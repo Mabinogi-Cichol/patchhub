@@ -1,0 +1,5 @@
+/target/
+/.tools/
+*.partial
+__pycache__/
+/.local/
