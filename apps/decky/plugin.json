@@ -1,0 +1,7 @@
+{
+  "name": "Steam 补丁管理",
+  "author": "Steam Patch Manager contributors",
+  "api_version": 1,
+  "flags": [],
+  "publish": { "tags": ["utility", "games"], "description": "管理已审核的官方 Steam 游戏补丁。" }
+}

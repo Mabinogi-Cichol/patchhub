@@ -2,7 +2,7 @@
 
 目标：为 Windows 与 SteamOS / Steam Deck 上已安装的 Steam 游戏，提供补丁发现、匹配、安装状态检测，以及可恢复的安装与卸载体验。
 
-当前为 P0 首批实现：Rust 核心与只读 CLI 可运行，支持多库扫描、AppID 匹配、补丁文件指纹检测与安装预览；尚无 Windows GUI、可安装的 Decky 插件或真实补丁安装 / 回滚。
+当前为 Alpha 开发中：共享核心已支持签名目录、本地 ZIP 计划、SQLite 备份事务、安装 / 卸载 / 恢复；Windows Tauri 与 Decky 客户端已实现并构建。Windows 和指定 Steam Deck 均已通过隔离库的生产 CLI 闭环，并匹配真实《夜勤病栋》。真实补丁安装、游戏运行与发布门槛仍在验收中。
 
 - [调研与开发计划](docs/development-plan.md)
 - [调研来源与证据边界](docs/research-sources.md)
@@ -15,10 +15,10 @@
 安装 Rust 1.94 后，在仓库根目录运行（Windows 有仓库隔离工具链时可用 scripts/cargo.ps1 代替 cargo）：
 
 ```powershell
-cargo build --workspace --locked
+cargo build -p steam-patch-cli --locked
 cargo run -p steam-patch-cli -- scan --catalog catalog/catalog.json
 cargo run -p steam-patch-cli -- scan --steam-root 'D:/Steam'
-cargo test --workspace --locked
+cargo test -p steam-patch-core -p steam-patch-cli --locked
 ```
 
 本次工作区已生成可直接运行的 Windows 调试 CLI：
@@ -27,7 +27,7 @@ cargo test --workspace --locked
 .\target\debug\steam-patch.exe scan --catalog catalog/catalog.json
 ```
 
-目录目前为空，因此所有安装记录显示 no_catalog_match；这表示没有已审核条目，不表示游戏不需要补丁。Steam 工具 / 运行时暂时保留 kind=unknown。
+目录包含 13 个官方来源引导 AppID；未审核包结构、哈希和运行结果的条目保持 discover_only。no_catalog_match 仅表示没有目录匹配。Steam 工具 / 运行时暂时保留 kind=unknown。
 
 如果使用 PowerShell 包装脚本，Cargo 的参数分隔符需作为字符串传递：
 
@@ -36,4 +36,4 @@ cargo test --workspace --locked
 .\scripts\cargo.ps1 clippy --workspace --all-targets '--' '-D' warnings
 ```
 
-CLI 的 serve 模式与 Decky 桥接示例见 apps/decky/README.md。Linux 尚需本机编译 / CI 和 Steam Deck 实机验证。所有扫描与检测均为只读；预览 executable 永远为 false。
+完整构建、使用与签名维护步骤见 [客户端指南](docs/client-guide.md)。签名目录到期、未知 build 或来源未审核时禁止自动安装。只读预览与可执行安装计划是不同接口。

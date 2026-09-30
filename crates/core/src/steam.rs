@@ -8,13 +8,13 @@ use std::path::{Component, Path, PathBuf};
 
 const MAX_FILE_BYTES: u64 = 4 * 1024 * 1024;
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ScanReport {
     pub installs: Vec<GameInstall>,
     pub diagnostics: Vec<Diagnostic>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct GameInstall {
     pub instance_id: String,
     pub appid: u32,
@@ -26,7 +26,7 @@ pub struct GameInstall {
     pub kind: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Diagnostic {
     pub code: String,
     pub path: PathBuf,

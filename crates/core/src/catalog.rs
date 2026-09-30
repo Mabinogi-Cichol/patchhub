@@ -9,9 +9,9 @@ use std::{
 };
 
 pub const MAX_CATALOG_BYTES: u64 = 4 * 1024 * 1024;
-const MAX_FINGERPRINT_BYTES: u64 = 256 * 1024 * 1024;
+const MAX_FINGERPRINT_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Catalog {
     pub schema_version: u32,
@@ -19,14 +19,14 @@ pub struct Catalog {
     pub releases: Vec<PatchRelease>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Platform {
     Windows,
     Steamos,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum SupportLevel {
     DiscoverOnly,
@@ -35,7 +35,7 @@ pub enum SupportLevel {
     Unsupported,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct PatchRelease {
     pub patch_id: String,
@@ -51,23 +51,34 @@ pub struct PatchRelease {
     pub verified_buildids: Vec<String>,
     pub detection: Vec<Fingerprint>,
     pub recipe: Option<Recipe>,
+    #[serde(default)]
+    pub artifact: Option<Artifact>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Artifact {
+    pub url: String,
+    pub size: u64,
+    pub sha256: String,
+    pub allowed_redirect_hosts: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Fingerprint {
     pub path: String,
     pub sha256: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Recipe {
     pub artifact_sha256: String,
     pub files: Vec<FileMapping>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct FileMapping {
     pub source: String,
@@ -77,7 +88,7 @@ pub struct FileMapping {
     pub installed_sha256: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct PatchMatch {
     pub release_id: String,
     pub name: String,
@@ -88,20 +99,20 @@ pub struct PatchMatch {
     pub detection: Detection,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct Detection {
     pub status: String,
     pub files: Vec<FileEvidence>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct FileEvidence {
     pub path: String,
     pub status: String,
     pub actual_sha256: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct InstallPreview {
     pub instance_id: String,
     pub release_id: String,
@@ -111,7 +122,7 @@ pub struct InstallPreview {
     pub changes: Vec<ProposedChange>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct ProposedChange {
     pub path: String,
     pub action: String,
@@ -227,6 +238,16 @@ impl Catalog {
                     || release.detection.is_empty())
             {
                 return Err(invalid("managed_release_missing_evidence"));
+            }
+            if let Some(artifact) = &release.artifact {
+                crate::download::validate_artifact(artifact)?;
+                if release
+                    .recipe
+                    .as_ref()
+                    .is_some_and(|r| r.artifact_sha256 != artifact.sha256)
+                {
+                    return Err(invalid("artifact_recipe_hash_mismatch"));
+                }
             }
         }
         Ok(())

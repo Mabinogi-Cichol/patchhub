@@ -43,6 +43,7 @@ fn release() -> PatchRelease {
                 installed_sha256: hash(b"patch"),
             }],
         }),
+        artifact: None,
     }
 }
 fn catalog(r: PatchRelease) -> Catalog {

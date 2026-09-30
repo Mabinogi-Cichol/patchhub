@@ -1,0 +1,10 @@
+{
+  "name": "steam-patch-clients",
+  "private": true,
+  "workspaces": ["apps/windows", "apps/decky", "packages/ui"],
+  "scripts": {
+    "build:windows": "npm run build -w apps/windows",
+    "build:decky": "npm run build -w apps/decky",
+    "typecheck": "npm run typecheck -w apps/windows && npm run typecheck -w apps/decky"
+  }
+}

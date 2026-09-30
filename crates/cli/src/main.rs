@@ -1,3 +1,7 @@
+mod maintenance;
+mod runtime;
+
+use runtime::{execute, Params};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::{
@@ -6,10 +10,7 @@ use std::{
     path::PathBuf,
     process::ExitCode,
 };
-use steam_patch_core::{
-    catalog::{self, Catalog, Platform},
-    steam,
-};
+use steam_patch_core::catalog::Platform;
 
 const MAX_REQUEST_BYTES: usize = 64 * 1024;
 
@@ -20,72 +21,6 @@ struct Request {
     request_id: String,
     method: String,
     params: Params,
-}
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Params {
-    #[serde(default)]
-    roots: Vec<PathBuf>,
-    catalog: Option<PathBuf>,
-    platform: Option<Platform>,
-    instance_id: Option<String>,
-    release_id: Option<String>,
-}
-
-fn host_platform() -> Platform {
-    if cfg!(windows) {
-        Platform::Windows
-    } else {
-        Platform::Steamos
-    }
-}
-
-fn execute(method: &str, params: Params) -> Result<Value, String> {
-    if params.roots.len() > 32 {
-        return Err("too_many_roots".into());
-    }
-    if !["scan", "preview"].contains(&method) {
-        return Err("unsupported_method".into());
-    }
-    if method == "scan" && (params.instance_id.is_some() || params.release_id.is_some()) {
-        return Err("unexpected_preview_arguments".into());
-    }
-    let roots = if params.roots.is_empty() {
-        steam::discover_roots()
-    } else {
-        params.roots
-    };
-    let report = steam::scan(&roots);
-    let catalog = match params.catalog {
-        Some(path) => catalog::load(&path).map_err(|e| format!("catalog_invalid: {e}"))?,
-        None => Catalog {
-            schema_version: 1,
-            revision: 0,
-            releases: Vec::new(),
-        },
-    };
-    let platform = params.platform.unwrap_or_else(host_platform);
-    if method == "preview" {
-        let instance_id = params.instance_id.ok_or("instance_required")?;
-        let release_id = params.release_id.ok_or("release_required")?;
-        let install = report
-            .installs
-            .iter()
-            .find(|i| i.instance_id == instance_id)
-            .ok_or("instance_not_found")?;
-        let preview = catalog::preview(install, &catalog, &release_id, platform)
-            .map_err(|e| e.to_string())?;
-        return serde_json::to_value(preview).map_err(|e| e.to_string());
-    }
-    let rows: Vec<_> = report.installs.iter().map(|install| {
-        let matches = catalog::matches(install, &catalog, platform);
-        json!({ "game": install, "match_status": if matches.is_empty() { "no_catalog_match" } else { "matched" }, "patches": matches })
-    }).collect();
-    Ok(
-        json!({ "catalog_revision": catalog.revision, "catalog_trust": "unsigned_development",
-        "platform": platform, "roots": roots, "installs": rows, "diagnostics": report.diagnostics }),
-    )
 }
 
 fn error(id: Option<&str>, code: &str) -> Value {
@@ -152,11 +87,14 @@ fn serve(reader: &mut impl BufRead, writer: &mut impl Write) -> io::Result<()> {
     Ok(())
 }
 
-const HELP: &str = "Steam patch manager P0 (read-only)\n\
+const HELP: &str = "Steam patch manager Alpha\n\
 Usage: steam-patch scan [--steam-root PATH]... [--catalog PATH] [--platform windows|steamos]\n\
        steam-patch preview --instance ID --release ID [scan options]\n\
        steam-patch serve  (versioned JSON-lines on stdin/stdout)\n\
-No command downloads or modifies games. Unsigned catalogs never authorize installation.";
+Installation requires a signed catalog and explicit game-closed confirmation.
+Methods: scan preview plan_install start_install fetch_artifact list_transactions uninstall recover.
+Options: --signed-catalog --trust-keys --state-dir --archive --plan --transaction --confirmed-game-closed.
+Maintenance: keygen PRIVATE PUBLIC KEY_ID; sign-catalog CATALOG PRIVATE KEY_ID OUTPUT LIFETIME_SECONDS; schema OUTPUT.";
 
 fn run() -> Result<(), String> {
     let mut args = env::args().skip(1);
@@ -174,10 +112,23 @@ fn run() -> Result<(), String> {
         }
         return serve(&mut io::stdin().lock(), &mut io::stdout().lock()).map_err(|e| e.to_string());
     }
+    if ["keygen", "sign-catalog", "schema"].contains(&command.as_str()) {
+        return maintenance::run(&command, &args.collect::<Vec<_>>());
+    }
     let mut params = Params::default();
     while let Some(flag) = args.next() {
+        if flag == "--confirmed-game-closed" {
+            params.confirmed_game_closed = true;
+            continue;
+        }
         let value = args.next().ok_or_else(|| format!("missing_value:{flag}"))?;
         match flag.as_str() {
+            "--signed-catalog" => params.signed_catalog = Some(PathBuf::from(value)),
+            "--trust-keys" => params.trust_keys = Some(PathBuf::from(value)),
+            "--state-dir" => params.state_dir = Some(PathBuf::from(value)),
+            "--archive" => params.archive = Some(PathBuf::from(value)),
+            "--plan" => params.plan_id = Some(value),
+            "--transaction" => params.transaction_id = Some(value),
             "--steam-root" => params.roots.push(PathBuf::from(value)),
             "--catalog" if params.catalog.is_none() => params.catalog = Some(PathBuf::from(value)),
             "--instance" if params.instance_id.is_none() => params.instance_id = Some(value),
@@ -246,7 +197,7 @@ mod tests {
         );
         assert_eq!(
             respond(request(1, "start_install").as_bytes())["error"]["code"],
-            "unsupported_method"
+            "game_closed_confirmation_required"
         );
         assert_eq!(respond(br#"{"protocol_version":1,"request_id":"r","method":"scan","params":{"shell":"evil"}}"#)["error"]["code"], "invalid_request");
     }
@@ -276,6 +227,7 @@ mod tests {
             platform: Some(Platform::Windows),
             instance_id: instance,
             release_id: None,
+            ..Default::default()
         };
         let scan = execute("scan", params(None)).unwrap();
         assert_eq!(scan["installs"][0]["match_status"], "matched");

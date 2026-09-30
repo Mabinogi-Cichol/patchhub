@@ -1,5 +1,253 @@
 {
   "schema_version": 1,
-  "revision": 0,
-  "releases": []
+  "revision": 1,
+  "releases": [
+    {
+      "patch_id": "official-822760",
+      "release_id": "official-822760-guide",
+      "appid": 822760,
+      "name": "Fureraba 官方补丁入口",
+      "version": "source-guide",
+      "language": "source-dependent",
+      "category": "content_restore",
+      "source_page": "https://patches.nekonyansoft.com/",
+      "support_level": "discover_only",
+      "platforms": [
+        "windows",
+        "steamos"
+      ],
+      "verified_buildids": [],
+      "detection": [],
+      "recipe": null,
+      "artifact": null
+    },
+    {
+      "patch_id": "official-888790",
+      "release_id": "official-888790-guide",
+      "appid": 888790,
+      "name": "Sabbat of the Witch 官方补丁入口",
+      "version": "source-guide",
+      "language": "source-dependent",
+      "category": "content_restore",
+      "source_page": "https://patches.nekonyansoft.com/",
+      "support_level": "discover_only",
+      "platforms": [
+        "windows",
+        "steamos"
+      ],
+      "verified_buildids": [],
+      "detection": [],
+      "recipe": null,
+      "artifact": null
+    },
+    {
+      "patch_id": "official-1009460",
+      "release_id": "official-1009460-guide",
+      "appid": 1009460,
+      "name": "Hello Goodbye 官方补丁入口",
+      "version": "source-guide",
+      "language": "source-dependent",
+      "category": "content_restore",
+      "source_page": "https://patches.nekonyansoft.com/",
+      "support_level": "discover_only",
+      "platforms": [
+        "windows",
+        "steamos"
+      ],
+      "verified_buildids": [],
+      "detection": [],
+      "recipe": null,
+      "artifact": null
+    },
+    {
+      "patch_id": "official-1009450",
+      "release_id": "official-1009450-guide",
+      "appid": 1009450,
+      "name": "Sankaku Renai 官方补丁入口",
+      "version": "source-guide",
+      "language": "source-dependent",
+      "category": "content_restore",
+      "source_page": "https://patches.nekonyansoft.com/",
+      "support_level": "discover_only",
+      "platforms": [
+        "windows",
+        "steamos"
+      ],
+      "verified_buildids": [],
+      "detection": [],
+      "recipe": null,
+      "artifact": null
+    },
+    {
+      "patch_id": "official-1044620",
+      "release_id": "official-1044620-guide",
+      "appid": 1044620,
+      "name": "Aokana 官方补丁入口",
+      "version": "source-guide",
+      "language": "source-dependent",
+      "category": "content_restore",
+      "source_page": "https://patches.nekonyansoft.com/",
+      "support_level": "discover_only",
+      "platforms": [
+        "windows",
+        "steamos"
+      ],
+      "verified_buildids": [],
+      "detection": [],
+      "recipe": null,
+      "artifact": null
+    },
+    {
+      "patch_id": "official-1144400",
+      "release_id": "official-1144400-guide",
+      "appid": 1144400,
+      "name": "Senren Banka 官方补丁入口",
+      "version": "source-guide",
+      "language": "source-dependent",
+      "category": "content_restore",
+      "source_page": "https://patches.nekonyansoft.com/",
+      "support_level": "discover_only",
+      "platforms": [
+        "windows",
+        "steamos"
+      ],
+      "verified_buildids": [],
+      "detection": [],
+      "recipe": null,
+      "artifact": null
+    },
+    {
+      "patch_id": "official-1200720",
+      "release_id": "official-1200720-guide",
+      "appid": 1200720,
+      "name": "Making Lovers 官方补丁入口",
+      "version": "source-guide",
+      "language": "source-dependent",
+      "category": "content_restore",
+      "source_page": "https://patches.nekonyansoft.com/",
+      "support_level": "discover_only",
+      "platforms": [
+        "windows",
+        "steamos"
+      ],
+      "verified_buildids": [],
+      "detection": [],
+      "recipe": null,
+      "artifact": null
+    },
+    {
+      "patch_id": "official-1277930",
+      "release_id": "official-1277930-guide",
+      "appid": 1277930,
+      "name": "Riddle Joker 官方补丁入口",
+      "version": "source-guide",
+      "language": "source-dependent",
+      "category": "content_restore",
+      "source_page": "https://patches.nekonyansoft.com/",
+      "support_level": "discover_only",
+      "platforms": [
+        "windows",
+        "steamos"
+      ],
+      "verified_buildids": [],
+      "detection": [],
+      "recipe": null,
+      "artifact": null
+    },
+    {
+      "patch_id": "official-1277940",
+      "release_id": "official-1277940-guide",
+      "appid": 1277940,
+      "name": "Kinkoi 官方补丁入口",
+      "version": "source-guide",
+      "language": "source-dependent",
+      "category": "content_restore",
+      "source_page": "https://patches.nekonyansoft.com/",
+      "support_level": "discover_only",
+      "platforms": [
+        "windows",
+        "steamos"
+      ],
+      "verified_buildids": [],
+      "detection": [],
+      "recipe": null,
+      "artifact": null
+    },
+    {
+      "patch_id": "official-1340120",
+      "release_id": "official-1340120-guide",
+      "appid": 1340120,
+      "name": "IxSHE Tell 官方补丁入口",
+      "version": "source-guide",
+      "language": "source-dependent",
+      "category": "content_restore",
+      "source_page": "https://patches.nekonyansoft.com/",
+      "support_level": "discover_only",
+      "platforms": [
+        "windows",
+        "steamos"
+      ],
+      "verified_buildids": [],
+      "detection": [],
+      "recipe": null,
+      "artifact": null
+    },
+    {
+      "patch_id": "official-432100",
+      "release_id": "official-432100-guide",
+      "appid": 432100,
+      "name": "Negligee 官方补丁入口",
+      "version": "source-guide",
+      "language": "source-dependent",
+      "category": "content_restore",
+      "source_page": "https://dharkerstudio.com/negligee.html",
+      "support_level": "discover_only",
+      "platforms": [
+        "windows",
+        "steamos"
+      ],
+      "verified_buildids": [],
+      "detection": [],
+      "recipe": null,
+      "artifact": null
+    },
+    {
+      "patch_id": "official-1165870",
+      "release_id": "official-1165870-guide",
+      "appid": 1165870,
+      "name": "Mahou Arms 官方补丁入口",
+      "version": "source-guide",
+      "language": "source-dependent",
+      "category": "content_restore",
+      "source_page": "https://paper.moe/downloads",
+      "support_level": "discover_only",
+      "platforms": [
+        "windows",
+        "steamos"
+      ],
+      "verified_buildids": [],
+      "detection": [],
+      "recipe": null,
+      "artifact": null
+    },
+    {
+      "patch_id": "official-3239270",
+      "release_id": "official-3239270-guide",
+      "appid": 3239270,
+      "name": "Night Shift Nurses / 夜勤病栋 官方补丁入口",
+      "version": "source-guide",
+      "language": "source-dependent",
+      "category": "content_restore",
+      "source_page": "https://shiravune.com/archives/7952",
+      "support_level": "discover_only",
+      "platforms": [
+        "windows",
+        "steamos"
+      ],
+      "verified_buildids": [],
+      "detection": [],
+      "recipe": null,
+      "artifact": null
+    }
+  ]
 }

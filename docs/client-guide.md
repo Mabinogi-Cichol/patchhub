@@ -1,0 +1,33 @@
+# Alpha 客户端与目录维护
+
+Windows 使用 Tauri 2，Decky 使用 @decky/api 和 @decky/ui；两端调用同一个 Rust CLI。核心路径、目录、公钥和状态路径由宿主配置。前端传入实例 / release / plan / transaction ID，不能指定目标目录、核心程序或执行脚本。
+
+## 使用流程
+
+扫描游戏库 → 选择游戏与补丁 → 打开官方来源 / 导入 ZIP → 生成安装计划 → 核对文件变更 → 关闭游戏并暂停 Steam 更新 → 确认安装。安装后重新扫描文件指纹和持久事务。卸载只恢复本工具备份，遇到游戏更新、用户修改或备份损坏则保留文件并报告冲突。
+
+来源条目仅供引导时，“状态未知”表示没有审核指纹，不能当作未安装。目录签名表示本工具维护端认可这些数据，不代表发行商授权，也不能代替游戏内运行验证。
+
+Decky 手动 ZIP 导入限于用户 Downloads 或本工具下载缓存；Windows 通过原生文件选择器导入。安装 / 卸载 / 恢复必须明确确认关闭游戏。当前提供等待状态和下载取消，没有字节级下载进度；不能在提交文件时强制杀死宿主。
+
+## 构建
+
+仓库固定 Rust 1.94，使用 Cargo.lock 和 package-lock.json。先 `npm ci`，再 `npm run typecheck`、`npm run build:windows`、`npm run build:decky`。
+
+Windows：先构建 `cargo build --release -p steam-patch-cli`，将工具链 bin 加入 PATH，再运行 `npm run bundle -w apps/windows`。prepare-sidecar 会复制固定二进制以及三个目录资源，Tauri 生成 NSIS 安装包。开发构建也需准备 sidecar 与资源。不要把私钥放入资源或提交到 Git。
+
+Linux：`sh scripts/build-linux.sh` 使用仓库内隔离工具链，测试核心与 CLI，并输出 `target/linux/release/steam-patch`。然后 `npm run package:plugin -w apps/decky` 生成 plugin-output 目录。安装到 Decky 前应检查二进制可执行权限、文件所属用户、宿主版本和日志；root 宿主启动核心时按游戏用户降权并同步 HOME / XDG，状态存于用户 ~/.local/share/steam-patch-manager；商店审核另设门槛。
+
+## 维护签名目录
+
+`steam-patch keygen PRIVATE PUBLIC KEY_ID` 创建 Ed25519 私钥与公钥目录；文件存在时拒绝覆盖，Unix 私钥文件权限为 0600。Windows 私钥继承目录 ACL，应保存在受限维护目录。
+
+`steam-patch sign-catalog CATALOG PRIVATE KEY_ID OUTPUT LIFETIME_SECONDS [REVOCATIONS_JSON]` 对严格校验的目录生成签名，最长有效期 90 天。签名覆盖原始 payload 字节。可选的撤销文件是 release_id 字符串数组，例如 `["withdrawn-release"]`，写入签名 payload 的 revoked_release_ids；拒绝重复或空 ID。撤销密钥通过升级受信公钥文件实施。生产维护需离线密钥、密钥轮换和审核流程，当前 alpha-local-2026 是此次开发的本地维护密钥。
+
+`steam-patch schema OUTPUT` 导出 payload JSON Schema。IPC 与模型详见 packages/contracts 和核心源码。修改配方必须递增 revision；同一 state 拒绝目录版本回退。客户端签名到期后禁用安装，仍可显示开发目录中的官方来源引导。
+
+## 验证边界
+
+`python scripts/smoke-transaction.py BINARY` 在临时 Steam 库运行完整签名 → 计划 → 安装 → 托管检测 → 卸载 → 恢复闭环，保留存档。它是生产接口测试，不能替代真实游戏、Proton 或控制器验证。
+
+默认不上传游戏库，不设置遥测。诊断与状态保存在本机；分享日志前应删除用户名、库路径与下载 URL 参数。安全安装拒绝链接、路径越界、危险 ZIP 成员、哈希错误和未知 build；同账户篡改完整 journal 与父目录 TOCTOU 的剩余风险见 install-design.md。

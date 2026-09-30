@@ -1,0 +1,257 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "CatalogPayload",
+  "type": "object",
+  "properties": {
+    "catalog": {
+      "$ref": "#/$defs/Catalog"
+    },
+    "expires_at": {
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0
+    },
+    "generated_at": {
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0
+    },
+    "revoked_release_ids": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "catalog",
+    "generated_at",
+    "expires_at",
+    "revoked_release_ids"
+  ],
+  "$defs": {
+    "Artifact": {
+      "type": "object",
+      "properties": {
+        "allowed_redirect_hosts": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "sha256": {
+          "type": "string"
+        },
+        "size": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "url": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "url",
+        "size",
+        "sha256",
+        "allowed_redirect_hosts"
+      ]
+    },
+    "Catalog": {
+      "type": "object",
+      "properties": {
+        "releases": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PatchRelease"
+          }
+        },
+        "revision": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "schema_version": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "revision",
+        "releases"
+      ]
+    },
+    "FileMapping": {
+      "type": "object",
+      "properties": {
+        "destination": {
+          "type": "string"
+        },
+        "installed_sha256": {
+          "type": "string"
+        },
+        "original_sha256": {
+          "description": "None means the destination must not already exist.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "source",
+        "destination",
+        "installed_sha256"
+      ]
+    },
+    "Fingerprint": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "sha256": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "sha256"
+      ]
+    },
+    "PatchRelease": {
+      "type": "object",
+      "properties": {
+        "appid": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "artifact": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Artifact"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "category": {
+          "type": "string"
+        },
+        "detection": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Fingerprint"
+          }
+        },
+        "language": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "patch_id": {
+          "type": "string"
+        },
+        "platforms": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Platform"
+          }
+        },
+        "recipe": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Recipe"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "release_id": {
+          "type": "string"
+        },
+        "source_page": {
+          "type": "string"
+        },
+        "support_level": {
+          "$ref": "#/$defs/SupportLevel"
+        },
+        "verified_buildids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "patch_id",
+        "release_id",
+        "appid",
+        "name",
+        "version",
+        "language",
+        "category",
+        "source_page",
+        "support_level",
+        "platforms",
+        "verified_buildids",
+        "detection"
+      ]
+    },
+    "Platform": {
+      "type": "string",
+      "enum": [
+        "windows",
+        "steamos"
+      ]
+    },
+    "Recipe": {
+      "type": "object",
+      "properties": {
+        "artifact_sha256": {
+          "type": "string"
+        },
+        "files": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/FileMapping"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "artifact_sha256",
+        "files"
+      ]
+    },
+    "SupportLevel": {
+      "type": "string",
+      "enum": [
+        "discover_only",
+        "manual_download",
+        "managed_zip",
+        "unsupported"
+      ]
+    }
+  }
+}
