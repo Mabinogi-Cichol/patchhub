@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "revision": 1,
+  "revision": 2,
   "releases": [
     {
       "patch_id": "official-822760",
@@ -231,22 +231,528 @@
       "artifact": null
     },
     {
-      "patch_id": "official-3239270",
-      "release_id": "official-3239270-guide",
+      "patch_id": "night-shift-nurses-content",
+      "release_id": "night-shift-nurses-20241120",
       "appid": 3239270,
-      "name": "Night Shift Nurses / 夜勤病栋 官方补丁入口",
-      "version": "source-guide",
-      "language": "source-dependent",
+      "name": "夜勤病栋 官方完整内容补丁",
+      "version": "20241120",
+      "language": "zh-CN/zh-TW/en",
       "category": "content_restore",
-      "source_page": "https://shiravune.com/archives/7952",
-      "support_level": "discover_only",
+      "source_page": "https://www.patch.moe/",
+      "support_level": "managed_zip",
       "platforms": [
-        "windows",
-        "steamos"
+        "windows"
       ],
-      "verified_buildids": [],
-      "detection": [],
-      "recipe": null,
+      "verified_buildids": [
+        "16533492"
+      ],
+      "detection": [
+        {
+          "path": "a_a005.dat",
+          "sha256": "5f4ba4775025925acfeec46c5ac7836e7b260a6b10d6f5075b20fa894c56268c"
+        },
+        {
+          "path": "a_a005_fast.dat",
+          "sha256": "942d815d7a136661d32624e359b93f40c6b6a40c84a03578ebecaaebb4344eb5"
+        },
+        {
+          "path": "a_a012.dat",
+          "sha256": "7e8ee0ff046b6bdc2cc132e7c5cdd7ee2a40d367f507eee280b972d834d08de8"
+        },
+        {
+          "path": "a_a012_fast.dat",
+          "sha256": "814f9cf8a42d6bd0b1fa0d23e90ebb5499f16e7911b1f637ecd21efceb99fc86"
+        },
+        {
+          "path": "a_a013.dat",
+          "sha256": "8136d9fa5250891e2d9657610078b379261eddf7f8aa76965241f8bb172913f5"
+        },
+        {
+          "path": "a_a013_fast.dat",
+          "sha256": "7d1843b1147d93ee0485456faca4cfa2cb7f09ea7d70a9181364f7c56629eb73"
+        },
+        {
+          "path": "a_b005.dat",
+          "sha256": "e1aac594b869c456861335316a7aaa524880f5f75e92b89bf30bd6d5a124fb38"
+        },
+        {
+          "path": "a_b005_fast.dat",
+          "sha256": "c2a230beb6380a5b0e417a46406a8224404758fd1a2f67bf57e059604ad2beb2"
+        },
+        {
+          "path": "a_b008.dat",
+          "sha256": "5c90a9f2e76bbb0d5b9e4f0b51c804b71fe1f17fcc78f91327efb8a79f2efa13"
+        },
+        {
+          "path": "a_b008_fast.dat",
+          "sha256": "e9c744c974a65085b60f58e1e627ef071a1ef62deb687f68033f09b456aba109"
+        },
+        {
+          "path": "a_b010.dat",
+          "sha256": "4e79408f31aa469c197d8af5d4aaea74e6868eb571c6928a3562e350f0be00c9"
+        },
+        {
+          "path": "a_b010_fast.dat",
+          "sha256": "6a65d05d40851765682baf1cfbc47b34c8edf4baaf9aea938f5a8bee291368f9"
+        },
+        {
+          "path": "a_b011.dat",
+          "sha256": "471dd29704cfce6ed907e4eb7e8d3237c542d42292d668cb8dd7fa0f7e4c4ac3"
+        },
+        {
+          "path": "a_b011_fast.dat",
+          "sha256": "74b1152c4fc5c252f74c80a81ae7e7c4ddba3fbb8023e854b1de920f187d201b"
+        },
+        {
+          "path": "a_c005.dat",
+          "sha256": "914933404125d05df0bafdf0eeee6af5bd410f55f63469092520d10581db25d8"
+        },
+        {
+          "path": "a_c005_fast.dat",
+          "sha256": "49e4c02e941cc30045623a5bb3a0d082b36b2f99ae0ad6ea7798ebfee7cebb26"
+        },
+        {
+          "path": "a_c008.dat",
+          "sha256": "2ff53fd874cae4100def31e0007bc22ade31771cd5e075c523a5f8301debb888"
+        },
+        {
+          "path": "a_c008_fast.dat",
+          "sha256": "2dd3da7a7fd8220c49b37783ade5caf1297d098d0f869665438ebbd414f67ff2"
+        },
+        {
+          "path": "a_c010.dat",
+          "sha256": "b7c76104f153a83ff95ce9dd188c21acc718bd93d82dedbe4b69c39bbe45e949"
+        },
+        {
+          "path": "a_c010_fast.dat",
+          "sha256": "c7c521262a74e6717e277ad4f95b1dca865ea047813ef6b62bc571c5efab9561"
+        },
+        {
+          "path": "a_d005.dat",
+          "sha256": "341f38aa7fef027ffe219f04492925ae4b03d65ed4ff6b3fdafb439c56d929e7"
+        },
+        {
+          "path": "a_d005_fast.dat",
+          "sha256": "463eef4232ae80cd17dcc537fdacff93ddd3be0065836edde51ddf4fd486284a"
+        },
+        {
+          "path": "a_d007.dat",
+          "sha256": "48e28b871b318ff4fd7754a4963e54f279263a3ec9ae9f707f66bf961cea717d"
+        },
+        {
+          "path": "a_d007_fast.dat",
+          "sha256": "f1b0a551c3e7f21a8f66722de9cdfe49a2889052a32357e384710ce128e5f279"
+        },
+        {
+          "path": "a_d010.dat",
+          "sha256": "6a424357049dde281fbd8cc33ea11fa14a7f92d2d54c86c6692980c0675c04ac"
+        },
+        {
+          "path": "a_d010b.dat",
+          "sha256": "d924a619e653c4825149934ee10cef04562c1e968621df0b7bfe059c4ff61455"
+        },
+        {
+          "path": "a_d010b_fast.dat",
+          "sha256": "176c6ccc790cc500bb3f49addff92650aa3428a045fe3c7098ae0bff53a0cc57"
+        },
+        {
+          "path": "a_d010_fast.dat",
+          "sha256": "c69c251b4a646ea0b86f2c26ff175325092effe5f5b6e27c37404bb5da9615e9"
+        },
+        {
+          "path": "a_g005.dat",
+          "sha256": "096fe0f91b9896197479b49d434e7cafab3eca9b70b3a83a728fbfcd3ba9adfc"
+        },
+        {
+          "path": "a_g005_fast.dat",
+          "sha256": "abe33963666a6c2052cfdb2280af437337379dca1b2c91d6784b5ebb862ea72a"
+        },
+        {
+          "path": "a_g009.dat",
+          "sha256": "89351991040ee9afe0af0ed6411dfb1c24daa65a30d7743dae5cb87a3fa32b7b"
+        },
+        {
+          "path": "a_g009b.dat",
+          "sha256": "47705ddc32e462eeea47937c17870294a48d1b1969645b12ffdc246ec33e7700"
+        },
+        {
+          "path": "a_g009b_fast.dat",
+          "sha256": "6ac8b78182adc4956853731b11c254687f2d84d4d52258388605d4e8697e4511"
+        },
+        {
+          "path": "a_g009_fast.dat",
+          "sha256": "5d6af95a949f940db4375d9cd4e72005b9d7d96189abeeb74be0658e14981506"
+        },
+        {
+          "path": "a_na005.dat",
+          "sha256": "179df715ed7004e26cdd6a28da8dd614749bef81616386bfe028f58660ff295b"
+        },
+        {
+          "path": "a_na005_fast.dat",
+          "sha256": "6ca419520493f9f2c501140773d135699e230b78da1d6f2b2d49736470237e84"
+        },
+        {
+          "path": "a_nc010.dat",
+          "sha256": "13d3ce1d78ba62577391e4e3af81014e8e463067962e1e3e44c132241e20b349"
+        },
+        {
+          "path": "a_nc010_fast.dat",
+          "sha256": "6c0988d47725c5a434b619ba8c5227331bc2a8b482d15e594133e7646f1db6a7"
+        },
+        {
+          "path": "a_ne002.dat",
+          "sha256": "3e2eb899fae817269d2bbd31f5cf4bd56bd1acc2fc1e716934c6a52befe5edcc"
+        },
+        {
+          "path": "a_ne002_fast.dat",
+          "sha256": "0cc485c3fb42a2a9465857e4a509659d55d66e7d49b5448c79aa52006856ea94"
+        },
+        {
+          "path": "data1.arc",
+          "sha256": "98beeefd383773513dc53e0869dfafd924da7cdcc0f0cb676cc9058bf5b00e75"
+        },
+        {
+          "path": "effect1.arc",
+          "sha256": "76df50c33765dd697ce9698e2efbc64b80657e9c3d415a6b3627dd56c3a32822"
+        },
+        {
+          "path": "image1.arc",
+          "sha256": "7ab58452f3cfd2254e9fe8649ca06d78c5b50979843a94e2f94b2c5b926d6330"
+        },
+        {
+          "path": "movie_ed_ch.dat",
+          "sha256": "e9efca3cb7904e268674f503e6501596a1c31a5d08fba0ce5df7fef4052b7a10"
+        },
+        {
+          "path": "movie_ed_en.dat",
+          "sha256": "4515329b64a379eb29f2553fa2d0183bddc54bede8bb55c117b5af79c2c1abf9"
+        },
+        {
+          "path": "movie_ed_tw.dat",
+          "sha256": "b9087c4952272586fcde9678a718ab235a5636e9cdc7856f8946f26e6f743a99"
+        },
+        {
+          "path": "music1.arc",
+          "sha256": "9640ec905ab390464df007cd2425905b3ea370dd9f5ea40fb7ebf5f3d08dd9a5"
+        },
+        {
+          "path": "script1.arc",
+          "sha256": "4fee94bbcfd02ad93bbdfe5d50836dcb365e87df5612e7e17b739d911ce8bc8b"
+        },
+        {
+          "path": "updateInfo.json",
+          "sha256": "60bcc677287c401cf708283a78e3cd48ac4835cadee2ac48130126b938cec321"
+        },
+        {
+          "path": "voice1.arc",
+          "sha256": "19f1c96aed15feb3ff8096abe1423c0143fdc81e3a601ca76f68a93f201a1892"
+        }
+      ],
+      "recipe": {
+        "artifact_sha256": "e646d4817f1b7bfebb01d37d9218a9ae18abca6c51c12379cf1fe3c770dfa0ef",
+        "files": [
+          {
+            "source": "a_a005.dat",
+            "destination": "a_a005.dat",
+            "original_sha256": null,
+            "installed_sha256": "5f4ba4775025925acfeec46c5ac7836e7b260a6b10d6f5075b20fa894c56268c"
+          },
+          {
+            "source": "a_a005_fast.dat",
+            "destination": "a_a005_fast.dat",
+            "original_sha256": null,
+            "installed_sha256": "942d815d7a136661d32624e359b93f40c6b6a40c84a03578ebecaaebb4344eb5"
+          },
+          {
+            "source": "a_a012.dat",
+            "destination": "a_a012.dat",
+            "original_sha256": null,
+            "installed_sha256": "7e8ee0ff046b6bdc2cc132e7c5cdd7ee2a40d367f507eee280b972d834d08de8"
+          },
+          {
+            "source": "a_a012_fast.dat",
+            "destination": "a_a012_fast.dat",
+            "original_sha256": null,
+            "installed_sha256": "814f9cf8a42d6bd0b1fa0d23e90ebb5499f16e7911b1f637ecd21efceb99fc86"
+          },
+          {
+            "source": "a_a013.dat",
+            "destination": "a_a013.dat",
+            "original_sha256": null,
+            "installed_sha256": "8136d9fa5250891e2d9657610078b379261eddf7f8aa76965241f8bb172913f5"
+          },
+          {
+            "source": "a_a013_fast.dat",
+            "destination": "a_a013_fast.dat",
+            "original_sha256": null,
+            "installed_sha256": "7d1843b1147d93ee0485456faca4cfa2cb7f09ea7d70a9181364f7c56629eb73"
+          },
+          {
+            "source": "a_b005.dat",
+            "destination": "a_b005.dat",
+            "original_sha256": null,
+            "installed_sha256": "e1aac594b869c456861335316a7aaa524880f5f75e92b89bf30bd6d5a124fb38"
+          },
+          {
+            "source": "a_b005_fast.dat",
+            "destination": "a_b005_fast.dat",
+            "original_sha256": null,
+            "installed_sha256": "c2a230beb6380a5b0e417a46406a8224404758fd1a2f67bf57e059604ad2beb2"
+          },
+          {
+            "source": "a_b008.dat",
+            "destination": "a_b008.dat",
+            "original_sha256": null,
+            "installed_sha256": "5c90a9f2e76bbb0d5b9e4f0b51c804b71fe1f17fcc78f91327efb8a79f2efa13"
+          },
+          {
+            "source": "a_b008_fast.dat",
+            "destination": "a_b008_fast.dat",
+            "original_sha256": null,
+            "installed_sha256": "e9c744c974a65085b60f58e1e627ef071a1ef62deb687f68033f09b456aba109"
+          },
+          {
+            "source": "a_b010.dat",
+            "destination": "a_b010.dat",
+            "original_sha256": null,
+            "installed_sha256": "4e79408f31aa469c197d8af5d4aaea74e6868eb571c6928a3562e350f0be00c9"
+          },
+          {
+            "source": "a_b010_fast.dat",
+            "destination": "a_b010_fast.dat",
+            "original_sha256": null,
+            "installed_sha256": "6a65d05d40851765682baf1cfbc47b34c8edf4baaf9aea938f5a8bee291368f9"
+          },
+          {
+            "source": "a_b011.dat",
+            "destination": "a_b011.dat",
+            "original_sha256": null,
+            "installed_sha256": "471dd29704cfce6ed907e4eb7e8d3237c542d42292d668cb8dd7fa0f7e4c4ac3"
+          },
+          {
+            "source": "a_b011_fast.dat",
+            "destination": "a_b011_fast.dat",
+            "original_sha256": null,
+            "installed_sha256": "74b1152c4fc5c252f74c80a81ae7e7c4ddba3fbb8023e854b1de920f187d201b"
+          },
+          {
+            "source": "a_c005.dat",
+            "destination": "a_c005.dat",
+            "original_sha256": null,
+            "installed_sha256": "914933404125d05df0bafdf0eeee6af5bd410f55f63469092520d10581db25d8"
+          },
+          {
+            "source": "a_c005_fast.dat",
+            "destination": "a_c005_fast.dat",
+            "original_sha256": null,
+            "installed_sha256": "49e4c02e941cc30045623a5bb3a0d082b36b2f99ae0ad6ea7798ebfee7cebb26"
+          },
+          {
+            "source": "a_c008.dat",
+            "destination": "a_c008.dat",
+            "original_sha256": null,
+            "installed_sha256": "2ff53fd874cae4100def31e0007bc22ade31771cd5e075c523a5f8301debb888"
+          },
+          {
+            "source": "a_c008_fast.dat",
+            "destination": "a_c008_fast.dat",
+            "original_sha256": null,
+            "installed_sha256": "2dd3da7a7fd8220c49b37783ade5caf1297d098d0f869665438ebbd414f67ff2"
+          },
+          {
+            "source": "a_c010.dat",
+            "destination": "a_c010.dat",
+            "original_sha256": null,
+            "installed_sha256": "b7c76104f153a83ff95ce9dd188c21acc718bd93d82dedbe4b69c39bbe45e949"
+          },
+          {
+            "source": "a_c010_fast.dat",
+            "destination": "a_c010_fast.dat",
+            "original_sha256": null,
+            "installed_sha256": "c7c521262a74e6717e277ad4f95b1dca865ea047813ef6b62bc571c5efab9561"
+          },
+          {
+            "source": "a_d005.dat",
+            "destination": "a_d005.dat",
+            "original_sha256": null,
+            "installed_sha256": "341f38aa7fef027ffe219f04492925ae4b03d65ed4ff6b3fdafb439c56d929e7"
+          },
+          {
+            "source": "a_d005_fast.dat",
+            "destination": "a_d005_fast.dat",
+            "original_sha256": null,
+            "installed_sha256": "463eef4232ae80cd17dcc537fdacff93ddd3be0065836edde51ddf4fd486284a"
+          },
+          {
+            "source": "a_d007.dat",
+            "destination": "a_d007.dat",
+            "original_sha256": null,
+            "installed_sha256": "48e28b871b318ff4fd7754a4963e54f279263a3ec9ae9f707f66bf961cea717d"
+          },
+          {
+            "source": "a_d007_fast.dat",
+            "destination": "a_d007_fast.dat",
+            "original_sha256": null,
+            "installed_sha256": "f1b0a551c3e7f21a8f66722de9cdfe49a2889052a32357e384710ce128e5f279"
+          },
+          {
+            "source": "a_d010.dat",
+            "destination": "a_d010.dat",
+            "original_sha256": null,
+            "installed_sha256": "6a424357049dde281fbd8cc33ea11fa14a7f92d2d54c86c6692980c0675c04ac"
+          },
+          {
+            "source": "a_d010b.dat",
+            "destination": "a_d010b.dat",
+            "original_sha256": null,
+            "installed_sha256": "d924a619e653c4825149934ee10cef04562c1e968621df0b7bfe059c4ff61455"
+          },
+          {
+            "source": "a_d010b_fast.dat",
+            "destination": "a_d010b_fast.dat",
+            "original_sha256": null,
+            "installed_sha256": "176c6ccc790cc500bb3f49addff92650aa3428a045fe3c7098ae0bff53a0cc57"
+          },
+          {
+            "source": "a_d010_fast.dat",
+            "destination": "a_d010_fast.dat",
+            "original_sha256": null,
+            "installed_sha256": "c69c251b4a646ea0b86f2c26ff175325092effe5f5b6e27c37404bb5da9615e9"
+          },
+          {
+            "source": "a_g005.dat",
+            "destination": "a_g005.dat",
+            "original_sha256": null,
+            "installed_sha256": "096fe0f91b9896197479b49d434e7cafab3eca9b70b3a83a728fbfcd3ba9adfc"
+          },
+          {
+            "source": "a_g005_fast.dat",
+            "destination": "a_g005_fast.dat",
+            "original_sha256": null,
+            "installed_sha256": "abe33963666a6c2052cfdb2280af437337379dca1b2c91d6784b5ebb862ea72a"
+          },
+          {
+            "source": "a_g009.dat",
+            "destination": "a_g009.dat",
+            "original_sha256": null,
+            "installed_sha256": "89351991040ee9afe0af0ed6411dfb1c24daa65a30d7743dae5cb87a3fa32b7b"
+          },
+          {
+            "source": "a_g009b.dat",
+            "destination": "a_g009b.dat",
+            "original_sha256": null,
+            "installed_sha256": "47705ddc32e462eeea47937c17870294a48d1b1969645b12ffdc246ec33e7700"
+          },
+          {
+            "source": "a_g009b_fast.dat",
+            "destination": "a_g009b_fast.dat",
+            "original_sha256": null,
+            "installed_sha256": "6ac8b78182adc4956853731b11c254687f2d84d4d52258388605d4e8697e4511"
+          },
+          {
+            "source": "a_g009_fast.dat",
+            "destination": "a_g009_fast.dat",
+            "original_sha256": null,
+            "installed_sha256": "5d6af95a949f940db4375d9cd4e72005b9d7d96189abeeb74be0658e14981506"
+          },
+          {
+            "source": "a_na005.dat",
+            "destination": "a_na005.dat",
+            "original_sha256": null,
+            "installed_sha256": "179df715ed7004e26cdd6a28da8dd614749bef81616386bfe028f58660ff295b"
+          },
+          {
+            "source": "a_na005_fast.dat",
+            "destination": "a_na005_fast.dat",
+            "original_sha256": null,
+            "installed_sha256": "6ca419520493f9f2c501140773d135699e230b78da1d6f2b2d49736470237e84"
+          },
+          {
+            "source": "a_nc010.dat",
+            "destination": "a_nc010.dat",
+            "original_sha256": null,
+            "installed_sha256": "13d3ce1d78ba62577391e4e3af81014e8e463067962e1e3e44c132241e20b349"
+          },
+          {
+            "source": "a_nc010_fast.dat",
+            "destination": "a_nc010_fast.dat",
+            "original_sha256": null,
+            "installed_sha256": "6c0988d47725c5a434b619ba8c5227331bc2a8b482d15e594133e7646f1db6a7"
+          },
+          {
+            "source": "a_ne002.dat",
+            "destination": "a_ne002.dat",
+            "original_sha256": null,
+            "installed_sha256": "3e2eb899fae817269d2bbd31f5cf4bd56bd1acc2fc1e716934c6a52befe5edcc"
+          },
+          {
+            "source": "a_ne002_fast.dat",
+            "destination": "a_ne002_fast.dat",
+            "original_sha256": null,
+            "installed_sha256": "0cc485c3fb42a2a9465857e4a509659d55d66e7d49b5448c79aa52006856ea94"
+          },
+          {
+            "source": "data1.arc",
+            "destination": "data1.arc",
+            "original_sha256": null,
+            "installed_sha256": "98beeefd383773513dc53e0869dfafd924da7cdcc0f0cb676cc9058bf5b00e75"
+          },
+          {
+            "source": "effect1.arc",
+            "destination": "effect1.arc",
+            "original_sha256": null,
+            "installed_sha256": "76df50c33765dd697ce9698e2efbc64b80657e9c3d415a6b3627dd56c3a32822"
+          },
+          {
+            "source": "image1.arc",
+            "destination": "image1.arc",
+            "original_sha256": null,
+            "installed_sha256": "7ab58452f3cfd2254e9fe8649ca06d78c5b50979843a94e2f94b2c5b926d6330"
+          },
+          {
+            "source": "movie_ed_ch.dat",
+            "destination": "movie_ed_ch.dat",
+            "original_sha256": null,
+            "installed_sha256": "e9efca3cb7904e268674f503e6501596a1c31a5d08fba0ce5df7fef4052b7a10"
+          },
+          {
+            "source": "movie_ed_en.dat",
+            "destination": "movie_ed_en.dat",
+            "original_sha256": null,
+            "installed_sha256": "4515329b64a379eb29f2553fa2d0183bddc54bede8bb55c117b5af79c2c1abf9"
+          },
+          {
+            "source": "movie_ed_tw.dat",
+            "destination": "movie_ed_tw.dat",
+            "original_sha256": null,
+            "installed_sha256": "b9087c4952272586fcde9678a718ab235a5636e9cdc7856f8946f26e6f743a99"
+          },
+          {
+            "source": "music1.arc",
+            "destination": "music1.arc",
+            "original_sha256": null,
+            "installed_sha256": "9640ec905ab390464df007cd2425905b3ea370dd9f5ea40fb7ebf5f3d08dd9a5"
+          },
+          {
+            "source": "script1.arc",
+            "destination": "script1.arc",
+            "original_sha256": null,
+            "installed_sha256": "4fee94bbcfd02ad93bbdfe5d50836dcb365e87df5612e7e17b739d911ce8bc8b"
+          },
+          {
+            "source": "updateInfo.json",
+            "destination": "updateInfo.json",
+            "original_sha256": null,
+            "installed_sha256": "60bcc677287c401cf708283a78e3cd48ac4835cadee2ac48130126b938cec321"
+          },
+          {
+            "source": "voice1.arc",
+            "destination": "voice1.arc",
+            "original_sha256": null,
+            "installed_sha256": "19f1c96aed15feb3ff8096abe1423c0143fdc81e3a601ca76f68a93f201a1892"
+          }
+        ]
+      },
       "artifact": null
     }
   ]

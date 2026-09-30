@@ -28,12 +28,22 @@ def main():
     for name in ['catalog.json', 'signed-catalog.json', 'trust-keys.json']:
         windows.append((ROOT / 'catalog' / name, 'resources/' + name, False))
     windows.append((ROOT / 'docs/client-guide.md', 'client-guide.md', False))
+    windows.append((ROOT / 'docs/privacy.md', 'privacy.md', False))
     plugin = ROOT / 'apps/decky/plugin-output'
     if not plugin.is_dir():
         raise FileNotFoundError('Build apps/decky package:plugin first')
     decky = [(path, 'steam-patch-manager/' + path.relative_to(plugin).as_posix(),
               path.relative_to(plugin).as_posix() == 'bin/steam-patch')
              for path in sorted(plugin.rglob('*')) if path.is_file()]
+    sbom = OUTPUT / 'dependencies.cdx.json'
+    if sbom.is_file():
+        data = json.loads(sbom.read_text(encoding='utf-8'))
+        properties = {item['name']: item['value'] for item in data['metadata']['properties']}
+        for name, path in [('cargo', 'Cargo.lock'), ('npm', 'package-lock.json')]:
+            if properties.get(f'steam-patch:{name}-lock-sha256') != hashlib.sha256((ROOT / path).read_bytes()).hexdigest():
+                raise ValueError('Regenerate SBOM for current lockfiles before packaging')
+        windows.append((sbom, sbom.name, False))
+        decky.append((sbom, 'steam-patch-manager/' + sbom.name, False))
     result = [archive('steam-patch-manager-windows-portable.zip', windows),
               archive('steam-patch-manager-decky.zip', decky)]
     (OUTPUT / 'checksums.json').write_text(json.dumps(result, indent=2) + '\n', encoding='utf-8')

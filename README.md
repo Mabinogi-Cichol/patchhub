@@ -9,6 +9,8 @@
 - [开发进度与验证记录](docs/progress.md)
 - [补丁目录说明](catalog/README.md)
 - [JSON 通信契约](packages/contracts/README.md)
+- [本地数据与隐私](docs/privacy.md)
+- [Alpha 发行检查](docs/release-checklist.md)
 
 建议路线：共享 Rust 安装核心 + Windows Tauri 桌面应用 + SteamOS Decky 插件；先建立少量经过审核的官方补丁目录，再扩大发行商覆盖。
 
@@ -27,7 +29,7 @@ cargo test -p steam-patch-core -p steam-patch-cli --locked
 .\target\debug\steam-patch.exe scan --catalog catalog/catalog.json
 ```
 
-目录包含 13 个官方来源引导 AppID；未审核包结构、哈希和运行结果的条目保持 discover_only。no_catalog_match 仅表示没有目录匹配。Steam 工具 / 运行时暂时保留 kind=unknown。
+目录包含 13 个 AppID：12 个官方来源引导，以及经过实机验证的 Windows《夜勤病栋》ZIP 配方。未审核包结构、哈希和运行结果的条目保持 discover_only；Deck《夜勤病栋》自动安装仍禁用。no_catalog_match 仅表示没有目录匹配。Steam 工具 / 运行时暂时保留 kind=unknown。
 
 如果使用 PowerShell 包装脚本，Cargo 的参数分隔符需作为字符串传递：
 
@@ -37,3 +39,5 @@ cargo test -p steam-patch-core -p steam-patch-cli --locked
 ```
 
 完整构建、使用与签名维护步骤见 [客户端指南](docs/client-guide.md)。签名目录到期、未知 build 或来源未审核时禁止自动安装。只读预览与可执行安装计划是不同接口。
+
+客户端构建完成后运行 `python scripts/package-artifacts.py`，生成 Windows 便携 ZIP、Decky ZIP 与校验清单，保存在忽略目录 .artifacts。Windows 便携包解压后运行 steam-patch-windows.exe；NSIS 是管理工具的可选安装方式，游戏补丁本身仍按配方解压文件。

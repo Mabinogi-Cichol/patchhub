@@ -36,19 +36,20 @@
 
 ## 2026-10-01：安装核心与双端 Alpha 实现
 
-- 首轮 Git 提交：6c8bf32。
+- 首轮 Git 提交：6c8bf32；双端 Alpha 实现提交：2614041。
 - 新增 Ed25519 签名、有效期、密钥 / release 撤销模型、SQLite revision 防回退；写事务内再次检查目录 revision。
 - 受控 HTTPS ZIP 获取、大小 / 哈希 / HTML / 重定向检查；本地 ZIP 流式安全检查与暂存，备份、安装、卸载、持久恢复。
 - 状态目录写入前扫描并拒绝与游戏目录重叠；卸载意图与状态一并持久化，兼容旧 committed + uninstall_requested 恢复窗口。
 - Windows Tauri 原生宿主编译、Clippy 与前端构建通过；Decky TypeScript 与 Rollup 构建通过，插件目录打包成功。
-- Windows 核心 / CLI 43 项测试通过，包含官方 ZIP 的受限 NTFS 时间戳兼容回归与签名 release 撤销执行检查；Python 3 项桥接测试通过。Linux 核心构建与测试通过。
+- Windows 核心 / CLI 43 项、Linux 46 项测试通过，包含官方 ZIP 的受限 NTFS 时间戳兼容回归与签名 release 撤销执行检查；Python 3 项桥接测试通过。
 - Windows 与 Steam Devkit 连接的 Steam Deck 均通过生产 CLI 的签名目录 → 计划 → 安装 → 托管检测 → 卸载 → 恢复隔离库测试；存档保留。
 - 两端真实库匹配《夜勤病栋》AppID 3239270，build 16533492；Deck 上位于 SD 卡。
-- 13 个官方来源引导条目已入目录；全部 discover_only，没有伪造可安装配方或平台运行声明。
+- 13 个 AppID 已入目录；12 个保持 discover_only，Windows 夜勤病栋配方在真实闭环完成后发布为 managed_zip，仅允许已验证 build。Deck 自动安装仍禁用。
 - 官方 patch.moe 已经浏览器年龄确认和简体中文选择；沿用原有下载取得 NSN_R18PATCH_20241120.zip，未重新下载。包大小 4,081,525,083 字节，SHA-256 为 e646d4817f1b7bfebb01d37d9218a9ae18abca6c51c12379cf1fe3c770dfa0ef；审核 50 个新增文件及哈希，不包含可执行安装器。
 - Windows 真实安装 committed、指纹检测 installed_managed；用户确认游戏能启动且补丁生效。卸载后 50 个补丁文件全部移除，12 个原版资源哈希一致；游戏运行修改的 systeminfo.json 被保留。
 - Steam Deck 真实配方预检通过；正在建立 SD 卡原版基线，尚未完成真实安装 / 游戏运行 / 卸载验收。
-- 已生成 Windows NSIS 客户端安装包；NSIS 只安装管理工具，游戏补丁按可信配方直接解压文件。最终发行包仍需刷新最新核心。Decky 插件目录已构建，实机安装与 UI 验收待进行。
+- 已生成最新 Windows NSIS 客户端安装包与便携 ZIP；NSIS 只安装管理工具，游戏补丁按可信配方直接解压文件。Decky ZIP 已实机安装，用户确认能够选择夜勤病栋；控制器导航与宿主重载仍待完整验收。
 - Windows 与 Decky 前端具有取消下载按钮；只取消下载子进程，暂时不显示字节级进度。已新增本地数据与隐私说明。
+- 已生成 726 个依赖组件的 SBOM 清单；npm 官方安全接口返回 0 条已披露漏洞。RustSec 全锁文件审计没有命中漏洞，但报告 glib 的 unsound 与 proc-macro-error 的 unmaintained 提示；依赖树确认两者均不进入当前 Windows 客户端或 Linux CLI 的构建依赖，完整锁文件的提示仍保留。
 
-剩余验收：来源许可条件、真实游戏 Deck 闭环，另外两个代表补丁样本、5 款双端运行矩阵；Decky 实机 UI、控制器、宿主重载；最终发行包、签名方案与供应链检查。当前没有字节级 UI 下载进度；更新要求先安全卸载，不宣称版本迁移事务已实现。远端 CI / 商店审核未执行。本轮不能据此宣布开发计划全部完成。
+剩余验收：来源许可条件与发行依赖通知补齐、真实游戏 Deck 闭环，另外两个代表补丁样本、5 款双端运行矩阵；Windows 原生客户端完整流程、Decky 控制器与宿主重载。已生成发行测试包和签名方案文档，但未配置 Windows 代码签名证书。当前没有字节级 UI 下载进度；更新要求先安全卸载，不宣称版本迁移事务已实现。远端 CI / 商店审核未执行。本轮不能据此宣布开发计划全部完成。

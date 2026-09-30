@@ -1,6 +1,6 @@
 # 补丁目录
 
-`catalog.json` 包含 13 个官方来源引导 AppID。`signed-catalog.json` 是维护端 Ed25519 签名封装，`trust-keys.json` 是受信公钥。未验证包 / build / 平台的来源保持 discover_only。官方夜勤病栋 ZIP 的真实双端验收正在进行，验收配方暂存于忽略的 .local 目录，尚未发布为默认自动安装条目。
+`catalog.json` revision 2 包含 13 个 AppID：12 个官方来源引导，以及经过真实安装 / 运行 / 卸载验证的 Windows 夜勤病栋配方。该配方只允许 build 16533492；须从官方浏览器下载 NSN_R18PATCH_20241120.zip 后导入，不承诺后台自动下载。Deck 运行尚未验证，公开条目不允许其自动安装。`signed-catalog.json` 是维护端 Ed25519 签名封装，`trust-keys.json` 是受信公钥。其他未验证包 / build / 平台的来源保持 discover_only。
 
 开发条目结构示例（完全合成，AppID 42 不代表已验证游戏）：
 

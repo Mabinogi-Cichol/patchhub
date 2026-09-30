@@ -18,6 +18,8 @@
 
 `scan.result` 包含 roots、platform、catalog_revision、catalog_trust、installs、diagnostics；每行有 game、match_status、patches。匹配状态为 matched / no_catalog_match；补丁检测为 unknown / not_detected / installed_external / partial_or_conflict，匹配有效 committed 事务后可显示 installed_managed。
 
+每个 patch 的 download_available 仅表示可信目录声明了可获取 Artifact；为 false 时使用官方浏览器下载与本地 ZIP 导入。managed_zip 表示有审核安装配方，不保证其站点允许后台下载。
+
 `preview.result` 是只读提案，executable 为 false；可执行计划使用独立 plan_install 接口，返回短期 plan_id、preconditions、文件变更、空间和 blockers。start_install 重新核对签名目录与保存的配方，不接受前端任意目的路径。
 
 生产方法：scan、preview、plan_install、start_install、fetch_artifact、list_transactions、uninstall、recover。Params 包含 signed_catalog、trust_keys、state_dir、archive、plan_id、transaction_id；宿主固定这些路径，UI 只传 ID 和关闭游戏确认。start_install / uninstall / recover 的 confirmed_game_closed 默认 false，未明确确认则拒绝。取消下载由各宿主绑定固定下载子进程，不能用于终止安装。

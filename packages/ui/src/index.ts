@@ -3,6 +3,7 @@ export type Patch = {
   name: string;
   source_page: string;
   support_level: string;
+  download_available?: boolean;
   compatibility: string;
   blockers: string[];
   detection: { status: string; files: { path: string; status: string }[] };
@@ -78,6 +79,7 @@ export function filterInstalls(rows: Install[], filter: Filter, query: string): 
 }
 
 export function reason(code: string): string {
+  const normalized = code.trim().replace(/^(Error|RuntimeError):\s*/, "");
   const labels: Record<string, string> = {
     library_unavailable: "Steam 库不可访问，请检查磁盘或 SD 卡是否已挂载。",
     instance_not_found: "游戏实例已变化，请重新扫描。",
@@ -88,9 +90,45 @@ export function reason(code: string): string {
     file_changed: "游戏文件已变化，请重新预览。",
     recovery_conflict: "检测到恢复冲突，已保留后续修改。",
     unsupported_method: "当前核心版本尚不支持此操作。",
-    no_archive_selected: "请先选择本地 ZIP 文件。"
+    no_archive_selected: "请先选择本地 ZIP 文件。",
+    archive_required: "请先导入从官方来源下载的 ZIP。",
+    artifact_requires_manual_download: "此来源需要浏览器下载；打开官方来源后导入 ZIP。",
+    build_not_verified: "当前游戏 build 尚未审核，自动安装已禁用。",
+    platform_not_verified: "当前平台尚未审核，自动安装已禁用。",
+    source_requires_guidance: "此条目提供官方来源引导，尚无可安装配方。",
+    game_not_ready: "游戏尚未完整安装或库不可访问，请检查 Steam 下载状态。",
+    signed_catalog_required: "需要有效的签名目录才能安装。",
+    catalog_expired: "签名目录已到期，请更新目录后重新生成计划。",
+    catalog_rollback: "目录版本低于本机已验证版本，请使用较新的可信目录。",
+    release_revoked: "此补丁版本已被维护端撤销，不能安装。",
+    plan_expired: "安装计划已过期，请重新预检。",
+    plan_authorization_changed: "目录授权或配方已变化，请重新生成计划。",
+    plan_has_blockers: "安装计划存在阻止条件，请先处理列出的问题。",
+    game_closed_confirmation_required: "请关闭游戏并暂停 Steam 更新后确认。",
+    game_changed_or_unavailable: "游戏版本或库状态已变化，请重新扫描和预检。",
+    installer_busy: "另一项安装或恢复正在执行，请等待完成。",
+    game_busy: "此游戏正在被另一项事务处理，请等待完成。",
+    insufficient_space: "可用磁盘空间不足，请清理空间后重新预检。",
+    managed_install_exists_or_needs_recovery: "已有托管安装或待恢复事务，请先卸载或恢复。",
+    artifact_hash_mismatch: "ZIP 哈希与已审核配方不符，请重新核对官方下载包。",
+    artifact_size_mismatch: "ZIP 大小与已审核记录不符，请确认下载完整。",
+    state_overlaps_game: "状态目录与游戏目录重叠，已阻止写入。",
+    backup_missing_or_changed: "原版备份丢失或已变化，无法安全还原。",
+    archive_outside_downloads: "请将 ZIP 放入 Deck 用户的 Downloads 目录再导入。",
+    invalid_archive: "所选文件不是可读取的普通 ZIP。"
   };
-  return labels[code] ?? code.replaceAll("_", " ");
+  return labels[normalized] ?? normalized.replaceAll("_", " ");
+}
+
+export function workflowState(value: string): string {
+  const labels: Record<string, string> = {
+    discover_only: "官方来源引导", manual_download: "手动下载导入", managed_zip: "审核 ZIP 安装", unsupported: "暂不支持",
+    verified_metadata: "目录条件已核对", needs_review: "尚待审核", signed: "已验证签名", unsigned_development: "未签名开发目录",
+    planned: "已生成计划", backing_up: "正在备份", backed_up: "备份完成", applying: "正在写入", committed: "安装完成",
+    rolling_back: "正在回滚", rolled_back: "已回滚", uninstalling: "正在卸载", uninstalled: "已卸载", needs_recovery: "需要恢复",
+    add: "新增", replace: "替换"
+  };
+  return labels[value] ?? value;
 }
 
 export function patchState(status: string): string {

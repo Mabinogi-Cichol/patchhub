@@ -2,7 +2,7 @@ import { callable, definePlugin } from "@decky/api";
 import { ButtonItem, Navigation, PanelSection, PanelSectionRow, TextField } from "@decky/ui";
 import { FaPuzzlePiece } from "react-icons/fa";
 import { useEffect, useMemo, useState } from "react";
-import { filterInstalls, isExternal, patchState, reason, type Filter, type Install, type Plan, type Preview, type ScanResult, type Transaction } from "@steam-patch/ui";
+import { filterInstalls, isExternal, patchState, reason, workflowState, type Filter, type Install, type Plan, type Preview, type ScanResult, type Transaction } from "@steam-patch/ui";
 
 const scan = callable<[], ScanResult>("scan");
 const preview = callable<[instanceId: string, releaseId: string], Preview>("preview");
@@ -75,7 +75,7 @@ function Content() {
       {busy && <PanelSectionRow><p>{busy} 完成后显示结果；暂无百分比进度。</p></PanelSectionRow>}
       {error && <PanelSectionRow><p style={{ color: "#ffb28d" }}>{error}</p></PanelSectionRow>}
       {note && <PanelSectionRow><p>{note}</p></PanelSectionRow>}
-      <PanelSectionRow><p>目录版本 {report?.catalog_revision ?? "—"} · {report?.catalog_trust ?? "未加载"}</p></PanelSectionRow>
+      <PanelSectionRow><p>目录版本 {report?.catalog_revision ?? "—"} · {workflowState(report?.catalog_trust ?? "未加载")}</p></PanelSectionRow>
     </PanelSection>
     {!selected && <><PanelSection title="已安装游戏"><PanelSectionRow><TextField label="搜索游戏或 AppID" value={query} onChange={e => setQuery(e.target.value)} /></PanelSectionRow>
       <PanelSectionRow><ButtonItem onClick={() => setFilter("all")}>全部 {filter === "all" ? "✓" : ""}</ButtonItem></PanelSectionRow>
@@ -92,26 +92,26 @@ function Content() {
       {!row.patches.length && <PanelSectionRow><p>目录暂无匹配。这不代表游戏不需要补丁，也无法判断补丁是否已安装。</p></PanelSectionRow>}
       {row.patches.map(item => <PanelSectionRow key={item.release_id}><ButtonItem onClick={() => selectedRelease(item.release_id)} disabled={!!busy}>{item.name} {release === item.release_id ? "✓" : ""}</ButtonItem></PanelSectionRow>)}
     </PanelSection>
-    {patch && <><PanelSection title="补丁详情"><PanelSectionRow><p>{patch.name}<br />状态：{patchState(patch.detection.status)}<br />兼容性：{patch.compatibility}<br />来源级别：{patch.support_level}</p></PanelSectionRow>
+    {patch && <><PanelSection title="补丁详情"><PanelSectionRow><p>{patch.name}<br />状态：{patchState(patch.detection.status)}<br />兼容性：{workflowState(patch.compatibility)}<br />来源级别：{workflowState(patch.support_level)}</p></PanelSectionRow>
       {patch.blockers.map((b, i) => <PanelSectionRow key={i}><p style={{ color: "#ffb28d" }}>{reason(b)}</p></PanelSectionRow>)}
       {isExternal(patch.detection.status) && <PanelSectionRow><p>外部安装没有本工具备份，不能从此处卸载。</p></PanelSectionRow>}
       <PanelSectionRow><ButtonItem onClick={() => source(patch.source_page)}>在外部浏览器打开来源 ↗</ButtonItem></PanelSectionRow>
     </PanelSection><PanelSection title="安装与预览"><PanelSectionRow><ButtonItem onClick={() => void work("正在生成只读预览…", () => preview(row.game.instance_id, patch.release_id), setView)} disabled={!!busy}>查看文件变更</ButtonItem></PanelSectionRow>
       <PanelSectionRow><TextField label="本地 ZIP 路径（仅 ~/Downloads 内）" value={archive} onChange={e => setArchive(e.target.value)} /></PanelSectionRow>
       <PanelSectionRow><p>浏览器下载后切换到桌面模式确认文件路径，再回到这里输入。导入仅允许 Downloads 内的 ZIP。</p></PanelSectionRow>
-      {patch.support_level === "managed_zip" && <PanelSectionRow><ButtonItem onClick={download} disabled={!!busy}>获取已审核文件</ButtonItem></PanelSectionRow>}
+      {patch.support_level === "managed_zip" && patch.download_available && <PanelSectionRow><ButtonItem onClick={download} disabled={!!busy}>获取已审核文件</ButtonItem></PanelSectionRow>}
       <PanelSectionRow><ButtonItem onClick={getPlan} disabled={!!busy || !["managed_zip", "manual_download"].includes(patch.support_level)}>验证并生成安装计划</ButtonItem></PanelSectionRow>
       {view && <Changes title="只读预览" value={view} />}{plan && <Changes title="安装计划" value={plan} />}
       {plan?.plan_id && plan.instance_id === selected && plan.release_id === release && plan.blockers.length === 0 && <><PanelSectionRow><ButtonItem onClick={() => setConfirm(plan.plan_id!)} disabled={!!busy}>查看确认</ButtonItem></PanelSectionRow>
         {confirm === plan.plan_id && <PanelSectionRow><ButtonItem onClick={() => void work("正在安装，请保持游戏关闭…", () => startInstall(plan.plan_id!, true), () => { setPlan(null); setConfirm(null); setNote("安装已返回结果，请重新扫描核验。"); refresh(); })} disabled={!!busy}>已关闭游戏及更新，确认安装 {plan.changes.length} 项变更</ButtonItem></PanelSectionRow>}</>}
     </PanelSection></>}
-    <PanelSection title="本工具事务">{owned.length ? owned.map(tx => <PanelSectionRow key={tx.transaction_id}><p>{tx.release_id} · {tx.state}{tx.error && ` · ${reason(tx.error)}`}</p>{tx.state === "committed" && <ButtonItem onClick={() => setConfirm(tx.transaction_id)}>卸载此事务</ButtonItem>}{confirm === tx.transaction_id && <ButtonItem onClick={() => void work("正在安全卸载…", () => uninstall(tx.transaction_id, true), () => { setConfirm(null); refresh(); })}>已关闭游戏及更新，确认恢复文件</ButtonItem>}</PanelSectionRow>) : <PanelSectionRow><p>没有托管事务；外部安装不能从此处卸载。</p></PanelSectionRow>}</PanelSection>
+    <PanelSection title="本工具事务">{owned.length ? owned.map(tx => <PanelSectionRow key={tx.transaction_id}><p>{tx.release_id} · {workflowState(tx.state)}{tx.error && ` · ${reason(tx.error)}`}</p>{tx.state === "committed" && <ButtonItem onClick={() => setConfirm(tx.transaction_id)}>卸载此事务</ButtonItem>}{confirm === tx.transaction_id && <ButtonItem onClick={() => void work("正在安全卸载…", () => uninstall(tx.transaction_id, true), () => { setConfirm(null); refresh(); })}>已关闭游戏及更新，确认恢复文件</ButtonItem>}</PanelSectionRow>) : <PanelSectionRow><p>没有托管事务；外部安装不能从此处卸载。</p></PanelSectionRow>}</PanelSection>
     </>}
   </>;
 }
 
 function Changes({ title, value }: { title: string; value: Preview | Plan }) {
-  return <><PanelSectionRow><p>{title} · {value.changes.length} 项文件变更</p></PanelSectionRow>{value.blockers.map((b, i) => <PanelSectionRow key={i}><p style={{ color: "#ffb28d" }}>{reason(b)}</p></PanelSectionRow>)}{value.changes.map((c, i) => <PanelSectionRow key={i}><p>{c.action} · {c.path}{c.baseline_matches === false ? " · 基线不匹配" : ""}</p></PanelSectionRow>)}{"executable" in value && value.executable === false && <PanelSectionRow><p>此结果只能查看，不能直接执行。</p></PanelSectionRow>}</>;
+  return <><PanelSectionRow><p>{title} · {value.changes.length} 项文件变更</p></PanelSectionRow>{value.blockers.map((b, i) => <PanelSectionRow key={i}><p style={{ color: "#ffb28d" }}>{reason(b)}</p></PanelSectionRow>)}{value.changes.map((c, i) => <PanelSectionRow key={i}><p>{workflowState(c.action)} · {c.path}{c.baseline_matches === false ? " · 基线不匹配" : ""}</p></PanelSectionRow>)}{"executable" in value && value.executable === false && <PanelSectionRow><p>此结果只能查看，不能直接执行。</p></PanelSectionRow>}</>;
 }
 
 export default definePlugin(() => ({ name: "Steam 补丁管理", titleView: <div>Steam 补丁管理</div>, content: <Content />, icon: <FaPuzzlePiece /> }));

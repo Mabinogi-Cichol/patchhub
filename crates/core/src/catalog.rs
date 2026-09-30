@@ -94,6 +94,7 @@ pub struct PatchMatch {
     pub name: String,
     pub source_page: String,
     pub support_level: SupportLevel,
+    pub download_available: bool,
     pub compatibility: String,
     pub blockers: Vec<String>,
     pub detection: Detection,
@@ -396,6 +397,7 @@ pub fn matches(install: &GameInstall, catalog: &Catalog, platform: Platform) -> 
                 name: r.name.clone(),
                 source_page: r.source_page.clone(),
                 support_level: r.support_level,
+                download_available: r.artifact.is_some(),
                 compatibility: if blockers.is_empty() {
                     "verified_metadata"
                 } else {
