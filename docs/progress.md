@@ -47,7 +47,7 @@
 - 13 个 AppID 已入目录；12 个保持 discover_only，Windows 夜勤病栋配方在真实闭环完成后发布为 managed_zip，仅允许已验证 build。Deck 自动安装仍禁用。
 - 官方 patch.moe 已经浏览器年龄确认和简体中文选择；沿用原有下载取得 NSN_R18PATCH_20241120.zip，未重新下载。包大小 4,081,525,083 字节，SHA-256 为 e646d4817f1b7bfebb01d37d9218a9ae18abca6c51c12379cf1fe3c770dfa0ef；审核 50 个新增文件及哈希，不包含可执行安装器。
 - Windows 真实安装 committed、指纹检测 installed_managed；用户确认游戏能启动且补丁生效。卸载后 50 个补丁文件全部移除，12 个原版资源哈希一致；游戏运行修改的 systeminfo.json 被保留。
-- Steam Deck 真实配方预检通过；正在建立 SD 卡原版基线，尚未完成真实安装 / 游戏运行 / 卸载验收。
+- Steam Deck 真实配方预检与 13 个原版文件基线读取完成。SD 卡读取受后台 Steam I/O 影响耗时约一小时，旧计划被 plan_expired 拒绝，未开始游戏文件写入；待确认 Steam 下载 / 更新已暂停后重新预检安装。真实安装 / 游戏运行 / 卸载验收未完成。
 - 已生成最新 Windows NSIS 客户端安装包与便携 ZIP；NSIS 只安装管理工具，游戏补丁按可信配方直接解压文件。Decky ZIP 已实机安装，用户确认能够选择夜勤病栋；控制器导航与宿主重载仍待完整验收。
 - Windows 与 Decky 前端具有取消下载按钮；只取消下载子进程，暂时不显示字节级进度。已新增本地数据与隐私说明。
 - 已生成 726 个依赖组件的 SBOM 清单；npm 官方安全接口返回 0 条已披露漏洞。RustSec 全锁文件审计没有命中漏洞，但报告 glib 的 unsound 与 proc-macro-error 的 unmaintained 提示；依赖树确认两者均不进入当前 Windows 客户端或 Linux CLI 的构建依赖，完整锁文件的提示仍保留。
