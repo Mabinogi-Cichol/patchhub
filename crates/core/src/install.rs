@@ -11,7 +11,7 @@ use sha2::{Digest, Sha256};
 use std::{
     collections::{HashMap, HashSet},
     fs::{self, File, OpenOptions},
-    io::{self, Read},
+    io::{self, Read, Seek, SeekFrom},
     path::{Component, Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -287,6 +287,37 @@ fn hash_at(path: &Path) -> io::Result<Option<String>> {
         Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
         Err(e) => Err(e),
     }
+}
+
+/// Compare an interrupted copy with an authenticated source without buffering
+/// either file in memory. A complete copy is handled by its destination hash;
+/// this permits only a *strict* prefix of the expected source image.
+fn is_verified_prefix(temp: &Path, source: &Path, expected: &str) -> io::Result<bool> {
+    let mut input = regular_file(source)?;
+    let (actual, source_len) = digest_reader(&mut input, MAX_FILE_BYTES)?;
+    if actual != expected {
+        return Err(invalid("temporary_source_changed"));
+    }
+    let mut partial = regular_file(temp)?;
+    let partial_len = partial.metadata()?.len();
+    if partial_len >= source_len || partial_len > MAX_FILE_BYTES {
+        return Ok(false);
+    }
+    input.seek(SeekFrom::Start(0))?;
+    let mut remaining = partial_len;
+    let mut from_source = [0_u8; 65536];
+    let mut from_partial = [0_u8; 65536];
+    while remaining > 0 {
+        let count = remaining.min(from_source.len() as u64) as usize;
+        input.read_exact(&mut from_source[..count])?;
+        partial.read_exact(&mut from_partial[..count])?;
+        if from_source[..count] != from_partial[..count] {
+            return Ok(false);
+        }
+        remaining -= count as u64;
+    }
+    // Detect an append while reading, including an empty prefix that grew.
+    Ok(partial.read(&mut from_partial[..1])? == 0)
 }
 
 fn sync_dir(path: &Path) -> io::Result<()> {
@@ -990,7 +1021,35 @@ fn apply_files(store: &Store, job: &mut Job) -> io::Result<()> {
     store.save(job)
 }
 
-/// Restore only when the live file is exactly an approved before/after image.
+fn validate_temporary(store: &Store, job: &Job, index: usize) -> io::Result<bool> {
+    let temp = temporary(job, index)?;
+    let Some(hash) = hash_at(&temp)? else {
+        return Ok(false);
+    };
+    let change = &job.plan.changes[index];
+    if hash == change.installed_sha256 || change.original_sha256.as_ref() == Some(&hash) {
+        return Ok(true);
+    }
+    let source = match job.progress[index].as_str() {
+        "writing" => Some((
+            store.item(&job.plan.plan_id, index, "stage")?,
+            change.installed_sha256.as_str(),
+        )),
+        "restoring" => match change.original_sha256.as_deref() {
+            Some(expected) => Some((store.item(&job.plan.plan_id, index, "backup")?, expected)),
+            None => None,
+        },
+        _ => None,
+    };
+    if let Some((source, expected)) = source {
+        if is_verified_prefix(&temp, &source, expected)? {
+            return Ok(true);
+        }
+    }
+    Err(invalid("temporary_file_changed"))
+}
+
+/// Restore only when every live, backup and temporary file has an approved image.
 fn restore(store: &Store, job: &mut Job, uninstalling: bool) -> io::Result<()> {
     validate_install(&job.plan.install, &store.root)?;
     // Check the entire set first. Any conflict leaves all remaining live files untouched.
@@ -999,9 +1058,13 @@ fn restore(store: &Store, job: &mut Job, uninstalling: bool) -> io::Result<()> {
         if live != change.original_sha256 && live.as_deref() != Some(&change.installed_sha256) {
             return Err(invalid(format!("recovery_conflict:{}", change.path)));
         }
+        let backup = hash_at(&store.item(&job.plan.plan_id, i, "backup")?)?;
+        if backup.is_some() && backup != change.original_sha256 {
+            return Err(invalid("backup_missing_or_changed"));
+        }
         if live.as_deref() == Some(&change.installed_sha256)
             && change.original_sha256.is_some()
-            && hash_at(&store.item(&job.plan.plan_id, i, "backup")?)? != change.original_sha256
+            && backup != change.original_sha256
         {
             return Err(invalid("backup_missing_or_changed"));
         }
@@ -1010,6 +1073,7 @@ fn restore(store: &Store, job: &mut Job, uninstalling: bool) -> io::Result<()> {
         {
             return Err(invalid("unwritten_file_changed"));
         }
+        validate_temporary(store, job, i)?;
     }
     job.transaction.state = if uninstalling {
         "uninstalling"
@@ -1023,10 +1087,7 @@ fn restore(store: &Store, job: &mut Job, uninstalling: bool) -> io::Result<()> {
         let change = &job.plan.changes[i];
         let dest = target(&job.plan.install.install_path, &change.path)?;
         let temp = temporary(job, i)?;
-        if let Some(hash) = hash_at(&temp)? {
-            if hash != change.installed_sha256 && Some(&hash) != change.original_sha256.as_ref() {
-                return Err(invalid("temporary_file_changed"));
-            }
+        if validate_temporary(store, job, i)? {
             fs::remove_file(&temp)?;
         }
         let live = hash_at(&dest)?;

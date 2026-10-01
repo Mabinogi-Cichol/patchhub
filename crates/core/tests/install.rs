@@ -108,6 +108,13 @@ impl Fixture {
     fn job_file(&self, id: &str, name: &str) -> PathBuf {
         self.state.join("jobs").join(id).join(name)
     }
+    fn temp_file(&self, id: &str, index: usize, destination: &str) -> PathBuf {
+        self.game
+            .join(destination)
+            .parent()
+            .unwrap()
+            .join(format!(".steam-patch-{id}-{index}.tmp"))
+    }
     fn edit_journal(&self, id: &str, edit: impl FnOnce(&mut serde_json::Value)) {
         let db = rusqlite::Connection::open(self.state.join("journal.sqlite")).unwrap();
         let text: String = db
@@ -314,6 +321,148 @@ fn recovery_preserves_files_changed_during_interruption() {
     assert_eq!(
         fs::read(f.game.join("original.dat")).unwrap(),
         b"user mod after crash"
+    );
+}
+
+#[test]
+fn interrupted_install_copy_accepts_only_verified_stage_prefixes() {
+    for prefix in [b"pat".as_slice(), b"".as_slice()] {
+        let f = Fixture::new();
+        let plan = f.plan().unwrap();
+        fs::write(f.job_file(&plan.plan_id, "0.backup"), b"original bytes").unwrap();
+        let temp = f.temp_file(&plan.plan_id, 0, "original.dat");
+        fs::write(&temp, prefix).unwrap();
+        f.edit_journal(&plan.plan_id, |j| {
+            j["transaction"]["state"] = "applying".into();
+            j["progress"] = serde_json::json!(["writing", "backed_up"]);
+        });
+        assert_eq!(recover(&f.state).unwrap()[0].state, "rolled_back");
+        assert!(!temp.exists());
+        f.assert_original();
+    }
+}
+
+#[test]
+fn interrupted_uninstall_copy_accepts_verified_backup_prefix() {
+    let f = Fixture::new();
+    let plan = f.plan().unwrap();
+    assert_eq!(apply(&plan.plan_id, &f.state).unwrap().state, "committed");
+    let temp = f.temp_file(&plan.plan_id, 0, "original.dat");
+    fs::write(&temp, b"orig").unwrap();
+    f.edit_journal(&plan.plan_id, |j| {
+        j["transaction"]["state"] = "uninstalling".into();
+        j["uninstall_requested"] = true.into();
+        j["progress"][0] = "restoring".into();
+    });
+    assert_eq!(recover(&f.state).unwrap()[0].state, "uninstalled");
+    assert!(!temp.exists());
+    f.assert_original();
+}
+
+#[test]
+fn unrecognized_partial_temps_and_changed_sources_are_preserved() {
+    for case in [
+        "wrong_prefix",
+        "wrong_progress",
+        "changed_source",
+        "missing_source",
+    ] {
+        let f = Fixture::new();
+        let plan = f.plan().unwrap();
+        fs::write(f.job_file(&plan.plan_id, "0.backup"), b"original bytes").unwrap();
+        let temp = f.temp_file(&plan.plan_id, 0, "original.dat");
+        let bytes = if case == "wrong_prefix" {
+            b"wrong".as_slice()
+        } else {
+            b"pat".as_slice()
+        };
+        fs::write(&temp, bytes).unwrap();
+        if case == "changed_source" {
+            fs::write(f.job_file(&plan.plan_id, "0.stage"), b"changed stage").unwrap();
+        } else if case == "missing_source" {
+            fs::remove_file(f.job_file(&plan.plan_id, "0.stage")).unwrap();
+        }
+        f.edit_journal(&plan.plan_id, |j| {
+            j["transaction"]["state"] = "applying".into();
+            j["progress"] = serde_json::json!([
+                if case == "wrong_progress" {
+                    "backed_up"
+                } else {
+                    "writing"
+                },
+                "backed_up"
+            ]);
+        });
+        assert_eq!(
+            recover(&f.state).unwrap()[0].state,
+            "needs_recovery",
+            "{case}"
+        );
+        assert_eq!(fs::read(&temp).unwrap(), bytes, "{case}");
+        f.assert_original();
+    }
+}
+
+#[test]
+fn preflight_checks_every_temp_before_restoring_any_live_file() {
+    let f = Fixture::new();
+    let plan = f.plan().unwrap();
+    fs::write(f.job_file(&plan.plan_id, "0.backup"), b"original bytes").unwrap();
+    fs::create_dir(f.game.join("content")).unwrap();
+    fs::write(f.game.join("content/new.dat"), b"new bytes").unwrap();
+    let temp = f.temp_file(&plan.plan_id, 0, "original.dat");
+    fs::write(&temp, b"unknown partial").unwrap();
+    f.edit_journal(&plan.plan_id, |j| {
+        j["transaction"]["state"] = "applying".into();
+        j["progress"] = serde_json::json!(["writing", "installed"]);
+    });
+    assert_eq!(recover(&f.state).unwrap()[0].state, "needs_recovery");
+    assert_eq!(
+        fs::read(f.game.join("original.dat")).unwrap(),
+        b"original bytes"
+    );
+    assert_eq!(
+        fs::read(f.game.join("content/new.dat")).unwrap(),
+        b"new bytes"
+    );
+    assert_eq!(fs::read(temp).unwrap(), b"unknown partial");
+}
+
+#[test]
+fn linked_temp_is_rejected_and_preserved() {
+    let f = Fixture::new();
+    let plan = f.plan().unwrap();
+    fs::write(f.job_file(&plan.plan_id, "0.backup"), b"original bytes").unwrap();
+    let temp = f.temp_file(&plan.plan_id, 0, "original.dat");
+    fs::hard_link(f.job_file(&plan.plan_id, "0.stage"), &temp).unwrap();
+    f.edit_journal(&plan.plan_id, |j| {
+        j["transaction"]["state"] = "applying".into();
+        j["progress"][0] = "writing".into();
+    });
+    assert_eq!(recover(&f.state).unwrap()[0].state, "needs_recovery");
+    assert_eq!(fs::read(temp).unwrap(), b"patched bytes");
+    f.assert_original();
+}
+
+#[test]
+fn corrupt_backup_blocks_recovery_before_other_file_is_removed() {
+    let f = Fixture::new();
+    let plan = f.plan().unwrap();
+    fs::write(f.job_file(&plan.plan_id, "0.backup"), b"partial backup").unwrap();
+    fs::create_dir(f.game.join("content")).unwrap();
+    fs::write(f.game.join("content/new.dat"), b"new bytes").unwrap();
+    f.edit_journal(&plan.plan_id, |j| {
+        j["transaction"]["state"] = "applying".into();
+        j["progress"] = serde_json::json!(["backed_up", "installed"]);
+    });
+    assert_eq!(recover(&f.state).unwrap()[0].state, "needs_recovery");
+    assert_eq!(
+        fs::read(f.game.join("content/new.dat")).unwrap(),
+        b"new bytes"
+    );
+    assert_eq!(
+        fs::read(f.job_file(&plan.plan_id, "0.backup")).unwrap(),
+        b"partial backup"
     );
 }
 
