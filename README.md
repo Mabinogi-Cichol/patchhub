@@ -1,51 +1,50 @@
 # Steam 游戏补丁管理工具
 
-目标：为 Windows 与 SteamOS / Steam Deck 上已安装的 Steam 游戏，提供补丁发现、匹配、安装状态检测，以及可恢复的安装与卸载体验。
+为 Windows 与 SteamOS / Steam Deck 上已安装的 Steam 游戏查找补丁来源、检测补丁状态，并对支持的 ZIP 补丁提供安装、备份、卸载与事务恢复。
 
-当前为 Alpha 开发中：共享核心已支持签名目录、本地 ZIP 计划、SQLite 备份事务、安装 / 卸载 / 恢复；Windows Tauri 与 Decky 客户端已实现并构建。Windows 和指定 Steam Deck 均已通过隔离库的生产 CLI 闭环，并匹配真实《夜勤病栋》。真实补丁安装、游戏运行与发布门槛仍在验收中。
+工具会扫描本机 Steam 游戏库，按游戏与平台匹配补丁目录。你可以按游戏名称或 AppID 搜索，查看官方来源、兼容性和文件变更，再决定是否安装。游戏库和安装记录保存在本机，默认不上传游戏库，不启用遥测。
 
-- [调研与开发计划](docs/development-plan.md)
-- [调研来源与证据边界](docs/research-sources.md)
-- [开发进度与验证记录](docs/progress.md)
-- [补丁目录说明](catalog/README.md)
-- [JSON 通信契约](packages/contracts/README.md)
-- [本地数据与隐私](docs/privacy.md)
-- [Alpha 发行检查](docs/release-checklist.md)
+当前版本为 Alpha，提供 Windows 桌面应用、Decky 插件和命令行工具。部分目录条目仅提供官方来源引导；自动安装只适用于具有审核配方、可信目录和匹配游戏版本的补丁。Steam Deck 插件仍在实机验收中。
 
-建议路线：共享 Rust 安装核心 + Windows Tauri 桌面应用 + SteamOS Decky 插件；先建立少量经过审核的官方补丁目录，再扩大发行商覆盖。
+## 使用方法
 
-安装 Rust 1.94 后，在仓库根目录运行（Windows 有仓库隔离工具链时可用 scripts/cargo.ps1 代替 cargo）：
+### 获取与启动
+
+- **Windows**：从本仓库的 GitHub Releases 下载 Windows 便携 ZIP，完整解压后运行 `steam-patch-windows.exe`；也可以使用 NSIS 安装包安装。
+- **Steam Deck**：需要先安装 Decky Loader，再通过其插件安装入口安装 Decky ZIP。插件中的 `bin/steam-patch` 需要具有可执行权限，并以游戏所属用户运行。
+- **Actions 构建包**：在本仓库 GitHub Actions 的成功运行详情页，下载 `windows-portable`、`windows-nsis` 或 `decky-plugin` Artifact。
+
+自行构建与 Decky 配置步骤见[客户端指南](docs/client-guide.md#构建)。
+
+### 查找与安装补丁
+
+1. 启动工具，等待游戏库扫描完成。游戏或库磁盘发生变化后，点击“重新扫描”。
+2. 搜索游戏名称或 AppID，也可以使用“有补丁”“已安装”“需处理”筛选。
+3. 选择游戏与补丁，查看检测状态、兼容性和提示。点击“在外部浏览器打开官方来源”查看补丁说明。
+4. 对支持安装的条目，点击“从审核来源获取”；如果来源要求手动下载，在浏览器下载后点击“导入本地 ZIP”。Windows 使用文件选择器；Decky 的手动导入范围为用户 Downloads 或工具下载缓存。
+5. 点击“生成安装计划”，核对要新增或替换的文件及阻止安装的提示。“查看变更预览”仅供查看，不能直接执行安装。
+6. 关闭游戏并暂停 Steam 更新，再点击“确认安装这些变更”。等待操作完成，工具会刷新游戏状态与安装记录。
+
+只有来源引导的条目需要按官方说明手动处理。目录没有匹配条目，不代表游戏没有补丁；“状态未知”也不代表补丁未安装。目录签名到期、游戏版本未知或补丁包未通过验证时，工具会禁止自动安装。
+
+### 卸载与恢复
+
+选择游戏，在“本工具事务”中点击“卸载并恢复”，关闭游戏并暂停 Steam 更新后确认。工具只恢复自身保存的备份；如果文件已被游戏更新或手动修改，或者备份损坏，会保留相关文件并报告冲突。其他方式安装的补丁无法通过本工具卸载。
+
+安装被中断后，可点击“恢复事务”，关闭相关游戏并暂停 Steam 更新后确认，检查并恢复未完成的操作。
+
+### 命令行扫描
+
+使用 `steam-patch` 命令行程序扫描本机游戏库，输出 JSON：
 
 ```powershell
-cargo build -p steam-patch-cli --locked
-cargo run -p steam-patch-cli -- scan --catalog catalog/catalog.json
-cargo run -p steam-patch-cli -- scan --steam-root 'D:/Steam'
-cargo test -p steam-patch-core -p steam-patch-cli --locked
+steam-patch scan --catalog catalog/catalog.json
 ```
 
-本次工作区已生成可直接运行的 Windows 调试 CLI：
+其中 `catalog/catalog.json` 为补丁目录文件路径。指定 Steam 安装目录或平台：
 
 ```powershell
-.\target\debug\steam-patch.exe scan --catalog catalog/catalog.json
+steam-patch scan --steam-root 'D:/Steam' --catalog catalog/catalog.json --platform windows
 ```
 
-目录包含 13 个 AppID：12 个官方来源引导，以及经过实机验证的 Windows《夜勤病栋》ZIP 配方。未审核包结构、哈希和运行结果的条目保持 discover_only；Deck《夜勤病栋》自动安装仍禁用。no_catalog_match 仅表示没有目录匹配。Steam 工具 / 运行时暂时保留 kind=unknown。
-
-如果使用 PowerShell 包装脚本，Cargo 的参数分隔符需作为字符串传递：
-
-```powershell
-.\scripts\cargo.ps1 run -p steam-patch-cli '--' scan --catalog catalog/catalog.json
-.\scripts\cargo.ps1 clippy --workspace --all-targets '--' '-D' warnings
-```
-
-完整构建、使用与签名维护步骤见 [客户端指南](docs/client-guide.md)。签名目录到期、未知 build 或来源未审核时禁止自动安装。只读预览与可执行安装计划是不同接口。
-
-Windows 一键构建：安装客户端指南中的依赖后，双击根目录 `build.bat`，或在终端运行 `build.bat --no-pause`。构建结果位于 `.artifacts`，详细依赖和输出说明见 [客户端指南的构建章节](docs/client-guide.md#构建)。
-
-GitHub Actions 在推送、Pull Request 和手动触发时检查代码并分别构建 Windows 与 Decky 客户端；完成后在运行详情页的 Artifacts 下载构建包。
-
-推送 `v*` Tag（例如 `v0.1.0-alpha.1`）后，全部检查与构建成功才自动发布 GitHub Release；含 `-` 的 Tag 发布为预发行版。操作步骤见 [Tag 发布](docs/client-guide.md#tag-发布)。
-
-客户端构建完成后运行 `python scripts/package-artifacts.py`，生成 Windows 便携 ZIP、Decky ZIP 与校验清单，保存在忽略目录 .artifacts。Windows 便携包解压后运行 steam-patch-windows.exe；NSIS 是管理工具的可选安装方式，游戏补丁本身仍按配方解压文件。
-
-只打包一端时，使用 `python scripts/package-artifacts.py --platform windows` 或 `--platform decky`，对应生成 `checksums-windows.json` 或 `checksums-decky.json`。
+SteamOS 使用 `--platform steamos`；多个 Steam 根目录可重复传入 `--steam-root`。运行 `steam-patch --help` 查看命令与参数。
