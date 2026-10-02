@@ -1,5 +1,6 @@
 """Package already-built clients without game assets or private signing keys."""
 from pathlib import Path
+import argparse
 import hashlib
 import json
 import zipfile
@@ -22,6 +23,9 @@ def archive(name, entries):
 
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--platform', choices=['all', 'windows', 'decky'], default='all')
+    platform = parser.parse_args().platform
     OUTPUT.mkdir(exist_ok=True)
     windows = [(ROOT / 'target/release/steam-patch-windows.exe', 'steam-patch-windows.exe', True),
                (ROOT / 'target/release/steam-patch.exe', 'steam-patch.exe', True)]
@@ -30,7 +34,7 @@ def main():
     windows.append((ROOT / 'docs/client-guide.md', 'client-guide.md', False))
     windows.append((ROOT / 'docs/privacy.md', 'privacy.md', False))
     plugin = ROOT / 'apps/decky/plugin-output'
-    if not plugin.is_dir():
+    if platform in ('all', 'decky') and not plugin.is_dir():
         raise FileNotFoundError('Build apps/decky package:plugin first')
     decky = [(path, 'steam-patch-manager/' + path.relative_to(plugin).as_posix(),
               path.relative_to(plugin).as_posix() == 'bin/steam-patch')
@@ -44,9 +48,18 @@ def main():
                 raise ValueError('Regenerate SBOM for current lockfiles before packaging')
         windows.append((sbom, sbom.name, False))
         decky.append((sbom, 'steam-patch-manager/' + sbom.name, False))
-    result = [archive('steam-patch-manager-windows-portable.zip', windows),
-              archive('steam-patch-manager-decky.zip', decky)]
-    (OUTPUT / 'checksums.json').write_text(json.dumps(result, indent=2) + '\n', encoding='utf-8')
+    selected = []
+    if platform in ('all', 'windows'):
+        selected.append(('steam-patch-manager-windows-portable.zip', windows))
+    if platform in ('all', 'decky'):
+        selected.append(('steam-patch-manager-decky.zip', decky))
+    for _, entries in selected:
+        for source, _, _ in entries:
+            if not source.is_file():
+                raise FileNotFoundError(f'Missing build input: {source}')
+    result = [archive(name, entries) for name, entries in selected]
+    checksum_name = 'checksums.json' if platform == 'all' else f'checksums-{platform}.json'
+    (OUTPUT / checksum_name).write_text(json.dumps(result, indent=2) + '\n', encoding='utf-8')
     print(json.dumps(result, indent=2))
 
 

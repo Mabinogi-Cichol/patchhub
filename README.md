@@ -40,4 +40,10 @@ cargo test -p steam-patch-core -p steam-patch-cli --locked
 
 完整构建、使用与签名维护步骤见 [客户端指南](docs/client-guide.md)。签名目录到期、未知 build 或来源未审核时禁止自动安装。只读预览与可执行安装计划是不同接口。
 
+Windows 一键构建：安装客户端指南中的依赖后，双击根目录 `build.bat`，或在终端运行 `build.bat --no-pause`。构建结果位于 `.artifacts`，详细依赖和输出说明见 [客户端指南的构建章节](docs/client-guide.md#构建)。
+
+GitHub Actions 在推送、Pull Request 和手动触发时检查代码并分别构建 Windows 与 Decky 客户端；完成后在运行详情页的 Artifacts 下载构建包。
+
 客户端构建完成后运行 `python scripts/package-artifacts.py`，生成 Windows 便携 ZIP、Decky ZIP 与校验清单，保存在忽略目录 .artifacts。Windows 便携包解压后运行 steam-patch-windows.exe；NSIS 是管理工具的可选安装方式，游戏补丁本身仍按配方解压文件。
+
+只打包一端时，使用 `python scripts/package-artifacts.py --platform windows` 或 `--platform decky`，对应生成 `checksums-windows.json` 或 `checksums-decky.json`。

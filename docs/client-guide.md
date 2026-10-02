@@ -14,6 +14,26 @@ Decky 手动 ZIP 导入限于用户 Downloads 或本工具下载缓存；Windows
 
 仓库固定 Rust 1.94，使用 Cargo.lock 和 package-lock.json。先 `npm ci`，再 `npm run typecheck`、`npm run build:windows`、`npm run build:decky`。
 
+### Windows 一键构建
+
+准备 Node.js 22（含 npm）、Rust 1.94 MSVC 工具链、Python 3.11 或更新版本，以及 Visual Studio 2022 Build Tools 的“使用 C++ 的桌面开发”和 Windows SDK。将 node、npm、cargo、rustc、python（或 py）加入 PATH；已有仓库隔离工具链 `.tools/cargo` 和 `.tools/rustup` 时，脚本优先使用它。首次构建需要联网下载依赖和 NSIS 工具。
+
+双击仓库根目录 `build.bat`；脚本自动切换到仓库目录，执行依赖安装、类型检查、release CLI、Tauri 应用与 NSIS 构建，再生成依赖 SBOM 和 Windows 便携 ZIP。失败时显示步骤和非零退出码，窗口保持打开。终端或自动化调用可关闭末尾暂停：
+
+```bat
+build.bat --no-pause
+```
+
+便携包为 `.artifacts/steam-patch-manager-windows-portable.zip`，SHA-256 清单为 `.artifacts/checksums-windows.json`，依赖清单为 `.artifacts/dependencies.cdx.json`。NSIS 安装包位于 `target/release/bundle/nsis/`。此脚本构建 Windows 客户端；Decky 的 Linux CLI 在 Linux 环境构建。
+
+### GitHub Actions
+
+`.github/workflows/ci.yml` 在 push、Pull Request 和手动触发时运行 Rust 格式、Clippy、测试、桥接测试及打包测试，并在独立 Windows/Linux runner 上构建客户端。Node.js 使用 22，Rust 使用 1.94.0，依赖按仓库锁文件安装。
+
+在 GitHub 的 Actions 页面打开成功运行，下载 `windows-portable`、`windows-nsis` 或 `decky-plugin` Artifact。便携 ZIP 与插件 ZIP 附带对应 SHA-256 校验清单和依赖清单。工作流只生成构建产物，不自动发布 Release；这些 Alpha 构建仍需客户端与游戏实机验收。
+
+### 手动构建
+
 Windows：先构建 `cargo build --release -p steam-patch-cli`，将工具链 bin 加入 PATH，再运行 `npm run bundle -w apps/windows`。prepare-sidecar 会复制固定二进制以及三个目录资源，Tauri 生成 NSIS 安装包。开发构建也需准备 sidecar 与资源。不要把私钥放入资源或提交到 Git。
 
 Linux：`sh scripts/build-linux.sh` 使用仓库内隔离工具链，测试核心与 CLI，并输出 `target/linux/release/steam-patch`。然后 `npm run package:plugin -w apps/decky` 生成 plugin-output 目录。安装到 Decky 前应检查二进制可执行权限、文件所属用户、宿主版本和日志；root 宿主启动核心时按游戏用户降权并同步 HOME / XDG，状态存于用户 ~/.local/share/steam-patch-manager；商店审核另设门槛。
