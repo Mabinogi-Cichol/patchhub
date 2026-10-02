@@ -30,7 +30,22 @@ build.bat --no-pause
 
 `.github/workflows/ci.yml` 在 push、Pull Request 和手动触发时运行 Rust 格式、Clippy、测试、桥接测试及打包测试，并在独立 Windows/Linux runner 上构建客户端。Node.js 使用 22，Rust 使用 1.94.0，依赖按仓库锁文件安装。
 
-在 GitHub 的 Actions 页面打开成功运行，下载 `windows-portable`、`windows-nsis` 或 `decky-plugin` Artifact。便携 ZIP 与插件 ZIP 附带对应 SHA-256 校验清单和依赖清单。工作流只生成构建产物，不自动发布 Release；这些 Alpha 构建仍需客户端与游戏实机验收。
+在 GitHub 的 Actions 页面打开成功运行，下载 `windows-portable`、`windows-nsis` 或 `decky-plugin` Artifact。便携 ZIP 与插件 ZIP 附带对应 SHA-256 校验清单和依赖清单。这些 Alpha 构建仍需客户端与游戏实机验收。
+
+### Tag 发布
+
+推送以 `v` 开头的 Tag（例如 `v0.1.0`、`v0.1.0-alpha.1`）会触发构建；只有 core、windows、decky 三个任务全部成功后，才自动创建对应 Tag 的 GitHub Release。分支推送、PR 和手动运行仅构建，不发布。非 `v` 开头的 Tag 不触发此工作流。
+
+先确保要发布的提交包含最新工作流，并手动将 Cargo workspace、Windows package.json 和 tauri.conf.json 等版本字段更新为计划发布的版本。Tag 不会自动改写程序内版本。将提交推送后，再创建并推送 Tag，例如：
+
+```powershell
+git tag -a v0.1.0-alpha.1 -m "Release v0.1.0-alpha.1"
+git push origin v0.1.0-alpha.1
+```
+
+Tag 名含 `-` 时标记为预发行版，其余标记为正式发行版。Release 自动生成说明，包含 Windows 便携 ZIP、NSIS 安装包、Decky ZIP、各平台校验与依赖清单，以及覆盖所有附件的 `SHA256SUMS.txt`。Windows、Decky 的外部依赖清单分别命名为 `dependencies-windows.cdx.json` 和 `dependencies-decky.cdx.json`，避免同名覆盖。
+
+发布使用 GitHub 自动提供的 `GITHUB_TOKEN`，仅发布任务授予 `contents: write`，无需配置个人访问令牌。同一 Tag 的发布任务串行执行；失败后可重新运行该次 Actions，若 Release 已存在则覆盖同名附件。已发布 Tag 应保持指向不变；新版本使用新 Tag。
 
 ### 手动构建
 

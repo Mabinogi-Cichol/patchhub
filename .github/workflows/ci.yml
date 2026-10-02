@@ -1,6 +1,8 @@
 name: Build and test
 on:
   push:
+    branches: ['**']
+    tags: ['v*']
   pull_request:
   workflow_dispatch:
 permissions:
@@ -60,6 +62,56 @@ jobs:
           path: target/release/bundle/nsis/*.exe
           if-no-files-found: error
 
+  release:
+    needs: [core, windows, decky]
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    concurrency:
+      group: release-${{ github.ref }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: windows-*
+          path: release-input
+      - uses: actions/download-artifact@v4
+        with:
+          name: decky-plugin
+          path: release-input/decky-plugin
+      - name: Prepare release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir release-assets
+          cp release-input/windows-portable/steam-patch-manager-windows-portable.zip release-assets/
+          cp release-input/windows-portable/checksums-windows.json release-assets/
+          cp release-input/windows-portable/dependencies.cdx.json release-assets/dependencies-windows.cdx.json
+          cp release-input/windows-nsis/*.exe release-assets/
+          cp release-input/decky-plugin/steam-patch-manager-decky.zip release-assets/
+          cp release-input/decky-plugin/checksums-decky.json release-assets/
+          cp release-input/decky-plugin/dependencies.cdx.json release-assets/dependencies-decky.cdx.json
+          cd release-assets
+          sha256sum -- * > SHA256SUMS.txt
+      - name: Publish GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          flags=()
+          if [[ "$RELEASE_TAG" == *-* ]]; then
+            flags+=(--prerelease)
+          fi
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" release-assets/* --clobber
+          else
+            gh release create "$RELEASE_TAG" release-assets/* \
+              --verify-tag --title "$RELEASE_TAG" --generate-notes "${flags[@]}"
+          fi
   decky:
     runs-on: ubuntu-22.04
     env:

@@ -44,6 +44,8 @@ Windows 一键构建：安装客户端指南中的依赖后，双击根目录 `b
 
 GitHub Actions 在推送、Pull Request 和手动触发时检查代码并分别构建 Windows 与 Decky 客户端；完成后在运行详情页的 Artifacts 下载构建包。
 
+推送 `v*` Tag（例如 `v0.1.0-alpha.1`）后，全部检查与构建成功才自动发布 GitHub Release；含 `-` 的 Tag 发布为预发行版。操作步骤见 [Tag 发布](docs/client-guide.md#tag-发布)。
+
 客户端构建完成后运行 `python scripts/package-artifacts.py`，生成 Windows 便携 ZIP、Decky ZIP 与校验清单，保存在忽略目录 .artifacts。Windows 便携包解压后运行 steam-patch-windows.exe；NSIS 是管理工具的可选安装方式，游戏补丁本身仍按配方解压文件。
 
 只打包一端时，使用 `python scripts/package-artifacts.py --platform windows` 或 `--platform decky`，对应生成 `checksums-windows.json` 或 `checksums-decky.json`。
