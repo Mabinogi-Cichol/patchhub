@@ -325,7 +325,7 @@ Steam 补丁管理
 | 下载 / 安装进度与安全取消 | 已实现并通过后端测试 | 真实字节上报、任务租约、取消竞态和安全恢复测试通过 |
 | 自动化测试与审查 | 已通过代码检查与测试 | Rust 55 项、Python 45 项（Deck）；前端 19 项（本轮新增 3 项路由编码测试）；格式检查、Clippy 与两个前端类型检查通过 |
 | 实机路由与顶部布局修复 | 已修复并部署验证 | URL-safe base64 路由段；`.patch-page` 顶部内边距；实机截图确认 |
-| Steam Deck 部署与实机验收 | 已部署，验收中 | 本轮逐文件哈希复核一致；概览与订阅源页实机通过；事务残留已清理，补丁阻断为空；补丁管理各状态与进度面板待手柄确认 |
+| Steam Deck 部署与实机验收 | 已部署，验收中 | 逐文件哈希复核一致；概览、订阅源、补丁管理页实机通过；侧栏切换已修复；事务残留已清理；进度面板与取消待手柄确认 |
 
 ### 施工记录
 
@@ -343,3 +343,4 @@ Steam 补丁管理
 - 2026-10-04：修复实机发现的两个问题。其一，`instance_id` 含 `/`，Steam 路由只部分解码单个 URL 段，导致点击游戏进入“游戏已不在当前扫描结果中”降级页；改用 URL-safe base64 路由段，新增 `apps/decky/src/route.ts` 及 3 项单测，`sources` 入口单独走不编码路径。其二，全屏内容顶部被系统状态栏遮挡；将 `.patch-page` 顶部内边距调整为 56px。重新构建后备份并部署（`backup-route-fix`、`backup-route-fix-2`），通过 Steam 现有前端 `importPlugin` 重载，实机截图确认概览页、订阅源页正常且顶部不再遮挡。
 - 2026-10-04：实机数据中 3239270 仍保留历史 committed 事务（`night-shift-nurses-20241120`）与一个未作废的 `planned` 计划，使已匹配补丁显示 `publisher_existing_transaction` 阻断、安装准备按钮不可用。补丁管理页各状态布局、下载 / 安装进度面板与取消仍需手柄实机确认，未将结构验证记作完整 UI 验收。
 - 2026-10-04：经用户授权清理 3239270 的验证事务残留。先备份 `journal.sqlite` 与 publisher `journal.sqlite` 为 `.bak-20261004`，再删除 4 条 base 事务与 1 条 publisher `planned`，未调用 uninstall、未改动游戏文件；`scan` 复核该补丁 `blockers` 为空。本轮 UX 施工改动已提交为 `61bc3e9`（27 个文件）。publisher 缓存为空，界面“自动下载”会重新下载约 4GB 补丁，未在无人值守时触发，进度面板与取消的实机确认保留给手柄操作。
+- 2026-10-04：修复用户反馈的“侧栏点击后不切换、选中态不变”。定位到 `@decky/ui` 导出的 `SidebarNavigation` 是路由驱动：当前页由 `matchPath(location.pathname, page.route)` 决定，切换通过替换 URL；且先注册的 `/steam-patch-manager/:instance` 前缀匹配会吞掉子段，使第二个路由永不命中。改为单一可选参数路由 `/steam-patch-manager/:instance/:panel?`，每个栏目使用完整子路由，`fnSetNavigateToPage` 注册内部切换器供“查看补丁”等程序化跳转，`disableRouteReporting` 避免联动 Steam 路由器。实机点击“补丁管理”后选中态与右侧内容（补丁详情、匹配源、当前状态）均正确切换。

@@ -26,8 +26,9 @@ async function readSnapshot() {
   return { report, transactions };
 }
 const session = createManagerSession(readSnapshot);
-const route = "/steam-patch-manager/:instance";
+const route = "/steam-patch-manager/:instance/:panel?";
 const sourceRoute = "sources";
+const panelKeys = ["overview", "patches", "records", "sources"] as const;
 const filterOptions: { data: Filter; label: string }[] = [
   { data: "all", label: "全部" }, { data: "matched", label: "有补丁" },
   { data: "installed", label: "已安装补丁" }, { data: "attention", label: "需要处理" },
@@ -228,9 +229,14 @@ function showTask(game: string, patch: string, onTerminal: (task: TaskSnapshot) 
   }} />, undefined, { strTitle: "补丁进度", bHideMainWindowForPopouts: false, fnOnClose: () => { void tasks.requestCancel(); } });
 }
 
-function GameManager({ item }: { item: Install }) {
+function GameManager({ item, seg, panel }: { item: Install; seg: string; panel?: string }) {
   const { report, transactions, busy, error, note } = useSyncExternalStore(session.subscribe, session.getSnapshot);
-  const [page, setPage] = useState("overview");
+  // The decky SidebarNavigation is route-driven: it renders the page whose
+  // `route` matches the URL and switches by replacing the URL. Keep one
+  // sub-route per panel so selection and content follow the URL.
+  const activePanel = panel && (panelKeys as readonly string[]).includes(panel) ? panel : "overview";
+  const base = `/steam-patch-manager/${seg}`;
+  const navigate = useRef<((route: string) => void) | null>(null);
   const [release, setRelease] = useState(item.patches[0]?.release_id ?? "");
   const [plan, setPlan] = useState<Plan | null>(null);
   const [archive, setArchive] = useState("");
@@ -264,16 +270,20 @@ function GameManager({ item }: { item: Install }) {
     return () => { mounted.current = false; void tasks.requestCancel(); };
   }, []);
   useEffect(() => { if (!active) return; const id = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(id); }, [active]);
-  useLayoutEffect(() => { if (contentRef.current) contentRef.current.scrollTop = panelScroll.current[page] ?? 0; }, [page]);
+  useLayoutEffect(() => { if (contentRef.current) contentRef.current.scrollTop = panelScroll.current[activePanel] ?? 0; }, [activePanel]);
   useLayoutEffect(() => {
-    if (page === "patches" && active && planRef.current) {
+    if (activePanel === "patches" && active && planRef.current) {
       planRef.current.scrollIntoView({ block: "start" });
       planRef.current.focus();
     }
-  }, [active?.plan_id, page]);
-  function selectPage(next: string) {
-    if (contentRef.current) panelScroll.current[page] = contentRef.current.scrollTop;
-    setPage(next);
+  }, [active?.plan_id, activePanel]);
+  function navigatePanel(next: string) {
+    if (next === activePanel) return;
+    const target = `${base}/${next}`;
+    // The sidebar exposes its own switcher, which replaces the URL instead of
+    // growing browser history; fall back to a normal navigation before it
+    // registers on the first render.
+    if (navigate.current) navigate.current(target); else Navigation.Navigate(target);
   }
   function chooseRelease(next: string) { setRelease(next); setPlan(null); setArchive(""); setAcquisition(null); setChangesOpen(false); }
   function changeSources(action: () => Promise<SourceSubscription[]>) {
@@ -289,7 +299,7 @@ function GameManager({ item }: { item: Install }) {
         if (task.release_id) setRelease(task.release_id);
         setPlan(value.plan); setArchive(value.archive); setAcquisition(value.acquisition); setChangesOpen(false);
         session.update({ note: preparedSource(value.acquisition, value.mode) });
-        selectPage("patches"); panelScroll.current.patches = 0;
+        navigatePanel("patches"); panelScroll.current.patches = 0;
       }
     } else if (task.state === "completed" && task.kind === "install") {
       const tx = task.result as Transaction;
@@ -323,20 +333,20 @@ function GameManager({ item }: { item: Install }) {
     });
   }
   const common = <>{busy && <Status>{busy}</Status>}{error && <Status warning>{error}</Status>}{note && <Status>{note}</Status>}</>;
-  const overview = <div className="patch-page" ref={page === "overview" ? contentRef : undefined} onScroll={e => panelScroll.current.overview = e.currentTarget.scrollTop}>
+  const overview = <div className="patch-page" ref={activePanel === "overview" ? contentRef : undefined} onScroll={e => panelScroll.current.overview = e.currentTarget.scrollTop}>
     <h1>{game}</h1><h2>概览</h2>{common}
     <PanelSection title="补丁状态"><Row><Status>{item.patches.length ? `${item.patches.length} 个匹配补丁` : "暂无匹配补丁"}</Status></Row>
       <Row><Status>匹配来源：{item.patches.length ? [...new Set(item.patches.map(p => p.source_name || report?.sources?.find(s => s.id === p.source_id)?.name || "匹配源未知"))].join("、") : "—"}</Status></Row>
-      {owned.some(needsRecovery) && <Row><Status warning>有未完成的操作需要处理。</Status><Action onClick={() => selectPage("records")}>查看操作记录</Action></Row>}
+      {owned.some(needsRecovery) && <Row><Status warning>有未完成的操作需要处理。</Status><Action onClick={() => navigatePanel("records")}>查看操作记录</Action></Row>}
     </PanelSection>
     <PanelSection title="匹配到的补丁">{item.patches.length ? item.patches.map(p => <Row key={p.release_id}>
       <Status><strong>{p.name}</strong><br />匹配源：{sourceInfo(p, report?.sources)}</Status>
-      <Action onClick={() => { chooseRelease(p.release_id); selectPage("patches"); }}>查看补丁</Action>
+      <Action onClick={() => { chooseRelease(p.release_id); navigatePanel("patches"); }}>查看补丁</Action>
       <Action onClick={() => openSource(p.source_page)}>打开来源网页 ↗</Action>
-    </Row>) : <Row><Status>暂无匹配补丁；这不代表游戏不需要补丁。</Status><Action onClick={() => selectPage("sources")}>管理订阅源</Action></Row>}</PanelSection>
+    </Row>) : <Row><Status>暂无匹配补丁；这不代表游戏不需要补丁。</Status><Action onClick={() => navigatePanel("sources")}>管理订阅源</Action></Row>}</PanelSection>
     <PanelSection title="游戏信息"><Row><Status>游戏编号：{item.game.appid}<br />游戏版本：{item.game.buildid ?? "未知"}<br />安装位置：{item.game.install_path}</Status></Row></PanelSection>
   </div>;
-  const patches = <div className="patch-page" ref={page === "patches" ? contentRef : undefined} onScroll={e => panelScroll.current.patches = e.currentTarget.scrollTop}>
+  const patches = <div className="patch-page" ref={activePanel === "patches" ? contentRef : undefined} onScroll={e => panelScroll.current.patches = e.currentTarget.scrollTop}>
     <h1>{game}</h1><h2>补丁管理</h2>{common}
     {!patch ? <PanelSection><Row><Status>暂无匹配补丁。</Status></Row></PanelSection> : <>
       <PanelSection title="选择补丁">{item.patches.length > 1 ? <Row><DropdownItem label="补丁" rgOptions={item.patches.map(p => ({ data: p.release_id, label: p.name }))} selectedOption={release} onChange={option => chooseRelease(option.data)} /></Row>
@@ -368,7 +378,7 @@ function GameManager({ item }: { item: Install }) {
         }))}>卸载补丁</Action></Row></PanelSection>)}
     </>}
   </div>;
-  const records = <div className="patch-page" ref={page === "records" ? contentRef : undefined} onScroll={e => panelScroll.current.records = e.currentTarget.scrollTop}>
+  const records = <div className="patch-page" ref={activePanel === "records" ? contentRef : undefined} onScroll={e => panelScroll.current.records = e.currentTarget.scrollTop}>
     <h1>{game}</h1><h2>操作记录</h2>{common}
     {unfinished.length > 0 && <PanelSection title="未完成的操作"><Row><Status warning>修复会处理以下所有游戏的未完成事务。请关闭这些游戏并暂停更新：</Status></Row>
       {unfinished.map(tx => <Row key={tx.transaction_id}><Status>{report?.installs.find(i => i.game.instance_id === tx.instance_id)?.game.name ?? tx.instance_id} · {workflowState(tx.state)}</Status></Row>)}
@@ -379,13 +389,21 @@ function GameManager({ item }: { item: Install }) {
     <PanelSection title="当前游戏记录">{owned.length ? owned.map(tx => <Row key={tx.transaction_id}><Status>{tx.release_id} · {workflowState(tx.state)}{tx.error ? ` · ${reason(tx.error)}` : ""}</Status></Row>)
       : <Row><Status>没有本工具的操作记录。</Status></Row>}</PanelSection>
   </div>;
-  const sources = <SourcesPage report={report} busy={!!busy} rule={rule} setRule={setRule} changeSources={changeSources} contentRef={page === "sources" ? contentRef : undefined} onScroll={value => { panelScroll.current.sources = value; }} />;
-  return <SidebarNavigation title={<span className="patch-nav-title" title={game}>{game}</span>} page={page} onPageRequested={selectPage} pages={[
-    { identifier: "overview", title: "概览", content: overview },
-    { identifier: "patches", title: "补丁管理", content: patches },
-    { identifier: "records", title: "操作记录", content: records },
-    "separator", { identifier: "sources", title: "管理订阅源", content: sources },
-  ]} />;
+  const sources = <SourcesPage report={report} busy={!!busy} rule={rule} setRule={setRule} changeSources={changeSources} contentRef={activePanel === "sources" ? contentRef : undefined} onScroll={value => { panelScroll.current.sources = value; }} />;
+  const navPages: ComponentProps<typeof SidebarNavigation>["pages"] = [
+    { identifier: `${base}/overview`, route: `${base}/overview`, title: "概览", content: overview },
+    { identifier: `${base}/patches`, route: `${base}/patches`, title: "补丁管理", content: patches },
+    { identifier: `${base}/records`, route: `${base}/records`, title: "操作记录", content: records },
+    "separator", { identifier: `${base}/sources`, route: `${base}/sources`, title: "管理订阅源", content: sources },
+  ];
+  // The decky SidebarNavigation resolves the visible page from page.route
+  // against the URL and switches by replacing the URL. `fnSetNavigateToPage`
+  // receives the internal switcher, so panel jumps reuse it instead of pushing
+  // history, and `disableRouteReporting` leaves Steam's own router untouched.
+  const navigation = { title: <span className="patch-nav-title" title={game}>{game}</span>, page: `${base}/${activePanel}`, pages: navPages,
+    fnSetNavigateToPage: (setter: (route: string) => void) => { navigate.current = setter; },
+    disableRouteReporting: true } as unknown as ComponentProps<typeof SidebarNavigation>;
+  return <SidebarNavigation {...navigation} />;
 }
 
 function SourcesPage({ report, busy, rule, setRule, changeSources, contentRef, onScroll }: {
@@ -407,14 +425,14 @@ function SourcesPage({ report, busy, rule, setRule, changeSources, contentRef, o
 }
 
 function Manager() {
-  const { instance } = useParams<{ instance: string }>();
+  const { instance, panel } = useParams<{ instance: string; panel?: string }>();
   const { report } = useSyncExternalStore(session.subscribe, session.getSnapshot);
   useEffect(() => { void session.ensureSnapshot(); }, []);
   const target = instance === sourceRoute ? instance : decodeInstance(instance ?? "");
   const item = report?.installs.find(i => i.game.instance_id === target);
   return <Focusable className="patch-full" onCancel={() => Navigation.NavigateBack()}><style>{css}</style>
-    {instance === sourceRoute ? <SidebarNavigation title="Steam 补丁管理" pages={[{ identifier: "sources", title: "管理订阅源", content: <GlobalSources /> }]} />
-      : item ? <GameManager key={instance} item={item} />
+    {instance === sourceRoute ? <SidebarNavigation title="Steam 补丁管理" pages={[{ identifier: "sources", route: "/steam-patch-manager/sources", title: "管理订阅源", content: <GlobalSources /> }]} />
+      : item ? <GameManager key={instance} item={item} seg={instance!} panel={panel} />
         : <div className="patch-page"><h1>Steam 补丁管理</h1><Status>{report ? "游戏已不在当前扫描结果中。" : "正在加载游戏列表…"}</Status><Action onClick={() => Navigation.NavigateBack()}>返回游戏列表</Action></div>}
   </Focusable>;
 }
