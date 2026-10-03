@@ -5,6 +5,11 @@
       "key_id": "alpha-local-2026",
       "public_key": "QtgOcAWxPGNaMrJ/KYjX8bzS7xqpPK5+3PCsXv3aZtg=",
       "revoked": false
+    },
+    {
+      "key_id": "alpha-local-2026-10",
+      "public_key": "E08HcAEFVmbYIEdND9tUkFGF0jQQaYihKYaxk8HXqOU=",
+      "revoked": false
     }
   ]
 }

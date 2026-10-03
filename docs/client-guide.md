@@ -8,7 +8,11 @@ Windows 使用 Tauri 2，Decky 使用 @decky/api 和 @decky/ui；两端调用同
 
 来源条目仅供引导时，“状态未知”表示没有审核指纹，不能当作未安装。目录签名表示本工具维护端认可这些数据，不代表发行商授权，也不能代替游戏内运行验证。
 
-Decky 手动 ZIP 导入限于用户 Downloads 或本工具下载缓存；Windows 通过原生文件选择器导入。安装 / 卸载 / 恢复必须明确确认关闭游戏。当前提供等待状态和下载取消，没有字节级下载进度；不能在提交文件时强制杀死宿主。
+Decky 手动 ZIP 导入限于用户 Downloads 或本工具下载缓存；Windows 通过原生文件选择器导入。安装 / 卸载 / 恢复必须明确确认关闭游戏。Decky 显示整体操作耗时及安装计划的剩余有效期，过期后需重新生成计划；有平台或版本阻止条件时禁用获取和安装入口。安装结果按实际事务状态显示，回滚或需要恢复不当作成功。当前没有字节级或细分阶段进度；不能在提交文件时强制杀死宿主。
+
+Decky 点击“自动下载并准备安装”即可完成 ZIP 获取与计划生成；维护审核的条目先查 Downloads 和工具缓存，按完整 SHA-256 复用文件。patch.moe 的其他精确匹配游戏默认保留归档相对路径、解压至游戏根目录，下载后根据当前 build 和原文件哈希生成本地计划。仍需在核对文件变更、关闭游戏及更新后确认提交；取消获取不会提交游戏文件，过期或丢弃的计划可重新生成。
+
+订阅源的通用安装状态位于 `~/.local/share/steam-patch-manager/publisher/<release>/<instance-hash>/`，含官方获取缓存、本机配方、独立密钥及事务备份。每个 Steam 库实例隔离，重启插件后安装和卸载记录仍可路由。设备上的签名只固定本机文件计划，不宣称逐游戏维护审核或运行兼容性；公开目录的签名、信任数据库与密钥不被修改。插件保持默认非 root 运行；非 ZIP 和需要执行安装程序的来源需另行处理。
 
 ## 构建
 
@@ -57,7 +61,7 @@ Linux：`sh scripts/build-linux.sh` 使用仓库内隔离工具链，测试核�
 
 `steam-patch keygen PRIVATE PUBLIC KEY_ID` 创建 Ed25519 私钥与公钥目录；文件存在时拒绝覆盖，Unix 私钥文件权限为 0600。Windows 私钥继承目录 ACL，应保存在受限维护目录。
 
-`steam-patch sign-catalog CATALOG PRIVATE KEY_ID OUTPUT LIFETIME_SECONDS [REVOCATIONS_JSON]` 对严格校验的目录生成签名，最长有效期 90 天。签名覆盖原始 payload 字节。可选的撤销文件是 release_id 字符串数组，例如 `["withdrawn-release"]`，写入签名 payload 的 revoked_release_ids；拒绝重复或空 ID。撤销密钥通过升级受信公钥文件实施。生产维护需离线密钥、密钥轮换和审核流程，当前 alpha-local-2026 是此次开发的本地维护密钥。
+`steam-patch sign-catalog CATALOG PRIVATE KEY_ID OUTPUT LIFETIME_SECONDS [REVOCATIONS_JSON]` 对严格校验的目录生成签名，最长有效期 90 天。签名覆盖原始 payload 字节。可选的撤销文件是 release_id 字符串数组，例如 `["withdrawn-release"]`，写入签名 payload 的 revoked_release_ids；拒绝重复或空 ID。撤销密钥通过升级受信公钥文件实施。生产维护需离线密钥、密钥轮换和审核流程。revision 4 使用维护密钥 alpha-local-2026-10，公钥目录同时保留 alpha-local-2026；私钥不提交或打包。
 
 `steam-patch schema OUTPUT` 导出 payload JSON Schema。IPC 与模型详见 packages/contracts 和核心源码。修改配方必须递增 revision；同一 state 拒绝目录版本回退。客户端签名到期后禁用安装，仍可显示开发目录中的官方来源引导。
 
@@ -66,3 +70,6 @@ Linux：`sh scripts/build-linux.sh` 使用仓库内隔离工具链，测试核�
 `python scripts/smoke-transaction.py BINARY` 在临时 Steam 库运行完整签名 → 计划 → 安装 → 托管检测 → 卸载 → 恢复闭环，保留存档。它是生产接口测试，不能替代真实游戏、Proton 或控制器验证。
 
 默认不上传游戏库，不设置遥测。诊断与状态保存在本机；分享日志前应删除用户名、库路径与下载 URL 参数。安全安装拒绝链接、路径越界、危险 ZIP 成员、哈希错误和未知 build；同账户篡改完整 journal 与父目录 TOCTOU 的剩余风险见 install-design.md。
+
+
+补丁源订阅通过“管理订阅的补丁源”维护。重新扫描会实时查询已启用网站；失败时显示缓存状态。新游戏只需官网发布符合该源规则的记录，无需更新游戏索引。添加网站及专用解析器的方法见 [源适配器与订阅](source-adapters.md)。停用源只停止查询和匹配，既有安装备份及卸载记录仍保留。

@@ -25,7 +25,7 @@ jobs:
       - run: cargo clippy -p steam-patch-core -p steam-patch-cli --all-targets --locked -- -D warnings
       - run: cargo test -p steam-patch-core -p steam-patch-cli --locked
       - run: cargo build -p steam-patch-core -p steam-patch-cli --locked
-      - run: python -m unittest discover -s apps/decky/backend -p test_bridge.py -v
+      - run: python -m unittest discover -s apps/decky/backend -p 'test_*.py' -v
       - run: python -m unittest discover -s scripts -p test_package_artifacts.py -v
 
   windows:

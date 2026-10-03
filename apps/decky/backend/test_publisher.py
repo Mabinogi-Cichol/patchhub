@@ -1,0 +1,180 @@
+import asyncio
+import hashlib
+import json
+from pathlib import Path
+import tempfile
+from threading import Event
+import unittest
+from unittest.mock import patch, Mock
+from urllib.error import HTTPError
+from io import BytesIO
+from sources import SourceRegistry
+import zipfile
+
+from publisher import Publisher, _download, _recipe, _released
+
+
+def fixture_sources(root, entries):
+    config = root / "sources.json"
+    config.write_text(json.dumps({"schema_version": 1, "sources": [{"id": "patchmoe", "name": "patch.moe",
+        "adapter": "patchmoe", "enabled": True, "pages": ["https://www.patch.moe/?flag=1"],
+        "page_hosts": ["www.patch.moe"], "download_hosts": ["download.patch.moe"], "root_layout": "game_root"}]}))
+    sources = SourceRegistry(root / "state", config)
+    sources._cache["patchmoe"] = {"entries": [{**entry, "source_page": "https://www.patch.moe/"} for entry in entries]}
+    return sources
+
+
+class DummyBridge:
+    def __init__(self, state_dir):
+        self.state_dir = state_dir
+
+
+class PublisherTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.index = self.root / "index.json"
+        entries = [
+            {"title": "Liminal Border Part III / Criminal Border 3rd Offence",
+             "aliases": ["境界之限 第三部"], "url": "https://download.patch.moe/a.zip", "language": "zh-CN"},
+            {"title": "Another Game", "aliases": ["另一个游戏"],
+             "url": "https://download.patch.moe/b.zip", "language": "zh-CN"}]
+        self.sources = fixture_sources(self.root, entries)
+        self.publisher = Publisher(DummyBridge(self.root / "state"), self.sources)
+
+    def test_exact_name_and_slash_alias_but_no_substring(self):
+        self.assertEqual(self.publisher.match({"name": "Criminal Border: 3rd Offence", "appid": 12})["release_id"], "patchmoe-12")
+        self.assertEqual(self.publisher.match({"name": "境界之限 第三部", "appid": 12})["url"], "https://download.patch.moe/a.zip")
+        self.assertIsNone(self.publisher.match({"name": "Border", "appid": 12}))
+
+    def test_different_urls_make_name_ambiguous(self):
+        self.sources._cache["patchmoe"]["entries"].append({"title": "Another Game", "aliases": [],
+                                       "url": "https://download.patch.moe/c.zip", "language": "en"})
+        self.assertIsNone(self.publisher.match({"name": "Another Game", "appid": 14}))
+
+    def test_plus_is_a_different_game_not_decoration(self):
+        self.sources._cache["patchmoe"]["entries"].append({"title": "Another Game+", "aliases": [],
+            "url": "https://download.patch.moe/plus.zip", "language": "en"})
+        self.assertEqual(self.publisher.match({"name": "Another Game", "appid": 14})["url"],
+            "https://download.patch.moe/b.zip")
+
+    def test_unreleased_index_entries_are_not_eligible_for_prepare(self):
+        self.assertFalse(_released({"date": "COMING SOON"}))
+        self.assertFalse(_released({"date": "2999/1/1"}))
+        self.assertTrue(_released({"date": "2000/1/1"}))
+
+    def test_bridges_keep_same_app_in_two_libraries_isolated(self):
+        for library in ("library-a", "library-b"):
+            game = self.root / library / "game"
+            game.mkdir(parents=True)
+            instance = f"12|{game.parent}|{game}"
+            state = self.publisher._state(instance, "patchmoe-12")
+            state.mkdir(parents=True)
+            for filename in ("catalog.json", "signed.json", "public.json"):
+                (state / filename).write_text("{}")
+            (state / "instance.json").write_text(json.dumps({"instance_id": instance,
+                "release_id": "patchmoe-12", "install_path": str(game)}))
+        with patch.object(self.publisher, "_bridge", side_effect=lambda state: state):
+            bridges = self.publisher.bridges()
+            self.assertEqual(len(bridges), 2)
+            self.assertNotEqual(bridges[0][2], bridges[1][2])
+            self.assertEqual({row[0] for row in bridges},
+                {f"12|{self.root / library}|{self.root / library / 'game'}" for library in ("library-a", "library-b")})
+
+    def test_zip_recipe_preserves_root_paths_and_baseline_hash(self):
+        game = self.root / "game"
+        game.mkdir()
+        (game / "data.txt").write_bytes(b"original")
+        archive = self.root / "patch.zip"
+        with zipfile.ZipFile(archive, "w") as z:
+            z.writestr("data.txt", b"patched")
+            z.writestr("sub/new.txt", b"new")
+        files = _recipe(archive, game, Event())
+        self.assertEqual(files[0]["source"], "data.txt")
+        self.assertEqual(files[0]["destination"], "data.txt")
+        self.assertEqual(files[0]["original_sha256"], hashlib.sha256(b"original").hexdigest())
+        self.assertEqual(files[0]["installed_sha256"], hashlib.sha256(b"patched").hexdigest())
+        self.assertEqual(files[1]["destination"], "sub/new.txt")
+        self.assertIsNone(files[1]["original_sha256"])
+        self.assertEqual((game / "data.txt").read_bytes(), b"original")
+        self.assertFalse((game / "sub").exists())
+
+    def test_zip_traversal_and_case_collision_rejected(self):
+        game = self.root / "game"
+        game.mkdir()
+        archive = self.root / "bad.zip"
+        with zipfile.ZipFile(archive, "w") as z:
+            z.writestr("../escape", b"bad")
+        with self.assertRaisesRegex(ValueError, "unsafe_relative_path"):
+            _recipe(archive, game, Event())
+        with zipfile.ZipFile(archive, "w") as z:
+            z.writestr("A.txt", b"one")
+            z.writestr("a.txt", b"two")
+        with self.assertRaisesRegex(ValueError, "zip_duplicate_or_case_collision"):
+            _recipe(archive, game, Event())
+
+    def test_only_manifest_verified_download_is_reused(self):
+        cache = self.root / "cache"
+        cache.mkdir()
+        archive = cache / "archive.zip"
+        archive.write_bytes(b"not a download")
+        digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+        (cache / "download.json").write_text(json.dumps({"url": "https://download.patch.moe/a.zip",
+                                                          "sha256": digest, "size": archive.stat().st_size}))
+        opener = Mock()
+        opener.open.side_effect = HTTPError("https://download.patch.moe/a.zip", 304, "unchanged", {}, None)
+        receipt = json.loads((cache / "download.json").read_text())
+        receipt["etag"] = '"v1"'
+        (cache / "download.json").write_text(json.dumps(receipt))
+        with patch("publisher.build_opener", return_value=opener):
+            self.assertEqual(_download("https://download.patch.moe/a.zip", cache, Event())[3], "local")
+        self.assertEqual(opener.open.call_args.args[0].get_header("If-none-match"), '"v1"')
+        archive.write_bytes(b"changed")
+        with patch("publisher.build_opener", side_effect=RuntimeError("must redownload")):
+            with self.assertRaisesRegex(RuntimeError, "must redownload"):
+                _download("https://download.patch.moe/a.zip", cache, Event())
+
+    def test_same_url_is_revalidated_and_changed_content_is_downloaded(self):
+        cache = self.root / "updated"
+        cache.mkdir()
+        (cache / "archive.zip").write_bytes(b"old")
+        (cache / "download.json").write_text(json.dumps({"url": "https://download.patch.moe/a.zip",
+            "sha256": hashlib.sha256(b"old").hexdigest(), "size": 3, "etag": '"old"'}))
+        class Response(BytesIO):
+            headers = {"ETag": '"new"'}
+            def geturl(self):
+                return "https://download.patch.moe/a.zip"
+        opener = Mock()
+        opener.open.return_value = Response(b"updated")
+        with patch("publisher.build_opener", return_value=opener):
+            archive, digest, size, mode = _download("https://download.patch.moe/a.zip", cache, Event())
+        self.assertEqual((archive.read_bytes(), digest, size, mode),
+            (b"updated", hashlib.sha256(b"updated").hexdigest(), 7, "download"))
+
+
+class ExistingTransactionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_committed_receipt_rejects_new_recipe_before_download(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            sources = fixture_sources(root, [{"title": "Game", "aliases": [],
+                "url": "https://download.patch.moe/game.zip", "language": "en"}])
+            publisher = Publisher(DummyBridge(root / "state"), sources)
+            game_root = root / "game"
+            game_root.mkdir()
+            game = {"name": "Game", "appid": 9, "instance_id": f"9|{root}|{game_root}",
+                    "install_path": str(game_root), "buildid": "42", "availability": "installed"}
+            state = publisher._state(game["instance_id"], "patchmoe-9")
+            state.mkdir(parents=True)
+            (state / "catalog.json").write_text("{}")
+            class Existing:
+                async def list_transactions(self):
+                    return [{"state": "committed"}]
+            with patch.object(publisher, "_bridge", return_value=Existing()), patch("publisher._download") as download:
+                with self.assertRaisesRegex(RuntimeError, "publisher_existing_transaction"):
+                    await publisher.prepare(game, publisher.match(game), Event())
+                download.assert_not_called()
+
+
+if __name__ == "__main__":
+    unittest.main()

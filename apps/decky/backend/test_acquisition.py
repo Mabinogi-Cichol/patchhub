@@ -1,0 +1,138 @@
+import asyncio
+import base64
+import hashlib
+import importlib.util
+import json
+from pathlib import Path
+import sys
+import tempfile
+from threading import Event
+import types
+import unittest
+from unittest.mock import AsyncMock
+
+from acquisition import find_archive
+
+decky_stub = types.ModuleType("decky")
+sys.modules.setdefault("decky", decky_stub)
+spec = importlib.util.spec_from_file_location("acquisition_plugin", Path(__file__).parents[1] / "main.py")
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+
+
+class AcquireTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.downloads = self.root / "Downloads"
+        self.downloads.mkdir()
+        self.cache = self.root / "state/downloads"
+        self.cache.mkdir(parents=True)
+
+    def plugin(self, release, content):
+        plugin = module.Plugin()
+        plugin.downloads = self.downloads
+        plugin._prepare_cancel = None
+        bridge = types.SimpleNamespace(state_dir=self.root / "state", signed_catalog=self.root / "signed.json",
+            fetch_artifact=AsyncMock(), cancel_download=AsyncMock(return_value={"canceled": True}))
+        plugin.bridge = bridge
+        metadata = dict(release_id=release, recipe=dict(artifact_sha256=hashlib.sha256(content).hexdigest()),
+            artifact=dict(size=len(content), url="https://download.patch.moe/shared.zip"))
+        bridge.signed_catalog.write_text(json.dumps(dict(payload=base64.b64encode(json.dumps(dict(catalog=dict(
+            revision=7, releases=[metadata]))).encode()).decode())))
+        plugin.scan = AsyncMock(return_value=dict(catalog_trust="signed",catalog_revision=7,installs=[
+            dict(game=dict(instance_id="instance"),patches=[dict(release_id=release,blockers=[],support_level="managed_zip",download_available=True)])]))
+        plugin.plan_install = AsyncMock(return_value=dict(plan_id="id",changes=[]))
+        return plugin
+
+    async def test_two_unrelated_releases_reuse_renamed_matching_archives(self):
+        for release, content in (("first", b"first archive"), ("other-title", b"different archive")):
+            with self.subTest(release=release):
+                archive = self.downloads / (release + ".zip")
+                archive.write_bytes(content)
+                plugin = self.plugin(release, content)
+                result = await plugin.prepare_install("instance", release)
+                self.assertEqual(result["archive"], str(archive))
+                self.assertEqual(result["acquisition"], "local")
+                plugin.bridge.fetch_artifact.assert_not_called()
+                plugin.plan_install.assert_awaited_once_with("instance", release, str(archive))
+
+    async def test_wrong_hash_falls_back_to_fetch_and_immediately_plans(self):
+        (self.downloads / "wrong.zip").write_bytes(b"bad")
+        plugin = self.plugin("any-title", b"good")
+        path = self.cache / "good.zip"
+        plugin.bridge.fetch_artifact.return_value = {"archive": str(path)}
+        result = await plugin.prepare_install("instance", "any-title")
+        self.assertEqual(result["acquisition"], "download")
+        plugin.plan_install.assert_awaited_once()
+
+    async def test_cancellation_between_download_and_plan_never_plans(self):
+        plugin = self.plugin("any-title", b"good")
+        async def downloaded(*args):
+            await plugin.cancel_download()
+            return {"archive": str(self.cache / "unused.zip")}
+        plugin.bridge.fetch_artifact.side_effect = downloaded
+        with self.assertRaisesRegex(RuntimeError, "download_cancelled"):
+            await plugin.prepare_install("instance", "any-title")
+        plugin.plan_install.assert_not_called()
+        self.assertIsNone(plugin._prepare_cancel)
+
+    def test_canceled_local_search_aborts(self):
+        (self.downloads / "candidate.zip").write_bytes(b"data")
+        event = Event()
+        event.set()
+        with self.assertRaisesRegex(RuntimeError, "download_cancelled"):
+            find_archive([self.downloads], hashlib.sha256(b"data").hexdigest(), 4, "", event)
+
+
+class PublisherScanTests(unittest.IsolatedAsyncioTestCase):
+    def plugin(self, *, expired=False, transaction_state="uninstalled", old_build=False):
+        plugin = module.Plugin()
+        game = dict(instance_id="instance", appid=9, name="Game", buildid="101", availability="installed")
+        base = dict(catalog_trust="signed",catalog_revision=4,installs=[dict(game=game,patches=[])],diagnostics=[])
+        plugin.bridge = types.SimpleNamespace(scan=AsyncMock(return_value=base))
+        plugin.sources = types.SimpleNamespace(refresh=AsyncMock(return_value=[]), list_sources=lambda:[])
+        plugin.list_transactions = AsyncMock(return_value=[])
+        local_patch = dict(release_id="patchmoe-9",blockers=["version_incompatible"] if old_build else [],
+            detection=dict(status="not_detected",files=[]))
+        signed = dict(catalog_trust="signed",catalog_error=None,installs=[dict(game=game,patches=[local_patch])])
+        local = types.SimpleNamespace(scan=AsyncMock(side_effect=[dict(signed,catalog_trust="unsigned_development",catalog_error="catalog_expired"),signed] if expired else None, return_value=signed),
+            list_transactions=AsyncMock(return_value=[dict(state=transaction_state)]))
+        plugin.publisher = types.SimpleNamespace(matches=lambda game:[dict(release_id="patchmoe-9",source_id="patchmoe",source_page="https://www.patch.moe/",language="en",date="2000/1/1")],
+            bridge_for=lambda *args:local,state_diagnostics=[],refresh_signature=AsyncMock(return_value=local))
+        return plugin
+
+    async def test_expired_local_signature_is_renewed_and_rescanned(self):
+        plugin=self.plugin(expired=True)
+        result=await plugin.scan()
+        plugin.publisher.refresh_signature.assert_awaited_once_with("instance","patchmoe-9")
+        self.assertEqual(result["installs"][0]["patches"][0]["blockers"],[])
+
+    async def test_uninstalled_old_build_may_prepare_but_committed_is_protected(self):
+        plugin=self.plugin(old_build=True)
+        result=await plugin.scan()
+        self.assertEqual(result["installs"][0]["patches"][0]["blockers"],[])
+        plugin=self.plugin(old_build=True,transaction_state="committed")
+        result=await plugin.scan()
+        blockers=result["installs"][0]["patches"][0]["blockers"]
+        self.assertIn("publisher_existing_transaction",blockers)
+        self.assertIn("version_incompatible",blockers)
+
+    async def test_other_source_active_transaction_blocks_install(self):
+        plugin = self.plugin()
+        plugin.list_transactions.return_value = [dict(instance_id="instance", release_id="source-vendor-9", state="committed")]
+        result = await plugin.scan()
+        self.assertIn("publisher_existing_transaction", result["installs"][0]["patches"][0]["blockers"])
+
+    async def test_multiple_sources_get_independent_entries(self):
+        plugin = self.plugin()
+        plugin.publisher.matches = lambda game: [dict(release_id=f"source-{sid}-9", source_id=sid,
+            source_page=f"https://{sid}.example/", language="en", date="2000/1/1") for sid in ("first", "second")]
+        plugin.publisher.bridge_for = lambda *args: None
+        report = await plugin.scan()
+        self.assertEqual({p["release_id"] for p in report["installs"][0]["patches"]}, {"source-first-9", "source-second-9"})
+
+
+if __name__ == "__main__":
+    unittest.main()

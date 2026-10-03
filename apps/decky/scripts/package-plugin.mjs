@@ -11,7 +11,7 @@ const output = join(app, "plugin-output");
 rmSync(output, { recursive: true, force: true });
 mkdirSync(join(output, "bin"), { recursive: true });
 for (const file of ["main.py", "plugin.json", "package.json", "README.md"]) copyFileSync(join(app, file), join(output, file));
-cpSync(join(app, "backend"), join(output, "backend"), { recursive: true, filter: path => !path.includes("__pycache__") && !path.endsWith("test_bridge.py") });
+cpSync(join(app, "backend"), join(output, "backend"), { recursive: true, filter: path => !path.includes("__pycache__") && !/[\\/]test_[^\\/]*\.py$/.test(path) });
 cpSync(join(app, "dist"), join(output, "dist"), { recursive: true });
 copyFileSync(binary, join(output, "bin", "steam-patch"));
 copyFileSync(join(root, "catalog", "catalog.json"), join(output, "bin", "catalog.json"));

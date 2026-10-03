@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "sources": [
+    {
+      "id": "patchmoe",
+      "name": "patch.moe",
+      "adapter": "patchmoe",
+      "enabled": true,
+      "pages": ["https://www.patch.moe/?flag=1"],
+      "page_hosts": ["www.patch.moe"],
+      "download_hosts": ["download.patch.moe"],
+      "root_layout": "game_root"
+    }
+  ]
+}

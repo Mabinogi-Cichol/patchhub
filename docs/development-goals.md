@@ -2,7 +2,7 @@
 
 目标：为 Windows 与 SteamOS / Steam Deck 上已安装的 Steam 游戏，提供补丁发现、匹配、安装状态检测，以及可恢复的安装与卸载体验。
 
-当前为 Alpha 开发中：共享核心已支持签名目录、本地 ZIP 计划、SQLite 备份事务、安装 / 卸载 / 恢复；Windows Tauri 与 Decky 客户端已实现并构建。Windows 和指定 Steam Deck 均已通过隔离库的生产 CLI 闭环，并匹配真实《夜勤病栋》。真实补丁安装、游戏运行与发布门槛仍在验收中。
+当前为 Alpha 开发中：共享核心已支持签名目录、本地 ZIP 计划、SQLite 备份事务、安装 / 卸载 / 恢复；Windows Tauri 与 Decky 客户端已实现并构建。Windows 与指定 Steam Deck 内置 SSD 已通过真实《夜勤病栋》的补丁安装 / 检测 / 卸载恢复；用户确认 Deck 桌面模式及 GE-Proton8-8 游戏模式补丁生效。其他样本、运行矩阵和发布门槛仍在验收中。
 
 - [调研与开发计划](development-plan.md)
 - [调研来源与证据边界](research-sources.md)
@@ -29,7 +29,7 @@ cargo test -p steam-patch-core -p steam-patch-cli --locked
 .\target\debug\steam-patch.exe scan --catalog catalog/catalog.json
 ```
 
-目录包含 13 个 AppID：12 个官方来源引导，以及经过实机验证的 Windows《夜勤病栋》ZIP 配方。未审核包结构、哈希和运行结果的条目保持 discover_only；Deck《夜勤病栋》自动安装仍禁用。no_catalog_match 仅表示没有目录匹配。Steam 工具 / 运行时暂时保留 kind=unknown。
+目录包含 13 个 AppID：12 个官方来源引导，以及经过实机验证的 Windows / SteamOS《夜勤病栋》ZIP 配方。Deck 内置 SSD 的真实文件安装 / 检测 / 卸载恢复已通过，用户确认桌面模式及 GE-Proton8-8 游戏模式补丁生效。未审核包结构、哈希和运行结果的条目保持 discover_only。no_catalog_match 仅表示没有目录匹配。Steam 工具 / 运行时暂时保留 kind=unknown。
 
 如果使用 PowerShell 包装脚本，Cargo 的参数分隔符需作为字符串传递：
 

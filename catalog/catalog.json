@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "revision": 2,
+  "revision": 4,
   "releases": [
     {
       "patch_id": "official-822760",
@@ -241,7 +241,8 @@
       "source_page": "https://www.patch.moe/",
       "support_level": "managed_zip",
       "platforms": [
-        "windows"
+        "windows",
+        "steamos"
       ],
       "verified_buildids": [
         "16533492"
@@ -753,7 +754,12 @@
           }
         ]
       },
-      "artifact": null
+      "artifact": {
+        "url": "https://download.patch.moe/NSN_R18PATCH_20241120.zip",
+        "size": 4081525083,
+        "sha256": "e646d4817f1b7bfebb01d37d9218a9ae18abca6c51c12379cf1fe3c770dfa0ef",
+        "allowed_redirect_hosts": []
+      }
     }
   ]
 }
