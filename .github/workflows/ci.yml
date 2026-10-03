@@ -128,6 +128,7 @@ jobs:
           python-version: '3.12'
       - run: npm ci
       - run: npm run typecheck
+      - run: npm run test -w apps/decky
       - run: cargo build --release --locked -p steam-patch-cli
       - run: npm run package:plugin -w apps/decky
       - run: mkdir -p .artifacts

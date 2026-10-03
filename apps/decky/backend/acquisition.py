@@ -7,6 +7,7 @@ from pathlib import Path
 import re
 from threading import Event
 from urllib.parse import unquote, urlsplit
+from tasks import current_task
 
 MAX_ARCHIVE_BYTES = 8 * 1024 * 1024 * 1024
 
@@ -64,11 +65,16 @@ def find_archive(roots: list[Path], digest: str, size: int | None, filename: str
             fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
             with os.fdopen(fd, "rb") as stream:
                 before = os.fstat(stream.fileno())
+                task = current_task.get()
+                if task:
+                    task.stage("validating", before.st_size, 1, archive_bytes=before.st_size, current_file=path.name)
                 hasher = hashlib.sha256()
                 while chunk := stream.read(4 * 1024 * 1024):
                     if cancel.is_set():
                         raise RuntimeError("download_cancelled")
                     hasher.update(chunk)
+                    if task:
+                        task.update(bytes_done=task.value["bytes_done"] + len(chunk))
                 after = os.fstat(stream.fileno())
                 current = path.stat()
                 identity = lambda s: (s.st_dev, s.st_ino, s.st_size, s.st_mtime_ns)

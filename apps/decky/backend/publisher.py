@@ -23,6 +23,7 @@ import zipfile
 
 from acquisition import no_links
 from bridge import CoreBridge
+from tasks import current_task
 
 MAX_ARCHIVE = 8 * 1024**3
 MAX_EXPANDED = 16 * 1024**3
@@ -90,7 +91,7 @@ def _json_new(path, value):
         temp.unlink(missing_ok=True)
 
 
-def _hash_file(path, limit, cancel):
+def _hash_file(path, limit, cancel, report=True):
     if not no_links(path):
         raise ValueError("linked_file")
     fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
@@ -98,6 +99,9 @@ def _hash_file(path, limit, cancel):
         before = os.fstat(stream.fileno())
         if not stat.S_ISREG(before.st_mode) or before.st_size > limit:
             raise ValueError("file_size_or_type")
+        task = current_task.get()
+        if task and report:
+            task.stage("validating", before.st_size, 1, current_file=path.name, archive_bytes=before.st_size)
         digest = hashlib.sha256()
         total = 0
         while data := stream.read(CHUNK):
@@ -107,6 +111,8 @@ def _hash_file(path, limit, cancel):
             if total > limit:
                 raise ValueError("file_size_limit")
             digest.update(data)
+            if task:
+                task.update(bytes_done=task.value["bytes_done"] + len(data))
         after = os.fstat(stream.fileno())
         current = path.stat()
         identity = lambda s: (s.st_dev, s.st_ino, s.st_size, s.st_mtime_ns)
@@ -125,6 +131,9 @@ class _SameHostRedirect(HTTPRedirectHandler):
 
 
 def _download(url, cache, cancel, validate=_url):
+    task = current_task.get()
+    if cancel.is_set():
+        raise RuntimeError("download_cancelled")
     validate(url)
     manifest = cache / "download.json"
     archive = cache / "archive.zip"
@@ -156,7 +165,13 @@ def _download(url, cache, cancel, validate=_url):
                     break
         opener = build_opener(HTTPSHandler(context=context), _SameHostRedirect(validate))
         try:
-            source = opener.open(Request(url, headers=headers), timeout=30)
+            if task:
+                task.stage("connecting")
+            if cancel.is_set():
+                raise RuntimeError("download_cancelled")
+            # Bound a stalled connect/read so UI cancellation can clean up at
+            # the next chunk boundary without limiting the whole download.
+            source = opener.open(Request(url, headers=headers), timeout=15)
         except HTTPError as error:
             if error.code == 304 and cached and len(headers) > 1:
                 error.close()
@@ -166,9 +181,15 @@ def _download(url, cache, cancel, validate=_url):
             raise
         with source:
             validate(source.geturl())
+            length = source.headers.get("Content-Length")
+            total_bytes = int(length) if length and length.isdigit() else None
+            if total_bytes is not None and total_bytes > MAX_ARCHIVE:
+                raise ValueError("archive_size_limit")
+            if task:
+                task.stage("downloading", total_bytes, archive_bytes=total_bytes)
             response_metadata = {"etag": source.headers.get("ETag"), "last_modified": source.headers.get("Last-Modified")}
             with os.fdopen(os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb") as output:
-                while data := source.read(CHUNK):
+                while data := getattr(source, "read1", source.read)(CHUNK):
                     if cancel.is_set():
                         raise RuntimeError("download_cancelled")
                     size += len(data)
@@ -176,10 +197,20 @@ def _download(url, cache, cancel, validate=_url):
                         raise ValueError("archive_size_limit")
                     digest.update(data)
                     output.write(data)
+                    if task:
+                        task.update(bytes_done=size)
+                if cancel.is_set():
+                    raise RuntimeError("download_cancelled")
+                if total_bytes is not None and size != total_bytes:
+                    raise ValueError("download_size_mismatch")
                 output.flush()
                 os.fsync(output.fileno())
         if not size:
             raise ValueError("empty_archive")
+        if cancel.is_set():
+            raise RuntimeError("download_cancelled")
+        if task:
+            task.update(archive_bytes=size)
         os.replace(temp, archive)
         _json_new(manifest, {"url": url, "sha256": digest.hexdigest(), "size": size, **response_metadata})
         return archive, digest.hexdigest(), size, "download"
@@ -218,6 +249,7 @@ def _extra_safe(extra):
 
 
 def _recipe(archive, root, cancel):
+    task = current_task.get()
     files = []
     names = set()
     directory_names = set()
@@ -256,6 +288,13 @@ def _recipe(archive, root, cancel):
             expanded += info.file_size
             if expanded > MAX_EXPANDED:
                 raise ValueError("zip_expansion_limit")
+        if task:
+            original_bytes = 0
+            for info in z.infolist():
+                candidate = root.joinpath(*info.filename.removesuffix("/").split("/"))
+                if no_links(candidate) and candidate.is_file():
+                    original_bytes += candidate.stat().st_size
+            task.stage("validating", expanded + original_bytes, sum(not i.is_dir() for i in z.infolist()), archive_bytes=Path(archive).stat().st_size)
         for info in z.infolist():
             name = info.filename.removesuffix("/")
             if any(parent.lower() in names and parent.lower() not in directory_names
@@ -265,6 +304,8 @@ def _recipe(archive, root, cancel):
                 continue
             if cancel.is_set():
                 raise RuntimeError("download_cancelled")
+            if task:
+                task.update(current_file=name)
             digest = hashlib.sha256()
             size = 0
             with z.open(info) as stream:
@@ -275,6 +316,8 @@ def _recipe(archive, root, cancel):
                     if size > MAX_FILE:
                         raise ValueError("zip_expansion_limit")
                     digest.update(data)
+                    if task:
+                        task.update(bytes_done=task.value["bytes_done"] + len(data))
             if size != info.file_size:
                 raise ValueError("zip_size_mismatch")
             target = root.joinpath(*name.split("/"))
@@ -283,11 +326,13 @@ def _recipe(archive, root, cancel):
             if target.exists():
                 if not target.is_file():
                     raise ValueError("target_not_file")
-                original, _ = _hash_file(target, MAX_FILE, cancel)
+                original, _ = _hash_file(target, MAX_FILE, cancel, report=False)
             else:
                 original = None
             files.append({"source": name, "destination": name,
                           "original_sha256": original, "installed_sha256": digest.hexdigest()})
+            if task:
+                task.update(files_done=len(files))
     if not files:
         raise ValueError("empty_recipe")
     return files
@@ -414,7 +459,7 @@ class Publisher:
             temporary.unlink(missing_ok=True)
         return self._bridge(state)
 
-    async def prepare(self, game: dict, entry: dict, cancel: Event):
+    async def prepare(self, game: dict, entry: dict, cancel: Event, local_archive=None):
         matched = self.match(game, entry.get("release_id"))
         if matched is None or entry.get("url") != matched["url"]:
             raise ValueError("publisher_match_changed")
@@ -450,7 +495,12 @@ class Publisher:
             revision = json.loads(catalog_path.read_text(encoding="utf-8"))["revision"] + 1
         cache = _safe_dir(state / "cache")
         validate = lambda url: self.sources.validate_download(matched["source_id"], url)
-        archive, digest, archive_size, acquisition = await asyncio.to_thread(_download, validate(matched["url"]), cache, cancel, validate)
+        if local_archive is None:
+            archive, digest, archive_size, acquisition = await asyncio.to_thread(_download, validate(matched["url"]), cache, cancel, validate)
+        else:
+            archive = Path(local_archive)
+            digest, archive_size = await asyncio.to_thread(_hash_file, archive, MAX_ARCHIVE, cancel)
+            acquisition = "local"
         files = await asyncio.to_thread(_recipe, archive, root, cancel)
         if cancel.is_set():
             raise RuntimeError("download_cancelled")

@@ -1,5 +1,6 @@
 //! Conservative local ZIP installer. Callers must authenticate the catalog before prepare/apply.
 //! SQLite journals intent before mutation; recovery is hash guarded, not globally atomic.
+use crate::operation;
 use crate::{
     catalog::{self, Catalog, PatchRelease, SupportLevel},
     steam::{self, GameInstall},
@@ -266,6 +267,7 @@ fn digest_reader(reader: &mut impl Read, limit: u64) -> io::Result<(String, u64)
     let mut total = 0_u64;
     let mut buffer = [0_u8; 65536];
     loop {
+        operation::check()?;
         let count = reader.read(&mut buffer)?;
         if count == 0 {
             break;
@@ -279,6 +281,18 @@ fn digest_reader(reader: &mut impl Read, limit: u64) -> io::Result<(String, u64)
         hash.update(&buffer[..count]);
     }
     Ok((format!("{:x}", hash.finalize()), total))
+}
+
+fn digest_measured(reader: &mut impl Read, limit: u64) -> io::Result<(String, u64)> {
+    struct Measured<'a, R>(&'a mut R);
+    impl<R: Read> Read for Measured<'_, R> {
+        fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
+            let count = self.0.read(bytes)?;
+            operation::advance(count as u64);
+            Ok(count)
+        }
+    }
+    digest_reader(&mut Measured(reader), limit)
 }
 
 fn hash_at(path: &Path) -> io::Result<Option<String>> {
@@ -595,7 +609,10 @@ pub fn prepare(
     }) {
         return Err(invalid("artifact_size_mismatch"));
     }
-    if digest_reader(&mut file, MAX_ARCHIVE_BYTES)?.0 != recipe.artifact_sha256 {
+    operation::archive(file.metadata()?.len());
+    operation::stage("validating", Some(file.metadata()?.len()), Some(1));
+    operation::file(0, &archive_path.to_string_lossy());
+    if digest_measured(&mut file, MAX_ARCHIVE_BYTES)?.0 != recipe.artifact_sha256 {
         return Err(invalid("artifact_hash_mismatch"));
     }
     use std::io::{Seek, SeekFrom};
@@ -731,8 +748,11 @@ pub fn prepare(
     let mut changes = Vec::new();
     let mut disk = 0_u64;
     let mut blockers = Vec::new();
+    operation::stage("validating", Some(mapped_bytes), Some(recipe.files.len()));
     let prepared = (|| -> io::Result<()> {
         for (index, mapping) in recipe.files.iter().enumerate() {
+            operation::check()?;
+            operation::file(index, &mapping.destination);
             relative(&mapping.destination)?;
             for other in &recipe.files {
                 if mapping
@@ -767,7 +787,7 @@ pub fn prepare(
                 .write(true)
                 .create_new(true)
                 .open(&stage)?;
-            let copied = io::copy(&mut member.by_ref().take(MAX_FILE_BYTES + 1), &mut out)?;
+            let copied = operation::copy(&mut member.by_ref().take(MAX_FILE_BYTES + 1), &mut out)?;
             out.sync_all()?;
             drop(out);
             if copied > MAX_FILE_BYTES
@@ -779,6 +799,7 @@ pub fn prepare(
             disk = disk
                 .checked_add(old_size + copied * 2)
                 .ok_or_else(|| invalid("space_overflow"))?;
+            operation::finish_file(index + 1);
             changes.push(PlannedChange {
                 path: mapping.destination.clone(),
                 action: if mapping.original_sha256.is_some() {
@@ -792,6 +813,7 @@ pub fn prepare(
                 size: copied,
             });
         }
+        operation::check()?;
         Ok(())
     })();
     if let Err(error) = prepared {
@@ -841,12 +863,36 @@ pub fn prepare(
         created_dirs: Vec::new(),
         uninstall_requested: false,
     };
+    operation::stage("planning", None, None);
     store.save(&mut job)?;
     Ok(job.plan)
 }
 
 pub fn get_plan(plan_id: &str, state_dir: &Path) -> io::Result<InstallPlan> {
     Ok(Store::open(state_dir)?.load(plan_id)?.plan)
+}
+
+/// Invalidate unexecuted preparation, without ever touching game contents.
+pub fn discard_plan(plan_id: &str, state_dir: &Path) -> io::Result<Transaction> {
+    let store = Store::open(state_dir)?;
+    let mut job = store.load(plan_id)?;
+    let _lock = game_lock(&job.plan.install)?;
+    if job.transaction.state != "planned" {
+        return Err(invalid("plan_already_consumed"));
+    }
+    job.transaction.state = "rolled_back".into();
+    job.transaction.error = Some("task_cancelled".into());
+    store.save(&mut job)?;
+    for i in 0..job.plan.changes.len() {
+        let path = store.item(plan_id, i, "stage")?;
+        safe_path(&path)?;
+        match fs::remove_file(path) {
+            Ok(()) => (),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => (),
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(job.transaction)
 }
 
 fn copy_checked(source: &Path, destination: &Path, expected: &str) -> io::Result<()> {
@@ -856,10 +902,18 @@ fn copy_checked(source: &Path, destination: &Path, expected: &str) -> io::Result
         .write(true)
         .create_new(true)
         .open(destination)?;
-    let bytes = io::copy(
+    let copied = operation::copy(
         &mut Read::by_ref(&mut input).take(MAX_FILE_BYTES + 1),
         &mut output,
-    )?;
+    );
+    let bytes = match copied {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            drop(output);
+            fs::remove_file(destination)?;
+            return Err(error);
+        }
+    };
     output.set_permissions(input.metadata()?.permissions())?;
     output.sync_all()?;
     drop(output);
@@ -943,6 +997,8 @@ pub fn apply(plan_id: &str, state_dir: &Path) -> io::Result<Transaction> {
     if !job.plan.blockers.is_empty() {
         return Err(invalid("plan_has_blockers"));
     }
+    operation::stage("validating", None, Some(job.plan.changes.len()));
+    operation::check()?;
     ensure_no_active(&store, &job.plan.instance_id, Some(plan_id))?;
     verify_all(&job, false)?;
     if fs2::available_space(&store.root)? < job.plan.disk_requirement
@@ -955,6 +1011,7 @@ pub fn apply(plan_id: &str, state_dir: &Path) -> io::Result<Transaction> {
     let result = apply_files(&store, &mut job);
     if let Err(error) = result {
         job.transaction.error = Some(error.to_string());
+        operation::restoring();
         let recovery = restore(&store, &mut job, false);
         if let Err(recovery_error) = recovery {
             job.transaction.state = "needs_recovery".into();
@@ -966,8 +1023,23 @@ pub fn apply(plan_id: &str, state_dir: &Path) -> io::Result<Transaction> {
 }
 
 fn apply_files(store: &Store, job: &mut Job) -> io::Result<()> {
+    let mut backup_bytes = 0;
+    for change in &job.plan.changes {
+        if change.original_sha256.is_some() {
+            backup_bytes += regular_file(&target(&job.plan.install.install_path, &change.path)?)?
+                .metadata()?
+                .len();
+        }
+    }
+    operation::stage(
+        "backing_up",
+        Some(backup_bytes),
+        Some(job.plan.changes.len()),
+    );
     for i in 0..job.plan.changes.len() {
+        operation::check()?;
         let change = &job.plan.changes[i];
+        operation::file(i, &change.path);
         let stage = store.item(&job.plan.plan_id, i, "stage")?;
         if hash_at(&stage)?.as_deref() != Some(&change.installed_sha256) {
             return Err(invalid("staged_file_changed"));
@@ -981,10 +1053,18 @@ fn apply_files(store: &Store, job: &mut Job) -> io::Result<()> {
         }
         job.progress[i] = "backed_up".into();
         store.save(job)?;
+        operation::finish_file(i + 1);
     }
+    operation::stage(
+        "writing",
+        Some(job.plan.changes.iter().map(|c| c.size).sum()),
+        Some(job.plan.changes.len()),
+    );
     job.transaction.state = "applying".into();
     store.save(job)?;
     for i in 0..job.plan.changes.len() {
+        operation::check()?;
+        operation::file(i, &job.plan.changes[i].path);
         validate_install(&job.plan.install, &store.root)?;
         make_parents(store, job, i)?;
         job.progress[i] = "writing".into();
@@ -1006,6 +1086,7 @@ fn apply_files(store: &Store, job: &mut Job) -> io::Result<()> {
             fs::set_permissions(&temp, fs::metadata(&dest)?.permissions())?;
             OpenOptions::new().write(true).open(&temp)?.sync_all()?;
         }
+        operation::check()?;
         safe_path(&dest)?;
         fs::rename(&temp, &dest)?;
         sync_dir(dest.parent().ok_or_else(|| invalid("missing_parent"))?)?;
@@ -1014,9 +1095,12 @@ fn apply_files(store: &Store, job: &mut Job) -> io::Result<()> {
         }
         job.progress[i] = "installed".into();
         store.save(job)?;
+        operation::finish_file(i + 1);
     }
+    operation::stage("committing", None, None);
     validate_install(&job.plan.install, &store.root)?;
     verify_all(job, true)?;
+    operation::check()?;
     job.transaction.state = "committed".into();
     store.save(job)
 }

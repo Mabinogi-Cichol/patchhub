@@ -12,6 +12,120 @@ use steam_patch_core::{
 };
 use zip::{write::SimpleFileOptions, ZipWriter};
 
+#[test]
+fn cancellation_after_first_live_write_restores_all_originals() {
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    };
+    use steam_patch_core::operation;
+    let fixture = Fixture::new();
+    let plan = fixture.plan().unwrap();
+    let cancel = Arc::new(AtomicBool::new(false));
+    let signal = cancel.clone();
+    let result = operation::run(
+        cancel,
+        move |p| {
+            if p.stage == "writing" && p.files_done == 1 {
+                signal.store(true, Ordering::Relaxed);
+            }
+        },
+        || apply(&plan.plan_id, &fixture.state),
+    )
+    .unwrap();
+    assert_eq!(result.state, "rolled_back");
+    assert_eq!(result.error.as_deref(), Some("task_cancelled"));
+    assert_eq!(
+        fs::read(fixture.game.join("original.dat")).unwrap(),
+        b"original bytes"
+    );
+    assert!(!fixture.game.join("content/new.dat").exists());
+    assert_eq!(
+        list_transactions(&fixture.state).unwrap()[0].state,
+        "rolled_back"
+    );
+}
+
+#[test]
+fn cancellation_inside_large_backup_or_write_cleans_partial_and_rolls_back() {
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    };
+    use steam_patch_core::operation;
+    for stage in ["backing_up", "writing"] {
+        let mut fixture = Fixture::new();
+        let original = vec![1u8; 1024 * 1024];
+        let patched = vec![2u8; 2 * 1024 * 1024];
+        fs::write(fixture.game.join("original.dat"), &original).unwrap();
+        let mapping = &mut fixture.release.recipe.as_mut().unwrap().files[0];
+        mapping.original_sha256 = Some(hash(&original));
+        mapping.installed_sha256 = hash(&patched);
+        fixture.archive_with(&[("replace.dat", &patched), ("add.dat", b"new bytes")]);
+        let plan = fixture.plan().unwrap();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let signal = cancel.clone();
+        let result = operation::run(
+            cancel,
+            move |p| {
+                if p.stage == stage && p.bytes_done > 0 && p.bytes_done < p.total_bytes.unwrap() {
+                    signal.store(true, Ordering::Relaxed);
+                }
+            },
+            || apply(&plan.plan_id, &fixture.state),
+        )
+        .unwrap();
+        assert_eq!(result.state, "rolled_back", "{stage}: {:?}", result.error);
+        assert_eq!(result.error.as_deref(), Some("task_cancelled"));
+        assert_eq!(
+            fs::read(fixture.game.join("original.dat")).unwrap(),
+            original
+        );
+        assert!(!fixture.game.join("content/new.dat").exists());
+        assert!(fs::read_dir(&fixture.game).unwrap().all(|item| !item
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .ends_with(".tmp")));
+    }
+}
+
+#[test]
+fn cancelled_preparation_removes_staging_and_discarded_plan_cannot_apply() {
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    };
+    use steam_patch_core::operation;
+    let fixture = Fixture::new();
+    let cancel = Arc::new(AtomicBool::new(false));
+    let signal = cancel.clone();
+    let error = operation::run(
+        cancel,
+        move |p| {
+            if p.stage == "validating" && p.total_files == Some(2) && p.bytes_done > 0 {
+                signal.store(true, Ordering::Relaxed);
+            }
+        },
+        || fixture.plan(),
+    )
+    .unwrap_err();
+    assert_eq!(error.to_string(), "task_cancelled");
+    assert_eq!(fs::read_dir(fixture.state.join("jobs")).unwrap().count(), 0);
+    let plan = fixture.plan().unwrap();
+    discard_plan(&plan.plan_id, &fixture.state).unwrap();
+    assert_eq!(
+        apply(&plan.plan_id, &fixture.state)
+            .unwrap_err()
+            .to_string(),
+        "plan_already_consumed"
+    );
+    assert_eq!(
+        fs::read(fixture.game.join("original.dat")).unwrap(),
+        b"original bytes"
+    );
+}
+
 fn hash(data: &[u8]) -> String {
     format!("{:x}", Sha256::digest(data))
 }

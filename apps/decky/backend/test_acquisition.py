@@ -34,8 +34,11 @@ class AcquireTests(unittest.IsolatedAsyncioTestCase):
         plugin = module.Plugin()
         plugin.downloads = self.downloads
         plugin._prepare_cancel = None
+        plugin.tasks = module.TaskManager()
+        plugin._plan_metadata = {}
         bridge = types.SimpleNamespace(state_dir=self.root / "state", signed_catalog=self.root / "signed.json",
-            fetch_artifact=AsyncMock(), cancel_download=AsyncMock(return_value={"canceled": True}))
+            fetch_artifact=AsyncMock(), cancel_download=AsyncMock(return_value={"canceled": True}),
+            discard_plan=AsyncMock())
         plugin.bridge = bridge
         metadata = dict(release_id=release, recipe=dict(artifact_sha256=hashlib.sha256(content).hexdigest()),
             artifact=dict(size=len(content), url="https://download.patch.moe/shared.zip"))
@@ -62,7 +65,10 @@ class AcquireTests(unittest.IsolatedAsyncioTestCase):
         (self.downloads / "wrong.zip").write_bytes(b"bad")
         plugin = self.plugin("any-title", b"good")
         path = self.cache / "good.zip"
-        plugin.bridge.fetch_artifact.return_value = {"archive": str(path)}
+        async def download(*args):
+            path.write_bytes(b"good")
+            return {"archive": str(path)}
+        plugin.bridge.fetch_artifact.side_effect = download
         result = await plugin.prepare_install("instance", "any-title")
         self.assertEqual(result["acquisition"], "download")
         plugin.plan_install.assert_awaited_once()
@@ -77,6 +83,34 @@ class AcquireTests(unittest.IsolatedAsyncioTestCase):
             await plugin.prepare_install("instance", "any-title")
         plugin.plan_install.assert_not_called()
         self.assertIsNone(plugin._prepare_cancel)
+
+    async def test_cancellation_after_plan_discards_staged_plan(self):
+        archive = self.downloads / "local.zip"
+        archive.write_bytes(b"good")
+        plugin = self.plugin("any-title", b"good")
+        async def planned(*args):
+            plugin._prepare_cancel.set()
+            return {"plan_id": "discard-me", "changes": []}
+        plugin.plan_install.side_effect = planned
+        with self.assertRaisesRegex(RuntimeError, "download_cancelled"):
+            await plugin.prepare_install("instance", "any-title")
+        plugin.bridge.discard_plan.assert_awaited_once_with("discard-me")
+        self.assertEqual(plugin._plan_metadata, {})
+        self.assertIsNone(plugin._prepare_cancel)
+
+    async def test_cancelled_publisher_plan_is_discarded_through_its_own_bridge(self):
+        plugin = self.plugin("source-title", b"good")
+        plugin.scan.return_value["installs"][0]["patches"][0]["support_level"] = "publisher_zip"
+        owner = types.SimpleNamespace(discard_plan=AsyncMock())
+        async def prepared(game, entry, cancel, archive):
+            cancel.set()
+            return owner, "unused.zip", {"plan_id": "publisher-plan"}, "download"
+        plugin.publisher = types.SimpleNamespace(match=lambda *args: {"release_id": "source-title"},
+            prepare=AsyncMock(side_effect=prepared))
+        with self.assertRaisesRegex(RuntimeError, "download_cancelled"):
+            await plugin.prepare_install("instance", "source-title")
+        owner.discard_plan.assert_awaited_once_with("publisher-plan")
+        plugin.bridge.discard_plan.assert_not_called()
 
     def test_canceled_local_search_aborts(self):
         (self.downloads / "candidate.zip").write_bytes(b"data")
@@ -132,6 +166,19 @@ class PublisherScanTests(unittest.IsolatedAsyncioTestCase):
         plugin.publisher.bridge_for = lambda *args: None
         report = await plugin.scan()
         self.assertEqual({p["release_id"] for p in report["installs"][0]["patches"]}, {"source-first-9", "source-second-9"})
+
+    async def test_prepare_scan_preserves_source_metadata_without_refreshing_sources(self):
+        plugin = self.plugin()
+        source = {"id": "patchmoe", "name": "Official patch feed", "status": "cached",
+            "cached_at": "2026-10-03T00:00:00Z"}
+        plugin.sources.list_sources = lambda: [source]
+        report = await plugin.scan(refresh_sources=False)
+        plugin.sources.refresh.assert_not_awaited()
+        patch = report["installs"][0]["patches"][0]
+        self.assertEqual(patch["source_id"], source["id"])
+        self.assertEqual(patch["source_name"], source["name"])
+        self.assertEqual(patch["source_status"], source["status"])
+        self.assertEqual(patch["source_cached_at"], source["cached_at"])
 
 
 if __name__ == "__main__":

@@ -1,0 +1,247 @@
+import asyncio
+from io import BytesIO
+import json
+from pathlib import Path
+import tempfile
+import time
+import unittest
+from unittest.mock import Mock, patch
+
+from tasks import Task, TaskManager, current_task
+from publisher import _download, _hash_file, _recipe
+from bridge import CoreBridge
+
+
+class ControlledProcess:
+    """A subprocess peer that delays its receipt until restoration finishes."""
+    def __init__(self, restoring=False):
+        self.returncode = None
+        self.stdout = asyncio.StreamReader()
+        self.finished = asyncio.Event()
+        self.request = None
+        self.messages = []
+        self.restoring = restoring
+        self.cancel_received = asyncio.Event()
+        self.stdin = Mock(write=self.write, drain=self.drain, close=lambda: None)
+
+    async def drain(self):
+        await asyncio.sleep(0)
+
+    def write(self, payload):
+        self.messages.append(payload)
+        if self.request is None:
+            self.request = json.loads(payload)
+            self.emit({"event": "progress", "progress": {"stage": "writing", "bytes_done": 12,
+                "total_bytes": 24, "files_done": 0, "total_files": 1, "archive_bytes": None}})
+            if not self.restoring:
+                self.finish("committed")
+        else:
+            self.cancel_received.set()
+            self.emit({"event": "progress", "progress": {"stage": "rolling_back", "bytes_done": 0,
+                "total_bytes": None, "files_done": 0, "total_files": None}})
+
+    def emit(self, value):
+        self.stdout.feed_data(json.dumps(value).encode() + b"\n")
+
+    def finish(self, state):
+        self.emit({"protocol_version": 1, "request_id": self.request["request_id"], "ok": True,
+            "result": {"state": state, "error": "task_cancelled" if state == "rolled_back" else None}})
+        self.returncode = 0
+        self.stdout.feed_eof()
+        self.finished.set()
+
+    async def wait(self):
+        await self.finished.wait()
+        return self.returncode
+
+
+class ControlledBridgeTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        path = Path(self.temp.name) / "binary"
+        path.touch()
+        self.bridge = CoreBridge(path, path)
+        self.task = Task("install", {})
+        self.task.update(archive_bytes=48)
+        token = current_task.set(self.task)
+        self.addCleanup(current_task.reset, token)
+
+    async def test_progress_preserves_known_archive_size_and_uses_controlled_process(self):
+        process = ControlledProcess()
+        with patch("bridge.asyncio.create_subprocess_exec", return_value=process) as spawn:
+            result = await self.bridge.start_install("plan", True)
+        self.assertEqual(spawn.call_args.args[1], "serve-task")
+        self.assertEqual(result["state"], "committed")
+        self.assertEqual(self.task.snapshot()["bytes_done"], 12)
+        self.assertEqual(self.task.snapshot()["archive_bytes"], 48)
+
+    async def test_cancelled_before_spawn_writes_request_before_control_and_drains_rollback(self):
+        process = ControlledProcess(restoring=True)
+        self.task.request_cancel()
+        with patch("bridge.asyncio.create_subprocess_exec", return_value=process):
+            call = asyncio.create_task(self.bridge.start_install("plan", True))
+            await asyncio.wait_for(process.cancel_received.wait(), 1)
+            self.assertEqual(json.loads(process.messages[0])["method"], "start_install")
+            self.assertEqual(process.messages[1], b"cancel\n")
+            await asyncio.sleep(.01)
+            self.assertFalse(call.done())
+            self.assertEqual(self.task.snapshot()["state"], "rolling_back")
+            process.finish("rolled_back")
+            self.assertEqual((await call)["state"], "rolled_back")
+
+    async def test_cancelling_rpc_waits_for_durable_rollback_receipt(self):
+        process = ControlledProcess(restoring=True)
+        with patch("bridge.asyncio.create_subprocess_exec", return_value=process):
+            call = asyncio.create_task(self.bridge.start_install("plan", True))
+            while process.request is None:
+                await asyncio.sleep(0)
+            call.cancel()
+            await asyncio.wait_for(process.cancel_received.wait(), 1)
+            self.assertFalse(call.done())
+            process.finish("rolled_back")
+            self.assertEqual((await call)["state"], "rolled_back")
+
+
+class TaskTests(unittest.IsolatedAsyncioTestCase):
+    async def test_expired_lease_cancels_work_and_reentry_never_restarts_it(self):
+        manager = TaskManager(lease_seconds=.02)
+        started = 0
+        async def work(task):
+            nonlocal started
+            started += 1
+            while True:
+                task.check()
+                await asyncio.sleep(.005)
+        task = manager.get(manager.start("prepare", work)["task_id"])
+        await asyncio.wait_for(task.worker, 1)
+        self.assertEqual(task.snapshot()["state"], "cancelled")
+        task.snapshot(renew=True)
+        self.assertEqual(started, 1)
+        self.assertFalse(manager.busy())
+
+    async def test_renewal_keeps_work_alive_and_cancellation_waits_for_rollback(self):
+        manager = TaskManager(lease_seconds=.04)
+        restoring = asyncio.Event()
+        finish = asyncio.Event()
+        async def work(task):
+            while not task.cancel.is_set():
+                await asyncio.sleep(.005)
+            task.stage("rolling_back")
+            restoring.set()
+            await finish.wait()
+            return {"state": "rolled_back", "error": "task_cancelled"}
+        task = manager.get(manager.start("install", work)["task_id"])
+        for _ in range(8):
+            await asyncio.sleep(.01)
+            self.assertEqual(task.snapshot(renew=True)["state"], "running")
+        task.request_cancel()
+        await restoring.wait()
+        self.assertEqual(task.snapshot()["state"], "rolling_back")
+        with self.assertRaisesRegex(RuntimeError, "installer_busy"):
+            manager.start("prepare", work)
+        task.request_cancel()
+        self.assertEqual(task.snapshot()["state"], "rolling_back")
+        finish.set()
+        await task.worker
+        self.assertEqual(task.snapshot()["state"], "cancelled")
+
+    async def test_commit_wins_cancel_race_but_recovery_failure_is_not_cancelled(self):
+        for receipt, expected in (({"state": "committed"}, "completed"),
+                                  ({"state": "needs_recovery", "error": "task_cancelled; recovery_conflict"}, "failed")):
+            manager = TaskManager()
+            async def work(task):
+                task.request_cancel()
+                return receipt
+            task = manager.get(manager.start("install", work)["task_id"])
+            await task.worker
+            self.assertEqual(task.snapshot()["state"], expected)
+            self.assertEqual(task.snapshot()["result"], receipt)
+
+    def test_speed_stalls_and_unknown_total_never_produces_eta(self):
+        task = Task("prepare", {})
+        task.stage("downloading")
+        now = time.monotonic()
+        task.samples.clear()
+        task.samples.extend([(now - 2, 0), (now, 100)])
+        task.value["bytes_done"] = 100
+        self.assertGreater(task.snapshot()["speed_bps"], 0)
+        self.assertIsNone(task.snapshot()["eta_seconds"])
+        with patch("tasks.time.monotonic", return_value=now + 3):
+            self.assertEqual(task.snapshot()["speed_bps"], 0)
+        task.stage("connecting")
+        self.assertEqual(task.snapshot()["speed_bps"], 0)
+
+
+class AcquisitionProgressTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.task = Task("prepare", {})
+        token = current_task.set(self.task)
+        self.addCleanup(current_task.reset, token)
+
+    def response(self, content, headers):
+        response = BytesIO(content)
+        response.geturl = lambda: "https://download.patch.moe/a.zip"
+        response.headers = headers
+        opener = Mock()
+        opener.open.return_value = response
+        return opener
+
+    def test_unknown_and_known_length_report_received_bytes(self):
+        for headers in ({}, {"Content-Length": "11"}):
+            with patch("publisher.build_opener", return_value=self.response(b"PK\x03\x04payload", headers)):
+                _download("https://download.patch.moe/a.zip", self.root, self.task.cancel)
+            value = self.task.snapshot()
+            self.assertEqual(value["bytes_done"], 11)
+            self.assertEqual(value["total_bytes"], 11 if headers else None)
+            self.assertEqual(value["archive_bytes"], 11)
+
+    def test_cancel_removes_partial_and_preserves_old_archive(self):
+        previous = self.root / "archive.zip"
+        previous.write_bytes(b"previous complete cache")
+        class CancelAfterRead(BytesIO):
+            def read1(stream, size):
+                data = super().read1(size)
+                self.task.cancel.set()
+                return data
+        response = CancelAfterRead(b"PK\x03\x04payload")
+        response.headers = {"Content-Length": "11"}
+        response.geturl = lambda: "https://download.patch.moe/a.zip"
+        opener = Mock(open=Mock(return_value=response))
+        with patch("publisher.build_opener", return_value=opener):
+            with self.assertRaisesRegex(RuntimeError, "download_cancelled"):
+                _download(response.geturl(), self.root, self.task.cancel)
+        self.assertEqual(previous.read_bytes(), b"previous complete cache")
+        self.assertEqual(list(self.root.glob("download-*.tmp")), [])
+
+    def test_local_hash_reports_real_processed_bytes_without_download(self):
+        archive = self.root / "local.zip"
+        archive.write_bytes(b"x" * (2 * 1024 * 1024 + 31))
+        _hash_file(archive, 3 * 1024 * 1024, self.task.cancel)
+        value = self.task.snapshot()
+        self.assertEqual(value["stage"], "validating")
+        self.assertEqual(value["bytes_done"], archive.stat().st_size)
+        self.assertEqual(value["total_bytes"], archive.stat().st_size)
+
+    def test_recipe_counts_expanded_and_baseline_bytes(self):
+        import zipfile
+        game = self.root / "game"
+        game.mkdir()
+        (game / "data.bin").write_bytes(b"original")
+        archive = self.root / "archive.zip"
+        with zipfile.ZipFile(archive, "w") as output:
+            output.writestr("data.bin", b"replacement")
+            output.writestr("new.bin", b"new")
+        _recipe(archive, game, self.task.cancel)
+        value = self.task.snapshot()
+        self.assertEqual(value["bytes_done"], 22)
+        self.assertEqual(value["total_bytes"], 22)
+        self.assertEqual(value["files_done"], 2)
+        self.assertEqual(value["total_files"], 2)
+
+
+if __name__ == "__main__":
+    unittest.main()

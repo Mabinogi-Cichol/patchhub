@@ -2,6 +2,10 @@ export type Patch = {
   release_id: string;
   name: string;
   source_page: string;
+  source_id?: string;
+  source_name?: string;
+  source_status?: string;
+  source_cached_at?: number | null;
   support_level: string;
   download_available?: boolean;
   compatibility: string;

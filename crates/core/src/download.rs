@@ -98,6 +98,7 @@ fn copy_verified(
     let mut total = 0;
     let mut magic = Vec::new();
     loop {
+        crate::operation::check()?;
         if cancel.load(Ordering::Relaxed) {
             return Err(invalid("download_cancelled"));
         }
@@ -115,6 +116,7 @@ fn copy_verified(
         hasher.update(&buffer[..count]);
         writer.write_all(&buffer[..count])?;
         progress(total, artifact.size);
+        crate::operation::advance(count as u64);
     }
     if total != artifact.size {
         return Err(invalid("download_size_mismatch"));
@@ -135,6 +137,8 @@ pub fn fetch(
     cancel: &AtomicBool,
     mut progress: impl FnMut(u64, u64),
 ) -> io::Result<PathBuf> {
+    crate::operation::archive(artifact.size);
+    crate::operation::stage("connecting", None, None);
     validate_artifact(artifact)?;
     fs::create_dir_all(cache)?;
     no_link(cache)?;
@@ -144,18 +148,25 @@ pub fn fetch(
         let client = Client::builder()
             .redirect(Policy::none())
             .connect_timeout(Duration::from_secs(15))
-            .timeout(Duration::from_secs(600))
+            // Blocking reqwest applies this timeout to each read operation,
+            // allowing long downloads while bounding stalled cancellation.
+            .timeout(Duration::from_secs(15))
             .user_agent("steam-patch-manager/0.1")
             .build()
             .map_err(|_| invalid("http_client_failed"))?;
         let mut url = approved_url(&artifact.url, artifact)?;
         let mut response = None;
         for _ in 0..=5 {
+            crate::operation::check()?;
             if cancel.load(Ordering::Relaxed) {
                 return Err(invalid("download_cancelled"));
             }
             let mut attempt = client.get(url.clone()).send();
             if attempt.is_err() {
+                crate::operation::check()?;
+                if cancel.load(Ordering::Relaxed) {
+                    return Err(invalid("download_cancelled"));
+                }
                 attempt = client.get(url.clone()).send();
             }
             let current = attempt.map_err(|_| invalid("download_network_error"))?;
@@ -193,6 +204,7 @@ pub fn fetch(
             .write(true)
             .create_new(true)
             .open(&partial)?;
+        crate::operation::stage("downloading", Some(artifact.size), None);
         copy_verified(&mut response, &mut file, artifact, cancel, &mut progress)?;
         file.sync_all()?;
         drop(file);
@@ -200,6 +212,7 @@ pub fn fetch(
         if destination.exists() {
             no_link(&destination)?;
             let mut existing = File::open(&destination)?;
+            crate::operation::stage("validating", Some(artifact.size), Some(1));
             copy_verified(
                 &mut existing,
                 &mut io::sink(),

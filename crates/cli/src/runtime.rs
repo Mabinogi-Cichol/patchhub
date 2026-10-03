@@ -31,6 +31,7 @@ pub struct Params {
 }
 
 pub const METHODS: &[&str] = &[
+    "discard_plan",
     "scan",
     "preview",
     "plan_install",
@@ -245,10 +246,14 @@ pub fn execute(method: &str, params: Params) -> Result<Value, String> {
     {
         return Err("game_closed_confirmation_required".into());
     }
-    if ["list_transactions", "uninstall", "recover"].contains(&method) {
+    if ["discard_plan", "list_transactions", "uninstall", "recover"].contains(&method) {
         let state = state(&params)?;
         state_safe(&state)?;
         return match method {
+            "discard_plan" => value(
+                install::discard_plan(params.plan_id.as_deref().ok_or("plan_required")?, &state)
+                    .map_err(err)?,
+            ),
             "list_transactions" if !state.join("journal.sqlite").exists() => Ok(json!([])),
             "list_transactions" => value(install::list_transactions(&state).map_err(err)?),
             "uninstall" => value(

@@ -4,10 +4,12 @@ import os
 import json
 from pathlib import Path
 import uuid
+from threading import Event
+from tasks import current_task
 
 MAX_RESPONSE_BYTES = 8 * 1024 * 1024
 MAX_REQUEST_BYTES = 64 * 1024
-METHODS = {"scan", "preview", "plan_install", "fetch_artifact", "start_install", "list_transactions", "uninstall", "recover"}
+METHODS = {"discard_plan", "scan", "preview", "plan_install", "fetch_artifact", "start_install", "list_transactions", "uninstall", "recover"}
 
 
 class CoreBridge:
@@ -58,13 +60,12 @@ class CoreBridge:
         return await self._call("fetch_artifact", {"instance_id": self._id(instance_id), "release_id": self._id(release_id)})
 
     async def cancel_download(self):
-        for process in tuple(self.downloads):
-            if process.returncode is None:
-                try:
-                    process.kill()
-                except ProcessLookupError:
-                    pass
+        for cancel in tuple(self.downloads):
+            cancel.set()
         return {"canceled": bool(self.downloads)}
+
+    async def discard_plan(self, plan_id):
+        return await self._call("discard_plan", {"plan_id": self._id(plan_id)})
 
     async def start_install(self, plan_id: str, confirmed_game_closed: bool = False):
         return await self._call("start_install", {"plan_id": self._id(plan_id), "confirmed_game_closed": confirmed_game_closed})
@@ -94,46 +95,94 @@ class CoreBridge:
         payload = json.dumps(request, ensure_ascii=False).encode("utf-8") + b"\n"
         if len(payload) > MAX_REQUEST_BYTES:
             raise ValueError("request_too_large")
+        task = current_task.get()
+        controlled = task is not None or method in {"fetch_artifact", "plan_install", "start_install"}
+        cancel = task.cancel if task else Event()
         process = await asyncio.create_subprocess_exec(
-            str(self.binary), "serve", stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL, env=self.process_env, **self.process_identity,
+            str(self.binary), "serve-task" if controlled else "serve", stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
+            limit=MAX_RESPONSE_BYTES + 1, env=self.process_env, **self.process_identity,
         )
-
         if method == "fetch_artifact":
-            self.downloads.add(process)
+            self.downloads.add(cancel)
+        request_sent = asyncio.Event()
+
+        async def signal_cancel():
+            # The control message must follow the request, including when a
+            # lease expires while the subprocess is starting.
+            await request_sent.wait()
+            while process.returncode is None:
+                if cancel.is_set():
+                    try:
+                        process.stdin.write(b"cancel\n")
+                        await process.stdin.drain()
+                    except (BrokenPipeError, ConnectionResetError):
+                        pass
+                    return
+                await asyncio.sleep(.1)
 
         async def exchange():
             process.stdin.write(payload)
             await process.stdin.drain()
-            process.stdin.close()
-            chunks = []
-            size = 0
-            while True:
-                chunk = await process.stdout.read(min(65536, MAX_RESPONSE_BYTES + 1 - size))
-                if not chunk:
-                    break
-                size += len(chunk)
-                if size > MAX_RESPONSE_BYTES:
+            request_sent.set()
+            if not controlled:
+                process.stdin.close()
+            response = None
+            while line := await process.stdout.readline():
+                if len(line) > MAX_RESPONSE_BYTES:
                     raise RuntimeError("response_too_large")
-                chunks.append(chunk)
+                row = json.loads(line)
+                if controlled and row.get("event") == "progress":
+                    if task:
+                        progress = row["progress"]
+                        # Core subcommands may not know the already acquired package size.
+                        if progress.get("archive_bytes") is None:
+                            progress.pop("archive_bytes", None)
+                        task.update(**progress)
+                elif response is None:
+                    response = row
+                else:
+                    raise RuntimeError("invalid_core_response")
             await process.wait()
             if process.returncode != 0:
                 raise RuntimeError("core_process_failed")
-            response = json.loads(b"".join(chunks))
-            if (response.get("protocol_version") != 1 or response.get("request_id") != request_id
-                    or not isinstance(response.get("ok"), bool)):
+            if (not isinstance(response, dict) or response.get("protocol_version") != 1
+                    or response.get("request_id") != request_id or not isinstance(response.get("ok"), bool)):
                 raise RuntimeError("invalid_core_response")
             if not response["ok"]:
                 raise RuntimeError(response.get("error", {}).get("code", "core_error"))
             return response["result"]
 
+        guard = asyncio.create_task(signal_cancel()) if controlled else None
+        running = asyncio.create_task(exchange())
         try:
-            return await asyncio.wait_for(exchange(), self.timeout if method in {"scan", "preview", "list_transactions"} else None)
+            return await asyncio.wait_for(asyncio.shield(running), self.timeout if not controlled else None)
+        except asyncio.CancelledError:
+            # Task/UI cancellation must never kill a writer. Drain it until rollback
+            # or the durable commit reports its actual outcome.
+            cancel.set()
+            if controlled:
+                return await running
+            raise
         finally:
-            self.downloads.discard(process)
+            self.downloads.discard(cancel)
             if process.returncode is None:
-                try:
+                if controlled:
+                    cancel.set()
+                    if not running.done():
+                        await asyncio.gather(running, return_exceptions=True)
+                    else:
+                        # Malformed telemetry is a transport error, not permission
+                        # to kill an in-flight transaction. EOF also requests cancel.
+                        process.stdin.close()
+                        while await process.stdout.read(65536):
+                            pass
+                    await process.wait()
+                else:
                     process.kill()
-                except ProcessLookupError:
-                    pass
-                await process.wait()
+                    await process.wait()
+                    running.cancel()
+            if guard:
+                guard.cancel()
+            if process.stdin:
+                process.stdin.close()

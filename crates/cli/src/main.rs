@@ -87,6 +87,51 @@ fn serve(reader: &mut impl BufRead, writer: &mut impl Write) -> io::Result<()> {
     Ok(())
 }
 
+/// One cancellable task. The controller keeps stdin open; cancellation or EOF
+/// requests cooperative stopping. In particular a disconnected Python host
+/// cannot leave an installer running unattended.
+fn serve_task() -> io::Result<()> {
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    };
+    let request = read_request(&mut io::stdin().lock())?;
+    let Some((bytes, oversized)) = request else {
+        return Ok(());
+    };
+    let cancel = Arc::new(AtomicBool::new(false));
+    let signal = cancel.clone();
+    std::thread::spawn(move || {
+        use std::io::Read;
+        let _ = io::stdin().read(&mut [0u8; 1]);
+        signal.store(true, Ordering::Relaxed);
+    });
+    let response = steam_patch_core::operation::run(
+        cancel,
+        |progress| {
+            let mut output = io::stdout().lock();
+            // A closed output pipe must not abort the rollback path.
+            let _ = serde_json::to_writer(
+                &mut output,
+                &json!({"event":"progress", "progress":progress}),
+            );
+            let _ = output.write_all(b"\n");
+            let _ = output.flush();
+        },
+        || {
+            if oversized {
+                error(None, "request_too_large")
+            } else {
+                respond(&bytes)
+            }
+        },
+    );
+    let mut output = io::stdout().lock();
+    serde_json::to_writer(&mut output, &response)?;
+    output.write_all(b"\n")?;
+    output.flush()
+}
+
 const HELP: &str = "Steam patch manager Alpha\n\
 Usage: steam-patch scan [--steam-root PATH]... [--catalog PATH] [--platform windows|steamos]\n\
        steam-patch preview --instance ID --release ID [scan options]\n\
@@ -105,6 +150,12 @@ fn run() -> Result<(), String> {
     if ["--help", "-h", "help"].contains(&command.as_str()) {
         println!("{HELP}");
         return Ok(());
+    }
+    if command == "serve-task" {
+        if args.next().is_some() {
+            return Err("serve_accepts_no_arguments".into());
+        }
+        return serve_task().map_err(|e| e.to_string());
     }
     if command == "serve" {
         if args.next().is_some() {
