@@ -1,7 +1,7 @@
 # Decky UX 问题与修复计划
 
 - 更新日期：2026-10-04
-- 状态：待施工
+- 状态：已施工并通过实机验证（详见 [`progress.md`](./progress.md)）
 - 设计依据：[`design.md`](./design.md)
 - 进度记录：[`progress.md`](./progress.md)
 

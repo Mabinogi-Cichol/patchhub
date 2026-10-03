@@ -1,5 +1,5 @@
 import { callable, definePlugin, routerHook } from "@decky/api";
-import { ButtonItem, ConfirmModal, DropdownItem, Focusable, ModalRoot, Navigation, PanelSection, PanelSectionRow, ProgressBar, SidebarNavigation, TextField, ToggleField, showModal, useParams } from "@decky/ui";
+import { Button, ButtonItem, ConfirmModal, DropdownItem, Field, Focusable, ModalRoot, Navigation, PanelSection, PanelSectionRow, ProgressBar, SidebarNavigation, TextField, ToggleField, showModal, useParams } from "@decky/ui";
 import { FaGamepad, FaPuzzlePiece } from "react-icons/fa";
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ComponentProps, type ReactNode } from "react";
 import { filterInstalls, isExternal, isManaged, needsAttention, patchState, reason, workflowState, type Filter, type Install, type Patch, type Plan, type ScanResult, type SourceSubscription, type Transaction } from "@steam-patch/ui";
@@ -51,6 +51,10 @@ function Status({ children, warning = false }: { children: ReactNode; warning?: 
   return <p className={warning ? "patch-warning" : undefined}>{children}</p>;
 }
 function Row({ children }: { children: ReactNode }) { return <PanelSectionRow>{children}</PanelSectionRow>; }
+// Native left-label / right-value row. Long values opt into a stacked layout.
+function InfoRow({ label, children, below = false }: { label: ReactNode; children: ReactNode; below?: boolean }) {
+  return <PanelSectionRow><Field label={label} childrenLayout={below ? "below" : "inline"} spacingBetweenLabelAndChild="none"><span className="patch-kv-value">{children}</span></Field></PanelSectionRow>;
+}
 function sourceInfo(patch: Patch, sources: SourceSubscription[] = []) {
   const subscription = sources.find(source => source.id === patch.source_id);
   const name = patch.source_name || subscription?.name || "匹配源未知";
@@ -94,17 +98,29 @@ const css = `
   @keyframes patch-marquee { 0%,12% {transform:translateX(0)} 88%,100% {transform:translateX(calc(-1 * var(--travel)))} }
   .patch-game-status { display:block; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-size:12px; opacity:.76; }
   .patch-full { height:100%; min-height:0; }
-  .patch-page { box-sizing:border-box; height:100%; overflow-y:auto; padding:56px 24px 48px; }
-  .patch-page h1 { margin:0 0 6px; font-size:25px; overflow-wrap:anywhere; }
+  .patch-page { box-sizing:border-box; height:100%; overflow-y:auto; padding:0 24px 48px; }
+  .patch-page h2 { margin:14px 0 6px; font-size:20px; overflow-wrap:anywhere; }
   .patch-page p { line-height:1.4; overflow-wrap:anywhere; }
   .patch-page .patch-warning { color:#ffb28d; }
   .patch-page button { max-width:100%; }
-  .patch-nav-title { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:240px; }
+  .patch-nav-header { display:flex; flex-direction:column; min-width:0; }
+  .patch-nav-tool { font-size:13px; font-weight:600; opacity:.85; }
+  .patch-nav-game { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; opacity:.7; }
+  .patch-actions { display:flex; gap:10px; margin-top:8px; }
+  .patch-actions > * { flex:1 1 0; min-width:0; }
+  .patch-patch-name { font-weight:600; }
+  .patch-patch-source { font-size:12px; opacity:.8; overflow-wrap:anywhere; }
+  .patch-kv-value { overflow-wrap:anywhere; }
   .patch-modal { width:min(640px,90vw); }
   .patch-modal p { line-height:1.4; overflow-wrap:anywhere; }
   .patch-metrics { display:grid; grid-template-columns:1fr 1fr; gap:4px 20px; margin:12px 0; }
 `;
 
+function matchSummary(item: Install): string {
+  if (needsAttention(item)) return "需要处理";
+  if (item.patches.some(p => isManaged(p.detection.status) || isExternal(p.detection.status))) return "已安装补丁";
+  return item.patches.length ? `可安装 · ${item.patches.length} 个补丁` : "暂无匹配补丁";
+}
 function GameButton({ item }: { item: Install }) {
   const { name, icon } = gamePresentation(item.game.appid, item.game.name);
   const [badIcon, setBadIcon] = useState(false);
@@ -116,8 +132,7 @@ function GameButton({ item }: { item: Install }) {
     const measure = () => setTravel(Math.max(0, element.scrollWidth - element.clientWidth));
     measure(); const observer = new ResizeObserver(measure); observer.observe(element); return () => observer.disconnect();
   }, [name]);
-  const state = needsAttention(item) ? "需要处理" : item.patches.some(p => isManaged(p.detection.status) || isExternal(p.detection.status))
-    ? "已安装补丁" : item.patches.length ? `可安装 · ${item.patches.length} 个补丁` : "暂无匹配补丁";
+  const state = matchSummary(item);
   return <div className="patch-game" data-instance={item.game.instance_id}><Action onClick={() => { lastGame = item.game.instance_id; openManager(item.game.instance_id); }}>
     <span className="patch-game-row" aria-label={`${name}，${state}`}>
       {icon && !badIcon ? <img className="patch-game-icon" src={icon} alt="" onError={() => setBadIcon(true)} />
@@ -254,6 +269,10 @@ function GameManager({ item, seg, panel }: { item: Install; seg: string; panel?:
   const active = plan?.instance_id === item.game.instance_id && plan.release_id === release ? plan : null;
   const blocked = patch ? installBlocker(patch) : null;
   const owned = transactions.filter(t => t.instance_id === item.game.instance_id).reverse();
+  const committed = owned.filter(t => t.release_id === release && t.state === "committed");
+  const installedManaged = patch ? isManaged(patch.detection.status) : false;
+  const installedExternal = patch ? isExternal(patch.detection.status) : false;
+  const installed = !!patch && (installedManaged || installedExternal || committed.length > 0);
   const unfinished = transactions.filter(needsRecovery);
   useEffect(() => {
     mounted.current = true;
@@ -334,52 +353,76 @@ function GameManager({ item, seg, panel }: { item: Install; seg: string; panel?:
   }
   const common = <>{busy && <Status>{busy}</Status>}{error && <Status warning>{error}</Status>}{note && <Status>{note}</Status>}</>;
   const overview = <div className="patch-page" ref={activePanel === "overview" ? contentRef : undefined} onScroll={e => panelScroll.current.overview = e.currentTarget.scrollTop}>
-    <h1>{game}</h1><h2>概览</h2>{common}
-    <PanelSection title="补丁状态"><Row><Status>{item.patches.length ? `${item.patches.length} 个匹配补丁` : "暂无匹配补丁"}</Status></Row>
-      <Row><Status>匹配来源：{item.patches.length ? [...new Set(item.patches.map(p => p.source_name || report?.sources?.find(s => s.id === p.source_id)?.name || "匹配源未知"))].join("、") : "—"}</Status></Row>
+    {common}
+    <PanelSection>
+      <InfoRow label="补丁状态">{matchSummary(item)}</InfoRow>
+      <InfoRow label="匹配来源">{item.patches.length ? [...new Set(item.patches.map(p => p.source_name || report?.sources?.find(s => s.id === p.source_id)?.name || "匹配源未知"))].join("、") : "—"}</InfoRow>
       {owned.some(needsRecovery) && <Row><Status warning>有未完成的操作需要处理。</Status><Action onClick={() => navigatePanel("records")}>查看操作记录</Action></Row>}
     </PanelSection>
-    <PanelSection title="匹配到的补丁">{item.patches.length ? item.patches.map(p => <Row key={p.release_id}>
-      <Status><strong>{p.name}</strong><br />匹配源：{sourceInfo(p, report?.sources)}</Status>
-      <Action onClick={() => { chooseRelease(p.release_id); navigatePanel("patches"); }}>查看补丁</Action>
-      <Action onClick={() => openSource(p.source_page)}>打开来源网页 ↗</Action>
-    </Row>) : <Row><Status>暂无匹配补丁；这不代表游戏不需要补丁。</Status><Action onClick={() => navigatePanel("sources")}>管理订阅源</Action></Row>}</PanelSection>
-    <PanelSection title="游戏信息"><Row><Status>游戏编号：{item.game.appid}<br />游戏版本：{item.game.buildid ?? "未知"}<br />安装位置：{item.game.install_path}</Status></Row></PanelSection>
+    <PanelSection title="匹配到的补丁">{item.patches.length ? item.patches.map(p => <PanelSectionRow key={p.release_id}>
+      <div className="patch-patch">
+        <div className="patch-patch-name">{p.name}</div>
+        <div className="patch-patch-source">匹配源：{sourceInfo(p, report?.sources)}</div>
+        <div className="patch-actions">
+          <Button onClick={() => { chooseRelease(p.release_id); navigatePanel("patches"); }}>查看补丁</Button>
+          <Button onClick={() => openSource(p.source_page)}>打开来源网页 ↗</Button>
+        </div>
+      </div>
+    </PanelSectionRow>) : <Row><Status>暂无匹配补丁；这不代表游戏不需要补丁。</Status><Action onClick={() => navigatePanel("sources")}>管理订阅源</Action></Row>}</PanelSection>
+    <PanelSection title="游戏信息">
+      <InfoRow label="游戏编号">{item.game.appid}</InfoRow>
+      <InfoRow label="游戏版本">{item.game.buildid ?? "未知"}</InfoRow>
+      <InfoRow label="安装位置" below>{item.game.install_path}</InfoRow>
+    </PanelSection>
   </div>;
   const patches = <div className="patch-page" ref={activePanel === "patches" ? contentRef : undefined} onScroll={e => panelScroll.current.patches = e.currentTarget.scrollTop}>
-    <h1>{game}</h1><h2>补丁管理</h2>{common}
+    {common}
     {!patch ? <PanelSection><Row><Status>暂无匹配补丁。</Status></Row></PanelSection> : <>
       <PanelSection title="选择补丁">{item.patches.length > 1 ? <Row><DropdownItem label="补丁" rgOptions={item.patches.map(p => ({ data: p.release_id, label: p.name }))} selectedOption={release} onChange={option => chooseRelease(option.data)} /></Row>
-        : <Row><Status>{patch.name}</Status></Row>}
-        <Row><Status>匹配源：{sourceInfo(patch, report?.sources)}</Status></Row>
+        : <InfoRow label="补丁">{patch.name}</InfoRow>}
+        <InfoRow label="匹配源">{sourceInfo(patch, report?.sources)}</InfoRow>
       </PanelSection>
-      <PanelSection title="补丁详情"><Row><Status>当前状态：{patchState(patch.detection.status)}<br />兼容性：{workflowState(patch.compatibility)}<br />安装方式：{workflowState(patch.support_level)}</Status></Row>
+      <PanelSection title="补丁详情">
+        <InfoRow label="当前状态">{patchState(patch.detection.status)}</InfoRow>
+        <InfoRow label="兼容性">{workflowState(patch.compatibility)}</InfoRow>
+        <InfoRow label="安装方式">{workflowState(patch.support_level)}</InfoRow>
         {patch.blockers.map((b, i) => <Row key={i}><Status warning>{reason(b)}</Status></Row>)}
-        {isExternal(patch.detection.status) && <Row><Status>通过其他方式安装；本工具没有原文件备份，不能自动卸载。</Status></Row>}
         <Row><Action onClick={() => openSource(patch.source_page)}>打开来源网页 ↗</Action></Row>
       </PanelSection>
-      {active ? <div ref={planRef} tabIndex={-1}><PanelSection title="安装计划"><Row><Status>{patch.name} · {sourceInfo(patch, report?.sources)}<br />文件来源：{acquisition === "download" ? "本次下载" : "本地 ZIP"}<br />将修改 {active.changes.length} 个文件；覆盖文件会先备份。</Status></Row>
-        <Row><Status>{planExpired(active, now) ? "安装计划已过期，请重新准备。" : `剩余 ${Math.ceil((active.expires_at! * 1000 - now) / 1000)} 秒`}</Status></Row>
+      {active ? <div ref={planRef} tabIndex={-1}><PanelSection title="安装计划">
+        <InfoRow label="补丁">{patch.name} · {sourceInfo(patch, report?.sources)}</InfoRow>
+        <InfoRow label="文件来源">{acquisition === "download" ? "本次下载" : "本地 ZIP"}</InfoRow>
+        <InfoRow label="文件变更">将修改 {active.changes.length} 个文件；覆盖文件会先备份。</InfoRow>
+        <InfoRow label="计划有效期">{planExpired(active, now) ? "已过期，请重新准备。" : `剩余 ${Math.ceil((active.expires_at! * 1000 - now) / 1000)} 秒`}</InfoRow>
         {active.blockers.map((b, i) => <Row key={i}><Status warning>{reason(b)}</Status></Row>)}
         <Row><Action onClick={() => setChangesOpen(value => !value)}>查看文件变更（{active.changes.length}）{changesOpen ? " ▴" : " ▾"}</Action></Row>
         {changesOpen && active.changes.map((change, i) => <Row key={i}><Status>{workflowState(change.action)} · {change.path}{change.baseline_matches === false ? " · 原文件已变化" : ""}</Status></Row>)}
         <Row><Action disabled={!active.plan_id || planExpired(active, now) || !!active.blockers.length || !!blocked || !!busy} onClick={() => confirmDialog("确认安装", <p>{game} · {patch.name}<br />将修改 {active.changes.length} 个文件。请关闭游戏并暂停 Steam 更新。</p>, "已关闭游戏及更新，安装", () => void beginInstall())}>继续确认安装</Action></Row>
         <Row><Action disabled={!!busy} onClick={cancelPreparedPlan}>取消本次准备</Action></Row>
-      </PanelSection></div> : <PanelSection title="安装准备"><Row><Status>{patch.download_available ? "自动查找或下载官方 ZIP，并校验后生成安装计划。" : "查找 Downloads 内的 ZIP，并校验后生成安装计划。"}</Status></Row>
+      </PanelSection></div> : installed ? <PanelSection title="已安装">
+        {committed.length
+          ? <Row><Status>此补丁由本工具安装，可恢复备份文件。</Status></Row>
+          : installedExternal
+            ? <Row><Status>通过其他方式安装；本工具没有原文件备份，不能自动卸载。</Status></Row>
+            : <Row><Status warning>检测到已安装，但找不到本工具的安装记录，不能自动卸载。</Status></Row>}
+        {committed.map(tx => <Row key={tx.transaction_id}><Action disabled={!!busy} onClick={() => confirmDialog("确认卸载", <p>{game} · {patch.name}<br />将恢复安装前的备份文件。请关闭游戏并暂停 Steam 更新。</p>, "已关闭游戏及更新，卸载", () => void session.work("正在安全卸载…", () => uninstall(tx.transaction_id, true), value => {
+          record(value); refreshAfterMutation(value.state === "uninstalled" ? "补丁已卸载，原文件已恢复。" : `卸载状态：${workflowState(value.state)}。${value.error ? reason(value.error) : "请检查操作记录。"}`);
+        }))}>卸载补丁</Action></Row>)}
+        {!committed.length && (blocked
+          ? <Row><Status warning>无法重新安装并接管：{blocked}</Status></Row>
+          : <><Row><Status>重新安装并接管会在写入前备份当前文件，成功后即可在本工具中卸载。该操作会覆盖当前补丁文件。</Status></Row>
+            <Row><Action disabled={!!busy || !!blocked} onClick={() => void beginPrepare()}>{patch.download_available ? "自动下载并重新安装" : "查找本地 ZIP 并重新安装"}</Action></Row></>)}
+      </PanelSection> : <PanelSection title="安装准备"><Row><Status>{patch.download_available ? "自动查找或下载官方 ZIP，并校验后生成安装计划。" : "查找 Downloads 内的 ZIP，并校验后生成安装计划。"}</Status></Row>
         {blocked && <Row><Status warning>无法准备安装：{blocked}</Status></Row>}
-        <Row><Action disabled={!!busy || !!blocked || isManaged(patch.detection.status)} onClick={() => void beginPrepare()}>{patch.download_available ? "自动下载并准备安装" : "查找本地 ZIP 并准备安装"}</Action></Row>
+        <Row><Action disabled={!!busy || !!blocked} onClick={() => void beginPrepare()}>{patch.download_available ? "自动下载并准备安装" : "查找本地 ZIP 并准备安装"}</Action></Row>
         {patch.support_level === "managed_zip" && <Row><Action onClick={() => setManual(value => !value)}>手动指定本地 ZIP（高级）{manual ? " ▴" : " ▾"}</Action></Row>}
         {manual && patch.support_level === "managed_zip" && <><Row><TextField label="Downloads 内的 ZIP 路径" value={archive} onChange={e => setArchive(e.target.value)} /></Row>
           <Row><Action disabled={!archive.trim() || !!blocked || !!busy} onClick={() => void beginPrepare(archive)}>使用指定 ZIP 准备安装</Action></Row></>}
       </PanelSection>}
-      {owned.filter(tx => tx.release_id === release && tx.state === "committed").map(tx => <PanelSection title="已安装" key={tx.transaction_id}><Row><Status>此补丁由本工具安装，可恢复备份文件。</Status></Row>
-        <Row><Action disabled={!!busy} onClick={() => confirmDialog("确认卸载", <p>{game} · {patch.name}<br />将恢复安装前的备份文件。请关闭游戏并暂停 Steam 更新。</p>, "已关闭游戏及更新，卸载", () => void session.work("正在安全卸载…", () => uninstall(tx.transaction_id, true), value => {
-          record(value); refreshAfterMutation(value.state === "uninstalled" ? "补丁已卸载，原文件已恢复。" : `卸载状态：${workflowState(value.state)}。${value.error ? reason(value.error) : "请检查操作记录。"}`);
-        }))}>卸载补丁</Action></Row></PanelSection>)}
     </>}
   </div>;
   const records = <div className="patch-page" ref={activePanel === "records" ? contentRef : undefined} onScroll={e => panelScroll.current.records = e.currentTarget.scrollTop}>
-    <h1>{game}</h1><h2>操作记录</h2>{common}
+    {common}
     {unfinished.length > 0 && <PanelSection title="未完成的操作"><Row><Status warning>修复会处理以下所有游戏的未完成事务。请关闭这些游戏并暂停更新：</Status></Row>
       {unfinished.map(tx => <Row key={tx.transaction_id}><Status>{report?.installs.find(i => i.game.instance_id === tx.instance_id)?.game.name ?? tx.instance_id} · {workflowState(tx.state)}</Status></Row>)}
       <Row><Action disabled={!!busy} onClick={() => confirmDialog("修复未完成的操作", <p>将尝试恢复上列 {unfinished.length} 个游戏的未完成事务。请确认这些游戏已关闭，且 Steam 更新已暂停。</p>, "已关闭游戏及更新，修复", () => void session.work("正在恢复…", () => recover(true), values => {
@@ -391,16 +434,18 @@ function GameManager({ item, seg, panel }: { item: Install; seg: string; panel?:
   </div>;
   const sources = <SourcesPage report={report} busy={!!busy} rule={rule} setRule={setRule} changeSources={changeSources} contentRef={activePanel === "sources" ? contentRef : undefined} onScroll={value => { panelScroll.current.sources = value; }} />;
   const navPages: ComponentProps<typeof SidebarNavigation>["pages"] = [
-    { identifier: `${base}/overview`, route: `${base}/overview`, title: "概览", content: overview },
-    { identifier: `${base}/patches`, route: `${base}/patches`, title: "补丁管理", content: patches },
-    { identifier: `${base}/records`, route: `${base}/records`, title: "操作记录", content: records },
-    "separator", { identifier: `${base}/sources`, route: `${base}/sources`, title: "管理订阅源", content: sources },
+    { identifier: `${base}/overview`, route: `${base}/overview`, title: "概览", visible: true, content: overview },
+    { identifier: `${base}/patches`, route: `${base}/patches`, title: "补丁管理", visible: true, content: patches },
+    { identifier: `${base}/records`, route: `${base}/records`, title: "操作记录", visible: true, content: records },
+    "separator", { identifier: `${base}/sources`, route: `${base}/sources`, title: "管理订阅源", visible: true, content: sources },
   ];
   // The decky SidebarNavigation resolves the visible page from page.route
   // against the URL and switches by replacing the URL. `fnSetNavigateToPage`
   // receives the internal switcher, so panel jumps reuse it instead of pushing
   // history, and `disableRouteReporting` leaves Steam's own router untouched.
-  const navigation = { title: <span className="patch-nav-title" title={game}>{game}</span>, page: `${base}/${activePanel}`, pages: navPages,
+  // `showTitle` renders the non-focusable two-line header at the top of the
+  // page list (native PagedSettings only renders `title` when it is true).
+  const navigation = { title: <div className="patch-nav-header"><span className="patch-nav-tool">Steam 补丁管理</span><span className="patch-nav-game" title={game}>{game}</span></div>, showTitle: true, page: `${base}/${activePanel}`, pages: navPages,
     fnSetNavigateToPage: (setter: (route: string) => void) => { navigate.current = setter; },
     disableRouteReporting: true } as unknown as ComponentProps<typeof SidebarNavigation>;
   return <SidebarNavigation {...navigation} />;
@@ -412,13 +457,16 @@ function SourcesPage({ report, busy, rule, setRule, changeSources, contentRef, o
   contentRef?: React.Ref<HTMLDivElement>; onScroll?: (value: number) => void;
 }) {
   return <div className="patch-page" ref={contentRef} onScroll={e => onScroll?.(e.currentTarget.scrollTop)}>
-    <h1>管理订阅源</h1><Status>全局设置，对所有游戏生效。修改后会更新匹配结果。</Status>
-    <PanelSection title="订阅源">{report?.sources?.map(source => <Fragment key={source.id}>
-      <Row><Status><strong>{source.name}</strong> · {source.enabled ? "已启用" : "已停用"}<br />{source.pages.join(" · ")}<br />
-        {source.status ? reason(source.status) : "待查询"}{source.entry_count != null ? ` · ${source.entry_count} 条` : ""}
-        {source.cached_at ? ` · 缓存于 ${new Date(source.cached_at * 1000).toLocaleString()}` : ""}</Status></Row>
+    <Status>全局设置，对所有游戏生效。修改后会更新匹配结果。</Status>
+    <PanelSection title="订阅源">{report?.sources?.length ? report.sources.map(source => <Fragment key={source.id}>
+      <InfoRow label="名称">{source.name}</InfoRow>
+      <InfoRow label="站点" below>{source.pages.join(" · ")}</InfoRow>
+      <InfoRow label="启用状态">{source.enabled ? "已启用" : "已停用"}</InfoRow>
+      <InfoRow label="查询结果">{source.entry_count != null ? `${source.entry_count} 条` : "—"}</InfoRow>
+      <InfoRow label="查询或缓存">{source.status ? reason(source.status) : "待查询"}</InfoRow>
+      <InfoRow label="缓存时间">{source.cached_at ? new Date(source.cached_at * 1000).toLocaleString() : "—"}</InfoRow>
       <Row><ToggleField label={`启用 ${source.name}`} checked={source.enabled} disabled={busy} onChange={enabled => changeSources(() => setSourceEnabled(source.id, enabled))} /></Row>
-    </Fragment>)}</PanelSection>
+    </Fragment>) : <Row><Status>尚未配置订阅源。</Status></Row>}</PanelSection>
     <PanelSection title="添加源"><Row><TextField label="源规则 JSON（高级）" value={rule} onChange={e => setRule(e.target.value)} /></Row>
       <Row><Action disabled={busy || !rule.trim()} onClick={() => changeSources(() => addSource(rule))}>添加并查询补丁源</Action></Row></PanelSection>
   </div>;
@@ -431,9 +479,9 @@ function Manager() {
   const target = instance === sourceRoute ? instance : decodeInstance(instance ?? "");
   const item = report?.installs.find(i => i.game.instance_id === target);
   return <Focusable className="patch-full" onCancel={() => Navigation.NavigateBack()}><style>{css}</style>
-    {instance === sourceRoute ? <SidebarNavigation title="Steam 补丁管理" pages={[{ identifier: "sources", route: "/steam-patch-manager/sources", title: "管理订阅源", content: <GlobalSources /> }]} />
+    {instance === sourceRoute ? <SidebarNavigation showTitle title={<div className="patch-nav-header"><span className="patch-nav-tool">Steam 补丁管理</span><span className="patch-nav-game">全局设置</span></div>} pages={[{ identifier: "sources", route: "/steam-patch-manager/sources", title: "管理订阅源", visible: true, content: <GlobalSources /> }]} />
       : item ? <GameManager key={instance} item={item} seg={instance!} panel={panel} />
-        : <div className="patch-page"><h1>Steam 补丁管理</h1><Status>{report ? "游戏已不在当前扫描结果中。" : "正在加载游戏列表…"}</Status><Action onClick={() => Navigation.NavigateBack()}>返回游戏列表</Action></div>}
+        : <div className="patch-page"><h2>Steam 补丁管理</h2><Status>{report ? "游戏已不在当前扫描结果中。" : "正在加载游戏列表…"}</Status><Action onClick={() => Navigation.NavigateBack()}>返回游戏列表</Action></div>}
   </Focusable>;
 }
 function GlobalSources() {
