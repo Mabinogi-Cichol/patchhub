@@ -66,6 +66,7 @@ export type Transaction = {
   release_id: string;
   state: string;
   error?: string | null;
+  backups?: boolean;
 };
 
 export type Filter = "all" | "matched" | "installed" | "attention";

@@ -121,7 +121,7 @@ class AcquireTests(unittest.IsolatedAsyncioTestCase):
 
 
 class PublisherScanTests(unittest.IsolatedAsyncioTestCase):
-    def plugin(self, *, expired=False, transaction_state="uninstalled", old_build=False):
+    def plugin(self, *, expired=False, transaction_state="uninstalled", old_build=False, state_dir=None):
         plugin = module.Plugin()
         game = dict(instance_id="instance", appid=9, name="Game", buildid="101", availability="installed")
         base = dict(catalog_trust="signed",catalog_revision=4,installs=[dict(game=game,patches=[])],diagnostics=[])
@@ -132,7 +132,8 @@ class PublisherScanTests(unittest.IsolatedAsyncioTestCase):
             detection=dict(status="not_detected",files=[]))
         signed = dict(catalog_trust="signed",catalog_error=None,installs=[dict(game=game,patches=[local_patch])])
         local = types.SimpleNamespace(scan=AsyncMock(side_effect=[dict(signed,catalog_trust="unsigned_development",catalog_error="catalog_expired"),signed] if expired else None, return_value=signed),
-            list_transactions=AsyncMock(return_value=[dict(state=transaction_state)]))
+            list_transactions=AsyncMock(return_value=[dict(transaction_id="j1", state=transaction_state)]),
+            state_dir=state_dir)
         plugin.publisher = types.SimpleNamespace(matches=lambda game:[dict(release_id="patchmoe-9",source_id="patchmoe",source_page="https://www.patch.moe/",language="en",date="2000/1/1")],
             bridge_for=lambda *args:local,state_diagnostics=[],refresh_signature=AsyncMock(return_value=local))
         return plugin
@@ -158,6 +159,24 @@ class PublisherScanTests(unittest.IsolatedAsyncioTestCase):
         plugin.list_transactions.return_value = [dict(instance_id="instance", release_id="source-vendor-9", state="committed")]
         result = await plugin.scan()
         self.assertIn("publisher_existing_transaction", result["installs"][0]["patches"][0]["blockers"])
+
+    async def test_committed_without_backups_does_not_block_reinstall(self):
+        with tempfile.TemporaryDirectory() as temp:
+            state = Path(temp)
+            (state / "jobs" / "j1").mkdir(parents=True)
+            plugin = self.plugin(transaction_state="committed", state_dir=state)
+            result = await plugin.scan()
+            self.assertEqual(result["installs"][0]["patches"][0]["blockers"], [])
+
+    async def test_committed_with_backups_still_blocks_reinstall(self):
+        with tempfile.TemporaryDirectory() as temp:
+            state = Path(temp)
+            job = state / "jobs" / "j1"
+            job.mkdir(parents=True)
+            (job / "0.backup").write_bytes(b"b")
+            plugin = self.plugin(transaction_state="committed", state_dir=state)
+            result = await plugin.scan()
+            self.assertIn("publisher_existing_transaction", result["installs"][0]["patches"][0]["blockers"])
 
     async def test_multiple_sources_get_independent_entries(self):
         plugin = self.plugin()

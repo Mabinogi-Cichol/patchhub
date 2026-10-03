@@ -8,6 +8,7 @@ import { gamePresentation } from "./steam";
 import { installBlocker, planExpired, preparedSource, transactionResult, type PreparedInstall } from "./install";
 import { createManagerSession, needsRecovery } from "./session";
 import { decodeInstance, encodeInstance } from "./route";
+import { autoCleanupNote, cacheClearNote, cacheSummary, formatSize as size, type CacheStatus, type Settings } from "./cache";
 import { tasks, taskIsTerminal, type TaskSnapshot } from "./tasks";
 
 const scan = callable<[], ScanResult>("scan");
@@ -17,6 +18,11 @@ const recover = callable<[boolean], Transaction[]>("recover");
 const setSourceEnabled = callable<[string, boolean], SourceSubscription[]>("set_source_enabled");
 const addSource = callable<[string], SourceSubscription[]>("add_source");
 const discardPlan = callable<[string], unknown>("discard_plan");
+const clearCache = callable<[], CacheStatus>("clear_cache");
+const clearTransactionBackups = callable<[], CacheStatus>("clear_transaction_backups");
+const getSettings = callable<[], Settings>("get_settings");
+const setAutoCleanup = callable<[boolean], Settings>("set_auto_cleanup");
+const setKeepBackups = callable<[boolean], Settings>("set_keep_backups");
 
 async function readSnapshot() {
   const report = await scan();
@@ -187,13 +193,6 @@ const stageNames: Record<string, string> = {
   validating: "校验文件", planning: "生成安装计划", backing_up: "备份原文件",
   writing: "写入文件", committing: "提交安装", rolling_back: "恢复原文件",
 };
-function size(bytes: number) {
-  if (!Number.isFinite(bytes)) return "—";
-  const units = ["B", "KiB", "MiB", "GiB", "TiB"];
-  let n = Math.max(0, bytes), i = 0;
-  while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
-  return `${i ? n.toFixed(1) : Math.round(n)} ${units[i]}`;
-}
 function duration(seconds: number) { return `${Math.floor(seconds / 60)} 分 ${Math.floor(seconds % 60)} 秒`; }
 function TaskModal({ game, patch, onTerminal }: { game: string; patch: string; onTerminal: (task: TaskSnapshot) => void }) {
   const task = useSyncExternalStore(tasks.subscribe, tasks.getSnapshot);
@@ -260,6 +259,7 @@ function GameManager({ item, seg, panel }: { item: Install; seg: string; panel?:
   const [changesOpen, setChangesOpen] = useState(false);
   const [rule, setRule] = useState("");
   const [now, setNow] = useState(Date.now());
+  const [keepBackups, setKeepBackups] = useState<boolean | null>(null);
   const panelScroll = useRef<Record<string, number>>({});
   const contentRef = useRef<HTMLDivElement>(null);
   const planRef = useRef<HTMLDivElement>(null);
@@ -270,6 +270,8 @@ function GameManager({ item, seg, panel }: { item: Install; seg: string; panel?:
   const blocked = patch ? installBlocker(patch) : null;
   const owned = transactions.filter(t => t.instance_id === item.game.instance_id).reverse();
   const committed = owned.filter(t => t.release_id === release && t.state === "committed");
+  const recoverable = committed.filter(t => t.backups !== false);
+  const canUninstall = recoverable.length > 0;
   const installedManaged = patch ? isManaged(patch.detection.status) : false;
   const installedExternal = patch ? isExternal(patch.detection.status) : false;
   const installed = !!patch && (installedManaged || installedExternal || committed.length > 0);
@@ -289,6 +291,7 @@ function GameManager({ item, seg, panel }: { item: Install; seg: string; panel?:
     return () => { mounted.current = false; void tasks.requestCancel(); };
   }, []);
   useEffect(() => { if (!active) return; const id = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(id); }, [active]);
+  useEffect(() => { getSettings().then(value => setKeepBackups(value.keep_backups)).catch(() => {}); }, []);
   useLayoutEffect(() => { if (contentRef.current) contentRef.current.scrollTop = panelScroll.current[activePanel] ?? 0; }, [activePanel]);
   useLayoutEffect(() => {
     if (activePanel === "patches" && active && planRef.current) {
@@ -401,16 +404,18 @@ function GameManager({ item, seg, panel }: { item: Install; seg: string; panel?:
         <Row><Action disabled={!!busy} onClick={cancelPreparedPlan}>取消本次准备</Action></Row>
       </PanelSection></div> : installed ? <PanelSection title="已安装">
         {committed.length
-          ? <Row><Status>此补丁由本工具安装，可恢复备份文件。</Status></Row>
+          ? (canUninstall
+            ? <Row><Status>此补丁由本工具安装，可恢复备份文件。</Status></Row>
+            : <Row><Status warning>此补丁由本工具安装，但未保留原文件备份，无法卸载，只能重新安装。</Status></Row>)
           : installedExternal
             ? <Row><Status>通过其他方式安装；本工具没有原文件备份，不能自动卸载。</Status></Row>
             : <Row><Status warning>检测到已安装，但找不到本工具的安装记录，不能自动卸载。</Status></Row>}
-        {committed.map(tx => <Row key={tx.transaction_id}><Action disabled={!!busy} onClick={() => confirmDialog("确认卸载", <p>{game} · {patch.name}<br />将恢复安装前的备份文件。请关闭游戏并暂停 Steam 更新。</p>, "已关闭游戏及更新，卸载", () => void session.work("正在安全卸载…", () => uninstall(tx.transaction_id, true), value => {
+        {recoverable.map(tx => <Row key={tx.transaction_id}><Action disabled={!!busy} onClick={() => confirmDialog("确认卸载", <p>{game} · {patch.name}<br />将恢复安装前的备份文件。请关闭游戏并暂停 Steam 更新。</p>, "已关闭游戏及更新，卸载", () => void session.work("正在安全卸载…", () => uninstall(tx.transaction_id, true), value => {
           record(value); refreshAfterMutation(value.state === "uninstalled" ? "补丁已卸载，原文件已恢复。" : `卸载状态：${workflowState(value.state)}。${value.error ? reason(value.error) : "请检查操作记录。"}`);
         }))}>卸载补丁</Action></Row>)}
-        {!committed.length && (blocked
+        {!canUninstall && (blocked
           ? <Row><Status warning>无法重新安装并接管：{blocked}</Status></Row>
-          : <><Row><Status>重新安装并接管会在写入前备份当前文件，成功后即可在本工具中卸载。该操作会覆盖当前补丁文件。</Status></Row>
+          : <><Row><Status>{keepBackups ? "重新安装会重新下载补丁并覆盖当前文件；成功后即可在本工具中卸载。" : "重新安装会重新下载补丁并覆盖当前文件。当前不保留原文件备份，安装后仍无法卸载。"}</Status></Row>
             <Row><Action disabled={!!busy || !!blocked} onClick={() => void beginPrepare()}>{patch.download_available ? "自动下载并重新安装" : "查找本地 ZIP 并重新安装"}</Action></Row></>)}
       </PanelSection> : <PanelSection title="安装准备"><Row><Status>{patch.download_available ? "自动查找或下载官方 ZIP，并校验后生成安装计划。" : "查找 Downloads 内的 ZIP，并校验后生成安装计划。"}</Status></Row>
         {blocked && <Row><Status warning>无法准备安装：{blocked}</Status></Row>}
@@ -472,6 +477,60 @@ function SourcesPage({ report, busy, rule, setRule, changeSources, contentRef, o
   </div>;
 }
 
+function GlobalCache() {
+  const { busy, error, note } = useSyncExternalStore(session.subscribe, session.getSnapshot);
+  const [settings, setSettings] = useState<Settings | null>(null);
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    let live = true;
+    getSettings().then(value => { if (live) setSettings(value); }).catch(() => { if (live) setFailed(true); });
+    return () => { live = false; };
+  }, []);
+  const status = settings?.cache;
+  const toggle = (enabled: boolean) => void session.work(enabled ? "正在开启自动清理…" : "正在关闭自动清理…",
+    () => setAutoCleanup(enabled),
+    value => { setSettings(value); session.update({ note: autoCleanupNote(value.auto_cleanup) }); });
+  const toggleBackups = (enabled: boolean) => void session.work(enabled ? "正在保留原文件备份…" : "正在关闭备份保留…",
+    () => setKeepBackups(enabled),
+    value => { setSettings(value); session.update({ note: value.keep_backups ? "已保留原文件备份，安装后仍可卸载。" : "已关闭备份保留，安装后不再保存原文件备份，无法卸载、只能重新安装。" }); });
+  const clean = () => {
+    const amount = status ? size(status.total_bytes) : "";
+    confirmDialog("清理下载缓存", <p>将删除本工具已下载的补丁 ZIP 缓存{amount ? `（约 ${amount}）` : ""}。事务备份与手动导入文件不受影响。</p>, "清理下载缓存",
+      () => void session.work("正在清理下载缓存…", clearCache, value => {
+        setSettings(current => current ? { ...current, cache: value } : current);
+        session.update({ note: cacheClearNote(value.removed_bytes ?? 0) });
+      }));
+  };
+  const transactionBytes = (status?.jobs.stage_bytes ?? 0) + (status?.jobs.backup_bytes ?? 0);
+  const cleanTransactions = () => {
+    const amount = status ? size(transactionBytes) : "";
+    confirmDialog("清理事务备份与暂存", <p>将删除已完成事务的暂存与备份{amount ? `（约 ${amount}）` : ""}。删除备份后这些已安装补丁将无法卸载，只能重新安装；进行中或需要恢复的事务不受影响。</p>, "清理事务空间",
+      () => void session.work("正在清理事务空间…", clearTransactionBackups, value => {
+        setSettings(current => current ? { ...current, cache: value } : current);
+        session.update({ note: cacheClearNote(value.removed_bytes ?? 0) });
+      }));
+  };
+  return <div className="patch-page">
+    <div>{busy && <Status>{busy}</Status>}{error && <Status warning>{error}</Status>}{note && <Status>{note}</Status>}</div>
+    <Status>全局设置，对所有游戏生效。</Status>
+    <PanelSection title="下载缓存">
+      {settings ? <>
+        <Row><ToggleField label="安装成功后自动删除下载缓存" checked={settings.auto_cleanup} disabled={!!busy} onChange={toggle} /></Row>
+        <InfoRow label="当前占用">{cacheSummary(status)}</InfoRow>
+        <Row><Status>{settings.auto_cleanup ? "开启时，安装成功后会删除本次下载的 ZIP；卸载后重装需重新下载。" : "已关闭自动清理，缓存将保留直至手动清理。"}</Status></Row>
+        <Row><Action disabled={!!busy || !status?.file_count} onClick={clean}>清理下载缓存</Action></Row>
+      </> : <Row><Status warning={failed}>{failed ? "读取缓存设置失败。" : "正在读取缓存设置…"}</Status></Row>}
+    </PanelSection>
+    <PanelSection title="事务备份与暂存">
+      <InfoRow label="暂存文件">{size(status?.jobs.stage_bytes ?? 0)}</InfoRow>
+      <InfoRow label="原文件备份">{size(status?.jobs.backup_bytes ?? 0)}</InfoRow>
+      {settings && <Row><ToggleField label="保留原文件备份（可卸载，占空间）" checked={settings.keep_backups} disabled={!!busy} onChange={toggleBackups} /></Row>}
+      {settings && <Row><Status warning={!settings.keep_backups}>{settings.keep_backups ? "已保留原文件备份，安装后可卸载；备份约占与补丁文件相近的空间。" : "不保留原文件备份：安装后无法卸载，只能重新安装。"}</Status></Row>}
+      <Row><Action disabled={!!busy || !transactionBytes} onClick={cleanTransactions}>清理事务备份与暂存</Action></Row>
+    </PanelSection>
+  </div>;
+}
+
 function Manager() {
   const { instance, panel } = useParams<{ instance: string; panel?: string }>();
   const { report } = useSyncExternalStore(session.subscribe, session.getSnapshot);
@@ -479,7 +538,11 @@ function Manager() {
   const target = instance === sourceRoute ? instance : decodeInstance(instance ?? "");
   const item = report?.installs.find(i => i.game.instance_id === target);
   return <Focusable className="patch-full" onCancel={() => Navigation.NavigateBack()}><style>{css}</style>
-    {instance === sourceRoute ? <SidebarNavigation showTitle title={<div className="patch-nav-header"><span className="patch-nav-tool">Steam 补丁管理</span><span className="patch-nav-game">全局设置</span></div>} pages={[{ identifier: "sources", route: "/steam-patch-manager/sources", title: "管理订阅源", visible: true, content: <GlobalSources /> }]} />
+    {instance === sourceRoute ? <SidebarNavigation showTitle title={<div className="patch-nav-header"><span className="patch-nav-tool">Steam 补丁管理</span><span className="patch-nav-game">全局设置</span></div>} page={panel === "cache" ? "/steam-patch-manager/sources/cache" : "/steam-patch-manager/sources"} pages={[
+      { identifier: "sources", route: "/steam-patch-manager/sources", title: "管理订阅源", visible: true, content: <GlobalSources /> },
+      "separator",
+      { identifier: "cache", route: "/steam-patch-manager/sources/cache", title: "下载缓存", visible: true, content: <GlobalCache /> },
+    ]} />
       : item ? <GameManager key={instance} item={item} seg={instance!} panel={panel} />
         : <div className="patch-page"><h2>Steam 补丁管理</h2><Status>{report ? "游戏已不在当前扫描结果中。" : "正在加载游戏列表…"}</Status><Action onClick={() => Navigation.NavigateBack()}>返回游戏列表</Action></div>}
   </Focusable>;

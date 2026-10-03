@@ -1,5 +1,16 @@
 # 开发进度
 
+## 2026-10-04：安装后下载缓存清理
+
+- 新增安装成功后自动删除本次下载 ZIP 缓存的流程，覆盖 publisher 的 `publisher/<release>/<instance-hash>/cache/archive.zip`（含 `download.json`）与核心 `downloads/<sha256>.zip`；依据“推导缓存路径 + `no_links` + 归属校验”判定，不触碰 `~/Downloads` 用户 ZIP、非摘要命名文件、事务备份与暂存。取消 / 回滚 / `needs_recovery` 保留缓存。
+- 新增后端自动清理开关（`settings.json`，默认开启）与手动“清理下载缓存”入口（“管理订阅源 > 下载缓存”，显示占用并可确认清理）。
+- 后端新增 `plugin_settings.py`（原 `settings.py`，因 Decky 运行时 `decky_loader.settings` 同名冲突改名）、`caches.py` 与 `publisher.clear_cache/caches`；`main.py` 在 `start_install` 提交后按开关清理。前端新增 `cache.ts` 纯逻辑与全局设置分区。
+- 测试：后端新增 `test_settings` 4 项、`test_caches` 5 项、`test_cache_cleanup` 6 项、publisher 缓存 2 项通过；前端 `cache.test.ts` 3 项通过；类型检查与 Rollup 构建通过。
+- 部署并实机验收：备份后按哈希部署到 Deck 并重载；经 Steam CEF 连接 Decky 路由实时调用 `get_settings` / `cache_status` / `clear_cache` / `set_auto_cleanup` / `clear_transaction_backups` 通过（构造 319B / 5 文件缓存，清理后清零且保留用户文件）。真实安装后自动删除与手柄 UI 渲染待办。设计与进度见 [cache-cleanup](cache-cleanup/design.md)。
+- 用户反馈事务 `.stage`/`.backup`（设备上 7.7G）未清理且找不到缓存面板。澄清它们是核心事务文件非下载缓存；新增提交后自动删除该事务 `.stage`、`jobs` 占用统计与手动“清理事务备份与暂存”（清理备份后无法卸载、只能重新安装），并把入口改为全局设置的独立侧栏页“下载缓存”。实机 `get_settings` 显示 stage/backup 各约 3.85G，部署后的 `caches.py` 在 Deck Python 3.13 上仅删目标文件并保留无关文件。
+- 按用户确认立即执行真实清理：状态目录从 7.7G 降到 344K。新增**备份保留开关 `keep_backups`，默认关闭**：关闭时安装提交后同时删除 `.backup`（默认无法卸载、只能重新安装），开启时保留以支持卸载；`list_transactions` 增加 `backups` 字段，无备份事务界面隐藏卸载，后端 `uninstall` 以 `uninstall_backups_missing` 拒绝。重新部署并实机验证 `get_settings`（`keep_backups:false`）、`set_keep_backups` 往返、事务 `backups:false` 与卸载拒绝均正确。
+- 修复“无备份时无法重新安装”：核心 `ensure_no_active` 会因旧 `committed` 事务拒绝新准备。因无 Rust 工具链，decky 侧让 `scan` 不再因无 `.backup` 的 committed 事务阻止（有备份仍阻止），并在准备前对无备份状态目录删除核心 `journal.sqlite`/`jobs`（保留配方/签名/密钥）。实机扫描该补丁 `blockers` 为空、检测 `installed_external`、可进入重新安装。后端 72 项测试通过。
+
 ## 2026-10-03：源订阅与运行时解析
 
 - 按用户澄清要求，删除 115 条静态来源索引及其生成脚本。Decky 发现仅由已订阅源实时查询产生；公开审核目录仍供 CLI 和历史事务使用。

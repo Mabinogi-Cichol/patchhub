@@ -10,9 +10,11 @@ import re
 import decky
 
 sys.path.insert(0, str(Path(__file__).parent / "backend"))
+import caches
 from bridge import CoreBridge
 from acquisition import find_archive, release_metadata
 from publisher import Publisher, _released, RELEASE_PATTERN
+from plugin_settings import Settings
 from sources import SourceRegistry
 from tasks import TaskManager, current_task
 
@@ -39,6 +41,7 @@ class Plugin:
         self._prepare_cancel = None
         self.tasks = TaskManager()
         self._plan_metadata = {}
+        self.settings = Settings(state_dir)
         self.sources = SourceRegistry(state_dir, root / "backend/sources.json")
         self.publisher = Publisher(self.bridge, self.sources)
 
@@ -72,7 +75,8 @@ class Plugin:
                 if not game.get("buildid"):
                     patch["blockers"].append("build_not_verified")
                 if any(t.get("instance_id") == game["instance_id"] and t.get("release_id") != entry["release_id"]
-                       and t["state"] not in ("planned", "uninstalled", "rolled_back") for t in existing_transactions):
+                       and t["state"] not in ("planned", "uninstalled", "rolled_back")
+                       and t.get("backups") is not False for t in existing_transactions):
                     patch["blockers"].append("publisher_existing_transaction")
                 local = self.publisher.bridge_for(game["instance_id"], entry["release_id"])
                 if local is not None:
@@ -88,7 +92,16 @@ class Plugin:
                         if local_patch:
                             patch["detection"] = local_patch["detection"]
                             transactions = await local.list_transactions()
-                            active = any(t["state"] not in ("planned", "uninstalled", "rolled_back") for t in transactions)
+                            # A committed install without backups cannot be uninstalled, so it
+                            # must not block re-installing over it. Without a known state dir
+                            # (e.g. a test double) keep the conservative blocking behaviour.
+                            local_state = getattr(local, "state_dir", None)
+                            if local_state is None:
+                                active = any(t["state"] not in ("planned", "uninstalled", "rolled_back") for t in transactions)
+                            else:
+                                local_jobs = Path(local_state) / "jobs"
+                                active = any(t["state"] not in ("planned", "uninstalled", "rolled_back")
+                                             and caches.has_backups(local_jobs, t["transaction_id"]) for t in transactions)
                             if active:
                                 patch["blockers"].append("publisher_existing_transaction")
                             patch["blockers"].extend(b for b in local_patch["blockers"]
@@ -182,12 +195,17 @@ class Plugin:
                 entry = self.publisher.match(row["game"], release_id)
                 if entry is None or entry["release_id"] != release_id:
                     raise ValueError("publisher_match_changed")
+                state_of = getattr(self.publisher, "_state", None)
+                if state_of is not None:
+                    await asyncio.to_thread(self._forget_without_backups, state_of(instance_id, release_id))
                 bridge, archive, plan, acquisition = await self.publisher.prepare(row["game"], entry, cancel, local_archive)
                 if cancel.is_set():
                     await bridge.discard_plan(plan["plan_id"])
                     raise RuntimeError("download_cancelled")
                 wrapped = self._wrap_publisher(plan, instance_id, release_id)
-                self._plan_metadata[wrapped["plan_id"]] = dict(instance_id=instance_id, release_id=release_id, archive_bytes=Path(archive).stat().st_size)
+                self._plan_metadata[wrapped["plan_id"]] = dict(
+                    instance_id=instance_id, release_id=release_id, archive_bytes=Path(archive).stat().st_size,
+                    cache={"kind": "publisher", "instance_id": instance_id, "release_id": release_id})
                 return {"archive": archive, "acquisition": acquisition, "mode": "publisher_root",
                     "plan": wrapped}
             if report.get("catalog_trust") != "signed":
@@ -210,11 +228,21 @@ class Plugin:
                 acquisition = "download"
             if cancel.is_set():
                 raise RuntimeError("download_cancelled")
+            base_state = getattr(self.bridge, "state_dir", None)
+            if base_state is not None:
+                await asyncio.to_thread(self._forget_without_backups, base_state)
             plan = await self.plan_install(instance_id, release_id, str(archive))
             if cancel.is_set():
                 await self.bridge.discard_plan(plan["plan_id"])
                 raise RuntimeError("download_cancelled")
-            self._plan_metadata[plan["plan_id"]] = dict(instance_id=instance_id, release_id=release_id, archive_bytes=Path(archive).stat().st_size)
+            metadata = dict(instance_id=instance_id, release_id=release_id, archive_bytes=Path(archive).stat().st_size)
+            try:
+                core_cache = self.bridge.state_dir / "downloads" / f"{digest}.zip"
+                if Path(archive).resolve() == core_cache.resolve():
+                    metadata["cache"] = {"kind": "core", "sha256": digest}
+            except OSError:
+                pass
+            self._plan_metadata[plan["plan_id"]] = metadata
             return {"archive": str(archive), "acquisition": acquisition, "mode": "reviewed", "plan": plan}
         finally:
             self._prepare_cancel = None
@@ -247,18 +275,111 @@ class Plugin:
             raise RuntimeError("installer_busy")
         bridge, value, owner = self._dispatch_id(plan_id)
         result = await bridge.start_install(value, confirmed_game_closed)
+        if result.get("state") == "committed":
+            await self._cleanup_after_install(plan_id, value, owner, self.settings.auto_cleanup)
         return self._wrap_publisher(result, *owner) if owner else result
+
+    async def _cleanup_after_install(self, plan_id, core_plan_id, owner, enabled):
+        """Best-effort post-commit cleanup; never changes the install outcome."""
+        metadata = self._plan_metadata.pop(plan_id, None) or {}
+        cache = metadata.get("cache")
+        if enabled:
+            try:
+                if cache.get("kind") == "publisher":
+                    await asyncio.to_thread(self.publisher.clear_cache, cache["instance_id"], cache["release_id"])
+                elif cache.get("kind") == "core":
+                    await asyncio.to_thread(self._clear_core_cache, cache.get("sha256"))
+            except Exception:
+                pass
+        # Staged copies are not needed after commit: apply is done and uninstall
+        # restores from backups only. Backups are removed unless the user opted
+        # into keeping them (which keeps uninstall available).
+        try:
+            suffixes = (".stage",) if self.settings.keep_backups else (".stage", ".backup")
+            await asyncio.to_thread(caches.delete_files, self._jobs_root(owner), core_plan_id, suffixes)
+        except Exception:
+            pass
+
+    def _jobs_root(self, owner):
+        if owner is None:
+            return self.bridge.state_dir / "jobs"
+        instance_id, release_id = owner
+        return self.publisher._state(instance_id, release_id) / "jobs"
+
+    def _forget_without_backups(self, state_dir):
+        """Clear a core transaction store that holds no backups.
+
+        Such an install cannot be uninstalled, so its committed record must not
+        block re-installing over it. The recipe, signed catalog and keys stay.
+        """
+        jobs = Path(state_dir) / "jobs"
+        if not jobs.is_dir() or caches.any_backups(jobs):
+            return
+        caches.forget_transactions(state_dir)
+
+    def _clear_core_cache(self, sha256):
+        return caches.clear_core(self.bridge.state_dir / "downloads", sha256)
+
+    async def cache_status(self):
+        status = await asyncio.to_thread(caches.status, self.publisher, self.bridge.state_dir / "downloads")
+        status["jobs"] = await asyncio.to_thread(caches.jobs_status, self.publisher, self.bridge.state_dir)
+        return status
+
+    async def clear_cache(self):
+        if self.tasks.busy() or self._prepare_cancel is not None:
+            raise RuntimeError("installer_busy")
+        removed = await asyncio.to_thread(caches.clear, self.publisher, self.bridge.state_dir / "downloads")
+        status = await self.cache_status()
+        status["removed_bytes"] = removed
+        return status
+
+    async def clear_transaction_backups(self):
+        """Delete staged/backup files for finished transactions, freeing space."""
+        if self.tasks.busy() or self._prepare_cancel is not None:
+            raise RuntimeError("installer_busy")
+        removable = ("committed", "uninstalled", "rolled_back")
+        removed = 0
+        base_ids = {t["transaction_id"] for t in await self.bridge.list_transactions() if t["state"] in removable}
+        removed += await asyncio.to_thread(caches.clear_jobs, self.bridge.state_dir / "jobs", base_ids)
+        for instance_id, release_id, bridge in self.publisher.bridges():
+            ids = {t["transaction_id"] for t in await bridge.list_transactions() if t["state"] in removable}
+            jobs_root = self.publisher._state(instance_id, release_id) / "jobs"
+            removed += await asyncio.to_thread(caches.clear_jobs, jobs_root, ids)
+        status = await self.cache_status()
+        status["removed_bytes"] = removed
+        return status
+
+    async def get_settings(self):
+        return {**self.settings.snapshot(), "cache": await self.cache_status()}
+
+    async def set_auto_cleanup(self, enabled: bool):
+        self.settings.set_auto_cleanup(enabled)
+        return await self.get_settings()
+
+    async def set_keep_backups(self, enabled: bool):
+        self.settings.set_keep_backups(enabled)
+        return await self.get_settings()
 
     async def list_transactions(self):
         result = await self.bridge.list_transactions()
+        self._annotate_backups(result, self.bridge.state_dir / "jobs")
         for instance_id, release_id, bridge in self.publisher.bridges():
-            result.extend(self._wrap_publisher(tx, instance_id, release_id) for tx in await bridge.list_transactions())
+            transactions = await bridge.list_transactions()
+            self._annotate_backups(transactions, self.publisher._state(instance_id, release_id) / "jobs")
+            result.extend(self._wrap_publisher(tx, instance_id, release_id) for tx in transactions)
         return result
+
+    @staticmethod
+    def _annotate_backups(transactions, jobs_root):
+        for transaction in transactions:
+            transaction["backups"] = caches.has_backups(jobs_root, transaction.get("transaction_id"))
 
     async def uninstall(self, transaction_id: str, confirmed_game_closed: bool = False):
         if self.tasks.busy():
             raise RuntimeError("installer_busy")
         bridge, value, owner = self._dispatch_id(transaction_id)
+        if not caches.has_backups(self._jobs_root(owner), value):
+            raise ValueError("uninstall_backups_missing")
         result = await bridge.uninstall(value, confirmed_game_closed)
         return self._wrap_publisher(result, *owner) if owner else result
 

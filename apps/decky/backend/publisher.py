@@ -66,6 +66,37 @@ def _safe_dir(path):
     return path
 
 
+def cache_files(cache):
+    """Publisher download-cache files. Never game files, keys or user imports."""
+    if not cache.is_dir() or not no_links(cache):
+        return []
+    result = []
+    try:
+        with os.scandir(cache) as entries:
+            for entry in entries:
+                if not entry.is_file(follow_symlinks=False):
+                    continue
+                name = entry.name
+                if name in ("archive.zip", "download.json") or (name.startswith("download-") and name.endswith(".tmp")):
+                    result.append(cache / name)
+    except OSError:
+        pass
+    return result
+
+
+def _unlink_within(root, path):
+    """Remove a regular file only when it resolves inside an owned root."""
+    try:
+        if not no_links(path) or not path.is_file():
+            return False
+        if not path.resolve().is_relative_to(root.resolve()):
+            return False
+        path.unlink()
+        return True
+    except OSError:
+        return False
+
+
 RELEASE_PATTERN = r"(?:patchmoe|source-[a-z][a-z0-9-]{0,47})-[1-9][0-9]*"
 
 
@@ -372,6 +403,42 @@ class Publisher:
         if not re.fullmatch(RELEASE_PATTERN, release_id):
             raise ValueError("invalid_release_id")
         return self.base / release_id / hashlib.sha256(instance_id.encode()).hexdigest()[:16]
+
+    def cache_dir(self, instance_id, release_id):
+        return self._state(instance_id, release_id) / "cache"
+
+    def clear_cache(self, instance_id, release_id):
+        """Delete one instance's downloaded ZIP cache; keep recipe and journal."""
+        cache = self.cache_dir(instance_id, release_id)
+        return sum(1 for path in cache_files(cache) if _unlink_within(cache, path))
+
+    def states(self):
+        """Yield every existing publisher state directory (no metadata checks)."""
+        if not self.base.is_dir() or not no_links(self.base):
+            return
+        try:
+            releases = list(os.scandir(self.base))
+        except OSError:
+            return
+        for release in releases:
+            release_dir = self.base / release.name
+            if not release.is_dir(follow_symlinks=False) or not no_links(release_dir):
+                continue
+            try:
+                states = list(os.scandir(release_dir))
+            except OSError:
+                continue
+            for state in states:
+                state_dir = release_dir / state.name
+                if state.is_dir(follow_symlinks=False) and no_links(state_dir):
+                    yield state_dir
+
+    def caches(self):
+        """Yield (release_id, state_dir, cache) for every publisher cache."""
+        for state_dir in self.states():
+            cache = state_dir / "cache"
+            if cache.is_dir() and no_links(cache):
+                yield state_dir.parent.name, state_dir, cache
 
     def _bridge(self, state):
         bridge = CoreBridge(self.bridge.binary, state / "catalog.json", timeout=self.bridge.timeout,

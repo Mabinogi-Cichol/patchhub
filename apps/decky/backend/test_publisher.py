@@ -152,6 +152,26 @@ class PublisherTests(unittest.TestCase):
         self.assertEqual((archive.read_bytes(), digest, size, mode),
             (b"updated", hashlib.sha256(b"updated").hexdigest(), 7, "download"))
 
+    def test_clear_cache_removes_download_files_and_keeps_recipe(self):
+        instance = f"12|{self.root}|{self.root / 'game'}"
+        cache = self.publisher._state(instance, "patchmoe-12") / "cache"
+        cache.mkdir(parents=True)
+        (cache / "archive.zip").write_bytes(b"zip")
+        (cache / "download.json").write_bytes(b"{}")
+        (cache / "download-stale.tmp").write_bytes(b"tmp")
+        (cache / "catalog.json").write_bytes(b"recipe")
+        self.assertEqual(self.publisher.clear_cache(instance, "patchmoe-12"), 3)
+        self.assertTrue((cache / "catalog.json").exists())
+        self.assertEqual(self.publisher.clear_cache(instance, "patchmoe-12"), 0)
+
+    def test_caches_enumerates_existing_cache_directories(self):
+        instance = f"12|{self.root}|{self.root / 'game'}"
+        cache = self.publisher._state(instance, "patchmoe-12") / "cache"
+        cache.mkdir(parents=True)
+        (cache / "archive.zip").write_bytes(b"zip")
+        self.assertEqual([(release, path) for release, _state, path in self.publisher.caches()],
+            [("patchmoe-12", cache)])
+
 
 class ExistingTransactionTests(unittest.IsolatedAsyncioTestCase):
     async def test_committed_receipt_rejects_new_recipe_before_download(self):
