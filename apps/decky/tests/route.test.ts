@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { decodeInstance, encodeInstance } from "../src/route.ts";
+import { decodeInstance, encodeInstance, settingsPage, settingsRoutes } from "../src/route.ts";
 
 test("instance ids with separators and non-ASCII survive a URL-safe round trip", () => {
   const values = [
@@ -23,4 +23,15 @@ test("the encoded segment never contains '/' or '%' route delimiters", () => {
 
 test("an undecodable legacy segment falls back to its raw value", () => {
   assert.equal(decodeInstance("3239270%7C%2Fhome"), "3239270%7C%2Fhome");
+});
+
+test("global settings pages cannot shadow each other under Steam prefix matching", () => {
+  const paths = Object.values(settingsRoutes);
+  for (const current of paths) {
+    const matches = paths.filter(route => current === route || current.startsWith(`${route}/`));
+    assert.deepEqual(matches, [current]);
+  }
+  assert.equal(settingsPage("subscriptions"), settingsRoutes.sources);
+  assert.equal(settingsPage("cache"), settingsRoutes.cache);
+  assert.equal(settingsPage(), settingsRoutes.sources, "legacy settings entry still opens sources");
 });

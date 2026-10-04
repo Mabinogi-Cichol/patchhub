@@ -1,3 +1,13 @@
+// SidebarNavigation uses prefix matching, so settings panels need sibling paths.
+export const settingsRoutes = {
+  sources: "/steam-patch-manager/sources/subscriptions",
+  cache: "/steam-patch-manager/sources/cache",
+} as const;
+
+export function settingsPage(panel?: string): string {
+  return panel === "cache" ? settingsRoutes.cache : settingsRoutes.sources;
+}
+
 // instance_id contains '/', and the Steam router only partially decodes a
 // single URL segment, so a raw or encodeURIComponent value is not restored
 // byte-for-byte. URL-safe base64 keeps the segment opaque to routing.

@@ -7,7 +7,7 @@ import { getListPreferences, setListPreferences, subscribeListPreferences } from
 import { gamePresentation } from "./steam";
 import { installBlocker, planExpired, preparedSource, transactionResult, type PreparedInstall } from "./install";
 import { createManagerSession, needsRecovery } from "./session";
-import { decodeInstance, encodeInstance } from "./route";
+import { decodeInstance, encodeInstance, settingsPage, settingsRoutes } from "./route";
 import { autoCleanupNote, cacheClearNote, cacheSummary, formatSize as size, type CacheStatus, type Settings } from "./cache";
 import { tasks, taskIsTerminal, type TaskSnapshot } from "./tasks";
 
@@ -48,7 +48,7 @@ function openManager(instance: string) {
   Navigation.CloseSideMenus();
 }
 function openSources() {
-  Navigation.Navigate(`/steam-patch-manager/${sourceRoute}`);
+  Navigation.Navigate(settingsRoutes.sources);
   Navigation.CloseSideMenus();
 }
 function Action({ children, ...props }: ComponentProps<typeof ButtonItem>) {
@@ -556,10 +556,10 @@ function Manager() {
   const target = instance === sourceRoute ? instance : decodeInstance(instance ?? "");
   const item = report?.installs.find(i => i.game.instance_id === target);
   return <Focusable className="patch-full" onCancel={() => Navigation.NavigateBack()}><style>{css}</style>
-    {instance === sourceRoute ? <SidebarNavigation showTitle title={<div className="patch-nav-header"><span className="patch-nav-tool">Steam 补丁管理</span><span className="patch-nav-game">全局设置</span></div>} page={panel === "cache" ? "/steam-patch-manager/sources/cache" : "/steam-patch-manager/sources"} pages={[
-      { identifier: "sources", route: "/steam-patch-manager/sources", title: "管理订阅源", visible: true, content: <GlobalSources /> },
+    {instance === sourceRoute ? <SidebarNavigation showTitle disableRouteReporting title={<div className="patch-nav-header"><span className="patch-nav-tool">Steam 补丁管理</span><span className="patch-nav-game">全局设置</span></div>} page={settingsPage(panel)} pages={[
+      { identifier: settingsRoutes.sources, route: settingsRoutes.sources, title: "管理订阅源", visible: true, content: <GlobalSources /> },
       "separator",
-      { identifier: "cache", route: "/steam-patch-manager/sources/cache", title: "下载缓存", visible: true, content: <GlobalCache /> },
+      { identifier: settingsRoutes.cache, route: settingsRoutes.cache, title: "下载缓存", visible: true, content: <GlobalCache /> },
     ]} />
       : item ? <GameManager key={instance} item={item} seg={instance!} panel={panel} />
         : <div className="patch-page"><h2>Steam 补丁管理</h2><Status>{report ? "游戏已不在当前扫描结果中。" : "正在加载游戏列表…"}</Status><Action onClick={() => Navigation.NavigateBack()}>返回游戏列表</Action></div>}
