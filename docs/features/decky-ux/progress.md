@@ -65,3 +65,11 @@
 - 前端 25 项测试、Windows / Decky 类型检查、Decky Rollup 构建和 53 个本地文档链接检查通过。
 - 后端全量 78 项中 74 项通过、1 项符号链接用例跳过，3 项 CLI 桥接集成用例因缺少 `target/debug/steam-patch.exe` 报环境错误；单独运行本次修改涉及的 `test_sources` 与 `test_acquisition` 共 26 项全部通过。
 - 未将缺少核心程序的集成检查记为通过，本轮未新增网络或实机验收。
+
+## 2026-10-04 游戏订阅源实机验证
+
+- 本轮按用户要求将游戏详情底部入口改为独立“订阅源管理”，使用游戏自身的 `/sources` 子路由。每个源提供“用于此游戏”开关和游戏匹配结果，按 AppID 持久化；全局网站配置继续从主面板进入。扫描和准备安装均遵守游戏选择，未选择的源仍可查看匹配结果并重新选择。
+- 本地前端 25 项测试、Decky 类型检查和 Rollup 构建通过；后台 75 项中 74 项通过、1 项符号链接用例跳过。全量中的另外 3 项 CLI 桥接用例缺少本机 `target/debug/steam-patch.exe`，未验证。新增覆盖游戏之间隔离、持久化、旧配置兼容、全局修改保留游戏选择，以及关闭后拒绝准备该源补丁。
+- 已备份并部署 `main.py`、`backend/sources.py`、`dist/index.js` 和 sourcemap，备份目录为 `/home/deck/steam-patch-validation/game-sources-20261004/backup`。部署后哈希与本地一致：前端 `8dce2e79…4380670`，入口 `ef1d12e7…0c2dfc5`，源注册表 `cbb60357…be40748`；`plugin_loader` 为 active，加载插件实例为 1。
+- Steam CEF 实际挂载页面验收：从《夜勤病栋》概览点击左侧“订阅源管理”，仍显示当前游戏标题与“用于此游戏”，不出现全局规则 JSON 表单。通过实际原生 checkbox 点击关闭再开启，页面更新并恢复匹配补丁；单独 API 验证关闭该游戏的 patch.moe 后不再匹配该源，其他 37 个游戏的源选择及全局源状态保持原状，随后恢复测试前选择。本次没有触发安装或下载补丁，实体手柄遍历和截图验收未执行。
+- 证据脚本：`.artifacts/game-sources-ui-check.js`、`.artifacts/game-sources-live-check.js`、`.artifacts/game-sources-toggle-check.js`；同名脚本保存在上述 Deck 验证目录。
