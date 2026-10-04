@@ -177,7 +177,7 @@ function QuickAccess() {
         {shown.map(item => <Row key={item.game.instance_id}><GameButton item={item} /></Row>)}
         {report && report.installs.length > 0 && !shown.length && <Row><Status>没有符合条件的游戏。</Status><Action onClick={() => setListPreferences({ filter: "all", query: "" })}>清除筛选</Action></Row>}
         {report && !report.installs.length && <Row><Status>未找到 Steam 游戏。请检查游戏库或 SD 卡。</Status></Row>}
-        {report?.diagnostics.map((d, i) => <Row key={i}><Status warning>{reason(d.code)}{d.path ? ` · ${d.path}` : ""}</Status></Row>)}
+        {report?.diagnostics.filter(d => d.code !== "library_unavailable").map((d, i) => <Row key={i}><Status warning>{reason(d.code)}{d.path ? ` · ${d.path}` : ""}</Status></Row>)}
       </PanelSection>
     </div>
     <div className="patch-qam-controls"><PanelSection>
