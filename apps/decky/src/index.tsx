@@ -1,5 +1,5 @@
 import { callable, definePlugin, routerHook } from "@decky/api";
-import { Button, ButtonItem, ConfirmModal, DropdownItem, Field, Focusable, ModalRoot, Navigation, PanelSection, PanelSectionRow, ProgressBar, SidebarNavigation, TextField, ToggleField, showModal, useParams } from "@decky/ui";
+import { Button, ButtonItem, ConfirmModal, DropdownItem, Field, Focusable, Navigation, PanelSection, PanelSectionRow, SidebarNavigation, TextField, ToggleField, showModal, useParams } from "@decky/ui";
 import { FaGamepad, FaPuzzlePiece } from "react-icons/fa";
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ComponentProps, type ReactNode } from "react";
 import { filterInstalls, isExternal, isManaged, needsAttention, patchState, reason, workflowState, type Filter, type Install, type Patch, type Plan, type ScanResult, type SourceSubscription, type Transaction } from "@steam-patch/ui";
@@ -10,6 +10,7 @@ import { createManagerSession, needsRecovery } from "./session";
 import { decodeInstance, encodeInstance, settingsPage, settingsRoutes } from "./route";
 import { autoCleanupNote, cacheClearNote, cacheSummary, formatSize as size, type CacheStatus, type Settings } from "./cache";
 import { tasks, taskIsTerminal, type TaskSnapshot } from "./tasks";
+import { TaskProgressView } from "./task-progress-view";
 
 const scan = callable<[], ScanResult>("scan");
 const listTransactions = callable<[], Transaction[] | { transactions: Transaction[] }>("list_transactions");
@@ -118,9 +119,6 @@ const css = `
   .patch-patch-name { font-weight:600; }
   .patch-patch-source { font-size:12px; opacity:.8; overflow-wrap:anywhere; }
   .patch-kv-value { overflow-wrap:anywhere; }
-  .patch-modal { width:min(640px,90vw); }
-  .patch-modal p { line-height:1.4; overflow-wrap:anywhere; }
-  .patch-metrics { display:grid; grid-template-columns:1fr 1fr; gap:4px 20px; margin:12px 0; }
 `;
 
 function matchSummary(item: Install): string {
@@ -189,12 +187,6 @@ function QuickAccess() {
   </div>;
 }
 
-const stageNames: Record<string, string> = {
-  scanning: "查找本地 ZIP", searching: "查找本地 ZIP", connecting: "正在连接", downloading: "下载补丁",
-  validating: "校验文件", planning: "生成安装计划", backing_up: "备份原文件",
-  writing: "写入文件", committing: "提交安装", rolling_back: "恢复原文件",
-};
-function duration(seconds: number) { return `${Math.floor(seconds / 60)} 分 ${Math.floor(seconds % 60)} 秒`; }
 function TaskModal({ game, patch, onTerminal }: { game: string; patch: string; onTerminal: (task: TaskSnapshot) => void }) {
   const task = useSyncExternalStore(tasks.subscribe, tasks.getSnapshot);
   const handled = useRef<string | null>(null);
@@ -208,32 +200,7 @@ function TaskModal({ game, patch, onTerminal }: { game: string; patch: string; o
     if (task && !taskIsTerminal(task.state)) { void tasks.requestCancel(); return; }
     modal?.Close(); tasks.clear();
   };
-  const busy = task && !taskIsTerminal(task.state);
-  const stage = task?.state === "cancelling" ? "正在取消" : task?.state === "rolling_back" ? "正在恢复原文件" : stageNames[task?.stage ?? ""] ?? task?.stage ?? "正在启动";
-  const measurable = task?.total_bytes != null && task.total_bytes > 0;
-  const progress = measurable ? Math.min(100, task!.bytes_done / task!.total_bytes! * 100) : 0;
-  return <ModalRoot className="patch-modal" bDisableBackgroundDismiss bHideCloseIcon onCancel={cancelOrClose} closeModal={cancelOrClose}>
-    <h2>{task?.kind === "install" ? "安装补丁" : "准备补丁"}</h2><p>{game} · {patch}</p>
-    <p>当前阶段：{stage}{measurable ? ` · ${Math.round(progress)}%` : ""}</p>
-    <ProgressBar indeterminate={!measurable} nProgress={progress / 100} />
-    <div className="patch-metrics">
-      <span>已处理：{size(task?.bytes_done ?? 0)}{measurable ? ` / ${size(task!.total_bytes!)}` : " / 总量未知"}</span>
-      <span>文件：{task?.files_done ?? 0}{task?.total_files != null ? ` / ${task.total_files}` : ""}</span>
-      {task?.kind === "prepare" && task.stage === "downloading" && <span>下载速度：{size(task.speed_bps)}/s</span>}
-      {task?.kind === "prepare" && task.archive_bytes != null && task.stage !== "downloading" && <span>ZIP 大小：{size(task.archive_bytes)}</span>}
-      {task?.kind === "install" && task.archive_bytes != null && <span>安装包大小：{size(task.archive_bytes)}</span>}
-      <span>已用：{duration(task?.elapsed_seconds ?? 0)}</span>
-      {task?.kind === "prepare" && task.stage === "downloading" && <span>预计剩余：{task.eta_seconds == null ? "估算中" : duration(task.eta_seconds)}</span>}
-    </div>
-    {task?.current_file && <p>当前文件：{task.current_file}</p>}
-    {task?.error && <Status warning>{reason(task.error)}</Status>}
-    {task?.state === "cancelled" && <p>已安全取消。</p>}
-    {task?.state === "completed" && <p>{task.kind === "install" ? "安装已完成。" : "准备完成。"}</p>}
-    {busy && <p>退出此界面将中断任务。安装取消时会恢复本次修改的文件。</p>}
-    <Action onClick={cancelOrClose} disabled={task?.state === "cancelling" || task?.state === "rolling_back"}>
-      {busy ? task?.state === "cancelling" || task?.state === "rolling_back" ? stage : "取消并返回" : "返回补丁管理"}
-    </Action>
-  </ModalRoot>;
+  return <TaskProgressView task={task} game={game} patch={patch} onCancel={cancelOrClose} />;
 }
 let modal: ReturnType<typeof showModal> | null = null;
 function showTask(game: string, patch: string, onTerminal: (task: TaskSnapshot) => void) {
