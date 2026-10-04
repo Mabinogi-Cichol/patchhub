@@ -1,5 +1,7 @@
 # 下载缓存清理设计与流程
 
+施工记录：[progress.md](progress.md)。
+
 本文设计 Decky 插件在**补丁安装成功后删除已下载 ZIP 缓存**的流程：新增**自动清理开关（默认开启，可关闭）**与**手动“清理下载缓存”入口**。核心原则：只删除本工具自己下载、且位于工具状态目录内的缓存文件；绝不触碰用户 `~/Downloads` 中手动导入的 ZIP、事务备份、暂存文件或订阅源查询缓存。
 
 ## 背景与现状
@@ -18,7 +20,7 @@
 - **安装/卸载/恢复不再依赖原始 ZIP**：core `prepare` 会把 ZIP 中每个映射成员解出并写入 `jobs/<plan_id>/<index>.stage`，`apply`、`uninstall`、`recover` 都只读 journal 与 stage/backup，`start_install` 不重新打开 ZIP。
 - `<state>/downloads` 同时是“手动导入白名单”（`main.py` 与 `find_archive` 允许用户把 ZIP 放这里被复用），因此**不能整目录删除**。
 - `~/Downloads`（`Plugin.downloads`）是用户个人目录，永不清理。
-- 取消下载必须**保留已有的完整缓存**（`docs/decky-ux/design.md`、`test_tasks.py::test_cancel_removes_partial_and_preserves_old_archive`）；本设计只删“安装提交成功”后的缓存，与该约定一致。
+- 取消下载必须**保留已有的完整缓存**（`docs/features/decky-ux/design.md`、`test_tasks.py::test_cancel_removes_partial_and_preserves_old_archive`）；本设计只删“安装提交成功”后的缓存，与该约定一致。
 
 ## 已确认的产品决策
 
@@ -168,7 +170,7 @@ return self._wrap_publisher(result, *owner) if owner else result
 - 入口为**全局设置的独立侧栏页**「下载缓存」（路由 `/steam-patch-manager/sources/cache`，与「管理订阅源」并列），不再嵌在订阅源页底部。页面包含两个分区：
   - **下载缓存**：`ToggleField`「安装成功后自动删除下载缓存」（默认开启）、当前占用、`Action`「清理下载缓存」。
   - **事务备份与暂存**：显示 stage/backup 占用，`Action`「清理事务备份与暂存」并弹确认，明确告知删除备份后无法卸载、只能重新安装。
-- 文案与 `docs/decky-ux/design.md` 的措辞统一（“缓存”专指订阅源查询结果时需与“下载缓存”区分）。
+- 文案与 `docs/features/decky-ux/design.md` 的措辞统一（“缓存”专指订阅源查询结果时需与“下载缓存”区分）。
 
 ## 安全与边界
 
@@ -200,7 +202,7 @@ return self._wrap_publisher(result, *owner) if owner else result
 13. 开关默认显示开启；切换关闭调用 `setAutoCleanup(false)` 并持久化显示。
 14. `busy` 时按钮与开关禁用。
 
-集成/实机（`docs/decky-ux/progress.md` 记录）：
+集成/实机（`docs/features/decky-ux/progress.md` 记录）：
 
 15. Deck 实机：默认开启下安装一个补丁，确认 `publisher/.../cache` 与 `downloads/` 中对应 ZIP 消失、游戏内补丁仍生效、操作记录/卸载仍可用。
 16. 关闭自动清理后安装，确认缓存保留；手动清理后再次“自动下载并准备安装”，确认能重新下载并复用流程正常。
@@ -211,8 +213,8 @@ return self._wrap_publisher(result, *owner) if owner else result
 - `docs/client-guide.md`：补充安装成功后清理下载缓存、自动清理开关（默认开启）以及全局设置中的手动清理入口。
 - `docs/install-design.md`：在“卸载与恢复”末尾区分“下载缓存已清理”与“事务/备份暂无自动清理”。
 - `apps/decky/README.md`：一句话说明缓存生命周期与开关。
-- `docs/decky-ux/design.md`：在进度/取消相关条目附近注明“安装成功后清理本次下载缓存”。
-- `docs/progress.md` / `docs/decky-ux/progress.md`：记录本轮施工与实机验收结果。
+- `docs/features/decky-ux/design.md`：在进度/取消相关条目附近注明“安装成功后清理本次下载缓存”。
+- `docs/progress.md` / `docs/features/decky-ux/progress.md`：记录本轮施工与实机验收结果。
 
 ## 实施拆分
 

@@ -26,12 +26,14 @@
 
 ### 2026-10-04
 
+- 文档归类：将 `docs/cache-cleanup/` 迁入 `docs/features/cache-cleanup/`，保留既有设计与施工记录并更新相关引用；后续遵循仓库根目录 `AGENTS.md` 的功能文档规则。此次归类只检查目录与文档链接。
+
 - 建立专门文件夹 `docs/cache-cleanup/`，移入设计文档并新建本进度文件。
 - 确认实现策略：后端持有开关；删除按“推导缓存路径 + `no_links` + 路径归属”判定，不依赖 `acquisition`；不触碰 `~/Downloads`、事务备份、暂存与订阅源缓存。
 - 实现后端：`plugin_settings.py`（默认开启、原子写入，部署时因 `decky_loader.settings` 同名冲突由 `settings.py` 改名）、`caches.py`（`scan/status/clear/clear_core`）、`publisher.py` 缓存辅助、`main.py` 接线。
 - 实现前端：`src/cache.ts`（`formatSize/cacheSummary/cacheClearNote/autoCleanupNote`）、全局设置“下载缓存”分区（`ToggleField` + 占用 + `ConfirmModal` 清理）。`index.tsx` 的 `size` 抽取为 `formatSize` 复用。
 - 验证：后端 62 项测试中仅 3 项因缺少未编译的核心二进制（`target/debug/steam-patch.exe`）报环境错误，另有 1 项符号链接用例在 Windows 跳过；新增用例全部通过。前端类型检查、Rollup 构建、`node --test`（22 项，含新增 3 项）通过。
-- 已同步 `docs/privacy.md`、`docs/client-guide.md`、`docs/install-design.md`、`apps/decky/README.md`、`docs/decky-ux/design.md`、`docs/progress.md`。
+- 已同步 `docs/privacy.md`、`docs/client-guide.md`、`docs/install-design.md`、`apps/decky/README.md`、`docs/features/decky-ux/design.md`、`docs/progress.md`。
 - 部署到真实 Deck（`deck@192.168.31.186`，插件目录 `/home/deck/homebrew/plugins/steam-patch-manager`）。先备份到 `/home/deck/steam-patch-validation/cache-cleanup-20261004/backup`，再按 SHA-256 校验上传 `main.py`、`backend/{plugin_settings,caches,publisher}.py`、`dist/index.js(.map)`、`README.md`，本地与远端哈希一致。
 - 首次重载后插件启动失败，日志显示 `ImportError: cannot import name 'Settings' from 'decky_loader.settings'`：Decky 运行时已有顶层 `settings` 模块，劫持了 `from settings import Settings`。该冲突只在 Decky 沙箱出现，本地测试无法发现。将模块改名为 `plugin_settings.py`、更新导入与测试后重新部署，删除远端旧 `settings.py` 与 `__pycache__`，再次 reload 后进程正常、日志无报错。
 - 通过 Steam CEF 调试端口（SSH 隧道 `18080→8080`）的 DevTools 协议，经 `__DECKY_SECRET_INTERNALS_DO_NOT_USE_OR_YOU_WILL_BE_FIRED_deckyLoaderAPIInit.connect(1, 'Steam 补丁管理')` 实时调用插件方法：`get_settings` 返回 `auto_cleanup: true` 且缓存为空；构造 publisher 缓存 109B（`archive.zip` 100 + `download.json` 2 + `download-x.tmp` 7）、core 缓存 210B（`<sha>.zip` 200 + `*.partial` 10）后 `cache_status` 精确返回 `total 319 / 5 文件`；`clear_cache` 返回 `removed_bytes: 319` 且清零，磁盘核对仅保留非摘要命名的 `user-keep.zip`；`set_auto_cleanup` 往返 `false→true` 并落盘 `settings.json`。验收用文件与临时 release 目录已清理。
