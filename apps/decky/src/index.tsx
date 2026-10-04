@@ -16,6 +16,7 @@ const listTransactions = callable<[], Transaction[] | { transactions: Transactio
 const uninstall = callable<[string, boolean], Transaction>("uninstall");
 const recover = callable<[boolean], Transaction[]>("recover");
 const setSourceEnabled = callable<[string, boolean], SourceSubscription[]>("set_source_enabled");
+const setGameSource = callable<[number, string, boolean], { appid: number }>("set_game_source");
 const addSource = callable<[string], SourceSubscription[]>("add_source");
 const discardPlan = callable<[string], unknown>("discard_plan");
 const clearCache = callable<[], CacheStatus>("clear_cache");
@@ -182,7 +183,7 @@ function QuickAccess() {
       </PanelSection>
     </div>
     <div className="patch-qam-controls"><PanelSection>
-      <Row><Action onClick={openSources}>管理订阅源 ›</Action></Row>
+      <Row><Action onClick={openSources}>全局设置 ›</Action></Row>
       <Row><Action onClick={() => void session.refresh()} disabled={!!busy}>重新扫描</Action></Row>
     </PanelSection></div>
   </div>;
@@ -257,7 +258,6 @@ function GameManager({ item, seg, panel }: { item: Install; seg: string; panel?:
   const [acquisition, setAcquisition] = useState<PreparedInstall["acquisition"] | null>(null);
   const [manual, setManual] = useState(false);
   const [changesOpen, setChangesOpen] = useState(false);
-  const [rule, setRule] = useState("");
   const [now, setNow] = useState(Date.now());
   const [keepBackups, setKeepBackups] = useState<boolean | null>(null);
   const panelScroll = useRef<Record<string, number>>({});
@@ -276,6 +276,11 @@ function GameManager({ item, seg, panel }: { item: Install; seg: string; panel?:
   const installedExternal = patch ? isExternal(patch.detection.status) : false;
   const installed = !!patch && (installedManaged || installedExternal || committed.length > 0);
   const unfinished = transactions.filter(needsRecovery);
+  useEffect(() => {
+    if (!item.patches.some(p => p.release_id === release)) {
+      setRelease(item.patches[0]?.release_id ?? ""); setPlan(null); setAcquisition(null); setArchive("");
+    }
+  }, [item.patches, release]);
   useEffect(() => {
     mounted.current = true;
     void session.ensureSnapshot();
@@ -308,10 +313,12 @@ function GameManager({ item, seg, panel }: { item: Install; seg: string; panel?:
     if (navigate.current) navigate.current(target); else Navigation.Navigate(target);
   }
   function chooseRelease(next: string) { setRelease(next); setPlan(null); setArchive(""); setAcquisition(null); setChangesOpen(false); }
-  function changeSources(action: () => Promise<SourceSubscription[]>) {
+  function changeGameSource(sourceId: string, subscribed: boolean) {
     setPlan(null);
-    void session.work("正在更新补丁源并查询…", async () => { await action(); return readSnapshot(); }, snapshot => {
-      session.update(snapshot); setRule("");
+    void session.work("正在更新此游戏的订阅源…", async () => {
+      await setGameSource(item.game.appid, sourceId, subscribed); return readSnapshot();
+    }, snapshot => {
+      session.update({ ...snapshot, note: "此游戏的订阅源已更新。" });
     });
   }
   function finishTask(task: TaskSnapshot) {
@@ -437,12 +444,23 @@ function GameManager({ item, seg, panel }: { item: Install; seg: string; panel?:
     <PanelSection title="当前游戏记录">{owned.length ? owned.map(tx => <Row key={tx.transaction_id}><Status>{tx.release_id} · {workflowState(tx.state)}{tx.error ? ` · ${reason(tx.error)}` : ""}</Status></Row>)
       : <Row><Status>没有本工具的操作记录。</Status></Row>}</PanelSection>
   </div>;
-  const sources = <SourcesPage report={report} busy={!!busy} rule={rule} setRule={setRule} changeSources={changeSources} contentRef={activePanel === "sources" ? contentRef : undefined} onScroll={value => { panelScroll.current.sources = value; }} />;
+  const sources = <div className="patch-page" ref={activePanel === "sources" ? contentRef : undefined} onScroll={e => { panelScroll.current.sources = e.currentTarget.scrollTop; }}>
+    {common}
+    <Status>选择用于此游戏的订阅源。关闭后不再从该源匹配补丁；选择按游戏编号保存。</Status>
+    {item.sources?.length ? item.sources.map(source => <PanelSection key={source.id} title={source.name}>
+      <Row><ToggleField label="用于此游戏" checked={source.subscribed} disabled={!!busy}
+        onChange={subscribed => changeGameSource(source.id, subscribed)} /></Row>
+      <InfoRow label="游戏匹配">{source.matched ? "已找到此游戏的补丁" : "暂无此游戏的匹配补丁"}</InfoRow>
+      {!source.enabled && <Row><Status warning>此源已在全局设置中停用，当前不会参与匹配。</Status></Row>}
+      <InfoRow label="查询状态">{source.status ? reason(source.status) : "待查询"}</InfoRow>
+      <Row><Action onClick={() => openSource(source.pages[0])}>打开来源网页 ↗</Action></Row>
+    </PanelSection>) : <PanelSection><Row><Status>尚未配置订阅源，请从主面板的全局设置添加。</Status></Row></PanelSection>}
+  </div>;
   const navPages: ComponentProps<typeof SidebarNavigation>["pages"] = [
     { identifier: `${base}/overview`, route: `${base}/overview`, title: "概览", visible: true, content: overview },
     { identifier: `${base}/patches`, route: `${base}/patches`, title: "补丁管理", visible: true, content: patches },
     { identifier: `${base}/records`, route: `${base}/records`, title: "操作记录", visible: true, content: records },
-    "separator", { identifier: `${base}/sources`, route: `${base}/sources`, title: "管理订阅源", visible: true, content: sources },
+    "separator", { identifier: `${base}/sources`, route: `${base}/sources`, title: "订阅源管理", visible: true, content: sources },
   ];
   // The decky SidebarNavigation resolves the visible page from page.route
   // against the URL and switches by replacing the URL. `fnSetNavigateToPage`

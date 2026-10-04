@@ -26,6 +26,7 @@ export type Install = {
   };
   match_status: string;
   patches: Patch[];
+  sources?: GameSourceSubscription[];
 };
 
 export type ScanResult = {
@@ -48,6 +49,11 @@ export type SourceSubscription = {
   cached_at?: number;
   checked_at?: number;
   entry_count?: number;
+};
+
+export type GameSourceSubscription = SourceSubscription & {
+  subscribed: boolean;
+  matched: boolean;
 };
 
 export type Change = { path: string; action: string; baseline_matches?: boolean };

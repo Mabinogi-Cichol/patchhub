@@ -126,7 +126,8 @@ class PublisherScanTests(unittest.IsolatedAsyncioTestCase):
         game = dict(instance_id="instance", appid=9, name="Game", buildid="101", availability="installed")
         base = dict(catalog_trust="signed",catalog_revision=4,installs=[dict(game=game,patches=[])],diagnostics=[])
         plugin.bridge = types.SimpleNamespace(scan=AsyncMock(return_value=base))
-        plugin.sources = types.SimpleNamespace(refresh=AsyncMock(return_value=[]), list_sources=lambda:[])
+        plugin.sources = types.SimpleNamespace(refresh=AsyncMock(return_value=[]), list_sources=lambda:[],
+            list_game_sources=lambda game: [])
         plugin.list_transactions = AsyncMock(return_value=[])
         local_patch = dict(release_id="patchmoe-9",blockers=["version_incompatible"] if old_build else [],
             detection=dict(status="not_detected",files=[]))
@@ -198,6 +199,45 @@ class PublisherScanTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(patch["source_name"], source["name"])
         self.assertEqual(patch["source_status"], source["status"])
         self.assertEqual(patch["source_cached_at"], source["cached_at"])
+
+    async def test_game_source_rpc_changes_scan_without_changing_other_games(self):
+        from test_sources import TABLE
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            config = root / "sources.json"
+            config.write_text(json.dumps({"schema_version": 1, "sources": [TABLE]}))
+            plugin = self.plugin()
+            plugin._prepare_cancel = None
+            plugin.tasks = module.TaskManager()
+            plugin.sources = module.SourceRegistry(root / "state", config)
+            plugin.sources._cache["second"] = {"entries": [dict(title="Game", aliases=[], appid=9,
+                url="https://cdn.example.org/game.zip", language="en", date="2000/1/1",
+                source_page=TABLE["pages"][0])]}
+            # Persist the cache so a settings reload can restore it.
+            cache = plugin.sources._cache_path("second")
+            cache.parent.mkdir(parents=True)
+            cache.write_text(json.dumps(plugin.sources._cache["second"]))
+            other = dict(instance_id="other", appid=10, name="Game", buildid="101", availability="installed")
+            plugin.bridge.scan.return_value["installs"].append(dict(game=other, patches=[]))
+            plugin.publisher.matches = plugin.sources.matches
+            plugin.publisher.bridge_for = lambda *args: None
+            before = await plugin.scan(refresh_sources=False)
+            self.assertEqual(len(before["installs"][0]["patches"]), 1)
+            await plugin.set_game_source(9, "second", False)
+            after = await plugin.scan(refresh_sources=False)
+            row = after["installs"][0]
+            self.assertEqual(row["patches"], [])
+            self.assertTrue(row["sources"][0]["matched"])
+            self.assertFalse(row["sources"][0]["subscribed"])
+            self.assertTrue(after["sources"][0]["enabled"])
+            self.assertTrue(after["installs"][1]["sources"][0]["subscribed"])
+            with self.assertRaisesRegex(ValueError, "release_not_found"):
+                await plugin.prepare_install("instance", "source-second-9")
+            await plugin.set_game_source(9, "second", True)
+            self.assertEqual(len((await plugin.scan(refresh_sources=False))["installs"][0]["patches"]), 1)
+            plugin._prepare_cancel = Event()
+            with self.assertRaisesRegex(RuntimeError, "installer_busy"):
+                await plugin.set_game_source(9, "second", False)
 
 
 if __name__ == "__main__":

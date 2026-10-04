@@ -56,6 +56,7 @@ class Plugin:
         existing_transactions = await self.list_transactions()
         for row in report["installs"]:
             game = row["game"]
+            row["sources"] = self.sources.list_game_sources(game)
             # Source subscriptions own discovery. The bundled catalog remains
             # available to the core for existing receipts and CLI operations.
             row["patches"] = []
@@ -264,6 +265,12 @@ class Plugin:
             raise ValueError("invalid_source_rule")
         self.sources.add_source(json.loads(rule_json))
         return self.sources.list_sources()
+
+    async def set_game_source(self, appid: int, source_id: str, subscribed: bool):
+        if self._prepare_cancel is not None or self.tasks.busy():
+            raise RuntimeError("installer_busy")
+        self.sources.set_game_source(appid, source_id, subscribed)
+        return {"appid": appid}
 
     async def cancel_download(self):
         if self._prepare_cancel is not None:

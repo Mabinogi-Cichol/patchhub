@@ -138,6 +138,49 @@ class SourcesTests(unittest.IsolatedAsyncioTestCase):
         reopened = SourceRegistry(self.root / "state", self.config)
         self.assertFalse(next(r for r in reopened.list_sources() if r["id"] == "third")["enabled"])
 
+    async def test_game_subscription_filters_only_one_app_and_survives_global_changes(self):
+        self.registry.set_enabled("patchmoe", False)
+        rows = '<table>' + ''.join(
+            f'<tr><td>Game {appid}</td><td>{appid}</td><td><a href="https://cdn.example.org/{appid}.zip">ZIP</a></td><td>2026/1/1</td><td>en</td></tr>'
+            for appid in (42, 43)) + '</table>'
+        with patch.object(self.registry, "_fetch", return_value=(200, rows, {}, TABLE["pages"][0])):
+            await self.registry.refresh(force=True)
+        game = {"appid": 42, "name": "Game 42"}
+        self.registry.set_game_source(42, "second", False)
+        self.assertEqual(self.registry.matches(game), [])
+        self.assertEqual(len(self.registry.matches({"appid": 43, "name": "Game 43"})), 1)
+        source = next(s for s in self.registry.list_game_sources(game) if s["id"] == "second")
+        self.assertTrue(source["enabled"], "game selection must not disable the global source")
+        self.assertTrue(source["matched"], "excluded sources must remain available to select again")
+        self.assertFalse(source["subscribed"])
+        self.registry.set_enabled("second", False)
+        self.registry.add_source({**TABLE, "id": "third", "name": "Third"})
+        reopened = SourceRegistry(self.root / "state", self.config)
+        self.assertFalse(reopened.game_subscribed(42, "second"))
+        reopened.set_enabled("second", True)
+        self.assertEqual(reopened.matches(game), [])
+        reopened.set_game_source(42, "second", True)
+        self.assertEqual(len(reopened.matches(game)), 1)
+        reopened.set_enabled("second", False)
+        self.assertEqual(reopened.matches(game), [], "a game cannot override global source disablement")
+
+    def test_game_subscription_validates_inputs_and_legacy_file(self):
+        # Existing override files predate game selections.
+        self.registry.override_path.parent.mkdir(parents=True, exist_ok=True)
+        self.registry.override_path.write_text(json.dumps({"enabled": {}, "added": []}))
+        self.registry._reload()
+        self.assertTrue(self.registry.game_subscribed(42, "second"))
+        for appid, source, subscribed in ((True, "second", False), (0, "second", True),
+                                          (42, "missing", True), (42, "second", "yes")):
+            with self.assertRaises(ValueError):
+                self.registry.set_game_source(appid, source, subscribed)
+        self.registry.set_game_source(42, "second", False)
+        overrides = json.loads(self.registry.override_path.read_text())
+        overrides["games"]["42"]["second"] = "no"
+        self.registry.override_path.write_text(json.dumps(overrides))
+        with self.assertRaisesRegex(ValueError, "invalid_source_overrides"):
+            SourceRegistry(self.root / "state", self.config)
+
     async def test_frozen_decky_uses_system_python_without_bundled_library_environment(self):
         diagnostics = [{"source_id": "patchmoe", "code": "source_refresh_failed"}]
         process = types.SimpleNamespace(returncode=0,

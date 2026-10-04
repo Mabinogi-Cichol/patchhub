@@ -288,6 +288,15 @@ class SourceRegistry:
             overrides = json.loads(self.override_path.read_text(encoding="utf-8"))
         if not isinstance(overrides.get("enabled"), dict) or not isinstance(overrides.get("added"), list):
             raise ValueError("invalid_source_overrides")
+        games = overrides.setdefault("games", {})
+        if not isinstance(games, dict) or any(
+            not isinstance(appid, str) or not re.fullmatch(r"[1-9][0-9]{0,9}", appid)
+            or not isinstance(choices, dict) or any(
+                not isinstance(source_id, str) or not re.fullmatch(r"[a-z][a-z0-9-]{0,47}", source_id)
+                or type(value) is not bool for source_id, value in choices.items())
+            for appid, choices in games.items()
+        ):
+            raise ValueError("invalid_source_overrides")
         rules = [dict(rule) for rule in self.builtins]
         rules.extend(_validate_rule(rule) for rule in overrides["added"])
         if len(rules) > MAX_SOURCES or len({r["id"] for r in rules}) != len(rules):
@@ -341,9 +350,8 @@ class SourceRegistry:
     def set_enabled(self, source_id, enabled):
         if type(enabled) is not bool or not any(r["id"] == source_id for r in self._rules):
             raise ValueError("unknown_source")
-        updated = {"enabled": dict(self._overrides["enabled"]), "added": self._overrides["added"]}
-        updated["enabled"][source_id] = enabled
         with self._sync_lock:
+            updated = {**self._overrides, "enabled": {**self._overrides["enabled"], source_id: enabled}}
             _write_json(self.override_path, updated)
             self._reload()
 
@@ -351,10 +359,33 @@ class SourceRegistry:
         rule = _validate_rule(rule)
         if rule["adapter"] not in self.adapters or any(r["id"] == rule["id"] for r in self._rules):
             raise ValueError("source_exists_or_adapter_unavailable")
-        updated = {"enabled": self._overrides["enabled"], "added": [*self._overrides["added"], rule]}
         if len(self._rules) >= MAX_SOURCES:
             raise ValueError("source_limit")
         with self._sync_lock:
+            updated = {**self._overrides, "added": [*self._overrides["added"], rule]}
+            _write_json(self.override_path, updated)
+            self._reload()
+
+    def game_subscribed(self, appid, source_id):
+        return self._overrides["games"].get(str(appid), {}).get(source_id, True)
+
+    def list_game_sources(self, game):
+        matched = {entry["source_id"] for entry in self.matches(game, include_disabled=True)}
+        return [{**source, "subscribed": self.game_subscribed(game["appid"], source["id"]),
+                 "matched": source["id"] in matched} for source in self.list_sources()]
+
+    def set_game_source(self, appid, source_id, subscribed):
+        if type(appid) is not int or not 0 < appid <= 9999999999:
+            raise ValueError("invalid_appid")
+        if type(subscribed) is not bool or not any(r["id"] == source_id for r in self._rules):
+            raise ValueError("unknown_source")
+        with self._sync_lock:
+            games = dict(self._overrides["games"])
+            choices = {**games.get(str(appid), {}), source_id: subscribed}
+            games[str(appid)] = choices
+            updated = {**self._overrides, "games": games}
+            if len(json.dumps(updated).encode("utf-8")) > 256 * 1024:
+                raise ValueError("source_limit")
             _write_json(self.override_path, updated)
             self._reload()
 
@@ -373,13 +404,13 @@ class SourceRegistry:
             raise ValueError("source_not_enabled")
         return _allowed_url(url, rule["download_hosts"], download=True)
 
-    def matches(self, game):
+    def matches(self, game, *, include_disabled=False):
         if not isinstance(game.get("name"), str) or type(game.get("appid")) is not int or game["appid"] <= 0:
             return []
         name = _normal(game["name"])
         result = []
         for rule in self._rules:
-            if not rule["enabled"]:
+            if not include_disabled and (not rule["enabled"] or not self.game_subscribed(game["appid"], rule["id"])):
                 continue
             candidates = []
             for entry in self._cache.get(rule["id"], {}).get("entries", []):
