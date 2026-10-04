@@ -6,5 +6,6 @@
 | --- | --- | --- | --- | --- |
 | Decky UX | 已实现并部署，部分真实操作与手柄验收待完成 | [设计](decky-ux/design.md) | [施工记录](decky-ux/progress.md) | [修复计划](decky-ux/fix-plan.md) |
 | 下载缓存清理 | 已实现并部署，后端实机验收通过，部分安装与手柄验收待完成 | [设计](cache-cleanup/design.md) | [施工记录](cache-cleanup/progress.md) | — |
+| KaguraGames 国内 / 海外内置源与 HGamer 兜底索引 | 调研完成，待实现 | [设计](kagura-hgamer-fallback/design.md) | [施工记录](kagura-hgamer-fallback/progress.md) | — |
 
 功能目录至少包含 `design.md` 和 `progress.md`，额外的调研、修复计划及验收材料也放在所属功能目录内。新增功能时同步更新本索引，具体完成范围与验证证据以各功能的施工记录为准。
