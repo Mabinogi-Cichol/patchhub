@@ -171,3 +171,16 @@
   - 卸载 `uninstalled`、`recover` 为空；3 个新增文件移除、无关文件摘要不变；游戏目录回到 2.1G，仅保留既有空协作锁。uninstall 证据 SHA `867b32ed0f94bbf43cae3b681f3a647a4a9b932720739817bd511668fc9b029c`。
 - 当前代码 Linux 复验：Rust 核心测试通过（含权限保留/崩溃/备份损坏）；backend 201、sf95 14+4、真实 bwrap + Rust 合成事务闭环、`--all-tests` 201、`--related-tests` 34（无 ResourceWarning）；debug CLI SHA `e69a1cd85b81e490762d779ef29d24f2663e4ef99a2589bbeb821f7247b3a431`。
 - 设备上仅执行受控安装/卸载与前端重载；未运行官方 EXE/Lua/DLL、未执行 Windows 安装器，真实游戏改动已由核心恢复；未提交 Git。夏日两份样本的完整事件语义与夏日适用实例/实体手柄仍待完成。
+
+## 2026-10-05：夏日狂想曲官方 DLC 补丁真实 EXE 安装闭环
+
+- 用户目标是让“夏日狂想曲这类 Setup Factory EXE”可自动安装。来源分为本体系列（CN v1.03 / EN v3，要求 `Script.vdf` CRC 3876755782、排除 DLC）与 DLC/扩展系列（CN v2.02.1 / EN v2.03.0，要求 DLC 1390150）。用户当前实例为 schinese、build 6270017、已装 DLC 1390150、`Script.vdf` CRC 2002373744，因此适用 DLC 补丁而非本体补丁。
+- P0 语义证据：夏日安装器类清单（CN/EN 各 18 个）只有文件表、`CIREvent`、界面/控件、语言/消息、`CSessionVar`、`CSUFPackage`、`CPasswordData`、`CImageInfo`、`CGlobalIncludeLuaFile`，**没有任何文件动作/运行类**；非事件字符串只有项目元数据、被禁用的卸载路径和通用错误文案；framed Lua 无 `File.Copy/Delete/Run/Move`、无 `Web.*`。据此确认夏日行为＝文件表复制 + 已解码事件（定位 `Game.exe`、`Script.vdf` CRC 门槛、取消 `Application.Exit`、通用关机重启助手）。
+- DLC 补丁 CN v2.02.1 审计：`exe_sha256=de370e86645e273bae205517b49077a9fd682a9d73309c518f5524d96216ecad`、大小 279,515,928；`metadata_sha256=6cc974e6b7a1c997097554acff0d0cb7cb8d1a8f677a38b5f86a4166d6699baf`；**5,874 个 `www/` 成员**（9 新增、5,865 替换）、条件空、类型 `All`、全部未压缩、展开 277,366,632 字节；DLC 屏幕的 `SetPackageProperties` 仍为注释；门槛条件为 `Script.vdf` CRC 2002373744。
+- 工程改动：为容纳 5,874 个成员，核心 `MAX_ENTRIES`、解析器、`exe_profiles`、`publisher` 的 ZIP 条目上限从 4,096 上调到 **8,192**（仍远低于核心其它上限，并在 Deck 上真实跑通）。新增审核 profile `summer-memories-dlc-cn-v2-02-1`（release `exe-4fd81a78c401784a42e6ad40-1227890`，`requires_dlc=[1390150]`，基线 `Game.exe` + `Script.vdf` CRC 2002373744）；registry SHA `df541421b17dc25331044c39ecf681ffb13b1b08daa95d7c56e679806d8eb37b`。
+- 设备真实闭环（插件 RPC + 真实网络与 Rust，未运行官方 EXE）：
+  - 下载 279,515,928 字节 → 提取/校验 → 计划 5,874 个变更（9 add / 5,865 replace）、无 blocker；prepare 证据 SHA `64b4882e5fe88b39e86ce219768ea45d2f69edf79ed07d3f2ee9a06c804f8956`。
+  - 安装 `committed`；全部 5,874 个文件安装后 SHA-256 与计划一致，`Game.exe`/`Script.vdf` 未变；install 证据 SHA `e5f59202b453f5d45831487925db2a57376aed21fe4ac51b776241d6bf1409a9`。
+  - 卸载：事务 `uninstalled`；**5,865 个替换文件全部恢复原 SHA-256、9 个新增文件全部移除**，`Game.exe`/`Script.vdf` 未变；restore 证据 SHA `46ac3fa4f6dd27b33c4e84bec6acaee09cb72420b20180d328a65489ef92623f`。
+- 说明：本事务的卸载为同步 RPC，恢复 5,865 个备份耗时约 2 分钟，期间 loader 客户端连接超时但后端正常完成（核心 `journal.lock` 正确串行化）；大规模事务的卸载进度/超时体验列入待办。
+- 本体 profile（CN v1.03 / EN v3）仍需要**未装 DLC**的适用实例来记录基线 `Script.vdf` SHA-256 并做 P5；当前 DLC 实例不得用本体补丁。相关实现与 P0 证据已就绪，待实例。

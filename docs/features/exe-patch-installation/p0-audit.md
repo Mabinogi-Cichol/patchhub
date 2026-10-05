@@ -110,3 +110,16 @@ Package01 的 prefix 后续由独立探针核对：CN `1413362/1413366/1413370`�
 | 条件 / 类型 / 包 | 全空 / `All` / 无 |
 
 事件只按 `VBFI.exe` 定位并推进界面、取消 `Application.Exit`、通用关机重启助手；framed 文本内无 `File.Copy/Delete/Run/Move`、无 `Web.*`、无注册表写。按纯新增建模，基线为 `VBFI.exe`。该结果只授权 VBF 的审核 profile，不外推到其他游戏或安装包版本；夏日两份样本的完整项目级语义仍待受控样本或发行商工程文件。详细报告在忽略目录 `.artifacts/exe-patch-research/vbf/`，真实安装/恢复证据见 [progress.md](progress.md)。
+
+## 夏日狂想曲官方 DLC 补丁 CN v2.02.1（2026-10-05）
+
+夏日安装器（本体与 DLC）的类清单只有文件表、`CIREvent`、界面/控件、语言/消息、`CSessionVar`、`CSUFPackage`、`CPasswordData`、`CImageInfo`、`CGlobalIncludeLuaFile`，没有任何文件动作/运行类；非事件字符串只有项目元数据、被禁用的卸载路径和通用错误文案；framed Lua 无 `File.Copy/Delete/Run/Move`、无 `Web.*`。据此确认夏日行为＝文件表复制 + 已解码事件。
+
+| 项目 | DLC CN v2.02.1 |
+| --- | --- |
+| EXE SHA-256 / 大小 | `de370e86645e273bae205517b49077a9fd682a9d73309c518f5524d96216ecad` / 279,515,928 |
+| 元数据 SHA-256 | `6cc974e6b7a1c997097554acff0d0cb7cb8d1a8f677a38b5f86a4166d6699baf` |
+| 成员 | 5,874 个 `www/` 文件（9 新增 / 5,865 替换），条件空、类型 `All`、未压缩 |
+| 门槛条件 | `Game.exe` 存在且 `Script.vdf` CRC = 2002373744（DLC 版） |
+
+DLC 屏幕的 `SetPackageProperties` 为注释、未启用。该结果授权夏日 DLC profile（`variant=dlc`，`requires_dlc=[1390150]`）；本体系列（CN v1.03 / EN v3，门槛 CRC 3876755782、排除 DLC）语义同源但需要未装 DLC 的实例记录基线并做 P5，未与 DLC 混用。真实安装/全量恢复证据见 [progress.md](progress.md)。
