@@ -77,7 +77,7 @@ def cache_files(cache):
                 if not entry.is_file(follow_symlinks=False):
                     continue
                 name = entry.name
-                if name in ("archive.zip", "download.json") or (name.startswith("download-") and name.endswith(".tmp")):
+                if name in ("archive.zip", "download.json", "archive.exe", "exe-download.json", "normalized.zip") or (name.startswith("download-") and name.endswith(".tmp")):
                     result.append(cache / name)
     except OSError:
         pass
@@ -97,7 +97,7 @@ def _unlink_within(root, path):
         return False
 
 
-RELEASE_PATTERN = r"(?:patchmoe|source-[a-z][a-z0-9-]{0,47})-[1-9][0-9]*"
+RELEASE_PATTERN = r"(?:patchmoe|source-[a-z][a-z0-9-]{0,47}|exe-[0-9a-f]{24})-[1-9][0-9]*"
 
 
 def _valid_instance(instance_id, release_id, install_path):
@@ -161,20 +161,27 @@ class _SameHostRedirect(HTTPRedirectHandler):
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
-def _download(url, cache, cancel, validate=_url):
+def _download(url, cache, cancel, validate=_url, *, archive_name="archive.zip", manifest_name="download.json",
+              max_size=MAX_ARCHIVE, expected_sha256=None, expected_size=None):
     task = current_task.get()
     if cancel.is_set():
         raise RuntimeError("download_cancelled")
     validate(url)
-    manifest = cache / "download.json"
-    archive = cache / "archive.zip"
+    if (not no_links(cache) or not cache.is_dir()
+            or not all(isinstance(n, str) and re.fullmatch(r"[a-z][a-z.-]{0,63}", n)
+                       for n in (archive_name, manifest_name))):
+        raise ValueError("unsafe_download_cache")
+    manifest = cache / manifest_name
+    archive = cache / archive_name
     cached = None
     headers = {"User-Agent": "SteamPatchSearcher/1"}
     if manifest.is_file() and archive.is_file() and no_links(manifest) and no_links(archive):
         try:
             data = json.loads(manifest.read_text(encoding="utf-8"))
-            digest, size = _hash_file(archive, MAX_ARCHIVE, cancel)
-            if data.get("url") == url and data.get("sha256") == digest and data.get("size") == size and size:
+            digest, size = _hash_file(archive, max_size, cancel)
+            if (data.get("url") == url and data.get("sha256") == digest and data.get("size") == size and size
+                    and (expected_sha256 is None or digest == expected_sha256)
+                    and (expected_size is None or size == expected_size)):
                 cached = (archive, digest, size, "local")
                 for key, header in (("etag", "If-None-Match"), ("last_modified", "If-Modified-Since")):
                     value = data.get(key)
@@ -214,17 +221,20 @@ def _download(url, cache, cancel, validate=_url):
             validate(source.geturl())
             length = source.headers.get("Content-Length")
             total_bytes = int(length) if length and length.isdigit() else None
-            if total_bytes is not None and total_bytes > MAX_ARCHIVE:
+            if total_bytes is not None and total_bytes > max_size:
                 raise ValueError("archive_size_limit")
+            if total_bytes is not None and expected_size is not None and total_bytes != expected_size:
+                raise ValueError("download_size_mismatch")
             if task:
                 task.stage("downloading", total_bytes, archive_bytes=total_bytes)
-            response_metadata = {"etag": source.headers.get("ETag"), "last_modified": source.headers.get("Last-Modified")}
+            response_metadata = {"etag": source.headers.get("ETag"), "last_modified": source.headers.get("Last-Modified"),
+                                 "final_url": source.geturl()}
             with os.fdopen(os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb") as output:
                 while data := getattr(source, "read1", source.read)(CHUNK):
                     if cancel.is_set():
                         raise RuntimeError("download_cancelled")
                     size += len(data)
-                    if size > MAX_ARCHIVE:
+                    if size > max_size or expected_size is not None and size > expected_size:
                         raise ValueError("archive_size_limit")
                     digest.update(data)
                     output.write(data)
@@ -238,6 +248,10 @@ def _download(url, cache, cancel, validate=_url):
                 os.fsync(output.fileno())
         if not size:
             raise ValueError("empty_archive")
+        if expected_size is not None and size != expected_size:
+            raise ValueError("download_size_mismatch")
+        if expected_sha256 is not None and digest.hexdigest() != expected_sha256:
+            raise ValueError("exe_payload_changed")
         if cancel.is_set():
             raise RuntimeError("download_cancelled")
         if task:

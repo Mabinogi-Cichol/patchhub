@@ -24,6 +24,9 @@ class StubBridge:
     async def list_transactions(self):
         return list(self.transactions)
 
+    async def uninstall(self, transaction_id, confirmed_game_closed=False):
+        return {"state": "uninstalled", "transaction_id": transaction_id}
+
 
 class StubPublisher:
     def __init__(self):
@@ -127,6 +130,22 @@ class CacheCleanupTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_uninstall_refuses_when_backups_are_gone(self):
         plugin, _ = self.make_plugin()
+        with self.assertRaisesRegex(ValueError, "uninstall_backups_missing"):
+            await plugin.uninstall("p1")
+
+    async def test_uninstall_allows_add_only_transaction_without_backups(self):
+        plugin, _ = self.make_plugin()
+        plugin.bridge.transactions = [
+            {"transaction_id": "p1", "instance_id": "i", "release_id": "r",
+             "state": "committed", "has_replacements": False}]
+        result = await plugin.uninstall("p1")
+        self.assertEqual(result["state"], "uninstalled")
+
+    async def test_uninstall_refuses_replacements_without_backups(self):
+        plugin, _ = self.make_plugin()
+        plugin.bridge.transactions = [
+            {"transaction_id": "p1", "instance_id": "i", "release_id": "r",
+             "state": "committed", "has_replacements": True}]
         with self.assertRaisesRegex(ValueError, "uninstall_backups_missing"):
             await plugin.uninstall("p1")
 

@@ -1,6 +1,7 @@
 """Live, bounded source subscriptions. Catalog signing and installation stay in core."""
 
 import asyncio
+import hashlib
 from datetime import date
 import ipaddress
 import json
@@ -19,6 +20,33 @@ import uuid
 MAX_HTML = 4 * 1024 * 1024
 MAX_ENTRIES = 4096
 MAX_SOURCES = 32
+MAX_DISCOVERY_INPUT = 32 * 1024
+MAX_DISCOVERY_OUTPUT = 512 * 1024
+DISCOVERY_ADAPTERS = {"kagura_wordpress", "kagura_woocommerce", "hgamer_html"}
+DISCOVERY_PARSER_VERSION = 2
+DISCOVERY_QUERY_VERSION = 1
+
+
+def _discovery_module():
+    # -I workers and Decky's frozen interpreter do not add this module's
+    # directory to sys.path. Load a fixed sibling, never a supplied module path.
+    import importlib.util
+    name = "steam_patch_discovery"
+    if name not in sys.modules:
+        spec = importlib.util.spec_from_file_location(name, Path(__file__).with_name("discovery.py"))
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[name] = module
+        spec.loader.exec_module(module)
+    return sys.modules[name]
+
+
+def _worker_environment():
+    environment = os.environ.copy()
+    for key in ("PYTHONHOME", "PYTHONPATH", "LD_LIBRARY_PATH"):
+        environment.pop(key, None)
+    if environment.get("LD_LIBRARY_PATH_ORIG"):
+        environment["LD_LIBRARY_PATH"] = environment["LD_LIBRARY_PATH_ORIG"]
+    return environment
 
 
 def _normal(text):
@@ -195,14 +223,28 @@ def _validate_rule(rule):
         raise ValueError("invalid_source_name")
     if not isinstance(rule.get("adapter"), str) or not re.fullmatch(r"[a-z][a-z0-9_]{0,47}", rule["adapter"]):
         raise ValueError("unsupported_source_adapter")
-    if type(rule.get("enabled")) is not bool or rule.get("root_layout") != "game_root":
+    rule = dict(rule)
+    rule.setdefault("role", "publisher")
+    rule.setdefault("discovery_only", False)
+    rule.setdefault("priority", 100)
+    if (type(rule.get("enabled")) is not bool or type(rule["discovery_only"]) is not bool
+            or rule["role"] not in ("publisher", "fallback_indexer")
+            or type(rule["priority"]) is not int or not 0 <= rule["priority"] <= 1000):
+        raise ValueError("invalid_source_rule")
+    if rule["discovery_only"]:
+        if rule.get("root_layout") is not None or rule["adapter"] not in DISCOVERY_ADAPTERS:
+            raise ValueError("invalid_source_rule")
+    elif rule.get("root_layout") != "game_root" or rule["role"] != "publisher":
+        raise ValueError("invalid_source_rule")
+    if rule["role"] == "fallback_indexer" and (not rule["discovery_only"] or rule.get("download_hosts")):
         raise ValueError("invalid_source_rule")
     pages = rule.get("pages")
     if not isinstance(pages, list) or not 1 <= len(pages) <= 5:
         raise ValueError("invalid_source_pages")
     for key in ("page_hosts", "download_hosts"):
         hosts = rule.get(key)
-        if not isinstance(hosts, list) or not 1 <= len(hosts) <= 8:
+        minimum = 0 if key == "download_hosts" and rule["discovery_only"] else 1
+        if not isinstance(hosts, list) or not minimum <= len(hosts) <= 8:
             raise ValueError("invalid_source_hosts")
         for host in hosts:
             _host(host)
@@ -262,7 +304,7 @@ class SourceRegistry:
         if not _no_links(self.state_dir):
             raise ValueError("linked_source_state")
         data = json.loads(self.config_path.read_text(encoding="utf-8"))
-        if data.get("schema_version") != 1 or not isinstance(data.get("sources"), list):
+        if data.get("schema_version") not in (1, 2) or not isinstance(data.get("sources"), list):
             raise ValueError("invalid_sources_config")
         self.builtins = [_validate_rule(rule) for rule in data["sources"]]
         self.override_path = self.state_dir / "overrides.json"
@@ -273,6 +315,14 @@ class SourceRegistry:
         self.diagnostics = []
         self._sync_lock = threading.RLock()
         self._refresh_lock = asyncio.Lock()
+        self.settings_revision = 0
+        self._discovery_cache = {}
+        self._discovery_indexes = {}
+        self._discovery_tasks = {}
+        self._discovery_semaphore = asyncio.Semaphore(3)
+        self._source_discovery_locks = {}
+        self._worker_processes = set()
+        self._closed = False
         self._reload()
 
     def register_adapter(self, adapter_id, collector):
@@ -297,8 +347,12 @@ class SourceRegistry:
             for appid, choices in games.items()
         ):
             raise ValueError("invalid_source_overrides")
-        rules = [dict(rule) for rule in self.builtins]
-        rules.extend(_validate_rule(rule) for rule in overrides["added"])
+        added = [_validate_rule(rule) for rule in overrides["added"]]
+        added_ids = {rule["id"] for rule in added}
+        # Newly shipped defaults must not overwrite a previously configured
+        # user source or make the upgraded registry fail on a duplicate ID.
+        rules = [dict(rule) for rule in self.builtins if rule["id"] not in added_ids]
+        rules.extend(added)
         if len(rules) > MAX_SOURCES or len({r["id"] for r in rules}) != len(rules):
             raise ValueError("invalid_source_overrides")
         for rule in rules:
@@ -311,6 +365,7 @@ class SourceRegistry:
         self._overrides = overrides
         self._cache = {}
         self._status = {}
+        self._discovery_cache = {}
         for rule in rules:
             status_path = self._status_path(rule["id"])
             if status_path.is_file() and _no_links(status_path) and status_path.stat().st_size <= 4096:
@@ -320,6 +375,8 @@ class SourceRegistry:
                         self._status[rule["id"]] = status
                 except (OSError, ValueError, TypeError, json.JSONDecodeError):
                     pass
+            if rule["discovery_only"]:
+                continue
             path = self._cache_path(rule["id"])
             if not path.is_file():
                 continue
@@ -341,9 +398,9 @@ class SourceRegistry:
 
     def list_sources(self):
         statuses = {d["source_id"]: d["code"] for d in self.diagnostics if "source_id" in d}
-        return [{**rule, "status": statuses.get(rule["id"], "cached" if rule["id"] in self._cache else "not_refreshed"),
-                 "entry_count": len(self._cache.get(rule["id"], {}).get("entries", [])),
-                 "cached_at": self._cache.get(rule["id"], {}).get("cached_at"),
+        return [{**rule, "status": statuses.get(rule["id"], self._status.get(rule["id"], {}).get("code", "cached" if rule["id"] in self._cache else "not_refreshed")),
+                 "entry_count": self._status.get(rule["id"], {}).get("entry_count", 0) if rule["discovery_only"] else len(self._cache.get(rule["id"], {}).get("entries", [])),
+                 "cached_at": self._status.get(rule["id"], {}).get("cached_at") if rule["discovery_only"] else self._cache.get(rule["id"], {}).get("cached_at"),
                  "checked_at": self._status.get(rule["id"], {}).get("checked_at",
                                 self._cache.get(rule["id"], {}).get("checked_at"))} for rule in self._rules]
 
@@ -353,17 +410,19 @@ class SourceRegistry:
         with self._sync_lock:
             updated = {**self._overrides, "enabled": {**self._overrides["enabled"], source_id: enabled}}
             _write_json(self.override_path, updated)
+            self.settings_revision += 1
             self._reload()
 
     def add_source(self, rule):
         rule = _validate_rule(rule)
-        if rule["adapter"] not in self.adapters or any(r["id"] == rule["id"] for r in self._rules):
+        if (rule["adapter"] not in self.adapters and rule["adapter"] not in DISCOVERY_ADAPTERS) or any(r["id"] == rule["id"] for r in self._rules):
             raise ValueError("source_exists_or_adapter_unavailable")
         if len(self._rules) >= MAX_SOURCES:
             raise ValueError("source_limit")
         with self._sync_lock:
             updated = {**self._overrides, "added": [*self._overrides["added"], rule]}
             _write_json(self.override_path, updated)
+            self.settings_revision += 1
             self._reload()
 
     def game_subscribed(self, appid, source_id):
@@ -371,6 +430,12 @@ class SourceRegistry:
 
     def list_game_sources(self, game):
         matched = {entry["source_id"] for entry in self.matches(game, include_disabled=True)}
+        for rule in self._rules:
+            if rule["discovery_only"]:
+                record = self._game_record(rule, game["appid"])
+                if any(c.get("match_basis") in ("appid", "verified_alias", "official_title")
+                       for c in [*record.get("success", {}).get("candidates", []), *record.get("attempt", {}).get("candidates", [])]):
+                    matched.add(rule["id"])
         return [{**source, "subscribed": self.game_subscribed(game["appid"], source["id"]),
                  "matched": source["id"] in matched} for source in self.list_sources()]
 
@@ -387,12 +452,15 @@ class SourceRegistry:
             if len(json.dumps(updated).encode("utf-8")) > 256 * 1024:
                 raise ValueError("source_limit")
             _write_json(self.override_path, updated)
+            self.settings_revision += 1
             self._reload()
 
     def source_for_release(self, release_id):
         if not isinstance(release_id, str):
             return None
         for rule in self._rules:
+            if rule["discovery_only"]:
+                continue
             prefix = "patchmoe-" if rule["id"] == "patchmoe" else f"source-{rule['id']}-"
             if release_id.startswith(prefix) and re.fullmatch(r"[1-9][0-9]*", release_id[len(prefix):]):
                 return dict(rule)
@@ -400,7 +468,7 @@ class SourceRegistry:
 
     def validate_download(self, source_id, url):
         rule = next((r for r in self._rules if r["id"] == source_id and r["enabled"]), None)
-        if rule is None:
+        if rule is None or rule["discovery_only"]:
             raise ValueError("source_not_enabled")
         return _allowed_url(url, rule["download_hosts"], download=True)
 
@@ -410,6 +478,8 @@ class SourceRegistry:
         name = _normal(game["name"])
         result = []
         for rule in self._rules:
+            if rule["discovery_only"]:
+                continue
             if not include_disabled and (not rule["enabled"] or not self.game_subscribed(game["appid"], rule["id"])):
                 continue
             candidates = []
@@ -425,6 +495,459 @@ class SourceRegistry:
             result.append({**selected, "source_id": rule["id"], "release_id": release_id,
                            "root_layout": rule["root_layout"]})
         return result
+
+    @staticmethod
+    def _fresh(record, ttl):
+        checked = record.get("checked_at")
+        return type(checked) is int and 0 <= time.time() - checked < ttl
+
+    def _discovery_fresh(self, record, ttl):
+        return (record.get("parser_version") == DISCOVERY_PARSER_VERSION
+                and record.get("query_version") == DISCOVERY_QUERY_VERSION and self._fresh(record, ttl))
+
+    def _discovery_path(self, source_id, appid):
+        return self.state_dir / "discovery" / source_id / (str(appid) + ".json")
+
+    def _index_path(self, source_id):
+        return self.state_dir / "discovery-index" / (source_id + ".json")
+
+    def _game_previous(self, rule, appid):
+        record = self._game_record(rule, appid)
+        source_id = rule["id"]
+        if source_id not in self._discovery_indexes:
+            path = self._index_path(source_id)
+            index = {}
+            try:
+                if path.is_file() and _no_links(path) and path.stat().st_size <= MAX_DISCOVERY_OUTPUT:
+                    data = json.loads(path.read_text(encoding="utf-8"))
+                    if (data.get("schema_version") == 1 and self._fresh(data, 24 * 3600)
+                            and isinstance(data.get("index"), dict) and data["index"].get("parser_version") == DISCOVERY_PARSER_VERSION):
+                        index = data
+            except (OSError, ValueError, TypeError):
+                pass
+            self._discovery_indexes[source_id] = index
+        source_record = self._discovery_indexes[source_id]
+        index = source_record.get("index", {}) if self._fresh(source_record, 24 * 3600) else {}
+        if index.get("parser_version") != DISCOVERY_PARSER_VERSION:
+            index = {}
+        # Old per-game index copies must not bypass the shared index TTL.
+        record = {**record, "attempt": {k: v for k, v in record.get("attempt", {}).items() if k != "index"}}
+        if index:
+            record = {**record, "attempt": {**record.get("attempt", {}), "index": index}}
+        return record
+
+    def _effective_discovery_rules(self, appid):
+        return sorted((dict(r) for r in self._rules if r["discovery_only"]
+                       and r["enabled"] and self.game_subscribed(appid, r["id"])),
+                      key=lambda r: (r["priority"], r["id"]))
+
+    def _validate_candidates(self, rule, appid, candidates):
+        if not isinstance(candidates, list) or len(candidates) > 128:
+            raise ValueError("invalid_discovery_candidates")
+        if len(json.dumps(candidates, ensure_ascii=False).encode()) > MAX_DISCOVERY_OUTPUT:
+            raise ValueError("oversized_discovery_candidates")
+        clean = []
+        for candidate in candidates:
+            if not isinstance(candidate, dict):
+                raise ValueError("invalid_discovery_candidate")
+            item = dict(candidate)
+            if (not isinstance(item.get("candidate_id"), str)
+                    or not re.fullmatch(r"candidate-[a-f0-9]{24}", item["candidate_id"])
+                    or item.get("source_id") != rule["id"] or item.get("capability") != "discover_only"
+                    or item.get("variant") not in ("base", "dlc", "demo", "unknown")
+                    or item.get("match_basis") not in ("appid", "verified_alias", "official_title", "title", "none")):
+                raise ValueError("invalid_discovery_candidate")
+            if item.get("game_appid") is not None and (type(item["game_appid"]) is not int or item["game_appid"] != appid):
+                raise ValueError("invalid_discovery_identity")
+            if item["match_basis"] in ("appid", "verified_alias", "official_title") and item.get("game_appid") != appid:
+                raise ValueError("invalid_discovery_identity")
+            if item["match_basis"] in ("appid", "verified_alias", "official_title") and item.get("game_appid") != appid:
+                raise ValueError("invalid_discovery_identity")
+            for key in ("game_title", "patch_title"):
+                if not isinstance(item.get(key), str) or not item[key].strip() or len(item[key]) > 1024:
+                    raise ValueError("invalid_discovery_candidate")
+            for key in ("aliases", "languages", "warnings"):
+                if not isinstance(item.get(key, []), list) or any(not isinstance(x, str) or len(x) > 1024 for x in item.get(key, [])):
+                    raise ValueError("invalid_discovery_candidate")
+            for key in ("requires_dlc", "excludes_dlc"):
+                values = item.get(key)
+                if values is not None and (not isinstance(values, list) or any(type(x) is not int or not 0 < x <= 9999999999 for x in values)):
+                    raise ValueError("invalid_discovery_candidate")
+            item["source_page"] = _allowed_url(item.get("source_page"), rule["page_hosts"])
+            if item.get("upstream_page"):
+                self._navigation_url(item["upstream_page"])
+            mirrors = item.get("mirrors", [])
+            if not isinstance(mirrors, list) or len(mirrors) > 32:
+                raise ValueError("invalid_discovery_candidate")
+            for mirror in mirrors:
+                if not isinstance(mirror, dict):
+                    raise ValueError("invalid_discovery_candidate")
+                self._navigation_url(mirror.get("url"))
+            for field in ("identity_evidence", "provenance", "related_index_pages"):
+                evidence = item.get(field, [])
+                if not isinstance(evidence, list) or len(evidence) > 64 or any(not isinstance(e, dict) for e in evidence):
+                    raise ValueError("invalid_discovery_candidate")
+                for evidence_item in evidence:
+                    if evidence_item.get("page"):
+                        self._navigation_url(evidence_item["page"])
+            clean.append(item)
+        return clean
+
+    @staticmethod
+    def _navigation_url(url):
+        if not isinstance(url, str):
+            raise ValueError("invalid_source_url")
+        host = _host(urlsplit(url).hostname or "")
+        return _allowed_url(url, [host])
+
+    def _game_record(self, rule, appid):
+        key = (rule["id"], appid)
+        if key not in self._discovery_cache:
+            path = self._discovery_path(*key)
+            record = {}
+            if path.is_file():
+                try:
+                    if not _no_links(path) or path.stat().st_size > MAX_DISCOVERY_OUTPUT:
+                        raise ValueError("invalid_discovery_cache")
+                    record = json.loads(path.read_text(encoding="utf-8"))
+                    if (record.get("schema_version") != 1 or record.get("appid") != appid
+                            or record.get("source_id") != rule["id"]):
+                        raise ValueError("invalid_discovery_cache")
+                    for section in ("success", "attempt"):
+                        if record.get(section):
+                            self._validate_candidates(rule, appid, record[section].get("candidates", []))
+                except (OSError, ValueError, TypeError, KeyError):
+                    record = {}
+                    self.diagnostics.append({"source_id": rule["id"], "code": "invalid_discovery_cache"})
+            self._discovery_cache[key] = record
+        return self._discovery_cache[key]
+
+    def cached_candidates(self, game):
+        candidates = []
+        for rule in self._effective_discovery_rules(game["appid"]):
+            record = self._game_record(rule, game["appid"])
+            success = record.get("success", {})
+            attempt = record.get("attempt", {})
+            values = success.get("candidates", [])
+            if attempt.get("status") == "partial":
+                values = [*values, *attempt.get("candidates", [])]
+            by_id = {c["candidate_id"]: {**c, "cache_status": "cached" if self._discovery_fresh(success, 6 * 3600) else "stale"}
+                     for c in values}
+            candidates.extend(by_id.values())
+        return candidates
+
+    def cached_discovery(self, game):
+        rules = self._effective_discovery_rules(game["appid"])
+        records = [self._game_record(r, game["appid"]) for r in rules]
+        attempts = [r.get("attempt", {}) for r in records]
+        candidates = self.cached_candidates(game)
+        statuses = [a.get("status", "not_queried") for a in attempts]
+        if any(s == "failed" for s in statuses):
+            status = "source_offline_cached" if candidates else "source_refresh_failed"
+        elif "partial" in statuses:
+            status = "cache_partial"
+        elif not statuses or "not_queried" in statuses:
+            status = "not_queried"
+        else:
+            status = "cache_complete"
+        return {"appid": game["appid"], "status": status, "candidates": candidates,
+                "diagnostics": [d for a in attempts for d in a.get("diagnostics", [])],
+                "settings_revision": self.settings_revision}
+
+    @staticmethod
+    def _query_key(query):
+        # New aliases and language preferences invalidate only negative results.
+        data = {k: query.get(k) for k in ("appid", "name", "name_hints", "preferred_language", "legacy_match", "source_context")}
+        data.update({"parser_version": DISCOVERY_PARSER_VERSION, "query_version": DISCOVERY_QUERY_VERSION})
+        return hashlib.sha256(json.dumps(data, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+
+    def _discovery_sync(self, query, rules, previous):
+        module = _discovery_module()
+        context = module.RequestContext(deadline=time.monotonic() + 29, budget=24)
+        results = []
+        all_candidates = [{**c, "cache_status": "cached" if self._discovery_fresh(record.get("success", {}), 6 * 3600) else "stale"}
+                          for record in previous.values() for c in record.get("success", {}).get("candidates", [])
+                          if any(r["id"] == c.get("source_id") and r["role"] == "publisher" for r in self._rules)]
+        officials = [r for r in rules if r["role"] == "publisher"]
+        effective_officials = [r for r in self._effective_discovery_rules(query["appid"]) if r["role"] == "publisher"]
+        fallback = [r for r in rules if r["role"] == "fallback_indexer"]
+
+        def collect(rule, current_query):
+            try:
+                cached = previous.get(rule["id"], {})
+                old = {**cached.get("success", {}), **{k: v for k, v in cached.get("attempt", {}).items()
+                       if k in ("index", "checkpoint", "queries", "query_cache")}}
+                outcome = module.discover(rule, current_query, old, context)
+                if not isinstance(outcome, dict) or outcome.get("status") not in ("complete", "empty", "partial", "failed"):
+                    raise ValueError("invalid_discovery_response")
+                outcome = {**outcome, "source_id": rule["id"], "status": "complete" if outcome["status"] == "empty" else outcome["status"],
+                    "diagnostics": [d if isinstance(d, dict) else {"source_id": rule["id"], "code": str(d)[:200]}
+                                    for d in outcome.get("diagnostics", [])]}
+            except Exception as error:
+                outcome = {"source_id": rule["id"], "status": "failed", "candidates": [],
+                           "diagnostics": [{"source_id": rule["id"], "code": "source_refresh_failed", "detail": str(error)[:200]}]}
+            return outcome
+
+        for rule in officials:
+            # Keep most of the single-game deadline for fallback. A publisher
+            # archive without this title should not exhaust every HGamer query.
+            deadline, budget = context.deadline, context.budget
+            context.deadline = min(deadline, time.monotonic() + 6)
+            context.budget = min(budget, context.requests + 3)
+            try:
+                result = collect(rule, query)
+            finally:
+                context.deadline, context.budget = deadline, budget
+            results.append(result)
+            all_candidates = [c for c in all_candidates if c.get("source_id") != rule["id"]]
+            all_candidates.extend(result.get("candidates", []))
+        if query.get("force") or ((module.needs_fallback(all_candidates, query) or any(r["status"] in ("failed", "partial") for r in results)) and not query.get("legacy_match")):
+            for rule in fallback:
+                result = collect(rule, query)
+                results.append(result)
+                identities = [i for i in result.get("identities", []) if i.get("appid") == query["appid"]]
+                if identities or any(c.get("upstream_page") for c in result.get("candidates", [])):
+                    supplemented = {**query, "identities": identities,
+                        "name_hints": list(dict.fromkeys([*query.get("name_hints", []),
+                            *(alias for i in identities for alias in i.get("aliases", []))]))[:12],
+                        "aliases": list(dict.fromkeys(alias for i in identities for alias in i.get("aliases", [])))[:32]}
+                    for official in effective_officials:
+                        pages = [c.get("upstream_page") for c in result.get("candidates", [])
+                                 if c.get("upstream_page") and urlsplit(c["upstream_page"]).hostname in official["page_hosts"]]
+                        enhanced = collect(official, {**supplemented, "upstream_pages": pages})
+                        prior = next((r for r in results if r["source_id"] == official["id"]),
+                                     {"source_id": official["id"], **previous.get(official["id"], {}).get("success", {})})
+                        # An exhausted second pass cannot discard the first pass.
+                        enhanced["candidates"] = module.enrich_candidates(module.merge_candidates(
+                            [*prior.get("candidates", []), *enhanced.get("candidates", [])]), identities)
+                        if prior in results:
+                            results[results.index(prior)] = enhanced
+                        else:
+                            results.append(enhanced)
+        else:
+            for rule in fallback:
+                # This game has adequate publisher evidence; no network request.
+                results.append({"source_id": rule["id"], "status": "skipped", "candidates": [], "diagnostics": []})
+        # Confirmed shared upstream pages can carry index provenance. Version,
+        # language and DLC uncertainty never collapse two candidates together.
+        official_candidates = [c for r in results for c in r.get("candidates", []) if r["source_id"] in {s["id"] for s in effective_officials}]
+        indexed_candidates = [c for r in results for c in r.get("candidates", []) if r["source_id"] in {s["id"] for s in fallback}]
+        for indexed in indexed_candidates:
+            for official in official_candidates:
+                upstream = indexed.get("upstream_page")
+                if (not upstream or module.canonical_url(upstream) != module.canonical_url(official["source_page"])
+                        or indexed.get("game_appid") != query["appid"]
+                        or indexed.get("match_basis") not in ("appid", "verified_alias", "official_title")
+                        or indexed.get("variant") not in ("base", "dlc") or indexed["variant"] != official.get("variant")):
+                    continue
+                if official.get("game_appid") is None:
+                    official["game_appid"] = indexed["game_appid"]
+                    official["parent_appid"] = indexed["game_appid"] if official["variant"] == "dlc" else None
+                    official["match_basis"] = "official_title"
+                    official["identity_evidence"] = [*official.get("identity_evidence", []),
+                        {"kind": "indexed_upstream_page", "appid": indexed["game_appid"], "page": indexed["source_page"]}]
+                if official["game_appid"] != indexed["game_appid"]:
+                    continue
+                relation = {"source_id": indexed["source_id"], "page": indexed["source_page"]}
+                official.setdefault("related_index_pages", []).append(relation)
+                same_version = (official.get("version_raw") and official.get("version_raw") == indexed.get("version_raw")
+                                and official.get("languages") and set(official["languages"]) == set(indexed.get("languages", [])))
+                if (same_version and indexed.get("format_reported") == "zip" and official.get("format_observed") == "exe"):
+                    for item in (official, indexed):
+                        item["warnings"] = list(dict.fromkeys([*item.get("warnings", []), "artifact_format_conflict"]))
+                    indexed["format_observed"] = "exe"
+                if (same_version
+                        and all(official.get(k) is not None and official.get(k) == indexed.get(k)
+                                for k in ("requires_dlc", "excludes_dlc", "patch_kind"))):
+                    official["provenance"] = [*official.get("provenance", []), relation]
+        return {"schema_version": 1, "results": results}
+
+    async def _discovery_worker(self, payload):
+        data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        if len(data) > MAX_DISCOVERY_INPUT:
+            raise ValueError("oversized_discovery_request")
+        process = await asyncio.create_subprocess_exec("/usr/bin/python3", "-I", str(Path(__file__).absolute()),
+            "--discover", str(self.state_dir.parent), str(self.config_path.absolute()),
+            stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+            env=_worker_environment())
+        self._worker_processes.add(process)
+        async def exchange():
+            process.stdin.write(data)
+            await process.stdin.drain()
+            process.stdin.close()
+            async def bounded_read(stream, limit):
+                chunks = []
+                size = 0
+                while True:
+                    chunk = await stream.read(min(65536, limit - size + 1))
+                    if not chunk:
+                        return b"".join(chunks)
+                    size += len(chunk)
+                    if size > limit:
+                        raise ValueError("oversized_discovery_response")
+                    chunks.append(chunk)
+            stdout, stderr = await asyncio.gather(bounded_read(process.stdout, MAX_DISCOVERY_OUTPUT),
+                                                  bounded_read(process.stderr, 4096))
+            await process.wait()
+            if process.returncode:
+                raise ValueError("source_worker_failed:" + stderr.decode(errors="replace")[:200])
+            return json.loads(stdout)
+        try:
+            return await asyncio.wait_for(exchange(), 30)
+        finally:
+            if process.returncode is None:
+                process.kill()
+            await process.wait()
+            self._worker_processes.discard(process)
+
+    async def discover_game(self, game, name_hints=None, preferred_language=None, force=False, generation=None, is_current=None):
+        if (not isinstance(game, dict) or type(game.get("appid")) is not int or not 0 < game["appid"] <= 9999999999
+                or not isinstance(game.get("name"), str) or not game["name"].strip() or len(game["name"]) > 1024
+                or type(force) is not bool):
+            raise ValueError("invalid_discovery_game")
+        hints = [] if name_hints is None else name_hints
+        if (not isinstance(hints, list) or len(hints) > 3 or any(not isinstance(n, str) or not n.strip() or len(n) > 256 for n in hints)
+                or preferred_language is not None and (not isinstance(preferred_language, str) or not re.fullmatch(r"[a-zA-Z]{2,3}(?:-[a-zA-Z]{2,4})?", preferred_language))):
+            raise ValueError("invalid_discovery_query")
+        if self._closed:
+            raise ValueError("source_registry_closed")
+        appid = game["appid"]
+        legacy_matches = self.matches(game)
+        if preferred_language:
+            preferred = preferred_language.casefold().replace("_", "-")
+            legacy_matches = [entry for entry in legacy_matches
+                              if entry["language"].casefold().replace("_", "-") == preferred
+                              or "-" not in entry["language"] and preferred.startswith(entry["language"].casefold() + "-")]
+        query = {"appid": appid, "name": game["name"], "name_hints": hints,
+                 "preferred_language": preferred_language, "legacy_match": bool(legacy_matches), "force": force,
+                 "source_context": [r["id"] for r in self._effective_discovery_rules(appid)]}
+        context_key = (generation, self.settings_revision, self._query_key(query), force)
+        existing = self._discovery_tasks.get(appid)
+        if existing and not existing.done():
+            result = await asyncio.shield(existing)
+            if getattr(existing, "discovery_context", None) == context_key:
+                return {**result, "generation": generation}
+            # A new scan/settings/query must run after an obsolete request, not
+            # inherit that request's stale result and remain cold indefinitely.
+            return await self.discover_game(game, hints, preferred_language, force, generation, is_current)
+        revision = self.settings_revision
+        task = asyncio.create_task(self._run_discovery(game, query, force, revision, is_current))
+        task.discovery_context = context_key
+        self._discovery_tasks[appid] = task
+        try:
+            result = await asyncio.shield(task)
+            return {**result, "generation": generation}
+        finally:
+            if task.done() and self._discovery_tasks.get(appid) is task:
+                del self._discovery_tasks[appid]
+
+    async def _run_discovery(self, game, query, force, revision, is_current):
+        appid = query["appid"]
+        rules = self._effective_discovery_rules(appid)
+        key = self._query_key(query)
+        previous = {r["id"]: self._game_previous(r, appid) for r in rules}
+        pending = []
+        for rule in rules:
+            old = previous[rule["id"]].get("success", {})
+            ttl = 24 * 3600 if rule["role"] == "fallback_indexer" and old.get("candidates") else 6 * 3600
+            confirmed = any(c.get("match_basis") in ("appid", "verified_alias", "official_title") for c in old.get("candidates", []))
+            if force or not self._discovery_fresh(old, ttl) or not confirmed and old.get("query_key") != key:
+                pending.append(rule)
+        if not pending:
+            return self.cached_discovery(game)
+        locks = [self._source_discovery_locks.setdefault(r["id"], asyncio.Lock()) for r in sorted(rules, key=lambda r: r["id"])]
+        async with self._discovery_semaphore:
+            acquired = []
+            try:
+                for lock in locks:
+                    await lock.acquire()
+                    acquired.append(lock)
+                if revision != self.settings_revision or is_current is not None and not is_current():
+                    return {**self.cached_discovery(game), "status": "stale", "settings_revision": revision}
+                payload = {"schema_version": 1, "query": query, "source_ids": [r["id"] for r in rules],
+                           "refresh_source_ids": [r["id"] for r in pending]}
+                try:
+                    if getattr(sys, "frozen", False):
+                        response = await self._discovery_worker(payload)
+                    else:
+                        response = await asyncio.wait_for(asyncio.to_thread(self._discovery_sync, query, pending, previous), 30)
+                    if not isinstance(response, dict) or response.get("schema_version") != 1 or not isinstance(response.get("results"), list):
+                        raise ValueError("invalid_discovery_response")
+                    if len(json.dumps(response).encode()) > MAX_DISCOVERY_OUTPUT:
+                        raise ValueError("oversized_discovery_response")
+                    results = response["results"]
+                    result_ids = [r.get("source_id") for r in results if isinstance(r, dict)]
+                    if (len(result_ids) != len(results) or len(set(result_ids)) != len(result_ids)
+                            or not {r["id"] for r in pending}.issubset(result_ids)
+                            or not set(result_ids).issubset({r["id"] for r in rules})):
+                        raise ValueError("invalid_discovery_response")
+                    for result in results:
+                        rule = next(r for r in rules if r["id"] == result["source_id"])
+                        if result.get("status") not in ("complete", "partial", "failed", "skipped"):
+                            raise ValueError("invalid_discovery_response")
+                        result["candidates"] = self._validate_candidates(rule, appid, result.get("candidates", []))
+                        if "index" in result and (not isinstance(result["index"], dict) or result["index"].get("parser_version") != DISCOVERY_PARSER_VERSION):
+                            raise ValueError("invalid_discovery_index")
+                        if not isinstance(result.get("diagnostics", []), list) or any(not isinstance(d, dict) or not isinstance(d.get("code"), str) for d in result.get("diagnostics", [])):
+                            raise ValueError("invalid_discovery_response")
+                except Exception as error:
+                    results = [{"source_id": r["id"], "status": "failed", "candidates": [],
+                                "diagnostics": [{"source_id": r["id"], "code": "source_refresh_failed", "detail": str(error)[:200]}]} for r in pending]
+                with self._sync_lock:
+                    if self._closed or revision != self.settings_revision or is_current is not None and not is_current():
+                        return {**self.cached_discovery(game), "status": "stale", "settings_revision": revision}
+                    for result in results:
+                        source_id = result["source_id"]
+                        old = previous[source_id]
+                        attempt = {"status": result["status"], "candidates": result["candidates"],
+                                   "diagnostics": result.get("diagnostics", []), "checked_at": int(time.time()), "query_key": key,
+                                   "parser_version": DISCOVERY_PARSER_VERSION, "query_version": DISCOVERY_QUERY_VERSION}
+                        attempt["cached_at"] = attempt["checked_at"] if result["status"] == "complete" else old.get("success", {}).get("cached_at")
+                        for field in ("index", "checkpoint", "queries", "query_cache"):
+                            if field in result:
+                                attempt[field] = result[field]
+                            elif field in old.get("attempt", {}):
+                                attempt[field] = old["attempt"][field]
+                            elif field in old.get("success", {}):
+                                attempt[field] = old["success"][field]
+                        success = attempt if result["status"] == "complete" or result["status"] == "skipped" and not old.get("success") else old.get("success", {})
+                        record = {"schema_version": 1, "source_id": source_id, "appid": appid,
+                                  "success": {k: v for k, v in success.items() if k not in ("index", "checkpoint", "queries", "query_cache")},
+                                  "attempt": {k: v for k, v in attempt.items() if k != "candidates" or result["status"] == "partial"}}
+                        # Single-source/game shards remain below the worker bound.
+                        if len(json.dumps(record, ensure_ascii=False).encode()) > MAX_DISCOVERY_OUTPUT:
+                            continue
+                        _write_json(self._discovery_path(source_id, appid), record)
+                        self._discovery_cache[(source_id, appid)] = record
+                        if "index" in result:
+                            old_index = self._discovery_indexes.get(source_id, {})
+                            index_record = {"schema_version": 1, "checked_at": result["index"].get("checked_at", old_index.get("checked_at", attempt["checked_at"])), "index": result["index"]}
+                            if len(json.dumps(index_record).encode()) <= MAX_DISCOVERY_OUTPUT:
+                                _write_json(self._index_path(source_id), index_record)
+                                self._discovery_indexes[source_id] = index_record
+                        status = {"checked_at": attempt["checked_at"], "cached_at": record["success"].get("cached_at"),
+                            "entry_count": len(record["success"].get("candidates", [])),
+                            "code": "source_refreshed" if result["status"] == "complete" else "source_partial" if result["status"] == "partial" else "source_offline_cached" if record["success"].get("candidates") else "source_refresh_failed"}
+                        _write_json(self._status_path(source_id), status)
+                        self._status[source_id] = status
+                result = self.cached_discovery(game)
+                result["status"] = {"cache_complete": "complete", "cache_partial": "partial"}.get(result["status"], result["status"])
+                return result
+            finally:
+                for lock in reversed(acquired):
+                    lock.release()
+
+    async def close(self):
+        self._closed = True
+        tasks = list(self._discovery_tasks.values())
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        for process in list(self._worker_processes):
+            if process.returncode is None:
+                process.kill()
+            await process.wait()
+        self._discovery_tasks.clear()
 
     def _fetch(self, url, rule, *, data=None, etag=None, modified=None, cookies=None):
         import http.cookiejar
@@ -528,6 +1051,9 @@ class SourceRegistry:
     def _refresh_one(self, rule, force):
         with self._sync_lock:
             old = self._cache.get(rule["id"], {}).copy()
+        if not force and self._fresh(old, 24 * 3600):
+            return {"source_id": rule["id"], "code": "source_cache_fresh", "entries": len(old.get("entries", [])),
+                    "cached_at": old.get("cached_at"), "checked_at": old.get("checked_at")}
         try:
             entries, etag, modified, unchanged = self.adapters[rule["adapter"]](rule, old, force)
             entries = _validate_entries(rule, entries)
@@ -605,7 +1131,7 @@ class SourceRegistry:
             async def one(rule):
                 async with semaphore:
                     return await asyncio.to_thread(self._refresh_one, rule, force)
-            rules = [dict(rule) for rule in self._rules if rule["enabled"]]
+            rules = [dict(rule) for rule in self._rules if rule["enabled"] and not rule["discovery_only"]]
             diagnostics = await asyncio.gather(*(one(rule) for rule in rules))
             self.diagnostics = diagnostics
             return diagnostics
@@ -621,8 +1147,31 @@ class SourceRegistry:
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 5 or sys.argv[1] != "--refresh" or sys.argv[4] not in ("0", "1"):
+    if len(sys.argv) == 4 and sys.argv[1] == "--discover":
+        data = sys.stdin.buffer.read(MAX_DISCOVERY_INPUT + 1)
+        if len(data) > MAX_DISCOVERY_INPUT:
+            raise SystemExit("oversized_discovery_request")
+        payload = json.loads(data)
+        if (not isinstance(payload, dict) or payload.get("schema_version") != 1
+                or not isinstance(payload.get("query"), dict) or not isinstance(payload.get("source_ids"), list)):
+            raise SystemExit("invalid_discovery_request")
+        registry = SourceRegistry(Path(sys.argv[2]), Path(sys.argv[3]))
+        query = payload["query"]
+        if type(query.get("appid")) is not int or query["appid"] <= 0:
+            raise SystemExit("invalid_discovery_request")
+        rules = [r for r in registry._effective_discovery_rules(query["appid"]) if r["id"] in payload["source_ids"]]
+        if len(rules) != len(payload["source_ids"]):
+            raise SystemExit("invalid_discovery_request")
+        previous = {r["id"]: registry._game_previous(r, query["appid"]) for r in rules}
+        refresh_ids = payload.get("refresh_source_ids", payload["source_ids"])
+        if not isinstance(refresh_ids, list) or any(source not in payload["source_ids"] for source in refresh_ids):
+            raise SystemExit("invalid_discovery_request")
+        result = registry._discovery_sync(query, [r for r in rules if r["id"] in refresh_ids], previous)
+        if len(json.dumps(result).encode()) > MAX_DISCOVERY_OUTPUT:
+            raise SystemExit("oversized_discovery_response")
+    elif len(sys.argv) == 5 and sys.argv[1] == "--refresh" and sys.argv[4] in ("0", "1"):
+        registry = SourceRegistry(Path(sys.argv[2]), Path(sys.argv[3]))
+        result = asyncio.run(registry.refresh(force=sys.argv[4] == "1"))
+    else:
         raise SystemExit("invalid_source_worker_arguments")
-    registry = SourceRegistry(Path(sys.argv[2]), Path(sys.argv[3]))
-    result = asyncio.run(registry.refresh(force=sys.argv[4] == "1"))
     print(json.dumps(result, ensure_ascii=True))

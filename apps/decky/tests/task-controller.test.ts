@@ -97,3 +97,19 @@ test("successful cancel keeps observing rollback until terminal state", async ()
   assert.ok(polled >= 2);
   controller.dismount();
 });
+
+test("EXE confirmations reach prepare while ZIP keeps the existing arguments", async () => {
+  const calls: unknown[][] = [];
+  const controller = createTaskController(api({
+    prepare: async (...args) => { calls.push(args); return { task_id: "task-1" }; },
+    status: async () => snapshot("completed"),
+  }));
+  const confirmations = { terms_accepted: true, conditions_accepted: true, keep_backups: true };
+  await controller.startPrepare("game", "exe-release", "", confirmations);
+  await tick();
+  controller.clear();
+  await controller.startPrepare("game", "zip-release");
+  assert.deepEqual(calls[0], ["game", "exe-release", "", confirmations]);
+  assert.deepEqual(calls[1], ["game", "zip-release", "", undefined]);
+  controller.dismount();
+});

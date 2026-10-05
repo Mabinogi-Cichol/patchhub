@@ -84,6 +84,17 @@ class SourcesTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(fetch.call_args.kwargs["etag"], "v2")
         self.assertEqual(reopened.list_sources()[1]["entry_count"], 2)
 
+    async def test_refresh_respects_ttl_and_force_bypasses_it(self):
+        self.registry.set_enabled("patchmoe", False)
+        rows = '<table><tr><td>Game</td><td>42</td><td><a href="https://cdn.example.org/a.zip">ZIP</a></td><td>2026/1/1</td><td>en</td></tr></table>'
+        with patch.object(self.registry, "_fetch", return_value=(200, rows, {}, TABLE["pages"][0])) as fetch:
+            await self.registry.refresh(force=False)
+            self.assertEqual(fetch.call_count, 1)
+            self.assertEqual((await self.registry.refresh(force=False))[0]["code"], "source_cache_fresh")
+            self.assertEqual(fetch.call_count, 1)
+            await self.registry.refresh(force=True)
+            self.assertEqual(fetch.call_count, 2)
+
     async def test_live_chinese_pending_date_is_normalized(self):
         self.registry.set_enabled("second", False)
         forms = '<form name="form_zh_cn" method="post" action="/"><input name="lang" type="hidden" value="cn"></form>'

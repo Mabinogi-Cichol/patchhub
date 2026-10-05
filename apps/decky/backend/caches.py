@@ -5,9 +5,15 @@ tool itself are considered. User ZIPs in ``~/Downloads``, non-digest files in
 the shared downloads directory, and transaction state are never touched.
 """
 import os
+import json
 from pathlib import Path
 import re
 import shutil
+import time
+import sqlite3
+import hashlib
+import uuid
+from contextlib import closing
 
 from acquisition import no_links
 from publisher import cache_files, _unlink_within
@@ -19,6 +25,8 @@ def scan(publisher, downloads_root):
     """Return (kind, root, path) for every tool-owned download cache file."""
     items = []
     for _release, _state, cache in publisher.caches():
+        if _release.startswith("exe-") and exe_cache_leased(_state):
+            continue
         items.extend(("publisher", cache, path) for path in cache_files(cache))
     if downloads_root.is_dir() and no_links(downloads_root):
         try:
@@ -80,14 +88,16 @@ def _job_files(jobs_root):
     if not jobs_root.is_dir() or not no_links(jobs_root):
         return
     try:
-        jobs = list(os.scandir(jobs_root))
+        with os.scandir(jobs_root) as entries:
+            jobs = list(entries)
     except OSError:
         return
     for job in jobs:
         if not job.is_dir(follow_symlinks=False):
             continue
         try:
-            entries = list(os.scandir(job.path))
+            with os.scandir(job.path) as iterator:
+                entries = list(iterator)
         except OSError:
             continue
         for entry in entries:
@@ -116,11 +126,15 @@ def delete_files(jobs_root, plan_id, suffixes=(".stage",)):
     if not isinstance(plan_id, str) or not plan_id:
         return 0
     job = Path(jobs_root) / plan_id
+    if protected_exe_jobs(jobs_root):
+        suffixes = tuple(s for s in suffixes if s != ".backup")
     if not no_links(job) or not job.is_dir():
         return 0
     removed = 0
     try:
-        for entry in os.scandir(job):
+        with os.scandir(job) as iterator:
+            entries = list(iterator)
+        for entry in entries:
             if not entry.is_file(follow_symlinks=False):
                 continue
             if not any(entry.name.endswith(suffix) for suffix in suffixes):
@@ -145,8 +159,9 @@ def has_backups(jobs_root, transaction_id):
     if not no_links(job) or not job.is_dir():
         return False
     try:
-        return any(entry.is_file(follow_symlinks=False) and entry.name.endswith(".backup")
-                   for entry in os.scandir(job))
+        with os.scandir(job) as entries:
+            return any(entry.is_file(follow_symlinks=False) and entry.name.endswith(".backup")
+                       for entry in entries)
     except OSError:
         return False
 
@@ -157,11 +172,13 @@ def any_backups(jobs_root):
     if not jobs_root.is_dir() or not no_links(jobs_root):
         return False
     try:
-        for job in os.scandir(jobs_root):
+        with os.scandir(jobs_root) as iterator:
+            jobs = list(iterator)
+        for job in jobs:
             if not job.is_dir(follow_symlinks=False):
                 continue
-            for entry in os.scandir(job.path):
-                if entry.is_file(follow_symlinks=False) and entry.name.endswith(".backup"):
+            with os.scandir(job.path) as entries:
+                if any(entry.is_file(follow_symlinks=False) and entry.name.endswith(".backup") for entry in entries):
                     return True
     except OSError:
         pass
@@ -175,10 +192,13 @@ def forget_transactions(state_dir):
     job store are removed. The core recreates both on its next run.
     """
     state_dir = Path(state_dir)
+    if protected_exe_jobs(state_dir / "jobs"):
+        return False
     if not state_dir.is_dir() or not no_links(state_dir):
         return False
     try:
-        entries = list(os.scandir(state_dir))
+        with os.scandir(state_dir) as iterator:
+            entries = list(iterator)
     except OSError:
         return False
     for entry in entries:
@@ -195,6 +215,8 @@ def clear_jobs(jobs_root, transaction_ids, suffixes=(".stage", ".backup")):
     """Delete staged/backup files for the given transactions; return bytes freed."""
     removed = 0
     root = Path(jobs_root)
+    if protected_exe_jobs(root):
+        suffixes = tuple(s for s in suffixes if s != ".backup")
     for transaction_id in transaction_ids:
         if not isinstance(transaction_id, str) or not transaction_id:
             continue
@@ -202,7 +224,8 @@ def clear_jobs(jobs_root, transaction_ids, suffixes=(".stage", ".backup")):
         if not no_links(job) or not job.is_dir():
             continue
         try:
-            entries = list(os.scandir(job))
+            with os.scandir(job) as iterator:
+                entries = list(iterator)
         except OSError:
             continue
         for entry in entries:
@@ -214,3 +237,89 @@ def clear_jobs(jobs_root, transaction_ids, suffixes=(".stage", ".backup")):
             if _unlink_within(root, Path(entry.path)):
                 removed += size
     return removed
+
+
+def protected_exe_jobs(jobs_root):
+    """EXE recovery never depends on the live profile or global setting.
+
+    Protect the complete EXE state even when its per-plan evidence is damaged;
+    corruption must not accidentally turn manual cleanup into backup deletion.
+    """
+    return bool(re.fullmatch(r"exe-[0-9a-f]{24}-[1-9][0-9]*", Path(jobs_root).parent.parent.name))
+
+
+def exe_cache_leased(state):
+    """Honor a persisted preparation lease; damaged receipts fail closed."""
+    jobs = Path(state) / "jobs"
+    if not jobs.exists():
+        return False
+    if not jobs.is_dir() or not no_links(jobs):
+        return True
+    try:
+        with os.scandir(jobs) as entries:
+            items = list(entries)
+        for job in items:
+            if not job.is_dir(follow_symlinks=False):
+                continue
+            path = Path(job.path) / "exe-policy.json"
+            if not path.is_file() or not no_links(path) or path.stat().st_size > 65536:
+                if _ended_exe_job(Path(state), job.name):
+                    continue
+                return True
+            try:
+                policy = json.loads(path.read_text(encoding="utf-8"))
+            except (ValueError, UnicodeDecodeError):
+                if _ended_exe_job(Path(state), job.name):
+                    continue
+                return True
+            if not isinstance(policy, dict):
+                return True
+            if (type(policy.get("schema_version")) is not int or policy["schema_version"] != 1
+                    or policy.get("kind") != "publisher_exe" or policy.get("plan_id") != job.name
+                    or policy.get("release_id") != Path(state).parent.name
+                    or not isinstance(policy.get("instance_id"), str)
+                    or hashlib.sha256(policy["instance_id"].encode()).hexdigest()[:16] != Path(state).name
+                    or type(policy.get("lease_active")) is not bool
+                    or type(policy.get("expires_at")) is not int or policy["expires_at"] < 0
+                    or policy.get("keep_backups") is not True):
+                if _ended_exe_job(Path(state), job.name):
+                    continue
+                return True
+            if policy.get("lease_active") is True and policy.get("expires_at", 0) > time.time():
+                return True
+    except (OSError, ValueError, TypeError):
+        return True
+    return False
+
+
+def _ended_exe_job(state, plan_id):
+    """Read bounded core evidence for a lease lost during a preparation crash.
+
+    This only permits deleting acquisition cache. Recovery files and the journal
+    remain protected regardless of this result. Unknown or active jobs stay pinned.
+    """
+    database = state / "journal.sqlite"
+    try:
+        if str(uuid.UUID(plan_id)) != plan_id or not no_links(database) or not database.is_file():
+            return False
+        with closing(sqlite3.connect(database.resolve().as_uri() + "?mode=ro", uri=True, timeout=.1)) as connection:
+            connection.set_progress_handler(lambda: 1, 10000)
+            row = connection.execute("SELECT document FROM jobs WHERE id=? AND length(document)<8388608", (plan_id,)).fetchone()
+        if not row:
+            return False
+        job = json.loads(row[0])
+        plan, transaction = job["plan"], job["transaction"]
+        if (plan["plan_id"] != plan_id or transaction["plan_id"] != plan_id
+                or transaction["transaction_id"] != plan_id
+                or plan["release_id"] != state.parent.name
+                or transaction["release_id"] != plan["release_id"]
+                or transaction["instance_id"] != plan["instance_id"]
+                or hashlib.sha256(plan["instance_id"].encode()).hexdigest()[:16] != state.name):
+            return False
+        if transaction["state"] in ("rolled_back", "uninstalled", "committed"):
+            return True
+        created, expires = plan["created_at"], plan["expires_at"]
+        return (transaction["state"] == "planned" and type(created) is int and type(expires) is int
+                and 0 <= created <= expires <= created + 900 and expires <= time.time())
+    except (OSError, sqlite3.Error, ValueError, TypeError, KeyError):
+        return False

@@ -1,0 +1,64 @@
+{
+  "schema_version": 1,
+  "profiles": [
+    {
+      "profile_id": "venusblood-frontier-cn-v5",
+      "revision": 1,
+      "source_id": "kagura-cn",
+      "source_record_id": "https://kagurafan.com/2020/02/07/venus-blood-frontier/",
+      "source_page": "https://kagurafan.com/2020/02/07/venus-blood-frontier/",
+      "appid": 1189440,
+      "language": "zh-CN",
+      "variant": "base",
+      "version_identity": "5:VenusBlood-FRONTIER-CN-Patch-v5.exe",
+      "exe_sha256": "502063d21d2e741533e7479955b6bbdc68dd36d55ad3cd01e86fa509d9056410",
+      "exe_size": 1126694464,
+      "metadata_sha256": "5a0ca3e10199a457ac8a52c83f4d61bc4662f2bbeb5a149825263b2ee558f5e3",
+      "installer_version": "9.5",
+      "compression": "lzma2",
+      "payload": [
+        {
+          "path": "R-18 Patch readme (CN).txt",
+          "size": 1580,
+          "sha256": "46ba5aca17cccd3b512e4752965712e37ee488174dec0214095cea48a7bfe039"
+        },
+        {
+          "path": "extra.xp3",
+          "size": 584428965,
+          "sha256": "32a5b159131ded7b482c7fe0e377e842c4e1051e726df7a5d26a0cb54c361073"
+        },
+        {
+          "path": "extra2.xp3",
+          "size": 648789888,
+          "sha256": "1e03e01be9beaaabf9894d537f793925a03beefcaa6b71ec8fa12542b5cb0d76"
+        }
+      ],
+      "verified_buildids": [
+        "5430305"
+      ],
+      "requires_dlc": [],
+      "excludes_dlc": [],
+      "baselines": [
+        {
+          "path": "VBFI.exe",
+          "sha256": "8ab4e801afa97adccd6f3831a606228d4a69b942da9e68ff1cdb49e9e6db918f",
+          "crc32": 3769231163
+        }
+      ],
+      "terms": {
+        "url": "https://kagurafan.com/2020/02/07/venus-blood-frontier/",
+        "text": "1. 点击“下一步”，阅读并同意使用条款后，点击“下一步”。\n2. 此补丁包会自动安装所需文件至 Steam 默认的《Venus Blood Frontier》目录；如果你的游戏安装在默认位置之外，请点击“浏览”按钮选择安装位置。\n3. 再点击两次“下一步”。成功安装后补丁生效。",
+        "sha256": "8d3a7e2ae925c9bb88d38a7c6fe8c8e5c7a3682a7e764e7ba1af398a0f2ca13e"
+      },
+      "review": {
+        "semantics": true,
+        "steamos": true,
+        "evidence": "Static review 2026-10-05: Setup Factory 9.5 CN v5; 3 unconditional game-root members (extra.xp3, extra2.xp3, readme), empty file conditions/packages, install type All; reviewed events only locate VBFI.exe, advance screens, Exit on cancel and the generic shutdown helper; no File.Copy/Delete/Run/Move, Web.* download or registry writes in framed text. Deck build 5430305 base game, no DLC. Residual project-level serialized bytes documented in progress."
+      },
+      "download_hosts": [
+        "kaguraserver.com",
+        "kaguragamespatch.com"
+      ]
+    }
+  ]
+}

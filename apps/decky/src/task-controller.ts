@@ -1,5 +1,5 @@
 import type { Transaction } from "@steam-patch/ui";
-import type { PreparedInstall } from "./install";
+import type { ExeConfirmations, PreparedInstall } from "./install";
 
 export type TaskSnapshot = {
   task_id: string;
@@ -21,7 +21,7 @@ export type TaskSnapshot = {
   release_id?: string;
 };
 export type TaskApi = {
-  prepare(instance: string, release: string, archive: string): Promise<{ task_id: string }>;
+  prepare(instance: string, release: string, archive: string, confirmations?: ExeConfirmations): Promise<{ task_id: string }>;
   install(plan: string, confirmed: boolean): Promise<{ task_id: string }>;
   status(id: string): Promise<TaskSnapshot>;
   cancel(id: string): Promise<TaskSnapshot>;
@@ -112,7 +112,7 @@ export function createTaskController(api: TaskApi, pollMs = 750, retryMs = 1500)
   return {
     getSnapshot: () => current,
     subscribe(listener: () => void) { listeners.add(listener); return () => { listeners.delete(listener); }; },
-    startPrepare: (instance: string, release: string, archive = "") => begin("prepare", instance, release, () => api.prepare(instance, release, archive)),
+    startPrepare: (instance: string, release: string, archive = "", confirmations?: ExeConfirmations) => begin("prepare", instance, release, () => api.prepare(instance, release, archive, confirmations)),
     startInstall: (plan: string, instance: string, release: string) => begin("install", instance, release, () => api.install(plan, true)),
     requestCancel, resume,
     clear() { if (current && taskIsTerminal(current.state)) { handled.add(current.task_id); publish(null); } },

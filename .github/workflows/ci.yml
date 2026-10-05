@@ -27,6 +27,9 @@ jobs:
       - run: cargo build -p steam-patch-core -p steam-patch-cli --locked
       - run: python -m unittest discover -s apps/decky/backend -p 'test_*.py' -v
       - run: python -m unittest discover -s scripts -p test_package_artifacts.py -v
+      - run: python -m unittest discover -s scripts -p test_build_sbom.py -v
+      - run: python -m unittest discover -s scripts -p test_sf95_audit.py -v
+      - run: python -m unittest discover -s scripts -p test_sf95_worker.py -v
 
   windows:
     runs-on: windows-2022

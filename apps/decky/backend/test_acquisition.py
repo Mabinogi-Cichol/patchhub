@@ -127,7 +127,8 @@ class PublisherScanTests(unittest.IsolatedAsyncioTestCase):
         base = dict(catalog_trust="signed",catalog_revision=4,installs=[dict(game=game,patches=[])],diagnostics=[])
         plugin.bridge = types.SimpleNamespace(scan=AsyncMock(return_value=base))
         plugin.sources = types.SimpleNamespace(refresh=AsyncMock(return_value=[]), list_sources=lambda:[],
-            list_game_sources=lambda game: [])
+            list_game_sources=lambda game: [], settings_revision=0,
+            cached_discovery=lambda game: {"status": "not_queried", "candidates": [], "diagnostics": []})
         plugin.list_transactions = AsyncMock(return_value=[])
         local_patch = dict(release_id="patchmoe-9",blockers=["version_incompatible"] if old_build else [],
             detection=dict(status="not_detected",files=[]))
@@ -199,6 +200,16 @@ class PublisherScanTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(patch["source_name"], source["name"])
         self.assertEqual(patch["source_status"], source["status"])
         self.assertEqual(patch["source_cached_at"], source["cached_at"])
+
+    async def test_default_scan_uses_cache_and_explicit_refresh_is_separate(self):
+        plugin = self.plugin()
+        first = await plugin.scan()
+        self.assertEqual(first["generation"], 1)
+        self.assertEqual(first["installs"][0]["discovery"]["status"], "not_queried")
+        plugin.sources.refresh.assert_not_awaited()
+        second = await plugin.scan(refresh_sources=True)
+        self.assertEqual(second["generation"], 2)
+        plugin.sources.refresh.assert_awaited_once_with(force=True)
 
     async def test_game_source_rpc_changes_scan_without_changing_other_games(self):
         from test_sources import TABLE

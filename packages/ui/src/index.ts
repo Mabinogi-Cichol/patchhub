@@ -8,6 +8,7 @@ export type Patch = {
   source_cached_at?: number | null;
   support_level: string;
   download_available?: boolean;
+  exe?: { language?: string; version?: string; variant?: string; terms?: { url?: string; text?: string; sha256?: string }; requires_dlc?: number[]; excludes_dlc?: number[]; backup_required: true; profile_id: string };
   compatibility: string;
   blockers: string[];
   detection: { status: string; files: { path: string; status: string }[] };
@@ -27,7 +28,62 @@ export type Install = {
   match_status: string;
   patches: Patch[];
   sources?: GameSourceSubscription[];
+  discovery?: GameDiscovery;
+  exe_reviews?: ExeReview[];
 };
+
+// Discovery identities belong to the Decky presentation layer. They never
+// become an installation release_id or authorize a prepare request.
+export type SourceCandidate = {
+  candidate_id: string;
+  source_id: string;
+  source_name?: string;
+  source_record_id?: string;
+  game_appid?: number | null;
+  parent_appid?: number | null;
+  game_title: string;
+  aliases?: string[];
+  patch_title: string;
+  variant?: string;
+  languages?: string[] | null;
+  version_raw?: string | null;
+  version_evidence?: unknown[];
+  requires_dlc?: number[] | null;
+  excludes_dlc?: number[] | null;
+  platforms?: string[] | null;
+  patch_kind?: string;
+  source_page: string;
+  upstream_page?: string | null;
+  mirrors?: { url: string; label?: string; format?: string }[];
+  format_reported?: string | null;
+  format_observed?: string | null;
+  capability: string;
+  match_basis?: string;
+  identity_evidence?: unknown[];
+  provenance?: unknown[];
+  observed_at?: number | string | null;
+  cache_status?: string;
+  warnings?: string[];
+};
+export type DiscoveryDiagnostic = { code: string; message?: string; detail?: string; source_id?: string };
+export type GameDiscovery = { status: string; candidates: SourceCandidate[]; diagnostics: DiscoveryDiagnostic[] };
+export type ExeReview = { candidate_id: string; release_id: string | null; profile_id: string | null; status: "guidance" | "installable"; blockers: string[] };
+export type DiscoveryResult = GameDiscovery & { instance_id: string; appid: number; generation: number; settings_revision: number; exe_reviews?: ExeReview[]; exe_patches?: Patch[] };
+export type DisplayPatch = { kind: "installable"; key: string; patch: Patch } | { kind: "discovery"; key: string; candidate: SourceCandidate };
+
+export function candidateMatched(candidate: SourceCandidate): boolean {
+  return ["appid", "verified_alias", "official_title"].includes(candidate.match_basis ?? "");
+}
+export function displayPatches(row: Install, preferredLanguage: string | null = null): DisplayPatch[] {
+  const discovery: DisplayPatch[] = [...(row.discovery?.candidates ?? [])]
+    .sort((a, b) => Number(a.source_id === "hgamer") - Number(b.source_id === "hgamer")
+      || Number(!!preferredLanguage && !a.languages?.includes(preferredLanguage)) - Number(!!preferredLanguage && !b.languages?.includes(preferredLanguage)))
+    .map(candidate => ({ kind: "discovery", key: candidate.candidate_id, candidate }));
+  return [...row.patches.map(patch => ({ kind: "installable" as const, key: patch.release_id, patch })), ...discovery];
+}
+export function hasMatchedPatch(row: Install): boolean {
+  return row.patches.length > 0 || !!row.discovery?.candidates.some(candidateMatched);
+}
 
 export type ScanResult = {
   roots: string[];
@@ -37,6 +93,8 @@ export type ScanResult = {
   installs: Install[];
   diagnostics: { code: string; path: string; message: string }[];
   sources?: SourceSubscription[];
+  generation?: number;
+  settings_revision?: number;
 };
 
 export type SourceSubscription = {
@@ -49,6 +107,7 @@ export type SourceSubscription = {
   cached_at?: number;
   checked_at?: number;
   entry_count?: number;
+  role?: string;
 };
 
 export type GameSourceSubscription = SourceSubscription & {
@@ -87,7 +146,8 @@ export function isExternal(status: string): boolean {
 
 export function needsAttention(row: Install): boolean {
   return row.game.availability !== "installed" || row.patches.some(p =>
-    p.blockers.length > 0 || ["partial", "conflict", "partial_or_conflict", "unknown", "needs_revalidation"].includes(p.detection.status)
+    p.blockers.length > 0 || ["partial", "conflict", "partial_or_conflict", "needs_revalidation"].includes(p.detection.status)
+    || (p.detection.status === "unknown" && p.support_level !== "discover_only")
   );
 }
 
@@ -95,7 +155,7 @@ export function filterInstalls(rows: Install[], filter: Filter, query: string): 
   const search = query.trim().toLocaleLowerCase();
   return rows.filter(row => {
     if (search && !`${row.game.name} ${row.game.appid}`.toLocaleLowerCase().includes(search)) return false;
-    if (filter === "matched") return row.patches.length > 0;
+    if (filter === "matched") return hasMatchedPatch(row);
     if (filter === "installed") return row.patches.some(p => isManaged(p.detection.status) || isExternal(p.detection.status));
     if (filter === "attention") return needsAttention(row);
     return true;
@@ -103,16 +163,48 @@ export function filterInstalls(rows: Install[], filter: Filter, query: string): 
 }
 
 export function reason(code: string): string {
-  const normalized = code.trim().replace(/^(Error|RuntimeError):\s*/, "");
+  const normalized = code.trim().replace(/^(Error|RuntimeError|ValueError):\s*/, "");
+  if (/^discovery_http_\d{3}$/.test(normalized)) return `来源网页返回 HTTP ${normalized.slice(-3)}，请稍后重试。`;
   const labels: Record<string, string> = {
     source_refreshed: "已实时查询",
     source_not_modified: "官网内容未变化",
     source_offline_cached: "查询失败，使用上次成功查询的缓存",
     source_refresh_failed: "补丁源查询失败，暂无可用缓存",
+    source_partial: "仅完成部分来源查询",
     cached: "已缓存，等待实时查询",
     not_refreshed: "尚未查询",
     invalid_source_cache: "源缓存无效，请重新查询",
     source_not_enabled: "补丁源已停用，请重新订阅后查询",
+    complete: "已查询来源",
+    cache_complete: "已读取成功缓存",
+    cache_partial: "已读取部分缓存",
+    not_queried: "尚未查询，选择游戏后查找",
+    partial: "查询尚未完整完成",
+    empty: "已查询的来源未找到补丁",
+    failed: "来源暂不可用，显示上次结果",
+    stale: "显示上次结果，等待重新查询",
+    queued: "等待查询来源",
+    artifact_format_conflict: "索引标示与上游文件格式不一致，当前仅提供来源引导。",
+    version_conflict: "来源中的补丁版本描述不一致，请核对原始说明。",
+    dlc_unknown: "DLC 拥有和安装状态待确认，请按实际版本选择。",
+    dlc_conditions_unknown: "DLC 适用条件待确认，请核对发布页说明。",
+    outside_japan_only: "发布页注明仅适用于日本以外地区，请核对原始说明。",
+    fresh: "已实时核查",
+    language_unknown: "补丁语言待确认，请核对来源说明。",
+    source_access_restricted: "网站访问受限，可打开来源网页查看。",
+    source_structure_changed: "网站页面结构已变化，保留上次查询结果。",
+    discovery_budget_exhausted: "本次查询时间已用尽，显示已取得的结果。",
+    discovery_detail_budget_exhausted: "本次详情查询已达到上限，显示已取得的结果。",
+    discovery_index_incomplete: "来源目录尚未查完，可重新查找以继续获取。",
+    discovery_retry_deferred: "来源要求稍后重试，显示已取得的结果。",
+    discovery_retry_exhausted: "来源仍暂不可用，显示上次成功结果。",
+    discovery_challenge: "来源网页需要验证码或访问确认，可在浏览器中打开。",
+    discovery_compressed_response: "来源网页的压缩格式暂不支持，保留上次查询结果。",
+    discovery_html_too_large: "来源网页超过查询大小限制，显示已取得的结果。",
+    discovery_pagination_cycle: "来源网页的分页链接重复，查询已停止。",
+    discovery_request_cycle: "来源网页的跳转链接重复，查询已停止。",
+    discovery_search_structure_changed: "来源搜索页面结构已变化，保留上次查询结果。",
+    discovery_structure_changed: "来源页面结构已变化，保留上次查询结果。",
     invalid_source_rule: "补丁源规则格式不正确",
     invalid_source_columns: "表格列配置不正确",
     unsupported_source_adapter: "此网站的解析适配器尚未提供",
@@ -131,7 +223,70 @@ export function reason(code: string): string {
     artifact_requires_manual_download: "此来源需要浏览器下载；打开官方来源后导入 ZIP。",
     build_not_verified: "当前游戏 build 尚未审核，自动安装已禁用。",
     platform_not_verified: "当前平台尚未审核，自动安装已禁用。",
-    source_requires_guidance: "此条目提供官方来源引导，尚无可安装配方。",
+    source_requires_guidance: "此条目提供官方来源引导，尚不能自动安装。",
+    exe_profile_missing: "此官方 EXE 尚未完成安装审核，请查看官方说明。",
+    exe_profile_not_reviewed: "此官方 EXE 尚未完成安装审核，请查看官方说明。",
+    exe_pipeline_unavailable: "此官方 EXE 的安全安装流程尚未开放，请查看官方说明。",
+    exe_profile_changed: "此补丁的审核记录已变化，请重新查询。",
+    exe_release_invalid: "补丁选择已失效，请重新查询。",
+    exe_candidate_changed: "官方补丁信息已变化，请重新查询。",
+    exe_candidate_stale: "官方补丁信息已过期，请重新查询。",
+    exe_source_changed: "官方补丁源规则已变化，请重新查询。",
+    exe_source_disabled: "官方补丁源已停用，暂不能安装。",
+    exe_no_direct_download: "官方补丁暂不能直接下载，请查看官方说明。",
+    exe_download_url_invalid: "官方下载地址不符合安全要求，请查看官方说明。",
+    exe_manual_import_not_supported: "此官方 EXE 只能通过已审核的下载流程准备。",
+    exe_prepare_first: "请先下载并检查官方 EXE，生成安装计划。",
+    exe_confirmation_invalid: "安装确认无效，请重新阅读条款与适用条件。",
+    exe_confirmation_changed: "安装确认已失效，请重新准备安装。",
+    exe_terms_confirmation_required: "请先阅读并同意官方条款。",
+    exe_conditions_confirmation_required: "请先确认游戏语言、版本和 DLC 条件。",
+    exe_backups_required: "此补丁必须保留原文件备份，请启用备份后重试。",
+    exe_terms_changed: "官方条款已变化，请重新阅读并确认。",
+    exe_language_mismatch: "游戏语言与此补丁的适用语言不符。",
+    exe_dlc_required: "此补丁需要指定的 DLC，当前游戏不符合条件。",
+    exe_dlc_excluded: "此补丁不适用于当前安装的 DLC。",
+    exe_manifest_unavailable: "无法读取游戏版本信息，请检查 Steam 游戏安装。",
+    exe_manifest_invalid: "游戏版本信息无效，请检查 Steam 游戏安装。",
+    exe_manifest_duplicate: "游戏版本信息冲突，请重新扫描。",
+    exe_manifest_limit: "游戏版本信息超出安全限制。",
+    exe_baseline_invalid: "已审核的游戏文件条件无效，暂不能安装。",
+    exe_game_file_changed: "游戏原文件已变化，请重新准备安装。",
+    exe_game_facts_changed: "游戏状态已变化，请重新准备安装。",
+    exe_game_identity_changed: "游戏实例已变化，请重新扫描。",
+    exe_linked_game_file: "游戏文件存在不安全的链接，已停止安装。",
+    exe_game_file_limit: "游戏文件超出检查限制，暂不能安装。",
+    exe_state_insufficient_space: "插件状态目录空间不足，请清理空间后重试。",
+    exe_target_insufficient_space: "游戏所在磁盘空间不足，请清理空间后重试。",
+    exe_original_size_limit: "原游戏文件超过备份安全限制，暂不能安装。",
+    exe_payload_changed: "官方安装包内容与审核记录不符，需要重新审核。",
+    exe_manifest_changed: "安装包文件清单与审核记录不符，需要重新审核。",
+    exe_worker_evidence_changed: "安装包检查结果与审核记录不符，需要重新审核。",
+    exe_local_authorization_changed: "本机安装计划授权已变化，请重新准备。",
+    exe_policy_identity_changed: "安装计划关联的游戏或补丁已变化，请重新准备。",
+    exe_policy_invalid: "安装计划记录无效，请重新准备。",
+    exe_policy_unavailable: "安装计划记录不可用，请重新准备。",
+    exe_existing_state_invalid: "已有安装记录无法安全读取，请先处理操作记录。",
+    exe_core_job_invalid: "安装任务记录无效，请重新准备。",
+    exe_core_plan_invalid: "安装计划无效，请重新准备。",
+    invalid_exe_profile: "补丁审核资料无效，暂不能自动安装。",
+    exe_profile_mismatch: "官方安装包已变化，需要重新审核后才能安装。",
+    exe_registry_changed: "补丁来源或审核记录已变化，请重新查询。",
+    exe_worker_unavailable: "无法安全检查此安装包，请稍后重试或查看官方说明。",
+    exe_worker_failed: "检查安装包失败，未修改游戏文件。",
+    exe_worker_invalid_response: "安装包检查结果无效，未修改游戏文件。",
+    exe_worker_timeout: "检查安装包超时，请稍后重试。",
+    exe_worker_response_limit: "安装包检查结果超出安全限制。",
+    exe_worker_input_output_overlap: "检查目录不安全，已停止处理安装包。",
+    exe_worker_path_invalid: "安装包检查路径无效，已停止处理。",
+    exe_descriptor_limit: "无法安全限制检查任务，暂不能自动安装。",
+    exe_baseline_mismatch: "游戏版本或原文件与已审核版本不符，请核对游戏版本。",
+    exe_dlc_mismatch: "当前 DLC 状态不符合此补丁的适用条件。",
+    exe_terms_required: "请先阅读并同意官方使用条款。",
+    exe_conditions_required: "请确认游戏语言、版本与 DLC 适用条件。",
+    exe_backup_required: "此补丁必须保留原文件备份，请启用备份后重试。",
+    exe_insufficient_space: "检查或安装此补丁所需空间不足，请清理空间后重试。",
+    exe_sandbox_unavailable: "安全提取环境不可用，暂不能自动安装此补丁。",
     game_not_ready: "游戏尚未完整安装或库不可访问，请检查 Steam 下载状态。",
     signed_catalog_required: "需要有效的签名目录才能安装。",
     catalog_expired: "签名目录已到期，请更新目录后重新生成计划。",
@@ -146,15 +301,15 @@ export function reason(code: string): string {
     game_busy: "此游戏正在被另一项事务处理，请等待完成。",
     insufficient_space: "可用磁盘空间不足，请清理空间后重新预检。",
     managed_install_exists_or_needs_recovery: "已有托管安装或待恢复事务，请先卸载或恢复。",
-    artifact_hash_mismatch: "ZIP 哈希与已审核配方不符，请重新核对官方下载包。",
-    artifact_size_mismatch: "ZIP 大小与已审核记录不符，请确认下载完整。",
+    artifact_hash_mismatch: "安装包与已审核记录不符，请重新核对官方下载包。",
+    artifact_size_mismatch: "安装包大小与已审核记录不符，请确认下载完整。",
     state_overlaps_game: "状态目录与游戏目录重叠，已阻止写入。",
     backup_missing_or_changed: "原版备份丢失或已变化，无法安全还原。",
     archive_outside_downloads: "请将 ZIP 放入 Deck 用户的 Downloads 目录再导入。",
     invalid_archive: "所选文件不是可读取的普通 ZIP。"
     ,source_not_released: "官方页面尚未发布此补丁，暂不能下载。"
     ,publisher_prepare_first: "请先自动下载并准备安装，获取文件变更计划。"
-    ,publisher_state_unavailable: "本机官方 ZIP 安装记录不可读取，请检查状态目录。"
+    ,publisher_state_unavailable: "本机官方补丁安装记录不可读取，请检查状态目录。"
     ,publisher_existing_transaction: "已有安装或待恢复记录，请先卸载或修复。"
     ,publisher_match_changed: "官方游戏匹配已变化，请重新扫描。"
     ,download_cancelled: "已取消获取或校验，没有执行安装。"
@@ -163,13 +318,13 @@ export function reason(code: string): string {
     ,download_not_zip: "下载内容不是有效 ZIP，未执行安装。"
     ,local_archive_search_limit: "下载目录文件过多，请使用手动 ZIP 备用方式。"
   };
-  return labels[normalized] ?? normalized.replaceAll("_", " ");
+  return labels[normalized] ?? (normalized.startsWith("exe_") ? "此官方 EXE 暂不能安全安装，请查看官方说明或稍后重试。" : normalized.replaceAll("_", " "));
 }
 
 export function workflowState(value: string): string {
   const labels: Record<string, string> = {
     discover_only: "官方来源引导", manual_download: "手动下载导入", managed_zip: "审核 ZIP 安装", unsupported: "暂不支持",
-    publisher_zip: "官方 ZIP · 默认解压至游戏根目录", publisher_default: "按根目录生成计划，效果待验证",
+    publisher_zip: "官方 ZIP · 默认解压至游戏根目录", publisher_exe: "已审核官方 EXE 安装", publisher_default: "按根目录生成计划，效果待验证",
     verified_metadata: "目录条件已核对", needs_review: "尚待审核", signed: "已验证签名", unsigned_development: "未签名开发目录",
     planned: "已生成计划", backing_up: "正在备份", backed_up: "备份完成", applying: "正在写入", committed: "安装完成",
     rolling_back: "正在回滚", rolled_back: "已回滚", uninstalling: "正在卸载", uninstalled: "已卸载", needs_recovery: "需要恢复",

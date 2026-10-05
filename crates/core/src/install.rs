@@ -64,6 +64,11 @@ pub struct Transaction {
     pub error: Option<String>,
     pub created_at: u64,
     pub updated_at: u64,
+    /// True when the committed plan replaces or removes an existing file whose
+    /// original bytes must be restored from a backup. Add-only transactions can
+    /// be uninstalled safely even when no backup files exist.
+    #[serde(default)]
+    pub has_replacements: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -855,6 +860,7 @@ pub fn prepare(
         error: None,
         created_at: now(),
         updated_at: now(),
+        has_replacements: plan.changes.iter().any(|change| change.action != "add"),
     };
     let mut job = Job {
         progress: vec!["pending".into(); plan.changes.len()],
@@ -1223,6 +1229,7 @@ fn restore(store: &Store, job: &mut Job, uninstalling: bool) -> io::Result<()> {
 pub fn uninstall(transaction_id: &str, state_dir: &Path) -> io::Result<Transaction> {
     let store = Store::open(state_dir)?;
     let mut job = store.load(transaction_id)?;
+    job.transaction.has_replacements = job.plan.changes.iter().any(|c| c.action != "add");
     if job.transaction.state == "uninstalled" {
         return Ok(job.transaction);
     }
@@ -1248,6 +1255,7 @@ pub fn recover(state_dir: &Path) -> io::Result<Vec<Transaction>> {
     let mut result = Vec::new();
     for id in store.ids()? {
         let mut job = store.load(&id)?;
+        job.transaction.has_replacements = job.plan.changes.iter().any(|c| c.action != "add");
         if ["planned", "rolled_back", "uninstalled"].contains(&job.transaction.state.as_str())
             || (job.transaction.state == "committed" && !job.uninstall_requested)
         {
@@ -1271,9 +1279,11 @@ pub fn recover(state_dir: &Path) -> io::Result<Vec<Transaction>> {
 
 pub fn list_transactions(state_dir: &Path) -> io::Result<Vec<Transaction>> {
     let store = Store::open(state_dir)?;
-    store
-        .ids()?
-        .iter()
-        .map(|id| Ok(store.load(id)?.transaction))
-        .collect()
+    let mut result = Vec::new();
+    for id in store.ids()? {
+        let mut job = store.load(&id)?;
+        job.transaction.has_replacements = job.plan.changes.iter().any(|change| change.action != "add");
+        result.push(job.transaction);
+    }
+    Ok(result)
 }

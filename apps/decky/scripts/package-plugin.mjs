@@ -11,8 +11,12 @@ const output = join(app, "plugin-output");
 rmSync(output, { recursive: true, force: true });
 mkdirSync(join(output, "bin"), { recursive: true });
 for (const file of ["main.py", "plugin.json", "package.json", "README.md"]) copyFileSync(join(app, file), join(output, file));
-cpSync(join(app, "backend"), join(output, "backend"), { recursive: true, filter: path => !path.includes("__pycache__") && !/[\\/]test_[^\\/]*\.py$/.test(path) });
+copyFileSync(join(root, "LICENSE"), join(output, "LICENSE"));
+cpSync(join(app, "backend"), join(output, "backend"), { recursive: true, filter: path => !path.includes("__pycache__") && !/[\\/]fixtures(?:[\\/]|$)/.test(path) && !/[\\/]test_[^\\/]*\.py$/.test(path) });
 cpSync(join(app, "dist"), join(output, "dist"), { recursive: true });
+mkdirSync(join(output, "backend", "exe_worker"), { recursive: true });
+for (const file of ["sf95_audit.py", "sf95_worker.py"]) copyFileSync(join(root, "scripts", file), join(output, "backend", "exe_worker", file));
+copyFileSync(join(root, "scripts", "licenses", "sfextract-MIT.txt"), join(output, "backend", "exe_worker", "sfextract-MIT.txt"));
 copyFileSync(binary, join(output, "bin", "steam-patch"));
 copyFileSync(join(root, "catalog", "catalog.json"), join(output, "bin", "catalog.json"));
 for (const file of ["signed-catalog.json", "trust-keys.json"]) {

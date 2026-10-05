@@ -7,6 +7,8 @@ import { taskProgressPercent } from "./task-progress";
 const stageNames: Record<string, string> = {
   scanning: "查找本地 ZIP", searching: "查找本地 ZIP", connecting: "正在连接", downloading: "下载补丁",
   validating: "校验文件", planning: "生成安装计划", backing_up: "备份原文件",
+  inspecting: "检查安装包", extracting: "提取补丁", converting: "准备游戏文件", signing: "核对安装资料",
+  checking_game: "核对游戏版本与文件", preparing_plan: "生成安装计划", generating_plan: "生成安装计划",
   writing: "写入文件", committing: "提交安装", rolling_back: "恢复原文件",
 };
 
@@ -25,7 +27,10 @@ const styles = `
   .patch-task-metrics span { min-width:0; overflow-wrap:anywhere; }
   .patch-task-warning { color:#ffb28d; }
   .patch-task-footer { padding-top:10px; }
-  @media (max-width:600px) { .patch-task-metrics { grid-template-columns:minmax(0,1fr); } }
+  @media (max-width:600px) {
+    .DialogContent.patch-task-modal { width:calc(100vw - 24px); padding:12px 14px; }
+    .patch-task-metrics { grid-template-columns:minmax(0,1fr); }
+  }
 `;
 
 export function TaskProgressView({ task, game, patch, onCancel }: {
@@ -49,7 +54,7 @@ export function TaskProgressView({ task, game, patch, onCancel }: {
           <span>已处理：{formatSize(task?.bytes_done ?? 0)}{progress != null ? ` / ${formatSize(task!.total_bytes!)}` : " / 总量未知"}</span>
           <span>文件：{task?.files_done ?? 0}{task?.total_files != null ? ` / ${task.total_files}` : ""}</span>
           {task?.kind === "prepare" && task.stage === "downloading" && <span>下载速度：{formatSize(task.speed_bps)}/s</span>}
-          {task?.kind === "prepare" && task.archive_bytes != null && task.stage !== "downloading" && <span>ZIP 大小：{formatSize(task.archive_bytes)}</span>}
+          {task?.kind === "prepare" && task.archive_bytes != null && task.stage !== "downloading" && <span>安装包大小：{formatSize(task.archive_bytes)}</span>}
           {task?.kind === "install" && task.archive_bytes != null && <span>安装包大小：{formatSize(task.archive_bytes)}</span>}
           <span>已用：{duration(task?.elapsed_seconds ?? 0)}</span>
           {task?.kind === "prepare" && task.stage === "downloading" && <span>预计剩余：{task.eta_seconds == null ? "估算中" : duration(task.eta_seconds)}</span>}
