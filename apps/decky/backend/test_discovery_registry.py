@@ -392,6 +392,30 @@ class DiscoveryRegistryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(official["candidates"][0]["match_basis"], "title")
         self.assertIsNone(official["candidates"][0]["game_appid"])
 
+    def test_empty_official_refresh_keeps_verified_candidate_when_index_confirms_page(self):
+        self.registry.add_source(FALLBACK)
+        promoted = candidate(match_basis="official_title")
+        indexed = candidate(source="hgamer", upstream_page=promoted["source_page"])
+        context = types.SimpleNamespace(deadline=time.monotonic() + 30, budget=24, requests=0, detail_requests=0)
+        def discover(rule, query, old, context):
+            return {"status": "complete", "candidates": [], "diagnostics": [], "identities": []}
+        mocked = types.SimpleNamespace(RequestContext=lambda **kw: context, needs_fallback=lambda values, query: True,
+            discover=discover, merge_candidates=lambda values: list({v["candidate_id"]: v for v in values}.values()),
+            enrich_candidates=lambda values, identities: values, canonical_url=lambda value: value)
+        rules = [_validate_rule(RULE), _validate_rule(FALLBACK)]
+        previous = {"official": {"success": {"candidates": [promoted]}},
+                    "hgamer": {"success": {"candidates": [indexed]}}}
+        with patch("sources._discovery_module", return_value=mocked):
+            result = self.registry._discovery_sync({**GAME, "force": True}, rules, previous)
+        official = next(r for r in result["results"] if r["source_id"] == "official")
+        self.assertEqual(official["candidates"][0]["match_basis"], "official_title")
+        self.assertEqual(official["candidates"][0]["game_appid"], 42)
+        # Without an index page confirming the source the empty listing stands.
+        with patch("sources._discovery_module", return_value=mocked):
+            result = self.registry._discovery_sync({**GAME, "force": True}, rules, {"official": previous["official"]})
+        official = next(r for r in result["results"] if r["source_id"] == "official")
+        self.assertEqual(official["candidates"], [])
+
     async def test_new_generation_waits_for_obsolete_query_then_retries(self):
         started, finish = asyncio.Event(), asyncio.Event()
         generation = [1]

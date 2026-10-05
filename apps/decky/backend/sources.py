@@ -786,6 +786,31 @@ class SourceRegistry:
                         evidence = {json.dumps(item, sort_keys=True, ensure_ascii=False): item
                                     for item in [*candidate.get("identity_evidence", []), *old.get("identity_evidence", [])]}
                         candidate["identity_evidence"] = list(evidence.values())
+        # An empty official result is not proof that a verified record is gone:
+        # a bounded index crawl or a failed second pass can return nothing while
+        # the fallback index still points at the same official page. Keep the
+        # last verified candidate instead of silently dropping the source; a
+        # later non-empty listing that omits it still replaces it normally.
+        index_rules = [r for r in self._effective_discovery_rules(query["appid"]) if r["role"] == "fallback_indexer"]
+        confirmed_pages = set()
+        for rule in index_rules:
+            records = [previous.get(rule["id"], {}).get("success", {})]
+            records.extend(r for r in results if r.get("source_id") == rule["id"])
+            for record in records:
+                for candidate in record.get("candidates", []):
+                    if candidate.get("game_appid") == query["appid"] and candidate.get("upstream_page"):
+                        confirmed_pages.add(module.canonical_url(candidate["upstream_page"]))
+        if confirmed_pages:
+            for rule in effective_officials:
+                for result in results:
+                    if result.get("source_id") != rule["id"] or result.get("candidates"):
+                        continue
+                    kept = [c for c in previous.get(rule["id"], {}).get("success", {}).get("candidates", [])
+                            if c.get("game_appid") == query["appid"]
+                            and c.get("match_basis") in ("appid", "verified_alias", "official_title")
+                            and module.canonical_url(c.get("source_page", "")) in confirmed_pages]
+                    if kept:
+                        result["candidates"] = [json.loads(json.dumps(c)) for c in kept]
         return {"schema_version": 1, "results": results}
 
     async def _discovery_worker(self, payload):
