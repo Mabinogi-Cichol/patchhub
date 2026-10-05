@@ -48,9 +48,17 @@
 - Steam 游戏模式真实渲染检查来源分组、夏日详情、HGamer ZIP / EXE 冲突、来源跳转按钮及滚动；页面无横向溢出，discover_only 详情未显示准备或确认安装。修正 `source_partial` 中文文案及重复格式警告后重建部署并复验。截图与 RPC 原始证据放在忽略的本机和设备验收目录，概要见验收记录。
 - 最后核对最终部署前端哈希与本机构建一致，打包内容校验通过，54 个相关本地文档链接及 `git diff --check` 通过。更新源适配器、客户端指南、隐私、Decky README 和功能索引；保留原有未提交修改，本轮未创建 Git 提交。
 
+### 2026-10-05：修复重新查找后 Kagura 官方来源消失
+
+- 用户报告：在《Venus Blood Frontier》补丁管理页点击“重新查找 / 查看更多来源”后，依赖 HGamer 回填身份的 Kagura 官方 EXE 来源消失。该游戏官方候选本身无 AppID，身份完全依赖兜底索引。
+- 根因与修复见 [fix-plan.md](fix-plan.md)：`cached_candidates` 不再让 `partial` 的 `attempt` 候选遮蔽同 `candidate_id` 的 `success` 已验证候选；`_discovery_sync` 在本轮兜底失败或仅部分刷新时，按同一 `candidate_id` 沿用上次已验证身份，`attempt` 独有线索仍照常展示。
+- 回归测试：`test_partial_refresh_does_not_shadow_verified_candidate_and_keeps_new_leads`、`test_refresh_without_fallback_identity_keeps_previously_verified_candidate`。
+- 验证：Windows 开发机 `apps/decky/backend` 全量 203 项通过（3 项按设计跳过）；离线构造 VBF 记录确认修复前来源不匹配、修复后命中 `venusblood-frontier-cn-v5`。真实 Deck 连续重新查找、部署与 Git 提交尚未执行。
+
 ## 待办与遗留
 
 - 严格设计 13.2 第 3 项的“未知发行商且已安装游戏”在现有设备缺少样本，待验证；已分别验证真实未知发行商网络与实际已安装游戏兜底，不擅自安装游戏补足证据。
 - 实体手柄连续操作、真实断网后菜单操作未执行；重挂载、失败保留缓存、超时、竞态已由自动化覆盖，不将其记为实体操作。
 - 官方归档超过单游戏预算时会保留分页检查点并显示部分完成；需要更多覆盖时主动重新查找，首期不承诺一次抓完整站。
 - 游戏语言和 DLC 拥有 / 安装状态仍未知；EXE、网盘和聚合候选仍仅作来源引导。安装、运行、补丁生效与恢复不属于本次完成范围。
+- [重新查找后 Kagura 来源消失修复](fix-plan.md) 仅在开发机自动化与离线复现通过；真实 Deck 连续重新查找、部署与提交未被本轮执行。
