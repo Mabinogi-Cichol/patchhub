@@ -21,7 +21,7 @@ use uuid::Uuid;
 pub const MAX_ARCHIVE_BYTES: u64 = 8 * 1024 * 1024 * 1024;
 pub const MAX_FILE_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 pub const MAX_EXPANDED_BYTES: u64 = 16 * 1024 * 1024 * 1024;
-pub const MAX_ENTRIES: usize = 4096;
+pub const MAX_ENTRIES: usize = 8192;
 pub const PLAN_TTL_SECONDS: u64 = 900;
 
 #[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]

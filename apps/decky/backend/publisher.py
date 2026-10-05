@@ -28,7 +28,7 @@ from tasks import current_task
 MAX_ARCHIVE = 8 * 1024**3
 MAX_EXPANDED = 16 * 1024**3
 MAX_FILE = 4 * 1024**3
-MAX_ENTRIES = 4096
+MAX_ENTRIES = 8192
 CHUNK = 1024 * 1024
 
 

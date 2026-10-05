@@ -16,7 +16,7 @@ from acquisition import no_links
 from discovery import safe_url
 
 MAX_PROFILES_BYTES = 16 * 1024 * 1024
-MAX_ENTRIES = 4096
+MAX_ENTRIES = 8192
 PROFILE_KEYS = {"profile_id", "revision", "source_id", "source_record_id", "source_page", "appid",
                 "language", "variant", "version_identity", "exe_sha256", "exe_size", "metadata_sha256",
                 "installer_version", "compression", "payload", "verified_buildids", "requires_dlc",
