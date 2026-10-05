@@ -122,4 +122,4 @@ Package01 的 prefix 后续由独立探针核对：CN `1413362/1413366/1413370`�
 | 成员 | 5,874 个 `www/` 文件（9 新增 / 5,865 替换），条件空、类型 `All`、未压缩 |
 | 门槛条件 | `Game.exe` 存在且 `Script.vdf` CRC = 2002373744（DLC 版） |
 
-DLC 屏幕的 `SetPackageProperties` 为注释、未启用。该结果授权夏日 DLC profile（`variant=dlc`，`requires_dlc=[1390150]`）；本体系列（CN v1.03 / EN v3，门槛 CRC 3876755782、排除 DLC）语义同源但需要未装 DLC 的实例记录基线并做 P5，未与 DLC 混用。真实安装/全量恢复证据见 [progress.md](progress.md)。
+DLC 屏幕的 `SetPackageProperties` 为注释、未启用。该结果授权夏日 DLC profile（`variant=dlc`，`requires_dlc=[1390150]`）；本体系列（CN v1.03 / EN v3，门槛 CRC 3876755782、排除 DLC）语义同源。2026-10-05 在临时移除 DLC 的实例上核验本体 CN 基线 `Script.vdf` SHA-256 `5cdc0e696aea4ea526840c1327bbb258846cbc7c703982c6e0aa833420554d6c`、CRC 3876755782，并完成本体 CN v1.03（2,502 文件）真实安装与全量恢复；英文本体 v3 待英文实例。真实安装/全量恢复证据见 [progress.md](progress.md)。

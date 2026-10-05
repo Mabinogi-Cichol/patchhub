@@ -184,3 +184,14 @@
   - 卸载：事务 `uninstalled`；**5,865 个替换文件全部恢复原 SHA-256、9 个新增文件全部移除**，`Game.exe`/`Script.vdf` 未变；restore 证据 SHA `46ac3fa4f6dd27b33c4e84bec6acaee09cb72420b20180d328a65489ef92623f`。
 - 说明：本事务的卸载为同步 RPC，恢复 5,865 个备份耗时约 2 分钟，期间 loader 客户端连接超时但后端正常完成（核心 `journal.lock` 正确串行化）；大规模事务的卸载进度/超时体验列入待办。
 - 本体 profile（CN v1.03 / EN v3）仍需要**未装 DLC**的适用实例来记录基线 `Script.vdf` SHA-256 并做 P5；当前 DLC 实例不得用本体补丁。相关实现与 P0 证据已就绪，待实例。
+
+## 2026-10-05：夏日本体系列 CN v1.03 真实 EXE 安装闭环
+
+- 用户临时在 Steam 中取消勾选 DLC 1390150，Steam 回写本体文件后：`Script.vdf` 大小 504、SHA-256 `5cdc0e696aea4ea526840c1327bbb258846cbc7c703982c6e0aa833420554d6c`、CRC 3876755782（与本体补丁门槛一致）；`Game.exe` SHA 256 `16aef53d…` 不变；build 6270017；已安装 depot 为 1227891/1227892（DLC depot 已移除）。
+- 新审核 profile `summer-memories-base-cn-v1-03`（release `exe-f24bb4f4233fac85593eb982-1227890`，variant=base，`excludes_dlc=[1390150]`，基线 `Game.exe` 与 `Script.vdf` CRC 3876755782）；payload 2,502 个 `www/` 文件来自既有 P0 审计（`cn-audit-v2.json`）。registry SHA `73ffdbc22e43f6684c6d7f5a742ebb52eeecfc0427efd09c898a65182585cb6a`，共 3 条 profile（VBF、夏日 DLC、夏日本体）。
+- 设备真实闭环（插件 RPC + 真实网络与 Rust，未运行官方 EXE）：
+  - 下载/缓存 126,137,104 字节 → 提取/校验 → 计划 2,502 个变更（8 add / 2,494 replace）、无 blocker；prepare 证据 SHA `743a44f5acc23492bdc780127601066fa9f8442bbd34ba6ea4c328a321551ccd`。
+  - 安装 `committed`；2,502 个文件全部与计划一致，`Game.exe`/`Script.vdf` 未变；install 证据 SHA `a4cc9e18befc49e2576dc68c0ab6590b62a0b91f1e58a89ea88ffe350646da35`。
+  - 卸载：事务 `uninstalled`；2,494 个替换文件全部恢复原 SHA-256、8 个新增移除、无关文件不变；restore 证据 SHA `d28bc21251c3f5a2a29c52d49ad8a823009211e875c498140dbae027c8194d6b`。
+- 本轮曾因上一次中断留下一个 planned 计划触发 `publisher_existing_transaction`，用 `discard_plan` 丢弃后重试成功；保留该失败记录，不当作成功证据。
+- 至此夏日本体（CN）与 DLC（CN）均可自动安装。用户可重新勾选装回 DLC：届时本体 profile 因 `excludes_dlc` 不适用，DLC profile 生效。英文本体 v3 仍需英文本体实例。
