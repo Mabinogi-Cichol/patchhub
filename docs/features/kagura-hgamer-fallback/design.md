@@ -1,10 +1,12 @@
 # Feature：KaguraGames 双站内置源与 HGamer 兜底索引
 
-状态：调研完成，待实现。调研日期：2026-10-04（Asia/Shanghai）。目标客户端：Steam Deck / Decky。
+状态：发现与来源引导已实现并部署，完成自动化、真实网络、Decky RPC 与界面验收；严格样本与实体手柄未验证项见施工记录。调研及实施日期：2026-10-04 至 2026-10-05（Asia/Shanghai）。目标客户端：Steam Deck / Decky。
 
 施工记录：[progress.md](progress.md)。
 
-本轮交付为方案文档；以下接口、字段、默认值和测试均为拟实施设计，未修改插件运行逻辑，也未执行游戏补丁安装。
+可行性证据与修订理由：[feasibility.md](feasibility.md)。实施后的设备证据与验收边界见[acceptance.md](acceptance.md)；实际 EXE 补丁安装能力不在本期范围。
+
+本轮按以下设计实施运行逻辑与验收；实际完成项和未执行项分别记录在施工记录中。Kagura 安装程序仅验收发现和来源引导，不执行游戏补丁安装。
 
 ## 1. 目标与产品决策
 
@@ -19,7 +21,7 @@
 
 首期完成**双站发现、正确匹配、兜底索引和可用来源引导**。安装格式扩展独立列为后续工作，不能为了让按钮可用而将 EXE 伪装成 ZIP。
 
-## 2. 当前仓库事实与根因
+## 2. 实施前仓库事实与根因
 
 | 位置 | 当前行为 | 本功能需要解决的问题 |
 | --- | --- | --- |
@@ -31,8 +33,11 @@
 | 同文件 `RELEASE_PATTERN` 与 sources 的 `source_for_release` | `source-<source-id>-<appid>`，每源每游戏一个 ID | 同源语言和本体 / DLC 可能冲突；需要独立候选 ID |
 | sources 的系统 Python 工作进程 | 子进程重新创建 SourceRegistry | 新适配器必须在共同初始化代码注册，不能只注册到父进程 |
 | [install.ts](../../../apps/decky/src/install.ts) | 只有 managed_zip / publisher_zip 可准备 | 可复用 discover_only 的引导边界，需调整详情展示与筛选 |
+| sources 的 `game_subscribed` / `set_game_source` | `overrides.games[appid][source_id]` 持久化单游戏订阅，缺省为 true | 全局与单游戏开关都必须参与发现及 fallback；迁移保留 games |
+| [session.ts](../../../apps/decky/src/session.ts)、main 的 scan | 一次 RPC 完成后替换整份扫描结果，无后台结果推送 | 首期明确单游戏查询接口；自动增量更新独立实现 |
+| [steam.ts](../../../apps/decky/src/steam.ts)、core GameInstall | 本地化名称仅用于前端显示；扫描数据没有游戏语言 / DLC拥有及安装状态 | 将名称提示传入发现接口；未知语言与DLC保留未知 |
 
-因此首要缺口是**发行商源缺失和发现模型过于偏向 ZIP**，不能仅增加一条游戏名或放宽模糊匹配。现有用户库的具体游戏 build、DLC 状态、当前扫描响应未在本轮读取；不将代码层根因调查当作设备复现。
+因此首要缺口是**发行商源缺失和发现模型过于偏向 ZIP**，不能仅增加一条游戏名或放宽模糊匹配。此表记录实施前调查；实施后的实际库、build、扫描响应及仍未知的 DLC 状态见施工记录，不将代码层根因调查当作设备复现。
 
 ## 3. 现场调研与证据
 
@@ -109,13 +114,27 @@ flowchart TD
     J -->|是| L[重新核实来源与包 / 生成本机计划]
 ```
 
-关键改动：先获取 core 的本机游戏列表，再进行按需补丁查询；不再在扫描游戏前刷新所有来源并抓取大量无关详情。首次展示可使用缓存，后台有界刷新后更新同一次扫描结果，避免游戏列表等待数百个网页请求。扫描加 generation ID，丢弃旧扫描晚到的结果。
+关键改动：先获取 core 的本机游戏列表及缓存，再进行按需补丁查询，不在扫描游戏前抓取所有详情。首期选择“扫描显示缓存 + 打开游戏详情时自动查询该游戏 + 查询结束后一次更新该游戏”的方式。HGamer依照触发矩阵在这次查询内部自动兜底，不需要用户主动选择HGamer。
+
+“后台增量更新”指先显示列表、随网络查询完成逐项补充结果，与补丁文件断点续传无关；它适用于大库、首次冷缓存与慢网站，但列为后续体验优化，不作为两个源适配器及fallback的上线依赖。首期保留 generation ID / settings_revision，防止旧查询覆盖新扫描或重新显示已停用来源。
+
+### 4.1 首期接口、工作进程与状态所有权
+
+- `scan(refresh_sources=False)`：核心扫描与已验证缓存投影；不发起HGamer全库查询，不依赖游戏名称提示。前端调用点显式传入缓存模式；保留内部安装准备的 `scan(refresh_sources=False)` 语义。明确的“刷新来源”入口只刷新到期 / 指定发行商索引，再重新投影缓存。
+- `discover_game(instance_id, name_hints, preferred_language, force=False)`：新增Decky RPC。后端从本机扫描记录取得可信AppID和实例；最多接受3个、各256字符的名称提示，禁止客户端传来源URL / 路径。返回 `{instance_id, appid, generation, settings_revision, status, candidates, diagnostics}`，单游戏查询预算耗尽也返回缓存与partial状态。
+- 名称提示来自 `gamePresentation` 的本地化显示名和core原名；仅作为搜索词，不能证明游戏身份。`preferred_language` 是用户偏好，不是已安装游戏语言。首期没有可靠游戏语言或DLC读取器时，不探测未经验证的Steam私有接口，直接标unknown。
+- 新采集接口为 `discover(rule, game_query, previous, request_context)`；其中request_context带截止时间、请求预算及已访问URL。旧collector `(rule, previous, force)` 保留给patch.moe / table_html，不要求HGamer在无游戏上下文的旧collector里搜索全库。
+- 精简Decky Python通过新的固定 `--discover` 工作进程命令，用stdin JSON传递单游戏请求（schema_version=1，最大32KiB）；只读配置与缓存，返回最多512KiB候选 / 诊断。父进程负责schema校验、检查generation / settings_revision和原子写缓存。沿用TLS与隔离环境，不将用户文本拼入shell。
+- 单游戏发现与现有安装 `TaskManager` 分离：该管理器的busy会阻塞安装，且有15秒UI租约，不适合直接承载来源发现。前端使用独立查询状态和session更新，不让查来源占用全局安装锁；同AppID查询合并，共享索引刷新按源串行。
+- 前端在查询完成后按instance_id合并当前游戏候选，保留其它行、事务与已准备计划。QAM关闭不重新发起同一请求；插件卸载时停止发现子进程。超时 / 取消只由父进程发布部分或缓存结果，失效子进程返回内容不能落盘。
+
+后续若启用自动批量发现，再增加任务ID、结果revision、轮询或事件传输，以及不超过10个游戏的批次调度；不能仅在scan内部启动asyncio任务就假定前端会接收到增量结果。
 
 ## 5. 来源规则与发现数据模型
 
 ### 5.1 配置规则
 
-升级 SourceRegistry 配置为 schema v2，新增 `role`（`publisher` / `fallback_indexer`）、`discovery_only` 能力、优先级、查询方式和语言偏好。v1 规则经内存迁移继续工作；不重写用户 overrides，保留已停用源及自定义源状态。新字段必须有版本化校验，不能向 Rust signed catalog 偷渡额外字段。
+升级 SourceRegistry 配置为 schema v2，新增 `role`（`publisher` / `fallback_indexer`）、`discovery_only` 能力、优先级、查询方式和语言偏好。v1 规则经内存迁移继续工作；不重写用户 overrides，保留 `enabled`、`added`、`games` 及已停用状态。effective_enabled = 全局enabled AND game_subscribed(appid, source_id)，查询、缓存投影、身份补全和fallback委派均使用此条件。新字段必须有版本化校验，不能向 Rust signed catalog 偷渡额外字段。
 
 | source_id / adapter | role | 公开页面 | 初始能力 |
 | --- | --- | --- | --- |
@@ -152,13 +171,15 @@ flowchart TD
 
 现有 `patchmoe-<appid>` 与 `source-<source-id>-<appid>` 的 release_id 和 publisher 状态路径保持可解析，避免破坏旧事务。新增发现候选映射到 Decky 展示层；未具备安装能力时后端明确拒绝 prepare。不要只改正则就让发现候选进入安装分发。
 
+首期使用Decky本地展示联合类型：`{kind:"installable", key:release_id, patch:Patch}` 或 `{kind:"discovery", key:candidate_id, candidate:SourceCandidate}`。不把candidate_id假填入共享 `Patch.release_id`。React key、选择器与详情选中状态改用展示key；计划与事务仍按release_id关联。补丁准备、preview、plan_install、fetch_artifact及任务入口只接受installable分支对应的已有release_id，发现候选不传入核心接口。列表筛选同时读取经身份确认的发现记录；未确认线索另列，不能仅用 `patches.length` 判断。
+
 将来同源多语言 / 多版本支持安装时，增加 v2 安装身份映射表，以 candidate_id 映射受验证 release_id；同时升级 `source_for_release`、`RELEASE_PATTERN`、`_dispatch_id`、publisher 状态与事务查找，并保留旧格式读取和旧 receipt。此迁移必须先有兼容性测试，首期 EXE 来源引导无需提前迁移事务。
 
 ## 6. 两个 Kagura 适配器分别实施
 
 ### 6.1 海外 WooCommerce 适配器
 
-1. 用 HTTPS 获取 `/patch/` 主补丁产品列表，解析实际产品卡和分页；必要时使用已核实的分类目录。两入口按产品规范 URL 去重，不把侧栏热门商品算作主列表完整性。
+1. 用 HTTPS 获取 `/patch/` 主补丁产品列表，解析实际产品卡；该入口本次实验一页即读出227个唯一产品链接，包含Summer Memories本体及DLC。它与每页21项的分类入口不同，不预设首页分页形态。响应上限4MiB；超限或结构失效则按分类目录实际分页取轻量索引。两入口按产品规范URL去重，不把侧栏热门商品算作主列表完整性。
 2. 构建轻量产品标题 → 发布页索引；读取与本机游戏名称或身份关联的详情，保留多 Mirror、语言、版号、Steam / GOG 范围和说明。产品页无法取得时保留列表发现条目，显示“详细信息暂不可用”。
 3. 优先使用正文明确 Steam 链接关联 AppID；没有链接时按完整英文标题关联本机身份或带 AppID 的 HGamer 游戏记录，保存证据来源。`Patch` 后缀仅从已识别补丁产品名提取；不全局删除 DLC / + / 序号。
 4. Mirror 是同一个产品的多个下载入口；可以分组显示，但不同 URL 未经包哈希核实不得宣布字节相同，更不能按域名替换拼出未知链接。
@@ -189,17 +210,17 @@ flowchart TD
 | 同源多个候选或本体 / DLC 条件未知 | 是，可补充线索 | 不以 HGamer 关联本体 AppID自动消除 DLC 歧义 |
 | 已有合适、明确官方发现结果，但它是 EXE | 通常否 | 正常显示来源引导；不因不能自动安装不断搜索 |
 | 已有明确官方 ZIP / managed_zip | 否 | 官方候选优先；用户可点“查看更多来源” |
-| HGamer 被停用 | 否 | 手动网页入口可见；停用不得被自动补全绕过 |
+| HGamer全局停用或当前游戏取消订阅 | 否 | 手动网页入口可见；停用不得被自动补全绕过 |
 
 ### 7.2 按需查询流程
 
-1. 从本机 AppID 的当前名称、Steam 本地化名称及带出处的缓存别名构建最多 3 个查询词。AppID 是核实键；不假定 HGamer 支持纯 AppID 检索，更不拼接未经证实的搜索 API。
-2. 对 `/zh-CN/search?q=<urlencoded>` GET，接受 hgamer.tw 同域语言重定向；解析实际结果区。对简繁标题差异优先利用页面明确别名，不将汉字转换或翻译结果当作身份确认。
+1. 从本机原名、Steam本地化显示名及带出处的缓存别名构建最多3个去重查询词。优先原始词，其次已有英文 / 原文别名，再尝试中文标题的简繁转换形式；若没有英文别名，转换形式占第二个名额。简繁转换器与字典随插件打包并在系统Python工作进程验证，不假定SteamOS已安装相关库。转换只生成检索词，不授予身份或安装信任。AppID是核实键，不假定HGamer支持纯AppID检索。
+2. 对 `/zh-CN/search?q=<urlencoded>` GET，接受hgamer.tw同域语言重定向。限定游戏 / 补丁标题对应的结果容器；整页 `<section>` 本身也可能同时包含推荐区域，不能只限定到section。零结果页可能只有推荐标题，需另外核实查询词和明确“0结果 / 未找到”标记。实测另一发行商游戏简体查询为0，繁体查询得到游戏和补丁，因此单一简体查询为0不能结束整款游戏的兜底。
 3. 游戏结果进入 `/games/<slug>`，读取该游戏主信息区的 Steam `/app/<id>` 和补丁链接。补丁结果进入详情页后读取其游戏关系、正文 Steam widget / app URL。忽略推荐卡片、广告和图片 CDN URL中的数字。
 4. AppID 不同直接排除；没有 AppID时只允许完整名 / 明确别名形成待确认候选，不由相似标题推断官方身份。确切 AppID允许记录为“已匹配的索引结果”，仍标注来源是 HGamer。
 5. 获取补丁类型、语言、版号和上游发布页。没有 Steam 关系的 DLsite、Android、GOG 专用或 Demo 项不自动匹配 Steam 正式版。
-6. 上游若属于已启用内置源，则交给该适配器重新解析，再合并来源证据；未收录站点只返回详情与外部入口。禁用的官方源不被 HGamer 重新启用或取得后台下载权限。
-7. 以 `(appid, variant, language, canonical_upstream_page)` 去重，未知字段不能视为相同；补丁类型不同、语言不同、DLC条件不同则分别显示。官方与 HGamer 指向同一明确发布页时显示一次，附“HGamer 索引提供关联”。
+6. 上游若属于当前游戏effective_enabled的内置源，则交给该适配器重新解析，再合并来源证据；未收录站点只返回详情与外部入口。禁用的官方源不被HGamer重新启用。委派最多一层，维护visited页面集合，避免官方 → HGamer → 官方再次触发HGamer形成循环。
+7. 以 `(appid, variant, language, patch_kind, version_identity, canonical_upstream_page, DLC条件)` 去重，未知字段不能视为相同。仅确认同一版本记录时合并官方与HGamer的证据；同一发布页上多个版本不能因URL相同而折叠。只有发布页级索引关系时，将它附在页面组上，不覆盖任一版本候选。
 
 默认不在每次扫描遍历整个 HGamer 目录。分页 / sitemap仅用于已验证 HTML 搜索失效时的受限索引维护或后续手动全量刷新；抓取中断必须记录不完整，不能把未到达页的游戏写入“无补丁”负缓存。
 
@@ -227,8 +248,8 @@ DLC 状态为三值：满足 / 不满足 / 未知。Steam API 的拥有状态、
 | 已核实发布页 / EXE / 网盘 | discover_only，可打开来源和说明 | 需独立安装格式方案 |
 | HGamer 标 ZIP、官方为 EXE | discover_only + 格式冲突说明 | 核实官方实际载荷，不以聚合标示为准 |
 | 官方直接 ZIP，但布局未知或含安装器 | discover_only | 核实实际 ZIP、成员及有效文件布局 |
-| 官方纯文件 ZIP，适配器确认 game_root 布局 | 可接入既有 publisher_zip | 按旧链路重验来源、哈希、路径和计划；仍显示尚未逐游戏验证效果 |
-| 有审核配方和平台 / build 证据 | managed_zip | 保持原核心审核与签名门槛 |
+| 官方纯文件 ZIP，适配器确认 game_root 布局 | 新发现候选首期仍为 discover_only | 完成候选到既有 publisher_zip 的独立适配与验证后提升能力 |
+| 已有审核配方和平台 / build 证据 | 保持既有 managed_zip 能力 | 新配方仍需原核心审核与签名门槛 |
 
 后端 `prepare_install` 必须基于候选能力重新校验，discover_only返回明确原因，不能只靠前端隐藏按钮。本地手动导入 ZIP也不能把任意 EXE 内容转换成受审核配方。
 
@@ -242,27 +263,31 @@ Kagura EXE支持若后续实施，先识别真实安装器类型、校验文件�
 | --- | --- |
 | 国内 / 海外索引 TTL | 24 小时；详情与目标候选 6 小时 |
 | HGamer 正匹配 TTL | 24 小时；无结果负缓存 6 小时 |
-| 请求超时 / 重试 | 每请求 15 秒；瞬时网络错误最多重试 1 次；429遵守 Retry-After |
+| 请求超时 / 重试 | 每请求不超过min(15秒, 剩余deadline)；瞬时错误最多重试1次且须在总预算内；429超过剩余预算则排队，遵守Retry-After |
 | 并发 / 节流 | 单站并发 1、全局最多 3；同站请求间隔至少 1 秒 |
-| 每轮 HGamer 预算 | 最多 10 个游戏、每游戏3个查询词、详情合计最多6个请求；超额等待后续查询 |
-| 每游戏发现期限 | 30秒；停止新请求并返回缓存 / 待查询状态 |
-| HTML / 分页边界 | 单响应最多2MiB；单索引至多100页、无新记录或 next 循环即停止 |
+| HGamer预算 | 首期按选择游戏查询：最多3个查询词、详情最多6个请求；后续批量模式每批最多10个游戏，超额排队 |
+| 每游戏发现期限 | 实际开始执行后30秒（排队不计）；父进程强制结束超时发现子进程并返回缓存 / partial |
+| HTML / 分页边界 | 解码前响应体最多4MiB；若支持压缩则解压后也限4MiB；单索引至多100页、重复next即停止并记partial |
 
-需要覆盖大库：本机先返回全部游戏，对当前可见 / 选择游戏优先兜底；预算外标“尚未查询”，用户选择时触发查询或下一批后台查询，不能标成“未找到”。同一 AppID多个库实例共享只读发现缓存，安装任务与备份仍按 instance_id隔离。
+需要覆盖大库：本机先返回全部游戏，首期选择游戏时触发查询；未查询不能标成“未找到”。默认“有补丁”过滤器会隐藏冷缓存游戏，因此必须显示“还有N款未查询，查看全部游戏”的入口，避免用户无法选择这些游戏。后续后台批量模式可自动补全列表。同一AppID多个库实例共享发现内容缓存，但语言 / DLC适用性按当前实例重新评估；不能共享已选版本结论或安装计划。
 
-缓存键包含 source_id、AppID / 查询规范词、locale、schema版本与parser版本；记录最后成功时间和最近失败。成功零结果只有在解析到明确结果区、该查询完整完成后才能负缓存。403 / CAPTCHA / 结构失效 / 超时 / 分页不完整均不产生零结果，不覆盖成功缓存。
+缓存键包含source_id、AppID或查询规范词、locale、schema / parser / query策略版本；保留有意义的+、DLC、序号。单词负缓存与整款游戏的无结果状态分开：明确零结果可缓存该词，但只有本轮所有计划查询词和候选详情都完整核查后，才可记录游戏级无结果。增添新别名或变更查询策略使游戏级负缓存失效。403 / CAPTCHA / 结构失效 / 超时 / 分页不完整均不产生零结果，不覆盖成功缓存。
 
 各游戏查询原子提交；单游戏失败保留自身历史记录，不能阻止其它游戏成功结果写入。源码维护的下载规则与 HTML缓存分离，缓存加载不能授予新域名权限。更新parser版本时重新验证或重采，保留旧成功缓存作为只读线索。避免大响应超过现有4MiB缓存上限，按源索引 / 查询记录分片而非无限增大一个JSON。
 
 沿用 `source_offline_cached` / `source_refresh_failed` 等状态；新增空结果、排队、部分完成、访问受限、结构失效和格式冲突诊断。HTTP源状态与每游戏发现状态分开：源访问正常不代表该游戏已经查询。
 
-重新扫描不再无条件 `force=True` 越过 TTL；提供明确“刷新来源”动作。QAM重挂载不触发全站重采，前端订阅共享扫描状态。退出 / 新扫描 / 取消可停止剩余发现请求，不影响正在执行的安装事务。
+当前refresh及collector实际上没有TTL跳过判断，仅把force透传；改成force=False本身不会减少请求。实施时显式新增freshness检查、到期调度和force绕过分支，`checked_at`用于最近验证，`cached_at`用于内容取得时间。重新扫描使用缓存；明确“刷新来源”才执行对应网络动作。QAM重挂载不重复查询，超时 / 取消不影响安装事务。
+
+首次索引刷新也受30秒游戏查询期限约束，不能在该请求内同步遍历100页。优先读取已有索引和目标分类，预算不足返回partial并保留分页检查点；后续按需查询或明确刷新来源时继续索引采集。这是索引采集进度，和补丁文件断点续传仍是两件事。
 
 ## 11. Decky交互与隐私
 
 订阅页显示“发行商补丁源”与“补丁索引”，包含 Kagura 国内、Kagura 海外和 HGamer的独立开关、查询状态、成功缓存时间。用户可关闭任何源，停用仍保留旧事务与恢复能力。
 
 游戏列表“有补丁”包含已核实 discover_only结果；仅模糊待确认线索不得冒充确定命中，可显示“待确认来源”。详情紧凑展示版本、语言、适用本体 / DLC、来源与能力；官方候选优先，聚合候选标“HGamer找到的补丁”。EXE按钮为“打开官方补丁页”，索引候选为“打开补丁详情”；不要统一写“官方 ZIP”。
+
+来源引导尚无安装检测证据时可以保持unknown，但不因此自动划入“需处理”；需处理状态由真实冲突、失败或需要用户选择的条件决定。
 
 无匹配用“已查询的来源未找到补丁”；失败用“来源暂不可用，显示上次结果”；预算未到用“尚未查询，选择游戏后查找”。操作记录与检测保持可达，即使发现源当前失败或停用，也不能丢掉已安装 receipt入口。
 
@@ -272,16 +297,16 @@ HGamer默认启用意味着插件会按需向它发送所查游戏名称，IP和
 
 | 阶段 | 工作 | 主要落点 | 完成条件 |
 | --- | --- | --- | --- |
-| P0：数据与兼容层 | v2规则、SourceCandidate、发现 / 安装分离、旧缓存与override兼容 | backend/sources.py；新增 backend/discovery.py、source_models.py | 旧patch.moe行为与receipt不变；discover_only不会进入Publisher |
-| P1：Kagura国内 | WordPress目录 / 分类 / 文章、镜像、语言和DLC条件 | 新增 backend/adapters/kagura_cn.py；sources.json | 本体和 + 分别发现，旧游戏可由实时类别目录发现 |
-| P2：Kagura海外 | WooCommerce列表 / 分页 / 产品Patch区域 | 新增 backend/adapters/kagura_en.py；sources.json | 读取实际Mirror，发布页不可用保留列表条目 |
-| P3：HGamer索引 | 公开HTML搜索 / 详情、身份补全与逐游戏fallback | 新增 backend/adapters/hgamer.py；discovery.py | 未收录发行商可发现；忽略推荐卡；不取得下载信任 |
-| P4：Decky整合 | 扫描顺序、预算、候选返回、详情、开关与状态 | main.py；src/index.tsx、install.ts；packages/ui类型与文案 | 有补丁过滤含来源引导；格式和DLC条件可见；UI不卡全站抓取 |
+| P0：数据与兼容层 | v2规则、SourceCandidate、单游戏发现RPC / worker协议、显式TTL、旧缓存与overrides.games兼容 | backend/sources.py、discovery.py；main.py；packages/ui 可选 DTO | 旧patch.moe行为与receipt不变；发现不占安装TaskManager；discover_only不会进入Publisher |
+| P1：Kagura国内 | WordPress目录 / 分类 / 文章、镜像、语言和DLC条件 | backend/discovery.py 国内适配器；sources.json | 本体和 + 分别发现，旧游戏可由实时类别目录发现 |
+| P2：Kagura海外 | WooCommerce列表 / 分页 / 产品Patch区域 | backend/discovery.py 海外适配器；sources.json | 读取实际Mirror，发布页不可用保留列表条目 |
+| P3：HGamer索引 | 公开HTML搜索 / 详情、身份补全与逐游戏fallback | backend/discovery.py HGamer 适配器；sources.py 编排 | 未收录发行商可发现；忽略推荐卡；不取得下载信任 |
+| P4：Decky整合 | 单游戏查询与合并、名称提示、展示联合类型、筛选与开关 | main.py；src/index.tsx、install.ts、session.ts、steam.ts；Decky discovery DTO | 有补丁过滤含来源引导；未查询游戏可达；格式和DLC条件可见 |
 | P5：验证与文档 | fixtures、测试、实机读取、回归、隐私说明 | backend/test_*.py、decky/tests、docs | 以下验收矩阵通过，网络与包 / 运行验证分别记录 |
 
-以上新文件名为建议，最终按模块边界确定。Python适配器注册和打包需同步核查插件打包脚本，保证新模块、默认规则部署到Deck。Decky的扩展字段在其自身DTO中定义；若需要共享Patch类型扩展，再更新packages/ui和契约说明，不破坏Rust严格signed catalog schema。
+以上落点已按实施后的模块边界更新。Python 适配器注册和打包同步核查插件打包脚本，保证新模块、默认规则部署到 Deck。发现 DTO 在 packages/ui 中作为可选扩展，不破坏 Rust 严格 signed catalog schema。
 
-依赖顺序：P0先做；P1/P2可独立实施；P3依赖身份 / 候选模型；P4集成完整路径；P5随阶段开展。任务所有权按模块划分，main.py / sources.py由同一集成者修改，避免并行写入冲突。本轮仅文档，不包含实现或Git提交。
+依赖顺序：先确认 P0 数据契约，P1/P2/P3 解析与 P0 缓存层可按契约并行；P4 集成完整路径，P5 随阶段开展。实现采用 `backend/discovery.py` 共用受限 HTTP、HTML 节点、候选和三个站点适配器；`sources.py` 负责规则、缓存和父子进程；`main.py` 负责可信实例和扫描代次。各模块分别由一个写入者负责，集成者统一核对接口。简繁字符查询字典与许可证随 `backend/vendor/opencc/` 打包。前端扩展共享 UI 的可选发现 DTO，不改 Rust 签名目录 schema。
 
 ## 13. 验证矩阵
 
@@ -308,7 +333,12 @@ HGamer默认启用意味着插件会按需向它发送所查游戏名称，IP和
 | 403 / CAPTCHA / 429 / 超时 / 页面结构改变 | 保留上次成功缓存；不写“无补丁”负缓存 |
 | 完整成功零结果 / 部分分页失败 / 单游戏失败 | 只有完整成功零结果可负缓存；成功记录独立提交 |
 | 超过每轮预算、同AppID多库、扫描竞态 | 尚未查询状态正确；发现请求去重；旧generation结果丢弃 |
-| HGamer停用、官方源停用 | 不自动查询或后台重新启用；旧事务仍可操作 |
+| HGamer或官方源全局停用 / 单游戏退订 | effective_enabled正确；不查询、不委派回启、不展示普通缓存候选；旧事务仍可操作 |
+| 简体零结果、繁体命中、新增别名、查询只完成一半 | 繁体词继续查询；负缓存不得把整款游戏锁成无补丁 |
+| 2.3MiB海外首页、4MiB超限、分类分页中断 | 真实首页可解析；超限切换受限分类入口；中断状态partial |
+| TTL内重复scan / discover、过期与force刷新 | 缓存命中时HTTP请求数为0；过期 / force才查询 |
+| 单游戏RPC超时、退订竞态、QAM重挂载 | 安装锁不被占用，陈旧结果不发布，无重复请求 |
+| discover_only全部为unknown检测状态 | 不将正常来源引导全部划入“需处理”；确定匹配可进入“有补丁” |
 | 伪造discover_only candidate调用prepare | 后端拒绝，不启动下载或生成安装计划 |
 | 系统Python工作进程、模块打包、TLS验证 | 两个新发行商适配器与HGamer均可加载，证书验证保持开启 |
 | patch.moe ZIP准备 / 安装事务 / 缓存清理回归 | 旧release_id、隔离路径、下载缓存与receipt不受影响 |
@@ -319,10 +349,10 @@ HGamer默认启用意味着插件会按需向它发送所查游戏名称，IP和
 2. Deck实际库中的《夏日狂想曲》从“无匹配”变为明确来源候选；核对其真实名称、AppID、语言与DLC状态。若DLC状态不可靠，确认条件待确认行为，而非误选补丁。
 3. 选择**运行时检索到的、内置源未覆盖发行商**的已安装Steam游戏：先得到官方源无结果，再由HGamer游戏页核实AppID并显示补丁详情，确认聚合源标签与上游链接。样本不写入生产固定清单。
 4. 已有明确官方候选时，确认HGamer不会每次无谓查询；关闭HGamer后，新查询停止。首次冷缓存、热缓存、断网和站点失败分别观察。
-5. 大库 / QAM关开 / 重新扫描时验证控制响应、缓存复用、进度与候选更新，不重复全量抓站。
+5. 大库 / QAM关开 / 重新扫描时验证控制响应、缓存复用、未查询游戏入口及选中游戏后的单行结果更新，不重复全量抓站；自动后台批量更新另列后续验收。
 6. 对Kagura EXE样本仅验收发现和来源引导；首期不宣称已安装或补丁生效。后续格式支持必须另行获取包、审查、安装、运行、生效与恢复。
 
-实现完成后的建议命令（本轮未执行）：
+验证命令（实际执行环境与结果见施工记录和验收记录）：
 
 ```powershell
 # 在 apps/decky/backend，以可用的标准 Python 解释器运行
@@ -343,7 +373,7 @@ git diff --check
 
 首期完成门槛：双站分别作为内置发行商源可启停；《夏日狂想曲》身份 / 本体DLC区分通过；HGamer对未知发行商的逐游戏兜底可用；discover_only真实进入Decky列表；格式冲突、缓存失败和预算状态正确；旧patch.moe和事务回归通过。
 
-发布前仍需核实：Steam Deck网络实际可访问性、两站分页完整性与年龄状态处理、可靠游戏语言 / DLC信号、同语言多版本选择，以及额外下载镜像重定向域名。HTTPS下载和HTML发现都必须保留证书检查。网页说明不是当前build兼容性证据，URL为EXE不是实际安装器结构证据。
+Steam Deck 网络、三站解析与受限分页已验收；预算内不保证官方归档完整，失败 / 部分状态保留。仍需核实可靠游戏语言 / DLC 信号、未来站点年龄状态变化及额外下载镜像重定向域名；新增下载能力另行审核。HTTPS 下载和 HTML 发现都必须保留证书检查。网页说明不是当前 build 兼容性证据，URL 为 EXE 不是实际安装器结构证据。
 
 采用独立适配器与可关闭源逐步上线，发生站点结构回归时只停用该适配器的实时查询，继续显示成功缓存和来源入口；下载能力可单独降级至discover_only。停用新功能不会删除游戏文件、安装备份、签名目录、journal或现有receipt。
 
@@ -351,6 +381,8 @@ git diff --check
 
 ## 15. 调研记录的可复核边界
 
-本轮只读分析代码，并读取公开HTML及链接，未下载补丁资产、未执行安装器、未接入插件或部署。现场HTTP样本保存在忽略目录 `.artifacts/*-research-*`，仅作为本机调研佐证，不随插件打包；正式实现需整理最小fixture并记录实机结果。
+初始调研阶段只读分析代码与公开 HTML，未下载补丁资产或执行安装器。当时 HTTP 样本保存在忽略目录 `.artifacts/*-research-*`，不随插件打包。后续实现已整理最小 fixture 并部署实机，阶段事实分别保留在[施工记录](progress.md)与[验收记录](acceptance.md)，不把最初调研结果当作部署证据。
 
 本方案承接现有 [源适配器说明](../../source-adapters.md) 的实时订阅、源隔离与失败缓存原则，并补上发现候选、双站语言 / 版本和fallback编排。实现时同步 source-adapters.md、privacy.md、client-guide.md、Decky README及progress.md，明确新功能已完成的范围与实际验证证据。
+
+可行性复核的独立HTTP与解析实验位于 `.artifacts/kagura-feasibility/`；概要、已修正问题和未验证边界见[可行性校验记录](feasibility.md)。

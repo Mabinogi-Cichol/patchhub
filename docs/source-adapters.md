@@ -1,10 +1,10 @@
 # 源适配器与订阅
 
-工具订阅网站，不订阅固定的游戏清单。Decky 扫描 Steam 库后，查询启用的网站，按各自规则解析记录、匹配游戏，再把选定 ZIP 交给共同的根目录安装流程。
+工具订阅网站，不订阅固定的游戏清单。Decky 扫描先读取成功缓存，选择游戏后按需查询启用的网站。只有具备 ZIP 安装能力的记录能进入共同的根目录安装流程；发现候选单独提供来源引导。
 
 ## 配置和状态
 
-默认订阅位于 `apps/decky/backend/sources.json`，只包含网站规则。用户启用状态和新增源保存到 `~/.local/share/steam-patch-manager/sources/overrides.json`；成功查询结果缓存到同目录的 `cache/`。缓存只来自运行时成功查询，不附带当前游戏列表。重新扫描查询最新官网内容；查询失败会保留上次成功的缓存并标明状态，结构失效不会覆盖有效缓存。停用源不会删除安装事务、备份或卸载能力。
+默认订阅位于 `apps/decky/backend/sources.json`，只包含网站规则。用户启用状态和新增源保存到 `~/.local/share/steam-patch-manager/sources/overrides.json`；成功查询结果缓存到同目录的 `cache/`。缓存只来自运行时成功查询，不附带当前游戏列表。显式刷新更新旧 ZIP 来源，游戏详情中的“重新查找 / 查看更多来源”更新该游戏发现记录；查询失败保留上次成功缓存并标明状态，结构失效不会覆盖有效缓存。停用源不会删除安装事务、备份或卸载能力。
 
 patch.moe 专用适配器在已确认年龄的官方入口获取页面，读取官网语言表单的实际参数并提交，然后解析标题、日期、下载链接。只用完整标题、明确双语标题或实际相同 ZIP 地址关联的别名匹配；不按排列位置猜测，也不由英文文件名拼接中文链接。`+` 与普通版有区别。已公布但尚未发行的条目不能准备安装。非 ZIP 需要另行适配，当前不会执行网页或包内安装程序。
 
@@ -37,7 +37,11 @@ patch.moe 专用适配器在已确认年龄的官方入口获取页面，读取�
 
 采集器接收 `(rule, previous_cache, force)`，返回 `(entries, etag, last_modified, unchanged)`。每条记录包含 `title`、`aliases`、`url`、`language`、`date`、`source_page`，可包含明确 `appid`。注册表统一验证记录及下载域名，执行源隔离的匹配，并产生 `release_id`：patch.moe 保留 `patchmoe-<appid>`，其他源使用 `source-<source-id>-<appid>`。新适配器需用真实页面结构及新增游戏、重复名称、失败缓存、语言、域名跳转等测试验证，随后在默认源配置中引用。
 
-目前已实现 patch.moe 专用规则和通用表格规则；其他发行商网站仍需各自配置或开发专用适配器，不能仅粘贴任意网址就自动适配。
+目前已实现 patch.moe 专用规则、通用表格规则、Kagura 国内 WordPress、海外 WooCommerce 和 HGamer 索引适配器。后面三者使用独立的 `SourceCandidate` / `discover_only` 路径，位于 `backend/discovery.py`，不遵循 ZIP 采集器返回格式。v2 规则区分 `publisher` 与 `fallback_indexer`，升级保留旧启停、逐游戏订阅和自定义规则。其他网站仍需各自配置或开发专用适配器，不能仅粘贴任意网址就自动适配。
+
+Kagura 双站分别保留语言、本体 / DLC、原始版本、镜像和格式；未知条件不自动选择。匹配不足时 HGamer 接收选中游戏的检索名称，Steam AppID / 有出处别名用于核实身份，标题线索仍待确认。索引声明 ZIP 而官方链接为 EXE 时显示冲突，两者均不得扩展下载白名单或成为安装 release ID。
+
+发现缓存按来源和 AppID 分片，保存成功结果与最近尝试：官方索引 24 小时、详情 6 小时、HGamer 正结果 24 小时、完整零结果 6 小时；失败 / partial 不写无补丁负缓存。解析版本、名称、来源选择影响缓存键；强制查询绕过新鲜期，停用来源既不查询也不显示普通候选。单游戏预算 30 秒，归档分页可部分完成并保留检查点。具体契约和验收见 [功能设计](features/kagura-hgamer-fallback/design.md)及[施工记录](features/kagura-hgamer-fallback/progress.md)。
 
 ## 安装与验证范围
 
