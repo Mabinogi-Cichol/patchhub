@@ -10,7 +10,7 @@ import sys
 from unittest.mock import AsyncMock, patch
 
 import sources
-from sources import SourceRegistry, _validate_rule
+from sources import SourceRegistry, _validate_rule, _write_json
 from test_sources import PATCH
 
 
@@ -137,6 +137,21 @@ class DiscoveryRegistryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(record["success"], success)
         self.assertEqual(self.registry.cached_discovery(GAME)["status"], "source_offline_cached")
         self.assertEqual(self.registry._game_previous(RULE, 42)["attempt"]["index"]["pending"], ["https://publisher.example/page/2"])
+
+    async def test_partial_refresh_does_not_shadow_verified_candidate_and_keeps_new_leads(self):
+        await self.seed()
+        promoted = candidate(match_basis="official_title")
+        unpromoted = candidate(match_basis="title", game_appid=None)
+        _write_json(self.registry._discovery_path("official", 42), {
+            "schema_version": 1, "source_id": "official", "appid": 42,
+            "success": {"status": "complete", "candidates": [promoted], "checked_at": int(time.time())},
+            "attempt": {"status": "partial", "checked_at": int(time.time()),
+                        "candidates": [unpromoted, candidate(suffix="b")]}})
+        self.registry._discovery_cache.clear()
+        found = {c["candidate_id"]: c for c in self.registry.cached_candidates(GAME)}
+        self.assertEqual(found[promoted["candidate_id"]]["match_basis"], "official_title")
+        self.assertEqual(found[promoted["candidate_id"]]["game_appid"], 42)
+        self.assertEqual(len(found), 2)
 
     async def test_global_and_game_toggle_filter_and_revision(self):
         await self.seed()
@@ -345,6 +360,37 @@ class DiscoveryRegistryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual({r["source_id"] for r in result["results"]}, {"hgamer", "official"})
         self.assertIn("artifact_format_conflict", result["results"][0]["candidates"][0]["warnings"])
         self.assertEqual(official["provenance"], [{"source_id": "hgamer", "page": indexed["source_page"]}])
+
+    def test_refresh_without_fallback_identity_keeps_previously_verified_candidate(self):
+        self.registry.add_source(FALLBACK)
+        promoted = candidate(match_basis="official_title")
+        unpromoted = candidate(match_basis="title", game_appid=None)
+        def discover(rule, query, old, context):
+            if rule["id"] == "hgamer":
+                return {"status": "failed", "candidates": [], "diagnostics": [], "identities": []}
+            return {"status": "complete", "candidates": [dict(unpromoted)], "diagnostics": []}
+        context = types.SimpleNamespace(deadline=time.monotonic() + 30, budget=24, requests=0, detail_requests=0)
+        mocked = types.SimpleNamespace(RequestContext=lambda **kw: context, needs_fallback=lambda values, query: True,
+            discover=discover, merge_candidates=lambda values: list({v["candidate_id"]: v for v in values}.values()),
+            enrich_candidates=lambda values, identities: values, canonical_url=lambda value: value)
+        previous = {"official": {"success": {"candidates": [promoted]}}}
+        rules = [_validate_rule(RULE), _validate_rule(FALLBACK)]
+        with patch("sources._discovery_module", return_value=mocked):
+            result = self.registry._discovery_sync({**GAME, "force": True}, rules, previous)
+        official = next(r for r in result["results"] if r["source_id"] == "official")
+        self.assertEqual(official["candidates"][0]["match_basis"], "official_title")
+        self.assertEqual(official["candidates"][0]["game_appid"], 42)
+        # A different record (new version) must not inherit the old identity.
+        changed = candidate(suffix="c", match_basis="title", game_appid=None)
+        def discover_changed(rule, query, old, context):
+            if rule["id"] == "hgamer":
+                return {"status": "failed", "candidates": [], "diagnostics": [], "identities": []}
+            return {"status": "complete", "candidates": [changed], "diagnostics": []}
+        with patch("sources._discovery_module", return_value=types.SimpleNamespace(**{**mocked.__dict__, "discover": discover_changed})):
+            result = self.registry._discovery_sync({**GAME, "force": True}, rules, previous)
+        official = next(r for r in result["results"] if r["source_id"] == "official")
+        self.assertEqual(official["candidates"][0]["match_basis"], "title")
+        self.assertIsNone(official["candidates"][0]["game_appid"])
 
     async def test_new_generation_waits_for_obsolete_query_then_retries(self):
         started, finish = asyncio.Event(), asyncio.Event()

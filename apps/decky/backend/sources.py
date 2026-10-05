@@ -628,11 +628,15 @@ class SourceRegistry:
             record = self._game_record(rule, game["appid"])
             success = record.get("success", {})
             attempt = record.get("attempt", {})
-            values = success.get("candidates", [])
-            if attempt.get("status") == "partial":
-                values = [*values, *attempt.get("candidates", [])]
-            by_id = {c["candidate_id"]: {**c, "cache_status": "cached" if self._discovery_fresh(success, 6 * 3600) else "stale"}
-                     for c in values}
+            # A partial refresh may expose new leads, but it must never shadow
+            # the last complete record for the same candidate: the incomplete
+            # pass can lack the identity, format or mirror evidence that a
+            # reviewed release depends on. New leads stay listed.
+            found = {c["candidate_id"]: c for c in (attempt.get("candidates", [])
+                     if attempt.get("status") == "partial" else [])}
+            found.update({c["candidate_id"]: c for c in success.get("candidates", [])})
+            by_id = {key: {**c, "cache_status": "cached" if self._discovery_fresh(success, 6 * 3600) else "stale"}
+                     for key, c in found.items()}
             candidates.extend(by_id.values())
         return candidates
 
@@ -760,6 +764,28 @@ class SourceRegistry:
                         and all(official.get(k) is not None and official.get(k) == indexed.get(k)
                                 for k in ("requires_dlc", "excludes_dlc", "patch_kind"))):
                     official["provenance"] = [*official.get("provenance", []), relation]
+        # A refresh that could not re-derive an identity this run (fallback
+        # indexer unavailable, partial crawl or timeout) keeps the evidence
+        # already verified for the exact same candidate record. A changed or
+        # newly versioned record has a different candidate_id, so a stale
+        # identity can never be carried onto a different artifact.
+        for rule in effective_officials:
+            verified = {c["candidate_id"]: c for c in previous.get(rule["id"], {}).get("success", {}).get("candidates", [])
+                        if c.get("game_appid") == query["appid"] and c.get("match_basis") in ("appid", "verified_alias", "official_title")}
+            if not verified:
+                continue
+            for result in results:
+                if result.get("source_id") != rule["id"]:
+                    continue
+                for candidate in result.get("candidates", []):
+                    old = verified.get(candidate.get("candidate_id"))
+                    if candidate.get("game_appid") is None and old:
+                        candidate["game_appid"] = old["game_appid"]
+                        candidate["parent_appid"] = old.get("parent_appid")
+                        candidate["match_basis"] = old["match_basis"]
+                        evidence = {json.dumps(item, sort_keys=True, ensure_ascii=False): item
+                                    for item in [*candidate.get("identity_evidence", []), *old.get("identity_evidence", [])]}
+                        candidate["identity_evidence"] = list(evidence.values())
         return {"schema_version": 1, "results": results}
 
     async def _discovery_worker(self, payload):
