@@ -1,0 +1,6 @@
+interface:
+  display_name: "项目 Git 安全提交"
+  short_description: "按用户明确要求核对改动和验证记录，暂存本次内容并创建本项目的本地 Git 提交"
+  default_prompt: "使用 $steam-patch-git-commit 检查并提交本次项目改动，报告提交 ID 和工作区状态。"
+policy:
+  allow_implicit_invocation: false

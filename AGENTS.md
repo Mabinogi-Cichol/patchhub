@@ -8,6 +8,7 @@
 
 ## 项目技能
 
+- 用户明确要求提交本项目 Git 改动时，使用 [steam-patch-git-commit](.agents/skills/steam-patch-git-commit/SKILL.md)（可显式调用 `$steam-patch-git-commit`）。项目版本已从个人记忆迁入并纳入 Git，后续以仓库文件为准。
 - Steam Deck 远程连接、Decky 插件部署、重载与实机验证使用 [decky-deploy-verify](.agents/skills/decky-deploy-verify/SKILL.md)（可显式调用 `$decky-deploy-verify`）。仅创建技能或编写方案时不操作设备；实际部署沿用用户当前授权范围。
 
 ## 功能文档归类
