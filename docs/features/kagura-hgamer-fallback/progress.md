@@ -51,9 +51,14 @@
 ### 2026-10-05：修复重新查找后 Kagura 官方来源消失
 
 - 用户报告：在《Venus Blood Frontier》补丁管理页点击“重新查找 / 查看更多来源”后，依赖 HGamer 回填身份的 Kagura 官方 EXE 来源消失。该游戏官方候选本身无 AppID，身份完全依赖兜底索引。
-- 根因与修复见 [fix-plan.md](fix-plan.md)：`cached_candidates` 不再让 `partial` 的 `attempt` 候选遮蔽同 `candidate_id` 的 `success` 已验证候选；`_discovery_sync` 在本轮兜底失败或仅部分刷新时，按同一 `candidate_id` 沿用上次已验证身份，`attempt` 独有线索仍照常展示。
-- 回归测试：`test_partial_refresh_does_not_shadow_verified_candidate_and_keeps_new_leads`、`test_refresh_without_fallback_identity_keeps_previously_verified_candidate`。
-- 验证：Windows 开发机 `apps/decky/backend` 全量 203 项通过（3 项按设计跳过）；离线构造 VBF 记录确认修复前来源不匹配、修复后命中 `venusblood-frontier-cn-v5`。真实 Deck 连续重新查找、部署与 Git 提交尚未执行。
+- 根因与修复见 [fix-plan.md](fix-plan.md)：`cached_candidates` 不再让 `partial` 的 `attempt` 候选遮蔽同 `candidate_id` 的 `success` 已验证候选；`_discovery_sync` 在本轮兜底失败或仅部分刷新时按同一 `candidate_id` 沿用上次已验证身份；官方源本轮为空且兜底索引仍指向同一官方页时保留上次已验证候选，不把空结果当权威删除。
+- 回归测试：`test_partial_refresh_does_not_shadow_verified_candidate_and_keeps_new_leads`、`test_refresh_without_fallback_identity_keeps_previously_verified_candidate`、`test_empty_official_refresh_keeps_verified_candidate_when_index_confirms_page`。
+- 开发机验证：Windows `apps/decky/backend` 全量 204 项通过（3 项按设计跳过）；离线构造 VBF 记录确认修复前来源不匹配、修复后命中 `venusblood-frontier-cn-v5`。
+- Steam Deck 实机复验（`deck@192.168.31.186`，SteamOS 6.18.50，系统 Python 3.13.5）：部署 `sources.py`（安装 SHA-256 `42f0b899b23d9a47470b8feca25be64c2275b1c2210c96a1f0aefe553a3c32b9`，旧文件备份 SHA-256 `077780444c80775b5484044511d213d4ee45a65779cdd166d564278db48a12c8`），经 `loader/reload_plugin` 重载，后端重启。实机发现并确认第三个接缝：`kagura-cn success complete []` 而 hgamer 仍持有身份与官方上游页。
+  - 确定性 A/B：旧代码投影 `kagura-cn title/null`、`reviews` guidance（来源消失）；修复后投影 `official_title/1189440`、`reviews installable`（`venusblood-frontier-cn-v5`）。
+  - 空官方结果与同候选兜底失败两种 fake-module 场景在设备上均按预期保留；真实网络 `discover_game(force=True)` 连续两次均 `installable`。
+  - 实时状态由部署代码恢复后读取为 `installable`；Steam CEF 真实界面显示 `VenusBlood FRONTIER International — 已找到补丁 · 1 个来源候选`（截图 SHA-256 `90040f3076ee51342222f787340ac04958c5322ee52b73451ab7d4f19429faf9`，实时分片 SHA-256 `4c10261fc09fef5c1a604f42a1dc38d13f07f49a56264736c7e54ad7181a6cd8`）。
+  - 边界：直接 Python 连 Decky loader WebSocket 被 Steam 前端单连接重载关闭，实时状态恢复改用部署后代码对状态目录执行一次强制重查再重载；未做实体手柄操作，未运行官方 EXE、未修改游戏文件。取证在 `/home/deck/steam-patch-validation/kagura-requery-20261005-fix1/` 与本地 `.artifacts/exe-deck-ci/kagura-requery-20261005-fix1/`。
 
 ## 待办与遗留
 
@@ -61,4 +66,4 @@
 - 实体手柄连续操作、真实断网后菜单操作未执行；重挂载、失败保留缓存、超时、竞态已由自动化覆盖，不将其记为实体操作。
 - 官方归档超过单游戏预算时会保留分页检查点并显示部分完成；需要更多覆盖时主动重新查找，首期不承诺一次抓完整站。
 - 游戏语言和 DLC 拥有 / 安装状态仍未知；EXE、网盘和聚合候选仍仅作来源引导。安装、运行、补丁生效与恢复不属于本次完成范围。
-- [重新查找后 Kagura 来源消失修复](fix-plan.md) 仅在开发机自动化与离线复现通过；真实 Deck 连续重新查找、部署与提交未被本轮执行。
+- [重新查找后 Kagura 来源消失修复](fix-plan.md) 已部署到设备并通过实机复验；仍未做实体手柄操作，且实时插件状态恢复未走真实前端点击（loader WebSocket 单连接限制）。
