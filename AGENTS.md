@@ -1,5 +1,15 @@
 # 仓库开发规则
 
+## 适用范围
+
+- 本文件中的插件开发规范仅适用于实际插件开发，包括插件功能、修复、配套测试以及相应的设计、施工和验收文档。
+- 单独创建或维护项目技能（skill）不属于 feature 开发，不需要遵循插件开发规范，不要求建立 `docs/features/<feature-name>/`、编写 `design.md` / `progress.md` 或更新功能索引。
+- 技能任务若同时涉及实际插件开发，仅插件开发部分遵循下述规范；不能因使用技能而跳过实际插件开发的要求。
+
+## 项目技能
+
+- Steam Deck 远程连接、Decky 插件部署、重载与实机验证使用 [decky-deploy-verify](.agents/skills/decky-deploy-verify/SKILL.md)（可显式调用 `$decky-deploy-verify`）。仅创建技能或编写方案时不操作设备；实际部署沿用用户当前授权范围。
+
 ## 功能文档归类
 
 - 所有新功能必须先在 `docs/features/` 下创建独立的功能根目录：`docs/features/<feature-name>/`。目录名采用小写英文与连字符（kebab-case），例如 `cache-cleanup`。

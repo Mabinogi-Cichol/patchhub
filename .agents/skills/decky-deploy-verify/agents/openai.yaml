@@ -1,0 +1,4 @@
+interface:
+  display_name: "Steam Deck 部署与验证"
+  short_description: "通过 Devkit 远程更新 Decky 插件并核对文件、RPC 和真实游戏模式界面"
+  default_prompt: "使用 $decky-deploy-verify 将本次 Decky 插件改动部署到已授权的 Steam Deck 并完成验证。"
