@@ -6,6 +6,7 @@ import asyncio
 from threading import Event
 import hashlib
 import re
+from urllib.parse import urlsplit
 
 import decky
 
@@ -108,7 +109,7 @@ class Plugin:
         source_by_id = {source["id"]: source for source in self.sources.list_sources()}
         for entry in entries:
             source = source_by_id.get(entry["source_id"], {})
-            patch = dict(release_id=entry["release_id"], name=f"{entry['source_id']} · 官方 ZIP · {entry['language']}",
+            patch = dict(release_id=entry["release_id"], name=f"{source.get('name') or entry['source_id']} · ZIP · {entry['language']}",
                 source_page=entry["source_page"], source_id=entry["source_id"], source_name=source.get("name"),
                 source_status=source.get("status", "unknown"), source_cached_at=source.get("cached_at"),
                 support_level="publisher_zip", download_available=True, compatibility="publisher_default",
@@ -153,6 +154,11 @@ class Plugin:
                         continue
                     restored = dict(local_patch, support_level="publisher_exe" if release.startswith("exe-") else "publisher_zip",
                                     download_available=False, blockers=["source_not_enabled"])
+                    source = source_by_id.get(local_patch.get("source_id")) or next((s for s in source_by_id.values()
+                        if urlsplit(local_patch.get("source_page") or "").hostname in s.get("page_hosts", [])), {})
+                    source_name = source.get("name") or local_patch.get("source_id") or urlsplit(local_patch.get("source_page") or "").hostname or "来源未知"
+                    restored.update(name=f"{game.get('name', '')} · {source_name} · {'EXE' if release.startswith('exe-') else 'ZIP'} · {local_patch.get('language') or '语言待确认'}",
+                                    source_id=source.get("id") or local_patch.get("source_id"), source_name=source_name)
                     row["patches"].append(restored)
                     known[release] = restored
                 known[release]["detection"] = local_patch["detection"]

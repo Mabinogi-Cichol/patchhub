@@ -125,6 +125,10 @@ class ExeInstallation:
         self.profiles = profiles
         self.tool_dir = Path(tool_dir)
 
+    def _source_name(self, profile):
+        return next((rule.get("name") or rule["id"] for rule in self.profiles.sources._rules
+                     if rule["id"] == profile["source_id"]), profile["source_id"])
+
     def matches(self, game):
         result = []
         for review in self.profiles.reviews(game):
@@ -134,10 +138,11 @@ class ExeInstallation:
                 profile, candidate = self.profiles.resolve(game, review["release_id"])
             except ValueError:
                 continue
+            language_name = {"zh-CN": "简体中文", "zh-TW": "繁体中文", "en": "英文", "ja": "日文"}.get(profile["language"], profile["language"])
             result.append({"release_id": review["release_id"], "profile_id": profile["profile_id"],
-                "name": f"{candidate.get('title') or game.get('name', '')} · 官方 EXE · {profile['language']}",
+                "name": f"{candidate.get('title') or game.get('name', '')} · {self._source_name(profile)} · EXE · {language_name}",
                 "version": profile["version_identity"], "language": profile["language"],
-                "source_id": profile["source_id"], "source_page": profile["source_page"],
+                "source_id": profile["source_id"], "source_name": self._source_name(profile), "source_page": profile["source_page"],
                 "support_level": "publisher_exe", "compatibility": "verified", "blockers": [],
                 "download_available": True, "detection": {"status": "unknown", "files": []},
                 "exe": {"profile_id": profile["profile_id"], "language": profile["language"],
@@ -295,7 +300,7 @@ class ExeInstallation:
             catalog_path = state / "catalog.json"
             revision = _read_json(catalog_path)["revision"] + 1 if catalog_path.exists() else 1
             release = {"patch_id": release_id, "release_id": release_id, "appid": profile["appid"],
-                "name": f"{game.get('name', '')} — reviewed official EXE", "version": profile["version_identity"],
+                "name": f"{game.get('name', '')} · {self._source_name(profile)} · EXE · {profile['language']}", "version": profile["version_identity"],
                 "language": profile["language"], "category": "publisher_exe", "source_page": profile["source_page"],
                 "support_level": "managed_zip", "platforms": ["steamos"],
                 "verified_buildids": profile["verified_buildids"],

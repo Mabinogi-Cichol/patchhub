@@ -238,30 +238,30 @@ export function reason(code: string): string {
     recovery_conflict: "检测到恢复冲突，已保留后续修改。",
     unsupported_method: "当前核心版本尚不支持此操作。",
     no_archive_selected: "请先选择本地 ZIP 文件。",
-    archive_required: "请先导入从官方来源下载的 ZIP。",
-    artifact_requires_manual_download: "此来源需要浏览器下载；打开官方来源后导入 ZIP。",
+    archive_required: "请先导入从补丁来源下载的 ZIP。",
+    artifact_requires_manual_download: "此来源需要浏览器下载；打开补丁来源后导入 ZIP。",
     build_not_verified: "当前游戏 build 尚未审核，自动安装已禁用。",
     platform_not_verified: "当前平台尚未审核，自动安装已禁用。",
-    source_requires_guidance: "此条目提供官方来源引导，尚不能自动安装。",
-    exe_profile_missing: "此官方 EXE 尚未完成安装审核，请查看官方说明。",
-    exe_profile_not_reviewed: "此官方 EXE 尚未完成安装审核，请查看官方说明。",
-    exe_pipeline_unavailable: "此官方 EXE 的安全安装流程尚未开放，请查看官方说明。",
+    source_requires_guidance: "此条目提供补丁来源引导，尚不能自动安装。",
+    exe_profile_missing: "此 EXE 补丁尚未完成安装审核，请查看来源说明。",
+    exe_profile_not_reviewed: "此 EXE 补丁尚未完成安装审核，请查看来源说明。",
+    exe_pipeline_unavailable: "此 EXE 补丁的安全安装流程尚未开放，请查看来源说明。",
     exe_profile_changed: "此补丁的审核记录已变化，请重新查询。",
     exe_release_invalid: "补丁选择已失效，请重新查询。",
-    exe_candidate_changed: "官方补丁信息已变化，请重新查询。",
-    exe_candidate_stale: "官方补丁信息已过期，请重新查询。",
-    exe_source_changed: "官方补丁源规则已变化，请重新查询。",
-    exe_source_disabled: "官方补丁源已停用，暂不能安装。",
-    exe_no_direct_download: "官方补丁暂不能直接下载，请查看官方说明。",
-    exe_download_url_invalid: "官方下载地址不符合安全要求，请查看官方说明。",
-    exe_manual_import_not_supported: "此官方 EXE 只能通过已审核的下载流程准备。",
-    exe_prepare_first: "请先下载并检查官方 EXE，生成安装计划。",
+    exe_candidate_changed: "补丁信息已变化，请重新查询。",
+    exe_candidate_stale: "补丁信息已过期，请重新查询。",
+    exe_source_changed: "补丁源规则已变化，请重新查询。",
+    exe_source_disabled: "补丁源已停用，暂不能安装。",
+    exe_no_direct_download: "补丁暂不能直接下载，请查看来源说明。",
+    exe_download_url_invalid: "下载地址不符合安全要求，请查看来源说明。",
+    exe_manual_import_not_supported: "此 EXE 补丁只能通过已审核的下载流程准备。",
+    exe_prepare_first: "请先下载并检查 EXE 补丁，生成安装计划。",
     exe_confirmation_invalid: "安装确认无效，请重新阅读条款与适用条件。",
     exe_confirmation_changed: "安装确认已失效，请重新准备安装。",
-    exe_terms_confirmation_required: "请先阅读并同意官方条款。",
+    exe_terms_confirmation_required: "请先阅读并同意来源条款。",
     exe_conditions_confirmation_required: "请先确认游戏语言、版本和 DLC 条件。",
     exe_backups_required: "此补丁必须保留原文件备份，请启用备份后重试。",
-    exe_terms_changed: "官方条款已变化，请重新阅读并确认。",
+    exe_terms_changed: "来源条款已变化，请重新阅读并确认。",
     exe_language_mismatch: "游戏语言与此补丁的适用语言不符。",
     exe_dlc_required: "此补丁需要指定的 DLC，当前游戏不符合条件。",
     exe_dlc_excluded: "此补丁不适用于当前安装的 DLC。",
@@ -278,7 +278,7 @@ export function reason(code: string): string {
     exe_state_insufficient_space: "插件状态目录空间不足，请清理空间后重试。",
     exe_target_insufficient_space: "游戏所在磁盘空间不足，请清理空间后重试。",
     exe_original_size_limit: "原游戏文件超过备份安全限制，暂不能安装。",
-    exe_payload_changed: "官方安装包内容与审核记录不符，需要重新审核。",
+    exe_payload_changed: "安装包内容与审核记录不符，需要重新审核。",
     exe_manifest_changed: "安装包文件清单与审核记录不符，需要重新审核。",
     exe_worker_evidence_changed: "安装包检查结果与审核记录不符，需要重新审核。",
     exe_local_authorization_changed: "本机安装计划授权已变化，请重新准备。",
@@ -289,9 +289,9 @@ export function reason(code: string): string {
     exe_core_job_invalid: "安装任务记录无效，请重新准备。",
     exe_core_plan_invalid: "安装计划无效，请重新准备。",
     invalid_exe_profile: "补丁审核资料无效，暂不能自动安装。",
-    exe_profile_mismatch: "官方安装包已变化，需要重新审核后才能安装。",
+    exe_profile_mismatch: "安装包已变化，需要重新审核后才能安装。",
     exe_registry_changed: "补丁来源或审核记录已变化，请重新查询。",
-    exe_worker_unavailable: "无法安全检查此安装包，请稍后重试或查看官方说明。",
+    exe_worker_unavailable: "无法安全检查此安装包，请稍后重试或查看来源说明。",
     exe_worker_failed: "检查安装包失败，未修改游戏文件。",
     exe_worker_invalid_response: "安装包检查结果无效，未修改游戏文件。",
     exe_worker_timeout: "检查安装包超时，请稍后重试。",
@@ -301,7 +301,7 @@ export function reason(code: string): string {
     exe_descriptor_limit: "无法安全限制检查任务，暂不能自动安装。",
     exe_baseline_mismatch: "游戏版本或原文件与已审核版本不符，请核对游戏版本。",
     exe_dlc_mismatch: "当前 DLC 状态不符合此补丁的适用条件。",
-    exe_terms_required: "请先阅读并同意官方使用条款。",
+    exe_terms_required: "请先阅读并同意来源使用条款。",
     exe_conditions_required: "请确认游戏语言、版本与 DLC 适用条件。",
     exe_backup_required: "此补丁必须保留原文件备份，请启用备份后重试。",
     exe_insufficient_space: "检查或安装此补丁所需空间不足，请清理空间后重试。",
@@ -320,30 +320,30 @@ export function reason(code: string): string {
     game_busy: "此游戏正在被另一项事务处理，请等待完成。",
     insufficient_space: "可用磁盘空间不足，请清理空间后重新预检。",
     managed_install_exists_or_needs_recovery: "已有托管安装或待恢复事务，请先卸载或恢复。",
-    artifact_hash_mismatch: "安装包与已审核记录不符，请重新核对官方下载包。",
+    artifact_hash_mismatch: "安装包与已审核记录不符，请重新核对下载包。",
     artifact_size_mismatch: "安装包大小与已审核记录不符，请确认下载完整。",
     state_overlaps_game: "状态目录与游戏目录重叠，已阻止写入。",
     backup_missing_or_changed: "原版备份丢失或已变化，无法安全还原。",
     archive_outside_downloads: "请将 ZIP 放入 Deck 用户的 Downloads 目录再导入。",
     invalid_archive: "所选文件不是可读取的普通 ZIP。"
-    ,source_not_released: "官方页面尚未发布此补丁，暂不能下载。"
+    ,source_not_released: "来源页面尚未发布此补丁，暂不能下载。"
     ,publisher_prepare_first: "请先自动下载并准备安装，获取文件变更计划。"
-    ,publisher_state_unavailable: "本机官方补丁安装记录不可读取，请检查状态目录。"
+    ,publisher_state_unavailable: "本机补丁安装记录不可读取，请检查状态目录。"
     ,publisher_existing_transaction: "已有安装或待恢复记录，请先卸载或修复。"
-    ,publisher_match_changed: "官方游戏匹配已变化，请重新扫描。"
+    ,publisher_match_changed: "来源中的游戏匹配已变化，请重新扫描。"
     ,download_cancelled: "已取消获取或校验，没有执行安装。"
-    ,download_http_error: "官方下载服务返回错误，请稍后重试。"
+    ,download_http_error: "下载服务返回错误，请稍后重试。"
     ,download_network_error: "补丁下载网络连接失败，请检查网络后重试。"
     ,download_not_zip: "下载内容不是有效 ZIP，未执行安装。"
     ,local_archive_search_limit: "下载目录文件过多，请使用手动 ZIP 备用方式。"
   };
-  return labels[normalized] ?? (normalized.startsWith("exe_") ? "此官方 EXE 暂不能安全安装，请查看官方说明或稍后重试。" : normalized.replaceAll("_", " "));
+  return labels[normalized] ?? (normalized.startsWith("exe_") ? "此 EXE 补丁暂不能安全安装，请查看来源说明或稍后重试。" : normalized.replaceAll("_", " "));
 }
 
 export function workflowState(value: string): string {
   const labels: Record<string, string> = {
-    discover_only: "官方来源引导", manual_download: "手动下载导入", managed_zip: "审核 ZIP 安装", unsupported: "暂不支持",
-    publisher_zip: "官方 ZIP · 默认解压至游戏根目录", publisher_exe: "已审核官方 EXE 安装", publisher_default: "按根目录生成计划，效果待验证",
+    discover_only: "查看补丁来源", manual_download: "手动下载导入", managed_zip: "审核 ZIP 安装", unsupported: "暂不支持",
+    publisher_zip: "ZIP · 默认解压至游戏根目录", publisher_exe: "已审核 EXE 安装", publisher_default: "按根目录生成计划，效果待验证",
     verified_metadata: "目录条件已核对", needs_review: "尚待审核", signed: "已验证签名", unsigned_development: "未签名开发目录",
     planned: "已生成计划", backing_up: "正在备份", backed_up: "备份完成", applying: "正在写入", committed: "安装完成",
     rolling_back: "正在回滚", rolled_back: "已回滚", uninstalling: "正在卸载", uninstalled: "已卸载", needs_recovery: "需要恢复",

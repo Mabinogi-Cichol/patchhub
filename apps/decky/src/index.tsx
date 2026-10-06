@@ -136,7 +136,7 @@ function CandidateDetails({ candidate }: { candidate: SourceCandidate }) {
     {!candidateMatched(candidate) && <Row><Status warning>此线索的游戏身份尚待确认，请核对来源中的游戏信息。</Status></Row>}
     {conflict && <Row><Status warning>索引标示与上游文件格式不一致，不能按 ZIP 安装。</Status></Row>}
     {candidate.warnings?.filter(warning => !conflict || warning !== "artifact_format_conflict").map((warning, index) => <Row key={index}><Status warning>{reason(warning)}</Status></Row>)}
-    <Row><Action onClick={() => openSource(candidate.source_page)}>{candidate.source_id === "hgamer" ? "打开补丁详情 ↗" : "打开官方补丁页 ↗"}</Action></Row>
+    <Row><Action onClick={() => openSource(candidate.source_page)}>{candidate.source_id === "hgamer" ? "打开补丁详情 ↗" : "打开补丁来源页 ↗"}</Action></Row>
     {candidate.upstream_page && candidate.upstream_page !== candidate.source_page && <Row><Action onClick={() => openSource(candidate.upstream_page!)}>打开上游发布页 ↗</Action></Row>}
   </PanelSection>;
 }
@@ -371,9 +371,9 @@ function GameManager({ item, seg, panel }: { item: Install; seg: string; panel?:
         <InfoRow label="兼容性">{workflowState(patch.compatibility)}</InfoRow>
         <InfoRow label="安装方式">{workflowState(patch.support_level)}</InfoRow>
         {patch.support_level === "publisher_exe" && patch.exe && <>
-          <InfoRow label="补丁语言">{patch.exe.language || "请核对官方说明"}</InfoRow>
-          <InfoRow label="补丁版本">{patch.exe.version || "请核对官方说明"}</InfoRow>
-          <InfoRow label="适用版本">{patch.exe.variant === "base" ? "游戏本体" : patch.exe.variant === "dlc" ? "DLC" : patch.exe.variant || "请核对官方说明"}</InfoRow>
+          <InfoRow label="补丁语言">{patch.exe.language || "请核对来源说明"}</InfoRow>
+          <InfoRow label="补丁版本">{patch.exe.version || "请核对来源说明"}</InfoRow>
+          <InfoRow label="适用版本">{patch.exe.variant === "base" ? "游戏本体" : patch.exe.variant === "dlc" ? "DLC" : patch.exe.variant || "请核对来源说明"}</InfoRow>
           <InfoRow label="DLC 条件" below>{patch.exe.requires_dlc?.length ? `需要 DLC ${patch.exe.requires_dlc.join("、")}` : "无额外 DLC 要求"}；{patch.exe.excludes_dlc?.length ? `不可使用 DLC ${patch.exe.excludes_dlc.join("、")}` : "无排除的 DLC"}</InfoRow>
         </>}
         {patch.blockers.map((b, i) => <Row key={i}><Status warning>{reason(b)}</Status></Row>)}
