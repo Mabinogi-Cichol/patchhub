@@ -73,3 +73,21 @@
 - 已备份并部署 `main.py`、`backend/sources.py`、`dist/index.js` 和 sourcemap，备份目录为 `/home/deck/steam-patch-validation/game-sources-20261004/backup`。部署后哈希与本地一致：前端 `8dce2e79…4380670`，入口 `ef1d12e7…0c2dfc5`，源注册表 `cbb60357…be40748`；`plugin_loader` 为 active，加载插件实例为 1。
 - Steam CEF 实际挂载页面验收：从《夜勤病栋》概览点击左侧“订阅源管理”，仍显示当前游戏标题与“用于此游戏”，不出现全局规则 JSON 表单。通过实际原生 checkbox 点击关闭再开启，页面更新并恢复匹配补丁；单独 API 验证关闭该游戏的 patch.moe 后不再匹配该源，其他 37 个游戏的源选择及全局源状态保持原状，随后恢复测试前选择。本次没有触发安装或下载补丁，实体手柄遍历和截图验收未执行。
 - 证据脚本：`.artifacts/game-sources-ui-check.js`、`.artifacts/game-sources-live-check.js`、`.artifacts/game-sources-toggle-check.js`；同名脚本保存在上述 Deck 验证目录。
+
+## 2026-10-06 补丁来源文案修正
+
+- 按用户反馈移除匹配补丁的“官方 EXE / 官方 ZIP”概括标签，直接显示订阅源名称；EXE 同时补齐 source_name，中文语言使用可读名称。新安装生成的本地目录名称同样使用来源名称。
+- 安装方式、来源按钮及相关 EXE 引导提示改用中性文案；来源身份、审核、下载白名单和安装判断保持原有逻辑。
+- 离线旧安装记录在扫描投影时重新生成来源名称，按来源页域名识别订阅源，找不到配置时显示域名或“来源未知”；不改写既有本地签名目录。
+- 本地既有 EXE 安装与扫描投影检查 22 项：21 项通过、1 项跳过（Windows 符号链接条件）；Decky 类型检查、Rollup 构建与 git diff --check 通过。本轮未部署到 Steam Deck，界面/实机待验证，未提交 Git。
+
+## 2026-10-06 来源文案部署与实机验证
+
+- 用户授权“部署并验证”。通过现有 Devkit 配对核实设备 `192.168.31.186`、插件身份及 Loader `v3.2.10`；部署前两条历史任务为 completed / cancelled，无非终态安装任务。沿用上节本地检查和构建，未重复运行。
+- 插件根目录为 root 所有，采用当前 Steam 已认证连接的 Loader 本地 ZIP 安装。新包 33 个文件；相对旧插件只有 `main.py`、`backend/exe_installation.py`、`dist/index.js` 及 sourcemap 共 4 项内容变化，Linux CLI 和其他正式文件哈希相同，未打包旧自动生成的 Python 字节码。包 SHA-256：`c3a05752005a724b43e71b36fc023c0213183a851b4ba6ddc20fd2529965cb4d`。
+- 首次完整备份 34 个旧文件，回滚 ZIP SHA-256：`cece8cd03006ed6986224fdf3113e30b3052577857daf929e500e7c5616b25aa`。已取回至忽略目录 `.artifacts/source-label-deck-20261006-1507/remote-evidence/`，逐文件及归档摘要复核通过；证据归档 SHA-256：`199b1b47289a579c9cf2c531c4301e44b5545dd685b2d0c26d1dd138f5c8ee0e`。
+- 正式目录 33 个文件逐项 SHA-256 通过，设备实际 HTTP 前端响应与本地构建一致：`9f1d7a6b7ff86e55a7db393c618a9994d46ed6ff571ba9fcc79fa9f9082464bf`。Loader 服务 active，插件实例 1，真实 list_tasks / list_transactions 正常。安装造成的本插件排序变化已合并恢复，冻结、隐藏、停用列表与部署前一致。
+- 真实 scan(false) 返回 39 个库实例，来源扫描 37 / 37 完成。VBF build 5430305 返回 `VenusBlood FRONTIER International · Kagura Games 国内 · EXE · 简体中文`、`source_name=Kagura Games 国内`，现有文件检测 installed_managed；8 条事务的身份、状态和错误字段与部署前一致。重载时 5 个 journal.sqlite 摘要变化，对应既有启动迁移重新保存终态记录的行为；未删除数据库或安装记录，未执行游戏补丁下载/安装。
+- 初始 scan RPC 超过 CDP 25 秒等待窗口，后续读取确认完成。页面切换期间有一次旧扫描 generation 的 scan_stale 日志；最终页面无错误且扫描完成。已通过当前五参数 importPlugin 显式重导入；旧补丁选择弹窗关闭后仍留下遮罩，确认无活动任务后按技能重启 Steam JS 上下文，重新检查全部运行状态与画面。
+- 真实 QAM 和 VBF 补丁管理页截图已查看：具体来源可读，旧“官方 EXE”标签消失，安装方式为“已审核 EXE 安装”，页面无横向溢出，滚动到底部可见来源链接与重新安装按钮。CSS viewport 854×534，屏幕图 1281×801。证据：`.artifacts/source-label-deck-20261006-1507/qam-final.png`、`vbf-final.png`、`vbf-bottom.png`、`final-ui.json`、`final-remote.json`。DevTools 导航/滚动只证明对应实机界面行为，实体手柄操作未验收。
+- 已恢复 VBF 补丁管理页顶部、关闭本次菜单，用户筛选保持“有补丁”，订阅选择未变；已在取回且校验备份后仅清理本轮远端暂存目录。未提交 Git。
