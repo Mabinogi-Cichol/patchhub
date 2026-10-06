@@ -4,6 +4,7 @@
 
 | 功能 | 状态 | 设计文档 | 施工记录 | 附加文档 |
 | --- | --- | --- | --- | --- |
+| 补丁一站式安装与流程精简 | 后端/Decky 已部署；VBF 重装/下载取消及界面通过，完整实机矩阵待验收；Windows TODO | [设计](simplified-install-flow/design.md) | [施工记录](simplified-install-flow/progress.md) | [调研](simplified-install-flow/research.md) |
 | Decky UX | 已实现并部署，部分真实操作与手柄验收待完成 | [设计](decky-ux/design.md) | [施工记录](decky-ux/progress.md) | [修复计划](decky-ux/fix-plan.md) |
 | 下载缓存清理 | 已实现并部署，后端实机验收通过，部分安装与手柄验收待完成 | [设计](cache-cleanup/design.md) | [施工记录](cache-cleanup/progress.md) | — |
 | KaguraGames 国内 / 海外内置源与 HGamer 兜底索引 | 已实现并部署，自动化、真实网络、RPC 与界面通过；重新查找后来源消失修复已自动化、离线复现并在真实 Deck 部署复验通过；严格样本与实体手柄待验证 | [设计](kagura-hgamer-fallback/design.md) | [施工记录](kagura-hgamer-fallback/progress.md) | [可行性](kagura-hgamer-fallback/feasibility.md) · [验收](kagura-hgamer-fallback/acceptance.md) · [修复计划](kagura-hgamer-fallback/fix-plan.md) |
