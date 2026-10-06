@@ -4,7 +4,7 @@
 
 状态：P1–P4 工程实现与自动化已推进；2026-10-05 在真实 Deck 上用当前源码复跑 Linux Rust、后端与隔离合成事务闭环，实机复核 P4 界面修复，并对 VenusBlood FRONTIER（AppID 1189440）、夏日官方本体补丁 CN v1.03（2,502 文件）与夏日官方 DLC 补丁 CN v2.02.1（5,874 文件）完成审核 profile 与真实安装/恢复闭环。夏日英文本体、中文/英文本体与 DLC 的语言/版本组合及实体手柄仍待其它实例；生产审核表含这三条经审核条目。日期：2026-10-05（Asia/Shanghai）。目标客户端：Steam Deck / Decky。
 
-施工记录：[progress.md](progress.md)。调研证据：[research.md](research.md)。P0 工具与设备条件：[p0-audit.md](p0-audit.md)。完成门槛核对：[acceptance.md](acceptance.md)。
+施工记录：[progress.md](progress.md)。调研证据：[research.md](research.md)。P0 工具与设备条件：[p0-audit.md](p0-audit.md)。完成门槛核对：[acceptance.md](acceptance.md)。当前实现的完整流程：[flow.md](flow.md)。2026-10-06 代码审阅与待修问题：[review.md](review.md)。
 
 ## 1. 目标与调研结论
 
@@ -59,7 +59,7 @@ Inno Setup、NSIS、7z SFX 保留适配器扩展位置，按独立样本决定�
 
 新增服务从后端缓存/重新抓取结果读取候选及镜像，前端仅提交可信实例和选择标识，不能提交任意 URL、路径、提取参数或配方。准备前重新检查来源启用、逐游戏订阅、候选身份与条件，过期或变更的记录重新验证。
 
-后端管理的 `publisher_exe` 安装能力与已审核安装 profile 关联，生成独立 `release_id`；旧 `candidate-*` 仍不能用于 preview/plan/fetch/prepare/apply。关联候选由官方来源、来源记录、AppID、语言、variant、原始补丁版本及载荷摘要决定，禁止使用标题或 EXE URL 后缀单独匹配。具体契约已在 P1 固化，但正式 profile 尚未开放。
+后端管理的 `publisher_exe` 安装能力与已审核安装 profile 关联，生成独立 `release_id`；旧 `candidate-*` 仍不能用于 preview/plan/fetch/prepare/apply。关联候选由官方来源、来源记录、AppID、语言、variant、原始补丁版本及载荷摘要决定，禁止使用标题或 EXE URL 后缀单独匹配。具体契约已在 P1 固化；2026-10-05 已开放 VBF、夏日中文 DLC 和中文本体三条 profile，文件事务验证与剩余实机门槛见施工记录及验收矩阵。
 
 推荐能力状态：来源引导 → 可检查安装包 → 已通过审核的可安装 release。检查任务成功可以生成诊断报告，但未经审核不得自动升级。来源停用、订阅取消、身份条件变化、载荷变更均使关联失效；apply 前重新核验这些条件。
 

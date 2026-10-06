@@ -6,9 +6,9 @@
 
 | 门槛 | 当前证据 | 结论及剩余工作 |
 | --- | --- | --- |
-| P0 官方样本身份、全部载荷与资源预算 | 夏日中文/英文 EXE 元数据与逐成员摘要；VenusBlood FRONTIER CN v5 的 Setup Factory 9.5 审计（3 个根文件、展开 1.15 GiB）；Deck 只读审计、bwrap 隔离及资源探针 | 载荷核验与资源探针通过。夏日当前实例 DLC/CRC 不适用；VBF 已用真实实例审核 |
-| P0 完整事件、条件、变量、覆盖及高级动作 | 夏日静态 runtime/元数据双证据（见 p0-audit）；VBF framed 事件与动作覆盖报告（见 progress 与 `.artifacts/exe-patch-research/vbf/`） | VBF：仅 `VBFI.exe` 定位、无删除/运行/下载/注册表写，按纯新增建模。夏日：对象及项目级未知项尚未全解，保持引导 |
-| P1 后端关联与严格 registry | [profile 测试](../../../apps/decky/backend/test_exe_profiles.py)、[RPC 测试](../../../apps/decky/backend/test_exe_rpc.py) | 自动化通过；候选、前端任意路径/URL、伪造或过期关联不能升级。生产 registry 现含 1 条经审核 VBF 条目 |
+| P0 官方样本身份、全部载荷与资源预算 | 夏日中文/英文 EXE 元数据与逐成员摘要；VenusBlood FRONTIER CN v5 的 Setup Factory 9.5 审计（3 个根文件、展开 1.15 GiB）；Deck 只读审计、bwrap 隔离及资源探针 | 载荷核验与资源探针通过；VBF、夏日中文 DLC、本体分别有适用真实实例与独立基线记录，英文本体待实例 |
+| P0 完整事件、条件、变量、覆盖及高级动作 | 夏日静态 runtime/元数据双证据及后续类清单 / framed Lua 审核；VBF framed 事件与动作覆盖报告（见 progress 与 `.artifacts/exe-patch-research/vbf/`） | VBF 按纯新增建模；夏日本体与 DLC 的文件复制和事件条件已按施工记录审核。仅对应审核摘要开放，其它样本不外推 |
+| P1 后端关联与严格 registry | [profile 测试](../../../apps/decky/backend/test_exe_profiles.py)、[RPC 测试](../../../apps/decky/backend/test_exe_rpc.py) | 自动化通过；候选、前端任意路径/URL、伪造或过期关联不能升级。生产 registry 现含 VBF、夏日中文 DLC、本体三条审核 profile；取消清理失败路径待修，见 review |
 | P1 来源、订阅、镜像、时间、profile 及实例漂移 | profile/RPC/服务测试，apply 前重新验证 | 自动化通过；当前 build 不会自动成为已验证 build。VBF 由 HGamer upstream 页 + 官方源合并得到 `official_title` 绑定，未按标题/后缀单独授权 |
 | P2 HTTPS/每跳域名/大小/SHA/取消/原子缓存 | [下载测试](../../../apps/decky/backend/test_exe_download.py)；2026-10-05 VBF 从白名单 `kaguraserver.com` 真实下载 1,126,694,464 字节并通过大小/SHA 复核 | 自动化与真实官方下载链通过；镜像等价性仍只按摘要，不拼接不同镜像字节 |
 | P2 PE/版本/UTF-8/安全路径/Unicode及大小写/文件目录冲突 | [审计测试](../../../scripts/test_sf95_audit.py)（14 项，含根目录 `%AppFolder%` 回归） | 自动化通过；不支持的格式无执行 fallback |
