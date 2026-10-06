@@ -106,7 +106,7 @@ def _job_files(jobs_root):
 
 
 def jobs_status(publisher, state_dir):
-    """Return staged/backup bytes kept for transaction recovery and uninstall."""
+    """Return staged/backup bytes kept for unfinished transaction recovery."""
     stage_bytes = backup_bytes = 0
     for _kind, jobs_root in job_roots(publisher, state_dir):
         for path in _job_files(jobs_root):
@@ -119,133 +119,6 @@ def jobs_status(publisher, state_dir):
             elif path.name.endswith(".backup"):
                 backup_bytes += size
     return {"stage_bytes": stage_bytes, "backup_bytes": backup_bytes}
-
-
-def delete_files(jobs_root, plan_id, suffixes=(".stage",)):
-    """Remove selected transaction files; backups are only removed when asked."""
-    if not isinstance(plan_id, str) or not plan_id:
-        return 0
-    job = Path(jobs_root) / plan_id
-    if protected_exe_jobs(jobs_root):
-        suffixes = tuple(s for s in suffixes if s != ".backup")
-    if not no_links(job) or not job.is_dir():
-        return 0
-    removed = 0
-    try:
-        with os.scandir(job) as iterator:
-            entries = list(iterator)
-        for entry in entries:
-            if not entry.is_file(follow_symlinks=False):
-                continue
-            if not any(entry.name.endswith(suffix) for suffix in suffixes):
-                continue
-            size = entry.stat(follow_symlinks=False).st_size
-            if _unlink_within(Path(jobs_root), Path(entry.path)):
-                removed += size
-    except OSError:
-        pass
-    return removed
-
-
-def delete_stage_files(jobs_root, plan_id):
-    """Remove one committed plan's staged copies; backups stay for uninstall."""
-    return delete_files(jobs_root, plan_id, (".stage",))
-
-
-def has_backups(jobs_root, transaction_id):
-    if not isinstance(transaction_id, str) or not transaction_id:
-        return False
-    job = Path(jobs_root) / transaction_id
-    if not no_links(job) or not job.is_dir():
-        return False
-    try:
-        with os.scandir(job) as entries:
-            return any(entry.is_file(follow_symlinks=False) and entry.name.endswith(".backup")
-                       for entry in entries)
-    except OSError:
-        return False
-
-
-def any_backups(jobs_root):
-    """True when any transaction under ``jobs_root`` still holds a backup file."""
-    jobs_root = Path(jobs_root)
-    if not jobs_root.is_dir() or not no_links(jobs_root):
-        return False
-    try:
-        with os.scandir(jobs_root) as iterator:
-            jobs = list(iterator)
-        for job in jobs:
-            if not job.is_dir(follow_symlinks=False):
-                continue
-            with os.scandir(job.path) as entries:
-                if any(entry.is_file(follow_symlinks=False) and entry.name.endswith(".backup") for entry in entries):
-                    return True
-    except OSError:
-        pass
-    return False
-
-
-def forget_transactions(state_dir):
-    """Drop a core transaction store so a backup-less install no longer blocks.
-
-    Recipe, signed catalog and keys are kept; only the journal database and the
-    job store are removed. The core recreates both on its next run.
-    """
-    state_dir = Path(state_dir)
-    if protected_exe_jobs(state_dir / "jobs"):
-        return False
-    if not state_dir.is_dir() or not no_links(state_dir):
-        return False
-    try:
-        with os.scandir(state_dir) as iterator:
-            entries = list(iterator)
-    except OSError:
-        return False
-    for entry in entries:
-        if entry.name == "journal.sqlite" or entry.name.startswith("journal.sqlite-"):
-            if entry.is_file(follow_symlinks=False):
-                _unlink_within(state_dir, Path(entry.path))
-    jobs = state_dir / "jobs"
-    if jobs.is_dir() and no_links(jobs):
-        shutil.rmtree(jobs, ignore_errors=True)
-    return True
-
-
-def clear_jobs(jobs_root, transaction_ids, suffixes=(".stage", ".backup")):
-    """Delete staged/backup files for the given transactions; return bytes freed."""
-    removed = 0
-    root = Path(jobs_root)
-    if protected_exe_jobs(root):
-        suffixes = tuple(s for s in suffixes if s != ".backup")
-    for transaction_id in transaction_ids:
-        if not isinstance(transaction_id, str) or not transaction_id:
-            continue
-        job = root / transaction_id
-        if not no_links(job) or not job.is_dir():
-            continue
-        try:
-            with os.scandir(job) as iterator:
-                entries = list(iterator)
-        except OSError:
-            continue
-        for entry in entries:
-            if not entry.is_file(follow_symlinks=False):
-                continue
-            if not any(entry.name.endswith(suffix) for suffix in suffixes):
-                continue
-            size = entry.stat(follow_symlinks=False).st_size
-            if _unlink_within(root, Path(entry.path)):
-                removed += size
-    return removed
-
-
-def protected_exe_jobs(jobs_root):
-    """EXE recovery never depends on the live profile or global setting.
-
-    Protect the complete EXE state even when its per-plan evidence is damaged;
-    corruption must not accidentally turn manual cleanup into backup deletion.
-    """
-    return bool(re.fullmatch(r"exe-[0-9a-f]{24}-[1-9][0-9]*", Path(jobs_root).parent.parent.name))
 
 
 def exe_cache_leased(state):
@@ -274,14 +147,14 @@ def exe_cache_leased(state):
                 return True
             if not isinstance(policy, dict):
                 return True
-            if (type(policy.get("schema_version")) is not int or policy["schema_version"] != 1
+            if (type(policy.get("schema_version")) is not int or policy["schema_version"] not in (1, 2)
                     or policy.get("kind") != "publisher_exe" or policy.get("plan_id") != job.name
                     or policy.get("release_id") != Path(state).parent.name
                     or not isinstance(policy.get("instance_id"), str)
                     or hashlib.sha256(policy["instance_id"].encode()).hexdigest()[:16] != Path(state).name
                     or type(policy.get("lease_active")) is not bool
                     or type(policy.get("expires_at")) is not int or policy["expires_at"] < 0
-                    or policy.get("keep_backups") is not True):
+                    or (policy["schema_version"] == 1 and policy.get("keep_backups") is not True)):
                 if _ended_exe_job(Path(state), job.name):
                     continue
                 return True
@@ -316,7 +189,7 @@ def _ended_exe_job(state, plan_id):
                 or transaction["instance_id"] != plan["instance_id"]
                 or hashlib.sha256(plan["instance_id"].encode()).hexdigest()[:16] != state.name):
             return False
-        if transaction["state"] in ("rolled_back", "uninstalled", "committed"):
+        if transaction["state"] in ("rolled_back", "uninstalled", "committed", "superseded"):
             return True
         created, expires = plan["created_at"], plan["expires_at"]
         return (transaction["state"] == "planned" and type(created) is int and type(expires) is int

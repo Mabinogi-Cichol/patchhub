@@ -11,7 +11,6 @@ import uuid
 
 MAX_SETTINGS_BYTES = 64 * 1024
 DEFAULT_AUTO_CLEANUP = True
-DEFAULT_KEEP_BACKUPS = False
 
 
 def _no_links(path):
@@ -40,7 +39,6 @@ class Settings:
     def __init__(self, state_dir):
         self.path = Path(state_dir).absolute() / "settings.json"
         self.auto_cleanup = DEFAULT_AUTO_CLEANUP
-        self.keep_backups = DEFAULT_KEEP_BACKUPS
         self.diagnostics = []
         self._load()
 
@@ -53,21 +51,19 @@ class Settings:
                 raise ValueError("invalid_settings")
             data = json.loads(self.path.read_text(encoding="utf-8"))
             auto_cleanup = data.get("auto_cleanup", DEFAULT_AUTO_CLEANUP)
-            keep_backups = data.get("keep_backups", DEFAULT_KEEP_BACKUPS)
-            if not isinstance(auto_cleanup, bool) or not isinstance(keep_backups, bool):
+            if not isinstance(auto_cleanup, bool):
                 raise ValueError("invalid_settings")
             self.auto_cleanup = auto_cleanup
-            self.keep_backups = keep_backups
+            if data.get("schema_version") != 2 or "keep_backups" in data:
+                self._save()
         except (OSError, ValueError, json.JSONDecodeError):
             # A missing, unreadable or malformed file falls back to the safe
             # defaults and never blocks plugin startup.
             self.auto_cleanup = DEFAULT_AUTO_CLEANUP
-            self.keep_backups = DEFAULT_KEEP_BACKUPS
             self.diagnostics.append({"code": "settings_unavailable", "path": str(self.path)})
 
     def _save(self):
-        _write_json(self.path, {"schema_version": 1, "auto_cleanup": self.auto_cleanup,
-                                "keep_backups": self.keep_backups})
+        _write_json(self.path, {"schema_version": 2, "auto_cleanup": self.auto_cleanup})
 
     def set_auto_cleanup(self, enabled):
         if not isinstance(enabled, bool):
@@ -75,11 +71,5 @@ class Settings:
         self.auto_cleanup = enabled
         self._save()
 
-    def set_keep_backups(self, enabled):
-        if not isinstance(enabled, bool):
-            raise ValueError("invalid_settings")
-        self.keep_backups = enabled
-        self._save()
-
     def snapshot(self):
-        return {"schema_version": 1, "auto_cleanup": self.auto_cleanup, "keep_backups": self.keep_backups}
+        return {"schema_version": 2, "auto_cleanup": self.auto_cleanup}

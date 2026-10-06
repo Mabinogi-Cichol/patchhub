@@ -19,10 +19,23 @@ from sources import SourceRegistry
 from tasks import TaskManager, current_task
 from exe_profiles import ExeProfiles
 from exe_installation import ExeInstallation
+from scan_session import ScanSession
+from publisher import _json_new
 
 
 class Plugin:
     async def _main(self):
+        self._startup_ready = asyncio.Event()
+        self._startup_error = None
+        try:
+            await self._initialize()
+        except BaseException as error:
+            self._startup_error = error
+            raise
+        finally:
+            self._startup_ready.set()
+
+    async def _initialize(self):
         root = Path(decky.DECKY_PLUGIN_DIR)
         catalog = root / "bin" / "catalog.json"
         state_dir = Path(decky.DECKY_USER_HOME) / ".local/share/steam-patch-manager"
@@ -41,7 +54,7 @@ class Plugin:
         )
         self.downloads = (Path(decky.DECKY_USER_HOME) / "Downloads").resolve()
         self._prepare_cancel = None
-        self.tasks = TaskManager()
+        self.tasks = TaskManager(state_dir=state_dir)
         self._plan_metadata = {}
         self.settings = Settings(state_dir)
         self.sources = SourceRegistry(state_dir, root / "backend/sources.json")
@@ -50,107 +63,159 @@ class Plugin:
         self.exe_installation = ExeInstallation(self.publisher, self.exe_profiles, root / "backend/exe_worker")
         self._scan_generation = 0
         self._scan_games = {}
+        self._scan_session = None
+        await self._migrate_startup(self.bridge)
+        for _, _, bridge in self.publisher.bridges():
+            await self._migrate_startup(bridge)
+        await self._reclaim_plans()
+
+    async def _migrate_startup(self, bridge):
+        # Loader can reload immediately after installation while a child of
+        # the preceding backend is still exiting. Wait for that journal lock;
+        # never delete the lock file or ignore a persistent busy state.
+        for attempt in range(41):
+            try:
+                return await bridge.migrate_state()
+            except RuntimeError as error:
+                if str(error) != "installer_busy" or attempt == 40:
+                    raise
+                await asyncio.sleep(.25)
+
+    async def _reclaim_plans(self):
+        # Startup runs before accepting tasks. A crash may happen after core
+        # prepare persisted a job but before its ID reached tasks.json, so the
+        # journal itself is authoritative for outstanding authorization.
+        for transaction in await self._list_transactions():
+            if transaction.get("state") != "planned":
+                continue
+            bridge, plan_id, owner = self._dispatch_id(transaction["plan_id"])
+            try:
+                await self._revoke_plan(bridge, plan_id, owner)
+            except Exception:
+                # A failed RPC is tolerable only after durable local revocation.
+                from acquisition import no_links
+                marker = bridge.state_dir / "jobs" / plan_id / "revoked"
+                if not marker.is_file() or not no_links(marker):
+                    raise
+
+    async def _project_row(self, row, transactions=None):
+        game = row["game"]
+        transactions = transactions if transactions is not None else await self.list_transactions()
+        row["sources"] = self.sources.list_game_sources(game)
+        row["patches"] = []
+        row["exe_reviews"] = []
+        entries = self.publisher.matches(game)
+        source_by_id = {source["id"]: source for source in self.sources.list_sources()}
+        for entry in entries:
+            source = source_by_id.get(entry["source_id"], {})
+            patch = dict(release_id=entry["release_id"], name=f"{entry['source_id']} · 官方 ZIP · {entry['language']}",
+                source_page=entry["source_page"], source_id=entry["source_id"], source_name=source.get("name"),
+                source_status=source.get("status", "unknown"), source_cached_at=source.get("cached_at"),
+                support_level="publisher_zip", download_available=True, compatibility="publisher_default",
+                blockers=[], detection=dict(status="unknown", files=[]))
+            if not _released(entry):
+                patch["blockers"].append("source_not_released")
+            if game.get("availability") != "installed":
+                patch["blockers"].append("game_not_ready")
+            if not game.get("buildid"):
+                patch["blockers"].append("build_not_verified")
+            row["patches"].append(patch)
+        exe = getattr(self, "exe_installation", None)
+        if exe:
+            for patch in exe.matches(game):
+                try:
+                    await asyncio.to_thread(exe.check_game, game, patch["release_id"])
+                except (ValueError, OSError) as error:
+                    patch["blockers"].append(str(error))
+                row["patches"].append(patch)
+            row["exe_reviews"] = self.exe_profiles.reviews(game)
+        # An installed receipt remains visible when its online source is disabled.
+        known = {p["release_id"]: p for p in row["patches"]}
+        for instance, release, local in self.publisher.bridges():
+            if instance != game["instance_id"]:
+                continue
+            try:
+                observed = await local.scan()
+                if observed.get("catalog_error") == "catalog_expired":
+                    local = await self.publisher.refresh_signature(instance, release)
+                    observed = await local.scan()
+                if observed.get("catalog_trust") != "signed":
+                    if release in known:
+                        known[release]["blockers"].append("catalog_untrusted")
+                    continue
+                local_row = next((i for i in observed["installs"] if i["game"]["instance_id"] == instance), None)
+                local_patch = next((p for p in (local_row or {}).get("patches", []) if p["release_id"] == release), None)
+                if not local_patch:
+                    continue
+                if release not in known:
+                    local_transactions = await local.list_transactions()
+                    if not any(t.get("state") == "committed" for t in local_transactions):
+                        continue
+                    restored = dict(local_patch, support_level="publisher_exe" if release.startswith("exe-") else "publisher_zip",
+                                    download_available=False, blockers=["source_not_enabled"])
+                    row["patches"].append(restored)
+                    known[release] = restored
+                known[release]["detection"] = local_patch["detection"]
+                known[release]["blockers"].extend(local_patch.get("blockers", []))
+            except Exception:
+                if release in known:
+                    known[release]["blockers"].append("publisher_state_unavailable")
+        for patch in row["patches"]:
+            own = [t for t in transactions if t.get("instance_id") == game["instance_id"]]
+            if any(t["state"] not in ("planned", "committed", "uninstalled", "rolled_back", "superseded") for t in own):
+                patch["blockers"].append("managed_install_exists_or_needs_recovery")
+            if any(t["state"] == "committed" and t["release_id"] != patch["release_id"] for t in own):
+                patch["blockers"].append("publisher_existing_transaction")
+            patch["blockers"] = list(dict.fromkeys(patch["blockers"]))
+            patch["auto_installable"] = bool(not patch["blockers"] and patch.get("download_available")
+                and patch["support_level"] in ("managed_zip", "publisher_zip", "publisher_exe"))
+            patch["reinstall_available"] = patch["auto_installable"] and (
+                any(t["state"] == "committed" and t["release_id"] == patch["release_id"] for t in own)
+                or patch["detection"]["status"] in ("managed", "installed_managed", "installed_owned", "external", "installed_external"))
+        row["match_status"] = "matched" if row["patches"] or any(
+            c.get("match_basis") in ("appid", "verified_alias", "official_title")
+            for c in row.get("discovery", {}).get("candidates", [])) else "no_source_match"
+
+    async def _read_report(self):
+        report = await self.bridge.scan()
+        report["sources"] = self.sources.list_sources()
+        report["generation"] = getattr(self, "_scan_generation", 0)
+        report["settings_revision"] = self.sources.settings_revision
+        transactions = await self.list_transactions()
+        for row in report["installs"]:
+            row["discovery"] = self.sources.cached_discovery(row["game"])
+            await self._project_row(row, transactions)
+        return report
 
     async def scan(self, refresh_sources: bool = False):
         self._scan_generation = getattr(self, "_scan_generation", 0) + 1
         generation = self._scan_generation
-        source_diagnostics = await self.sources.refresh(force=True) if refresh_sources else []
-        report = await self.bridge.scan()
-        report["diagnostics"].extend({"code": issue["code"], "path": issue.get("source_id", ""),
-            "message": issue.get("detail", "")} for issue in source_diagnostics
-            if issue["code"] not in ("source_refreshed", "source_not_modified"))
-        report["sources"] = self.sources.list_sources()
-        report["generation"] = generation
-        report["settings_revision"] = self.sources.settings_revision
-        source_by_id = {source["id"]: source for source in report["sources"]}
-        existing_transactions = await self.list_transactions()
-        for row in report["installs"]:
-            game = row["game"]
-            row["sources"] = self.sources.list_game_sources(game)
-            row["discovery"] = self.sources.cached_discovery(game)
-            profiles = getattr(self, "exe_profiles", None)
-            row["exe_reviews"] = profiles.reviews(game) if profiles else []
-            # Source subscriptions own discovery. The bundled catalog remains
-            # available to the core for existing receipts and CLI operations.
-            row["patches"] = []
-            row["match_status"] = "no_source_match"
-            entries = self.publisher.matches(game)
-            for entry in entries:
-                patch = dict(release_id=entry["release_id"], name=f"{entry['source_id']} · 官方 ZIP · {entry['language']} · 默认游戏根目录",
-                    source_page=entry["source_page"], support_level="publisher_zip", download_available=True,
-                    compatibility="publisher_default", blockers=[], detection=dict(status="unknown", files=[]))
-                source = source_by_id.get(entry["source_id"], {})
-                patch.update(source_id=entry["source_id"], source_name=source.get("name"),
-                    source_status=source.get("status", "unknown"), source_cached_at=source.get("cached_at"))
-                if not _released(entry):
-                    patch["blockers"].append("source_not_released")
-                if game.get("availability") != "installed":
-                    patch["blockers"].append("game_not_ready")
-                if not game.get("buildid"):
-                    patch["blockers"].append("build_not_verified")
-                if any(t.get("instance_id") == game["instance_id"] and t.get("release_id") != entry["release_id"]
-                       and t["state"] not in ("planned", "uninstalled", "rolled_back")
-                       and t.get("backups") is not False for t in existing_transactions):
-                    patch["blockers"].append("publisher_existing_transaction")
-                local = self.publisher.bridge_for(game["instance_id"], entry["release_id"])
-                if local is not None:
-                    try:
-                        observed = await local.scan()
-                        if observed.get("catalog_error") == "catalog_expired":
-                            local = await self.publisher.refresh_signature(game["instance_id"], entry["release_id"])
-                            observed = await local.scan()
-                        local_row = next((i for i in observed["installs"] if i["game"]["instance_id"] == game["instance_id"]), None)
-                        local_patch = next((p for p in (local_row or {}).get("patches", []) if p["release_id"] == entry["release_id"]), None)
-                        if observed.get("catalog_trust") != "signed":
-                            patch["blockers"].append("catalog_untrusted")
-                        if local_patch:
-                            patch["detection"] = local_patch["detection"]
-                            transactions = await local.list_transactions()
-                            # A committed install without backups cannot be uninstalled, so it
-                            # must not block re-installing over it. Without a known state dir
-                            # (e.g. a test double) keep the conservative blocking behaviour.
-                            local_state = getattr(local, "state_dir", None)
-                            if local_state is None:
-                                active = any(t["state"] not in ("planned", "uninstalled", "rolled_back") for t in transactions)
-                            else:
-                                local_jobs = Path(local_state) / "jobs"
-                                active = any(t["state"] not in ("planned", "uninstalled", "rolled_back")
-                                             and caches.has_backups(local_jobs, t["transaction_id"]) for t in transactions)
-                            if active:
-                                patch["blockers"].append("publisher_existing_transaction")
-                            patch["blockers"].extend(b for b in local_patch["blockers"]
-                                if active or b not in ("version_incompatible", "build_not_verified"))
-                    except Exception:
-                        patch["blockers"].append("publisher_state_unavailable")
-                row["patches"].insert(0, patch)
-                row["match_status"] = "matched"
-            exe = getattr(self, "exe_installation", None)
-            for patch in exe.matches(game) if exe else []:
-                local = self.publisher.bridge_for(game["instance_id"], patch["release_id"])
-                if local is not None:
-                    try:
-                        observed = await local.scan()
-                        if observed.get("catalog_error") == "catalog_expired":
-                            local = await self.publisher.refresh_signature(game["instance_id"], patch["release_id"])
-                            observed = await local.scan()
-                        local_row = next((i for i in observed["installs"] if i["game"]["instance_id"] == game["instance_id"]), None)
-                        local_patch = next((p for p in (local_row or {}).get("patches", []) if p["release_id"] == patch["release_id"]), None)
-                        if observed.get("catalog_trust") != "signed":
-                            patch["blockers"].append("catalog_untrusted")
-                        if local_patch:
-                            patch["detection"] = local_patch["detection"]
-                    except Exception:
-                        patch["blockers"].append("publisher_state_unavailable")
-                row["patches"].append(patch)
-                row["match_status"] = "matched"
-            if any(candidate.get("match_basis") in ("appid", "verified_alias", "official_title")
-                   for candidate in row["discovery"]["candidates"]):
-                row["match_status"] = "matched"
-        for issue in self.publisher.state_diagnostics:
-            report["diagnostics"].append({"code": "publisher_state_unavailable", "path": issue.get("path", ""), "message": issue.get("code", "")})
-        if generation == self._scan_generation:
-            self._scan_games = {row["game"]["instance_id"]: dict(row["game"]) for row in report["installs"]}
-        return report
+        previous = getattr(self, "_scan_session", None)
+        if previous:
+            await previous.close()
+        report = await self._read_report()
+        self._scan_games = {row["game"]["instance_id"]: dict(row["game"]) for row in report["installs"]}
+        revision = self.sources.settings_revision
+        async def discover(game):
+            return await self.discover_game(game["instance_id"], [], None, refresh_sources)
+        async def refresh(report):
+            diagnostics = await self.sources.refresh(force=refresh_sources)
+            if self._scan_generation == generation and self.sources.settings_revision == revision:
+                report["sources"] = self.sources.list_sources()
+                report["diagnostics"].extend(diagnostics)
+        session = ScanSession(report, discover, self._project_row,
+            lambda: self._scan_generation == generation and self.sources.settings_revision == revision,
+            refresh=refresh)
+        self._scan_session = session
+        return session.snapshot()
+
+    async def scan_status(self, generation: int):
+        session = getattr(self, "_scan_session", None)
+        if type(generation) is not int or not session or generation != self._scan_generation:
+            raise ValueError("scan_stale")
+        if session.report["settings_revision"] != self.sources.settings_revision:
+            raise ValueError("scan_stale")
+        return session.snapshot()
 
     async def discover_game(self, instance_id: str, name_hints=None, preferred_language=None, force: bool = False):
         """Discover metadata for a trusted local instance without occupying the installer."""
@@ -180,7 +245,11 @@ class Plugin:
         profiles = getattr(self, "exe_profiles", None)
         result["exe_reviews"] = profiles.reviews(game) if profiles and result.get("status") != "stale" else []
         exe = getattr(self, "exe_installation", None)
-        result["exe_patches"] = exe.matches(game) if exe and result.get("status") != "stale" else []
+        row = {"game": game, "discovery": result}
+        if result.get("status") != "stale":
+            await self._project_row(row)
+        result["exe_patches"] = [p for p in row.get("patches", []) if p["support_level"] == "publisher_exe"]
+        result["patches"] = row.get("patches", [])
         return result
 
     async def exe_installation_reviews(self, instance_id: str):
@@ -235,7 +304,7 @@ class Plugin:
             return await bridge.preview(instance_id, release_id)
         return await self.bridge.preview(instance_id, release_id)
 
-    async def plan_install(self, instance_id: str, release_id: str, archive_path: str = ""):
+    async def _plan_install(self, instance_id: str, release_id: str, archive_path: str = "", operation="install"):
         self._installable_release(release_id)
         if re.fullmatch(RELEASE_PATTERN, release_id):
             raise ValueError("publisher_prepare_first")
@@ -252,7 +321,7 @@ class Plugin:
                 raise ValueError("invalid_archive")
             if not (archive.is_relative_to(self.downloads) or archive.is_relative_to(self.bridge.state_dir / "downloads")):
                 raise ValueError("archive_outside_downloads")
-        return await self.bridge.plan_install(instance_id, release_id, archive)
+        return await self.bridge.plan_install(instance_id, release_id, archive, operation)
 
     async def fetch_artifact(self, instance_id: str, release_id: str):
         self._installable_release(release_id)
@@ -260,7 +329,7 @@ class Plugin:
             raise ValueError("exe_prepare_first")
         return await self.bridge.fetch_artifact(instance_id, release_id)
 
-    async def prepare_install(self, instance_id: str, release_id: str, archive_path: str = "", confirmations=None):
+    async def _prepare_install(self, instance_id: str, release_id: str, archive_path: str = "", operation="install"):
         """Acquire a reviewed ZIP and prepare a plan; never write game files."""
         self._installable_release(release_id)
         if self._prepare_cancel is not None:
@@ -274,7 +343,7 @@ class Plugin:
             if task:
                 task.stage("scanning")
                 task.check()
-            report = await self.scan(refresh_sources=False)
+            report = await self._read_report()
             if task:
                 task.check()
             row = next((i for i in report["installs"] if i["game"]["instance_id"] == instance_id), None)
@@ -288,12 +357,9 @@ class Plugin:
             if patch["support_level"] == "publisher_exe":
                 if archive_path:
                     raise ValueError("exe_manual_import_not_supported")
-                if not self.settings.keep_backups:
-                    raise ValueError("exe_backup_required")
-                bridge, archive, plan, acquisition = await self.exe_installation.prepare(row["game"], release_id, cancel, confirmations)
+                bridge, archive, plan, acquisition = await self.exe_installation.prepare(row["game"], release_id, cancel, operation=operation)
                 if cancel.is_set():
-                    await bridge.discard_plan(plan["plan_id"])
-                    self.exe_installation.release_lease(self.publisher._state(instance_id, release_id), plan["plan_id"])
+                    await self._revoke_plan(bridge, plan["plan_id"], (instance_id, release_id))
                     raise RuntimeError("download_cancelled")
                 wrapped = self._wrap_publisher(plan, instance_id, release_id)
                 self._plan_metadata[wrapped["plan_id"]] = dict(instance_id=instance_id, release_id=release_id,
@@ -305,12 +371,9 @@ class Plugin:
                 entry = self.publisher.match(row["game"], release_id)
                 if entry is None or entry["release_id"] != release_id:
                     raise ValueError("publisher_match_changed")
-                state_of = getattr(self.publisher, "_state", None)
-                if state_of is not None:
-                    await asyncio.to_thread(self._forget_without_backups, state_of(instance_id, release_id))
-                bridge, archive, plan, acquisition = await self.publisher.prepare(row["game"], entry, cancel, local_archive)
+                bridge, archive, plan, acquisition = await self.publisher.prepare(row["game"], entry, cancel, local_archive, operation=operation)
                 if cancel.is_set():
-                    await bridge.discard_plan(plan["plan_id"])
+                    await self._revoke_plan(bridge, plan["plan_id"], (instance_id, release_id))
                     raise RuntimeError("download_cancelled")
                 wrapped = self._wrap_publisher(plan, instance_id, release_id)
                 self._plan_metadata[wrapped["plan_id"]] = dict(
@@ -338,12 +401,9 @@ class Plugin:
                 acquisition = "download"
             if cancel.is_set():
                 raise RuntimeError("download_cancelled")
-            base_state = getattr(self.bridge, "state_dir", None)
-            if base_state is not None:
-                await asyncio.to_thread(self._forget_without_backups, base_state)
-            plan = await self.plan_install(instance_id, release_id, str(archive))
+            plan = await self._plan_install(instance_id, release_id, str(archive), operation)
             if cancel.is_set():
-                await self.bridge.discard_plan(plan["plan_id"])
+                await self._revoke_plan(self.bridge, plan["plan_id"])
                 raise RuntimeError("download_cancelled")
             metadata = dict(instance_id=instance_id, release_id=release_id, archive_bytes=Path(archive).stat().st_size)
             try:
@@ -386,13 +446,11 @@ class Plugin:
             self._prepare_cancel.set()
         return await self.bridge.cancel_download()
 
-    async def start_install(self, plan_id: str, confirmed_game_closed: bool = False):
+    async def _start_install(self, plan_id: str):
         if self.tasks.busy() and current_task.get() is None:
             raise RuntimeError("installer_busy")
         bridge, value, owner = self._dispatch_id(plan_id)
         if owner and owner[1].startswith("exe-"):
-            if confirmed_game_closed is not True:
-                raise ValueError("game_closed_confirmation_required")
             if current_task.get():
                 current_task.get().stage("checking_game")
             report = await self.bridge.scan()
@@ -400,7 +458,7 @@ class Plugin:
             if game is None:
                 raise ValueError("instance_not_found")
             await self.exe_installation.validate_apply(game, owner[1], value)
-        result = await bridge.start_install(value, confirmed_game_closed)
+        result = await bridge.start_install(value)
         if result.get("state") == "committed":
             await self._cleanup_after_install(plan_id, value, owner, self.settings.auto_cleanup)
         return self._wrap_publisher(result, *owner) if owner else result
@@ -425,13 +483,9 @@ class Plugin:
                     await asyncio.to_thread(self._clear_core_cache, cache.get("sha256"))
             except Exception:
                 pass
-        # Staged copies are not needed after commit: apply is done and uninstall
-        # restores from backups only. Backups are removed unless the user opted
-        # into keeping them (which keeps uninstall available).
+        # The core keeps the durable receipt and clears only terminal blobs.
         try:
-            must_keep = self.settings.keep_backups or bool(owner and owner[1].startswith("exe-"))
-            suffixes = (".stage",) if must_keep else (".stage", ".backup")
-            await asyncio.to_thread(caches.delete_files, self._jobs_root(owner), core_plan_id, suffixes)
+            await self._dispatch_id(plan_id)[0].cleanup_transactions()
         except Exception:
             pass
 
@@ -441,45 +495,18 @@ class Plugin:
         instance_id, release_id = owner
         return self.publisher._state(instance_id, release_id) / "jobs"
 
-    def _forget_without_backups(self, state_dir):
-        """Clear a core transaction store that holds no backups.
-
-        Such an install cannot be uninstalled, so its committed record must not
-        block re-installing over it. The recipe, signed catalog and keys stay.
-        """
-        jobs = Path(state_dir) / "jobs"
-        if not jobs.is_dir() or caches.any_backups(jobs):
-            return
-        caches.forget_transactions(state_dir)
-
-    def _clear_core_cache(self, sha256):
-        return caches.clear_core(self.bridge.state_dir / "downloads", sha256)
-
     async def cache_status(self):
         status = await asyncio.to_thread(caches.status, self.publisher, self.bridge.state_dir / "downloads")
         status["jobs"] = await asyncio.to_thread(caches.jobs_status, self.publisher, self.bridge.state_dir)
         return status
 
+    def _clear_core_cache(self, sha256):
+        return caches.clear_core(self.bridge.state_dir / "downloads", sha256)
+
     async def clear_cache(self):
         if self.tasks.busy() or self._prepare_cancel is not None:
             raise RuntimeError("installer_busy")
         removed = await asyncio.to_thread(caches.clear, self.publisher, self.bridge.state_dir / "downloads")
-        status = await self.cache_status()
-        status["removed_bytes"] = removed
-        return status
-
-    async def clear_transaction_backups(self):
-        """Delete staged/backup files for finished transactions, freeing space."""
-        if self.tasks.busy() or self._prepare_cancel is not None:
-            raise RuntimeError("installer_busy")
-        removable = ("committed", "uninstalled", "rolled_back")
-        removed = 0
-        base_ids = {t["transaction_id"] for t in await self.bridge.list_transactions() if t["state"] in removable}
-        removed += await asyncio.to_thread(caches.clear_jobs, self.bridge.state_dir / "jobs", base_ids)
-        for instance_id, release_id, bridge in self.publisher.bridges():
-            ids = {t["transaction_id"] for t in await bridge.list_transactions() if t["state"] in removable}
-            jobs_root = self.publisher._state(instance_id, release_id) / "jobs"
-            removed += await asyncio.to_thread(caches.clear_jobs, jobs_root, ids)
         status = await self.cache_status()
         status["removed_bytes"] = removed
         return status
@@ -491,45 +518,22 @@ class Plugin:
         self.settings.set_auto_cleanup(enabled)
         return await self.get_settings()
 
-    async def set_keep_backups(self, enabled: bool):
-        self.settings.set_keep_backups(enabled)
-        return await self.get_settings()
-
     async def list_transactions(self):
+        return await self._list_transactions()
+
+    async def _list_transactions(self):
         result = await self.bridge.list_transactions()
-        self._annotate_backups(result, self.bridge.state_dir / "jobs")
         for instance_id, release_id, bridge in self.publisher.bridges():
             transactions = await bridge.list_transactions()
-            self._annotate_backups(transactions, self.publisher._state(instance_id, release_id) / "jobs")
             result.extend(self._wrap_publisher(tx, instance_id, release_id) for tx in transactions)
         return result
 
-    @staticmethod
-    def _annotate_backups(transactions, jobs_root):
-        for transaction in transactions:
-            transaction["backups"] = caches.has_backups(jobs_root, transaction.get("transaction_id"))
-
-    async def uninstall(self, transaction_id: str, confirmed_game_closed: bool = False):
+    async def recover(self):
         if self.tasks.busy():
             raise RuntimeError("installer_busy")
-        bridge, value, owner = self._dispatch_id(transaction_id)
-        if not caches.has_backups(self._jobs_root(owner), value):
-            # Add-only transactions created no backup because no original file
-            # existed to restore. Only replacements missing their retained
-            # backup are unsafe to uninstall.
-            transactions = await bridge.list_transactions()
-            record = next((t for t in transactions if t.get("transaction_id") == value), None)
-            if record is None or record.get("has_replacements", True):
-                raise ValueError("uninstall_backups_missing")
-        result = await bridge.uninstall(value, confirmed_game_closed)
-        return self._wrap_publisher(result, *owner) if owner else result
-
-    async def recover(self, confirmed_game_closed: bool = False):
-        if self.tasks.busy():
-            raise RuntimeError("installer_busy")
-        result = await self.bridge.recover(confirmed_game_closed)
+        result = await self.bridge.recover()
         for instance_id, release_id, bridge in self.publisher.bridges():
-            result.extend(self._wrap_publisher(tx, instance_id, release_id) for tx in await bridge.recover(confirmed_game_closed))
+            result.extend(self._wrap_publisher(tx, instance_id, release_id) for tx in await bridge.recover())
         return result
 
     def _local_archive(self, archive_path):
@@ -546,27 +550,42 @@ class Plugin:
             raise ValueError("archive_outside_downloads")
         return path
 
-    async def start_prepare_task(self, instance_id: str, release_id: str, archive_path: str = "", confirmations=None):
-        self._installable_release(release_id)
-        async def work(task):
-            return await self.prepare_install(instance_id, release_id, archive_path, confirmations)
-        return self.tasks.start("prepare", work, instance_id=instance_id, release_id=release_id)
+    async def _revoke_plan(self, bridge, plan_id, owner=None):
+        # Local durable revocation precedes the possibly failing RPC.
+        from exe_installation import revoke_plan
+        revoke_plan(bridge.state_dir, plan_id)
+        if owner and owner[1].startswith("exe-"):
+            self.exe_installation.release_lease(self.publisher._state(*owner), plan_id)
+        return await bridge.discard_plan(plan_id)
 
-    async def start_install_task(self, plan_id: str, confirmed_game_closed: bool = False):
-        if confirmed_game_closed is not True:
-            raise ValueError("game_closed_confirmation_required")
-        self._dispatch_id(plan_id)
+    async def start_patch_install_task(self, instance_id: str, release_id: str, operation: str, request_id: str, archive_path: str = ""):
+        self._installable_release(release_id)
+        if operation not in ("install", "reinstall"):
+            raise ValueError("invalid_install_operation")
+        if not isinstance(instance_id, str) or not instance_id or len(instance_id) > 1024:
+            raise ValueError("invalid_id")
         async def work(task):
-            metadata = self._plan_metadata.get(plan_id, {})
-            if metadata.get("archive_bytes") is not None:
-                task.update(archive_bytes=metadata["archive_bytes"])
-            return await self.start_install(plan_id, True)
-        metadata = self._plan_metadata.get(plan_id, {})
-        return self.tasks.start("install", work, plan_id=plan_id,
-            instance_id=metadata.get("instance_id"), release_id=metadata.get("release_id"))
+            plan_id = None
+            try:
+                value = await self._prepare_install(instance_id, release_id, archive_path, operation)
+                plan_id = value["plan"]["plan_id"]
+                task.update(plan_id=plan_id, archive_bytes=Path(value["archive"]).stat().st_size)
+                self.tasks._save()
+                task.check()
+                return await self._start_install(plan_id)
+            except BaseException:
+                if plan_id:
+                    bridge, core_id, owner = self._dispatch_id(plan_id)
+                    try:
+                        await self._revoke_plan(bridge, core_id, owner)
+                    except Exception:
+                        pass  # Local marker already invalidated the plan.
+                raise
+        return self.tasks.start("install", work, instance_id=instance_id, release_id=release_id,
+                                operation=operation, request_id=request_id, archive_path=archive_path)
 
     async def task_status(self, task_id: str):
-        return self.tasks.get(task_id).snapshot(renew=True)
+        return self.tasks.get(task_id).snapshot()
 
     async def cancel_task(self, task_id: str):
         task = self.tasks.get(task_id)
@@ -580,7 +599,7 @@ class Plugin:
         if self.tasks.busy():
             raise RuntimeError("installer_busy")
         bridge, value, owner = self._dispatch_id(plan_id)
-        result = await bridge.discard_plan(value)
+        result = await self._revoke_plan(bridge, value, owner)
         if owner and owner[1].startswith("exe-"):
             try:
                 self.exe_installation.release_lease(self.publisher._state(*owner), value)
@@ -590,5 +609,27 @@ class Plugin:
         return self._wrap_publisher(result, *owner) if owner else result
 
     async def _unload(self):
-        await self.sources.close()
+        session = getattr(self, "_scan_session", None)
+        if session:
+            await session.close()
         await self.tasks.shutdown()
+        await self.sources.close()
+
+
+def _await_startup(method):
+    from functools import wraps
+    @wraps(method)
+    async def ready(self, *args, **kwargs):
+        event = getattr(self, "_startup_ready", None)
+        if event is not None:
+            await event.wait()
+            if self._startup_error is not None:
+                raise RuntimeError("plugin_startup_failed") from self._startup_error
+        return await method(self, *args, **kwargs)
+    return ready
+
+
+# Loader schedules _main asynchronously; frontend RPCs must not race migration.
+for _name, _method in list(vars(Plugin).items()):
+    if not _name.startswith("_") and asyncio.iscoroutinefunction(_method):
+        setattr(Plugin, _name, _await_startup(_method))

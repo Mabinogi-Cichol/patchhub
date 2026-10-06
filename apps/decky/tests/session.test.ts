@@ -30,6 +30,37 @@ test("menu remounts and filter changes reuse the snapshot; explicit refresh scan
   remount();
 });
 
+test("scan status updates the same generation without a detail mount", async () => {
+  const initial: ScanResult = { ...report, generation: 7, settings_revision: 2, scan_progress: { completed: 0, total: 1, running: true } };
+  let polls = 0;
+  const session = createManagerSession(async () => ({ report: initial, transactions: [] }), undefined, async generation => {
+    assert.equal(generation, 7);
+    polls++;
+    return { ...initial, scan_progress: { completed: 1, total: 1, running: false } };
+  });
+  await session.ensureSnapshot();
+  await new Promise(resolve => setTimeout(resolve, 1050));
+  assert.equal(polls, 1);
+  assert.equal(session.getSnapshot().report?.scan_progress?.completed, 1);
+});
+
+test("starting a refresh fences errors from the previous scan before its snapshot arrives", async () => {
+  const initial = { ...report, generation: 7, settings_revision: 2, scan_progress: { completed: 0, total: 1, running: true } };
+  let finish!: (value: { report: ScanResult; transactions: Transaction[] }) => void;
+  let calls = 0;
+  const session = createManagerSession(() => ++calls === 1 ? Promise.resolve({ report: initial, transactions: [] })
+    : new Promise(resolve => { finish = resolve; }), undefined, async () => { throw new Error("scan_stale"); });
+  await session.refresh();
+  const refreshing = session.refresh();
+  await new Promise(resolve => setTimeout(resolve, 1050));
+  assert.equal(session.getSnapshot().error, null);
+  assert.equal(session.getSnapshot().busy, "正在扫描…");
+  finish({ report: { ...initial, generation: 8, scan_progress: { completed: 1, total: 1, running: false } }, transactions: [] });
+  await refreshing;
+  assert.equal(session.getSnapshot().error, null);
+  assert.equal(session.getSnapshot().report?.generation, 8);
+});
+
 test("an in-flight scan survives unmount and blocks duplicate scans and operations", async () => {
   let finish!: (value: { report: ScanResult; transactions: Transaction[] }) => void;
   let scans = 0;

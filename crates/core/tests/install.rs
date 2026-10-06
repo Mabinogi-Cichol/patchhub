@@ -219,6 +219,44 @@ impl Fixture {
             .remove(0);
         prepare(&install, &self.release, &self.archive, &self.state, 1)
     }
+    // Upgrade samples retain legacy recovery semantics; new plans always clean.
+    fn legacy_plan(&self) -> std::io::Result<InstallPlan> {
+        let plan = self.plan()?;
+        self.edit_journal(&plan.plan_id, |job| {
+            job.as_object_mut().unwrap().remove("transient_recovery");
+        });
+        Ok(plan)
+    }
+    fn complete_legacy_uninstall(&self, id: &str) -> std::io::Result<Transaction> {
+        if let Some(transaction) = list_transactions(&self.state)?
+            .into_iter()
+            .find(|t| t.plan_id == id && t.state == "uninstalled")
+        {
+            return Ok(transaction);
+        }
+        // Model an existing older journal that already persisted uninstall intent.
+        self.edit_journal(id, |job| {
+            job["transaction"]["state"] = "uninstalling".into();
+            job["uninstall_requested"] = true.into();
+        });
+        Ok(recover(&self.state)?
+            .into_iter()
+            .find(|t| t.plan_id == id)
+            .unwrap())
+    }
+    fn reinstall(&self) -> std::io::Result<InstallPlan> {
+        let game = steam::scan(std::slice::from_ref(&self.library))
+            .installs
+            .remove(0);
+        prepare_with_operation(
+            &game,
+            &self.release,
+            &self.archive,
+            &self.state,
+            1,
+            InstallOperation::Reinstall,
+        )
+    }
     fn job_file(&self, id: &str, name: &str) -> PathBuf {
         self.state.join("jobs").join(id).join(name)
     }
@@ -254,10 +292,10 @@ impl Fixture {
 }
 
 #[test]
-fn install_and_uninstall_are_persistent_idempotent_and_preserve_unrelated_files() {
+fn legacy_uninstall_recovery_is_persistent_idempotent_and_preserves_unrelated_files() {
     let f = Fixture::new();
     fs::write(f.game.join("save.sav"), b"user save").unwrap();
-    let plan = f.plan().unwrap();
+    let plan = f.legacy_plan().unwrap();
     assert!(plan.blockers.is_empty());
     f.assert_original();
     assert!(plan.disk_requirement > 0);
@@ -273,11 +311,11 @@ fn install_and_uninstall_are_persistent_idempotent_and_preserve_unrelated_files(
     assert_eq!(apply(&plan.plan_id, &f.state).unwrap().state, "committed");
     assert_eq!(list_transactions(&f.state).unwrap().len(), 1);
     assert_eq!(
-        uninstall(&plan.plan_id, &f.state).unwrap().state,
+        f.complete_legacy_uninstall(&plan.plan_id).unwrap().state,
         "uninstalled"
     );
     assert_eq!(
-        uninstall(&plan.plan_id, &f.state).unwrap().state,
+        f.complete_legacy_uninstall(&plan.plan_id).unwrap().state,
         "uninstalled"
     );
     f.assert_original();
@@ -314,13 +352,16 @@ fn unmanaged_baseline_conflicts_and_stale_plans_never_write() {
 #[test]
 fn steam_update_or_downloading_prevents_apply_and_old_backup_restore() {
     let f = Fixture::new();
-    let plan = f.plan().unwrap();
+    let plan = f.legacy_plan().unwrap();
     f.manifest("100", "6");
     assert!(apply(&plan.plan_id, &f.state).is_err());
     f.manifest("100", "4");
     assert_eq!(apply(&plan.plan_id, &f.state).unwrap().state, "committed");
     f.manifest("101", "4");
-    assert!(uninstall(&plan.plan_id, &f.state).is_err());
+    assert_eq!(
+        f.complete_legacy_uninstall(&plan.plan_id).unwrap().state,
+        "needs_recovery"
+    );
     assert_eq!(
         fs::read(f.game.join("original.dat")).unwrap(),
         b"patched bytes"
@@ -331,14 +372,14 @@ fn steam_update_or_downloading_prevents_apply_and_old_backup_restore() {
 fn user_modification_and_corrupt_backup_block_the_entire_restore() {
     for corrupt_backup in [false, true] {
         let f = Fixture::new();
-        let plan = f.plan().unwrap();
+        let plan = f.legacy_plan().unwrap();
         apply(&plan.plan_id, &f.state).unwrap();
         if corrupt_backup {
             fs::write(f.job_file(&plan.plan_id, "0.backup"), b"bad backup").unwrap();
         } else {
             fs::write(f.game.join("original.dat"), b"user mod").unwrap();
         }
-        let result = uninstall(&plan.plan_id, &f.state).unwrap();
+        let result = f.complete_legacy_uninstall(&plan.plan_id).unwrap();
         assert_eq!(result.state, "needs_recovery");
         assert_eq!(
             fs::read(f.game.join("content/new.dat")).unwrap(),
@@ -364,8 +405,8 @@ fn stage_tampering_rolls_back_without_game_changes() {
 #[test]
 fn managed_updates_are_explicitly_blocked_until_clean_uninstall() {
     let f = Fixture::new();
-    let first = f.plan().unwrap();
-    let second = f.plan().unwrap();
+    let first = f.legacy_plan().unwrap();
+    let second = f.legacy_plan().unwrap();
     apply(&first.plan_id, &f.state).unwrap();
     assert!(apply(&second.plan_id, &f.state).is_err());
     assert!(f
@@ -373,8 +414,8 @@ fn managed_updates_are_explicitly_blocked_until_clean_uninstall() {
         .unwrap_err()
         .to_string()
         .contains("managed_install_exists"));
-    uninstall(&first.plan_id, &f.state).unwrap();
-    let new_plan = f.plan().unwrap();
+    f.complete_legacy_uninstall(&first.plan_id).unwrap();
+    let new_plan = f.legacy_plan().unwrap();
     assert_eq!(
         apply(&new_plan.plan_id, &f.state).unwrap().state,
         "committed"
@@ -408,7 +449,7 @@ fn crash_after_backup_before_and_after_replacement_recovers() {
 #[test]
 fn interrupted_uninstall_finishes_and_removes_created_directories() {
     let f = Fixture::new();
-    let plan = f.plan().unwrap();
+    let plan = f.legacy_plan().unwrap();
     apply(&plan.plan_id, &f.state).unwrap();
     fs::remove_file(f.game.join("content/new.dat")).unwrap();
     f.edit_journal(&plan.plan_id, |j| {
@@ -459,7 +500,7 @@ fn interrupted_install_copy_accepts_only_verified_stage_prefixes() {
 #[test]
 fn interrupted_uninstall_copy_accepts_verified_backup_prefix() {
     let f = Fixture::new();
-    let plan = f.plan().unwrap();
+    let plan = f.legacy_plan().unwrap();
     assert_eq!(apply(&plan.plan_id, &f.state).unwrap().state, "committed");
     let temp = f.temp_file(&plan.plan_id, 0, "original.dat");
     fs::write(&temp, b"orig").unwrap();
@@ -730,7 +771,7 @@ fn replacing_and_restoring_preserves_executable_permissions() {
         fs::Permissions::from_mode(0o755),
     )
     .unwrap();
-    let plan = f.plan().unwrap();
+    let plan = f.legacy_plan().unwrap();
     assert_eq!(apply(&plan.plan_id, &f.state).unwrap().state, "committed");
     assert_eq!(
         fs::metadata(f.game.join("original.dat"))
@@ -741,7 +782,7 @@ fn replacing_and_restoring_preserves_executable_permissions() {
         0o755
     );
     assert_eq!(
-        uninstall(&plan.plan_id, &f.state).unwrap().state,
+        f.complete_legacy_uninstall(&plan.plan_id).unwrap().state,
         "uninstalled"
     );
     assert_eq!(
@@ -775,7 +816,7 @@ fn symlinked_game_ancestor_or_target_is_rejected() {
 #[test]
 fn legacy_committed_uninstall_intent_is_recovered() {
     let f = Fixture::new();
-    let plan = f.plan().unwrap();
+    let plan = f.legacy_plan().unwrap();
     apply(&plan.plan_id, &f.state).unwrap();
     f.edit_journal(&plan.plan_id, |j| {
         j["uninstall_requested"] = true.into();
@@ -829,4 +870,263 @@ fn fixed_ntfs_timestamps_are_ignored_but_other_ntfs_metadata_is_rejected() {
         }
         f.assert_original();
     }
+}
+
+#[test]
+fn successful_install_and_reinstall_clean_temporaries_and_keep_receipts() {
+    let f = Fixture::new();
+    let first = f.plan().unwrap();
+    assert_eq!(apply(&first.plan_id, &f.state).unwrap().state, "committed");
+    assert!(!f.job_file(&first.plan_id, "0.backup").exists());
+    assert!(!f.job_file(&first.plan_id, "1.stage").exists());
+    assert!(recover(&f.state).unwrap().is_empty());
+    let second = f.reinstall().unwrap();
+    assert!(second.blockers.is_empty());
+    assert_eq!(apply(&second.plan_id, &f.state).unwrap().state, "committed");
+    let records = list_transactions(&f.state).unwrap();
+    assert_eq!(records.iter().filter(|t| t.state == "committed").count(), 1);
+    assert!(records
+        .iter()
+        .any(|t| t.plan_id == first.plan_id && t.state == "superseded"));
+    assert!(!f.job_file(&second.plan_id, "0.backup").exists());
+}
+
+#[test]
+fn owned_missing_and_damaged_files_reinstall_and_failed_retry_preserves_preop_and_receipt() {
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    };
+    use steam_patch_core::operation;
+    let f = Fixture::new();
+    let first = f.plan().unwrap();
+    apply(&first.plan_id, &f.state).unwrap();
+    fs::write(f.game.join("original.dat"), b"damaged current bytes").unwrap();
+    fs::remove_file(f.game.join("content/new.dat")).unwrap();
+    let second = f.reinstall().unwrap();
+    assert_eq!(
+        second.changes[0].original_sha256,
+        Some(hash(b"damaged current bytes"))
+    );
+    assert_eq!(second.changes[1].original_sha256, None);
+    let cancel = Arc::new(AtomicBool::new(false));
+    let signal = cancel.clone();
+    let transaction = operation::run(
+        cancel,
+        move |p| {
+            if p.stage == "writing" && p.files_done == 1 {
+                signal.store(true, Ordering::Relaxed);
+            }
+        },
+        || apply(&second.plan_id, &f.state),
+    )
+    .unwrap();
+    assert_eq!(transaction.state, "rolled_back");
+    assert_eq!(
+        fs::read(f.game.join("original.dat")).unwrap(),
+        b"damaged current bytes"
+    );
+    assert!(!f.game.join("content/new.dat").exists());
+    assert!(list_transactions(&f.state)
+        .unwrap()
+        .iter()
+        .any(|t| t.plan_id == first.plan_id && t.state == "committed"));
+    assert!(!f.job_file(&second.plan_id, "0.backup").exists());
+    let third = f.reinstall().unwrap();
+    assert_eq!(apply(&third.plan_id, &f.state).unwrap().state, "committed");
+}
+
+#[test]
+fn reinstall_rejects_changed_content_and_unowned_damage() {
+    let mut f = Fixture::new();
+    fs::write(f.game.join("original.dat"), b"patched bytes").unwrap();
+    assert_eq!(
+        f.reinstall().unwrap_err().to_string(),
+        "reinstall_unowned_or_incomplete"
+    );
+    fs::write(f.game.join("original.dat"), b"original bytes").unwrap();
+    let plan = f.plan().unwrap();
+    apply(&plan.plan_id, &f.state).unwrap();
+    f.release.recipe.as_mut().unwrap().files[0].destination = "save.sav".into();
+    assert_eq!(
+        f.reinstall().unwrap_err().to_string(),
+        "reinstall_content_identity_changed"
+    );
+    assert!(!f.game.join("save.sav").exists());
+}
+
+#[test]
+fn revoked_marker_alone_blocks_apply_and_during_write_rolls_back() {
+    use std::sync::{atomic::AtomicBool, Arc};
+    use steam_patch_core::operation;
+    let f = Fixture::new();
+    let first = f.plan().unwrap();
+    fs::write(f.job_file(&first.plan_id, "revoked"), b"").unwrap();
+    assert_eq!(
+        apply(&first.plan_id, &f.state).unwrap_err().to_string(),
+        "plan_revoked"
+    );
+    let second = f.plan().unwrap();
+    let marker = f.job_file(&second.plan_id, "revoked");
+    let result = operation::run(
+        Arc::new(AtomicBool::new(false)),
+        move |p| {
+            if p.stage == "writing" && p.files_done == 1 {
+                fs::write(&marker, b"").unwrap();
+            }
+        },
+        || apply(&second.plan_id, &f.state),
+    )
+    .unwrap();
+    assert_eq!(result.state, "rolled_back");
+    f.assert_original();
+}
+
+#[test]
+fn migration_revokes_old_plans_once_and_retains_unfinished_legacy_recovery() {
+    let f = Fixture::new();
+    let old = f.legacy_plan().unwrap();
+    migrate_state(&f.state).unwrap();
+    assert!(f.job_file(&old.plan_id, "revoked").exists());
+    let fresh = f.plan().unwrap();
+    migrate_state(&f.state).unwrap();
+    assert!(!f.job_file(&fresh.plan_id, "revoked").exists());
+    assert_eq!(apply(&fresh.plan_id, &f.state).unwrap().state, "committed");
+
+    let legacy = Fixture::new();
+    let old = legacy.legacy_plan().unwrap();
+    apply(&old.plan_id, &legacy.state).unwrap();
+    legacy.edit_journal(&old.plan_id, |job| {
+        job["transaction"]["state"] = "uninstalling".into();
+        job["uninstall_requested"] = true.into();
+    });
+    migrate_state(&legacy.state).unwrap();
+    assert!(legacy.job_file(&old.plan_id, "0.backup").exists());
+    assert_eq!(recover(&legacy.state).unwrap()[0].state, "uninstalled");
+    legacy.assert_original();
+    assert!(!legacy.job_file(&old.plan_id, "0.backup").exists());
+}
+
+#[test]
+fn migration_cleans_legacy_success_but_damaged_terminal_state_never_deletes_material() {
+    let f = Fixture::new();
+    let old = f.legacy_plan().unwrap();
+    apply(&old.plan_id, &f.state).unwrap();
+    migrate_state(&f.state).unwrap();
+    assert!(!f.job_file(&old.plan_id, "0.backup").exists());
+    assert_eq!(list_transactions(&f.state).unwrap()[0].state, "committed");
+
+    let damaged = Fixture::new();
+    let old = damaged.legacy_plan().unwrap();
+    damaged.edit_journal(&old.plan_id, |job| {
+        job["transaction"]["state"] = "committed".into();
+    });
+    assert_eq!(
+        migrate_state(&damaged.state).unwrap_err().to_string(),
+        "journal_invalid_terminal"
+    );
+    assert!(damaged.job_file(&old.plan_id, "0.stage").exists());
+}
+
+#[test]
+fn committed_success_wins_over_late_cancel_and_cleanup_failure_can_retry() {
+    use std::sync::{atomic::AtomicBool, Arc};
+    use steam_patch_core::operation;
+    let f = Fixture::new();
+    let plan = f.plan().unwrap();
+    // An unexpected directory in a derived cleanup slot is retained and recorded.
+    fs::create_dir(f.job_file(&plan.plan_id, "1.backup")).unwrap();
+    let committed = apply(&plan.plan_id, &f.state).unwrap();
+    assert_eq!(committed.state, "committed");
+    assert!(committed
+        .error
+        .as_deref()
+        .unwrap()
+        .contains("cleanup_pending"));
+    fs::remove_dir(f.job_file(&plan.plan_id, "1.backup")).unwrap();
+    migrate_state(&f.state).unwrap();
+    assert!(!f.job_file(&plan.plan_id, "1.stage").exists());
+    assert_eq!(list_transactions(&f.state).unwrap()[0].error, None);
+    fs::write(f.job_file(&plan.plan_id, "revoked"), b"").unwrap();
+    let repeated = operation::run(
+        Arc::new(AtomicBool::new(true)),
+        |_| (),
+        || apply(&plan.plan_id, &f.state),
+    )
+    .unwrap();
+    assert_eq!(repeated.state, "committed");
+}
+
+#[test]
+fn unfinished_legacy_transaction_blocks_reinstall_without_journal_discard() {
+    let f = Fixture::new();
+    let first = f.legacy_plan().unwrap();
+    apply(&first.plan_id, &f.state).unwrap();
+    f.edit_journal(&first.plan_id, |job| {
+        job["transaction"]["state"] = "needs_recovery".into();
+    });
+    let original_journal = fs::read(f.state.join("journal.sqlite")).unwrap();
+    assert!(f
+        .reinstall()
+        .unwrap_err()
+        .to_string()
+        .contains("managed_install_exists_or_needs_recovery"));
+    assert_eq!(
+        fs::read(f.state.join("journal.sqlite")).unwrap(),
+        original_journal
+    );
+    assert!(f.job_file(&first.plan_id, "0.backup").exists());
+}
+
+#[test]
+fn cancellation_at_planning_boundary_never_leaves_executable_plan() {
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    };
+    use steam_patch_core::operation;
+    let f = Fixture::new();
+    let cancel = Arc::new(AtomicBool::new(false));
+    let signal = cancel.clone();
+    let result = operation::run(
+        cancel,
+        move |p| {
+            if p.stage == "planning" {
+                signal.store(true, Ordering::Relaxed);
+            }
+        },
+        || f.plan(),
+    );
+    assert_eq!(result.unwrap_err().to_string(), "task_cancelled");
+    assert!(list_transactions(&f.state).unwrap().is_empty());
+    assert_eq!(fs::read_dir(f.state.join("jobs")).unwrap().count(), 0);
+    f.assert_original();
+}
+
+#[test]
+fn committed_install_survives_cleanup_diagnostic_journal_write_failure() {
+    let f = Fixture::new();
+    let plan = f.plan().unwrap();
+    fs::create_dir(f.job_file(&plan.plan_id, "1.backup")).unwrap();
+    // The final install commit succeeds; only writes against the committed
+    // receipt fail, simulating a full disk while persisting cleanup diagnostics.
+    let db = rusqlite::Connection::open(f.state.join("journal.sqlite")).unwrap();
+    db.execute_batch("CREATE TRIGGER deny_cleanup BEFORE UPDATE ON jobs WHEN json_extract(OLD.document, '$.transaction.state') = 'committed' BEGIN SELECT RAISE(FAIL, 'simulated_disk_full'); END;").unwrap();
+    drop(db);
+    let transaction = apply(&plan.plan_id, &f.state).unwrap();
+    assert_eq!(transaction.state, "committed");
+    assert!(transaction
+        .error
+        .as_deref()
+        .unwrap()
+        .contains("cleanup_pending"));
+    assert_eq!(list_transactions(&f.state).unwrap()[0].state, "committed");
+    assert_eq!(
+        fs::read(f.game.join("original.dat")).unwrap(),
+        b"patched bytes"
+    );
+    assert_eq!(
+        fs::read(f.game.join("content/new.dat")).unwrap(),
+        b"new bytes"
+    );
 }

@@ -13,10 +13,11 @@ type SessionState = {
 
 // Steam menus and route changes can remount the UI. Keep the last scan and
 // in-flight operation in the plugin session, rather than in a mounted panel.
-export function createManagerSession(readSnapshot: () => Promise<Snapshot>, discoverGame?: (instance: string, names: string[], language: string | null, force: boolean) => Promise<DiscoveryResult>) {
+export function createManagerSession(readSnapshot: () => Promise<Snapshot>, discoverGame?: (instance: string, names: string[], language: string | null, force: boolean) => Promise<DiscoveryResult>, scanStatus?: (generation: number) => Promise<ScanResult>) {
   let state: SessionState = { report: null, transactions: [], busy: null, busySince: null, error: null, note: null, discoveries: {} };
   let attemptedInitialScan = false;
   let discoveryEpoch = 0;
+  let scanEpoch = 0;
   const pending = new Map<string, Promise<void>>();
   const attempted = new Set<string>();
   const listeners = new Set<() => void>();
@@ -35,8 +36,29 @@ export function createManagerSession(readSnapshot: () => Promise<Snapshot>, disc
     catch (error) { update({ error: reason(String(error)) }); }
     finally { update({ busy: null, busySince: null }); }
   }
+  function acceptSnapshot(snapshot: Snapshot) {
+    const epoch = ++scanEpoch;
+    update(snapshot);
+    const generation = snapshot.report.generation;
+    const revision = snapshot.report.settings_revision;
+    if (!scanStatus || generation == null || !snapshot.report.scan_progress?.running) return;
+    const poll = async () => {
+      try {
+        const report = await scanStatus(generation);
+        if (epoch !== scanEpoch || state.report?.generation !== generation || state.report.settings_revision !== revision || report.generation !== generation || report.settings_revision !== revision) return;
+        update({ report });
+        if (report.scan_progress?.running) setTimeout(() => void poll(), 1000);
+      } catch (error) {
+        if (epoch === scanEpoch && state.report?.generation === generation) update({ error: reason(String(error)) });
+      }
+    };
+    setTimeout(() => void poll(), 1000);
+  }
   function refresh() {
-    return work("正在扫描…", readSnapshot, update);
+    if (state.busy) return Promise.resolve();
+    // Starting a new backend scan invalidates the previous generation immediately.
+    scanEpoch++;
+    return work("正在扫描…", readSnapshot, acceptSnapshot);
   }
   function discover(instance: string, names: string[], language: string | null = null, force = false) {
     const report = state.report;
@@ -65,7 +87,7 @@ export function createManagerSession(readSnapshot: () => Promise<Snapshot>, disc
         }
         const current = state.report!;
         update({ report: { ...current, installs: current.installs.map(item => item.game.instance_id === instance ? { ...item,
-          patches: [...new Map([...item.patches.filter(patch => patch.support_level !== "publisher_exe"), ...(result.exe_patches ?? [])]
+          patches: [...new Map([...item.patches.filter(patch => !result.patches?.some(fresh => fresh.source_id === patch.source_id) && patch.support_level !== "publisher_exe"), ...(result.patches ?? result.exe_patches ?? [])]
             .map(patch => [patch.release_id, patch] as const)).values()],
           exe_reviews: result.exe_reviews ?? [], discovery: { status: result.status, candidates: result.candidates, diagnostics: result.diagnostics } } : item) } });
       } catch (error) {
@@ -83,6 +105,7 @@ export function createManagerSession(readSnapshot: () => Promise<Snapshot>, disc
     return operation;
   }
   function invalidateDiscovery(sourceId?: string, appid?: number) {
+    scanEpoch++;
     discoveryEpoch++;
     attempted.clear();
     update({ discoveries: {}, report: state.report ? { ...state.report, installs: state.report.installs.map(item => {
@@ -98,6 +121,7 @@ export function createManagerSession(readSnapshot: () => Promise<Snapshot>, disc
       return () => { listeners.delete(listener); };
     },
     update,
+    acceptSnapshot,
     work,
     refresh,
     discover,

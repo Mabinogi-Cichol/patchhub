@@ -315,20 +315,39 @@ fn hash_file(root: &Path, library: &Path, relative: &str) -> io::Result<Option<S
 }
 
 pub fn detect(install: &GameInstall, release: &PatchRelease) -> Detection {
-    if release.detection.is_empty() || install.availability != "installed" {
+    if (release.detection.is_empty() && release.recipe.is_none())
+        || install.availability != "installed"
+    {
         return Detection {
             status: "unknown".into(),
             files: Vec::new(),
         };
     }
-    let files: Vec<_> = release
-        .detection
-        .iter()
-        .map(
-            |rule| match hash_file(&install.install_path, &install.library_path, &rule.path) {
+    // A managed patch is complete only when every audited destination matches;
+    // a detection hint may be a subset and cannot prove installation success.
+    let mut rules: Vec<_> = release
+        .recipe
+        .as_ref()
+        .map(|recipe| {
+            recipe
+                .files
+                .iter()
+                .map(|file| (&file.destination, &file.installed_sha256))
+                .collect()
+        })
+        .unwrap_or_default();
+    for hint in &release.detection {
+        if !rules.iter().any(|(path, _)| *path == &hint.path) {
+            rules.push((&hint.path, &hint.sha256));
+        }
+    }
+    let files: Vec<_> = rules
+        .into_iter()
+        .map(|(path, expected)| {
+            match hash_file(&install.install_path, &install.library_path, path) {
                 Ok(Some(hash)) => FileEvidence {
-                    path: rule.path.clone(),
-                    status: if hash == rule.sha256 {
+                    path: path.clone(),
+                    status: if hash == *expected {
                         "match"
                     } else {
                         "mismatch"
@@ -337,17 +356,17 @@ pub fn detect(install: &GameInstall, release: &PatchRelease) -> Detection {
                     actual_sha256: Some(hash),
                 },
                 Ok(None) => FileEvidence {
-                    path: rule.path.clone(),
+                    path: path.clone(),
                     status: "missing".into(),
                     actual_sha256: None,
                 },
                 Err(_) => FileEvidence {
-                    path: rule.path.clone(),
+                    path: path.clone(),
                     status: "unreadable_or_unsafe".into(),
                     actual_sha256: None,
                 },
-            },
-        )
+            }
+        })
         .collect();
     let status = if files.iter().any(|f| f.status == "unreadable_or_unsafe") {
         "unknown"

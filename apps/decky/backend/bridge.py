@@ -9,7 +9,7 @@ from tasks import current_task
 
 MAX_RESPONSE_BYTES = 8 * 1024 * 1024
 MAX_REQUEST_BYTES = 64 * 1024
-METHODS = {"discard_plan", "scan", "preview", "plan_install", "fetch_artifact", "start_install", "list_transactions", "uninstall", "recover"}
+METHODS = {"discard_plan", "scan", "preview", "plan_install", "fetch_artifact", "start_install", "list_transactions", "recover", "migrate_state"}
 
 
 class CoreBridge:
@@ -50,8 +50,8 @@ class CoreBridge:
     async def preview(self, instance_id: str, release_id: str):
         return await self._call("preview", {"instance_id": self._id(instance_id), "release_id": self._id(release_id)})
 
-    async def plan_install(self, instance_id: str, release_id: str, archive: Path | None = None):
-        params = {"instance_id": self._id(instance_id), "release_id": self._id(release_id)}
+    async def plan_install(self, instance_id: str, release_id: str, archive: Path | None = None, operation="install"):
+        params = {"instance_id": self._id(instance_id), "release_id": self._id(release_id), "operation": operation}
         if archive is not None:
             params["archive"] = str(archive.resolve(strict=True))
         return await self._call("plan_install", params)
@@ -67,17 +67,20 @@ class CoreBridge:
     async def discard_plan(self, plan_id):
         return await self._call("discard_plan", {"plan_id": self._id(plan_id)})
 
-    async def start_install(self, plan_id: str, confirmed_game_closed: bool = False):
-        return await self._call("start_install", {"plan_id": self._id(plan_id), "confirmed_game_closed": confirmed_game_closed})
+    async def start_install(self, plan_id: str):
+        return await self._call("start_install", {"plan_id": self._id(plan_id)})
 
     async def list_transactions(self):
         return await self._call("list_transactions", {})
 
-    async def uninstall(self, transaction_id: str, confirmed_game_closed: bool = False):
-        return await self._call("uninstall", {"transaction_id": self._id(transaction_id), "confirmed_game_closed": confirmed_game_closed})
+    async def recover(self):
+        return await self._call("recover", {})
 
-    async def recover(self, confirmed_game_closed: bool = False):
-        return await self._call("recover", {"confirmed_game_closed": confirmed_game_closed})
+    async def migrate_state(self):
+        return await self._call("migrate_state", {})
+
+    async def cleanup_transactions(self):
+        return await self._call("migrate_state", {})
 
     async def _call(self, method: str, params: dict):
         if method not in METHODS:
@@ -90,7 +93,7 @@ class CoreBridge:
             host_params["trust_keys"] = str(self.trust_keys)
         if self.state_dir:
             host_params["state_dir"] = str(self.state_dir)
-        request = {"protocol_version": 1, "request_id": request_id, "method": method,
+        request = {"protocol_version": 2, "request_id": request_id, "method": method,
                    "params": {**host_params, **params}}
         payload = json.dumps(request, ensure_ascii=False).encode("utf-8") + b"\n"
         if len(payload) > MAX_REQUEST_BYTES:
@@ -146,7 +149,7 @@ class CoreBridge:
             await process.wait()
             if process.returncode != 0:
                 raise RuntimeError("core_process_failed")
-            if (not isinstance(response, dict) or response.get("protocol_version") != 1
+            if (not isinstance(response, dict) or response.get("protocol_version") != 2
                     or response.get("request_id") != request_id or not isinstance(response.get("ok"), bool)):
                 raise RuntimeError("invalid_core_response")
             if not response["ok"]:

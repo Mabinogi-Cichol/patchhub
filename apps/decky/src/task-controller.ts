@@ -1,9 +1,8 @@
 import type { Transaction } from "@steam-patch/ui";
-import type { ExeConfirmations, PreparedInstall } from "./install";
 
 export type TaskSnapshot = {
   task_id: string;
-  kind: "prepare" | "install";
+  kind: "install";
   state: "running" | "cancelling" | "rolling_back" | "cancelled" | "completed" | "failed";
   stage: string;
   bytes_done: number;
@@ -15,22 +14,20 @@ export type TaskSnapshot = {
   elapsed_seconds: number;
   speed_bps: number;
   eta_seconds: number | null;
-  result: PreparedInstall | Transaction | null;
+  result: Transaction | null;
   error: string | null;
   instance_id?: string;
   release_id?: string;
 };
 export type TaskApi = {
-  prepare(instance: string, release: string, archive: string, confirmations?: ExeConfirmations): Promise<{ task_id: string }>;
-  install(plan: string, confirmed: boolean): Promise<{ task_id: string }>;
+  install(instance: string, release: string, operation: "install" | "reinstall", requestId: string, archive: string): Promise<{ task_id: string }>;
   status(id: string): Promise<TaskSnapshot>;
   cancel(id: string): Promise<TaskSnapshot>;
   list(): Promise<TaskSnapshot[]>;
 };
 export const taskIsTerminal = (state: TaskSnapshot["state"]) => ["cancelled", "completed", "failed"].includes(state);
 
-// task_status renews the backend lease. The controller therefore stops status
-// polling when the UI closes or cancellation cannot reach the backend.
+// The backend owns task lifetime. Closing the UI only stops observation.
 export function createTaskController(api: TaskApi, pollMs = 750, retryMs = 1500) {
   let current: TaskSnapshot | null = null;
   let timer: ReturnType<typeof setTimeout> | null = null;
@@ -51,8 +48,7 @@ export function createTaskController(api: TaskApi, pollMs = 750, retryMs = 1500)
       publish(value);
       if (!taskIsTerminal(value.state)) schedule(() => void poll(id, epoch), pollMs);
     } catch {
-      // Transient status failures are safe: without a successful status call,
-      // the backend lease expires and stops the task.
+      // Transient polling failures do not cancel the backend task.
       if (epoch === generation && !disposed && !cancelling) schedule(() => void poll(id, epoch), retryMs);
     }
   }
@@ -73,29 +69,27 @@ export function createTaskController(api: TaskApi, pollMs = 750, retryMs = 1500)
         cancelling = false;
         if (!disposed && !taskIsTerminal(result.state)) schedule(() => void poll(id, epoch), pollMs);
       } catch {
-        // cancel_task does not renew the lease. Never call task_status while
-        // cancellation is unconfirmed; the watchdog must remain effective.
+        // Retry explicit cancellation until the backend acknowledges it.
         if (epoch === generation && !disposed) schedule(() => void attempt(), retryMs);
       }
     }
     void attempt();
   }
-  async function begin(kind: TaskSnapshot["kind"], instance: string, release: string, action: () => Promise<{ task_id: string }>) {
+  async function begin(instance: string, release: string, action: () => Promise<{ task_id: string }>) {
     if (starting || (current && !taskIsTerminal(current.state))) throw new Error("installer_busy");
     starting = true; cancelling = false; disposed = false; stopTimer();
     const epoch = ++generation;
     try {
       const value = await action();
-      if (epoch !== generation || disposed || cancelling) {
-        // UI left while start RPC was in flight. Do not poll or renew.
-        try { await api.cancel(value.task_id); } catch { /* Lease will expire. */ }
+      if (epoch !== generation || disposed) {
         return value.task_id;
       }
-      publish({ task_id: value.task_id, kind, state: "running", stage: "starting", bytes_done: 0,
+      publish({ task_id: value.task_id, kind: "install", state: "running", stage: "starting", bytes_done: 0,
         total_bytes: null, files_done: 0, total_files: null, current_file: null, archive_bytes: null,
         elapsed_seconds: 0, speed_bps: 0, eta_seconds: null, result: null, error: null,
         instance_id: instance, release_id: release });
       void poll(value.task_id, epoch);
+      if (cancelling) { cancelling = false; setTimeout(() => void requestCancel(), 0); }
       return value.task_id;
     } finally { starting = false; }
   }
@@ -112,16 +106,11 @@ export function createTaskController(api: TaskApi, pollMs = 750, retryMs = 1500)
   return {
     getSnapshot: () => current,
     subscribe(listener: () => void) { listeners.add(listener); return () => { listeners.delete(listener); }; },
-    startPrepare: (instance: string, release: string, archive = "", confirmations?: ExeConfirmations) => begin("prepare", instance, release, () => api.prepare(instance, release, archive, confirmations)),
-    startInstall: (plan: string, instance: string, release: string) => begin("install", instance, release, () => api.install(plan, true)),
+    startInstall: (instance: string, release: string, operation: "install" | "reinstall", requestId: string, archive = "") => begin(instance, release, () => api.install(instance, release, operation, requestId, archive)),
     requestCancel, resume,
     clear() { if (current && taskIsTerminal(current.state)) { handled.add(current.task_id); publish(null); } },
     dismount() {
       disposed = true; stopTimer();
-      if (starting) cancelling = true;
-      else if (current && !taskIsTerminal(current.state)) {
-        void api.cancel(current.task_id).catch(() => {});
-      }
       generation++;
     },
   };

@@ -3,6 +3,7 @@ import hashlib
 import json
 from pathlib import Path
 import tempfile
+import types
 from threading import Event
 import unittest
 from unittest.mock import patch, Mock
@@ -194,6 +195,41 @@ class ExistingTransactionTests(unittest.IsolatedAsyncioTestCase):
                 with self.assertRaisesRegex(RuntimeError, "publisher_existing_transaction"):
                     await publisher.prepare(game, publisher.match(game), Event())
                 download.assert_not_called()
+
+
+class ReinstallContentTests(unittest.IsolatedAsyncioTestCase):
+    async def test_changed_zip_keeps_previous_catalog_and_signed_detection(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            sources = fixture_sources(root, [{"title": "Game", "aliases": [],
+                "url": "https://download.patch.moe/game.zip", "language": "en"}])
+            publisher = Publisher(DummyBridge(root / "state"), sources)
+            game_root = root / "game"
+            game_root.mkdir()
+            game = {"name": "Game", "appid": 9, "instance_id": f"9|{root}|{game_root}",
+                    "install_path": str(game_root), "buildid": "42", "availability": "installed"}
+            matched = publisher.match(game)
+            state = publisher._state(game["instance_id"], matched["release_id"])
+            state.mkdir(parents=True)
+            previous = {"schema_version": 1, "revision": 1, "releases": [{
+                "release_id": matched["release_id"], "appid": 9, "language": "en",
+                "verified_buildids": ["42"], "recipe": {"artifact_sha256": "a" * 64,
+                "files": [{"source": "patch.txt", "destination": "patch.txt", "installed_sha256": "b" * 64}]}}]}
+            catalog = state / "catalog.json"
+            catalog.write_text(json.dumps(previous), encoding="utf-8")
+            signed = state / "signed.json"
+            signed.write_bytes(b"previous-signature")
+            archive = root / "new.zip"
+            with zipfile.ZipFile(archive, "w") as package:
+                package.writestr("patch.txt", b"updated-content")
+            from unittest.mock import AsyncMock
+            existing = types.SimpleNamespace(list_transactions=AsyncMock(return_value=[{"state": "committed"}]))
+            with patch.object(publisher, "_bridge", return_value=existing), patch.object(publisher, "_native", new_callable=AsyncMock) as native:
+                with self.assertRaisesRegex(ValueError, "reinstall_content_identity_changed"):
+                    await publisher.prepare(game, matched, Event(), local_archive=archive, operation="reinstall")
+                native.assert_not_awaited()
+            self.assertEqual(json.loads(catalog.read_text(encoding="utf-8")), previous)
+            self.assertEqual(signed.read_bytes(), b"previous-signature")
 
 
 if __name__ == "__main__":

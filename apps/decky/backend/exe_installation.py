@@ -25,7 +25,6 @@ from tasks import current_task
 
 MAX_POLICY = 4 * 1024 * 1024
 UUID_PATTERN = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
-CONFIRMATIONS = {"terms_accepted", "conditions_accepted", "keep_backups"}
 CORE_PLAN_MAX_TTL = 900  # core install::validate_job enforces this upper bound
 
 
@@ -50,15 +49,24 @@ def _read_json(path, limit=MAX_POLICY):
     return value
 
 
-def _accept(profile, confirmations):
-    _need(isinstance(confirmations, dict) and not set(confirmations) - CONFIRMATIONS
-          and all(type(v) is bool for v in confirmations.values()), "exe_confirmation_invalid")
-    _need(confirmations.get("terms_accepted") is True, "exe_terms_confirmation_required")
-    _need(confirmations.get("keep_backups") is True, "exe_backups_required")
-    conditional = bool(profile["requires_dlc"] or profile["excludes_dlc"])
-    _need(not conditional or confirmations.get("conditions_accepted") is True, "exe_conditions_confirmation_required")
-    return {"terms_accepted": True, "keep_backups": True,
-            "conditions_accepted": confirmations.get("conditions_accepted") is True}
+def revoke_plan(state, plan_id):
+    """Persist revocation before the fallible discard RPC."""
+    _need(isinstance(plan_id, str) and re.fullmatch(UUID_PATTERN, plan_id), "invalid_id")
+    job = Path(state) / "jobs" / plan_id
+    _need(no_links(job) and job.is_dir(), "exe_core_job_invalid")
+    marker = job / "revoked"
+    _need(no_links(marker), "linked_state_path")
+    if not marker.exists():
+        with os.fdopen(os.open(marker, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb") as stream:
+            stream.write(b"revoked\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        if os.name != "nt":
+            fd = os.open(job, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.fsync(fd)
+            finally:
+                os.close(fd)
 
 
 def _overlap(state, root):
@@ -67,7 +75,7 @@ def _overlap(state, root):
 
 
 def _space(state, root, profile):
-    """Budget each volume before acquisition, including retained backups.
+    """Budget each volume before acquisition, including temporary failure-recovery copies.
 
     ZIP_STORED needs payload + bounded directory/header overhead. State holds
     EXE, worker ZIP, staging, and original backups; target holds temporary files.
@@ -135,11 +143,10 @@ class ExeInstallation:
                 "exe": {"profile_id": profile["profile_id"], "language": profile["language"],
                     "version": profile["version_identity"], "variant": profile["variant"],
                     "terms": profile["terms"], "requires_dlc": profile["requires_dlc"],
-                    "excludes_dlc": profile["excludes_dlc"], "backup_required": True,
-                    "conditions_confirmation_required": bool(profile["requires_dlc"] or profile["excludes_dlc"])}})
+                    "excludes_dlc": profile["excludes_dlc"]}})
         return result
 
-    async def _idle(self, state):
+    async def _idle(self, state, operation="install"):
         if (state / "journal.sqlite").exists() and not (state / "catalog.json").is_file():
             raise ValueError("exe_existing_state_invalid")
         if (state / "catalog.json").exists():
@@ -182,7 +189,7 @@ class ExeInstallation:
                         except (OSError, ValueError):
                             pass
             transactions = [t for t in transactions if t.get("plan_id") not in swept]
-            if any(t.get("state") not in ("uninstalled", "rolled_back") for t in transactions):
+            if any(t.get("state") not in (("uninstalled", "rolled_back", "superseded", "committed") if operation == "reinstall" else ("uninstalled", "rolled_back", "superseded")) for t in transactions):
                 raise RuntimeError("publisher_existing_transaction")
 
     def _recheck(self, game, release_id, profile, candidate, facts, cancel):
@@ -199,8 +206,8 @@ class ExeInstallation:
         if not path.exists():
             return None
         receipt = _read_json(path)
-        _need(receipt.get("schema_version") == 1 and receipt.get("plan_id") == plan_id
-              and receipt.get("keep_backups") is True and type(receipt.get("lease_active")) is bool
+        _need(receipt.get("schema_version") == 2 and receipt.get("plan_id") == plan_id
+              and type(receipt.get("lease_active")) is bool
               and type(receipt.get("expires_at")) is int, "exe_policy_invalid")
         return receipt
 
@@ -211,10 +218,14 @@ class ExeInstallation:
             receipt["lease_active"] = False
             _json_new(Path(state) / "jobs" / plan_id / "exe-policy.json", receipt)
 
-    async def prepare(self, game, release_id, cancel, confirmations):
+    def check_game(self, game, release_id):
+        profile, _ = self.profiles.resolve(game, release_id)
+        return game_facts(game, profile)
+
+    async def prepare(self, game, release_id, cancel, operation="install"):
         _check(cancel)
         profile, candidate = self.profiles.resolve(game, release_id)
-        accepted = _accept(profile, confirmations)
+        _need(operation in ("install", "reinstall"), "invalid_install_operation")
         task = current_task.get()
         if task:
             task.stage("checking_game")
@@ -227,7 +238,7 @@ class ExeInstallation:
             old = _read_json(state / "instance.json")
             _need((old.get("instance_id"), old.get("release_id"), old.get("install_path")) ==
                   (instance_id, release_id, str(root)), "publisher_state_identity_changed")
-        await self._idle(state)
+        await self._idle(state, operation)
         estimate = await asyncio.to_thread(_space, state, root, profile)
         _check(cancel)
         cache = _safe_dir(state / "cache")
@@ -279,7 +290,7 @@ class ExeInstallation:
             expected = sorted((f["path"], f["sha256"]) for f in profile["payload"])
             _need(actual == expected, "exe_manifest_changed")
             await asyncio.to_thread(self._recheck, game, release_id, profile, candidate, facts, cancel)
-            await self._idle(state)
+            await self._idle(state, operation)
             _check(cancel)
             catalog_path = state / "catalog.json"
             revision = _read_json(catalog_path)["revision"] + 1 if catalog_path.exists() else 1
@@ -305,7 +316,7 @@ class ExeInstallation:
                 task.stage("preparing_plan")
             await self.publisher._native("sign-catalog", work / "catalog.json", private, key_id, work / "signed.json", "7776000")
             _check(cancel)
-            await self._idle(state)
+            await self._idle(state, operation)
             await asyncio.to_thread(self._recheck, game, release_id, profile, candidate, facts, cancel)
             for path in (archive, state / "catalog.json", state / "signed.json", state / "instance.json"):
                 _need(no_links(path), "linked_state_path")
@@ -319,19 +330,20 @@ class ExeInstallation:
             _json_new(state / "instance.json", {"instance_id": instance_id, "release_id": release_id,
                 "install_path": str(root), "url": url, "kind": "publisher_exe"})
             bridge = self.publisher._bridge(state)
+            await bridge.migrate_state()
             _check(cancel)
             # Rust starts the plan TTL only here, after EXE conversion completes.
-            plan = await bridge.plan_install(instance_id, release_id, archive)
+            plan = await bridge.plan_install(instance_id, release_id, archive, operation)
             _check(cancel)
             plan_id = plan.get("plan_id")
             _need(isinstance(plan_id, str) and re.fullmatch(UUID_PATTERN, plan_id), "exe_core_plan_invalid")
             _need(type(plan.get("expires_at")) is int and plan["expires_at"] >= int(time.time()), "exe_core_plan_invalid")
             job = state / "jobs" / plan_id
             _need(no_links(job) and job.is_dir(), "exe_core_job_invalid")
-            receipt = {"schema_version": 1, "kind": "publisher_exe", "plan_id": plan_id,
+            receipt = {"schema_version": 2, "kind": "publisher_exe", "plan_id": plan_id,
                 "instance_id": instance_id, "release_id": release_id, "expires_at": plan["expires_at"],
-                "lease_active": True, "keep_backups": True, "confirmations": accepted,
-                "terms_sha256": profile["terms"]["sha256"], "condition_declaration": accepted["conditions_accepted"],
+                "lease_active": True, "operation": operation,
+                "terms_sha256": profile["terms"]["sha256"],
                 "profile_id": profile["profile_id"], "profile_revision": profile["revision"],
                 "profile_sha256": digest(profile), "candidate_sha256": candidate_binding(candidate),
                 "facts": facts, "source_page": profile["source_page"], "source_id": profile["source_id"],
@@ -348,9 +360,10 @@ class ExeInstallation:
             if isinstance(error, asyncio.CancelledError):
                 cancel.set()
             if plan and bridge and isinstance(plan.get("plan_id"), str):
+                revoke_plan(state, plan["plan_id"])
+                self.release_lease(state, plan["plan_id"])
                 try:
                     await bridge.discard_plan(plan["plan_id"])
-                    self.release_lease(state, plan["plan_id"])
                 except Exception:
                     pass
             if published:
@@ -364,11 +377,12 @@ class ExeInstallation:
         finally:
             await asyncio.to_thread(_remove_work, state, work)
 
-    async def validate_apply(self, game, release_id, core_plan_id, confirmations=None):
+    async def validate_apply(self, game, release_id, core_plan_id):
         task = current_task.get()
         cancel = task.cancel if task else Event()
         _check(cancel)
         state = self.publisher._state(game["instance_id"], release_id)
+        _need(not (state / "jobs" / core_plan_id / "revoked").exists(), "plan_revoked")
         receipt = self.plan_evidence(state, core_plan_id)
         _need(receipt is not None, "exe_policy_unavailable")
         _need(receipt.get("instance_id") == game["instance_id"] and receipt.get("release_id") == release_id,
@@ -378,10 +392,6 @@ class ExeInstallation:
         _need(receipt.get("profile_sha256") == digest(profile), "exe_profile_changed")
         _need(receipt.get("candidate_sha256") == candidate_binding(candidate), "exe_candidate_changed")
         _need(receipt.get("terms_sha256") == profile["terms"]["sha256"], "exe_terms_changed")
-        accepted = _accept(profile, receipt.get("confirmations"))
-        if confirmations is not None:
-            _need(_accept(profile, confirmations) == accepted, "exe_confirmation_changed")
-        _need(receipt.get("condition_declaration") == accepted["conditions_accepted"], "exe_confirmation_changed")
         facts = await asyncio.to_thread(game_facts, game, profile, cancel)
         _check(cancel)
         _need(facts == receipt.get("facts"), "exe_game_facts_changed")

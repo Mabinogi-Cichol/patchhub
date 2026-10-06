@@ -540,6 +540,20 @@ class DiscoveryRegistryTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(upgraded.game_subscribed(42, "kagura-cn"))
         self.assertEqual(json.loads(self.registry.override_path.read_text()), overrides)
 
+    def test_verified_official_refresh_targets_known_page_instead_of_archive(self):
+        captured = []
+        def discover(rule, query, old, context):
+            captured.append(query)
+            return {"status": "complete", "candidates": [candidate(observed_at="new")], "diagnostics": []}
+        mock = types.SimpleNamespace(RequestContext=lambda **kw: types.SimpleNamespace(deadline=time.monotonic()+29,budget=24,requests=0),
+            discover=discover, needs_fallback=lambda values, query: False, canonical_url=lambda url:url)
+        previous = {"official": {"success": {"candidates": [candidate(observed_at="old", aliases=["Official title"])]}}}
+        with patch("sources._discovery_module", return_value=mock):
+            result = self.registry._discovery_sync(GAME, [_validate_rule(RULE)], previous)
+        self.assertEqual(captured[0]["upstream_pages"], ["https://publisher.example/game/"])
+        self.assertIn("Official title", captured[0]["name_hints"])
+        self.assertEqual(result["results"][0]["candidates"][0]["observed_at"], "new")
+
 
 if __name__ == "__main__":
     unittest.main()

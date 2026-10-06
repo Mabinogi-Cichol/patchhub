@@ -172,3 +172,21 @@ fn fingerprint_does_not_follow_links_outside_game() {
         "unknown"
     );
 }
+
+#[test]
+fn installed_detection_requires_every_recipe_target_even_when_hints_are_subset() {
+    let temp = tempfile::tempdir().unwrap();
+    fs::create_dir(temp.path().join("game")).unwrap();
+    let install = game(temp.path().into());
+    let mut patch = release();
+    patch.recipe.as_mut().unwrap().files.push(FileMapping {
+        source: "second.dat".into(),
+        destination: "game/second.dat".into(),
+        original_sha256: None,
+        installed_sha256: hash(b"second"),
+    });
+    fs::write(temp.path().join("game/patch.rpa"), b"patch").unwrap();
+    assert_eq!(detect(&install, &patch).status, "partial_or_conflict");
+    fs::write(temp.path().join("game/second.dat"), b"second").unwrap();
+    assert_eq!(detect(&install, &patch).status, "installed_external");
+}

@@ -22,6 +22,7 @@ class DiscoveryRpcTests(unittest.IsolatedAsyncioTestCase):
             return_value={"appid": 123, "candidates": [], "diagnostics": [], "status": "empty"}))
         plugin.bridge = types.SimpleNamespace(preview=AsyncMock(), plan_install=AsyncMock(), fetch_artifact=AsyncMock())
         plugin.tasks = module.TaskManager()
+        plugin._project_row = AsyncMock()
         return plugin
 
     async def test_uses_local_identity_and_does_not_occupy_install_lock(self):
@@ -62,7 +63,7 @@ class DiscoveryRpcTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_candidates_rejected_by_all_install_entry_points(self):
         plugin = self.plugin()
-        for method in ("preview", "plan_install", "fetch_artifact", "prepare_install", "start_prepare_task"):
+        for method in ("preview", "_plan_install", "fetch_artifact", "_prepare_install"):
             with self.subTest(method=method):
                 with self.assertRaisesRegex(ValueError, "source_requires_guidance"):
                     await getattr(plugin, method)("local", "candidate-123")

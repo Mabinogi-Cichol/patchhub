@@ -540,7 +540,7 @@ class Publisher:
             temporary.unlink(missing_ok=True)
         return self._bridge(state)
 
-    async def prepare(self, game: dict, entry: dict, cancel: Event, local_archive=None):
+    async def prepare(self, game: dict, entry: dict, cancel: Event, local_archive=None, operation="install"):
         matched = self.match(game, entry.get("release_id"))
         if matched is None or entry.get("url") != matched["url"]:
             raise ValueError("publisher_match_changed")
@@ -568,7 +568,7 @@ class Publisher:
         if (state / "catalog.json").is_file():
             existing = self._bridge(state)
             transactions = await existing.list_transactions()
-            if any(t["state"] not in ("planned", "uninstalled", "rolled_back") for t in transactions):
+            if any(t["state"] not in (("planned", "uninstalled", "rolled_back", "committed", "superseded") if operation == "reinstall" else ("planned", "uninstalled", "rolled_back", "superseded")) for t in transactions):
                 raise RuntimeError("publisher_existing_transaction")
         revision = 1
         catalog_path = state / "catalog.json"
@@ -597,6 +597,18 @@ class Publisher:
                    "recipe": {"artifact_sha256": digest, "files": files},
                    "artifact": {"url": matched["url"], "size": archive_size,
                                 "sha256": digest, "allowed_redirect_hosts": []}}
+        if operation == "reinstall" and catalog_path.is_file():
+            previous = json.loads(catalog_path.read_text(encoding="utf-8"))
+            old = next((r for r in previous["releases"] if r["release_id"] == release_id), None)
+            def content(value):
+                return (value["appid"], value["language"], value["verified_buildids"],
+                        value["recipe"]["artifact_sha256"],
+                        [(f["source"], f["destination"], f["installed_sha256"])
+                         for f in value["recipe"]["files"]])
+            # Do this before publishing: a refused content upgrade must leave
+            # the previous signed catalog and its installed detection intact.
+            if old is None or content(old) != content(release):
+                raise ValueError("reinstall_content_identity_changed")
         _json_new(catalog_path, {"schema_version": 1, "revision": revision, "releases": [release]})
         private = state / "private.key"
         public = state / "public.json"
@@ -615,7 +627,8 @@ class Publisher:
         _json_new(state / "instance.json", {"instance_id": instance_id, "release_id": release_id,
                                              "install_path": str(root), "url": matched["url"]})
         bridge = self._bridge(state)
+        await bridge.migrate_state()
         if cancel.is_set():
             raise RuntimeError("download_cancelled")
-        plan = await bridge.plan_install(instance_id, release_id, archive)
+        plan = await bridge.plan_install(instance_id, release_id, archive, operation)
         return bridge, str(archive), plan, acquisition

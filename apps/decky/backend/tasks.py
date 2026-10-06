@@ -1,10 +1,13 @@
-"""Backend-owned tasks with a renewable UI lease and cooperative cancellation."""
+"""Backend-owned tasks; observing or leaving the UI never cancels work."""
 import asyncio
 from collections import deque
 from contextvars import ContextVar
+import json
+from pathlib import Path
 from threading import Event, RLock
 import time
 import uuid
+from plugin_settings import _write_json
 
 current_task = ContextVar("patch_task", default=None)
 TERMINAL = {"completed", "cancelled", "failed"}
@@ -70,32 +73,66 @@ class Task:
 
 
 class TaskManager:
-    def __init__(self, lease_seconds=LEASE_SECONDS):
+    def __init__(self, lease_seconds=LEASE_SECONDS, state_dir=None):
         self.tasks = {}
-        self.lease_seconds = lease_seconds
+        self.path = Path(state_dir) / "tasks.json" if state_dir else None
+        self.requests = {}
+        if self.path and self.path.exists():
+            from acquisition import no_links
+            if not no_links(self.path) or self.path.stat().st_size > 1024 * 1024:
+                raise ValueError("invalid_task_history")
+            data = json.loads(self.path.read_text(encoding="utf-8"))
+            if data.get("schema_version") != 1 or not isinstance(data.get("tasks"), list):
+                raise ValueError("invalid_task_history")
+            for value in data["tasks"][-64:]:
+                if not isinstance(value, dict) or not isinstance(value.get("task_id"), str):
+                    raise ValueError("invalid_task_history")
+                task = Task(value.get("kind", "install"), {})
+                task.value.update(value)
+                if task.value["state"] not in TERMINAL:
+                    task.update(state="failed", error="task_interrupted", result=None)
+                self.tasks[value["task_id"]] = task
+                if value.get("request_id"):
+                    self.requests[value["request_id"]] = value["task_id"]
+
+    def _save(self):
+        if self.path:
+            _write_json(self.path, {"schema_version": 1, "tasks": [t.value for t in self.tasks.values()]})
 
     def busy(self):
         return any(t.value["state"] not in TERMINAL for t in self.tasks.values())
 
     def start(self, kind, work, **metadata):
+        request_id = metadata.get("request_id")
+        if request_id is not None:
+            if not isinstance(request_id, str) or len(request_id) > 64 or str(uuid.UUID(request_id)) != request_id:
+                raise ValueError("invalid_request_id")
+            previous = self.tasks.get(self.requests.get(request_id))
+            if previous:
+                if any(previous.value.get(k) != metadata.get(k) for k in ("instance_id", "release_id", "operation", "archive_path")):
+                    raise ValueError("request_identity_changed")
+                return {"task_id": previous.value["task_id"]}
         if self.busy():
             raise RuntimeError("installer_busy")
         task = Task(kind, metadata)
-        # Retain bounded terminal history for reconnects, without renewing leases.
-        for key in list(self.tasks)[:-31]:
+        # Persist bounded receipts for reconnects and retries of a lost start RPC.
+        for key in list(self.tasks)[:-63]:
             if self.tasks[key].value["state"] in TERMINAL:
+                self.requests.pop(self.tasks[key].value.get("request_id"), None)
                 del self.tasks[key]
         self.tasks[task.value["task_id"]] = task
+        if request_id:
+            self.requests[request_id] = task.value["task_id"]
+        try:
+            self._save()
+        except Exception:
+            del self.tasks[task.value["task_id"]]
+            self.requests.pop(request_id, None)
+            raise
         task.worker = asyncio.create_task(self._run(task, work))
         return {"task_id": task.value["task_id"]}
 
     async def _run(self, task, work):
-        async def watchdog():
-            while task.value["state"] not in TERMINAL:
-                await asyncio.sleep(min(1, self.lease_seconds / 2))
-                if time.monotonic() - task.lease > self.lease_seconds:
-                    task.request_cancel()
-        guard = asyncio.create_task(watchdog())
         token = current_task.set(task)
         try:
             task.check()
@@ -117,7 +154,11 @@ class TaskManager:
             task.update(state="cancelled" if code in ("task_cancelled", "download_cancelled") else "failed", error=code)
         finally:
             current_task.reset(token)
-            guard.cancel()
+            try:
+                self._save()
+            except (OSError, ValueError):
+                # The durable core receipt is authoritative after a commit.
+                pass
 
     def get(self, task_id):
         if not isinstance(task_id, str) or task_id not in self.tasks:
@@ -127,4 +168,4 @@ class TaskManager:
     async def shutdown(self):
         for task in self.tasks.values():
             task.request_cancel()
-        await asyncio.gather(*(t.worker for t in self.tasks.values()), return_exceptions=True)
+        await asyncio.gather(*(t.worker for t in self.tasks.values() if t.worker), return_exceptions=True)

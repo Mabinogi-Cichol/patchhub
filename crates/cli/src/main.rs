@@ -13,6 +13,7 @@ use std::{
 use steam_patch_core::catalog::Platform;
 
 const MAX_REQUEST_BYTES: usize = 64 * 1024;
+const PROTOCOL_VERSION: u32 = 2;
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -24,23 +25,26 @@ struct Request {
 }
 
 fn error(id: Option<&str>, code: &str) -> Value {
-    json!({ "protocol_version": 1, "request_id": id, "ok": false, "error": { "code": code } })
+    json!({ "protocol_version": PROTOCOL_VERSION, "request_id": id, "ok": false, "error": { "code": code } })
 }
 
 fn respond(bytes: &[u8]) -> Value {
-    let request: Request = match serde_json::from_slice(bytes) {
+    let mut request: Request = match serde_json::from_slice(bytes) {
         Ok(r) => r,
         Err(_) => return error(None, "invalid_request"),
     };
-    if request.protocol_version != 1 {
+    if request.protocol_version != PROTOCOL_VERSION {
         return error(Some(&request.request_id), "unsupported_protocol");
     }
     if request.request_id.is_empty() || request.request_id.len() > 128 {
         return error(None, "invalid_request_id");
     }
+    if request.method == "install_patch" && request.params.request_id.is_none() {
+        request.params.request_id = Some(request.request_id.clone());
+    }
     match execute(&request.method, request.params) {
         Ok(result) => {
-            json!({ "protocol_version": 1, "request_id": request.request_id, "ok": true, "result": result })
+            json!({ "protocol_version": PROTOCOL_VERSION, "request_id": request.request_id, "ok": true, "result": result })
         }
         Err(code) => error(Some(&request.request_id), &code),
     }
@@ -136,9 +140,9 @@ const HELP: &str = "Steam patch manager Alpha\n\
 Usage: steam-patch scan [--steam-root PATH]... [--catalog PATH] [--platform windows|steamos]\n\
        steam-patch preview --instance ID --release ID [scan options]\n\
        steam-patch serve  (versioned JSON-lines on stdin/stdout)\n\
-Installation requires a signed catalog and explicit game-closed confirmation.
-Methods: scan preview plan_install start_install fetch_artifact list_transactions uninstall recover.
-Options: --signed-catalog --trust-keys --state-dir --archive --plan --transaction --confirmed-game-closed.
+Installation requires a signed catalog. Close the game and pause Steam updates before installing.
+Methods: scan preview install_patch fetch_artifact list_transactions recover migrate_state.
+Options: --signed-catalog --trust-keys --state-dir --archive --operation install|reinstall --request-id ID.
 Maintenance: keygen PRIVATE PUBLIC KEY_ID; sign-catalog CATALOG PRIVATE KEY_ID OUTPUT LIFETIME_SECONDS; schema OUTPUT.";
 
 fn run() -> Result<(), String> {
@@ -166,20 +170,25 @@ fn run() -> Result<(), String> {
     if ["keygen", "sign-catalog", "schema"].contains(&command.as_str()) {
         return maintenance::run(&command, &args.collect::<Vec<_>>());
     }
+    if ["plan_install", "start_install"].contains(&command.as_str()) {
+        return Err("internal_method_requires_task_controller".into());
+    }
     let mut params = Params::default();
     while let Some(flag) = args.next() {
-        if flag == "--confirmed-game-closed" {
-            params.confirmed_game_closed = true;
-            continue;
-        }
         let value = args.next().ok_or_else(|| format!("missing_value:{flag}"))?;
         match flag.as_str() {
             "--signed-catalog" => params.signed_catalog = Some(PathBuf::from(value)),
             "--trust-keys" => params.trust_keys = Some(PathBuf::from(value)),
             "--state-dir" => params.state_dir = Some(PathBuf::from(value)),
             "--archive" => params.archive = Some(PathBuf::from(value)),
-            "--plan" => params.plan_id = Some(value),
-            "--transaction" => params.transaction_id = Some(value),
+            "--request-id" => params.request_id = Some(value),
+            "--operation" => {
+                params.operation = match value.as_str() {
+                    "install" => steam_patch_core::install::InstallOperation::Install,
+                    "reinstall" => steam_patch_core::install::InstallOperation::Reinstall,
+                    _ => return Err("invalid_operation".into()),
+                }
+            }
             "--steam-root" => params.roots.push(PathBuf::from(value)),
             "--catalog" if params.catalog.is_none() => params.catalog = Some(PathBuf::from(value)),
             "--instance" if params.instance_id.is_none() => params.instance_id = Some(value),
@@ -220,7 +229,7 @@ mod tests {
     #[test]
     fn protocol_recovers_after_bad_or_oversized_line() {
         let root = tempfile::tempdir().unwrap();
-        let valid = json!({"protocol_version":1,"request_id":"r1","method":"scan","params":{"roots":[root.path()]}}).to_string();
+        let valid = json!({"protocol_version":2,"request_id":"r1","method":"scan","params":{"roots":[root.path()]}}).to_string();
         let input = format!("broken\n{}\n{valid}\n", "x".repeat(MAX_REQUEST_BYTES + 1));
         let mut output = Vec::new();
         serve(&mut Cursor::new(input), &mut output).unwrap();
@@ -243,14 +252,14 @@ mod tests {
                 .to_string()
         };
         assert_eq!(
-            respond(request(2, "scan").as_bytes())["error"]["code"],
+            respond(request(1, "scan").as_bytes())["error"]["code"],
             "unsupported_protocol"
         );
         assert_eq!(
-            respond(request(1, "start_install").as_bytes())["error"]["code"],
-            "game_closed_confirmation_required"
+            respond(request(2, "uninstall").as_bytes())["error"]["code"],
+            "unsupported_method"
         );
-        assert_eq!(respond(br#"{"protocol_version":1,"request_id":"r","method":"scan","params":{"shell":"evil"}}"#)["error"]["code"], "invalid_request");
+        assert_eq!(respond(br#"{"protocol_version":2,"request_id":"r","method":"scan","params":{"shell":"evil"}}"#)["error"]["code"], "invalid_request");
     }
 
     #[test]

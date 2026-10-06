@@ -2,62 +2,30 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
-
 from plugin_settings import Settings
-
 
 class SettingsTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
-
-    def test_defaults_auto_cleanup_on_and_backups_off(self):
+    def test_default_and_round_trip(self):
         settings = Settings(self.root)
-        self.assertTrue(settings.auto_cleanup)
-        self.assertFalse(settings.keep_backups)
-        self.assertEqual(settings.snapshot(),
-                         {"schema_version": 1, "auto_cleanup": True, "keep_backups": False})
-        self.assertEqual(settings.diagnostics, [])
-
-    def test_round_trip_persists_and_reloads(self):
-        settings = Settings(self.root)
+        self.assertEqual(settings.snapshot(), {"schema_version": 2, "auto_cleanup": True})
         settings.set_auto_cleanup(False)
-        settings.set_keep_backups(True)
-        data = json.loads((self.root / "settings.json").read_text(encoding="utf-8"))
-        self.assertEqual(data, {"schema_version": 1, "auto_cleanup": False, "keep_backups": True})
-        reloaded = Settings(self.root)
-        self.assertFalse(reloaded.auto_cleanup)
-        self.assertTrue(reloaded.keep_backups)
-        self.assertEqual(reloaded.diagnostics, [])
-
-    def test_partial_or_empty_config_uses_per_field_defaults(self):
-        (self.root / "settings.json").write_text(json.dumps({}), encoding="utf-8")
+        self.assertFalse(Settings(self.root).auto_cleanup)
+    def test_old_config_migrates_preserving_download_preference(self):
+        path = self.root / "settings.json"
+        path.write_text(json.dumps({"schema_version":1,"auto_cleanup":False,"keep_backups":True}))
         settings = Settings(self.root)
-        self.assertTrue(settings.auto_cleanup)
-        self.assertFalse(settings.keep_backups)
-        self.assertEqual(settings.diagnostics, [])
-        (self.root / "settings.json").write_text(json.dumps({"keep_backups": True}), encoding="utf-8")
-        settings = Settings(self.root)
-        self.assertTrue(settings.auto_cleanup)
-        self.assertTrue(settings.keep_backups)
-
-    def test_malformed_or_wrong_types_fall_back_to_defaults(self):
-        for content in ("{not json", json.dumps({"auto_cleanup": "yes"}),
-                        json.dumps({"keep_backups": 1})):
-            (self.root / "settings.json").write_text(content, encoding="utf-8")
+        self.assertEqual(settings.snapshot(), {"schema_version":2,"auto_cleanup":False})
+        self.assertEqual(json.loads(path.read_text()), settings.snapshot())
+        self.assertEqual(Settings(self.root).snapshot(),settings.snapshot())
+    def test_invalid_config_and_non_boolean_set(self):
+        for content in ("broken",json.dumps({"auto_cleanup":"yes"})):
+            (self.root / "settings.json").write_text(content)
             settings = Settings(self.root)
             self.assertTrue(settings.auto_cleanup)
-            self.assertFalse(settings.keep_backups)
-            self.assertEqual(settings.diagnostics[0]["code"], "settings_unavailable")
-
-    def test_rejects_non_boolean_set(self):
-        settings = Settings(self.root)
-        with self.assertRaisesRegex(ValueError, "invalid_settings"):
-            settings.set_auto_cleanup("yes")
-        with self.assertRaisesRegex(ValueError, "invalid_settings"):
-            settings.set_keep_backups(1)
-
-
-if __name__ == "__main__":
-    unittest.main()
+            self.assertEqual(settings.diagnostics[0]["code"],"settings_unavailable")
+        with self.assertRaisesRegex(ValueError,"invalid_settings"):
+            Settings(self.root).set_auto_cleanup(1)

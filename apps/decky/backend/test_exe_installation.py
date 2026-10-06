@@ -18,7 +18,6 @@ from test_exe_facts import steam_fixture
 from test_exe_profiles import candidate_fixture, profile_fixture
 
 SHA = lambda b: hashlib.sha256(b).hexdigest()
-ACCEPT = {"terms_accepted": True, "keep_backups": True, "conditions_accepted": True}
 
 
 class FakeBridge:
@@ -32,7 +31,10 @@ class FakeBridge:
     async def list_transactions(self):
         return self.transactions
 
-    async def plan_install(self, instance, release, archive):
+    async def migrate_state(self):
+        return self.transactions
+
+    async def plan_install(self, instance, release, archive, operation="install"):
         plan_id = str(uuid.uuid4())
         (self.state_dir / "jobs" / plan_id).mkdir(parents=True)
         plan = {"plan_id": plan_id, "expires_at": int(time.time()) + 900,
@@ -127,9 +129,8 @@ class ExeInstallationTests(unittest.IsolatedAsyncioTestCase):
                 "artifact_sha256": SHA(normalized.read_bytes()), "artifact_size": normalized.stat().st_size,
                 "files": profile["payload"], "extractor": "synthetic-test-only"}
 
-    async def prepare(self, confirmations=None, cancel=None):
-        return await self.service.prepare(self.game, self.selection, cancel or Event(),
-                                           ACCEPT if confirmations is None else confirmations)
+    async def prepare(self, operation="install", cancel=None):
+        return await self.service.prepare(self.game, self.selection, cancel or Event(), operation=operation)
 
     def unchanged_game(self):
         root = Path(self.game["install_path"])
@@ -155,9 +156,11 @@ class ExeInstallationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(receipt["exe_sha256"], SHA(b"synthetic-exe"))
         self.assertEqual(receipt["normalized_sha256"], SHA(Path(archive).read_bytes()))
         self.assertNotEqual(receipt["exe_sha256"], receipt["normalized_sha256"])
-        self.assertTrue(receipt["keep_backups"] and receipt["lease_active"])
+        self.assertTrue(receipt["lease_active"])
+        self.assertNotIn("confirmations", receipt)
+        self.assertNotIn("keep_backups", receipt)
         self.assertEqual(receipt["terms_sha256"], self.profile["terms"]["sha256"])
-        self.assertTrue(receipt["condition_declaration"])
+        self.assertEqual(receipt["schema_version"], 2)
         self.assertFalse(list((self.state / "exe-work").iterdir()))
         self.assertEqual(len(bridge.plans), 1)
         self.unchanged_game()
@@ -167,24 +170,33 @@ class ExeInstallationTests(unittest.IsolatedAsyncioTestCase):
         matches = self.service.matches(self.game)
         self.assertEqual(matches[0]["support_level"], "publisher_exe")
         self.assertEqual(matches[0]["exe"]["terms"], self.profile["terms"])
-        self.assertTrue(matches[0]["exe"]["backup_required"])
+        self.assertNotIn("backup_required", matches[0]["exe"])
         self.write_profiles([])
         self.assertEqual(self.service.matches(self.game), [])
         with self.assertRaisesRegex(ValueError, "exe_profile_changed"):
             await self.prepare()
         self.assertFalse(self.download_calls)
 
-    async def test_confirmation_booleans_and_conditions_required_before_download(self):
-        for missing, code in (("terms_accepted", "exe_terms_confirmation_required"),
-                              ("keep_backups", "exe_backups_required"),
-                              ("conditions_accepted", "exe_conditions_confirmation_required")):
-            with self.subTest(missing=missing), self.assertRaisesRegex(ValueError, code):
-                await self.prepare({**ACCEPT, missing: False})
-        for confirmations in ({**ACCEPT, "url": "https://example.com/x.exe"},
-                              {**ACCEPT, "keep_backups": 1}, {**ACCEPT, "terms_accepted": "yes"}):
-            with self.subTest(confirmations=confirmations), self.assertRaisesRegex(ValueError, "exe_confirmation_invalid"):
-                await self.prepare(confirmations)
-        self.assertFalse(self.download_calls)
+    async def test_prepare_needs_no_artificial_user_declarations(self):
+        _, _, plan, _ = await self.prepare()
+        receipt = self.service.plan_evidence(self.state, plan["plan_id"])
+        self.assertNotIn("confirmations", receipt)
+        self.assertNotIn("condition_declaration", receipt)
+        self.assertEqual(receipt["facts"]["buildid"], "100")
+
+    async def test_discard_rpc_failure_still_revokes_created_plan(self):
+        from unittest.mock import AsyncMock
+        self.publisher._bridge(self.state).on_plan = lambda: setattr(self, "subscribed", False)
+        bridge = self.publisher._bridge(self.state)
+        bridge.discard_plan = AsyncMock(side_effect=RuntimeError("rpc_failed"))
+        with self.assertRaisesRegex(ValueError, "exe_source_disabled"):
+            await self.prepare()
+        plan_id = bridge.plans[0][0]["plan_id"]
+        self.assertTrue((self.state / "jobs" / plan_id / "revoked").is_file())
+        self.assertFalse(self.service.plan_evidence(self.state, plan_id)["lease_active"])
+        self.subscribed = True
+        with self.assertRaisesRegex(ValueError, "plan_revoked"):
+            await self.service.validate_apply(self.game, self.selection, plan_id)
 
     async def test_apply_revalidates_source_subscription_profile_candidate_and_current_facts(self):
         _, _, plan, _ = await self.prepare()
@@ -203,16 +215,14 @@ class ExeInstallationTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(ValueError, "exe_profile_changed"):
             await self.service.validate_apply(self.game, self.selection, plan["plan_id"])
         # Offline restore metadata survives disable and needs no remote lookup.
-        self.assertTrue(self.service.plan_evidence(self.state, plan["plan_id"])["keep_backups"])
+        self.assertEqual(self.service.plan_evidence(self.state, plan["plan_id"])["schema_version"], 2)
         self.service.release_lease(self.state, plan["plan_id"])
         self.assertFalse(self.service.plan_evidence(self.state, plan["plan_id"])["lease_active"])
 
-    async def test_apply_restart_uses_persisted_receipt_and_blocks_missing_or_changed_confirmations(self):
+    async def test_apply_restart_uses_persisted_receipt_and_blocks_missing_evidence(self):
         _, _, plan, _ = await self.prepare()
         restarted = ExeInstallation(self.publisher, self.profiles, self.root / "tools")
         await restarted.validate_apply(self.game, self.selection, plan["plan_id"])
-        with self.assertRaisesRegex(ValueError, "exe_backups_required"):
-            await restarted.validate_apply(self.game, self.selection, plan["plan_id"], {**ACCEPT, "keep_backups": False})
         (self.state / "jobs" / plan["plan_id"] / "exe-policy.json").unlink()
         with self.assertRaisesRegex(ValueError, "exe_policy_unavailable"):
             await restarted.validate_apply(self.game, self.selection, plan["plan_id"])

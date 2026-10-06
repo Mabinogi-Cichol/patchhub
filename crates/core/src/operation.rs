@@ -109,6 +109,15 @@ pub fn advance(bytes: u64) {
 pub fn finish_file(done: usize) {
     update(true, |p| p.files_done = done);
 }
+/// A durable successful commit wins over a cancellation received afterwards.
+pub(crate) fn committed() {
+    CONTROL.with(|c| {
+        if let Some(c) = c.borrow_mut().as_mut() {
+            c.restoring = true;
+        }
+    });
+}
+
 pub fn restoring() {
     CONTROL.with(|c| {
         if let Some(c) = c.borrow_mut().as_mut() {

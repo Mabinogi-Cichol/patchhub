@@ -25,9 +25,9 @@ pub struct Params {
     pub state_dir: Option<PathBuf>,
     pub archive: Option<PathBuf>,
     pub plan_id: Option<String>,
-    pub transaction_id: Option<String>,
     #[serde(default)]
-    pub confirmed_game_closed: bool,
+    pub operation: install::InstallOperation,
+    pub request_id: Option<String>,
 }
 
 pub const METHODS: &[&str] = &[
@@ -38,7 +38,8 @@ pub const METHODS: &[&str] = &[
     "start_install",
     "fetch_artifact",
     "list_transactions",
-    "uninstall",
+    "install_patch",
+    "migrate_state",
     "recover",
 ];
 fn err(error: impl std::fmt::Display) -> String {
@@ -242,11 +243,14 @@ pub fn execute(method: &str, params: Params) -> Result<Value, String> {
     if let Some(state) = &params.state_dir {
         validate_state_boundary(state, &report.installs)?;
     }
-    if ["start_install", "uninstall", "recover"].contains(&method) && !params.confirmed_game_closed
+    if [
+        "discard_plan",
+        "list_transactions",
+        "migrate_state",
+        "recover",
+    ]
+    .contains(&method)
     {
-        return Err("game_closed_confirmation_required".into());
-    }
-    if ["discard_plan", "list_transactions", "uninstall", "recover"].contains(&method) {
         let state = state(&params)?;
         state_safe(&state)?;
         return match method {
@@ -256,20 +260,14 @@ pub fn execute(method: &str, params: Params) -> Result<Value, String> {
             ),
             "list_transactions" if !state.join("journal.sqlite").exists() => Ok(json!([])),
             "list_transactions" => value(install::list_transactions(&state).map_err(err)?),
-            "uninstall" => value(
-                install::uninstall(
-                    params
-                        .transaction_id
-                        .as_deref()
-                        .ok_or("transaction_required")?,
-                    &state,
-                )
-                .map_err(err)?,
-            ),
+            "migrate_state" => value(install::migrate_state(&state).map_err(err)?),
             _ => value(install::recover(&state).map_err(err)?),
         };
     }
     let platform = params.platform.unwrap_or_else(host_platform);
+    if method == "install_patch" {
+        return install_patch(&params, &report, platform);
+    }
     if method == "start_install" {
         let state = state(&params)?;
         let plan = install::get_plan(params.plan_id.as_deref().ok_or("plan_required")?, &state)
@@ -284,6 +282,8 @@ pub fn execute(method: &str, params: Params) -> Result<Value, String> {
         let recipe = release.recipe.as_ref().ok_or("recipe_missing")?;
         if plan.catalog_revision != catalog.catalog().revision
             || plan.install.buildid != current.buildid
+            || plan.recipe_sha256.as_deref()
+                != Some(install::recipe_identity(release).map_err(err)?.as_str())
             || plan.changes.len() != recipe.files.len()
             || plan
                 .changes
@@ -291,7 +291,8 @@ pub fn execute(method: &str, params: Params) -> Result<Value, String> {
                 .zip(&recipe.files)
                 .any(|(change, mapping)| {
                     change.path != mapping.destination
-                        || change.original_sha256 != mapping.original_sha256
+                        || (plan.operation == install::InstallOperation::Install
+                            && change.original_sha256 != mapping.original_sha256)
                         || change.installed_sha256 != mapping.installed_sha256
                 })
         {
@@ -329,8 +330,15 @@ pub fn execute(method: &str, params: Params) -> Result<Value, String> {
         }
         let archive = params.archive.as_ref().ok_or("archive_required")?;
         return value(
-            install::prepare(game, release, archive, &state, catalog.catalog().revision)
-                .map_err(err)?,
+            install::prepare_with_operation(
+                game,
+                release,
+                archive,
+                &state,
+                catalog.catalog().revision,
+                params.operation,
+            )
+            .map_err(err)?,
         );
     }
     let mut catalog_error = None;
@@ -393,9 +401,12 @@ pub fn execute(method: &str, params: Params) -> Result<Value, String> {
         let mut patches = catalog::matches(game, &catalog, platform);
         for patch in &mut patches {
             if verified.as_ref().is_some_and(|c| c.is_revoked(&patch.release_id)) { patch.blockers.push("release_revoked".into()); }
-            if patch.detection.status == "installed_external" && transactions.iter().any(|t|
-                t.instance_id == game.instance_id && t.release_id == patch.release_id && t.state == "committed") {
+            let owned = transactions.iter().any(|t| t.instance_id == game.instance_id
+                && t.release_id == patch.release_id && t.state == "committed");
+            if owned && patch.detection.status == "installed_external" {
                 patch.detection.status = "installed_managed".into();
+            } else if owned && patch.detection.status == "not_detected" {
+                patch.detection.status = "partial_or_conflict".into();
             }
         }
         json!({"game":game,"match_status":if patches.is_empty(){"no_catalog_match"}else{"matched"},"patches":patches})
@@ -439,12 +450,242 @@ mod tests {
                 Params {
                     roots: vec![temp.path().into()],
                     state_dir: Some(game.clone()),
-                    confirmed_game_closed: true,
                     ..Default::default()
                 },
             );
             assert_eq!(result.unwrap_err(), "state_overlaps_game");
             assert_eq!(fs::read_dir(&game).unwrap().count(), 0);
         }
+    }
+}
+
+/// Persistent request binding makes a lost RPC response safe to retry. A request
+/// interrupted before preparation is diagnosed rather than silently rerun.
+fn install_patch(
+    params: &Params,
+    report: &steam::ScanReport,
+    platform: Platform,
+) -> Result<Value, String> {
+    let state = state(params)?;
+    let request = params.request_id.as_deref().ok_or("request_id_required")?;
+    if request.is_empty() || request.len() > 128 {
+        return Err("invalid_request_id".into());
+    }
+    let instance = params.instance_id.as_deref().ok_or("instance_required")?;
+    let release_id = params.release_id.as_deref().ok_or("release_required")?;
+    state_safe(&state)?;
+    fs::create_dir_all(&state).map_err(err)?;
+    let request_file = state.join("install_requests.sqlite");
+    state_safe(&request_file)?;
+    state_safe(&state.join("install_requests.sqlite-journal"))?;
+    let conn = rusqlite::Connection::open(request_file).map_err(err)?;
+    conn.busy_timeout(std::time::Duration::from_secs(5))
+        .map_err(err)?;
+    conn.execute_batch("PRAGMA synchronous=FULL; CREATE TABLE IF NOT EXISTS requests(id TEXT PRIMARY KEY, binding TEXT NOT NULL, plan TEXT, error TEXT)").map_err(err)?;
+    let binding = serde_json::to_string(&(instance, release_id, params.operation)).map_err(err)?;
+    let inserted = conn
+        .execute(
+            "INSERT OR IGNORE INTO requests(id,binding) VALUES(?1,?2)",
+            rusqlite::params![request, binding],
+        )
+        .map_err(err)?;
+    if inserted == 0 {
+        let (old_binding, plan, error): (String, Option<String>, Option<String>) = conn
+            .query_row(
+                "SELECT binding,plan,error FROM requests WHERE id=?1",
+                [request],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .map_err(err)?;
+        if old_binding != binding {
+            return Err("request_id_binding_conflict".into());
+        }
+        if let Some(error) = error {
+            return Err(error);
+        }
+        if let Some(plan) = plan {
+            let transactions = install::list_transactions(&state).map_err(err)?;
+            let transaction = transactions
+                .iter()
+                .find(|t| t.plan_id == plan)
+                .ok_or("request_transaction_missing")?;
+            if ["committed", "superseded", "rolled_back", "needs_recovery"]
+                .contains(&transaction.state.as_str())
+            {
+                return value(transaction);
+            }
+        }
+        return Err("install_request_in_progress_or_interrupted".into());
+    }
+    let outcome = (|| {
+        let game = report
+            .installs
+            .iter()
+            .find(|g| g.instance_id == instance)
+            .ok_or("instance_not_found")?;
+        let catalog = signed(params)?;
+        let release = ready_release(&catalog, release_id, game, platform)?;
+        let archive = match &params.archive {
+            Some(path) => path.clone(),
+            None => download::fetch(
+                release
+                    .artifact
+                    .as_ref()
+                    .ok_or("artifact_requires_manual_download")?,
+                &state.join("downloads"),
+                &AtomicBool::new(false),
+                |_, _| (),
+            )
+            .map_err(err)?,
+        };
+        let plan = install::prepare_with_operation(
+            game,
+            release,
+            &archive,
+            &state,
+            catalog.catalog().revision,
+            params.operation,
+        )
+        .map_err(err)?;
+        conn.execute(
+            "UPDATE requests SET plan=?2 WHERE id=?1",
+            rusqlite::params![request, plan.plan_id],
+        )
+        .map_err(err)?;
+        let transaction = install::apply(&plan.plan_id, &state).map_err(err)?;
+        value(transaction)
+    })();
+    if let Err(error) = &outcome {
+        conn.execute(
+            "UPDATE requests SET error=?2 WHERE id=?1",
+            rusqlite::params![request, error],
+        )
+        .map_err(err)?;
+    }
+    outcome
+}
+
+#[cfg(test)]
+mod install_flow_tests {
+    use super::*;
+    use sha2::{Digest, Sha256};
+    use std::io::Write;
+    use zip::{write::SimpleFileOptions, ZipWriter};
+
+    fn fixture() -> (tempfile::TempDir, Params, PathBuf) {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("Steam");
+        let game = root.join("steamapps/common/Test");
+        fs::create_dir_all(&game).unwrap();
+        fs::write(root.join("steamapps/appmanifest_42.acf"),
+            "\"AppState\" { \"appid\" \"42\" \"name\" \"Test\" \"installdir\" \"Test\" \"buildid\" \"100\" \"StateFlags\" \"4\" }").unwrap();
+        let archive = temp.path().join("patch.zip");
+        let mut zip = ZipWriter::new(fs::File::create(&archive).unwrap());
+        zip.start_file(
+            "patch.dat",
+            SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored),
+        )
+        .unwrap();
+        zip.write_all(b"patch content").unwrap();
+        zip.finish().unwrap();
+        let digest = |bytes: &[u8]| format!("{:x}", Sha256::digest(bytes));
+        let catalog = temp.path().join("catalog.json");
+        fs::write(&catalog, json!({"schema_version":1,"revision":1,"releases":[{
+            "patch_id":"test","release_id":"test-v1","appid":42,"name":"Test patch","version":"1",
+            "language":"zh-CN","category":"content_restore","source_page":"https://example.invalid/patch",
+            "support_level":"managed_zip","platforms":["windows","steamos"],"verified_buildids":["100"],
+            "detection":[{"path":"patch.dat","sha256":digest(b"patch content")}],
+            "recipe":{"artifact_sha256":digest(&fs::read(&archive).unwrap()),"files":[{
+                "source":"patch.dat","destination":"patch.dat","original_sha256":null,"installed_sha256":digest(b"patch content")}]}
+        }]}).to_string()).unwrap();
+        let private = temp.path().join("private");
+        let keys = temp.path().join("keys.json");
+        let signed = temp.path().join("signed.json");
+        crate::maintenance::run(
+            "keygen",
+            &[
+                private.display().to_string(),
+                keys.display().to_string(),
+                "test-key".into(),
+            ],
+        )
+        .unwrap();
+        crate::maintenance::run(
+            "sign-catalog",
+            &[
+                catalog.display().to_string(),
+                private.display().to_string(),
+                "test-key".into(),
+                signed.display().to_string(),
+                "3600".into(),
+            ],
+        )
+        .unwrap();
+        let instance_id = steam::scan(std::slice::from_ref(&root))
+            .installs
+            .remove(0)
+            .instance_id;
+        let params = Params {
+            roots: vec![root],
+            instance_id: Some(instance_id),
+            release_id: Some("test-v1".into()),
+            signed_catalog: Some(signed),
+            trust_keys: Some(keys),
+            state_dir: Some(temp.path().join("state")),
+            archive: Some(archive),
+            request_id: Some("request-1".into()),
+            ..Default::default()
+        };
+        (temp, params, game)
+    }
+
+    fn copy_params(params: &Params) -> Params {
+        serde_json::from_value(serde_json::to_value(params).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn one_step_signed_install_retry_and_reinstall_are_bound_and_idempotent() {
+        let (_temp, params, game) = fixture();
+        let first = execute("install_patch", copy_params(&params)).unwrap();
+        assert_eq!(first["state"], "committed");
+        let repeated = execute("install_patch", copy_params(&params)).unwrap();
+        assert_eq!(first["transaction_id"], repeated["transaction_id"]);
+        let mut conflict = copy_params(&params);
+        conflict.operation = install::InstallOperation::Reinstall;
+        assert_eq!(
+            execute("install_patch", conflict).unwrap_err(),
+            "request_id_binding_conflict"
+        );
+        fs::write(game.join("patch.dat"), b"damaged").unwrap();
+        let mut reinstall = copy_params(&params);
+        reinstall.request_id = Some("request-2".into());
+        reinstall.operation = install::InstallOperation::Reinstall;
+        assert_eq!(
+            execute("install_patch", reinstall).unwrap()["state"],
+            "committed"
+        );
+        assert_eq!(fs::read(game.join("patch.dat")).unwrap(), b"patch content");
+    }
+
+    #[test]
+    fn signed_apply_rejects_revoked_marker_without_confirmation_gate() {
+        let (_temp, params, game) = fixture();
+        let plan = execute("plan_install", copy_params(&params)).unwrap();
+        let plan_id = plan["plan_id"].as_str().unwrap();
+        fs::write(
+            params
+                .state_dir
+                .as_ref()
+                .unwrap()
+                .join("jobs")
+                .join(plan_id)
+                .join("revoked"),
+            b"",
+        )
+        .unwrap();
+        let mut apply = copy_params(&params);
+        apply.plan_id = Some(plan_id.into());
+        assert_eq!(execute("start_install", apply).unwrap_err(), "plan_revoked");
+        assert!(!game.join("patch.dat").exists());
     }
 }

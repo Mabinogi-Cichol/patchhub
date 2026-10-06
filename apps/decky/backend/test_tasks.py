@@ -44,7 +44,7 @@ class ControlledProcess:
         self.stdout.feed_data(json.dumps(value).encode() + b"\n")
 
     def finish(self, state):
-        self.emit({"protocol_version": 1, "request_id": self.request["request_id"], "ok": True,
+        self.emit({"protocol_version": 2, "request_id": self.request["request_id"], "ok": True,
             "result": {"state": state, "error": "task_cancelled" if state == "rolled_back" else None}})
         self.returncode = 0
         self.stdout.feed_eof()
@@ -70,7 +70,7 @@ class ControlledBridgeTests(unittest.IsolatedAsyncioTestCase):
     async def test_progress_preserves_known_archive_size_and_uses_controlled_process(self):
         process = ControlledProcess()
         with patch("bridge.asyncio.create_subprocess_exec", return_value=process) as spawn:
-            result = await self.bridge.start_install("plan", True)
+            result = await self.bridge.start_install("plan")
         self.assertEqual(spawn.call_args.args[1], "serve-task")
         self.assertEqual(result["state"], "committed")
         self.assertEqual(self.task.snapshot()["bytes_done"], 12)
@@ -80,7 +80,7 @@ class ControlledBridgeTests(unittest.IsolatedAsyncioTestCase):
         process = ControlledProcess(restoring=True)
         self.task.request_cancel()
         with patch("bridge.asyncio.create_subprocess_exec", return_value=process):
-            call = asyncio.create_task(self.bridge.start_install("plan", True))
+            call = asyncio.create_task(self.bridge.start_install("plan"))
             await asyncio.wait_for(process.cancel_received.wait(), 1)
             self.assertEqual(json.loads(process.messages[0])["method"], "start_install")
             self.assertEqual(process.messages[1], b"cancel\n")
@@ -93,7 +93,7 @@ class ControlledBridgeTests(unittest.IsolatedAsyncioTestCase):
     async def test_cancelling_rpc_waits_for_durable_rollback_receipt(self):
         process = ControlledProcess(restoring=True)
         with patch("bridge.asyncio.create_subprocess_exec", return_value=process):
-            call = asyncio.create_task(self.bridge.start_install("plan", True))
+            call = asyncio.create_task(self.bridge.start_install("plan"))
             while process.request is None:
                 await asyncio.sleep(0)
             call.cancel()
@@ -104,21 +104,20 @@ class ControlledBridgeTests(unittest.IsolatedAsyncioTestCase):
 
 
 class TaskTests(unittest.IsolatedAsyncioTestCase):
-    async def test_expired_lease_cancels_work_and_reentry_never_restarts_it(self):
-        manager = TaskManager(lease_seconds=.02)
-        started = 0
+    async def test_ui_lease_expiry_never_cancels_backend_work(self):
+        manager = TaskManager(lease_seconds=.01)
+        finish = asyncio.Event()
         async def work(task):
-            nonlocal started
-            started += 1
-            while True:
-                task.check()
-                await asyncio.sleep(.005)
-        task = manager.get(manager.start("prepare", work)["task_id"])
-        await asyncio.wait_for(task.worker, 1)
-        self.assertEqual(task.snapshot()["state"], "cancelled")
-        task.snapshot(renew=True)
-        self.assertEqual(started, 1)
-        self.assertFalse(manager.busy())
+            await finish.wait()
+            task.check()
+            return {"state": "committed"}
+        task = manager.get(manager.start("install", work)["task_id"])
+        await asyncio.sleep(.04)
+        self.assertFalse(task.cancel.is_set())
+        self.assertTrue(manager.busy())
+        finish.set()
+        await task.worker
+        self.assertEqual(task.snapshot()["state"], "completed")
 
     async def test_renewal_keeps_work_alive_and_cancellation_waits_for_rollback(self):
         manager = TaskManager(lease_seconds=.04)

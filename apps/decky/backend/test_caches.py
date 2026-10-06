@@ -74,7 +74,7 @@ class CacheTests(unittest.TestCase):
         self.assertEqual(caches.clear_core(self.downloads, digest), 0)
         self.assertTrue(target.exists())
 
-    def test_jobs_status_and_selective_clearing(self):
+    def test_jobs_status_is_read_only(self):
         job = self.root / "jobs" / "tx-1"
         job.mkdir(parents=True)
         (job / "0.stage").write_bytes(b"s" * 30)
@@ -82,39 +82,8 @@ class CacheTests(unittest.TestCase):
         (job / "note.txt").write_bytes(b"keep")
         self.assertEqual(caches.jobs_status(self.publisher, self.root),
                          {"stage_bytes": 30, "backup_bytes": 40})
-        self.assertEqual(caches.delete_stage_files(self.root / "jobs", "tx-1"), 30)
-        self.assertFalse((job / "0.stage").exists())
+        self.assertTrue((job / "0.stage").exists())
         self.assertTrue((job / "0.backup").exists())
-        self.assertEqual(caches.clear_jobs(self.root / "jobs", {"tx-1"}), 40)
-        self.assertFalse((job / "0.backup").exists())
-        self.assertTrue((job / "note.txt").exists())
-
-    def test_has_backups_detects_backup_files(self):
-        job = self.root / "jobs" / "tx-1"
-        job.mkdir(parents=True)
-        self.assertFalse(caches.has_backups(self.root / "jobs", "tx-1"))
-        (job / "0.stage").write_bytes(b"s")
-        self.assertFalse(caches.has_backups(self.root / "jobs", "tx-1"))
-        (job / "0.backup").write_bytes(b"b")
-        self.assertTrue(caches.has_backups(self.root / "jobs", "tx-1"))
-        self.assertFalse(caches.has_backups(self.root / "jobs", "missing"))
-
-    def test_any_backups_and_forget_transactions(self):
-        state = self.root / "state"
-        job = state / "jobs" / "tx"
-        job.mkdir(parents=True)
-        (job / "0.stage").write_bytes(b"s")
-        (state / "journal.sqlite").write_bytes(b"db")
-        (state / "catalog.json").write_bytes(b"cat")
-        self.assertFalse(caches.any_backups(state / "jobs"))
-        self.assertTrue(caches.forget_transactions(state))
-        self.assertFalse((state / "journal.sqlite").exists())
-        self.assertFalse((state / "jobs").exists())
-        self.assertTrue((state / "catalog.json").exists())
-        job2 = state / "jobs" / "tx2"
-        job2.mkdir(parents=True)
-        (job2 / "0.backup").write_bytes(b"b")
-        self.assertTrue(caches.any_backups(state / "jobs"))
 
 
 if __name__ == "__main__":

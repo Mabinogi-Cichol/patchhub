@@ -8,6 +8,8 @@ export type Patch = {
   source_cached_at?: number | null;
   support_level: string;
   download_available?: boolean;
+  auto_installable?: boolean;
+  reinstall_available?: boolean;
   exe?: { language?: string; version?: string; variant?: string; terms?: { url?: string; text?: string; sha256?: string }; requires_dlc?: number[]; excludes_dlc?: number[]; backup_required: true; profile_id: string };
   compatibility: string;
   blockers: string[];
@@ -68,7 +70,7 @@ export type SourceCandidate = {
 export type DiscoveryDiagnostic = { code: string; message?: string; detail?: string; source_id?: string };
 export type GameDiscovery = { status: string; candidates: SourceCandidate[]; diagnostics: DiscoveryDiagnostic[] };
 export type ExeReview = { candidate_id: string; release_id: string | null; profile_id: string | null; status: "guidance" | "installable"; blockers: string[] };
-export type DiscoveryResult = GameDiscovery & { instance_id: string; appid: number; generation: number; settings_revision: number; exe_reviews?: ExeReview[]; exe_patches?: Patch[] };
+export type DiscoveryResult = GameDiscovery & { instance_id: string; appid: number; generation: number; settings_revision: number; exe_reviews?: ExeReview[]; exe_patches?: Patch[]; patches?: Patch[] };
 export type DisplayPatch = { kind: "installable"; key: string; patch: Patch } | { kind: "discovery"; key: string; candidate: SourceCandidate };
 
 export function candidateMatched(candidate: SourceCandidate): boolean {
@@ -95,7 +97,24 @@ export type ScanResult = {
   sources?: SourceSubscription[];
   generation?: number;
   settings_revision?: number;
+  scan_progress?: { completed: number; total: number; running: boolean };
 };
+
+export function canAutoInstall(patch: Patch): boolean {
+  return patch.auto_installable === true && patch.blockers.length === 0 && patch.source_id !== "hgamer";
+}
+
+export function installSummary(row: Install, scanning = false): string {
+  if (row.patches.some(p => isManaged(p.detection.status) || isExternal(p.detection.status))) return "已安装补丁";
+  if (row.patches.some(p => p.reinstall_available && ["partial", "conflict", "partial_or_conflict", "needs_revalidation"].includes(p.detection.status))) return "补丁文件不完整，需重新安装";
+  if (row.patches.some(p => canAutoInstall(p))) return "有可用补丁";
+  if (row.patches.length || row.discovery?.candidates.some(candidateMatched)) return "找到补丁来源";
+  if (["failed", "source_refresh_failed", "source_offline_cached"].includes(row.discovery?.status ?? "")) return "来源查询失败";
+  if (scanning && !["complete", "empty", "cache_complete"].includes(row.discovery?.status ?? "")) return "正在查找补丁";
+  if (["partial", "cache_partial", "source_partial"].includes(row.discovery?.status ?? "")) return "来源查询不完整";
+  if (["not_queried", "queued", "stale"].includes(row.discovery?.status ?? "not_queried")) return "正在查找补丁";
+  return "暂未找到补丁";
+}
 
 export type SourceSubscription = {
   id: string;

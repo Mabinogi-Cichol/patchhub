@@ -699,7 +699,22 @@ class SourceRegistry:
             context.deadline = min(deadline, time.monotonic() + 6)
             context.budget = min(budget, context.requests + 3)
             try:
-                result = collect(rule, query)
+                # Revalidate a known verified official page directly. A bounded
+                # archive search can miss it and retain an old candidate forever,
+                # which correctly fails the EXE freshness check even after refresh.
+                pages = list(dict.fromkeys(c.get("source_page")
+                    for c in previous.get(rule["id"], {}).get("success", {}).get("candidates", [])
+                    if c.get("game_appid") == query["appid"]
+                    and c.get("match_basis") in ("appid", "verified_alias", "official_title")
+                    and isinstance(c.get("source_page"), str)
+                    and urlsplit(c["source_page"]).hostname in rule["page_hosts"]))[:3]
+                aliases = [alias for c in previous.get(rule["id"], {}).get("success", {}).get("candidates", [])
+                    if c.get("game_appid") == query["appid"]
+                    and c.get("match_basis") in ("appid", "verified_alias", "official_title")
+                    for alias in c.get("aliases", []) if isinstance(alias, str)]
+                direct_query = {**query, "upstream_pages": pages,
+                    "name_hints": list(dict.fromkeys([*query.get("name_hints", []), *aliases]))[:12]}
+                result = collect(rule, direct_query if pages else query)
             finally:
                 context.deadline, context.budget = deadline, budget
             results.append(result)

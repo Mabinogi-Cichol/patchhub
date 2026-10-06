@@ -1,6 +1,6 @@
 export type JobsStatus = { stage_bytes: number; backup_bytes: number };
 export type CacheStatus = { total_bytes: number; file_count: number; publisher_bytes: number; core_bytes: number; removed_bytes?: number; jobs: JobsStatus };
-export type Settings = { auto_cleanup: boolean; keep_backups: boolean; cache: CacheStatus };
+export type Settings = { auto_cleanup: boolean; cache: CacheStatus };
 
 // One binary-unit formatter shared by progress and cache rows.
 export function formatSize(bytes: number) {

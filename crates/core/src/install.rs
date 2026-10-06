@@ -24,6 +24,38 @@ pub const MAX_EXPANDED_BYTES: u64 = 16 * 1024 * 1024 * 1024;
 pub const MAX_ENTRIES: usize = 8192;
 pub const PLAN_TTL_SECONDS: u64 = 900;
 
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum InstallOperation {
+    #[default]
+    Install,
+    Reinstall,
+}
+
+/// Content identity excludes pre-operation hashes, which are snapshots during reinstall.
+pub fn recipe_identity(release: &PatchRelease) -> io::Result<String> {
+    let recipe = release
+        .recipe
+        .as_ref()
+        .ok_or_else(|| invalid("recipe_missing"))?;
+    let mappings: Vec<_> = recipe
+        .files
+        .iter()
+        .map(|m| (&m.source, &m.destination, &m.installed_sha256))
+        .collect();
+    let bytes = serde_json::to_vec(&(
+        release.appid,
+        &release.release_id,
+        &release.language,
+        &recipe.artifact_sha256,
+        mappings,
+    ))
+    .map_err(|e| invalid(e.to_string()))?;
+    Ok(format!("{:x}", Sha256::digest(bytes)))
+}
+
 #[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct PlannedChange {
@@ -37,6 +69,10 @@ pub struct PlannedChange {
 #[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct InstallPlan {
+    #[serde(default)]
+    pub operation: InstallOperation,
+    #[serde(default)]
+    pub recipe_sha256: Option<String>,
     pub plan_id: String,
     pub instance_id: String,
     pub release_id: String,
@@ -47,8 +83,8 @@ pub struct InstallPlan {
     pub changes: Vec<PlannedChange>,
     pub disk_requirement: u64,
     pub blockers: Vec<String>,
-    /// The caller must confirm these conditions; cooperating locks do not detect
-    /// or stop a running game or Steam updater.
+    /// Legacy diagnostic field, empty for new automatic tasks. Cooperating
+    /// locks do not detect or stop a running game or Steam updater.
     #[serde(default)]
     pub preconditions: Vec<String>,
 }
@@ -64,9 +100,8 @@ pub struct Transaction {
     pub error: Option<String>,
     pub created_at: u64,
     pub updated_at: u64,
-    /// True when the committed plan replaces or removes an existing file whose
-    /// original bytes must be restored from a backup. Add-only transactions can
-    /// be uninstalled safely even when no backup files exist.
+    /// Whether this operation temporarily snapshots existing bytes for failure
+    /// recovery. Successful new installations do not retain those snapshots.
     #[serde(default)]
     pub has_replacements: bool,
 }
@@ -82,6 +117,8 @@ struct Job {
     created_dirs: Vec<String>,
     #[serde(default)]
     uninstall_requested: bool,
+    #[serde(default)]
+    transient_recovery: bool,
 }
 
 fn invalid(code: impl Into<String>) -> io::Error {
@@ -452,11 +489,15 @@ fn validate_job(job: &Job, id: &str) -> io::Result<()> {
     {
         return Err(invalid("journal_invalid"));
     }
+    if p.recipe_sha256.as_ref().is_some_and(|h| !valid_hash(h)) {
+        return Err(invalid("journal_invalid_identity"));
+    }
     if ![
         "planned",
         "backing_up",
         "applying",
         "committed",
+        "superseded",
         "uninstalling",
         "rolling_back",
         "rolled_back",
@@ -477,6 +518,19 @@ fn validate_job(job: &Job, id: &str) -> io::Result<()> {
         })
     {
         return Err(invalid("journal_invalid_state"));
+    }
+    if ["committed", "superseded"].contains(&job.transaction.state.as_str())
+        && !job.uninstall_requested
+        && job.progress.iter().any(|state| state != "installed")
+    {
+        return Err(invalid("journal_invalid_terminal"));
+    }
+    if ["rolled_back", "uninstalled"].contains(&job.transaction.state.as_str())
+        && !job.progress.iter().all(|state| state == "restored")
+        && !(job.transaction.state == "rolled_back"
+            && job.progress.iter().all(|state| state == "pending"))
+    {
+        return Err(invalid("journal_invalid_terminal"));
     }
     let mut names = HashSet::new();
     for change in &p.changes {
@@ -552,12 +606,19 @@ fn game_lock(install: &GameInstall) -> io::Result<File> {
     Ok(file)
 }
 
-fn ensure_no_active(store: &Store, instance: &str, except: Option<&str>) -> io::Result<()> {
+fn ensure_no_active(
+    store: &Store,
+    instance: &str,
+    except: Option<&str>,
+    reinstall: bool,
+) -> io::Result<()> {
     for id in store.ids()? {
         let job = store.load(&id)?;
         if Some(id.as_str()) != except
             && job.plan.instance_id == instance
-            && !["planned", "rolled_back", "uninstalled"].contains(&job.transaction.state.as_str())
+            && !["planned", "rolled_back", "uninstalled", "superseded"]
+                .contains(&job.transaction.state.as_str())
+            && !(reinstall && job.transaction.state == "committed" && !job.uninstall_requested)
         {
             return Err(invalid("managed_install_exists_or_needs_recovery"));
         }
@@ -573,6 +634,24 @@ pub fn prepare(
     archive: &Path,
     state_dir: &Path,
     catalog_revision: u64,
+) -> io::Result<InstallPlan> {
+    prepare_with_operation(
+        install,
+        release,
+        archive,
+        state_dir,
+        catalog_revision,
+        InstallOperation::Install,
+    )
+}
+
+pub fn prepare_with_operation(
+    install: &GameInstall,
+    release: &PatchRelease,
+    archive: &Path,
+    state_dir: &Path,
+    catalog_revision: u64,
+    operation_kind: InstallOperation,
 ) -> io::Result<InstallPlan> {
     Catalog {
         schema_version: 1,
@@ -603,7 +682,57 @@ pub fn prepare(
     }
     let store = Store::open(state_dir)?;
     validate_install(install, &store.root)?;
-    ensure_no_active(&store, &install.instance_id, None)?;
+    ensure_no_active(
+        &store,
+        &install.instance_id,
+        None,
+        operation_kind == InstallOperation::Reinstall,
+    )?;
+    let identity = recipe_identity(release)?;
+    if operation_kind == InstallOperation::Reinstall {
+        let mut owned = false;
+        for id in store.ids()? {
+            let previous = store.load(&id)?;
+            if previous.plan.instance_id != install.instance_id
+                || previous.transaction.state != "committed"
+            {
+                continue;
+            }
+            let same_targets = previous.plan.changes.len() == recipe.files.len()
+                && previous
+                    .plan
+                    .changes
+                    .iter()
+                    .zip(&recipe.files)
+                    .all(|(c, m)| {
+                        c.path == m.destination && c.installed_sha256 == m.installed_sha256
+                    });
+            if previous.uninstall_requested
+                || previous.plan.release_id != release.release_id
+                || previous.plan.install.appid != install.appid
+                || previous.plan.install.buildid != install.buildid
+                || previous.plan.install.install_path != install.install_path
+                || !same_targets
+                || previous
+                    .plan
+                    .recipe_sha256
+                    .as_ref()
+                    .is_some_and(|h| h != &identity)
+            {
+                return Err(invalid("reinstall_content_identity_changed"));
+            }
+            owned = true;
+        }
+        if !owned {
+            for mapping in &recipe.files {
+                if hash_at(&target(&install.install_path, &mapping.destination)?)?.as_deref()
+                    != Some(mapping.installed_sha256.as_str())
+                {
+                    return Err(invalid("reinstall_unowned_or_incomplete"));
+                }
+            }
+        }
+    }
     let archive_path = std::path::absolute(archive)?;
     let mut file = regular_file(&archive_path)?;
     if file.metadata()?.len() > MAX_ARCHIVE_BYTES {
@@ -776,7 +905,7 @@ pub fn prepare(
             }
             let path = target(&install.install_path, &mapping.destination)?;
             let actual = hash_at(&path)?;
-            if actual != mapping.original_sha256 {
+            if operation_kind == InstallOperation::Install && actual != mapping.original_sha256 {
                 blockers.push(format!("baseline_conflict:{}", mapping.destination));
             }
             let old_size = if actual.is_some() {
@@ -807,13 +936,8 @@ pub fn prepare(
             operation::finish_file(index + 1);
             changes.push(PlannedChange {
                 path: mapping.destination.clone(),
-                action: if mapping.original_sha256.is_some() {
-                    "replace"
-                } else {
-                    "add"
-                }
-                .into(),
-                original_sha256: mapping.original_sha256.clone(),
+                action: if actual.is_some() { "replace" } else { "add" }.into(),
+                original_sha256: actual,
                 installed_sha256: mapping.installed_sha256.clone(),
                 size: copied,
             });
@@ -836,6 +960,8 @@ pub fn prepare(
     }
     sync_dir(&directory)?;
     let plan = InstallPlan {
+        operation: operation_kind,
+        recipe_sha256: Some(identity),
         plan_id: id.clone(),
         instance_id: install.instance_id.clone(),
         release_id: release.release_id.clone(),
@@ -849,7 +975,7 @@ pub fn prepare(
         changes,
         disk_requirement: disk,
         blockers,
-        preconditions: vec!["close_game_and_pause_steam_updates".into()],
+        preconditions: Vec::new(),
     };
     let transaction = Transaction {
         transaction_id: id.clone(),
@@ -868,9 +994,17 @@ pub fn prepare(
         transaction,
         created_dirs: Vec::new(),
         uninstall_requested: false,
+        transient_recovery: true,
     };
     operation::stage("planning", None, None);
-    store.save(&mut job)?;
+    if let Err(error) = operation::check().and_then(|()| store.save(&mut job)) {
+        for index in 0..job.plan.changes.len() {
+            let path = store.item(&job.plan.plan_id, index, "stage")?;
+            let _ = fs::remove_file(path);
+        }
+        let _ = fs::remove_dir(&directory);
+        return Err(error);
+    }
     Ok(job.plan)
 }
 
@@ -886,6 +1020,7 @@ pub fn discard_plan(plan_id: &str, state_dir: &Path) -> io::Result<Transaction> 
     if job.transaction.state != "planned" {
         return Err(invalid("plan_already_consumed"));
     }
+    revoke(&store, plan_id)?;
     job.transaction.state = "rolled_back".into();
     job.transaction.error = Some("task_cancelled".into());
     store.save(&mut job)?;
@@ -991,21 +1126,56 @@ pub fn apply(plan_id: &str, state_dir: &Path) -> io::Result<Transaction> {
     validate_install(&job.plan.install, &store.root)?;
     let _game_lock = game_lock(&job.plan.install)?;
     if job.transaction.state == "committed" {
+        operation::committed();
         verify_all(&job, true)?;
         return Ok(job.transaction);
     }
     if job.transaction.state != "planned" {
         return Err(invalid("plan_already_consumed"));
     }
+    check_revoked(&store, plan_id)?;
     if now() < job.plan.created_at || now() > job.plan.expires_at {
         return Err(invalid("plan_expired"));
     }
     if !job.plan.blockers.is_empty() {
         return Err(invalid("plan_has_blockers"));
     }
+    if job.plan.operation == InstallOperation::Reinstall {
+        for id in store.ids()? {
+            let previous = store.load(&id)?;
+            if previous.plan.instance_id == job.plan.instance_id
+                && previous.transaction.state == "committed"
+                && (previous.plan.release_id != job.plan.release_id
+                    || previous.plan.install.appid != job.plan.install.appid
+                    || previous.plan.install.buildid != job.plan.install.buildid
+                    || previous.plan.install.install_path != job.plan.install.install_path
+                    || previous.plan.changes.len() != job.plan.changes.len()
+                    || previous
+                        .plan
+                        .changes
+                        .iter()
+                        .zip(&job.plan.changes)
+                        .any(|(old, new)| {
+                            old.path != new.path || old.installed_sha256 != new.installed_sha256
+                        })
+                    || previous
+                        .plan
+                        .recipe_sha256
+                        .as_ref()
+                        .is_some_and(|identity| Some(identity) != job.plan.recipe_sha256.as_ref()))
+            {
+                return Err(invalid("reinstall_content_identity_changed"));
+            }
+        }
+    }
     operation::stage("validating", None, Some(job.plan.changes.len()));
     operation::check()?;
-    ensure_no_active(&store, &job.plan.instance_id, Some(plan_id))?;
+    ensure_no_active(
+        &store,
+        &job.plan.instance_id,
+        Some(plan_id),
+        job.plan.operation == InstallOperation::Reinstall,
+    )?;
     verify_all(&job, false)?;
     if fs2::available_space(&store.root)? < job.plan.disk_requirement
         || fs2::available_space(&job.plan.install.install_path)? < job.plan.disk_requirement
@@ -1025,6 +1195,10 @@ pub fn apply(plan_id: &str, state_dir: &Path) -> io::Result<Transaction> {
             store.save(&mut job)?;
         }
     }
+    if job.transaction.state == "committed" {
+        operation::committed();
+    }
+    cleanup_terminal(&store, &mut job)?;
     Ok(job.transaction)
 }
 
@@ -1070,6 +1244,7 @@ fn apply_files(store: &Store, job: &mut Job) -> io::Result<()> {
     store.save(job)?;
     for i in 0..job.plan.changes.len() {
         operation::check()?;
+        check_revoked(store, &job.plan.plan_id)?;
         operation::file(i, &job.plan.changes[i].path);
         validate_install(&job.plan.install, &store.root)?;
         make_parents(store, job, i)?;
@@ -1107,8 +1282,36 @@ fn apply_files(store: &Store, job: &mut Job) -> io::Result<()> {
     validate_install(&job.plan.install, &store.root)?;
     verify_all(job, true)?;
     operation::check()?;
+    check_revoked(store, &job.plan.plan_id)?;
     job.transaction.state = "committed".into();
-    store.save(job)
+    // Supersede old successful receipts and commit this receipt atomically.
+    sql(store.conn.execute_batch("BEGIN IMMEDIATE"))?;
+    let outcome = (|| {
+        for id in store.ids()? {
+            if id == job.plan.plan_id {
+                continue;
+            }
+            let mut previous = store.load(&id)?;
+            if previous.plan.instance_id == job.plan.instance_id
+                && previous.transaction.state == "committed"
+            {
+                previous.transaction.state = "superseded".into();
+                store.save(&mut previous)?;
+            }
+        }
+        store.save(job)
+    })();
+    if let Err(error) = outcome {
+        let _ = store.conn.execute_batch("ROLLBACK");
+        job.transaction.state = "applying".into();
+        return Err(error);
+    }
+    if let Err(error) = sql(store.conn.execute_batch("COMMIT")) {
+        let _ = store.conn.execute_batch("ROLLBACK");
+        job.transaction.state = "applying".into();
+        return Err(error);
+    }
+    Ok(())
 }
 
 fn validate_temporary(store: &Store, job: &Job, index: usize) -> io::Result<bool> {
@@ -1226,37 +1429,14 @@ fn restore(store: &Store, job: &mut Job, uninstalling: bool) -> io::Result<()> {
     store.save(job)
 }
 
-pub fn uninstall(transaction_id: &str, state_dir: &Path) -> io::Result<Transaction> {
-    let store = Store::open(state_dir)?;
-    let mut job = store.load(transaction_id)?;
-    job.transaction.has_replacements = job.plan.changes.iter().any(|c| c.action != "add");
-    if job.transaction.state == "uninstalled" {
-        return Ok(job.transaction);
-    }
-    if job.transaction.state != "committed" {
-        return Err(invalid("transaction_not_committed"));
-    }
-    validate_install(&job.plan.install, &store.root)?;
-    let _lock = game_lock(&job.plan.install)?;
-    job.uninstall_requested = true;
-    job.transaction.state = "uninstalling".into();
-    store.save(&mut job)?;
-    if let Err(error) = restore(&store, &mut job, true) {
-        // Even preflight conflicts remain visible in history and preserve original backups.
-        job.transaction.state = "needs_recovery".into();
-        job.transaction.error = Some(error.to_string());
-        store.save(&mut job)?;
-    }
-    Ok(job.transaction)
-}
-
 pub fn recover(state_dir: &Path) -> io::Result<Vec<Transaction>> {
     let store = Store::open(state_dir)?;
     let mut result = Vec::new();
     for id in store.ids()? {
         let mut job = store.load(&id)?;
         job.transaction.has_replacements = job.plan.changes.iter().any(|c| c.action != "add");
-        if ["planned", "rolled_back", "uninstalled"].contains(&job.transaction.state.as_str())
+        if ["planned", "rolled_back", "uninstalled", "superseded"]
+            .contains(&job.transaction.state.as_str())
             || (job.transaction.state == "committed" && !job.uninstall_requested)
         {
             continue;
@@ -1272,6 +1452,7 @@ pub fn recover(state_dir: &Path) -> io::Result<Vec<Transaction>> {
             job.transaction.error = Some(error.to_string());
             store.save(&mut job)?;
         }
+        cleanup_terminal(&store, &mut job)?;
         result.push(job.transaction);
     }
     Ok(result)
@@ -1282,8 +1463,146 @@ pub fn list_transactions(state_dir: &Path) -> io::Result<Vec<Transaction>> {
     let mut result = Vec::new();
     for id in store.ids()? {
         let mut job = store.load(&id)?;
-        job.transaction.has_replacements = job.plan.changes.iter().any(|change| change.action != "add");
+        job.transaction.has_replacements =
+            job.plan.changes.iter().any(|change| change.action != "add");
         result.push(job.transaction);
+    }
+    Ok(result)
+}
+
+fn check_revoked(store: &Store, id: &str) -> io::Result<()> {
+    let marker = store.directory(id)?.join("revoked");
+    safe_path(&marker)?;
+    if marker.exists() {
+        return Err(invalid("plan_revoked"));
+    }
+    Ok(())
+}
+
+fn revoke(store: &Store, id: &str) -> io::Result<()> {
+    let directory = store.directory(id)?;
+    fs::create_dir_all(&directory)?;
+    let marker = directory.join("revoked");
+    safe_path(&marker)?;
+    let file = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(marker)?;
+    file.sync_all()?;
+    sync_dir(&directory)
+}
+
+/// Delete only derived temporary files for validated terminal records. Failures
+/// preserve successful installation and remain visible as cleanup diagnostics.
+fn cleanup_terminal(store: &Store, job: &mut Job) -> io::Result<()> {
+    if !job.transient_recovery
+        || job.uninstall_requested && job.transaction.state != "uninstalled"
+        || !["committed", "superseded", "rolled_back", "uninstalled"]
+            .contains(&job.transaction.state.as_str())
+    {
+        return Ok(());
+    }
+    let cleanup = (|| {
+        for index in 0..job.plan.changes.len() {
+            for kind in ["stage", "backup"] {
+                let path = store.item(&job.plan.plan_id, index, kind)?;
+                match regular_file(&path) {
+                    Ok(file) => {
+                        drop(file);
+                        fs::remove_file(path)?;
+                    }
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => (),
+                    Err(error) => return Err(error),
+                }
+            }
+        }
+        sync_dir(&store.directory(&job.plan.plan_id)?)
+    })();
+    let previous_error = job.transaction.error.as_deref().and_then(|error| {
+        if error.starts_with("cleanup_pending:") {
+            None
+        } else {
+            Some(
+                error
+                    .split("; cleanup_pending:")
+                    .next()
+                    .unwrap_or(error)
+                    .to_owned(),
+            )
+        }
+    });
+    if let Err(error) = cleanup {
+        job.transaction.error = Some(format!(
+            "{}cleanup_pending:{error}",
+            previous_error
+                .map(|error| format!("{error}; "))
+                .unwrap_or_default()
+        ));
+        // Cleanup diagnostics must never change an already durable terminal outcome.
+        let _ = store.save(job);
+    } else if previous_error != job.transaction.error {
+        job.transaction.error = previous_error;
+        // Cleanup diagnostics must never change an already durable terminal outcome.
+        let _ = store.save(job);
+    }
+    Ok(())
+}
+
+/// One-time upgrade invalidates old executable plans. Subsequent calls only
+/// retry safe terminal cleanup and never revoke current-version preparations.
+pub fn migrate_state(state_dir: &Path) -> io::Result<Vec<Transaction>> {
+    let store = Store::open(state_dir)?;
+    sql(store
+        .conn
+        .execute_batch("CREATE TABLE IF NOT EXISTS migrations(name TEXT PRIMARY KEY NOT NULL)"))?;
+    let migrated: bool = sql(store.conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM migrations WHERE name='simplified_install_v1')",
+        [],
+        |r| r.get(0),
+    ))?;
+    let ids = store.ids()?;
+    // Validate the complete journal before deleting any material.
+    for id in &ids {
+        let _ = store.load(id)?;
+    }
+    let mut result = Vec::new();
+    for id in ids {
+        let mut job = store.load(&id)?;
+        if !migrated && job.transaction.state == "planned" {
+            revoke(&store, &id)?;
+            job.transaction.state = "rolled_back".into();
+            job.transaction.error = Some("upgrade_plan_revoked".into());
+        }
+        // Legacy unfinished operations keep their materials until recovery;
+        // once settled, their compatibility backups have no further product use.
+        job.transient_recovery = true;
+        store.save(&mut job)?;
+        if ["committed", "superseded", "rolled_back", "uninstalled"]
+            .contains(&job.transaction.state.as_str())
+            && (!job.uninstall_requested || job.transaction.state == "uninstalled")
+        {
+            // Check the recorded instance still resolves to this Steam game.
+            match validate_install(&job.plan.install, &store.root) {
+                Ok(()) => {
+                    let _lock = game_lock(&job.plan.install)?;
+                    job.transient_recovery = true;
+                    store.save(&mut job)?;
+                    cleanup_terminal(&store, &mut job)?;
+                }
+                Err(error) => {
+                    job.transaction.error = Some(format!("migration_cleanup_blocked:{error}"));
+                    store.save(&mut job)?;
+                }
+            }
+        }
+        result.push(job.transaction);
+    }
+    if !migrated {
+        sql(store.conn.execute(
+            "INSERT INTO migrations(name) VALUES('simplified_install_v1')",
+            [],
+        ))?;
     }
     Ok(result)
 }

@@ -6,9 +6,9 @@ import { taskProgressPercent } from "./task-progress";
 
 const stageNames: Record<string, string> = {
   scanning: "查找本地 ZIP", searching: "查找本地 ZIP", connecting: "正在连接", downloading: "下载补丁",
-  validating: "校验文件", planning: "生成安装计划", backing_up: "备份原文件",
+  validating: "校验文件", planning: "检查安装条件", backing_up: "保护现有文件",
   inspecting: "检查安装包", extracting: "提取补丁", converting: "准备游戏文件", signing: "核对安装资料",
-  checking_game: "核对游戏版本与文件", preparing_plan: "生成安装计划", generating_plan: "生成安装计划",
+  checking_game: "核对游戏版本与文件", preparing_plan: "检查安装条件", generating_plan: "检查安装条件",
   writing: "写入文件", committing: "提交安装", rolling_back: "恢复原文件",
 };
 
@@ -33,19 +33,20 @@ const styles = `
   }
 `;
 
-export function TaskProgressView({ task, game, patch, onCancel }: {
+export function TaskProgressView({ task, game, patch, onCancel, onClose }: {
   task: TaskSnapshot | null;
   game: string;
   patch: string;
   onCancel: () => void;
+  onClose: () => void;
 }) {
   const busy = task != null && !taskIsTerminal(task.state);
   const stage = task?.state === "cancelling" ? "正在取消" : task?.state === "rolling_back" ? "正在恢复原文件" : stageNames[task?.stage ?? ""] ?? task?.stage ?? "正在启动";
   const progress = taskProgressPercent(task);
-  return <ModalRoot className="patch-task-modal" bDisableBackgroundDismiss bHideCloseIcon onCancel={onCancel} closeModal={onCancel}>
+  return <ModalRoot className="patch-task-modal" onCancel={onClose} closeModal={onClose}>
     <style>{styles}</style>
     <div className="patch-task-shell">
-      <header className="patch-task-header"><h2>{task?.kind === "install" ? "安装补丁" : "准备补丁"}</h2></header>
+      <header className="patch-task-header"><h2>安装补丁</h2></header>
       <div className="patch-task-body">
         <p>{game} · {patch}</p>
         <p className="patch-task-stage">当前阶段：{stage}{progress != null ? ` · ${Math.round(progress)}%` : ""}</p>
@@ -53,22 +54,22 @@ export function TaskProgressView({ task, game, patch, onCancel }: {
         <div className="patch-task-metrics">
           <span>已处理：{formatSize(task?.bytes_done ?? 0)}{progress != null ? ` / ${formatSize(task!.total_bytes!)}` : " / 总量未知"}</span>
           <span>文件：{task?.files_done ?? 0}{task?.total_files != null ? ` / ${task.total_files}` : ""}</span>
-          {task?.kind === "prepare" && task.stage === "downloading" && <span>下载速度：{formatSize(task.speed_bps)}/s</span>}
-          {task?.kind === "prepare" && task.archive_bytes != null && task.stage !== "downloading" && <span>安装包大小：{formatSize(task.archive_bytes)}</span>}
-          {task?.kind === "install" && task.archive_bytes != null && <span>安装包大小：{formatSize(task.archive_bytes)}</span>}
+          {task?.stage === "downloading" && <span>下载速度：{formatSize(task.speed_bps)}/s</span>}
+          {task?.archive_bytes != null && <span>安装包大小：{formatSize(task.archive_bytes)}</span>}
           <span>已用：{duration(task?.elapsed_seconds ?? 0)}</span>
-          {task?.kind === "prepare" && task.stage === "downloading" && <span>预计剩余：{task.eta_seconds == null ? "估算中" : duration(task.eta_seconds)}</span>}
+          {task?.stage === "downloading" && <span>预计剩余：{task.eta_seconds == null ? "估算中" : duration(task.eta_seconds)}</span>}
         </div>
         {task?.current_file && <p>当前文件：{task.current_file}</p>}
         {task?.error && <p className="patch-task-warning">{reason(task.error)}</p>}
         {task?.state === "cancelled" && <p>已安全取消。</p>}
-        {task?.state === "completed" && <p>{task.kind === "install" ? "安装已完成。" : "准备完成。"}</p>}
-        {busy && <p>退出此界面将中断任务。安装取消时会恢复本次修改的文件。</p>}
+        {task?.state === "completed" && <p>安装已完成。</p>}
+        {busy && <p>关闭进度窗口后安装仍会继续。取消安装时会恢复本次修改的文件。</p>}
       </div>
       <footer className="patch-task-footer"><ButtonItem layout="below" bottomSeparator="none" onClick={onCancel}
         disabled={task?.state === "cancelling" || task?.state === "rolling_back"}>
-        {busy ? task?.state === "cancelling" || task?.state === "rolling_back" ? stage : "取消并返回" : "返回补丁管理"}
+        {busy ? task?.state === "cancelling" || task?.state === "rolling_back" ? stage : "取消安装" : "返回补丁管理"}
       </ButtonItem></footer>
+      {busy && <ButtonItem layout="below" bottomSeparator="none" onClick={onClose}>关闭进度窗口</ButtonItem>}
     </div>
   </ModalRoot>;
 }
