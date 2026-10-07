@@ -1,6 +1,6 @@
 # P0 契约冻结设计（P0-Gate 1 通过，定稿）
 
-日期：2026-10-08（Asia/Shanghai）。状态：**P0 契约 v0.5——P0-Gate 1 终审通过（attempt 3/3，2026-10-08），定稿冻结；Windows 支持版本已确认：仅 Win11 x64（2026-10-08）**。已回填：lib-2 LZMA 依赖调研（§8）、P0-B Windows 探针实测（§6.2/§8，证据见 [p0-sandbox-probe-windows.md](p0-sandbox-probe-windows.md)）。
+日期：2026-10-08（Asia/Shanghai）。状态：**P0 契约 v0.5——P0-Gate 1 终审通过（attempt 3/3，2026-10-08），定稿冻结；Windows 支持版本已确认：仅 Win11 x64（2026-10-08）**。已回填：lib-2 LZMA 依赖调研（§8）、P0-B Windows 探针实测（§6.2/§8，证据见 [p0-sandbox-probe-windows.md](p0-sandbox-probe-windows.md)）。**增补：已按 [p1-zip-orchestration.md](p1-zip-orchestration.md)（P1-3b-3 设计）回写动态 publisher ZIP 契约（§2.2 交叉引用、§2.5 新增、§3.1 补注、§9 F6、§10，2026-10-08）。**
 
 关联：[design.md](design.md)、[progress.md](progress.md)。取代 [shared-source-discovery/p0-p1-rust-design.md](../shared-source-discovery/p0-p1-rust-design.md) §5.1 的来源编码/ID 契约。开发阶段接受旧缓存 breaking change，不做旧格式兼容/回退。
 
@@ -99,6 +99,7 @@
 **【冻结值】** `content_id = "exe-content-" + hex(sha256(canonical(identity)))[:24] + "-" + appid`。
 `identity` 字段集（来自 `exe_generic.py:195`）：`appid, source_id, source_record_id, language, variant, exe_sha256, metadata_sha256, payload`。`payload` = 有序 `[{path,size,sha256}]`。
 - **终态 release_id 显式返回**：EXE 动态路径的最终 `release_id = content_id`；签名 ZIP 路径的 `release_id = catalog.release_id`（`patchmoe-<appid>` / `source-<id>-<appid>`）。UI 只持有选择 ID，终态由核心回填。
+- **动态 publisher ZIP 交叉引用（见 §2.5）**：动态 ZIP 终态 `release_id` = 来源 release id（`patchmoe-<appid>`，否则 `source-<rule-id>-<appid>`）；**`content_id` 不产生**（R2，仅 EXE 动态路由产生）；其内容身份见 §2.4 `install::recipe_identity`（落 `plan.recipe_sha256`），落账本的内部 `content_id` 即该摘要（§3.1）。
 
 **【理由】** 设计 §5.1“绑定来源、AppID、语言/变体、EXE SHA、元数据及完整载荷/选择摘要；终态显式返回最终 release_id”。**被否替代**：内容 ID 纳入 `source_page`/`mirrors`（会因镜像/页面文案变化误判内容更新，与现行实现不符）。
 
@@ -126,6 +127,27 @@
 
 **【验证方式】** 同 URL 不同字节 / 同 release_id 不同 artifact_sha → 阻断（fixture）。
 
+### 2.5 动态 publisher ZIP 选择 ID（candidate 级，不可 apply）
+
+> 来源 [p1-zip-orchestration.md](p1-zip-orchestration.md) §1（P1-3b-3 设计，2026-10-08 回写）。与 §2.1 的 EXE 选择 ID **同源**（同一候选级绑定与 §1.1 编码），仅前缀区分路由。
+
+**【冻结值】** `zip-selection-<hex(sha256(canonical_bytes(zip_candidate_binding)))[:24]>-<appid>`。
+`zip_candidate_binding` 字段集（有序、显式）：`source_id, source_record_id, game_appid, variant, languages, version_identity, source_page, requires_dlc, excludes_dlc, mirrors_zip`。
+- `mirrors_zip` **有意收窄**：仅取 `candidate.mirrors` 中 `format=="zip"` 的条目、按原顺序取 `url`（去 label）；ZIP 路由不应因无关 EXE 镜像或标签变化而失效（相较 §2.1 绑全量 `mirrors`）。
+- `game_appid` 必须 `Some(appid)` 且等于 ID 后缀 `appid`；`appid` 为正整数（`[1-9][0-9]*`）。
+- 编码使用 §1.1 确定性 JSON（键 UTF-8 字节序、无空格、`ensure_ascii=false`、禁浮点），**不新增编码版本**（新增消费者不改变字节契约）。
+- **与 §2.1 `exe-selection-*` 平行**：同一 candidate 的 ZIP/EXE 两条 selection 共享摘要、前缀不同，互不冒充。
+- **选择 ID 只代表候选，不授予 apply 权限**（设计 §5.1）；产生时机为安装器投影（`scan.installs[].patches[]` 与 `discover_game`），`list_game_sources` 不产生 selection。
+- **投影去重（签名优先）**：同一 appid 同时存在签名 `managed_zip` release 与动态 `publisher_zip` 候选且 `release_id` 相同时，只投影签名 release、抑制动态 selection。
+
+**【理由】** 复用 §2.1 候选级绑定与 §1.1 编码，使 ZIP/EXE 选择表示同源、易证；`mirrors_zip` 收窄避免无关镜像误失效；终态身份按 §2.4 + R2 推导为“来源 `release_id` + `recipe_identity`”，不引入新 ID 家族。
+
+**【被否替代】** 另造 `zip-content-<hash>` 作为终态 ID（与 §2.4 内容身份重复且需新编码契约）；绑定 `SourceMatch`（缺 `variant/version_identity/requires_dlc/mirrors`）；绑全量 `mirrors`；`list_game_sources` 产生 selection（破坏权限分离）；允许动态 selection 与签名 release 同 `release_id` 并存投影（UI/账本键冲突、弱化信任优先级）。
+
+**【迁移动作】** 新增 `installer/resolve.rs::zip_selection_id(candidate)`（无 `game_appid` 或无 zip mirror 返回 `None`）；`runtime.rs` 在 `scan` 动态投影后追加、`discover_game` 追加 `patches[]`；`catalog::SupportLevel` 增 `PublisherZip`（`PublisherExe` 预留 P2/P3），`PatchMatch` 增 `selection_id: Option<String>`。
+
+**【验证方式】** 同输入跨次/跨进程 ID 一致；`mirrors_zip`/`languages`/`variant`/`version_identity`/`requires_dlc`/`excludes_dlc` 任一变化 → ID 变化（fixture 矩阵，§9 F6）；ZIP/EXE 前缀隔离；无 zip mirror → 不产生 selection；签名优先去重（注入同 `release_id` 签名 release + 动态候选 → scan 只出现签名 patch）。
+
 ---
 
 ## 3. 新状态 schema `installer/rust-v1/`
@@ -149,7 +171,7 @@ installer/rust-v1/
 
 与 `state_dir` 顶层关系：`installer/rust-v1/` 与 `sources/rust-v1/`、`trust.sqlite`、`install_requests.sqlite` 平级且互不嵌套；`publisher/`、旧 `jobs/`、旧 `downloads/`、旧 `install_requests.sqlite` 只保留为不读取的旧目录。
 
-- `requests.sqlite` 为新请求**幂等账本**，承接 §3.3/请求幂等语义，**替代旧顶层 `install_requests.sqlite` 的读取**（旧文件只保留、不读取）。
+- `requests.sqlite` 为新请求**幂等账本**，承接 §3.3/请求幂等语义，**替代旧顶层 `install_requests.sqlite` 的读取**（旧文件只保留、不读取）。**对动态 publisher ZIP**，账本 `content_id` 存 **`install::recipe_identity` 摘要**（64 hex，§2.4/§2.5 的内部解析内容）；宿主 DTO 的 `content_id` 仍为 `null`。
 - `instance_hash` **冻结为 `sha256(instance_id)` 前 16 hex**；成功收据必须绑定 `content_id` + transaction id；**完整收据 schema 由 P1 冻结（以 design §5.2 完整绑定为准）**。
 
 **【理由】** 设计 §7.1/§7.2 要求统一 schema；沿用 `install.rs::Store` 的 `jobs/<uuid>/<i>.<kind>` 便于复用恢复算法。**被否替代**：沿用 `publisher/<release_id>/<instance_hash>/`（设计明确不复用）。
@@ -352,7 +374,7 @@ installer/rust-v1/
 | F3 | SF IR/行为黄金 | `sf9-behavior-v1` IR、`audit` 报告 schema v1、coverage/terms/condition、worker 协议信封 fixture（`schema_version`/`action`/`installable`/`capability`） | `crates/installer-format/tests/fixtures/sf/*.json`（对 `scripts/test_sf9_behavior.py`、`test_sf95_*` 的脱敏结果） |
 | F4 | 授权绑定 | `exe-policy` schema 2 各绑定字段、`validate_apply` 重核矩阵 | `crates/core/tests/fixtures/installer/authorization.json` |
 | F5 | 恢复/事务 | journal 状态机、`revoked`、`needs_recovery`、同内容重装 | 复用 `crates/core/tests/install.rs` 合成 + fixture 断言 |
-| F6 | 选择/内容 ID | `candidate_binding`/`identity` 字段变化 → ID 变化矩阵 | `crates/core/tests/fixtures/installer/ids.json` |
+| F6 | 选择/内容 ID | `candidate_binding`/`identity` 字段变化 → ID 变化矩阵；**动态 publisher ZIP 增 `zip_candidate_binding` 矩阵**（`mirrors_zip`/`languages`/`variant`/`version_identity`/`requires_dlc`/`excludes_dlc` 任一变化 → `zip-selection-*` 变化，§2.5） | `crates/core/tests/fixtures/installer/ids.json` |
 
 - **合成策略**：所有 EXE/ZIP/XP3/ACF 由测试在临时目录生成（沿用 `test_publisher.py`/`test_exe_*.py` 的合成方式）；无提交的二进制样本。
 - 三条旧 profile 对应包只作 **F3 通用行为/载荷回归**，不迁移 profile 注册表。**当前仓库不含这些旧 profile 包的二进制样本**；P2 前由用户提供，否则降级为合成 fixture，该部分保持**待验证**。
@@ -384,6 +406,7 @@ installer/rust-v1/
 | 用户规则是否携带 `root_layout` | §7 | P1 用真实 settings 抽样确认（不作为冻结前提） |
 | `migrate_state` 去留 | §4.2 | P1 决策（倾向删除） |
 | 宿主 RPC 方法白名单/事件命名空间/终态字段 | §11（design §6） | 已冻结：[p1-host-contract.md](p1-host-contract.md) v1.2（P1-0 门禁通过，2026-10-08） |
+| 动态 publisher ZIP 的 `release_id`/内容身份/选择 ID | §2.2/§2.4/§2.5 | 已冻结（P1-3b-3 设计，2026-10-08）：终态 `release_id`=来源 release id、宿主 `content_id`=null、账本 `content_id`=`recipe_identity` 摘要；见 [p1-zip-orchestration.md](p1-zip-orchestration.md) |
 | Linux 树级资源限额（cgroup v2 / RLIMIT_NPROC；与 Windows Job 树级约束不对称） | §6.2 | 待实现/待实测（P1/P3；P0-D 评审 M2） |
 | Linux launcher 输出限额 fail-closed（stdout 16 MiB / stderr 64 KiB，超限终止并报 `exe_worker_response_limit`） | §6.1 | 已修复（P0-D remediation，WSL 非 root + root 场景验证；评审 M3） |
 | Linux launcher P1 事项：固定 `/input/archive.exe` 命名、路径校验（no_links/输入输出不相交）、`RLIMIT_FSIZE` 默认、单进程不变量跨平台措辞、`pre_exec` 安全复核、宿主进程不可见断言 | §6.1/§6.2 | P1 登记（P0-D 评审 R1-R6） |

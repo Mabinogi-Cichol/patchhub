@@ -208,9 +208,17 @@
 - 验证：core lib 190（+13 新测试）、集成全绿、check/clippy/fmt 通过。
 - 遗留：协议接线与编排（P1-3b-3）；`conditions_sha256`/`candidate_sha256`/`rule_fingerprint` 由调用方提供（条件求值器与来源绑定摘要为后续任务）；成功收据 schema 后续。
 
+### P1-3b-3 动态 publisher ZIP 编排与协议接线（2026-10-08 续）
+
+- 设计：`p1-zip-orchestration.md`（ora-5 设计：zip-selection 表示、resolve 数据流、orchestrator、协议接线、测试与回写清单）；契约回写已落 p0-contracts §2.5 等与 p1-host-contract 增量。
+- 实施（fix-12）：`installer/resolve.rs`（`zip_selection_id`/`parse`、`ResolvedZipCandidate`、`resolve_zip` 与稳定错误码、released 门）；`installer/orchestrator.rs`（`install_zip` 单任务：connecting→acquire→recipe→facts→prepare→authorize→重核→apply→cleanup；幂等 `begin_request`/`content_conflict`/`record_plan`/`record_terminal`；取消/租约边界与计划后 discard）；`install.rs` `_at` API 族 + `PlannedChange.source` + `open_ro` 只读快照；`catalog::SupportLevel::{PublisherZip,PublisherExe}` + `PatchMatch.selection_id`；CLI：install_patch 路由分派（互斥→签名优先→zip/exe 前缀）、`install_zip_route`、签名路由迁新根/新账本/授权重核、preview 路由、scan 动态投影、`discard_plan`/`list_transactions`/`recover`/`cleanup_cache` 迁 installer 根、`LeaseState` + 看门狗。
+- 验证：core lib 199 + 集成 60 + cli 28 全绿；workspace check、clippy、fmt（改动文件）通过；重点用例（阶段序列、幂等重放、计划前取消、路由矩阵、archive 拒绝、preview 只读、签名迁新根）。
+- 实施注记（设计缺口裁决，待 P1 gate 审议；已同步设计稿 §9）：① `!discovery_only` 校正为仅 `enabled`；② `source_not_enabled`/`source_not_subscribed`/`selection_stale` 在 resolve 不可达（过滤后为 `selection_not_found`），仅 scan 投影保留；③ buildid 交接经 `ResolvedZipCandidate::expectation(buildid)`；④ 签名路由授权绑定为实施确定值（`source_id="signed"`、`settings_revision=catalog.revision`、release 派生摘要）——待冻结或收窄；⑤ `error.detail` 经内部 `\u{1}` 分隔（后续 typed error）；⑥ 空 journal 容忍与 `cleanup_cache` 保持旧形状。
+- 测试缺口（P1-3b-3 门槛未满，补测进行中）：resolve 逐码矩阵（按可达语义）、facts 语言/DLC 动态矩阵、逐阶段取消/租约过期、recover `needs_recovery`（动态）、动态重装错误、CLI 端到端 scan/preview（注入 transport）。
+
 ### 待办
 
-1. 已完成：P1-2 / P1-3a / P1-3b-1 / P1-3b-2（本轮分批提交）。
-2. 进行中：P1-3b-3 编排 + 协议接线（前置：动态 publisher ZIP 选择/解析数据流设计）。
+1. 已完成：P1-2 / P1-3a / P1-3b-1 / P1-3b-2 / P1-3b-3（本轮分批提交）。
+2. 进行中：P1-3b-3 测试缺口补全（设计 §5 门槛）；随后 P1 gate。
 3. `import_python_state`/`import_index` 删除与规则 schema 收紧（P1 后续块）。
-4. 提交：本轮按模块分批（installer facts/授权 / 文档）。
+4. 提交：本轮按模块分批（installer / 协议 / 文档）。

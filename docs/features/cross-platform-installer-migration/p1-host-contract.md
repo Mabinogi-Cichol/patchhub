@@ -1,6 +1,6 @@
 # P1 宿主契约冻结稿（protocol_version=3）
 
-日期：2026-10-08（Asia/Shanghai）。状态：**v1.2，已按 P1-0 初审与定向复审（attempt 2/3）修订（含 R1-R3 折入，2026-10-08）；可作为 P1 实现基线；不代表已实现**。基准为 [design.md](design.md) §6（CLI、事件与任务生命周期）、§5.2（授权）、§7.3（清理清单）、[p0-contracts.md](p0-contracts.md) §0/§6/§10/§11。本稿取代 p0-contracts §11 的“宿主 RPC/事件/终态延后”待冻结项。开发阶段接受 breaking change，不设计 v2 兼容路由。
+日期：2026-10-08（Asia/Shanghai）。状态：**v1.2，已按 P1-0 初审与定向复审（attempt 2/3）修订（含 R1-R3 折入，2026-10-08）；可作为 P1 实现基线；不代表已实现**。**增量：已按 [p1-zip-orchestration.md](p1-zip-orchestration.md)（P1-3b-3 设计，2026-10-08）回写动态 publisher ZIP 契约（§1.1、§2.2、§2.3、§5.1、§7.1、§8）。** 基准为 [design.md](design.md) §6（CLI、事件与任务生命周期）、§5.2（授权）、§7.3（清理清单）、[p0-contracts.md](p0-contracts.md) §0/§6/§10/§11。本稿取代 p0-contracts §11 的“宿主 RPC/事件/终态延后”待冻结项。开发阶段接受 breaking change，不设计 v2 兼容路由。
 
 > 决策格式：【冻结值 / 理由 / 被否替代或删除项 / 迁移动作 / 验证方式】。
 > 标注：**待实现**（P1 代码）、**待实测**（需设备/样本证据）、**P4/P5 宿主**（随宿主更新，不在 P1 改 Rust 协议）。
@@ -60,10 +60,11 @@ design §6 要求“核心与两端宿主一起更新，旧版本明确拒绝”
 | `discard_plan` | serve | `{plan_id}` | `Transaction`（持久撤销，不删除恢复材料） |
 | `cleanup_cache` | serve | `{}` | `CacheStatus`（新共享清单/清理；不删 active lease/receipt/journal/`.stage`/`.backup`/`revoked`） |
 
-- `install_patch` 后端判别 **签名 release**（`catalog.release_id`）与 **动态选择/内容路由**（`exe-selection-*` → 内容 ID）；后端路由，不看前端自称（design §6、§5.1）。
+- `install_patch` 后端判别 **签名 release**（`catalog.release_id`）与 **动态选择路由**（`zip-selection-*` / `exe-selection-*`）；后端路由，不看前端自称（design §6、§5.1）。**判定顺序**：先校验 `selection_id`/`release_id` 互斥（同给 → `invalid_request`；皆缺 → `selection_or_release_required`）→ 有 `release_id` 走**签名路由（优先）** → 否则按 `selection_id` 前缀分派：`zip-selection-` → 动态 ZIP 编排（P1）；`exe-selection-` → P2/P3，P1 返回 `exe_route_unimplemented`；其他前缀/格式 → `invalid_selection_id`。任何候选/选择身份（`candidate-*`/`zip-selection-*` 等）不得冒充 `release_id`，`archive` **仍仅签名 `release_id` 路由**有效。
+- **动态路由错误码（P1-3b-3）**：`invalid_selection_id`、`selection_not_found`、`selection_stale`、`zip_download_unavailable`、`zip_download_ambiguous`、`source_not_released`，以及 P1 临时占位 `exe_route_unimplemented`（P2/P3 EXE worker 落地后移除）。
 - `preview` 只接受候选/选择与 release；动态路径不返回可执行授权（`executable:false` 恒成立）。
 - `install_patch`/`preview` 的 `selection_id` 与 `release_id` **互斥**（同时提供 → `invalid_request`）；二者皆缺 → `selection_or_release_required`（替换 v2 的 `release_required`，R3）。
-- 保存的本地 ZIP 导入（`archive`）：**仅对签名 `release_id` 路由有效**；动态 `exe-selection-*` 路由携带 `archive` 一律拒绝（`archive_not_allowed_for_selection`），防止绕过 design §2.1“动态安装只接受后端从核实来源解析的 URL、不新增任意 EXE 导入”。签名路由的 `archive` 仅允许宿主层校验后传入的**受控绝对路径**（Decky 限 `~/Downloads` 或 `state/downloads`；Windows 只接受 `.zip` 普通文件）。**UI 不传配方、不传目标路径、不传任意 URL**。
+- 保存的本地 ZIP 导入（`archive`）：**仅对签名 `release_id` 路由有效**；动态 selection（`zip-selection-*`/`exe-selection-*`）路由携带 `archive` 一律拒绝（`archive_not_allowed_for_selection`），防止绕过 design §2.1“动态安装只接受后端从核实来源解析的 URL、不新增任意 EXE 导入”。签名路由的 `archive` 仅允许宿主层校验后传入的**受控绝对路径**（Decky 限 `~/Downloads` 或 `state/downloads`；Windows 只接受 `.zip` 普通文件）。**UI 不传配方、不传目标路径、不传任意 URL**。
 - `archive` **核心侧校验**（不信任宿主层，design §2.1/§4.1）：必须是**普通文件**（拒符号链接/硬链接，`no_links`）、扩展名与魔数为 **`.zip`**、大小为普通文件且不超过 publisher ZIP 冻结上限（design §8，包 ≤8 GiB；超限 → `archive_too_large`）。任一项不满足即拒绝，不进入分析/计划。
 
 **B. 来源面（沿用 shared-source-discovery，收敛为有消费者者）**
@@ -154,7 +155,7 @@ design §6 表把接口收敛为 `get_capabilities / scan|preview / install_patc
 | `request_id` | string | 任务绑定（= `install_patch` 的 `request_id`） |
 | `sequence` | u64 | **从 0 起严格递增**，每任务独立 |
 | `instance_id` | string | 安装实例 |
-| `selection_id` | string? | 动态路径的选择 ID（签名路径可空） |
+| `selection_id` | string? | 动态路径的选择 ID；**动态 ZIP（`zip-selection-*`）必填**，签名路径可空 |
 | `stage` | enum(9) | 上表 |
 | `substage` | string? | `applying` 内部细分，仅诊断 |
 | `bytes_done` | u64 | **随阶段可重置为 0** |
@@ -186,6 +187,7 @@ design §6 表把接口收敛为 `get_capabilities / scan|preview / install_patc
 - `needs_recovery` 明确上报，**不伪装 `cancelled`/`completed`**（p0-contracts §5.2）。
 - 恢复/清理诊断放在 `recovery`/`cleanup`，不塞进 `error` 单串。
 - **`content_id` 为可选字段（R2）**：仅 EXE 动态路由产生；签名 ZIP 路由的终态身份为 `release_id` + `recipe_identity`（p0-contracts §2.2），宿主不得等待 `content_id` 非空。
+- **动态 publisher ZIP（P1-3b-3）**：动态 ZIP 的 `release_id` = 来源 release id（`patchmoe-<appid>`，否则 `source-<rule-id>-<appid>`）；`selection_id` = `zip-selection-*`；**`content_id` = `null`**（同 R2，宿主不得等待非空）；内容身份见 p0-contracts §2.4 `install::recipe_identity`（落 `plan.recipe_sha256`）。
 - **`uninstalled` 已删除（MF4）**：`install_patch` 不产生该 state，与 design §2.2“不新增长期备份/卸载开关”对齐。
 
 **非终态失败 / 取消（MF4）**
@@ -320,6 +322,8 @@ design §4.3/§6；shared-source-discovery 已把 `get_capabilities` 作为协�
 ### 5.1 幂等（request_id 绑定）
 
 - 冻结绑定元组：`(instance_id, selection_id|release_id, operation, resolved content_id)`（design §6“绑定实例、选择、操作与已解析内容”）。
+- **动态 publisher ZIP 绑定（P1-3b-3）**：动态 ZIP 的 `selection_id` **必填**、`release_id` 为 null、内部 `content_id` 存 `install::recipe_identity` 摘要（p0-contracts §2.5/§3.1）。
+- **计划建立前的失败不写 `error`**（保留绑定行、允许同 `request_id` 重试）；计划建立后回填 `plan_id`/`content_id`，终态后回填 `transaction_id/state/error`。
 - 账本：`installer/rust-v1/requests.sqlite`（p0-contracts §3.1），**替代旧顶层 `install_requests.sqlite` 的读取**。
 - 行为：
   - 相同 `request_id` 相同绑定 → **返回原任务/原终态**，不二次写入（幂等）。
@@ -421,6 +425,9 @@ design §6“宿主随新契约更新并只转发身份/任务/事件”“UI �
 - 能力：v3 形状、平台 `links` 探测、方法集合两端一致。
 - 契约文档一致性（MF2）：`packages/contracts/README.md` 与 `get_capabilities.methods`（16 方法）、事件/终态形状、`error.detail` 精确一致；不再出现 `plan_install`/`start_install`/`fetch_artifact`。
 - 单测参考：`crates/cli/src/main.rs::tests`、`runtime.rs::tests`、`install_flow_tests` 更新为 v3。
+- **动态路由矩阵（P1-3b-3）**：`release_id` / `zip-selection-*` / `exe-selection-*` / 未知前缀 / `selection_id` 与 `release_id` 互斥 / 皆缺 → 预期码（前缀分派 `zip-selection-*`→动态 ZIP、`exe-selection-*`→`exe_route_unimplemented`；其他前缀→`invalid_selection_id`；互斥→`invalid_request`；皆缺→`selection_or_release_required`）；动态 selection + `archive` → `archive_not_allowed_for_selection`。
+- **动态 ZIP 编排（P1-3b-3）**：幂等（同 `request_id` 同绑定重放返回同 `transaction_id`；异 `operation`/选择 → `request_id_binding_conflict`；计划前失败**不写 `error`** 可重试；同内容重装换新 `request_id` → 新事务）；取消（计划前无事务 `cancelled`；计划后 `rolled_back`；迟到取消不覆盖 `committed`）；恢复（`recover` → `rolled_back`/`needs_recovery`）；重装（同内容 `committed`；新字节/语言/DLC → `reinstall_content_identity_changed`；无主 → `reinstall_unowned_or_incomplete`）。
+- **`stage`/`substage` 映射（P1-3b-3）**：动态 ZIP 断言 `connecting→downloading→validating→planning→applying(substage=backing_up|writing|committing)→cleanup`；`analyzing_installer`/`extracting` 对 ZIP 不发出；`sequence` 严格递增、阶段重置字节。
 
 ### 7.2 宿主构建/类型
 
@@ -455,6 +462,7 @@ design §6“宿主随新契约更新并只转发身份/任务/事件”“UI �
 | `reason` 新增/删除键的最终清单 | §6.3 | **待实现**（P1 定键，P4/P5 同步） |
 | 是否保留 `list_source_matches`/`get_source_policy` 的宿主内部用途 | §1.1 | 已核对无消费者 → **删除**；若 P5 出现新消费者再单独评估 |
 | `archive` 本地导入的宿主校验边界（是否改为不透明引用） | §1.1/§6 | **待实现**（P1 保留受控绝对路径；P4/P5 对齐） |
+| 动态 publisher ZIP 编排（选择 ID / resolve 数据流 / 账本绑定 / 阶段映射 / 错误码） | §1/§2/§5 | **已冻结**（P1-3b-3 设计，2026-10-08）：见 [p1-zip-orchestration.md](p1-zip-orchestration.md)；P1 实现 `install_patch` 动态 ZIP 路由 |
 
 ---
 
