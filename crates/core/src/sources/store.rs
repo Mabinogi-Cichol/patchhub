@@ -149,8 +149,20 @@ impl SourceStore {
             settings: Mutex::new(default_settings()),
             lock: Mutex::new(()),
         };
-        if store.paths.schema().exists() {
+        // The completion marker is not the source of truth for user state: a
+        // missing/corrupt `schema.json` must never discard an intact
+        // `settings.json` (F7). Reuse persisted settings whenever they exist and
+        // only write the Rust defaults when the whole namespace is empty.
+        if store.paths.settings().exists() {
             let settings = store.load_settings()?;
+            *store.settings_guard()? = settings;
+            if !store.paths.schema().exists() {
+                store.write_schema_marker()?;
+            }
+        } else if store.paths.schema().exists() {
+            // Marker without settings: keep the in-memory defaults; do not write
+            // a fresh settings file over an ambiguous namespace.
+            let settings = default_settings();
             *store.settings_guard()? = settings;
         } else {
             // First start: persist the default settings and write the
@@ -158,21 +170,25 @@ impl SourceStore {
             // re-runs on the next open (idempotent).
             let settings = default_settings();
             write_json(&store.paths.settings(), &settings, MAX_SETTINGS_BYTES)?;
-            let created_at = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map(|elapsed| elapsed.as_secs())
-                .unwrap_or(0);
-            write_atomic(
-                &store.paths.schema(),
-                format!(
-                    "{{\"schema_version\":{STORE_SCHEMA_VERSION},\"created_at\":{created_at}}}"
-                )
-                .as_bytes(),
-                MAX_STATUS_BYTES,
-            )?;
+            store.write_schema_marker()?;
             *store.settings_guard()? = settings;
         }
         Ok(store)
+    }
+
+    /// Writes the `schema.json` completion marker (idempotent; never touches
+    /// `settings.json`).
+    fn write_schema_marker(&self) -> Result<()> {
+        let created_at = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|elapsed| elapsed.as_secs())
+            .unwrap_or(0);
+        write_atomic(
+            &self.paths.schema(),
+            format!("{{\"schema_version\":{STORE_SCHEMA_VERSION},\"created_at\":{created_at}}}")
+                .as_bytes(),
+            MAX_STATUS_BYTES,
+        )
     }
 
     pub fn paths(&self) -> &StorePaths {
@@ -545,6 +561,46 @@ mod tests {
         let reopened = SourceStore::open(temp.path()).unwrap();
         assert_eq!(reopened.revision(), 1);
         assert_eq!(reopened.load_settings().unwrap(), settings);
+    }
+
+    #[test]
+    fn missing_or_corrupt_schema_preserves_existing_settings() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = SourceStore::open(temp.path()).unwrap();
+        let rule = builtins()
+            .into_iter()
+            .find(|rule| rule.id == "kagura-cn")
+            .unwrap();
+        let overrides = super::super::model::Overrides {
+            enabled: BTreeMap::from([("patchmoe".to_string(), false)]),
+            added: vec![rule],
+            games: BTreeMap::from([(
+                "42".to_string(),
+                BTreeMap::from([("kagura-cn".to_string(), true)]),
+            )]),
+        };
+        store.apply_overrides(&overrides).unwrap();
+        store.bump_revision().unwrap();
+        let settings = store.load_settings().unwrap();
+        assert!(!settings.added.is_empty());
+        drop(store);
+
+        // A missing `schema.json` must not overwrite the intact user settings.
+        let paths = StorePaths::new(temp.path());
+        fs::remove_file(paths.schema()).unwrap();
+        let reopened = SourceStore::open(temp.path()).unwrap();
+        let restored = reopened.load_settings().unwrap();
+        assert_eq!(restored.added, settings.added);
+        assert_eq!(restored.games, settings.games);
+        assert_eq!(restored.enabled, settings.enabled);
+        assert!(paths.schema().exists(), "completion marker is recreated");
+        drop(reopened);
+
+        // A corrupt marker is equally ignored.
+        fs::write(paths.schema(), b"{not json").unwrap();
+        let reopened = SourceStore::open(temp.path()).unwrap();
+        assert_eq!(reopened.load_settings().unwrap().added, settings.added);
+        assert_eq!(reopened.load_settings().unwrap().games, settings.games);
     }
 
     #[test]

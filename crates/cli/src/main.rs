@@ -24,6 +24,10 @@ const MAX_ERROR_DETAIL_BYTES: usize = 2 * 1024;
 /// Foreground lease TTL (15s, p1-host-contract §5.2); used by the task control
 /// channel's in-memory lease placeholder.
 const LEASE_TTL_MILLIS: u64 = 15_000;
+/// Methods that must run on the `serve-task` control channel (cancel + renew +
+/// foreground lease). The plain `serve` loop rejects them with `task_required`
+/// so a non-task host cannot accidentally start an install (p1-host-contract §1.1).
+const TASK_CHANNEL_METHODS: &[&str] = &["install_patch", "scan_sources", "refresh_sources"];
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -71,12 +75,28 @@ fn error(id: Option<&str>, code: &str) -> Value {
 
 fn respond(bytes: &[u8]) -> Value {
     let cancel = AtomicBool::new(false);
-    respond_with(bytes, &cancel, &|_| true)
+    respond_with_channel(bytes, &cancel, &|_| true, &|| 0_u64, false)
 }
 
-/// Parses and executes a request with the task control channel available to
-/// `install_patch` (cancel + foreground lease).
-fn respond_with<L: Fn(u64) -> bool>(bytes: &[u8], cancel: &AtomicBool, lease_active: &L) -> Value {
+/// `serve` and `serve-task` share this parser/executor; only `serve-task` may
+/// dispatch the task-channel methods (`install_patch` and the streaming source
+/// tasks), carrying the live lease closures.
+fn respond_with<L: Fn(u64) -> bool, D: Fn() -> u64>(
+    bytes: &[u8],
+    cancel: &AtomicBool,
+    lease_active: &L,
+    lease_deadline_ms: &D,
+) -> Value {
+    respond_with_channel(bytes, cancel, lease_active, lease_deadline_ms, true)
+}
+
+fn respond_with_channel<L: Fn(u64) -> bool, D: Fn() -> u64>(
+    bytes: &[u8],
+    cancel: &AtomicBool,
+    lease_active: &L,
+    lease_deadline_ms: &D,
+    task_channel: bool,
+) -> Value {
     let request: Request = match serde_json::from_slice(bytes) {
         Ok(r) => r,
         Err(_) => return error(None, "invalid_request"),
@@ -94,11 +114,24 @@ fn respond_with<L: Fn(u64) -> bool>(bytes: &[u8], cancel: &AtomicBool, lease_act
     if !valid_request_id(&request.request_id) {
         return error(None, "invalid_request_id");
     }
+    if !task_channel && TASK_CHANNEL_METHODS.contains(&request.method.as_str()) {
+        return error_with_detail(
+            Some(&request.request_id),
+            "task_required",
+            Some("method requires the serve-task control channel"),
+        );
+    }
     let mut params = request.params;
     if request.method == "install_patch" && params.request_id.is_none() {
         params.request_id = Some(request.request_id.clone());
     }
-    match runtime::execute_controlled(&request.method, params, cancel, lease_active) {
+    match runtime::execute_controlled(
+        &request.method,
+        params,
+        cancel,
+        lease_active,
+        lease_deadline_ms,
+    ) {
         Ok(result) => {
             json!({ "protocol_version": PROTOCOL_VERSION, "request_id": request.request_id, "ok": true, "result": result })
         }
@@ -171,12 +204,14 @@ fn serve_task() -> io::Result<()> {
     spawn_control_thread(Arc::clone(&cancel), Arc::clone(&lease));
     spawn_lease_watchdog(Arc::clone(&cancel), Arc::clone(&lease));
     let response = {
-        let lease = Arc::clone(&lease);
+        let lease_active = Arc::clone(&lease);
+        let lease_deadline = Arc::clone(&lease);
         run_task_with_lease(
             &bytes,
             oversized,
             cancel,
-            move |now| lease.active(now),
+            move |now| lease_active.active(now),
+            move || lease_deadline.deadline_ms(),
             |value| {
                 let mut output = io::stdout().lock();
                 // A closed output pipe must not abort the rollback path.
@@ -225,6 +260,12 @@ impl LeaseState {
     fn active(&self, now_seconds: u64) -> bool {
         now_seconds.saturating_mul(1000) <= self.deadline_ms.load(Ordering::Relaxed)
     }
+
+    /// Current foreground-lease deadline (epoch ms) for `lease.json`
+    /// persistence (p1-zip-orchestration §3.5).
+    fn deadline_ms(&self) -> u64 {
+        self.deadline_ms.load(Ordering::Relaxed)
+    }
 }
 
 /// Reads `renew`/`cancel` control lines from the task stdin. EOF (`None` or a
@@ -272,17 +313,18 @@ pub(crate) fn run_task(
     cancel: Arc<AtomicBool>,
     emit: impl FnMut(Value) + 'static,
 ) -> Value {
-    run_task_with_lease(bytes, oversized, cancel, |_| true, emit)
+    run_task_with_lease(bytes, oversized, cancel, |_| true, || 0, emit)
 }
 
 /// Runs one `serve-task` request: stream methods emit their events, everything
 /// else runs under `operation::run` and emits flat `install_progress` events.
 /// Returns the single final response line value.
-pub(crate) fn run_task_with_lease<L: Fn(u64) -> bool>(
+pub(crate) fn run_task_with_lease<L: Fn(u64) -> bool, D: Fn() -> u64>(
     bytes: &[u8],
     oversized: bool,
     cancel: Arc<AtomicBool>,
     lease_active: L,
+    lease_deadline_ms: D,
     mut emit: impl FnMut(Value) + 'static,
 ) -> Value {
     let parsed = if oversized {
@@ -310,7 +352,7 @@ pub(crate) fn run_task_with_lease<L: Fn(u64) -> bool>(
                 if oversized {
                     error(None, "request_too_large")
                 } else {
-                    respond_with(bytes, cancel.as_ref(), &lease_active)
+                    respond_with(bytes, cancel.as_ref(), &lease_active, &lease_deadline_ms)
                 }
             },
         );
@@ -319,7 +361,7 @@ pub(crate) fn run_task_with_lease<L: Fn(u64) -> bool>(
         error(None, "request_too_large")
     } else {
         let cancel_ref = AtomicBool::new(false);
-        respond_with(bytes, &cancel_ref, &|_| true)
+        respond_with(bytes, &cancel_ref, &|_| true, &|| 0u64)
     }
 }
 
@@ -606,6 +648,30 @@ mod tests {
         assert_eq!(result["sources"]["parser_version"], 2);
         assert_eq!(result["sources"]["query_version"], 1);
         assert_eq!(result["sources"]["methods"].as_array().unwrap().len(), 8);
+    }
+
+    #[test]
+    fn serve_channel_rejects_task_methods_with_task_required() {
+        let request = |method| {
+            json!({"protocol_version":3,"request_id":"r","method":method,"params":{}}).to_string()
+        };
+        // Task-channel methods must not run on the plain `serve` loop.
+        for method in ["install_patch", "scan_sources", "refresh_sources"] {
+            let response = respond(request(method).as_bytes());
+            assert_eq!(response["ok"], false, "method {method}");
+            assert_eq!(
+                response["error"]["code"], "task_required",
+                "method {method} must be refused on serve"
+            );
+        }
+        // Serve-face methods keep working (not refused by the task guard).
+        for method in ["get_capabilities", "scan", "preview"] {
+            let response = respond(request(method).as_bytes());
+            assert_ne!(
+                response["error"]["code"], "task_required",
+                "method {method} must remain a serve method"
+            );
+        }
     }
 
     #[test]

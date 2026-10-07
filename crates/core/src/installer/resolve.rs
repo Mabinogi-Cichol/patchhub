@@ -315,18 +315,13 @@ pub fn resolve_zip(
         _ => return Err(ResolveError::code("zip_download_ambiguous")),
     };
 
-    // Released gate: date evidence from the source cache entry for the same
-    // release id (candidates themselves carry no reliable date).
+    // The released gate is intentionally absent: the frozen contract no longer
+    // carries `source_not_released` for dynamic ZIP (fix-16 doc revision), and
+    // the gate was unreachable anyway — dynamic candidates come only from
+    // `discovery_only` rules, which `registry.matches` skips, and candidates
+    // carry no reliable date (`published_at` is always `None`). `source_released`
+    // is retained for when a candidate-level date evidence field exists.
     let release_id = source_release_id(&rule, appid);
-    if let Some(entry) = registry
-        .matches(game, true)
-        .into_iter()
-        .find(|entry| entry.release_id == release_id)
-    {
-        if !source_released(entry.date.as_deref(), registry.now_unix()) {
-            return Err(ResolveError::code("source_not_released"));
-        }
-    }
 
     let language = choose_language(&candidate, &rule);
     Ok(ResolvedZipCandidate {

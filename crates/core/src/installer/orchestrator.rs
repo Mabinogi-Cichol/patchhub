@@ -83,8 +83,15 @@ pub struct ZipInstallDeps<'a> {
     pub state_dir: &'a Path,
     pub transport: &'a dyn Transport,
     pub cancel: &'a AtomicBool,
-    /// `now -> whether the foreground lease is still active` (seconds).
+    /// `now -> whether the foreground lease is still active` (seconds). The
+    /// orchestrator supplies a *current* timestamp at every check so an expired
+    /// lease is observed even when the plan/authorization was created earlier
+    /// (p1-host-contract §5.2); a frozen `inputs.now` would make this always true.
     pub lease_active: &'a dyn Fn(u64) -> bool,
+    /// Current host foreground-lease deadline in epoch milliseconds, re-read at
+    /// each stage boundary so a `renew` is reflected in the persisted
+    /// `jobs/<plan_id>/lease.json` (p1-zip-orchestration §3.5).
+    pub lease_deadline_ms: &'a dyn Fn() -> u64,
 }
 
 fn now_unix() -> u64 {
@@ -335,6 +342,9 @@ fn build_release(
         language: expectation.language.clone(),
         category: "publisher_zip".to_string(),
         source_page: selection.candidate.source_page.clone(),
+        // `prepare_with_operation_at` hard-rejects anything but `ManagedZip`, so
+        // the dynamic publisher-ZIP routing borrows that support level here; the
+        // projected `catalog::PatchMatch.support_level` remains `PublisherZip`.
         support_level: SupportLevel::ManagedZip,
         platforms: vec![Platform::Windows, Platform::Steamos],
         verified_buildids: expectation.verified_buildids.clone(),
@@ -382,14 +392,35 @@ fn fail_after_plan(
     ZipTaskError::new(code, detail)
 }
 
-fn boundary(deps: &ZipInstallDeps<'_>, now: u64) -> ZipTaskResult<()> {
+/// Stage-boundary gate: local cancel flag, then the **live** foreground lease
+/// (re-read from the clock), then the in-process operation cancel flag.
+fn boundary(deps: &ZipInstallDeps<'_>) -> ZipTaskResult<()> {
     if deps.cancel.load(Ordering::Relaxed) {
         return Err(ZipTaskError::code("cancelled"));
     }
-    if !(deps.lease_active)(now) {
+    if !(deps.lease_active)(now_unix()) {
         return Err(ZipTaskError::code("installer_lease_expired"));
     }
     operation::check().map_err(|_| ZipTaskError::code("cancelled"))
+}
+
+/// Persists the current foreground-lease deadline at
+/// `jobs/<plan_id>/lease.json` (`{deadline_ms, renewed_at}`, atomic write;
+/// p1-zip-orchestration §3.5). Called when the plan is established and refreshed
+/// at the apply-time stage boundary so a `renew` reaches disk.
+fn write_lease(deps: &ZipInstallDeps<'_>, plan_id: &str) -> ZipTaskResult<()> {
+    let document = serde_json::json!({
+        "deadline_ms": (deps.lease_deadline_ms)(),
+        // Kept in the same unit as `deadline_ms` (epoch milliseconds).
+        "renewed_at": now_unix().saturating_mul(1000),
+    });
+    let bytes = serde_json::to_vec(&document).map_err(internal)?;
+    let path = deps
+        .paths
+        .job(plan_id)
+        .map_err(internal)?
+        .join("lease.json");
+    super::store::write_atomic(&path, &bytes, 4096).map_err(internal)
 }
 
 /// Orchestrates one dynamic publisher ZIP install (p1-zip-orchestration §3.3).
@@ -410,7 +441,7 @@ pub fn install_zip(
 
     // Step 3: connecting + acquire (no journal lock held).
     operation::stage("connecting", None, None);
-    boundary(&deps, inputs.now)?;
+    boundary(&deps)?;
     let request = DownloadRequest {
         url: &inputs.selection.download_url,
         download_hosts: &inputs.selection.rule.download_hosts,
@@ -450,7 +481,7 @@ pub fn install_zip(
     }
 
     // Step 7: plan + authorize + re-check (journal.lock held only inside prepare).
-    boundary(&deps, inputs.now)?;
+    boundary(&deps)?;
     let plan = install::prepare_with_operation_at(
         deps.paths.root(),
         inputs.game,
@@ -474,6 +505,19 @@ pub fn install_zip(
         &plan.plan_id,
         &identity,
     )?;
+    // The plan exists: persist the foreground lease for recovery/audit
+    // (p1-zip-orchestration §3.5).
+    if let Err(error) = write_lease(&deps, &plan.plan_id) {
+        return Err(fail_after_plan(
+            deps.paths,
+            inputs.request_id,
+            &binding,
+            &identity,
+            &plan.plan_id,
+            "plan_failed",
+            error.to_string(),
+        ));
+    }
 
     let content = ContentBinding::publisher_zip(&acquired.sha256, acquired.size, &mappings);
     let auth = authorize(AuthorizeInput {
@@ -519,6 +563,26 @@ pub fn install_zip(
 
     let current = recheck_authorization(&deps, &inputs, &plan, &acquired, &expectation)?;
     if let Err(invalidation) = authorization::validate(&auth, &current) {
+        // A lost/expired foreground lease or a persistent revoke after the plan
+        // is a durable cancellation, not an RPC failure: roll the plan back and
+        // return the `InstallOutcome` (p1-host-contract §2.3). Every other
+        // invalidation (candidate/rules/content/facts drift) stays
+        // `ok:false + error{code}` per §4.4.
+        if matches!(
+            invalidation.code.as_str(),
+            "authorization_lease_inactive" | "authorization_revoked"
+        ) {
+            let transaction =
+                install::discard_plan_at(deps.paths.root(), &plan.plan_id).map_err(internal)?;
+            record_terminal(
+                deps.paths,
+                inputs.request_id,
+                &binding,
+                &identity,
+                &transaction,
+            )?;
+            return Ok(transaction);
+        }
         return Err(fail_after_plan(
             deps.paths,
             inputs.request_id,
@@ -530,9 +594,22 @@ pub fn install_zip(
         ));
     }
 
+    // Stage boundary after the plan: refresh the persisted lease so a `renew`
+    // reaches disk, then re-check cancel/lease/op before apply.
+    if let Err(error) = write_lease(&deps, &plan.plan_id) {
+        return Err(fail_after_plan(
+            deps.paths,
+            inputs.request_id,
+            &binding,
+            &identity,
+            &plan.plan_id,
+            "plan_failed",
+            error.to_string(),
+        ));
+    }
     // Step 8: apply. A cancellation after the plan is a durable revoke + discard.
     if deps.cancel.load(Ordering::Relaxed)
-        || !(deps.lease_active)(inputs.now)
+        || !(deps.lease_active)(now_unix())
         || operation::check().is_err()
     {
         let transaction =
@@ -611,7 +688,7 @@ fn recheck_authorization(
         plan_id: plan.plan_id.clone(),
         instance_id: inputs.game.instance_id.clone(),
         revoked: authorization::is_revoked(deps.paths, &plan.plan_id).map_err(internal)?,
-        lease_active: (deps.lease_active)(inputs.now),
+        lease_active: (deps.lease_active)(now_unix()),
         facts,
         settings_revision: fresh.settings_revision,
         policy: PolicyVersions::default(),
@@ -833,6 +910,7 @@ mod tests {
         operation_kind: InstallOperation,
     ) -> ZipTaskResult<Transaction> {
         let lease = |_now: u64| true;
+        let lease_deadline = || 1_500_000_u64;
         let inputs = ZipInstallInputs {
             game,
             selection,
@@ -847,6 +925,7 @@ mod tests {
             transport,
             cancel,
             lease_active: &lease,
+            lease_deadline_ms: &lease_deadline,
         };
         operation::run(
             Arc::new(AtomicBool::new(false)),
@@ -922,6 +1001,7 @@ mod tests {
         let transport = transport(archive);
         let cancel = AtomicBool::new(false);
         let lease = |_now: u64| true;
+        let lease_deadline = || 1_500_000_u64;
         let inputs = ZipInstallInputs {
             game: &game,
             selection: &selection,
@@ -936,6 +1016,7 @@ mod tests {
             transport: &transport,
             cancel: &cancel,
             lease_active: &lease,
+            lease_deadline_ms: &lease_deadline,
         };
         let stages = Arc::new(Mutex::new(Vec::new()));
         let sink = Arc::clone(&stages);
@@ -979,6 +1060,12 @@ mod tests {
                 .exists()
         );
         assert!(!crate::installer::is_revoked(&paths, &transaction.plan_id).unwrap());
+        // The plan-time foreground lease is persisted for recovery/audit.
+        assert!(paths
+            .job(&transaction.plan_id)
+            .unwrap()
+            .join("lease.json")
+            .exists());
     }
 
     #[test]
@@ -991,6 +1078,7 @@ mod tests {
         let selection = seed_and_resolve(&state, &selection_id);
         let cancel = AtomicBool::new(false);
         let lease = |_now: u64| true;
+        let lease_deadline = || 1_500_000_u64;
 
         let run = |transport: &dyn Transport| {
             let inputs = ZipInstallInputs {
@@ -1007,6 +1095,7 @@ mod tests {
                 transport,
                 cancel: &cancel,
                 lease_active: &lease,
+                lease_deadline_ms: &lease_deadline,
             };
             operation::run(
                 Arc::new(AtomicBool::new(false)),
@@ -1036,6 +1125,7 @@ mod tests {
             transport: &empty,
             cancel: &cancel,
             lease_active: &lease,
+            lease_deadline_ms: &lease_deadline,
         };
         let error = operation::run(
             Arc::new(AtomicBool::new(false)),
@@ -1056,6 +1146,7 @@ mod tests {
         let selection = seed_and_resolve(&state, &selection_id);
         let cancel = AtomicBool::new(true);
         let lease = |_now: u64| true;
+        let lease_deadline = || 1_500_000_u64;
         let transport = transport(archive);
         let inputs = ZipInstallInputs {
             game: &game,
@@ -1071,6 +1162,7 @@ mod tests {
             transport: &transport,
             cancel: &cancel,
             lease_active: &lease,
+            lease_deadline_ms: &lease_deadline,
         };
         let error = operation::run(
             Arc::new(AtomicBool::new(false)),
@@ -1355,6 +1447,7 @@ mod tests {
         let cancel = Arc::new(AtomicBool::new(false));
         let transport = cancelling_transport(archive, Arc::clone(&cancel));
         let lease = |_now: u64| true;
+        let lease_deadline = || 1_500_000_u64;
         let inputs = ZipInstallInputs {
             game: &game,
             selection: &selection,
@@ -1369,6 +1462,7 @@ mod tests {
             transport: &transport,
             cancel: cancel.as_ref(),
             lease_active: &lease,
+            lease_deadline_ms: &lease_deadline,
         };
         let error = operation::run(
             Arc::new(AtomicBool::new(false)),
@@ -1434,6 +1528,7 @@ mod tests {
         let cancel = Arc::new(AtomicBool::new(false));
         let signal = Arc::clone(&cancel);
         let lease = |_now: u64| true;
+        let lease_deadline = || 1_500_000_u64;
         let inputs = ZipInstallInputs {
             game: &game,
             selection: &selection,
@@ -1448,6 +1543,7 @@ mod tests {
             transport: &transport,
             cancel: cancel.as_ref(),
             lease_active: &lease,
+            lease_deadline_ms: &lease_deadline,
         };
         let transaction = operation::run(
             Arc::clone(&cancel),
@@ -1511,6 +1607,7 @@ mod tests {
         let active = Arc::new(AtomicBool::new(true));
         let signal = Arc::clone(&active);
         let lease = move |_now: u64| active.load(Ordering::Relaxed);
+        let lease_deadline = || 1_500_000_u64;
         let cancel = AtomicBool::new(false);
         let inputs = ZipInstallInputs {
             game: &game,
@@ -1526,8 +1623,13 @@ mod tests {
             transport: &transport,
             cancel: &cancel,
             lease_active: &lease,
+            lease_deadline_ms: &lease_deadline,
         };
-        let error = operation::run(
+        // An expired foreground lease after the plan is a durable rollback
+        // (`InstallOutcome.state="rolled_back"`), not an RPC failure
+        // (p1-host-contract §2.3): the plan is revoked and the terminal
+        // transaction is recorded.
+        let transaction = operation::run(
             Arc::new(AtomicBool::new(false)),
             move |progress| {
                 if progress.stage == "planning" {
@@ -1536,13 +1638,89 @@ mod tests {
             },
             || install_zip(inputs, deps),
         )
-        .unwrap_err();
-        assert_eq!(error.code, "authorization_lease_inactive");
+        .unwrap();
+        assert_eq!(transaction.state, "rolled_back");
 
         let transactions = install::list_transactions_at(paths.root()).unwrap();
         assert_eq!(transactions.len(), 1);
         assert_eq!(transactions[0].state, "rolled_back");
         assert!(crate::installer::is_revoked(&paths, &transactions[0].plan_id).unwrap());
+        // The lease deadline is on disk for both the plan and the rollback.
+        assert!(paths
+            .job(&transactions[0].plan_id)
+            .unwrap()
+            .join("lease.json")
+            .exists());
+
+        // A replay of the same request returns the same terminal shape
+        // (idempotent, §5.1), without touching the transport.
+        let replay_lease = |_now: u64| true;
+        let replay_deadline = || 1_500_000_u64;
+        let replay_inputs = ZipInstallInputs {
+            game: &game,
+            selection: &selection,
+            operation: InstallOperation::Install,
+            request_id: "req-lease",
+            now: 1_000,
+            ttl_seconds: 900,
+        };
+        let replay_deps = ZipInstallDeps {
+            paths: &paths,
+            state_dir: &state,
+            transport: &FakeTransport::new(Vec::new()),
+            cancel: &cancel,
+            lease_active: &replay_lease,
+            lease_deadline_ms: &replay_deadline,
+        };
+        let replayed = operation::run(
+            Arc::new(AtomicBool::new(false)),
+            |_| {},
+            || install_zip(replay_inputs, replay_deps),
+        )
+        .unwrap();
+        assert_eq!(replayed.state, "rolled_back");
+        assert_eq!(replayed.transaction_id, transaction.transaction_id);
+    }
+
+    /// The foreground lease is re-read at every boundary from the injected clock
+    /// (F4): a frozen `inputs.now` would keep it "active" forever. With a
+    /// time-sensitive predicate the boundary must observe the current time.
+    #[test]
+    fn expired_foreground_lease_uses_the_current_time_before_plan() {
+        let (temp, game, archive) = setup();
+        let (state, paths) = dynamic_paths(&temp);
+        let selection_id = zip_selection_id(&candidate()).unwrap();
+        let selection = seed_and_resolve(&state, &selection_id);
+        let transport = transport(archive);
+        let cancel = AtomicBool::new(false);
+        // `inputs.now == 1_000`; a boundary using that frozen value would report
+        // the lease active. The live clock (epoch seconds) is far past it.
+        let lease = |now: u64| now < 1_050;
+        let lease_deadline = || 1_050_000_u64;
+        let inputs = ZipInstallInputs {
+            game: &game,
+            selection: &selection,
+            operation: InstallOperation::Install,
+            request_id: "req-lease-expired",
+            now: 1_000,
+            ttl_seconds: 900,
+        };
+        let deps = ZipInstallDeps {
+            paths: &paths,
+            state_dir: &state,
+            transport: &transport,
+            cancel: &cancel,
+            lease_active: &lease,
+            lease_deadline_ms: &lease_deadline,
+        };
+        let error = operation::run(
+            Arc::new(AtomicBool::new(false)),
+            |_| {},
+            || install_zip(inputs, deps),
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "installer_lease_expired");
+        assert_no_transactions(&paths);
     }
 
     #[test]

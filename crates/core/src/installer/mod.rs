@@ -1,10 +1,12 @@
 //! P1 installer state schema `installer/rust-v1/` (p0-contracts §3).
 //!
 //! This module freezes the on-disk layout and provides the atomic, idempotent
-//! bootstrap ([`store::init_atomic`]) plus the request-idempotency ledger
-//! ([`requests`]). It intentionally does **not** wire into the protocol layer:
-//! production callers still use the legacy `install::Store` root until a later
-//! P1 task switches them over.
+//! bootstrap ([`store::init_atomic`]), the request-idempotency ledger
+//! ([`requests`]), the single-task orchestrator ([`orchestrator`]) and the
+//! internal authorization ([`authorization`]). It **is** wired into the protocol
+//! layer: `crates/cli` dispatches `install_patch` through
+//! [`orchestrator::install_zip`] / the signed route and persists all state under
+//! `installer/rust-v1/` (p1-zip-orchestration §3/§4).
 
 pub mod acquire;
 pub mod authorization;

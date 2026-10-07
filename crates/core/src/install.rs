@@ -1096,6 +1096,14 @@ pub fn get_plan_at(root: &Path, plan_id: &str) -> io::Result<InstallPlan> {
     Ok(Store::open_at(root)?.load(plan_id)?.plan)
 }
 
+/// Read-only variant of [`get_plan_at`] for `scan`/`preview` projections
+/// (p0-contracts §4.1). Uses the shared read-only snapshot ([`Store::open_ro`]):
+/// it never takes the exclusive `journal.lock` and never creates the installer
+/// root, so a cooperating writer is not reported as `installer_busy`.
+pub fn get_plan_ro(root: &Path, plan_id: &str) -> io::Result<InstallPlan> {
+    Ok(Store::open_ro(root)?.load(plan_id)?.plan)
+}
+
 /// Invalidate unexecuted preparation, without ever touching game contents.
 pub fn discard_plan(plan_id: &str, state_dir: &Path) -> io::Result<Transaction> {
     discard_plan_at(&transaction_root(state_dir), plan_id)

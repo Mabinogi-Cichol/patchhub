@@ -1,5 +1,4 @@
-//! New internal install authorization (design §5.2; replaces the Python
-//! `exe-policy.json` receipt, p0-contracts §2.2).
+//! New internal install authorization (design §5.2).
 //!
 //! An [`Authorization`] is generated server-side by Rust from the current
 //! source/candidate/rule identity, the resolved content/transform artifacts, the
@@ -13,8 +12,7 @@
 //! location (`authorization.json`, p0-contracts §3.1–§3.2). It never replaces the
 //! `journal.sqlite` transaction truth source: the journal still owns the plan,
 //! TTL and recovery material, and this file only records the authorization
-//! bindings referenced by the same `plan_id`. The protocol layer is intentionally
-//! not wired here.
+//! bindings referenced by the same `plan_id`.
 //!
 //! Integration points:
 //! - Content mappings come from `installer::zip_recipe::build_recipe`

@@ -385,11 +385,16 @@ fn validate_state_boundary(state: &Path, installs: &[steam::GameInstall]) -> Res
 
 pub fn execute(method: &str, params: Params) -> Result<Value, String> {
     let cancel = AtomicBool::new(false);
-    execute_controlled(method, params, &cancel, &always_active)
+    execute_controlled(method, params, &cancel, &always_active, &no_lease_deadline)
 }
 
 fn always_active(_now: u64) -> bool {
     true
+}
+
+/// No task channel: no persisted foreground lease deadline.
+fn no_lease_deadline() -> u64 {
+    0
 }
 
 /// Encode a stable `code` plus optional `detail` for the protocol envelope.
@@ -408,11 +413,12 @@ pub fn failed(code: impl Into<String>, detail: impl Into<String>) -> String {
 
 /// Executes one method with the task control channel available to
 /// `install_patch` (p1-zip-orchestration §3.10/§4.1).
-pub fn execute_controlled<L: Fn(u64) -> bool>(
+pub fn execute_controlled<L: Fn(u64) -> bool, D: Fn() -> u64>(
     method: &str,
     params: Params,
     cancel: &AtomicBool,
     lease_active: &L,
+    lease_deadline_ms: &D,
 ) -> Result<Value, String> {
     if !METHODS.contains(&method) {
         return Err("unsupported_method".into());
@@ -460,7 +466,14 @@ pub fn execute_controlled<L: Fn(u64) -> bool>(
     }
     let platform = params.platform.unwrap_or_else(host_platform);
     if method == "install_patch" {
-        return install_patch(&params, &report, platform, cancel, lease_active);
+        return install_patch(
+            &params,
+            &report,
+            platform,
+            cancel,
+            lease_active,
+            lease_deadline_ms,
+        );
     }
     let mut catalog_error = None;
     let verified = if params.signed_catalog.is_some() {
@@ -927,12 +940,13 @@ mod tests {
 /// Single-task install entry point (p1-host-contract §1.1 A; p1-zip-orchestration
 /// §4.1). Validates mutual exclusion and dispatches to the signed `release_id`
 /// route (priority) or the dynamic `selection_id` prefix route.
-fn install_patch<L: Fn(u64) -> bool>(
+fn install_patch<L: Fn(u64) -> bool, D: Fn() -> u64>(
     params: &Params,
     report: &steam::ScanReport,
     platform: Platform,
     cancel: &AtomicBool,
     lease_active: &L,
+    lease_deadline_ms: &D,
 ) -> Result<Value, String> {
     let request = params.request_id.as_deref().ok_or("request_id_required")?;
     if request.is_empty() || request.len() > 128 {
@@ -963,6 +977,7 @@ fn install_patch<L: Fn(u64) -> bool>(
                 selection_id,
                 cancel,
                 lease_active,
+                lease_deadline_ms,
             );
         }
         if selection_id.starts_with("exe-selection-") {
@@ -1016,7 +1031,7 @@ fn outcome_json(transaction: &install::Transaction, selection_id: Option<&str>) 
 /// Dynamic ZIP route: resolve from cached sources, then run the orchestrator
 /// with an injected transport (p1-zip-orchestration §2/§3).
 #[allow(clippy::too_many_arguments)]
-fn install_zip_route<L: Fn(u64) -> bool>(
+fn install_zip_route<L: Fn(u64) -> bool, D: Fn() -> u64>(
     params: &Params,
     report: &steam::ScanReport,
     state: PathBuf,
@@ -1025,6 +1040,7 @@ fn install_zip_route<L: Fn(u64) -> bool>(
     selection_id: &str,
     cancel: &AtomicBool,
     lease_active: &L,
+    lease_deadline_ms: &D,
 ) -> Result<Value, String> {
     let paths = installer::InstallerPaths::new(&state);
     installer::init_atomic(&paths).map_err(err)?;
@@ -1042,6 +1058,7 @@ fn install_zip_route<L: Fn(u64) -> bool>(
     let transport = installer::https_transport().map_err(err)?;
     let now = trust::now().map_err(err)?;
     let lease = |now: u64| lease_active(now);
+    let lease_deadline = || lease_deadline_ms();
     let inputs = installer::ZipInstallInputs {
         game,
         selection: &selection,
@@ -1056,6 +1073,7 @@ fn install_zip_route<L: Fn(u64) -> bool>(
         transport: transport.as_ref(),
         cancel,
         lease_active: &lease,
+        lease_deadline_ms: &lease_deadline,
     };
     let transaction = installer::install_zip(inputs, deps).map_err(zip_task_failure)?;
     Ok(outcome_json(&transaction, Some(selection_id)))
@@ -1201,6 +1219,19 @@ fn install_signed_route<L: Fn(u64) -> bool>(
         content: content_now,
     };
     if let Err(invalidation) = installer::validate(&authorization, &current) {
+        // Lease loss / persistent revoke after the plan is a durable
+        // cancellation: roll back and return the `InstallOutcome` rather than an
+        // RPC failure (p1-host-contract §2.3). Other invalidations keep
+        // `ok:false + error{code}` (§4.4).
+        if matches!(
+            invalidation.code.as_str(),
+            "authorization_lease_inactive" | "authorization_revoked"
+        ) {
+            let transaction = install::discard_plan_at(paths.root(), &plan.plan_id).map_err(err)?;
+            installer::record_terminal(&paths, request, &binding, &identity, &transaction)
+                .map_err(zip_task_failure)?;
+            return Ok(outcome_json(&transaction, None));
+        }
         let _ = install::discard_plan_at(paths.root(), &plan.plan_id);
         return Err(failed(invalidation.code.clone(), invalidation.to_string()));
     }
@@ -1368,7 +1399,7 @@ fn dynamic_detection(
     else {
         return unknown;
     };
-    let Ok(plan) = install::get_plan_at(root, &transaction.plan_id) else {
+    let Ok(plan) = install::get_plan_ro(root, &transaction.plan_id) else {
         return unknown;
     };
     let files: Vec<catalog::FileEvidence> = plan
@@ -1497,7 +1528,7 @@ fn committed_changes(
     else {
         return Ok(Vec::new());
     };
-    let plan = install::get_plan_at(&root, &transaction.plan_id).map_err(err)?;
+    let plan = install::get_plan_ro(&root, &transaction.plan_id).map_err(err)?;
     Ok(plan
         .changes
         .iter()
