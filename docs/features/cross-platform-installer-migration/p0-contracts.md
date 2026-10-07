@@ -384,6 +384,10 @@ installer/rust-v1/
 | 用户规则是否携带 `root_layout` | §7 | P1 用真实 settings 抽样确认（不作为冻结前提） |
 | `migrate_state` 去留 | §4.2 | P1 决策（倾向删除） |
 | 宿主 RPC 方法白名单/事件命名空间/终态字段 | §11（design §6） | 延后 P1 冻结 |
+| Linux 树级资源限额（cgroup v2 / RLIMIT_NPROC；与 Windows Job 树级约束不对称） | §6.2 | 待实现/待实测（P1/P3；P0-D 评审 M2） |
+| Linux launcher 输出限额 fail-closed（stdout 16 MiB / stderr 64 KiB，超限终止并报 `exe_worker_response_limit`） | §6.1 | 已修复（P0-D remediation，WSL 非 root + root 场景验证；评审 M3） |
+| Linux launcher P1 事项：固定 `/input/archive.exe` 命名、路径校验（no_links/输入输出不相交）、`RLIMIT_FSIZE` 默认、单进程不变量跨平台措辞、`pre_exec` 安全复核、宿主进程不可见断言 | §6.1/§6.2 | P1 登记（P0-D 评审 R1-R6） |
+| root 宿主降权（setgroups→setgid→setuid） | §4.3 | 最小实现 + WSL root 场景补测通过（P0-D）；生产 Decky 接入按 P3 复核 |
 
 ---
 

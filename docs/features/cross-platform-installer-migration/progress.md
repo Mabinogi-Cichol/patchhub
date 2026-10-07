@@ -1,6 +1,6 @@
 # 跨平台安装器迁移施工记录
 
-设计：[design.md](design.md)。日期：2026-10-08（Asia/Shanghai）。状态：**P0 实施中：契约冻结与 Windows 隔离原型已通过 Gate 1（见 [p0-contracts.md](p0-contracts.md)、[p0-sandbox-probe-windows.md](p0-sandbox-probe-windows.md)）；Linux 对照与 P1+ 待执行**。
+设计：[design.md](design.md)。日期：2026-10-08（Asia/Shanghai）。状态：**P0 实施中：契约冻结与 Windows 隔离原型已通过 Gate 1（见 [p0-contracts.md](p0-contracts.md)、[p0-sandbox-probe-windows.md](p0-sandbox-probe-windows.md)）；Linux bwrap 原型已在 WSL2 与 SteamOS Deck 双平台对照通过（见 [p0-sandbox-probe-linux.md](p0-sandbox-probe-linux.md)）；P1+ 待执行**。
 
 ## 当前状态
 
@@ -9,7 +9,7 @@
 | 前序范围/安装器差异盘点 | 已完成只读核对 | 来源 P0–P6 完成；动态 ZIP/EXE 准备与授权仍为 Decky Python，Windows 只展示候选 |
 | 设计与功能归档 | 已完成 | 独立设计/施工、索引与关联入口；文档检查见下文 |
 | 来源迁移兼容遗留盘点与清理规划 | 已完成只读检查与设计；代码待清理 | 六类遗留、消费者依赖、阶段门槛已纳入设计第 7.3 节；不是已清理或已验证 |
-| P0 契约/样本/平台隔离 | 契约冻结定稿并通过 Gate 1；Windows 原型完成；Linux 对照待授权 | 契约 v0.5（encoding/ID/schema/锁/worker/限额/依赖冻结，Gate 1 终审通过）；Windows LPAC+Job 原型 31 项探针 27 pass；Linux/Deck 对照、版本矩阵与 P1+ 待执行 |
+| P0 契约/样本/平台隔离 | 契约冻结定稿并通过 Gate 1；Windows 原型完成；Linux/Deck 对照与 root 降权补测通过 | 契约 v0.5（encoding/ID/schema/锁/worker/限额/依赖冻结，Gate 1 终审通过）；Windows LPAC+Job 原型 31 项探针 27 pass；Linux bwrap 原型 22 项在 WSL2 与 SteamOS Deck 均为 21 pass/0 fail/1 info；P0-D 修订后非 root 回归 23 项与 WSL root 降权补测 26 项均 0 fail；cgroup/seccomp 与 P1+ 待执行 |
 | P1 共享 ZIP 服务 | 待实现 | 获取/缓存/配方/新授权与新 schema；来源 Rust 编码、当前规则契约和直接初始化 |
 | P2 Rust SF 与 worker | 待实现 | SF9.5–9.7 完整结构/AST/IR/转换 |
 | P3 隔离/授权/任务 | 待实现 | 双平台启动、facts/撤销/互斥/进度/恢复 |
@@ -128,6 +128,40 @@
 ### 待办
 
 1. 已完成：用户确认 Windows 支持版本冻结为仅 Win11 x64（2026-10-08），P0 契约定稿。
-2. 进行中：P0 阶段成果提交（用户要求，按文档/代码/配置拆分）。
+2. 已完成：P0 阶段成果提交（b0ade70 文档 / 1ef5388 原型代码 / ef1671f 配置；未推送）。
 3. 下一步（用户选择）：P0-D Linux/Deck 对照（bwrap 启动 Rust worker 原型 + 实机对照；Deck 操作按授权范围）。
 4. P1 开工前置：冻结宿主 RPC 方法/事件/终态契约（p0-contracts §11）；P1 实施：来源编码替换/规则收紧/直接初始化、共享 ZIP 获取-配方-授权-状态路由。
+
+## 2026-10-08 P0-D：Linux bwrap 原型与 SteamOS Deck 实机对照
+
+### 用户目标与本轮范围
+
+完成 P0-D Linux/Deck 对照：实现 Linux bwrap 启动器与探针并在 WSL2 验证，再在真实 SteamOS Deck 上运行同一探针。本节记录 Deck 实机验证与证据归档；实机未发现需针对 bwrap 0.12 修复的差异，**未修改 `crates/installer-worker` 代码、未创建 Git 提交**。
+
+### 实际修改
+
+- Linux 平台实现与探针（详见 [p0-sandbox-probe-linux.md](p0-sandbox-probe-linux.md) §3、§9）：`crates/installer-worker/src/linux/{mod,sys,launch,probe_os}.rs`、`model.rs` Linux rlimit 字段、`lib.rs` 平台 gating、`probe_worker.rs`/`probe_runner.rs` 的 `linux_impl`。未改 `Cargo.toml`/`Cargo.lock`（无新依赖），未改 `core`/`cli`/`apps`。
+- `p0-sandbox-probe-linux.md` 本次追加第 10 节「SteamOS / Deck 实测」并同步首部范围声明与 §7 未覆盖表。
+
+### 验证方式与结果
+
+- WSL2 Ubuntu 22.04（bwrap 0.6.1，内核 6.18.40.1-WSL2）：22 项 = 21 pass / 0 fail / 1 info。
+- SteamOS Deck（bwrap 0.12.0，内核 6.18.50-valve，deck uid=1000）：22 项 = 21 pass / 0 fail / 1 info，逐项结果与 WSL2 一致；越界读写/私钥读在真实 `/home/deck/...` 路径仍 `ENOENT`，回环/外网连接被拒。
+- 上传与取回均逐文件核对 SHA-256 一致；远端唯一验证目录 `/home/deck/steam-patch-validation/p0d-20261008-033904/` 取回证据后已删除，未触碰插件/state/游戏目录。
+- 证据：`p0-sandbox-probe-linux.md` §10；本机 `.artifacts/p0d-deck-20261008-033904/probe.json`（SHA-256 `cf3f110e2ac3f11ec8584c63b9150bf757b50a29e5aa1fbbeab713e620b8a8bb`）。
+
+### 未执行（保持待验证）
+
+- Deck 上 cgroup v2 委派与 seccomp 策略、真实 SF9 worker 与黄金产物、并发/跨用户、ARM64、正式超时值（wall-clock 180/240/480s、CPU 300s）、无 core dump 端到端证明、CEF/HTTP 与插件部署。
+
+### P0-D 门禁修订（2026-10-08）
+
+- 独立 oracle 初审（attempt 1/3）条件通过；已执行 remediation：M3 输出限额 fail-closed（stdout 16 MiB / stderr 64 KiB，超限终止并报 `exe_worker_response_limit`）；M1 root 宿主最小降权（setgroups→setgid→setuid）并补 WSL root 场景实测（26 pass / 0 fail / 1 info；负对照无 `--run-as` 时 worker uid=0，证明降权路径有效）；非 root 回归 23 pass / 0 fail / 1 info。
+- M2（Linux 树级资源限额与 Windows Job 不对称）与评审 R1-R6 已登记（见 [p0-contracts.md](p0-contracts.md) §10、[p0-sandbox-probe-linux.md](p0-sandbox-probe-linux.md) §8）；`design.md` §4.3 已同步 root 降权补测状态。
+- 未执行：Deck 上 root 场景（Decky Loader 实际形态）与 cgroup/seccomp 仍待 P1/P3；未提交 Git。
+
+### 待办
+
+1. root 降权生产化（Decky Loader root 形态、完整环境处理）与 cgroup v2 / RLIMIT_NPROC 树级限额在 P1/P3 落实。
+2. 按 [p0-sandbox-probe-linux.md](p0-sandbox-probe-linux.md) §8 建议冻结 Linux 侧生产配置（待 cgroup/seccomp 评估）。
+3. P0 收口后：提交 P0-D 成果（代码 + 文档）。

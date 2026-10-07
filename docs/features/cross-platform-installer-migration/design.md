@@ -112,7 +112,7 @@ IR 保留文件存在、CRC/摘要、确定载荷选择及可信实例定位；A
 
 ### 4.3 双平台隔离门槛
 
-Linux 沿用非 root 身份、bwrap namespace/离线/只读输入/独占输出、父退出终止和资源限额，改为执行固定 Rust worker。Decky Loader 即使为 root，worker 和核心文件操作保持用户降权。
+Linux 沿用非 root 身份、bwrap namespace/离线/只读输入/独占输出、父退出终止和资源限额，改为执行固定 Rust worker。Decky Loader 即使为 root，worker 和核心文件操作保持用户降权（P0-D 已完成最小降权实现与 WSL root 场景补测，见 [p0-sandbox-probe-linux.md](p0-sandbox-probe-linux.md) §6；生产 Decky 集成按 P3 复核）。
 
 Windows 拟采用原生 AppContainer、明确资源权限与 Job Object 组合，不要求 WSL、管理员或 Python。微软文档分别说明 [AppContainer 资源隔离](https://learn.microsoft.com/en-us/windows/win32/secauthz/appcontainer-isolation)与 [Job Object 进程组/资源控制](https://learn.microsoft.com/en-us/windows/win32/procthread/job-objects)。Job Object 本身不能证明文件/网络隔离。以下项目要求尚未实测：
 
