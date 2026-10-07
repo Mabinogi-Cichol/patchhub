@@ -4,6 +4,7 @@ mod appinfo;
 pub mod catalog;
 pub mod download;
 pub mod install;
+pub mod installer;
 pub mod keyvalues;
 pub mod operation;
 pub mod sources;

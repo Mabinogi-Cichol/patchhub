@@ -388,13 +388,30 @@ fn sync_dir(path: &Path) -> io::Result<()> {
     Ok(())
 }
 
-struct Store {
+/// Legacy/default transactional root for a state dir: the state dir itself.
+///
+/// P1's `installer/rust-v1/` schema roots transactions under
+/// [`crate::installer::InstallerPaths::root`] instead; callers that opt in pass
+/// that root to [`Store::open_at`].
+pub fn transaction_root(state_dir: &Path) -> PathBuf {
+    state_dir.to_path_buf()
+}
+
+pub struct Store {
     root: PathBuf,
     conn: Connection,
     _lock: File,
 }
 impl Store {
-    fn open(root: &Path) -> io::Result<Self> {
+    /// Opens the legacy layout, unchanged for existing callers.
+    fn open(state_dir: &Path) -> io::Result<Self> {
+        Self::open_at(&transaction_root(state_dir))
+    }
+
+    /// Opens the transactional store with an explicit root, letting callers
+    /// point `journal.lock` / `journal.sqlite` / `jobs/` at the P1 installer
+    /// directory (`<state_dir>/installer/rust-v1/`).
+    pub fn open_at(root: &Path) -> io::Result<Self> {
         let root = std::path::absolute(root)?;
         safe_path(&root)?;
         fs::create_dir_all(&root)?;
