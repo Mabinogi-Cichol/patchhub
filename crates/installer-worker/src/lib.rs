@@ -1,17 +1,31 @@
-//! P0 prototype: Windows LPAC (Less Privileged AppContainer) + Job Object launcher
-//! and probe worker for the cross-platform installer migration.
+//! P0 prototype: platform sandbox launchers and probe workers for the
+//! cross-platform installer migration.
 //!
-//! Windows-only functionality lives under [`win`]; other platforms get a stub so the
-//! workspace still compiles and tests on Linux. The probe binaries are only meaningful
-//! on Windows and print an "unsupported" message elsewhere.
+//! - Windows: LPAC (Less Privileged AppContainer) + Job Object under [`win`].
+//! - Linux: bubblewrap (`bwrap`) under [`linux`].
+//! - Other platforms: a stub so the workspace still compiles and tests.
+//!
+//! The probe binaries print an "unsupported" message on other platforms.
 
 pub mod model;
 
 #[cfg(windows)]
 pub mod win;
 
-#[cfg(not(windows))]
+#[cfg(target_os = "linux")]
+pub mod linux;
+
+#[cfg(not(any(windows, target_os = "linux")))]
 pub mod stub;
+
+#[cfg(windows)]
+pub use win::run_sandboxed;
+
+#[cfg(target_os = "linux")]
+pub use linux::run_sandboxed;
+
+#[cfg(not(any(windows, target_os = "linux")))]
+pub use stub::run_sandboxed;
 
 pub use model::{
     CheckResult, CheckStatus, IsolationError, JobSnapshot, LaunchOutcome, SandboxConfig,

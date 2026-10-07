@@ -64,6 +64,20 @@ pub struct SandboxLimits {
     pub close_job_after: Option<Duration>,
     /// After this delay, capture one job accounting/memory snapshot.
     pub snapshot_after: Option<Duration>,
+
+    // ------------------------------------------------------------------
+    // Linux-only resource limits (`setrlimit` applied in the child before
+    // `exec`). Ignored by the Windows launcher. `None` selects the platform
+    // default documented on each field.
+    // ------------------------------------------------------------------
+    /// `RLIMIT_AS` address-space cap in bytes. Linux default 3 GiB.
+    pub address_space_bytes: Option<u64>,
+    /// `RLIMIT_CPU` per-process CPU seconds. Linux default 300.
+    pub cpu_seconds: Option<u64>,
+    /// `RLIMIT_CORE` core-dump size in bytes. Linux default 0 (no core dump).
+    pub core_bytes: Option<u64>,
+    /// `RLIMIT_FSIZE` maximum file size in bytes. Linux default: unset (inherit).
+    pub file_size_bytes: Option<u64>,
 }
 
 /// Everything needed to launch one sandboxed worker process.
@@ -105,6 +119,11 @@ pub struct SandboxConfig {
     pub tree_children: usize,
     /// Sleep duration for `tree_children` processes.
     pub tree_sleep_ms: u64,
+    /// Linux-only: when the launcher runs with `euid == 0`, drop to this
+    /// `(uid, gid)` in `pre_exec` before `exec`. `None` falls back to the
+    /// `SUDO_UID`/`SUDO_GID` environment variables, then to no drop. Ignored on
+    /// Windows.
+    pub run_as: Option<(u32, u32)>,
 }
 
 impl SandboxConfig {
@@ -129,6 +148,7 @@ impl SandboxConfig {
             less_privileged: true,
             tree_children: 0,
             tree_sleep_ms: 15_000,
+            run_as: None,
         }
     }
 }
