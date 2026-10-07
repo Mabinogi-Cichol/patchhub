@@ -28,6 +28,8 @@ node .agents/skills/decky-deploy-verify/scripts/cef.mjs --target '<列表中的�
 在 SharedJSContext 先只读探测 `typeof DeckyPluginLoader`、插件列表及实际连接对象，不输出其 token/凭证。安装接口/内部连接版本可能改变，读取运行中对象或当前 Loader 实现，不猜 API。
 
 - Python/CLI 更新：使用当前 Loader 的 `loader/reload_plugin` 或正式安装流程完成后端重启，检查新进程/导入日志。前端导入成功不足以证明新后端已运行。
+
+> 经验（本项目）：直接以 `cp` 替换插件目录文件、或手工 `kill` 插件后端进程，会让 Loader 进入「插件已加载且拒绝重载」的陈旧状态——此后 `loader/reload_plugin` 调用不再返回、`restartWebhelper`/`importPlugin` 均无效，只有重启 `plugin_loader`/设备才能清掉。部署插件（尤其 Python/CLI 后端变更）应走 Loader 的正常安装/重载入口，避免裸文件替换 + 手工结束进程。
 - 前端更新：读取本轮 `plugin.json.name`、`package.json.version`，使用实际 `DeckyPluginLoader.importPlugin` 签名。历史有 `importPlugin(name, version, false, timeout)` 绕过排队的用法；先核对签名，设置有限超时，等待导入完成。不能将 Promise 提交当作完成。
 - 检查插件实例严格为 1，`hasPlugin(name)` 为真（若当前 API 支持），服务 active。出现旧版标识/`old_frontend` 时核对 HTTP bundle 和运行中实际渲染行为。
 - 只有正常导入仍无法卸载旧前端时，且无活动任务，才在部署授权范围内考虑 `SteamClient.Browser.RestartJSContext()`；该操作影响整个 Steam JS 上下文，先告知影响并保存基线。重启后旧 CDP 连接会断开，重新列 target，复核实例和新行为。不要直接重启整机。
