@@ -196,7 +196,7 @@ P0 → P1 → P2 → P3 → P4。文档与代码分开提交。
 
 ## 7. 关联
 
-- 来源发现 / 刮削核心化：独立 feature（未建立），本 feature 为其提供本地化名字段。
+- 来源发现 / 刮削核心化：[来源发现与订阅迁入共享 Rust 后端](../shared-source-discovery/design.md)（迁移方案，待实现）；本 feature 为其提供本地化名字段。
 - Decky 展示：[Decky UX](../decky-ux/design.md)。
 - Windows 一站式安装：[补丁一站式安装与流程精简](../simplified-install-flow/design.md)。
 - 总体架构：[开发计划](../../development-plan.md)、[客户端指南](../../client-guide.md)。

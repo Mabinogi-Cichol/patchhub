@@ -1,5 +1,7 @@
 # 源适配器与订阅
 
+Rust 迁移计划：[来源发现与订阅迁入共享后端](features/shared-source-discovery/design.md)及[施工记录](features/shared-source-discovery/progress.md)，状态为待实现。下文保留当前 Decky Python 实现说明，实施切换后再更新实际入口。
+
 工具订阅网站，不订阅固定的游戏清单。Decky 扫描先读取成功缓存，选择游戏后按需查询启用的网站。只有具备 ZIP 安装能力的记录能进入共同的根目录安装流程；发现候选单独提供来源引导。
 
 ## 配置和状态
