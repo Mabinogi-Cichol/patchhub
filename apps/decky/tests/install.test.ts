@@ -21,7 +21,9 @@ test("summary prefers installed and available over source guidance", () => {
   const available = { ...patch("publisher_exe"), auto_installable: true };
   assert.equal(installSummary(row([guidance])), "找到补丁来源");
   assert.equal(installSummary(row([guidance, available])), "有可用补丁");
-  assert.equal(installSummary(row([{ ...available, compatibility: "check_required" }])), "找到补丁来源");
+  assert.equal(installSummary(row([{ ...available, compatibility: "check_required" }])), "有可用补丁");
+  assert.equal(installSummary(row([{ ...available, compatibility: "check_required", source_id: "hgamer" }])), "找到补丁来源");
+  assert.equal(installSummary(row([{ ...available, compatibility: "check_required", blockers: ["build_not_verified"] }])), "找到补丁来源");
   assert.equal(installSummary(row([{ ...available, detection: { status: "managed", files: [] } }])), "已安装补丁");
   assert.equal(installSummary(row([{ ...available, reinstall_available: true, detection: { status: "partial", files: [] } }])), "补丁文件不完整，需重新安装");
   assert.equal(installSummary(row([]), true), "正在查找补丁");

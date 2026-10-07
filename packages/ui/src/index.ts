@@ -109,7 +109,7 @@ export function canAutoInstall(patch: Patch): boolean {
 export function installSummary(row: Install, scanning = false): string {
   if (row.patches.some(p => isManaged(p.detection.status) || isExternal(p.detection.status))) return "已安装补丁";
   if (row.patches.some(p => p.reinstall_available && ["partial", "conflict", "partial_or_conflict", "needs_revalidation"].includes(p.detection.status))) return "补丁文件不完整，需重新安装";
-  if (row.patches.some(p => canAutoInstall(p) && p.compatibility !== "check_required")) return "有可用补丁";
+  if (row.patches.some(canAutoInstall)) return "有可用补丁";
   if (row.patches.length || row.discovery?.candidates.some(candidateMatched)) return "找到补丁来源";
   if (["failed", "source_refresh_failed", "source_offline_cached"].includes(row.discovery?.status ?? "")) return "来源查询失败";
   if (scanning && !["complete", "empty", "cache_complete"].includes(row.discovery?.status ?? "")) return "正在查找补丁";
