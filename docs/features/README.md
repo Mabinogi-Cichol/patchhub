@@ -6,6 +6,7 @@
 
 | 功能 | 状态 | 设计文档 | 施工记录 | 附加文档 |
 | --- | --- | --- | --- | --- |
+| Windows 扫描刷新状态锁冲突修复 | 已修复、重新部署并通过 Windows 实机验收 | [设计](windows-scan-state-lock/design.md) | [施工记录](windows-scan-state-lock/progress.md) | — |
 | 通用 EXE 自动安装（按安装器行为判定） | 实施与验收完成；四款本地矩阵及用户确认生效，Deck 部署/RPC/真实页面、合成任务 UI、只读 worker 和用户手柄验收通过；2026-10-07 列表口径修订：无阻断通用 EXE 显示“有可用补丁”，已部署并实机验证（QAM/全屏），实体手柄待验收 | [设计](generic-exe-installation/design.md) | [施工记录](generic-exe-installation/progress.md) | [调研](generic-exe-installation/research.md) |
 | 补丁一站式安装与流程精简 | 后端/Decky 已部署；VBF 重装/下载取消及界面通过，完整实机矩阵待验收；2026-10-07 通用 EXE 无阻断时显示“有可用补丁”；Windows TODO | [设计](simplified-install-flow/design.md) | [施工记录](simplified-install-flow/progress.md) | [调研](simplified-install-flow/research.md) |
 | Decky UX | 2026-10-07 前台安装与结果面板已部署，自动化、真实 RPC / 页面与合成渲染验证通过，真实下载 / 恢复与手柄待验收；既有 UX 已实现并部署；2026-10-06 来源文案修正已部署，真实 RPC、QAM 与 VBF 全屏页面验证通过；实体手柄验收待完成 | [设计](decky-ux/design.md) | [施工记录](decky-ux/progress.md) | [修复计划](decky-ux/fix-plan.md) |
