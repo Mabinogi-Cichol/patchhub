@@ -37,7 +37,9 @@ function App() {
 
   async function refresh() {
     await run("正在扫描 Steam 库…", async () => {
-      const [nextScan, tx] = await Promise.all([call<ScanResult>("scan"), call<Transaction[] | { transactions: Transaction[] }>("list_transactions")]);
+      // Both core calls open the same journal; finish one before starting the other.
+      const nextScan = await call<ScanResult>("scan");
+      const tx = await call<Transaction[] | { transactions: Transaction[] }>("list_transactions");
       return { nextScan, tx };
     }, ({ nextScan, tx }) => {
       setScan(nextScan);
