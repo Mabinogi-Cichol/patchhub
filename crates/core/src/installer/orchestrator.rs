@@ -634,12 +634,13 @@ mod tests {
     use crate::installer::zip_selection_id;
     use crate::sources::model::{
         ArtifactFormat, CacheStatus, Capability, DiscoveryRecord, MatchBasis, Mirror,
-        SourceCandidate,
+        SourceCandidate, SourceRole, SourceRule,
     };
     use crate::sources::registry::DiscoveryOutcome;
     use crate::sources::{GameQuery, Sources};
+    use sha2::Digest;
     use std::fs;
-    use std::io::Write;
+    use std::io::{Read, Write};
     use std::path::Path;
     use std::sync::{Arc, Mutex};
     use tempfile::TempDir;
@@ -739,6 +740,126 @@ mod tests {
             localized_name: None,
             instance_id: None,
         }
+    }
+
+    fn sha256_hex(bytes: &[u8]) -> String {
+        format!("{:x}", sha2::Sha256::digest(bytes))
+    }
+
+    /// A source rule with a download host, for a hand-built selection that does
+    /// not require a seeded registry (facts/acquire/reinstall-error paths).
+    fn source_rule() -> SourceRule {
+        SourceRule {
+            id: "kagura-cn".to_string(),
+            name: "Kagura".to_string(),
+            adapter: "kagura_wordpress".to_string(),
+            role: SourceRole::Publisher,
+            discovery_only: true,
+            priority: 10,
+            enabled: true,
+            pages: vec!["https://kagurafan.com/".to_string()],
+            page_hosts: vec!["kagurafan.com".to_string()],
+            download_hosts: vec!["kaguraserver.com".to_string()],
+            root_layout: None,
+            columns: None,
+            table_id: None,
+            language: None,
+            url: None,
+        }
+    }
+
+    fn manual_selection(
+        requires: Option<Vec<u32>>,
+        excludes: Option<Vec<u32>>,
+    ) -> ResolvedZipCandidate {
+        let mut candidate = candidate();
+        candidate.requires_dlc = requires;
+        candidate.excludes_dlc = excludes;
+        ResolvedZipCandidate {
+            selection_id: zip_selection_id(&candidate).unwrap(),
+            release_id: format!("source-kagura-cn-{APPID}"),
+            appid: APPID,
+            source_id: "kagura-cn".to_string(),
+            source_record_id: candidate.source_record_id.clone(),
+            candidate,
+            rule: source_rule(),
+            download_url: "https://kaguraserver.com/a.zip".to_string(),
+            language: "zh-CN".to_string(),
+            candidate_sha256: "f".repeat(64),
+            rule_fingerprint: "a".repeat(64),
+            settings_revision: 0,
+        }
+    }
+
+    fn write_manifest(
+        game: &GameInstall,
+        language: &str,
+        flags: &str,
+        buildid: Option<&str>,
+        dlc: Option<u32>,
+    ) {
+        let build = buildid
+            .map(|build| format!("\"buildid\" \"{build}\" "))
+            .unwrap_or_default();
+        let dlc = dlc
+            .map(|dlc| {
+                format!("\"InstalledDepots\" {{ \"2303801\" {{ \"dlcappid\" \"{dlc}\" }} }}")
+            })
+            .unwrap_or_default();
+        let body = format!(
+            "\"AppState\" {{ \"appid\" \"{APPID}\" \"name\" \"Test\" \"installdir\" \"Test\" \
+             {build}\"StateFlags\" \"{flags}\" \
+             \"UserConfig\" {{ \"language\" \"{language}\" }} \
+             \"MountedConfig\" {{ \"language\" \"{language}\" }} {dlc} }}"
+        );
+        fs::write(
+            game.library_path
+                .join("steamapps")
+                .join(format!("appmanifest_{APPID}.acf")),
+            body,
+        )
+        .unwrap();
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn run_install(
+        game: &GameInstall,
+        selection: &ResolvedZipCandidate,
+        paths: &InstallerPaths,
+        state: &Path,
+        transport: &dyn Transport,
+        cancel: &AtomicBool,
+        request_id: &str,
+        operation_kind: InstallOperation,
+    ) -> ZipTaskResult<Transaction> {
+        let lease = |_now: u64| true;
+        let inputs = ZipInstallInputs {
+            game,
+            selection,
+            operation: operation_kind,
+            request_id,
+            now: 1_000,
+            ttl_seconds: 900,
+        };
+        let deps = ZipInstallDeps {
+            paths,
+            state_dir: state,
+            transport,
+            cancel,
+            lease_active: &lease,
+        };
+        operation::run(
+            Arc::new(AtomicBool::new(false)),
+            |_| {},
+            || install_zip(inputs, deps),
+        )
+    }
+
+    fn dynamic_paths(temp: &TempDir) -> (std::path::PathBuf, InstallerPaths) {
+        let state = temp.path().join("state");
+        let paths = InstallerPaths::new(&state);
+        crate::installer::init_atomic(&paths).unwrap();
+        (state, paths)
     }
 
     /// Seeds a fresh kagura-cn discovery record and returns the resolved
@@ -961,5 +1082,610 @@ mod tests {
         assert!(install::list_transactions_at(paths.root())
             .unwrap()
             .is_empty());
+    }
+
+    struct FailingTransport;
+
+    impl Transport for FailingTransport {
+        fn get(
+            &self,
+            _url: &str,
+            _etag: Option<&str>,
+            _last_modified: Option<&str>,
+        ) -> std::io::Result<HttpResponse> {
+            Err(std::io::Error::other("download_http_error"))
+        }
+    }
+
+    /// A download body that returns one byte per read and flips `cancel` on the
+    /// first read, so cancellation is observed mid-download.
+    struct OneByteCancelReader {
+        data: Vec<u8>,
+        offset: usize,
+        cancel: Arc<AtomicBool>,
+    }
+
+    impl Read for OneByteCancelReader {
+        fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+            if self.offset >= self.data.len() || buffer.is_empty() {
+                return Ok(0);
+            }
+            self.cancel.store(true, Ordering::Relaxed);
+            buffer[0] = self.data[self.offset];
+            self.offset += 1;
+            Ok(1)
+        }
+    }
+
+    struct BodyTransport {
+        response: Mutex<Option<HttpResponse>>,
+    }
+
+    impl Transport for BodyTransport {
+        fn get(
+            &self,
+            _url: &str,
+            _etag: Option<&str>,
+            _last_modified: Option<&str>,
+        ) -> std::io::Result<HttpResponse> {
+            self.response
+                .lock()
+                .unwrap()
+                .take()
+                .ok_or_else(|| std::io::Error::other("no_response"))
+        }
+    }
+
+    fn cancelling_transport(data: Vec<u8>, cancel: Arc<AtomicBool>) -> BodyTransport {
+        BodyTransport {
+            response: Mutex::new(Some(HttpResponse {
+                status: 200,
+                location: None,
+                content_type: Some("application/octet-stream".to_string()),
+                content_length: Some(data.len() as u64),
+                etag: None,
+                last_modified: None,
+                final_url: "https://kaguraserver.com/a.zip".to_string(),
+                body: Box::new(OneByteCancelReader {
+                    data,
+                    offset: 0,
+                    cancel,
+                }),
+            })),
+        }
+    }
+
+    fn edit_journal(root: &Path, plan_id: &str, edit: impl FnOnce(&mut serde_json::Value)) {
+        let db = rusqlite::Connection::open(root.join("journal.sqlite")).unwrap();
+        let text: String = db
+            .query_row("SELECT document FROM jobs WHERE id=?1", [plan_id], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        let mut value: serde_json::Value = serde_json::from_str(&text).unwrap();
+        edit(&mut value);
+        db.execute(
+            "UPDATE jobs SET document=?2 WHERE id=?1",
+            rusqlite::params![plan_id, value.to_string()],
+        )
+        .unwrap();
+    }
+
+    /// Builds (without applying) a dynamic publisher ZIP plan at the P1 root.
+    fn prepare_dynamic_plan(
+        paths: &InstallerPaths,
+        game: &GameInstall,
+        selection: &ResolvedZipCandidate,
+        archive: &Path,
+        operation_kind: InstallOperation,
+    ) -> install::InstallPlan {
+        let cancel = AtomicBool::new(false);
+        let mappings = zip_recipe::build_recipe(archive, &game.install_path, &cancel).unwrap();
+        let expectation = selection.expectation(game.buildid.as_deref());
+        let bytes = fs::read(archive).unwrap();
+        let acquired = acquire::AcquiredArchive {
+            path: archive.to_path_buf(),
+            sha256: sha256_hex(&bytes),
+            size: bytes.len() as u64,
+            final_url: selection.download_url.clone(),
+            source: acquire::Acquisition::Downloaded,
+        };
+        let release = build_release(selection, &acquired, &mappings, &expectation);
+        install::prepare_with_operation_at(paths.root(), game, &release, archive, 0, operation_kind)
+            .unwrap()
+    }
+
+    fn assert_no_transactions(paths: &InstallerPaths) {
+        assert!(
+            install::list_transactions_at(paths.root())
+                .unwrap()
+                .is_empty(),
+            "a plan-phase failure must not write a transaction"
+        );
+    }
+
+    #[test]
+    fn facts_requires_dlc_missing_blocks_without_a_transaction() {
+        let (temp, game, archive) = setup();
+        let (state, paths) = dynamic_paths(&temp);
+        write_manifest(&game, "schinese", "4", Some("100"), None);
+        let selection = manual_selection(Some(vec![2_303_802]), None);
+        let transport = transport(archive);
+        let cancel = AtomicBool::new(false);
+        let error = run_install(
+            &game,
+            &selection,
+            &paths,
+            &state,
+            &transport,
+            &cancel,
+            "req-dlc-required",
+            InstallOperation::Install,
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "exe_dlc_required");
+        assert_no_transactions(&paths);
+    }
+
+    #[test]
+    fn facts_excludes_dlc_hit_blocks_without_a_transaction() {
+        let (temp, game, archive) = setup();
+        let (state, paths) = dynamic_paths(&temp);
+        write_manifest(&game, "schinese", "4", Some("100"), Some(2_303_999));
+        let selection = manual_selection(None, Some(vec![2_303_999]));
+        let transport = transport(archive);
+        let cancel = AtomicBool::new(false);
+        let error = run_install(
+            &game,
+            &selection,
+            &paths,
+            &state,
+            &transport,
+            &cancel,
+            "req-dlc-excluded",
+            InstallOperation::Install,
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "exe_dlc_excluded");
+        assert_no_transactions(&paths);
+    }
+
+    #[test]
+    fn facts_language_mismatch_blocks_without_a_transaction() {
+        let (temp, game, archive) = setup();
+        let (state, paths) = dynamic_paths(&temp);
+        write_manifest(&game, "english", "4", Some("100"), None);
+        let selection = manual_selection(None, None);
+        let transport = transport(archive);
+        let cancel = AtomicBool::new(false);
+        let error = run_install(
+            &game,
+            &selection,
+            &paths,
+            &state,
+            &transport,
+            &cancel,
+            "req-language",
+            InstallOperation::Install,
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "exe_language_mismatch");
+        assert_no_transactions(&paths);
+    }
+
+    #[test]
+    fn facts_missing_manifest_blocks_without_a_transaction() {
+        let (temp, game, archive) = setup();
+        let (state, paths) = dynamic_paths(&temp);
+        fs::remove_file(
+            game.library_path
+                .join("steamapps")
+                .join(format!("appmanifest_{APPID}.acf")),
+        )
+        .unwrap();
+        let selection = manual_selection(None, None);
+        let transport = transport(archive);
+        let cancel = AtomicBool::new(false);
+        let error = run_install(
+            &game,
+            &selection,
+            &paths,
+            &state,
+            &transport,
+            &cancel,
+            "req-manifest",
+            InstallOperation::Install,
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "exe_manifest_unavailable");
+        assert_no_transactions(&paths);
+    }
+
+    #[test]
+    fn facts_missing_buildid_blocks_build_not_verified() {
+        let (temp, game, archive) = setup();
+        let (state, paths) = dynamic_paths(&temp);
+        write_manifest(&game, "schinese", "4", None, None);
+        let selection = manual_selection(None, None);
+        let transport = transport(archive);
+        let cancel = AtomicBool::new(false);
+        let error = run_install(
+            &game,
+            &selection,
+            &paths,
+            &state,
+            &transport,
+            &cancel,
+            "req-build",
+            InstallOperation::Install,
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "build_not_verified");
+        assert_no_transactions(&paths);
+    }
+
+    #[test]
+    fn facts_not_ready_blocks_game_not_ready() {
+        let (temp, game, archive) = setup();
+        let (state, paths) = dynamic_paths(&temp);
+        write_manifest(&game, "schinese", "2", Some("100"), None);
+        let selection = manual_selection(None, None);
+        let transport = transport(archive);
+        let cancel = AtomicBool::new(false);
+        let error = run_install(
+            &game,
+            &selection,
+            &paths,
+            &state,
+            &transport,
+            &cancel,
+            "req-not-ready",
+            InstallOperation::Install,
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "game_not_ready");
+        assert_no_transactions(&paths);
+    }
+
+    #[test]
+    fn cancellation_mid_download_returns_download_cancelled() {
+        let (temp, game, archive) = setup();
+        let (state, paths) = dynamic_paths(&temp);
+        let selection = manual_selection(None, None);
+        let cancel = Arc::new(AtomicBool::new(false));
+        let transport = cancelling_transport(archive, Arc::clone(&cancel));
+        let lease = |_now: u64| true;
+        let inputs = ZipInstallInputs {
+            game: &game,
+            selection: &selection,
+            operation: InstallOperation::Install,
+            request_id: "req-download-cancel",
+            now: 1_000,
+            ttl_seconds: 900,
+        };
+        let deps = ZipInstallDeps {
+            paths: &paths,
+            state_dir: &state,
+            transport: &transport,
+            cancel: cancel.as_ref(),
+            lease_active: &lease,
+        };
+        let error = operation::run(
+            Arc::new(AtomicBool::new(false)),
+            |_| {},
+            || install_zip(inputs, deps),
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "download_cancelled");
+        assert_no_transactions(&paths);
+    }
+
+    #[test]
+    fn pre_plan_transport_failure_can_retry_with_the_same_request_id() {
+        let (temp, game, archive) = setup();
+        let (state, paths) = dynamic_paths(&temp);
+        let selection_id = zip_selection_id(&candidate()).unwrap();
+        let selection = seed_and_resolve(&state, &selection_id);
+        let cancel = AtomicBool::new(false);
+
+        let first = run_install(
+            &game,
+            &selection,
+            &paths,
+            &state,
+            &FailingTransport,
+            &cancel,
+            "req-retry",
+            InstallOperation::Install,
+        )
+        .unwrap_err();
+        assert_eq!(first.code, "download_failed");
+        // A pre-plan failure must not persist `error` (the binding stays retryable).
+        let record = crate::installer::RequestLedger::open(&paths)
+            .unwrap()
+            .get("req-retry")
+            .unwrap()
+            .unwrap();
+        assert!(record.plan_id.is_none());
+        assert!(record.error.is_none());
+
+        let transport = transport(archive);
+        let transaction = run_install(
+            &game,
+            &selection,
+            &paths,
+            &state,
+            &transport,
+            &cancel,
+            "req-retry",
+            InstallOperation::Install,
+        )
+        .unwrap();
+        assert_eq!(transaction.state, "committed");
+    }
+
+    #[test]
+    fn cancellation_during_apply_restores_and_rolls_back() {
+        let (temp, game, archive) = setup();
+        let (state, paths) = dynamic_paths(&temp);
+        let selection_id = zip_selection_id(&candidate()).unwrap();
+        let selection = seed_and_resolve(&state, &selection_id);
+        let transport = transport(archive);
+        let cancel = Arc::new(AtomicBool::new(false));
+        let signal = Arc::clone(&cancel);
+        let lease = |_now: u64| true;
+        let inputs = ZipInstallInputs {
+            game: &game,
+            selection: &selection,
+            operation: InstallOperation::Install,
+            request_id: "req-apply-cancel",
+            now: 1_000,
+            ttl_seconds: 900,
+        };
+        let deps = ZipInstallDeps {
+            paths: &paths,
+            state_dir: &state,
+            transport: &transport,
+            cancel: cancel.as_ref(),
+            lease_active: &lease,
+        };
+        let transaction = operation::run(
+            Arc::clone(&cancel),
+            move |progress| {
+                if progress.stage == "writing" && progress.files_done == 1 {
+                    signal.store(true, Ordering::Relaxed);
+                }
+            },
+            || install_zip(inputs, deps),
+        )
+        .unwrap();
+        assert_eq!(transaction.state, "rolled_back");
+        assert!(!game.install_path.join("data.txt").exists());
+    }
+
+    #[test]
+    fn late_cancellation_after_commit_replays_committed() {
+        let (temp, game, archive) = setup();
+        let (state, paths) = dynamic_paths(&temp);
+        let selection_id = zip_selection_id(&candidate()).unwrap();
+        let selection = seed_and_resolve(&state, &selection_id);
+        let no_cancel = AtomicBool::new(false);
+        let transport = transport(archive);
+        let first = run_install(
+            &game,
+            &selection,
+            &paths,
+            &state,
+            &transport,
+            &no_cancel,
+            "req-late",
+            InstallOperation::Install,
+        )
+        .unwrap();
+        assert_eq!(first.state, "committed");
+
+        let late = AtomicBool::new(true);
+        let empty = FakeTransport::new(Vec::new());
+        let replay = run_install(
+            &game,
+            &selection,
+            &paths,
+            &state,
+            &empty,
+            &late,
+            "req-late",
+            InstallOperation::Install,
+        )
+        .unwrap();
+        assert_eq!(replay.state, "committed");
+        assert_eq!(replay.transaction_id, first.transaction_id);
+    }
+
+    #[test]
+    fn lease_expiry_after_plan_persists_revocation() {
+        let (temp, game, archive) = setup();
+        let (state, paths) = dynamic_paths(&temp);
+        let selection_id = zip_selection_id(&candidate()).unwrap();
+        let selection = seed_and_resolve(&state, &selection_id);
+        let transport = transport(archive);
+        let active = Arc::new(AtomicBool::new(true));
+        let signal = Arc::clone(&active);
+        let lease = move |_now: u64| active.load(Ordering::Relaxed);
+        let cancel = AtomicBool::new(false);
+        let inputs = ZipInstallInputs {
+            game: &game,
+            selection: &selection,
+            operation: InstallOperation::Install,
+            request_id: "req-lease",
+            now: 1_000,
+            ttl_seconds: 900,
+        };
+        let deps = ZipInstallDeps {
+            paths: &paths,
+            state_dir: &state,
+            transport: &transport,
+            cancel: &cancel,
+            lease_active: &lease,
+        };
+        let error = operation::run(
+            Arc::new(AtomicBool::new(false)),
+            move |progress| {
+                if progress.stage == "planning" {
+                    signal.store(false, Ordering::Relaxed);
+                }
+            },
+            || install_zip(inputs, deps),
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "authorization_lease_inactive");
+
+        let transactions = install::list_transactions_at(paths.root()).unwrap();
+        assert_eq!(transactions.len(), 1);
+        assert_eq!(transactions[0].state, "rolled_back");
+        assert!(crate::installer::is_revoked(&paths, &transactions[0].plan_id).unwrap());
+    }
+
+    #[test]
+    fn same_content_reinstall_commits() {
+        let (temp, game, archive) = setup();
+        let (state, paths) = dynamic_paths(&temp);
+        let selection_id = zip_selection_id(&candidate()).unwrap();
+        let selection = seed_and_resolve(&state, &selection_id);
+        let cancel = AtomicBool::new(false);
+        let first = run_install(
+            &game,
+            &selection,
+            &paths,
+            &state,
+            &transport(archive.clone()),
+            &cancel,
+            "req-install",
+            InstallOperation::Install,
+        )
+        .unwrap();
+        assert_eq!(first.state, "committed");
+
+        let second = run_install(
+            &game,
+            &selection,
+            &paths,
+            &state,
+            &transport(archive),
+            &cancel,
+            "req-reinstall",
+            InstallOperation::Reinstall,
+        )
+        .unwrap();
+        assert_eq!(second.state, "committed");
+        assert_ne!(second.transaction_id, first.transaction_id);
+    }
+
+    #[test]
+    fn reinstall_with_changed_bytes_is_rejected() {
+        let (temp, game, archive) = setup();
+        let (state, paths) = dynamic_paths(&temp);
+        let selection_id = zip_selection_id(&candidate()).unwrap();
+        let selection = seed_and_resolve(&state, &selection_id);
+        let cancel = AtomicBool::new(false);
+        let first = run_install(
+            &game,
+            &selection,
+            &paths,
+            &state,
+            &transport(archive),
+            &cancel,
+            "req-install",
+            InstallOperation::Install,
+        )
+        .unwrap();
+        assert_eq!(first.state, "committed");
+
+        let changed = build_zip(&[("data.txt", b"different bytes")]);
+        let error = run_install(
+            &game,
+            &selection,
+            &paths,
+            &state,
+            &transport(changed),
+            &cancel,
+            "req-reinstall-changed",
+            InstallOperation::Reinstall,
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "reinstall_content_identity_changed");
+    }
+
+    #[test]
+    fn reinstall_without_an_owned_target_is_rejected() {
+        let (temp, game, archive) = setup();
+        let (state, paths) = dynamic_paths(&temp);
+        fs::write(game.install_path.join("data.txt"), b"original").unwrap();
+        let selection = manual_selection(None, None);
+        let cancel = AtomicBool::new(false);
+        let error = run_install(
+            &game,
+            &selection,
+            &paths,
+            &state,
+            &transport(archive),
+            &cancel,
+            "req-unowned",
+            InstallOperation::Reinstall,
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "reinstall_unowned_or_incomplete");
+    }
+
+    #[test]
+    fn recover_of_an_interrupted_add_plan_rolls_back() {
+        let (temp, game, archive) = setup();
+        let (_state, paths) = dynamic_paths(&temp);
+        let archive_path = temp.path().join("dynamic.zip");
+        fs::write(&archive_path, &archive).unwrap();
+        let selection = manual_selection(None, None);
+        let plan = prepare_dynamic_plan(
+            &paths,
+            &game,
+            &selection,
+            &archive_path,
+            InstallOperation::Install,
+        );
+        edit_journal(paths.root(), &plan.plan_id, |job| {
+            job["transaction"]["state"] = "applying".into();
+            job["progress"][0] = "installed".into();
+        });
+        fs::write(game.install_path.join("data.txt"), b"patched").unwrap();
+
+        let recovered = install::recover_at(paths.root()).unwrap();
+        assert_eq!(recovered.len(), 1);
+        assert_eq!(recovered[0].state, "rolled_back");
+        assert!(!game.install_path.join("data.txt").exists());
+    }
+
+    #[test]
+    fn recover_of_an_interrupted_replace_plan_reports_needs_recovery() {
+        let (temp, game, archive) = setup();
+        let (_state, paths) = dynamic_paths(&temp);
+        fs::write(game.install_path.join("data.txt"), b"original").unwrap();
+        let archive_path = temp.path().join("dynamic.zip");
+        fs::write(&archive_path, &archive).unwrap();
+        let selection = manual_selection(None, None);
+        let plan = prepare_dynamic_plan(
+            &paths,
+            &game,
+            &selection,
+            &archive_path,
+            InstallOperation::Install,
+        );
+        edit_journal(paths.root(), &plan.plan_id, |job| {
+            job["transaction"]["state"] = "applying".into();
+            job["progress"][0] = "installed".into();
+        });
+        fs::write(game.install_path.join("data.txt"), b"patched").unwrap();
+
+        let recovered = install::recover_at(paths.root()).unwrap();
+        assert_eq!(recovered.len(), 1);
+        assert_eq!(recovered[0].state, "needs_recovery");
+        assert!(recovered[0].error.is_some());
     }
 }

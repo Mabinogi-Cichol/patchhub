@@ -900,10 +900,19 @@ fn same_content_reinstall_failure_before_backups_rolls_back() {
     fs::write(f.job_file(&second.plan_id, "0.stage"), b"invalid stage").unwrap();
     let result = apply(&second.plan_id, &f.state).unwrap();
     assert_eq!(result.state, "rolled_back");
-    assert_eq!(fs::read(f.game.join("original.dat")).unwrap(), b"patched bytes");
-    assert_eq!(fs::read(f.game.join("content/new.dat")).unwrap(), b"new bytes");
+    assert_eq!(
+        fs::read(f.game.join("original.dat")).unwrap(),
+        b"patched bytes"
+    );
+    assert_eq!(
+        fs::read(f.game.join("content/new.dat")).unwrap(),
+        b"new bytes"
+    );
     assert!(recover(&f.state).unwrap().is_empty());
-    assert!(list_transactions(&f.state).unwrap().iter().any(|t| t.plan_id == first.plan_id && t.state == "committed"));
+    assert!(list_transactions(&f.state)
+        .unwrap()
+        .iter()
+        .any(|t| t.plan_id == first.plan_id && t.state == "committed"));
 }
 
 #[test]
@@ -1144,4 +1153,26 @@ fn committed_install_survives_cleanup_diagnostic_journal_write_failure() {
         fs::read(f.game.join("content/new.dat")).unwrap(),
         b"new bytes"
     );
+}
+
+#[test]
+fn planned_change_source_is_optional_for_older_journals() {
+    let f = Fixture::new();
+    let plan = f.plan().unwrap();
+    assert!(
+        plan.changes.iter().all(|change| change.source.is_some()),
+        "new plans record the archive member"
+    );
+    // Model a journal written before `PlannedChange.source` existed.
+    f.edit_journal(&plan.plan_id, |job| {
+        for change in job["plan"]["changes"].as_array_mut().unwrap() {
+            change.as_object_mut().unwrap().remove("source");
+        }
+    });
+    let reloaded = get_plan(&plan.plan_id, &f.state).unwrap();
+    assert!(reloaded
+        .changes
+        .iter()
+        .all(|change| change.source.is_none()));
+    assert_eq!(reloaded.changes.len(), plan.changes.len());
 }

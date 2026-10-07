@@ -2070,3 +2070,306 @@ mod install_flow_tests {
         assert!(result["changes"].as_array().unwrap().is_empty());
     }
 }
+
+#[cfg(test)]
+mod dynamic_projection_tests {
+    use super::*;
+    use steam_patch_core::sources::model::{
+        ArtifactFormat, CacheStatus, Capability, DiscoveryRecord, MatchBasis, Mirror,
+        SourceCandidate,
+    };
+    use steam_patch_core::sources::registry::DiscoveryOutcome;
+
+    const APPID: u32 = 42;
+
+    fn dynamic_candidate() -> SourceCandidate {
+        SourceCandidate {
+            candidate_id: "candidate-000000000000000000000000".to_string(),
+            source_id: "kagura-cn".to_string(),
+            source_record_id: "https://kagurafan.com/patches/game".to_string(),
+            game_appid: Some(APPID),
+            parent_appid: None,
+            aliases: Vec::new(),
+            game_title: "Test".to_string(),
+            patch_title: "Test patch".to_string(),
+            variant: steam_patch_core::sources::model::Variant::Base,
+            requires_dlc: None,
+            excludes_dlc: None,
+            platforms: vec!["steam".to_string()],
+            patch_kind: "adult_content".to_string(),
+            languages: vec!["zh-CN".to_string()],
+            version_raw: Some("1".to_string()),
+            version_evidence: Vec::new(),
+            version_identity: "1".to_string(),
+            published_at: None,
+            patch_updated_at: None,
+            source_page: "https://kagurafan.com/patches/game".to_string(),
+            upstream_page: None,
+            mirrors: vec![Mirror {
+                url: "https://kaguraserver.com/a.zip".to_string(),
+                label: None,
+                format: "zip".to_string(),
+            }],
+            format_reported: ArtifactFormat::Zip,
+            format_observed: ArtifactFormat::Zip,
+            capability: Capability::DiscoverOnly,
+            identity_evidence: Vec::new(),
+            provenance: Vec::new(),
+            match_basis: MatchBasis::Appid,
+            observed_at: "2026-01-01T00:00:00+00:00".to_string(),
+            cache_status: CacheStatus::Cached,
+            warnings: Vec::new(),
+            fingerprint: "f".repeat(64),
+            related_index_pages: Vec::new(),
+        }
+    }
+
+    fn seed_dynamic(state: &Path) {
+        let mut handle = sources::Sources::open(state).unwrap();
+        let rule = handle
+            .registry()
+            .rules()
+            .iter()
+            .find(|rule| rule.id == "kagura-cn")
+            .cloned()
+            .unwrap();
+        handle
+            .registry_mut()
+            .commit(
+                &rule,
+                APPID,
+                DiscoveryOutcome {
+                    status: "complete".to_string(),
+                    candidates: vec![dynamic_candidate()],
+                    ..DiscoveryOutcome::default()
+                },
+                &DiscoveryRecord::default(),
+                "key",
+            )
+            .unwrap();
+    }
+
+    /// Synthetic installed game + seeded source candidate + dynamic archive.
+    fn fixture() -> (
+        tempfile::TempDir,
+        Params,
+        steam::GameInstall,
+        PathBuf,
+        String,
+    ) {
+        let temp = tempfile::tempdir().unwrap();
+        let library = temp.path().join("Steam");
+        let install = library.join("steamapps").join("common").join("Test");
+        fs::create_dir_all(&install).unwrap();
+        fs::write(
+            library
+                .join("steamapps")
+                .join(format!("appmanifest_{APPID}.acf")),
+            "\"AppState\" { \"appid\" \"42\" \"name\" \"Test\" \"installdir\" \"Test\" \
+             \"buildid\" \"100\" \"StateFlags\" \"4\" \
+             \"UserConfig\" { \"language\" \"schinese\" } \
+             \"MountedConfig\" { \"language\" \"schinese\" } }",
+        )
+        .unwrap();
+        let mut report = steam::scan(std::slice::from_ref(&library));
+        let game = report.installs.remove(0);
+        let archive = temp.path().join("dynamic.zip");
+        let mut zip = zip::ZipWriter::new(fs::File::create(&archive).unwrap());
+        zip.start_file(
+            "data.txt",
+            zip::write::SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Stored),
+        )
+        .unwrap();
+        use std::io::Write as _;
+        zip.write_all(b"patched").unwrap();
+        zip.finish().unwrap();
+        let state = temp.path().join("state");
+        seed_dynamic(&state);
+        let selection_id = installer::zip_selection_id(&dynamic_candidate()).unwrap();
+        let params = Params {
+            roots: vec![library],
+            state_dir: Some(state),
+            instance_id: Some(game.instance_id.clone()),
+            platform: Some(Platform::Windows),
+            ..Default::default()
+        };
+        (temp, params, game, archive, selection_id)
+    }
+
+    fn clone_params(params: &Params) -> Params {
+        serde_json::from_value(serde_json::to_value(params).unwrap()).unwrap()
+    }
+
+    fn dynamic_release(
+        release_id: &str,
+        archive: &Path,
+        mappings: &[catalog::FileMapping],
+    ) -> catalog::PatchRelease {
+        let digest = format!("{:x}", Sha256::digest(fs::read(archive).unwrap()));
+        catalog::PatchRelease {
+            patch_id: release_id.to_string(),
+            release_id: release_id.to_string(),
+            appid: APPID,
+            name: "Dynamic".to_string(),
+            version: "0".to_string(),
+            language: "zh-CN".to_string(),
+            category: "publisher_zip".to_string(),
+            source_page: "https://kagurafan.com/patches/game".to_string(),
+            support_level: SupportLevel::ManagedZip,
+            platforms: vec![Platform::Windows, Platform::Steamos],
+            verified_buildids: vec!["100".to_string()],
+            detection: mappings
+                .iter()
+                .map(|mapping| catalog::Fingerprint {
+                    path: mapping.destination.clone(),
+                    sha256: mapping.installed_sha256.clone(),
+                })
+                .collect(),
+            recipe: Some(catalog::Recipe {
+                artifact_sha256: digest,
+                files: mappings.to_vec(),
+            }),
+            artifact: None,
+        }
+    }
+
+    fn install_dynamic_committed(
+        state: &Path,
+        game: &steam::GameInstall,
+        archive: &Path,
+        release_id: &str,
+    ) -> String {
+        let paths = installer::InstallerPaths::new(state);
+        installer::init_atomic(&paths).unwrap();
+        let cancel = AtomicBool::new(false);
+        let mappings = installer::build_recipe(archive, &game.install_path, &cancel).unwrap();
+        let release = dynamic_release(release_id, archive, &mappings);
+        let plan = install::prepare_with_operation_at(
+            paths.root(),
+            game,
+            &release,
+            archive,
+            0,
+            install::InstallOperation::Install,
+        )
+        .unwrap();
+        let transaction = install::apply_at(paths.root(), &plan.plan_id).unwrap();
+        assert_eq!(transaction.state, "committed");
+        plan.plan_id
+    }
+
+    #[test]
+    fn scan_projects_the_dynamic_selection_with_full_fields() {
+        let (_temp, params, _game, _archive, selection_id) = fixture();
+        let mut scan = clone_params(&params);
+        scan.instance_id = None;
+        let result = execute("scan", scan).unwrap();
+        let patches = result["installs"][0]["patches"].as_array().unwrap();
+        let dynamic = patches
+            .iter()
+            .find(|patch| patch["selection_id"] == selection_id.as_str())
+            .expect("dynamic selection projected");
+        assert_eq!(dynamic["release_id"], "source-kagura-cn-42");
+        assert_eq!(dynamic["support_level"], "publisher_zip");
+        assert_eq!(dynamic["download_available"], true);
+        assert!(dynamic["blockers"].as_array().unwrap().is_empty());
+        assert!(dynamic["detection"]["status"].is_string());
+        assert!(dynamic["compatibility"].is_string());
+    }
+
+    #[test]
+    fn scan_lets_a_signed_release_win_over_the_dynamic_selection() {
+        let (temp, params, _game, _archive, selection_id) = fixture();
+        let digest = format!("{:x}", Sha256::digest(b"patched"));
+        let catalog_path = temp.path().join("catalog.json");
+        fs::write(
+            &catalog_path,
+            json!({
+                "schema_version": 1,
+                "revision": 1,
+                "releases": [{
+                    "patch_id": "dynamic", "release_id": "source-kagura-cn-42", "appid": 42,
+                    "name": "Dynamic", "version": "1", "language": "zh-CN", "category": "publisher_zip",
+                    "source_page": "https://kagurafan.com/patches/game",
+                    "support_level": "managed_zip", "platforms": ["windows", "steamos"],
+                    "verified_buildids": ["100"],
+                    "detection": [{ "path": "data.txt", "sha256": digest }],
+                    "recipe": { "artifact_sha256": "0".repeat(64), "files": [
+                        { "source": "data.txt", "destination": "data.txt",
+                          "original_sha256": null, "installed_sha256": digest }] }
+                }]
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let mut scan = clone_params(&params);
+        scan.instance_id = None;
+        scan.catalog = Some(catalog_path);
+        let result = execute("scan", scan).unwrap();
+        let patches = result["installs"][0]["patches"].as_array().unwrap();
+        let matching: Vec<_> = patches
+            .iter()
+            .filter(|patch| patch["release_id"] == "source-kagura-cn-42")
+            .collect();
+        assert_eq!(
+            matching.len(),
+            1,
+            "signature priority must deduplicate: {patches:?}"
+        );
+        assert_eq!(matching[0]["support_level"], "managed_zip");
+        assert!(patches
+            .iter()
+            .all(|patch| patch["selection_id"] != selection_id.as_str()));
+    }
+
+    #[test]
+    fn preview_selection_is_read_only_and_reflects_a_committed_plan() {
+        let (_temp, params, game, archive, selection_id) = fixture();
+        let mut preview = clone_params(&params);
+        preview.selection_id = Some(selection_id.clone());
+
+        let read_only = execute("preview", clone_params(&preview)).unwrap();
+        assert_eq!(read_only["executable"], false);
+        assert_eq!(read_only["selection_id"], selection_id.as_str());
+        assert_eq!(read_only["release_id"], "source-kagura-cn-42");
+        assert!(read_only["blockers"].as_array().unwrap().is_empty());
+        assert!(read_only["changes"].as_array().unwrap().is_empty());
+        assert!(!game.install_path.join("data.txt").exists());
+
+        let state = params.state_dir.clone().unwrap();
+        install_dynamic_committed(&state, &game, &archive, "source-kagura-cn-42");
+
+        let after = execute("preview", clone_params(&preview)).unwrap();
+        let changes = after["changes"].as_array().unwrap();
+        assert_eq!(changes.len(), 1);
+        assert_eq!(changes[0]["path"], "data.txt");
+        assert_eq!(changes[0]["action"], "add");
+    }
+
+    #[test]
+    fn outcome_reports_needs_recovery_explicitly() {
+        let transaction = install::Transaction {
+            transaction_id: "11111111-1111-1111-1111-111111111111".to_string(),
+            plan_id: "11111111-1111-1111-1111-111111111111".to_string(),
+            instance_id: "inst".to_string(),
+            release_id: "source-kagura-cn-42".to_string(),
+            state: "needs_recovery".to_string(),
+            error: Some("recovery_conflict".to_string()),
+            created_at: 1,
+            updated_at: 2,
+            has_replacements: true,
+        };
+        let value = super::outcome_json(
+            &transaction,
+            Some("zip-selection-000000000000000000000000-42"),
+        );
+        assert_eq!(value["state"], "needs_recovery");
+        assert_eq!(value["recovery"]["required"], true);
+        assert_eq!(value["content_id"], Value::Null);
+        assert_eq!(
+            value["selection_id"],
+            "zip-selection-000000000000000000000000-42"
+        );
+    }
+}

@@ -348,7 +348,9 @@ pub fn resolve_zip(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sources::model::{ArtifactFormat, Capability, MatchBasis, Mirror, SourceCandidate};
+    use crate::sources::model::{
+        ArtifactFormat, Capability, MatchBasis, Mirror, SourceCandidate, SourceRule,
+    };
 
     fn mirror(url: &str, format: &str) -> Mirror {
         Mirror {
@@ -360,7 +362,7 @@ mod tests {
 
     fn candidate() -> SourceCandidate {
         SourceCandidate {
-            candidate_id: "candidate-0000".to_string(),
+            candidate_id: "candidate-000000000000000000000000".to_string(),
             source_id: "kagura-cn".to_string(),
             source_record_id: "https://kagura.example/p/1".to_string(),
             game_appid: Some(42),
@@ -524,12 +526,19 @@ mod tests {
         );
     }
 
-    #[test]
-    fn resolve_blocks_ambiguous_zip_mirrors() {
+    fn seedable(version: &str) -> SourceCandidate {
+        let mut value = candidate();
+        value.source_page = "https://kagurafan.com/patches/game".to_string();
+        value.source_record_id = value.source_page.clone();
+        value.mirrors = vec![mirror("https://kaguraserver.com/a.zip", "zip")];
+        value.version_identity = version.to_string();
+        value
+    }
+
+    fn seed(state: &std::path::Path, candidate: SourceCandidate) {
         use crate::sources::model::DiscoveryRecord;
         use crate::sources::registry::DiscoveryOutcome;
-        let temp = tempfile::tempdir().unwrap();
-        let mut handle = crate::sources::Sources::open(temp.path()).unwrap();
+        let mut handle = crate::sources::Sources::open(state).unwrap();
         let rule = handle
             .registry()
             .rules()
@@ -537,22 +546,6 @@ mod tests {
             .find(|rule| rule.id == "kagura-cn")
             .cloned()
             .unwrap();
-        let mut candidate = candidate();
-        candidate.source_page = "https://kagurafan.com/patches/game".to_string();
-        candidate.source_record_id = candidate.source_page.clone();
-        candidate.mirrors = vec![
-            Mirror {
-                url: "https://kaguraserver.com/a.zip".to_string(),
-                label: None,
-                format: "zip".to_string(),
-            },
-            Mirror {
-                url: "https://kaguragamespatch.com/b.zip".to_string(),
-                label: None,
-                format: "zip".to_string(),
-            },
-        ];
-        let selection_id = zip_selection_id(&candidate).unwrap();
         handle
             .registry_mut()
             .commit(
@@ -567,17 +560,153 @@ mod tests {
                 "key",
             )
             .unwrap();
-        let game = crate::sources::GameQuery {
+    }
+
+    fn seeded_registry(state: &std::path::Path, candidate: &SourceCandidate) -> String {
+        let id = zip_selection_id(candidate).unwrap();
+        seed(state, candidate.clone());
+        id
+    }
+
+    fn game() -> crate::sources::GameQuery {
+        crate::sources::GameQuery {
             appid: 42,
             name: "Game".to_string(),
             localized_name: None,
             instance_id: None,
-        };
+        }
+    }
+
+    #[test]
+    fn resolve_blocks_ambiguous_zip_mirrors() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut candidate = seedable("1");
+        candidate.mirrors = vec![
+            mirror("https://kaguraserver.com/a.zip", "zip"),
+            mirror("https://kaguragamespatch.com/b.zip", "zip"),
+        ];
+        let selection_id = seeded_registry(temp.path(), &candidate);
+        let sources = crate::sources::Sources::open(temp.path()).unwrap();
         assert_eq!(
-            resolve_zip(handle.registry(), &game, &selection_id)
+            resolve_zip(sources.registry(), &game(), &selection_id)
                 .unwrap_err()
                 .code,
             "zip_download_ambiguous"
+        );
+    }
+
+    #[test]
+    fn resolve_rejects_a_mirror_outside_the_download_hosts() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut candidate = seedable("1");
+        candidate.mirrors = vec![mirror("https://evil.example.com/a.zip", "zip")];
+        let selection_id = seeded_registry(temp.path(), &candidate);
+        let sources = crate::sources::Sources::open(temp.path()).unwrap();
+        assert_eq!(
+            resolve_zip(sources.registry(), &game(), &selection_id)
+                .unwrap_err()
+                .code,
+            "invalid_download_url"
+        );
+    }
+
+    #[test]
+    fn candidate_drift_is_reported_as_selection_not_found() {
+        let temp = tempfile::tempdir().unwrap();
+        let stale = seedable("1");
+        let stale_id = seeded_registry(temp.path(), &stale);
+        // A later discovery replaces the candidate; the recomputed digest no
+        // longer matches the caller's selection id.
+        seed(temp.path(), seedable("2"));
+        let sources = crate::sources::Sources::open(temp.path()).unwrap();
+        assert_eq!(
+            resolve_zip(sources.registry(), &game(), &stale_id)
+                .unwrap_err()
+                .code,
+            "selection_not_found"
+        );
+    }
+
+    #[test]
+    fn candidate_without_a_zip_mirror_has_no_selection_identity() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut candidate = seedable("1");
+        candidate.mirrors = vec![mirror("https://kaguraserver.com/a.rar", "unknown")];
+        assert!(zip_selection_id(&candidate).is_none());
+        // Seeding produces no projectable candidate, so any selection is absent.
+        seed(temp.path(), candidate);
+        let sources = crate::sources::Sources::open(temp.path()).unwrap();
+        assert_eq!(
+            resolve_zip(
+                sources.registry(),
+                &game(),
+                "zip-selection-0123456789abcdef01234567-42"
+            )
+            .unwrap_err()
+            .code,
+            "selection_not_found"
+        );
+    }
+
+    #[test]
+    fn stale_discovery_yields_selection_stale() {
+        use crate::sources::model::{DiscoveryRecord, RulesConfig};
+        use crate::sources::registry::{DiscoveryOutcome, SourceRegistry};
+        use crate::sources::store::SourceStore;
+        use crate::sources::{validate, Clock, DEFAULT_RULES_JSON};
+        use std::sync::atomic::{AtomicU64, Ordering};
+        use std::sync::Arc;
+
+        struct SharedClock(Arc<AtomicU64>);
+        impl Clock for SharedClock {
+            fn now_unix(&self) -> u64 {
+                self.0.load(Ordering::SeqCst)
+            }
+        }
+
+        let temp = tempfile::tempdir().unwrap();
+        let now = Arc::new(AtomicU64::new(1_000));
+        let config: RulesConfig = serde_json::from_str(DEFAULT_RULES_JSON).unwrap();
+        let builtins: Vec<SourceRule> = config
+            .sources
+            .iter()
+            .map(|raw| validate::validate_rule(raw).unwrap())
+            .collect();
+        let store = SourceStore::open(temp.path(), &builtins).unwrap();
+        let mut registry = SourceRegistry::load_with_clock(
+            store,
+            builtins,
+            Box::new(SharedClock(Arc::clone(&now))),
+        )
+        .unwrap();
+        let rule = registry
+            .rules()
+            .iter()
+            .find(|rule| rule.id == "kagura-cn")
+            .cloned()
+            .unwrap();
+        let candidate = seedable("1");
+        let selection_id = zip_selection_id(&candidate).unwrap();
+        registry
+            .commit(
+                &rule,
+                42,
+                DiscoveryOutcome {
+                    status: "complete".to_string(),
+                    candidates: vec![candidate],
+                    ..DiscoveryOutcome::default()
+                },
+                &DiscoveryRecord::default(),
+                "key",
+            )
+            .unwrap();
+        // Advance past `DISCOVERY_SUCCESS_TTL` (6h) without re-publishing.
+        now.store(1_000 + 7 * 3_600, Ordering::SeqCst);
+        assert_eq!(
+            resolve_zip(&registry, &game(), &selection_id)
+                .unwrap_err()
+                .code,
+            "selection_stale"
         );
     }
 }
