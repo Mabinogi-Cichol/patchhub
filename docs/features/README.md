@@ -4,6 +4,7 @@
 
 | 功能 | 状态 | 设计文档 | 施工记录 | 附加文档 |
 | --- | --- | --- | --- | --- |
+| 通用 EXE 自动安装（按安装器行为判定） | 实施与验收完成；四款本地矩阵及用户确认生效，Deck 部署/RPC/真实页面、合成任务 UI、只读 worker 和用户手柄验收通过 | [设计](generic-exe-installation/design.md) | [施工记录](generic-exe-installation/progress.md) | [调研](generic-exe-installation/research.md) |
 | 补丁一站式安装与流程精简 | 后端/Decky 已部署；VBF 重装/下载取消及界面通过，完整实机矩阵待验收；Windows TODO | [设计](simplified-install-flow/design.md) | [施工记录](simplified-install-flow/progress.md) | [调研](simplified-install-flow/research.md) |
 | Decky UX | 已实现并部署；2026-10-06 来源文案修正已部署，真实 RPC、QAM 与 VBF 全屏页面验证通过；实体手柄验收待完成 | [设计](decky-ux/design.md) | [施工记录](decky-ux/progress.md) | [修复计划](decky-ux/fix-plan.md) |
 | 下载缓存清理 | 已实现并部署，后端实机验收通过，部分安装与手柄验收待完成 | [设计](cache-cleanup/design.md) | [施工记录](cache-cleanup/progress.md) | — |

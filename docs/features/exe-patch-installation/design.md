@@ -1,5 +1,7 @@
 # Feature：EXE 补丁静态提取与安装
 
+当前准入规则更新（2026-10-07）：[通用 EXE 自动安装](../generic-exe-installation/design.md) 接入按安装器行为判断的 SF9.5–9.7 动态入口，新内容不要求逐游戏 profile。旧 profile 与下文历史审核/验收记录保留兼容；本轮本地和最终 Decky 验收状态见该功能[施工记录](../generic-exe-installation/progress.md)。
+
 当前流程更新（2026-10-06）：[一站式安装设计](../simplified-install-flow/design.md) 已替代本文涉及的人工确认、卸载及长期备份规则。Decky 下载后直接安装，只提供安装/重装；临时恢复材料由内核在成功或完整回滚后清理，未完成恢复仍保留。以下原有调研与验收事实保留。
 
 状态：P1–P4 工程实现与自动化已推进；2026-10-05 在真实 Deck 上用当前源码复跑 Linux Rust、后端与隔离合成事务闭环，实机复核 P4 界面修复，并对 VenusBlood FRONTIER（AppID 1189440）、夏日官方本体补丁 CN v1.03（2,502 文件）与夏日官方 DLC 补丁 CN v2.02.1（5,874 文件）完成审核 profile 与真实安装/恢复闭环。夏日英文本体、中文/英文本体与 DLC 的语言/版本组合及实体手柄仍待其它实例；生产审核表含这三条经审核条目。日期：2026-10-05（Asia/Shanghai）。目标客户端：Steam Deck / Decky。

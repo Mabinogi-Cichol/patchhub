@@ -1,5 +1,7 @@
 # EXE 补丁完整流程图（当前实现）
 
+2026-10-07 更新：[通用 EXE 自动安装](../generic-exe-installation/design.md) 已增加按完整对象图、受限 AST 与行为条件判断的新内容入口，旧 profile 不再是新安装的唯一入口。下图保留 2026-10-06 审阅时的历史流程，最新实现与验收见[新功能施工记录](../generic-exe-installation/progress.md)。
+
 审阅日期：2026-10-06。基于提交 `d2f551f` 的代码；设计见 [design.md](design.md)，验证记录见 [progress.md](progress.md)，本次缺陷见 [review.md](review.md)。下图区分已实现流程和审阅发现的异常分支，不将设计意图当作已通过验收的行为。
 
 ## 1. 来源发现与准备

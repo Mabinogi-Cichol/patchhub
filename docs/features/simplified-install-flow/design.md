@@ -1,5 +1,7 @@
 # 补丁一站式安装与流程精简
 
+2026-10-07 补充：[通用 EXE 自动安装](../generic-exe-installation/design.md) 沿用本流程，点击后自动完成完整行为/条件检查和安装，不复现安装器向导，不展示条款或增加确认步骤；新内容按支持行为准入。最新验证范围见其[施工记录](../generic-exe-installation/progress.md)。
+
 状态：**后端与 Decky 已实现并部署；自动化、VBF 重装与下载取消、真实界面验证通过。完整实机矩阵待验收，Windows 适配 TODO。** 日期：2026-10-06（Asia/Shanghai），详细范围以施工记录为准。
 
 施工记录：[progress.md](progress.md)。现状与代码证据：[research.md](research.md)。关联：[EXE 安装](../exe-patch-installation/design.md)、[下载缓存清理](../cache-cleanup/design.md)、[Decky UX](../decky-ux/design.md)。
