@@ -17,7 +17,7 @@ import uuid
 
 from acquisition import no_links
 from discovery import safe_url
-from exe_facts import game_facts, read_file
+from exe_facts import game_facts as legacy_game_facts, read_file
 from exe_profiles import candidate_binding, digest
 from exe_worker import extract
 from publisher import _download, _hash_file, _json_new, _recipe, _safe_dir
@@ -26,6 +26,13 @@ from tasks import current_task
 MAX_POLICY = 4 * 1024 * 1024
 UUID_PATTERN = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
 CORE_PLAN_MAX_TTL = 900  # core install::validate_job enforces this upper bound
+
+
+def game_facts(game, profile, cancel=None):
+    if profile.get("generic") and "behavior" in profile:
+        from exe_generic import facts
+        return facts(game, profile, cancel)
+    return legacy_game_facts(game, profile, cancel)
 
 
 def _need(condition, code):
@@ -124,6 +131,8 @@ class ExeInstallation:
         self.publisher = publisher
         self.profiles = profiles
         self.tool_dir = Path(tool_dir)
+        from exe_generic import routing
+        self.profiles._routing_profile = lambda game, content: routing(self, game, content)
 
     def _source_name(self, profile):
         return next((rule.get("name") or rule["id"] for rule in self.profiles.sources._rules
@@ -132,22 +141,34 @@ class ExeInstallation:
     def matches(self, game):
         result = []
         for review in self.profiles.reviews(game):
-            if review.get("status") != "installable" or not review.get("release_id"):
+            if review.get("status") not in ("installable", "check_required") or not review.get("release_id"):
                 continue
             try:
                 profile, candidate = self.profiles.resolve(game, review["release_id"])
             except ValueError:
                 continue
             language_name = {"zh-CN": "简体中文", "zh-TW": "繁体中文", "en": "英文", "ja": "日文"}.get(profile["language"], profile["language"])
-            result.append({"release_id": review["release_id"], "profile_id": profile["profile_id"],
+            display_version = candidate.get("version_raw") or profile["version_identity"].split(":", 1)[0]
+            selected = review["release_id"]
+            if profile.get("generic"):
+                # Reuse the installed content's identity, rather than showing
+                # a second selection blocked by that same installation.
+                for instance, content, _ in self.publisher.bridges():
+                    if instance != game["instance_id"] or not content.startswith("exe-content-"): continue
+                    try: routed, _ = self.profiles.resolve(game, content)
+                    except (ValueError, OSError): continue
+                    if routed.get("selection_id") == selected:
+                        selected = content
+                        break
+            result.append({"release_id": selected, "profile_id": profile["profile_id"], "candidate_id": candidate["candidate_id"],
                 "name": f"{candidate.get('title') or game.get('name', '')} · {self._source_name(profile)} · EXE · {language_name}",
-                "version": profile["version_identity"], "language": profile["language"],
+                "version": display_version, "language": profile["language"],
                 "source_id": profile["source_id"], "source_name": self._source_name(profile), "source_page": profile["source_page"],
-                "support_level": "publisher_exe", "compatibility": "verified", "blockers": [],
+                "support_level": "publisher_exe", "compatibility": "check_required" if profile.get("generic") else "verified", "blockers": [],
                 "download_available": True, "detection": {"status": "unknown", "files": []},
                 "exe": {"profile_id": profile["profile_id"], "language": profile["language"],
-                    "version": profile["version_identity"], "variant": profile["variant"],
-                    "terms": profile["terms"], "requires_dlc": profile["requires_dlc"],
+                    "version": display_version, "variant": profile["variant"],
+                    "requires_dlc": profile["requires_dlc"],
                     "excludes_dlc": profile["excludes_dlc"]}})
         return result
 
@@ -227,9 +248,17 @@ class ExeInstallation:
         profile, _ = self.profiles.resolve(game, release_id)
         return game_facts(game, profile)
 
-    async def prepare(self, game, release_id, cancel, operation="install"):
+    async def prepare(self, game, release_id, cancel, operation="install", *, _analyzed=False):
         _check(cancel)
+        from exe_generic import SELECTION, prepare_analysis
+        if re.fullmatch(SELECTION, release_id):
+            _need(operation == "install", "exe_analysis_required")
+            content = await prepare_analysis(self, game, release_id, cancel)
+            return await self.prepare(game, content, cancel, operation, _analyzed=True)
         profile, candidate = self.profiles.resolve(game, release_id)
+        if profile.get("generic") and not _analyzed:
+            await prepare_analysis(self, game, profile["selection_id"], cancel, expected_content=release_id)
+            return await self.prepare(game, release_id, cancel, operation, _analyzed=True)
         _need(operation in ("install", "reinstall"), "invalid_install_operation")
         task = current_task.get()
         if task:
@@ -264,17 +293,26 @@ class ExeInstallation:
                 return checked
 
             last_error = None
-            for url in self.profiles.mirrors(profile, candidate):
-                try:
-                    original, original_sha, original_size, acquisition = await asyncio.to_thread(_download,
-                        url, cache, cancel, validate, archive_name="archive.exe", manifest_name="exe-download.json",
-                        max_size=2 * 1024 ** 3, expected_sha256=profile["exe_sha256"], expected_size=profile["exe_size"])
-                    break
-                except (ValueError, OSError) as error:
-                    last_error = error
-                    _check(cancel)
+            urls = self.profiles.mirrors(profile, candidate)
+            if profile.get("generic"):
+                acquired = profile["analysis_acquisition"]
+                url = validate(acquired["url"])
+                _need(url in urls, "exe_candidate_changed")
+                original = cache / "archive.exe"
+                original_sha, original_size = profile["exe_sha256"], profile["exe_size"]
+                acquisition = acquired["mode"]
             else:
-                raise last_error or ValueError("exe_no_direct_download")
+                for url in urls:
+                    try:
+                        original, original_sha, original_size, acquisition = await asyncio.to_thread(_download,
+                            url, cache, cancel, validate, archive_name="archive.exe", manifest_name="exe-download.json",
+                            max_size=2 * 1024 ** 3, expected_sha256=profile["exe_sha256"], expected_size=profile["exe_size"])
+                        break
+                    except (ValueError, OSError) as error:
+                        last_error = error
+                        _check(cancel)
+                else:
+                    raise last_error or ValueError("exe_no_direct_download")
             _need(original_sha == profile["exe_sha256"] and original_size == profile["exe_size"], "exe_payload_changed")
             download = _read_json(cache / "exe-download.json", 32768)
             final_url = validate(download.get("final_url", url))

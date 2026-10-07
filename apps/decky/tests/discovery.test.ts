@@ -39,6 +39,13 @@ test("cold cache games remain countable and DLC conditions stay explicit", () =>
   assert.match(candidateConditions(candidate({ variant: "base", excludes_dlc: [1390150] })), /未使用 DLC 1390150/);
 });
 
+test("an automatic EXE entry replaces its own duplicate source guidance", () => {
+  const game = row([candidate({ candidate_id: "official" }), candidate({ candidate_id: "other", source_id: "hgamer" })]);
+  game.patches = [{ release_id: "exe-selection-example", candidate_id: "official", name: "Installable", source_page: "https://example.com",
+    support_level: "publisher_exe", compatibility: "check_required", blockers: [], detection: { status: "unknown", files: [] } }];
+  assert.deepEqual(displayPatches(game).map(entry => [entry.kind, entry.key]), [["installable", "exe-selection-example"], ["discovery", "other"]]);
+});
+
 test("external navigation accepts public HTTPS pages and rejects local addresses and arbitrary schemes", () => {
   for (const url of ["https://kagurafan.com/patch/", "https://hgamer.tw/zh-CN/patches/game"]) assert.equal(safeSourceUrl(url), true);
   for (const url of ["http://example.com", "https://localhost/", "https://127.0.0.1/", "https://10.0.0.1/", "https://[::1]/", "https://example.local/", "https://name:secret@example.com/", "javascript:alert(1)", "https://example.com:8443/"]) assert.equal(safeSourceUrl(url), false, url);

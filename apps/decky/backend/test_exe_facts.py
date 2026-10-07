@@ -120,6 +120,14 @@ class ExeFactsTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "exe_manifest_limit"):
             keyvalues(b'"AppState" {' + b'"x" {' * 17 + b'}' * 18)
 
+    def test_windows_steam_literal_path_escapes_are_decoded_without_directives(self):
+        raw = b'"AppState" { "LauncherPath" "D:\\\\Steam\\\\steam.exe" "name" "A \\"quoted\\" name" }'
+        self.assertEqual(keyvalues(raw), {"launcherpath": "D:\\Steam\\steam.exe", "name": 'A "quoted" name'})
+        for raw in (b'"AppState" { "name" "bad\\nvalue" }', b'"AppState" { "name" "bad\\',
+                    b'"AppState" { "name" "a\\" }'):
+            with self.assertRaisesRegex(ValueError, "exe_manifest_invalid"):
+                keyvalues(raw)
+
     def test_read_limits_and_cancel(self):
         with self.assertRaisesRegex(ValueError, "exe_game_file_limit"):
             read_file(self.manifest, 1)

@@ -97,7 +97,7 @@ def _unlink_within(root, path):
         return False
 
 
-RELEASE_PATTERN = r"(?:patchmoe|source-[a-z][a-z0-9-]{0,47}|exe-[0-9a-f]{24})-[1-9][0-9]*"
+RELEASE_PATTERN = r"(?:patchmoe|source-[a-z][a-z0-9-]{0,47}|exe-(?:(?:selection|content)-)?[0-9a-f]{24})-[1-9][0-9]*"
 
 
 def _valid_instance(instance_id, release_id, install_path):

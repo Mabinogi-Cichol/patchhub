@@ -83,6 +83,13 @@ class ExeRpcTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["state"], "committed")
         p.publisher.clear_cache.assert_not_called()
 
+    async def test_completed_rollback_releases_exe_lease_without_success_cleanup(self):
+        self.local.start_install.return_value = {"plan_id": self.core_id, "state": "rolled_back", "error": "task_cancelled"}
+        result = await self.plugin._start_install(self.wrapped_id)
+        self.assertEqual(result["state"], "rolled_back")
+        self.plugin.exe_installation.release_lease.assert_called_once_with(self.state, self.core_id)
+        self.plugin.publisher.clear_cache.assert_not_called()
+
     async def test_discard_rpc_failure_still_invalidates_plan_locally(self):
         job=self.state / "jobs" / self.core_id;job.mkdir(parents=True)
         self.local.discard_plan.side_effect=RuntimeError("rpc_failed")
@@ -90,3 +97,29 @@ class ExeRpcTests(unittest.IsolatedAsyncioTestCase):
             await self.plugin.discard_plan(self.wrapped_id)
         self.assertTrue((job / "revoked").exists())
         self.plugin.exe_installation.release_lease.assert_called_once()
+
+    async def test_selection_preparation_wraps_the_actual_content_identity(self):
+        selected = "exe-selection-" + "b"*24 + "-42"
+        content = "exe-content-" + "c"*24 + "-42"
+        archive = self.state / "normalized.zip"; archive.write_bytes(b"checked archive")
+        self.plugin._read_report.return_value = {"installs": [{"game": self.game,
+            "patches": [{"release_id": selected, "support_level": "publisher_exe", "blockers": []}]}]}
+        self.plugin.exe_installation.prepare.return_value = (self.local, str(archive),
+            {"plan_id": self.core_id, "release_id": content}, "download")
+        prepared = await self.plugin._prepare_install(self.instance, selected)
+        self.assertEqual(prepared["plan"]["release_id"], content)
+        self.assertEqual(prepared["plan"]["plan_id"], self.plugin._publisher_id(self.instance, content, self.core_id))
+        self.assertEqual(self.plugin._plan_metadata[prepared["plan"]["plan_id"]]["release_id"], content)
+
+    async def test_stale_selection_routes_to_same_candidate_content_for_reinstall(self):
+        selected = "exe-selection-" + "b"*24 + "-42"
+        content = "exe-content-" + "c"*24 + "-42"
+        archive = self.state / "normalized.zip"; archive.write_bytes(b"checked archive")
+        self.plugin.exe_profiles.resolve.return_value = ({}, {"candidate_id": "official-candidate"})
+        self.plugin._read_report.return_value = {"installs": [{"game": self.game,
+            "patches": [{"release_id": content, "candidate_id": "official-candidate", "support_level": "publisher_exe", "blockers": []}]}]}
+        self.plugin.exe_installation.prepare.return_value = (self.local, str(archive),
+            {"plan_id": self.core_id, "release_id": content}, "download")
+        prepared = await self.plugin._prepare_install(self.instance, selected, operation="reinstall")
+        self.assertEqual(prepared["plan"]["release_id"], content)
+        self.plugin.exe_installation.prepare.assert_awaited_once_with(self.game, content, unittest.mock.ANY, operation="reinstall")

@@ -39,13 +39,65 @@ async def _bounded(stream, limit):
     return bytes(data)
 
 
-async def extract(bridge, tool_dir, archive, output, profile, cancel, *, timeout=180):
+async def extract(bridge, tool_dir, archive, output, profile, cancel, *, timeout=None):
+    descriptor = {k: profile[k] for k in ("exe_sha256", "exe_size", "metadata_sha256", "payload")}
+    if profile.get("generic"):
+        descriptor.update(action="convert_behavior", behavior_sha256=profile["behavior_sha256"])
+        _behavior_tools(tool_dir)
+    else:
+        descriptor["semantics_approved"] = profile["review"]["semantics"] is True
+    return await _run_worker(bridge, tool_dir, archive, output, descriptor, cancel,
+                             timeout=timeout if timeout is not None else (480 if profile.get("generic") else 180))
+
+
+async def analyze(bridge, tool_dir, archive, output, exe_sha256, exe_size, cancel, *, timeout=180):
+    """Run the content-bound, read-only SF9 diagnostic protocol in the same sandbox."""
+    module = Path(tool_dir) / "sf9_metadata.py"
+    if not no_links(module) or not module.is_file():
+        raise ValueError("exe_worker_path_invalid")
+    descriptor = {"action": "analyze", "exe_sha256": exe_sha256, "exe_size": exe_size}
+    result = await _run_worker(bridge, tool_dir, archive, output, descriptor, cancel, timeout=timeout)
+    report = result.get("report")
+    package = report.get("exe") if isinstance(report, dict) else None
+    if (result.get("schema_version") != 1 or result.get("action") != "analyze"
+            or result.get("installable") is not False or not isinstance(report, dict)
+            or not isinstance(package, dict) or report.get("installable") is not False
+            or package.get("sha256") != exe_sha256 or package.get("size") != exe_size):
+        raise ValueError("exe_worker_invalid_response")
+    return report
+
+
+def _behavior_tools(tool_dir):
+    for name in ("sf9_graph.py", "sf9_lua.py", "sf9_behavior.py"):
+        module = Path(tool_dir) / name
+        if not no_links(module) or not module.is_file():
+            raise ValueError("exe_worker_path_invalid")
+
+
+async def analyze_behavior(bridge, tool_dir, archive, output, exe_sha256, exe_size, cancel, *, timeout=240):
+    _behavior_tools(tool_dir)
+    descriptor = {"action": "analyze_behavior", "exe_sha256": exe_sha256, "exe_size": exe_size}
+    result = await _run_worker(bridge, tool_dir, archive, output, descriptor, cancel, timeout=timeout)
+    report = result.get("report")
+    if (result.get("action") != "analyze_behavior" or result.get("schema_version") != 1
+            or result.get("installable") is not False or not isinstance(report, dict)
+            or report.get("exe") != {"offset": 0, "size": exe_size, "sha256": exe_sha256}
+            or report.get("installable") is not False
+            or report.get("capability") != "behavior_supported"
+            or not isinstance(report.get("behavior"), dict)
+            or report["behavior"].get("coverage", {}).get("complete") is not True):
+        raise ValueError("exe_worker_invalid_response")
+    from exe_profiles import digest
+    if digest(report["behavior"]) != report.get("behavior_sha256"):
+        raise ValueError("exe_worker_invalid_response")
+    return report
+
+
+async def _run_worker(bridge, tool_dir, archive, output, descriptor, cancel, *, timeout):
     command = worker_command(tool_dir, archive, output)
     identity = bridge.process_identity
     if os.geteuid() == 0 and identity.get("user") in (None, 0):
         raise ValueError("worker_requires_linux_user")
-    descriptor = {k: profile[k] for k in ("exe_sha256", "exe_size", "metadata_sha256", "payload")}
-    descriptor["semantics_approved"] = profile["review"]["semantics"] is True
     payload = json.dumps(descriptor, ensure_ascii=True).encode()
     if len(payload) > MAX_OUTPUT:
         raise ValueError("exe_descriptor_limit")
@@ -65,7 +117,7 @@ async def extract(bridge, tool_dir, archive, output, profile, cancel, *, timeout
     started = asyncio.get_running_loop().time()
     task = current_task.get()
     if task:
-        task.stage("extracting")
+        task.stage("analyzing_installer" if descriptor.get("action") in ("analyze", "analyze_behavior") else "extracting")
     try:
         while not readers.done():
             if cancel.is_set():
@@ -80,9 +132,11 @@ async def extract(bridge, tool_dir, archive, output, profile, cancel, *, timeout
             result = json.loads(stdout)
         except (ValueError, UnicodeDecodeError) as error:
             raise ValueError("exe_worker_invalid_response") from error
+        if not isinstance(result, dict):
+            raise ValueError("exe_worker_invalid_response")
         if code:
             raise ValueError(result.get("error", "exe_worker_failed"))
-        if not isinstance(result, dict) or result.get("exe_sha256") != profile["exe_sha256"]:
+        if not isinstance(result, dict) or result.get("exe_sha256") != descriptor["exe_sha256"]:
             raise ValueError("exe_worker_invalid_response")
         return result
     finally:

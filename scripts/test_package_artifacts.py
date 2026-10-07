@@ -31,6 +31,10 @@ class PackagingTests(unittest.TestCase):
         sources = {
             'scripts/sf95_audit.py': ('backend/exe_worker/sf95_audit.py', 'bundled-audit', b'VERSION = "sf95-audit-v-test"\n'),
             'scripts/sf95_worker.py': ('backend/exe_worker/sf95_worker.py', 'bundled-worker', b'import sf95_audit\n'),
+            'scripts/sf9_metadata.py': ('backend/exe_worker/sf9_metadata.py', 'bundled-metadata', b'VERSION = "sf9-metadata-v-test"\n'),
+            'scripts/sf9_graph.py': ('backend/exe_worker/sf9_graph.py', 'bundled-graph', b'# synthetic sf9_graph\n'),
+            'scripts/sf9_lua.py': ('backend/exe_worker/sf9_lua.py', 'bundled-lua', b'# synthetic sf9_lua\n'),
+            'scripts/sf9_behavior.py': ('backend/exe_worker/sf9_behavior.py', 'bundled-behavior', b'# synthetic sf9_behavior\n'),
             'LICENSE': ('LICENSE', 'project-license', b'MIT project license\n'),
             'scripts/licenses/sfextract-MIT.txt': ('backend/exe_worker/sfextract-MIT.txt', 'bundled-license', b'MIT reference license\n'),
         }

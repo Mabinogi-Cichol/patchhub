@@ -8,7 +8,7 @@ from threading import Event
 import time
 import types
 import unittest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 import uuid
 import zipfile
 
@@ -66,6 +66,13 @@ class FakePublisher:
 
     def _bridge(self, state):
         return self.bridges_by_state.setdefault(state, FakeBridge(state))
+
+    def bridges(self):
+        for state, bridge in self.bridges_by_state.items():
+            path = state / "instance.json"
+            if path.exists():
+                value = json.loads(path.read_text(encoding="utf-8"))
+                yield value["instance_id"], value["release_id"], bridge
 
     async def _native(self, *args):
         self.native_calls.append(args)
@@ -166,16 +173,80 @@ class ExeInstallationTests(unittest.IsolatedAsyncioTestCase):
         self.unchanged_game()
         await self.service.validate_apply(self.game, self.selection, plan["plan_id"])
 
-    async def test_matches_ui_contract_and_empty_registry_fail_closed(self):
+    async def test_matches_ui_contract_and_empty_registry_offers_generic_check(self):
         matches = self.service.matches(self.game)
         self.assertEqual(matches[0]["support_level"], "publisher_exe")
-        self.assertEqual(matches[0]["exe"]["terms"], self.profile["terms"])
+        self.assertNotIn("terms", matches[0]["exe"])
         self.assertNotIn("backup_required", matches[0]["exe"])
         self.write_profiles([])
-        self.assertEqual(self.service.matches(self.game), [])
+        unchecked = self.service.matches(self.game)
+        self.assertEqual(len(unchecked), 1)
+        self.assertTrue(unchecked[0]["release_id"].startswith("exe-selection-"))
+        self.assertEqual(unchecked[0]["compatibility"], "check_required")
         with self.assertRaisesRegex(ValueError, "exe_profile_changed"):
             await self.prepare()
         self.assertFalse(self.download_calls)
+
+    async def test_restart_routing_does_not_grant_behavior_authority(self):
+        from exe_generic import selection_id
+        from exe_profiles import candidate_binding
+        self.write_profiles([])
+        content = "exe-content-" + "a" * 24 + f"-{self.game['appid']}"
+        selected = selection_id(self.candidate)
+        state = self.publisher._state(self.game["instance_id"], content)
+        state.mkdir(parents=True)
+        association = {"schema_version": 1, "instance_id": self.game["instance_id"], "release_id": content,
+                       "selection_id": selected, "candidate_sha256": candidate_binding(self.candidate)}
+        (state / "generic-source.json").write_text(json.dumps(association), encoding="utf-8")
+        (state / "instance.json").write_text(json.dumps({"instance_id": self.game["instance_id"], "release_id": content}), encoding="utf-8")
+        self.publisher._bridge(state)
+        profile, _ = self.profiles.resolve(self.game, content)
+        self.assertTrue(profile["analysis_pending"])
+        self.assertNotIn("behavior", profile)
+        self.assertEqual(self.service.matches(self.game)[0]["release_id"], content)
+        with patch("exe_generic.prepare_analysis", side_effect=ValueError("analysis_still_required")) as analysis:
+            with self.assertRaisesRegex(ValueError, "analysis_still_required"):
+                await self.service.prepare(self.game, content, Event(), "reinstall")
+            self.assertEqual(analysis.call_args.kwargs["expected_content"], content)
+        self.candidate["version_identity"] = "changed"
+        with self.assertRaisesRegex(ValueError, "exe_candidate_changed"):
+            self.profiles.resolve(self.game, content)
+        self.assertFalse(self.download_calls)
+
+    async def test_generic_selection_prepares_content_once_and_reanalyzes_after_restart(self):
+        from exe_generic import selection_id
+        from exe_profiles import digest
+        self.write_profiles([])
+        behavior = {"schema_version": 1, "policy": "synthetic-behavior", "condition": True,
+                    "terms": ["internal evidence"], "coverage": {"complete": True}}
+        report = {"metadata": {"sha256": SHA(b"metadata")}, "installer": "Setup Factory 9.7.0.0",
+                  "behavior": behavior, "behavior_sha256": digest(behavior),
+                  "files": [{"destination": "www/data.bin", "unpacked_size": 7, "payload": {"sha256": SHA(b"patched")}}]}
+        selected = selection_id(self.candidate)
+        with patch("exe_generic._download", self.download), patch("exe_generic.analyze_behavior", new=AsyncMock(return_value=report)) as analyze:
+            bridge, _, plan, _ = await self.service.prepare(self.game, selected, Event())
+            content = plan["release_id"]
+            self.assertTrue(content.startswith("exe-content-"))
+            self.assertEqual(len(self.download_calls), 1)
+            self.assertNotIn("expected_sha256", self.download_calls[0][1])
+            self.assertTrue(self.extract_calls[0][2]["generic"])
+            self.assertNotIn("review", self.extract_calls[0][2])
+            await self.service.validate_apply(self.game, content, plan["plan_id"])
+            state = self.publisher._state(self.game["instance_id"], content)
+            self.assertTrue((state / "generic-source.json").is_file())
+            self.service.release_lease(state, plan["plan_id"])
+            bridge.transactions[0]["state"] = "committed"
+            # A new process has no previous in-memory semantic authorization.
+            registry = ExeProfiles(self.registry_path, self.profiles.sources, pipeline_ready=True)
+            fresh_service = ExeInstallation(self.publisher, registry, self.root / "tools")
+            self.assertTrue(registry.resolve(self.game, content)[0]["analysis_pending"])
+            self.assertEqual(fresh_service.matches(self.game)[0]["release_id"], content)
+            _, _, new_plan, _ = await fresh_service.prepare(self.game, content, Event(), "reinstall")
+            self.assertEqual(new_plan["release_id"], content)
+            self.assertEqual(analyze.await_count, 2)
+            self.assertEqual(len(self.download_calls), 2)
+            await fresh_service.validate_apply(self.game, content, new_plan["plan_id"])
+        self.unchanged_game()
 
     async def test_prepare_needs_no_artificial_user_declarations(self):
         _, _, plan, _ = await self.prepare()

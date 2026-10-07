@@ -65,17 +65,20 @@ def sf95_version(path):
 
 audit = root / 'scripts/sf95_audit.py'
 worker = root / 'scripts/sf95_worker.py'
+metadata_decoder = root / 'scripts/sf9_metadata.py'
 license_file = root / 'scripts/licenses/sfextract-MIT.txt'
 project_license = root / 'LICENSE'
 sf95 = component('generic', 'steam-patch-sf95-worker', sf95_version(audit), 'MIT')
 sf95['properties'] = [
-    {'name': 'steam-patch:implementation', 'value': 'Maintained in-tree SF95 parser and sandbox worker; not the complete sfextract runtime.'},
+    {'name': 'steam-patch:implementation', 'value': 'Maintained in-tree SF9 parser, diagnostic metadata decoder and sandbox worker; not the complete sfextract runtime.'},
     {'name': 'steam-patch:project-license-path', 'value': 'LICENSE'},
     {'name': 'steam-patch:project-license-sha256', 'value': hashlib.sha256(project_license.read_bytes()).hexdigest()},
     {'name': 'steam-patch:bundled-audit-path', 'value': 'backend/exe_worker/sf95_audit.py'},
     {'name': 'steam-patch:bundled-audit-sha256', 'value': hashlib.sha256(audit.read_bytes()).hexdigest()},
     {'name': 'steam-patch:bundled-worker-path', 'value': 'backend/exe_worker/sf95_worker.py'},
     {'name': 'steam-patch:bundled-worker-sha256', 'value': hashlib.sha256(worker.read_bytes()).hexdigest()},
+    {'name': 'steam-patch:bundled-metadata-path', 'value': 'backend/exe_worker/sf9_metadata.py'},
+    {'name': 'steam-patch:bundled-metadata-sha256', 'value': hashlib.sha256(metadata_decoder.read_bytes()).hexdigest()},
     {'name': 'steam-patch:reference-repository', 'value': 'https://github.com/CybercentreCanada/sfextract'},
     {'name': 'steam-patch:reference-commit', 'value': '21f5c5595a70e9284fff83476c0e307d5b92f573'},
     {'name': 'steam-patch:reference-scope', 'value': 'SF9.5 file-table layout reference; upstream runtime is not bundled.'},
@@ -83,6 +86,13 @@ sf95['properties'] = [
     {'name': 'steam-patch:bundled-license-path', 'value': 'backend/exe_worker/sfextract-MIT.txt'},
     {'name': 'steam-patch:bundled-license-sha256', 'value': hashlib.sha256(license_file.read_bytes()).hexdigest()},
 ]
+
+for module in ('sf9_graph', 'sf9_lua', 'sf9_behavior'):
+    prefix = 'bundled-' + module[4:]
+    sf95['properties'].extend([
+        {'name': f'steam-patch:{prefix}-path', 'value': f'backend/exe_worker/{module}.py'},
+        {'name': f'steam-patch:{prefix}-sha256', 'value': hashlib.sha256((root / f'scripts/{module}.py').read_bytes()).hexdigest()},
+    ])
 
 output = root / '.artifacts/dependencies.cdx.json'
 output.parent.mkdir(exist_ok=True)

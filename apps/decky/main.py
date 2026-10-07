@@ -270,7 +270,7 @@ class Plugin:
         # Opaque discovery identities never enter catalog, download or plan APIs.
         if not isinstance(release_id, str) or release_id.startswith("candidate-") or release_id.startswith("candidate:"):
             raise ValueError("source_requires_guidance")
-        if release_id.startswith("exe-") and not re.fullmatch(r"exe-[0-9a-f]{24}-[1-9][0-9]*", release_id):
+        if release_id.startswith("exe-") and not re.fullmatch(r"exe-(?:(?:selection|content)-)?[0-9a-f]{24}-[1-9][0-9]*", release_id):
             raise ValueError("exe_release_invalid")
 
     @staticmethod
@@ -356,6 +356,14 @@ class Plugin:
             if row is None:
                 raise ValueError("instance_not_found")
             patch = next((p for p in row["patches"] if p["release_id"] == release_id), None)
+            if patch is None and re.fullmatch(r"exe-selection-[0-9a-f]{24}-[1-9][0-9]*", release_id):
+                # The same source selection may now project as its persisted
+                # content identity after a previous preparation or install.
+                _, candidate = self.exe_profiles.resolve(row["game"], release_id)
+                patch = next((p for p in row["patches"] if p.get("candidate_id") == candidate["candidate_id"]
+                              and p["support_level"] == "publisher_exe"), None)
+                if patch is not None:
+                    release_id = patch["release_id"]
             if patch is None:
                 raise ValueError("release_not_found")
             if patch["blockers"]:
@@ -364,6 +372,7 @@ class Plugin:
                 if archive_path:
                     raise ValueError("exe_manual_import_not_supported")
                 bridge, archive, plan, acquisition = await self.exe_installation.prepare(row["game"], release_id, cancel, operation=operation)
+                release_id = plan.get("release_id", release_id)
                 if cancel.is_set():
                     await self._revoke_plan(bridge, plan["plan_id"], (instance_id, release_id))
                     raise RuntimeError("download_cancelled")
@@ -467,6 +476,11 @@ class Plugin:
         result = await bridge.start_install(value)
         if result.get("state") == "committed":
             await self._cleanup_after_install(plan_id, value, owner, self.settings.auto_cleanup)
+        elif owner and owner[1].startswith("exe-") and result.get("state") == "rolled_back":
+            try:
+                self.exe_installation.release_lease(self.publisher._state(*owner), value)
+            except (OSError, ValueError):
+                pass  # Keep malformed evidence pinned rather than hide rollback.
         return self._wrap_publisher(result, *owner) if owner else result
 
     async def _cleanup_after_install(self, plan_id, core_plan_id, owner, enabled):

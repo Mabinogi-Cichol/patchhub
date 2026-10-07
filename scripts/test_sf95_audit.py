@@ -28,12 +28,12 @@ def compressed(data, declared=None):
         data, format=lzma.FORMAT_RAW, filters=[{"id": lzma.FILTER_LZMA2, "dict_size": dictionary}])
 
 
-def file_record(name="测试.txt", directory="%AppFolder%\\www", content=b"test-data", condition="", package=None):
+def file_record(name="测试.txt", directory="%AppFolder%\\www", content=b"test-data", condition="", package=None, installer_version="9.5"):
     payload = compressed(content)
     data = b"".join(string(s) for s in ("C:\\source\\" + name, name, "C:\\source", ".txt", "Archive", ""))
     data += bytes(2) + number("q", len(content)) + bytes(5) + bytes(8) + bytes(16) + bytes(8) + bytes(25)
     data += string(directory) + bytes(11) + string("") * 5 + bytes(1) + string("") + bytes(8) + string("")
-    data += bytes(3) + b"\x01\x01\0" + bytes(10) + number("H", 0) + string(condition) + bytes(2)
+    data += bytes(4 if installer_version == "9.7" else 3) + b"\x01\x01\0" + bytes(10) + number("H", 0) + string(condition) + bytes(2)
     data += string("") * 2 + number("H", 1 if package else 0)
     if package:
         data += string(package)
@@ -87,6 +87,31 @@ def sample(records=None, version="9.5.1.0", certificate=False, xml=None):
 
 
 class AuditTests(unittest.TestCase):
+    def test_explicit_sf9_layouts_keep_legacy_gate_and_condition_fields(self):
+        for version in ("9.5", "9.6", "9.7"):
+            with self.subTest(version=version):
+                records = [file_record("one.xp3", condition="NeedsDLC()", package="expansion", installer_version=version),
+                           file_record("two.xp3", content=b"second", installer_version=version)]
+                raw = sample(records, version=version + ".0.0")
+                report = sf.audit(raw, supported_versions=("9.5", "9.6", "9.7"))
+                self.assertEqual(report["installer"], "Setup Factory " + version)
+                self.assertEqual(report["files"][0]["condition"], "NeedsDLC()")
+                self.assertEqual(report["files"][0]["packages"], ["expansion"])
+                self.assertEqual(report["files"][1]["payload"]["size"], 6)
+                self.assertFalse(report["installable"])
+                if version != "9.5":
+                    self.rejects("unsupported_installer_version", sf.audit, raw)
+
+    def test_bounded_mfc_extended_and_unicode_strings(self):
+        text = "x" * 300
+        self.assertEqual(sf.Reader(b"\xff" + number("H", 300) + text.encode()).string(), text)
+        self.assertEqual(sf.Reader(b"\xff\xff\xff" + number("I", 300) + text.encode()).string(), text)
+        wide = "中文"
+        self.assertEqual(sf.Reader(b"\xff\xfe\xff\x02" + wide.encode("utf-16-le")).string(), wide)
+        self.rejects("embedded_nul", sf.Reader(b"\xff\xfe\xff\x03" + "a\0b".encode("utf-16-le")).string)
+        self.rejects("string_size_limit", sf.Reader(b"\xff\xff\xff" + number("I", sf.MAX_METADATA + 1)).string)
+        self.rejects("truncated_record", sf.Reader(b"\xff" + number("H", 300) + b"short").string)
+
     def test_crc_boundary_keeps_unknown_object_tail_and_framing_out_of_file_fields(self):
         import base64
         import hashlib

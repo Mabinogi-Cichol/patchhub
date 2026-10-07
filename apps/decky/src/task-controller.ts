@@ -5,6 +5,7 @@ export type TaskSnapshot = {
   kind: "install";
   state: "running" | "cancelling" | "rolling_back" | "cancelled" | "completed" | "failed";
   stage: string;
+  content_release_id?: string;
   bytes_done: number;
   total_bytes: number | null;
   files_done: number;

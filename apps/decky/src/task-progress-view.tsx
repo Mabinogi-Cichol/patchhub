@@ -9,6 +9,7 @@ const stageNames: Record<string, string> = {
   validating: "校验文件", planning: "检查安装条件", backing_up: "保护现有文件",
   inspecting: "检查安装包", extracting: "提取补丁", converting: "准备游戏文件", signing: "核对安装资料",
   checking_game: "核对游戏版本与文件", preparing_plan: "检查安装条件", generating_plan: "检查安装条件",
+  analyzing_installer: "检查安装器行为",
   writing: "写入文件", committing: "提交安装", rolling_back: "恢复原文件",
 };
 

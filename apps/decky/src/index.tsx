@@ -347,7 +347,7 @@ function GameManager({ item, seg, panel }: { item: Install; seg: string; panel?:
         </div>
       </div>
     </PanelSectionRow>) : <Row><Status>{discoveryStatus(item.discovery?.status)}</Status><Action onClick={() => navigatePanel("sources")}>管理订阅源</Action></Row>}</PanelSection>}
-    {!!item.discovery?.candidates.length && <PanelSection title="来源候选">{entries.filter(entry => entry.kind === "discovery").map(entry => entry.kind === "discovery" && <Row key={entry.key}>
+    {entries.some(entry => entry.kind === "discovery") && <PanelSection title="来源候选">{entries.filter(entry => entry.kind === "discovery").map(entry => entry.kind === "discovery" && <Row key={entry.key}>
       <div className="patch-patch"><div className="patch-patch-name">{entry.candidate.patch_title}</div>
         <div className="patch-patch-source">{candidateSource(entry.candidate)} · {entry.candidate.version_raw || "版本待确认"} · {candidateLanguage(entry.candidate)}</div>
         <div className="patch-patch-source">{candidateConditions(entry.candidate)}</div>
@@ -374,7 +374,10 @@ function GameManager({ item, seg, panel }: { item: Install; seg: string; panel?:
           <InfoRow label="补丁语言">{patch.exe.language || "请核对来源说明"}</InfoRow>
           <InfoRow label="补丁版本">{patch.exe.version || "请核对来源说明"}</InfoRow>
           <InfoRow label="适用版本">{patch.exe.variant === "base" ? "游戏本体" : patch.exe.variant === "dlc" ? "DLC" : patch.exe.variant || "请核对来源说明"}</InfoRow>
-          <InfoRow label="DLC 条件" below>{patch.exe.requires_dlc?.length ? `需要 DLC ${patch.exe.requires_dlc.join("、")}` : "无额外 DLC 要求"}；{patch.exe.excludes_dlc?.length ? `不可使用 DLC ${patch.exe.excludes_dlc.join("、")}` : "无排除的 DLC"}</InfoRow>
+          {!!(patch.exe.requires_dlc?.length || patch.exe.excludes_dlc?.length) && <InfoRow label="DLC 条件" below>{[
+            patch.exe.requires_dlc?.length ? `需要 DLC ${patch.exe.requires_dlc.join("、")}` : "",
+            patch.exe.excludes_dlc?.length ? `不可使用 DLC ${patch.exe.excludes_dlc.join("、")}` : "",
+          ].filter(Boolean).join("；")}</InfoRow>}
         </>}
         {patch.blockers.map((b, i) => <Row key={i}><Status warning>{reason(b)}</Status></Row>)}
         <Row><Action onClick={() => openSource(patch.source_page)}>打开来源网页 ↗</Action></Row>

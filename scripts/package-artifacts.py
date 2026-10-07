@@ -11,6 +11,10 @@ OUTPUT = ROOT / '.artifacts'
 SF95_FILES = (
     ('scripts/sf95_audit.py', 'backend/exe_worker/sf95_audit.py', 'bundled-audit'),
     ('scripts/sf95_worker.py', 'backend/exe_worker/sf95_worker.py', 'bundled-worker'),
+    ('scripts/sf9_metadata.py', 'backend/exe_worker/sf9_metadata.py', 'bundled-metadata'),
+    ('scripts/sf9_graph.py', 'backend/exe_worker/sf9_graph.py', 'bundled-graph'),
+    ('scripts/sf9_lua.py', 'backend/exe_worker/sf9_lua.py', 'bundled-lua'),
+    ('scripts/sf9_behavior.py', 'backend/exe_worker/sf9_behavior.py', 'bundled-behavior'),
     ('LICENSE', 'LICENSE', 'project-license'),
     ('scripts/licenses/sfextract-MIT.txt', 'backend/exe_worker/sfextract-MIT.txt', 'bundled-license'),
 )

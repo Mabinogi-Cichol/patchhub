@@ -27,6 +27,10 @@ class BuildSbomTests(unittest.TestCase):
             project_license = b'MIT License\nCopyright (c) test contributors\n'
             (scripts / 'sf95_audit.py').write_bytes(audit)
             (scripts / 'sf95_worker.py').write_bytes(worker)
+            metadata_decoder = b'VERSION = "sf9-metadata-v-test"\n'
+            (scripts / 'sf9_metadata.py').write_bytes(metadata_decoder)
+            for module in ('sf9_graph', 'sf9_lua', 'sf9_behavior'):
+                (scripts / f'{module}.py').write_bytes(b'# synthetic module\n')
             (licenses / 'sfextract-MIT.txt').write_bytes(license_text)
             (root / 'LICENSE').write_bytes(project_license)
             cargo_checksum = 'ab' * 32
@@ -62,6 +66,7 @@ checksum = "{cargo_checksum}"
             properties = {entry['name']: entry['value'] for entry in sf95['properties']}
             self.assertEqual(properties['steam-patch:bundled-audit-sha256'], hashlib.sha256(audit).hexdigest())
             self.assertEqual(properties['steam-patch:bundled-worker-sha256'], hashlib.sha256(worker).hexdigest())
+            self.assertEqual(properties['steam-patch:bundled-metadata-sha256'], hashlib.sha256(metadata_decoder).hexdigest())
             self.assertEqual(properties['steam-patch:bundled-license-sha256'], hashlib.sha256(license_text).hexdigest())
             self.assertEqual(properties['steam-patch:project-license-path'], 'LICENSE')
             self.assertEqual(properties['steam-patch:project-license-sha256'], hashlib.sha256(project_license).hexdigest())

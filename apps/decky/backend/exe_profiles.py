@@ -136,6 +136,7 @@ class ExeProfiles:
         self.path = path
         self.sources = sources
         self.pipeline_ready = pipeline_ready
+        self._generic_profiles = {}
         self.reload()
 
     def reload(self):
@@ -190,7 +191,21 @@ class ExeProfiles:
 
     def resolve(self, game, selection, *, now=None):
         """Fresh backend-owned lookup. Frontend submits only a release selection."""
-        _need(isinstance(selection, str) and re.fullmatch(r"exe-[0-9a-f]{24}-[1-9][0-9]*", selection), "exe_release_invalid")
+        _need(isinstance(selection, str) and re.fullmatch(r"exe-(?:(?:selection|content)-)?[0-9a-f]{24}-[1-9][0-9]*", selection), "exe_release_invalid")
+        from exe_generic import SELECTION, CONTENT, candidate, placeholder
+        if re.fullmatch(SELECTION, selection):
+            value = candidate(self, game, selection)
+            _need(self.pipeline_ready, "exe_pipeline_unavailable")
+            return placeholder(game, value), value
+        if re.fullmatch(CONTENT, selection):
+            profile = self._generic_profiles.get((game.get("instance_id"), selection))
+            if profile is None and getattr(self, "_routing_profile", None):
+                profile = self._routing_profile(game, selection)
+            _need(profile is not None, "exe_analysis_required")
+            value = candidate(self, game, profile["selection_id"])
+            _need(candidate_binding(value) == profile["candidate_sha256"], "exe_candidate_changed")
+            _need(game.get("buildid") in profile["verified_buildids"], "exe_game_facts_changed")
+            return json.loads(json.dumps(profile)), value
         self.reload()  # profile disable/change also invalidates a persisted plan
         profile = self._profiles.get(selection)
         _need(profile is not None and profile["appid"] == game.get("appid"), "exe_profile_changed")
@@ -240,7 +255,20 @@ class ExeProfiles:
                     blockers = [] if self.pipeline_ready else ["exe_pipeline_unavailable"]
                 except ValueError as error:
                     blockers = [str(error)]
+            # Legacy sample/build coverage must not block fresh behavior analysis.
+            # Keep legacy receipt resolution strict; only new candidate selection
+            # falls back, rechecking the current source through generic resolve.
+            if self.pipeline_ready and (profile is None or blockers):
+                from exe_generic import selection_id
+                selection = selection_id(candidate) if candidate.get("game_appid") == game.get("appid") else None
+                if selection:
+                    try:
+                        self.resolve(game, selection)
+                        profile = None
+                        blockers = []
+                    except ValueError as error:
+                        blockers = [str(error)]
             reviews.append({"candidate_id": candidate["candidate_id"], "release_id": selection,
                 "profile_id": profile["profile_id"] if profile else None,
-                "status": "installable" if not blockers else "guidance", "blockers": blockers})
+                "status": ("installable" if profile else "check_required") if not blockers else "guidance", "blockers": blockers})
         return reviews

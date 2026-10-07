@@ -8,8 +8,9 @@ from unittest.mock import patch
 import zipfile
 
 import sf95_audit as sf
-from sf95_worker import convert
+from sf95_worker import convert, analyze
 from test_sf95_audit import file_record, sample
+from test_sf9_metadata import include_array, declaration, event_bytes
 
 
 class ConversionTests(unittest.TestCase):
@@ -75,6 +76,28 @@ class ConversionTests(unittest.TestCase):
                 self.run_conversion()
             self.assertEqual(existing.read_bytes(), b"another invocation owns this")
             existing.unlink()
+
+    def test_analysis_accepts_explicit_layouts_but_cannot_authorize_or_write(self):
+        from test_sf95_audit import metadata
+        for version in ("9.5", "9.6", "9.7"):
+            records = [file_record("patch.xp3", installer_version=version)]
+            table = metadata(records).replace(b"unparsed-events", include_array(), 1)
+            table = table.replace(b"unparsed-after-table", declaration("CIREvent")
+                + event_bytes("On Next", "Screen.Next();")
+                + b"\x10\x80" + event_bytes("On Shutdown", ""), 1)
+            with patch("test_sf95_audit.metadata", return_value=table):
+                raw = sample(records, version=version + ".0.0")
+            self.source.write_bytes(raw)
+            descriptor = {"action": "analyze", "exe_sha256": hashlib.sha256(raw).hexdigest(), "exe_size": len(raw)}
+            with self.source.open("rb") as stream:
+                report = analyze(stream, descriptor)
+            self.assertFalse(report["installable"])
+            self.assertEqual(report["report"]["installer"], "Setup Factory " + version)
+            self.assertFalse(report["report"]["script_inventory"]["coverage"]["complete"])
+            self.assertEqual(list(self.root.iterdir()), [self.source])
+            for change in ({"semantics_approved": True}, {"exe_sha256": "a" * 64}):
+                with self.source.open("rb") as stream, self.assertRaises(sf.AuditError):
+                    analyze(stream, {**descriptor, **change})
 
 
 if __name__ == "__main__":

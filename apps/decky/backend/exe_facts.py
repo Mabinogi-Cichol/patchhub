@@ -56,7 +56,7 @@ def read_file(path, limit, cancel=None, *, contents=False):
 
 
 def keyvalues(raw):
-    """Strict quoted Valve KV subset: reject duplicate keys, escapes and suffixes.
+    """Strict quoted Valve KV subset: reject duplicate keys and directives.
 
     Steam app manifests contain quoted keys/values and objects. Unknown scalar
     fields are retained; executable directives, conditionals and malformed input
@@ -80,12 +80,23 @@ def keyvalues(raw):
             tokens.append(char)
             i += 1
         elif char == '"':
-            end = text.find('"', i + 1)
-            _need(end >= 0, "exe_manifest_invalid")
-            value = text[i + 1:end]
-            _need(len(value) <= 8192 and "\\" not in value and all(ord(c) >= 32 for c in value), "exe_manifest_invalid")
-            tokens.append((value,))
-            i = end + 1
+            i += 1
+            pieces = []
+            while i < len(text) and text[i] != '"':
+                current = text[i]
+                if current == "\\":
+                    i += 1
+                    # Windows Steam serializes LauncherPath with escaped
+                    # backslashes. Accept only literal quote/backslash escapes,
+                    # never control escapes or arbitrary KV directives.
+                    _need(i < len(text) and text[i] in ('"', "\\"), "exe_manifest_invalid")
+                    current = text[i]
+                _need(ord(current) >= 32 and len(pieces) < 8192, "exe_manifest_invalid")
+                pieces.append(current)
+                i += 1
+            _need(i < len(text), "exe_manifest_invalid")
+            tokens.append(("".join(pieces),))
+            i += 1
         else:
             raise ValueError("exe_manifest_invalid")
         _need(len(tokens) <= 65536, "exe_manifest_limit")

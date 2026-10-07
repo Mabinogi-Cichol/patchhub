@@ -142,6 +142,20 @@ class ExeProfilesTests(unittest.TestCase):
         self.candidate["observed_at"] += 5
         self.assertEqual(candidate_binding(self.candidate), candidate_binding(dict(self.candidate)))
 
+    def test_old_build_coverage_falls_back_to_fresh_behavior_check(self):
+        from exe_generic import selection_id
+        self.registry.pipeline_ready = True
+        self.game.update(buildid="101", instance_id="instance-test")
+        review = self.registry.reviews(self.game)[0]
+        self.assertEqual(review["release_id"], selection_id(self.candidate))
+        self.assertEqual(review["status"], "check_required")
+        self.assertEqual(review["blockers"], [])
+        self.assertIsNone(review["profile_id"])
+        with self.assertRaisesRegex(ValueError, "build_not_verified"):
+            self.registry.resolve(self.game, release_id(self.profile))
+        self.subscribed = False
+        self.assertEqual(self.registry.reviews(self.game)[0]["blockers"], ["exe_source_disabled"])
+
     def test_untrusted_selection_and_schema_cannot_enable_profiles(self):
         for selection in (self.candidate["candidate_id"], "https://kaguraserver.com/x.exe", "../profile", {}, None):
             with self.subTest(selection=selection), self.assertRaisesRegex(ValueError, "exe_release_invalid"):

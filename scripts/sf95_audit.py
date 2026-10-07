@@ -1,4 +1,4 @@
-"""Read-only Setup Factory 9.5 sample auditor (P0, never an installer).
+"""Read-only Setup Factory 9.x sample auditor (P0, never an installer).
 
 The SF file-table layout is derived from CybercentreCanada/sfextract commit
 21f5c5595a70e9284fff83476c0e307d5b92f573; see licenses/sfextract-MIT.txt.
@@ -20,14 +20,16 @@ import zlib
 from pathlib import Path
 from xml.etree import ElementTree
 
-VERSION = "sf95-audit-v2"
+VERSION = "sf9-audit-v3"
 SIGNATURE = bytes.fromhex("e0e0e1e1e2e2e3e3e4e4e5e5e6e6e7e7")
-# P0 budget measured on the Deck against reviewed real patches: a 1.05 GiB
-# Setup Factory package can use a single ~649 MiB member and ~1.15 GiB expanded.
+# The original Deck samples used single members below 1 GiB. Local SF9.5/9.6
+# samples require ~1.28 GiB members; full read-only audits passed in nonprivileged
+# WSL bwrap under the unchanged 3 GiB address-space and 180-second worker caps.
+# The new large-member budget still needs final Deck verification.
 # These stay below the core's archive (8 GiB), single-file (4 GiB) and total
 # (16 GiB) caps.
 MAX_EXE = 2 * 1024 ** 3
-MAX_FILE = 1024 ** 3
+MAX_FILE = 2 * 1024 ** 3
 MAX_TOTAL = 2 * 1024 ** 3
 MAX_METADATA = 16 * 1024 ** 2
 MAX_ENTRIES = 8192
@@ -61,14 +63,27 @@ class Reader:
         return struct.unpack("<" + fmt, self.read(struct.calcsize("<" + fmt)))[0]
 
     def string(self):
-        data = self.read(self.number("B"))
+        length = self.number("B")
+        encoding = "utf-8"
+        if length == 0xff:
+            length = self.number("H")
+            if length == 0xfffe:
+                encoding = "utf-16-le"
+                length = self.number("B")
+                if length == 0xff:
+                    length = self.number("H")
+            if length == 0xffff:
+                length = self.number("I")
+                require(length != 0xffffffff, "unsupported_string_length")
+        byte_length = length * (2 if encoding == "utf-16-le" else 1)
+        require(byte_length <= MAX_METADATA, "string_size_limit")
+        data = self.read(byte_length)
         # Preserve exactly what was serialized, including any terminator bytes.
-        value = data.rstrip(b"\0")
-        require(b"\0" not in value, "embedded_nul")
         try:
-            text = value.decode("utf-8", errors="strict")
+            text = data.decode(encoding, errors="strict").rstrip("\0")
         except UnicodeDecodeError as error:
             raise AuditError("invalid_utf8") from error
+        require("\0" not in text, "embedded_nul")
         return text
 
 
@@ -80,7 +95,7 @@ def _at(data, offset, fmt):
     return Reader(data, offset).number(fmt)
 
 
-def pe_overlay(data):
+def pe_overlay(data, *, supported_versions=("9.5",)):
     """Use the PE resource table, not arbitrary XML/signature string searches."""
     require(len(data) >= 64 and data[:2] == b"MZ", "not_pe")
     pe = _at(data, 60, "I")
@@ -173,10 +188,12 @@ def pe_overlay(data):
         raise AuditError("invalid_manifest_xml") from error
     identities = [n for n in xml if n.tag.rsplit("}", 1)[-1] == "assemblyIdentity"]
     descriptions = [n.text for n in xml if n.tag.rsplit("}", 1)[-1] == "description"]
-    require(len(identities) == 1 and identities[0].get("version", "").startswith("9.5."), "unsupported_installer_version")
+    version = identities[0].get("version", "") if len(identities) == 1 else ""
+    require(re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+", version) is not None
+            and ".".join(version.split(".")[:2]) in supported_versions, "unsupported_installer_version")
     require(any(d in ("Setup Factory 9 Run-time", "Setup Factory Run-time") for d in descriptions), "unsupported_installer_brand")
     require(data[overlay:overlay + 16] == SIGNATURE, "unsupported_overlay")
-    return overlay, overlay_end, evidence(manifest), certificate
+    return overlay, overlay_end, {**evidence(manifest), "version": version}, certificate
 
 
 def safe_target(directory, basename):
@@ -216,7 +233,8 @@ def validate_targets(records):
                         for i in range(1, len(key.split("/")))), "file_directory_collision")
 
 
-def file_table(metadata):
+def file_table(metadata, *, installer_version="9.5"):
+    require(installer_version in ("9.5", "9.6", "9.7"), "unsupported_installer_version")
     marker = metadata.find(b"CSetupFileData")
     require(marker >= 8 and metadata.find(b"CSetupFileData", marker + 1) == -1, "ambiguous_file_table")
     start = marker - 8
@@ -256,7 +274,9 @@ def file_table(metadata):
         icon = r.string()
         unknown(8)
         font = r.string()
-        unknown(3)
+        # SF 9.7 serializes an additional byte before the compression flags.
+        # Keep it as unreviewed evidence: framing support is not semantics approval.
+        unknown(4 if installer_version == "9.7" else 3)
         compressed, original_attributes, forced_attributes = [r.number("B") for _ in range(3)]
         require(compressed in (0, 1) and original_attributes in (0, 1), "invalid_file_flags")
         unknown(10)
@@ -353,9 +373,10 @@ class Decoder:
         return {"size": size, "crc32": checksum, "sha256": digest.hexdigest()}, b"".join(parts)
 
 
-def audit(data):
+def audit(data, *, supported_versions=("9.5",), metadata_inspector=None):
     require(0 < len(data) <= MAX_EXE, "exe_size_limit")
-    overlay, overlay_end, manifest, certificate = pe_overlay(data)
+    overlay, overlay_end, manifest, certificate = pe_overlay(data, supported_versions=supported_versions)
+    installer_version = ".".join(manifest["version"].split(".")[:2])
     r = Reader(data, overlay, overlay_end)
     require(r.read(16) == SIGNATURE, "unsupported_overlay")
     overlay_header = r.read(10)
@@ -384,7 +405,8 @@ def audit(data):
                             "unknown_header_base64": base64.b64encode(unknown).decode(), **info})
         if expected_name == "irsetup.dat":
             metadata = content
-    records, table = file_table(metadata)
+    script_inventory = metadata_inspector(metadata) if metadata_inspector else None
+    records, table = file_table(metadata, installer_version=installer_version)
     # The complete directory/paths/counts and compressed ranges are checked first.
     payload_end = r.pos + sum(row["packed_size"] for row in records)
     padding = (-payload_end) % 8 if certificate is not None else 0
@@ -396,7 +418,7 @@ def audit(data):
                                  record["crc32"], compressed=record["compressed"])
         record["payload"] = info
     require(r.read(padding) == bytes(padding) and r.pos == overlay_end, "trailing_overlay_data")
-    return {"schema_version": 1, "auditor": VERSION, "exe": evidence(data), "installer": "Setup Factory 9.5",
+    result = {"schema_version": 1, "auditor": VERSION, "exe": evidence(data), "installer": "Setup Factory " + installer_version,
             "overlay_offset": overlay, "overlay_header_base64": base64.b64encode(overlay_header).decode(),
             "manifest": manifest, "certificate": certificate, "certificate_alignment_bytes": padding,
             "diagnostics": diagnostics, "metadata": evidence(metadata),
@@ -404,12 +426,16 @@ def audit(data):
             "capability": "discover_only", "installable": False, "semantics_reviewed": False,
             "blockers": ["unparsed_installer_events", "unreviewed_serialized_file_fields",
                          "game_language_build_dlc_not_verified", "steamos_install_restore_not_verified"]}
+    if script_inventory is not None:
+        result["script_inventory"] = script_inventory
+    return result
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("sample", type=Path)
     parser.add_argument("--metrics", action="store_true", help="Write worker timing/RSS to stderr (Linux).")
+    parser.add_argument("--sf9", action="store_true", help="Inspect SF9.5/9.6/9.7 with incomplete script inventory; never authorizes installation.")
     args = parser.parse_args()
     started = time.monotonic()
     try:
@@ -424,7 +450,11 @@ def main():
         with args.sample.open("rb") as stream:
             require(0 < stream.seek(0, 2) <= MAX_EXE, "exe_size_limit")
             with mmap.mmap(stream.fileno(), 0, access=mmap.ACCESS_READ) as data:
-                report = audit(data)
+                if args.sf9:
+                    from sf9_metadata import inventory
+                    report = audit(data, supported_versions=("9.5", "9.6", "9.7"), metadata_inspector=inventory)
+                else:
+                    report = audit(data)
         encoded = json.dumps(report, ensure_ascii=True, separators=(",", ":"))
         require(len(encoded) + 1 <= MAX_METADATA, "report_size_limit")
         sys.stdout.write(encoded + "\n")
