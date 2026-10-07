@@ -2,7 +2,7 @@
 
 2026-10-07 补充：[通用 EXE 自动安装](../generic-exe-installation/design.md) 沿用本流程，点击后自动完成完整行为/条件检查和安装，不复现安装器向导，不展示条款或增加确认步骤；新内容按支持行为准入。最新验证范围见其[施工记录](../generic-exe-installation/progress.md)。
 
-状态：**后端与 Decky 已实现并部署；自动化、VBF 重装与下载取消、真实界面验证通过。完整实机矩阵待验收，Windows 适配 TODO。** 日期：2026-10-06（Asia/Shanghai），详细范围以施工记录为准。
+状态：**后端、Decky 与 Windows 客户端均已迁移到协议 v2；后端/Decky 已部署，自动化、VBF 重装与下载取消、真实界面验证通过；Windows 客户端一站式适配已实施（自动化验证见施工记录）。完整实机矩阵与 Windows 实机回归待验收。** 日期：2026-10-06（Asia/Shanghai），详细范围以施工记录为准。
 
 施工记录：[progress.md](progress.md)。现状与代码证据：[research.md](research.md)。关联：[EXE 安装](../exe-patch-installation/design.md)、[下载缓存清理](../cache-cleanup/design.md)、[Decky UX](../decky-ux/design.md)。
 
@@ -16,7 +16,7 @@
 - 扫描阶段自动查找并判断安装能力；正常界面表达“有可用补丁”“找到补丁来源”“已安装补丁”，主操作为“安装补丁”“重新安装补丁”。
 - 进行中的下载、校验、安装、取消和失败仍提供必要反馈，不要求用户理解计划、事务、配方或备份。
 
-本 feature 落地后端、共享 Rust/CLI 契约和 Decky 一站式任务。按用户最新决定，不保留旧接口兼容性；Windows 客户端本轮不修改，可能无法工作，后续适配作为明确 TODO，不阻塞本轮验收。
+本 feature 落地后端、共享 Rust/CLI 契约、Decky 一站式任务和 Windows 客户端一站式入口。按用户最新决定，不保留旧接口兼容性；Windows 客户端按同一协议 v2 迁移，仅保留审核 ZIP 能力，不含来源发现与 EXE 自动安装，技术边界见 3.6。
 
 后端和 Decky 已实现并部署到 Steam Deck，验证范围见施工记录；Windows 适配延后。跨版本升级、切换语言或本体/DLC 补丁、未知 EXE 安装、新来源适配器不属于本 feature。
 
@@ -147,6 +147,15 @@ profile 当前由完整 JSON 摘要派生 release_id，修改 terms 文案或 sc
 
 只读能力探测不执行 prepare，不提取完整包、不写游戏、不生成有效计划/租约。来源查找与能力探测的结果绑定 scan generation、settings revision、实例和补丁身份；重新扫描、订阅变更、实例变化后的旧响应丢弃。列表汇总与详情按钮使用同一份能力结果，避免列表显示“有可用补丁”但详情仍要求人工查找或确认。
 
+### 3.6 Windows 客户端一站式适配
+
+Windows 客户端（Tauri + React，`apps/windows`）只通过随包分发的 Rust CLI sidecar 调用核心，不具备 Decky 的 Python 来源发现与任务管理器，因此对齐范围限定为协议 v2 与审核 ZIP 的一站式安装。
+
+- **协议与入口**：宿主发送 `protocol_version=2` 的 JSON 行请求。`scan/preview/list_transactions/recover/migrate_state` 走一次请求的 `serve` 模式；安装走可流式输出进度并支持协作取消的 `serve-task` 模式。一步式 `install_patch` 取代旧的 `plan_install` + `start_install` 两段确认，`uninstall` 方法不再存在，`confirmed_game_closed` 等人工作用参数删除。本地 ZIP 仍通过原生文件选择器导入。
+- **任务与取消**：安装期间宿主保持 sidecar 的 stdin 打开（EOF 即协作取消），`install_status` 暴露 `connecting/downloading/validating/planning/backing_up/writing/committing/rolling_back` 阶段与字节/文件进度；`cancel_install` 写入一字节触发核心协作取消。核心回滚忽略取消、已持久提交优先；`request_id` 绑定实例、补丁与 operation 保证重试幂等，重复启动被拒绝。桌面端保留内容区“取消安装”按钮，同时关闭窗口也请求取消（若任务进行中先取消并等待恢复完成再退出）。
+- **能力投影**：Rust `scan` 只输出 `blockers/download_available/support_level/detection`，Windows 层按与后端一致的规则派生 `auto_installable` 与 `reinstall_available`（签名目录、无阻断、可下载、`managed_zip`；或已有 committed 收据与检测为托管/外部），再复用共享 `installSummary/canAutoInstall` 呈现“已安装补丁/有可用补丁/找到补丁来源/暂未找到补丁”和“安装补丁/重新安装补丁”。
+- **边界**：Windows 不提供来源发现、候选来源与 EXE 自动安装；`managed_zip` 且无可下载 artifact 时以“找到补丁来源 + 导入本地 ZIP”呈现。任务开始前执行一次 `migrate_state` 撤销旧的计划授权。安装成功/失败按真实 `Transaction` 终态展示，卸载产品能力不迁移。
+
 ## 4. 实施拆分与依赖
 
 | 阶段 | 工作 | 完成门槛 |
@@ -155,8 +164,8 @@ profile 当前由完整 JSON 摘要派生 release_id，修改 terms 文案或 sc
 | P1 内核与迁移 | 显式同内容重装、最小安装收据、失败临时恢复、提交后清理、旧未完成卸载读取/恢复；移除新卸载生产接口 | 有旧数据仍可识别/重装，未完成事务无法绕过，迁移幂等 |
 | P2 后端任务 | 编排扫描阶段全库来源查找及只读能力探测；统一获取→prepare→apply；改 tasks lease/取消、EXE receipt、备份保护和 settings；可靠撤销授权 | 无需逐游戏查找即可分类；一次安装请求完成全链路，界面退出取消，取消后任何 apply 拒绝 |
 | P3 Decky 界面 | 扫描进度与三种主要状态；移除计划确认、consent、卸载、备份设置/清理和正常事务操作页；诊断收起，异常恢复单独展示 | 列表和详情能力一致；安装/重装均一次操作，选择来源不新增强制步骤，QAM/全屏一致 |
-| P4 调用方与资料 | 同步 CLI/桥接/契约；Windows 一站式入口与终态判断延后为 TODO；更新现行资料 | 后端和 Decky 没有生产卸载入口或旧确认位；明确 Windows 待适配 |
-| P5 验收 | 自动化异常矩阵；Deck 上 ZIP/三个审核 EXE profile 安装与连续重装、界面退出、取消、空间和旧数据迁移；Windows 回归后续执行 | 以下验收项完成，未实测范围仍明确记录 |
+| P4 调用方与资料 | 同步 CLI/桥接/契约；Windows 一站式入口、进度/取消与安装/重装状态；更新现行资料 | 后端、Decky 与 Windows 没有生产卸载入口或旧确认位 |
+| P5 验收 | 自动化异常矩阵；Deck 上 ZIP/三个审核 EXE profile 安装与连续重装、界面退出、取消、空间和旧数据迁移；Windows 协议 v2 与一步安装回归（typecheck/build/cargo check） | 以下验收项完成，未实测范围仍明确记录 |
 
 P0 → P1 → P2 → P3/P4 → P5。文档与代码分开提交；各阶段按实际依赖形成可审阅提交，不把其他 feature 的修改混入。实现后修订关联设计的现行规则，保留既有 progress/flow/review 的历史事实。
 

@@ -117,3 +117,14 @@
 - 测试：`apps/decky/tests/install.test.ts` 将 `check_required` 用例期望改为“有可用补丁”，并新增 HGamer 与 blocker 仍为“找到补丁来源”的断言。
 - 文档：README 第 4 条改回“工具无法自动安装”语义（通用 EXE 不再属于来源指引），第 32 条补充通用 EXE 安装时检查；本功能 design 展示状态说明同步；通用 EXE 功能的 design/progress 记录本次修订。
 - 未改后端判定、扫描或安装流水线；未运行构建、部署或实机验证。
+
+## 2026-10-07 Windows 客户端适配
+
+- 用户要求把 Windows 前端对齐最新后端。基线为协议 v2 CLI 与已实现的 simplified-install-flow；Windows 此前仍是协议 v1 的 计划 → 确认 → 卸载 流程。调查确认 Windows 只对接随包 Rust CLI（`serve`/`serve-task`），没有 Decky 的 Python 来源发现与任务管理器，因此维持审核 ZIP 能力（不含来源发现与 EXE 自动安装）。
+- 宿主 `apps/windows/src-tauri/src/main.rs`：迁移到协议 v2；核心方法收敛为 `scan/preview/list_transactions/recover/migrate_state`（一次请求的 `serve`）与 `install_patch`（可流式输出进度并协作取消的 `serve-task`）；删除 `plan_install/start_install/fetch_artifact/uninstall` 方法与 `plan_id/transaction_id/confirmed_game_closed` 参数。安装期间保持 sidecar stdin 打开（EOF 即取消），`install_status` 暴露阶段/字节/文件进度，`cancel_install` 写入一字节触发协作取消；启动执行一次 `migrate_state` 撤销旧的计划授权；任务进行中关闭窗口先请求取消并等待恢复完成再退出。
+- 界面 `apps/windows/src/main.tsx`：改为一步安装/重装——按 `reinstall_available` 与检测状态选择 `install|reinstall`，`crypto.randomUUID()` 作 request_id 并按 实例/补丁/operation/archive 复用保证重试幂等，本地 ZIP 用原生选择器导入；新增进度卡片与“取消安装”按钮；删除计划生成、安装计划确认弹窗、`window.confirm`、卸载入口及备份相关文案，`recover` 无确认。扫描结果按与后端一致的规则投影 `auto_installable`/`reinstall_available`（签名目录、无阻断、可下载、`managed_zip`，或已有 committed 收据/托管/外部检测），复用共享 `installSummary/canAutoInstall` 呈现四种状态与主操作。
+- 共享 `packages/ui/src/index.ts`：`installSummary` 仅在存在 discovery 对象时才判“正在查找补丁”，使无 discovery 的 Windows 行回落到“暂未找到补丁”（Decky 始终提供 discovery，行为不变）；`reason()` 增补 `task_cancelled`、`install_in_progress`、`request_id_binding_conflict`、`unsupported_protocol` 等错误码文案。
+- 验证：Windows `npm run typecheck` 与 `npm run build` 通过；`cargo check -p steam-patch-windows` 通过（期间修复 `request_cancel` 的 `map_err` 类型与 `MutexGuard` 跨 `.await` 两处编译错误）；`cargo fmt -p steam-patch-windows` 与 `git diff --check` 通过；Decky 51 项测试通过（共享 UI 无回归）。用真实 debug sidecar 做端到端 smoke：`serve` scan 返回协议 v2；`serve-task install_patch` 输出 22 行进度（`planning/validating/backing_up/writing/committing`）并 `committed` 落盘；同 request_id 重试返回同一事务；写入 stdin 一字节得到 `task_cancelled` 且已提交文件未被改动。
+- 发现：dev 路径的 `target/debug/steam-patch.exe` 若非最新会返回协议 v1，需要先重建 CLI；仓库基线 `crates/core/tests/install.rs` 在当前隔离工具链下已存在 rustfmt 差异，与本次改动无关。
+- 文档：同步本功能 design 的 Windows 章节与状态、功能索引、install-design 与 client-guide 的现行流程描述；保留既有施工历史。
+- 未执行：Windows NSIS / 便携包实机构建、真实游戏安装/重装/取消、关闭窗口取消的实机验证；Windows 实机回归与完整 P5 矩阵仍待验收。未提交 Git。

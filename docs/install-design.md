@@ -26,7 +26,7 @@ apply 返回实际事务状态，调用方必须区分 `committed`、`rolled_bac
 
 同实例待恢复事务阻止新安装；已提交事务允许显式 `reinstall`，仅限同内容、同实例、同 build 和目标映射。新任务成功后旧收据标记 `superseded`，失败则保留原收据。成功提交或完整回滚后清理临时 stage/backup，保留最小收据；清理失败可重试，不将已提交安装改为失败。内容升级、语言切换等不作为重装处理。
 
-`migrate_state` 用持久迁移标记撤销升级前的可执行计划，处理历史材料与未完成恢复；新版取消先写 durable revoked，再丢弃计划。Decky 任务通过 request_id 去重，prepare→apply 内部衔接，界面关闭不取消任务。详见 [精简安装流程](features/simplified-install-flow/design.md) 与 [施工记录](features/simplified-install-flow/progress.md)。Windows 旧调用方尚未适配协议 v2。
+`migrate_state` 用持久迁移标记撤销升级前的可执行计划，处理历史材料与未完成恢复；新版取消先写 durable revoked，再丢弃计划。Decky 与 Windows 安装均通过 request_id 去重、一次完成 prepare→apply；安装保持前台，离开界面（Windows 关闭窗口）请求协作取消，恢复结束前不强制杀死宿主。详见 [精简安装流程](features/simplified-install-flow/design.md) 与 [施工记录](features/simplified-install-flow/progress.md)。Windows 客户端已适配协议 v2，安装走 `install_patch` 一步任务，`serve-task` 提供阶段/字节进度与 stdin 协作取消。
 
 ## 保证范围与待实机验证
 
