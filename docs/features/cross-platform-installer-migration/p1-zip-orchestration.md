@@ -438,4 +438,4 @@ pub fn install_zip(
 7. **F1 裁决（r6）：`source_not_released` 从动态 ZIP 路径契约移除。** 候选模型暂无可靠日期字段（`SourceCandidate.date` 缺失、`published_at` 恒 `None`），released 门在动态路径无稳定来源可依；§2.1 step 7 与 §4.4 错误码表已同步标注“待候选日期字段补齐后另行引入”。未发布条目的过滤仍由 discovery/来源缓存负责，不变更 resolve 语义。
 8. **F3 裁决（fix-14）：租约落盘已补做。** 计划建立时写 `jobs/<plan_id>/lease.json`（`{deadline_ms, renewed_at}`，`write_atomic`），阶段边界续租刷新；不再仅内存 `LeaseState`（§3.5、p1-host-contract §5.5/§8 同步）。
 9. **F4 裁决（fix-14）：动态路由租约改为实时检查。** `install_zip_route` 不再用单次固定 `now`（原 `lease_active(fixed_now)` 恒真），改取实时时间，与签名路由对称；真实过期仍叠加看门狗（§3.5）。
-10. **F6 裁决（fix-14）：计划后失败形态统一对齐 §2.3。** 计划后取消/租约过期经恢复返回 `InstallOutcome`（恢复成功 `rolled_back`、恢复冲突 `needs_recovery`、提交已成功 `committed`），不再出现“首次 `Err(code)`、重放返回 `rolled_back`”的双形态（§3.7、p1-host-contract §2.3）。
+10. **F6 裁决（fix-14）：计划后取消/租约过期/撤销的形态统一对齐 §2.3。** 该三类经恢复返回 `InstallOutcome`（恢复成功 `rolled_back`、恢复冲突 `needs_recovery`、提交已成功 `committed`）；**其余计划后漂移失败**（`authorization_candidate_changed`/`authorization_content_changed`/`authorization_facts_changed`/`authorization_expired` 等）保持 `ok:false + error{code}`（§4.4），并已留下 `rolled_back` 终态事务——同 `request_id` 重放返回该终态（契约允许）（§3.7、p1-host-contract §2.3）。
