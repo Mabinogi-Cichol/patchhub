@@ -12,7 +12,7 @@ use super::validate;
 use super::{
     invalid, Clock, Result, SystemClock, BUILTIN_ADAPTERS, DISCOVERY_FALLBACK_TTL,
     DISCOVERY_INDEX_TTL, DISCOVERY_SUCCESS_TTL, MAX_DISCOVERY_OUTPUT, MAX_SOURCES, PARSER_VERSION,
-    QUERY_VERSION, SOURCE_CACHE_TTL,
+    QUERY_VERSION, SOURCES_ENCODING_VERSION, SOURCE_CACHE_TTL,
 };
 use std::collections::{BTreeMap, HashSet};
 use std::sync::atomic::AtomicBool;
@@ -45,6 +45,7 @@ fn empty_success() -> DiscoverySuccess {
         query_key: String::new(),
         parser_version: 0,
         query_version: 0,
+        encoding_version: SOURCES_ENCODING_VERSION,
     }
 }
 
@@ -512,6 +513,7 @@ impl SourceRegistry {
     fn discovery_fresh(&self, success: &DiscoverySuccess, ttl: u64) -> bool {
         success.parser_version == PARSER_VERSION
             && success.query_version == QUERY_VERSION
+            && success.encoding_version == SOURCES_ENCODING_VERSION
             && is_fresh(Some(success.checked_at), ttl, self.now())
     }
 
@@ -620,7 +622,9 @@ impl SourceRegistry {
         if !is_fresh(Some(record.checked_at), DISCOVERY_INDEX_TTL, self.now()) {
             return None;
         }
-        if record.index.parser_version != PARSER_VERSION {
+        if record.index.parser_version != PARSER_VERSION
+            || record.index.encoding_version != SOURCES_ENCODING_VERSION
+        {
             return None;
         }
         Some(record.index)
@@ -652,6 +656,7 @@ impl SourceRegistry {
             query_key: key.to_string(),
             parser_version: PARSER_VERSION,
             query_version: QUERY_VERSION,
+            encoding_version: SOURCES_ENCODING_VERSION,
             index: result.index.clone().or_else(|| {
                 previous
                     .attempt
@@ -690,6 +695,7 @@ impl SourceRegistry {
                 query_key: attempt.query_key.clone(),
                 parser_version: attempt.parser_version,
                 query_version: attempt.query_version,
+                encoding_version: attempt.encoding_version,
             })
         } else {
             prev_success
@@ -727,10 +733,14 @@ impl SourceRegistry {
                         .unwrap_or(now)
                 })
             };
+            // Normalize the encoding version on the persisted envelope so an
+            // adapter can never publish an index the current build would reject.
+            let mut stored_index = index.clone();
+            stored_index.encoding_version = SOURCES_ENCODING_VERSION;
             let index_record = DiscoveryIndexRecord {
                 schema_version: 1,
                 checked_at: envelope_checked,
-                index: index.clone(),
+                index: stored_index,
             };
             let index_blob =
                 serde_json::to_vec(&index_record).map_err(|error| invalid(error.to_string()))?;
@@ -1062,6 +1072,7 @@ mod tests {
     fn index(checked_at: u64) -> DiscoveryIndex {
         DiscoveryIndex {
             parser_version: PARSER_VERSION,
+            encoding_version: SOURCES_ENCODING_VERSION,
             records: Vec::new(),
             pending: Vec::new(),
             checked_at,
@@ -1648,6 +1659,7 @@ mod tests {
         let mut success = empty_success();
         success.parser_version = PARSER_VERSION;
         success.query_version = QUERY_VERSION;
+        success.encoding_version = SOURCES_ENCODING_VERSION;
         success.checked_at = 1000;
         assert!(registry.discovery_fresh(&success, DISCOVERY_SUCCESS_TTL));
 
@@ -1658,6 +1670,68 @@ mod tests {
         let mut old_query = success.clone();
         old_query.query_version = QUERY_VERSION + 1;
         assert!(!registry.discovery_fresh(&old_query, DISCOVERY_SUCCESS_TTL));
+
+        // An encoding-version mismatch invalidates confirmed discovery even when
+        // parser/query versions and freshness match (contract §1.3).
+        let mut old_encoding = success.clone();
+        old_encoding.encoding_version = SOURCES_ENCODING_VERSION - 1;
+        assert!(!registry.discovery_fresh(&old_encoding, DISCOVERY_SUCCESS_TTL));
+        let mut missing_encoding = success;
+        missing_encoding.encoding_version = 0;
+        assert!(!registry.discovery_fresh(&missing_encoding, DISCOVERY_SUCCESS_TTL));
+    }
+
+    #[test]
+    fn old_encoding_version_invalidates_stored_discovery_and_index() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut registry = registry_at(temp.path(), 1000);
+        let rule = rule(&registry, "hgamer");
+
+        // A complete success plus a fresh index carrying the current encoding.
+        let mut outcome = complete(vec![candidate('a', 42, MatchBasis::Appid)]);
+        outcome.index = Some(index(1000));
+        registry
+            .commit(&rule, 42, outcome, &DiscoveryRecord::default(), "k1")
+            .unwrap();
+        assert!(!registry.needs_refresh(&rule, 42, "k1", false));
+        assert!(registry.shared_index("hgamer").is_some());
+
+        // Rewrite both records at the previous encoding version (missing field
+        // in older files deserializes to `0`): both gates must reject them.
+        let mut old_success = empty_success();
+        old_success.status = "complete".to_string();
+        old_success.checked_at = 1000;
+        old_success.query_key = "k1".to_string();
+        old_success.candidates = vec![candidate('a', 42, MatchBasis::Appid)];
+        old_success.encoding_version = SOURCES_ENCODING_VERSION - 1;
+        let old_index = DiscoveryIndex {
+            encoding_version: SOURCES_ENCODING_VERSION - 1,
+            ..index(1000)
+        };
+        let record = DiscoveryRecord {
+            schema_version: 1,
+            source_id: rule.id.clone(),
+            appid: 42,
+            success: Some(old_success),
+            attempt: None,
+        };
+        let store = SourceStore::open(temp.path(), &builtins()).unwrap();
+        store.save_discovery(&rule.id, 42, &record).unwrap();
+        store
+            .save_discovery_index(
+                &rule.id,
+                &DiscoveryIndexRecord {
+                    schema_version: 1,
+                    checked_at: 1000,
+                    index: old_index,
+                },
+            )
+            .unwrap();
+        drop(store);
+
+        let reopened = registry_at(temp.path(), 1000);
+        assert!(reopened.shared_index("hgamer").is_none());
+        assert!(reopened.needs_refresh(&rule, 42, "k1", false));
     }
 
     #[test]

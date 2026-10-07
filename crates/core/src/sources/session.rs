@@ -13,9 +13,9 @@ use super::model::{
 use super::registry::{self, SourceRegistry};
 use super::{
     invalid, official_subbudget, Result, OFFICIAL_SUBDEADLINE, PARSER_VERSION, QUERY_VERSION,
+    SOURCES_ENCODING_VERSION,
 };
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
@@ -738,13 +738,17 @@ fn query_key(query: &QueryContext) -> String {
         "query_version".to_string(),
         serde_json::Value::from(query.query_version),
     );
+    // `encoding_version` is part of the frozen query contract (P0 v0.5 §1.2) so
+    // an encoding change invalidates confirmed discovery.
+    map.insert(
+        "encoding_version".to_string(),
+        serde_json::Value::from(SOURCES_ENCODING_VERSION),
+    );
     canonical::query_key(&serde_json::Value::Object(map))
 }
 
 fn rule_fingerprint(rule: &SourceRule) -> String {
-    let value = serde_json::to_value(rule).unwrap_or(serde_json::Value::Null);
-    let json = canonical::python_json(&value, true, false);
-    format!("{:x}", Sha256::digest(json.as_bytes()))
+    canonical::canonical_sha256(rule)
 }
 
 fn release_prefix_match(rule: &SourceRule, release_id: &str) -> bool {
@@ -1183,6 +1187,44 @@ mod tests {
         assert_eq!(policy.fingerprint.len(), 64);
         assert_eq!(policy.rule.id, "patchmoe");
         assert!(source_policy(&registry, "missing").is_err());
+    }
+
+    #[test]
+    fn query_key_and_rule_fingerprint_match_golden() {
+        let raw = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/sources/encoding-golden.json"
+        ))
+        .expect("encoding golden fixture must be readable");
+        let fixture: serde_json::Value = serde_json::from_str(&raw).unwrap();
+
+        // The fixture input carries exactly the production query field set plus
+        // the encoding version, so the production wrapper must reproduce it.
+        let query_case = &fixture["query_key"][0];
+        let input = &query_case["input"];
+        let query = QueryContext {
+            appid: input["appid"].as_u64().unwrap() as u32,
+            name: input["name"].as_str().unwrap().to_string(),
+            name_hints: Vec::new(),
+            preferred_language: None,
+            legacy_match: false,
+            force: false,
+            source_context: vec!["official".to_string()],
+            parser_version: PARSER_VERSION,
+            query_version: QUERY_VERSION,
+            settings_revision: 1,
+            generation: None,
+        };
+        assert_eq!(query_key(&query), query_case["expected"].as_str().unwrap());
+
+        // `rule_fingerprint` encodes the whole normalized `SourceRule`.
+        let rule_case = &fixture["rule_fingerprint"][0];
+        let rule: SourceRule = serde_json::from_value(rule_case["input"].clone()).unwrap();
+        assert_eq!(
+            rule_fingerprint(&rule),
+            rule_case["expected"].as_str().unwrap()
+        );
+        assert_eq!(rule_fingerprint(&rule).len(), 64);
     }
 
     #[test]

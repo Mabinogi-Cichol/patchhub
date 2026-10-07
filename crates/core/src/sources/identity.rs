@@ -1069,9 +1069,7 @@ fn dedupe_json<T: serde::Serialize + Clone>(items: Vec<T>) -> Vec<T> {
     let mut seen = HashSet::new();
     let mut out = Vec::new();
     for item in items {
-        let key = serde_json::to_value(&item)
-            .map(|value| canonical::python_json(&value, true, false))
-            .unwrap_or_default();
+        let key = canonical::canonical_string(&item).unwrap_or_default();
         if seen.insert(key) {
             out.push(item);
         }

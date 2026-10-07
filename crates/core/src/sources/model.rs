@@ -384,6 +384,9 @@ pub struct DiscoverySuccess {
     pub query_key: String,
     pub parser_version: u32,
     pub query_version: u32,
+    /// `SOURCES_ENCODING_VERSION`; missing (old records) deserializes to `0`.
+    #[serde(default)]
+    pub encoding_version: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -401,6 +404,9 @@ pub struct DiscoveryAttempt {
     pub query_key: String,
     pub parser_version: u32,
     pub query_version: u32,
+    /// `SOURCES_ENCODING_VERSION`; missing (old records) deserializes to `0`.
+    #[serde(default)]
+    pub encoding_version: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub index: Option<DiscoveryIndex>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -437,6 +443,9 @@ pub struct IndexRecord {
 #[serde(deny_unknown_fields)]
 pub struct DiscoveryIndex {
     pub parser_version: u32,
+    /// `SOURCES_ENCODING_VERSION`; missing (old records) deserializes to `0`.
+    #[serde(default)]
+    pub encoding_version: u32,
     #[serde(default)]
     pub records: Vec<IndexRecord>,
     #[serde(default)]

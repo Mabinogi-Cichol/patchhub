@@ -526,9 +526,8 @@ pub fn validate_candidates(
     if candidates.len() > MAX_CANDIDATES {
         return Err(invalid("invalid_discovery_candidates"));
     }
-    let value =
-        serde_json::to_value(candidates).map_err(|_| invalid("invalid_discovery_candidates"))?;
-    if canonical::python_json(&value, false, false).len() as u64 > MAX_DISCOVERY_OUTPUT {
+    // Size is measured with the frozen deterministic encoding (contract §1).
+    if canonical::canonical_bytes(candidates)?.len() as u64 > MAX_DISCOVERY_OUTPUT {
         return Err(invalid("oversized_discovery_candidates"));
     }
     for candidate in candidates {

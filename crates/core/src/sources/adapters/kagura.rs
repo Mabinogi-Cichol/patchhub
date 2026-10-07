@@ -5,7 +5,7 @@
 
 use super::super::http::RequestContext;
 use super::super::model::{DiscoveryIndex, IndexRecord, QueryContext, SourceCandidate, SourceRule};
-use super::super::{identity, invalid, validate, Result, PARSER_VERSION};
+use super::super::{identity, invalid, validate, Result, PARSER_VERSION, SOURCES_ENCODING_VERSION};
 use super::dom;
 use super::{fetch_page, hostname_in, Adapter, DiscoverOutcome, DiscoverPrevious};
 use scraper::ElementRef;
@@ -321,6 +321,7 @@ fn official(
 
     let index = DiscoveryIndex {
         parser_version: PARSER_VERSION,
+        encoding_version: SOURCES_ENCODING_VERSION,
         records: records
             .into_iter()
             .map(|record| IndexRecord {
@@ -597,6 +598,7 @@ mod tests {
         let previous = DiscoverPrevious {
             index: Some(DiscoveryIndex {
                 parser_version: PARSER_VERSION,
+                encoding_version: SOURCES_ENCODING_VERSION,
                 records: vec![IndexRecord {
                     title: "Game".to_string(),
                     page: "https://kagurafan.com/game/".to_string(),

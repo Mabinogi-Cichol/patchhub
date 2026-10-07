@@ -40,6 +40,10 @@ pub const MAX_EVIDENCE: usize = 64;
 
 pub const PARSER_VERSION: u32 = 2;
 pub const QUERY_VERSION: u32 = 1;
+/// Deterministic identity encoding version (P0 contract v0.5 §0/§1). Part of
+/// `query_key` and persisted on discovery/index records so an encoding change
+/// invalidates confirmed discovery and shared indexes.
+pub const SOURCES_ENCODING_VERSION: u32 = 1;
 pub const DEFAULT_RULES_SCHEMA: u32 = 2;
 pub const STORE_SCHEMA_VERSION: u32 = 1;
 

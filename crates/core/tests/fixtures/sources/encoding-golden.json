@@ -1,0 +1,181 @@
+{
+  "candidate_id": [
+    {
+      "expected": "candidate-320253b4e85e760632252ed6",
+      "identity": [
+        "official",
+        "https://publisher.example/game/",
+        "base",
+        [
+          "en"
+        ],
+        "page-unknown"
+      ]
+    },
+    {
+      "expected": "candidate-b739430f17b82d6ea2474c22",
+      "identity": [
+        "kagura-cn",
+        "https://kagurafan.com/game/",
+        "dlc",
+        [
+          "zh-CN"
+        ],
+        "v1.2.3:patch_v1.2.3.zip"
+      ]
+    },
+    {
+      "expected": "candidate-5445d7c97c164efe8130be46",
+      "identity": [
+        "hgamer",
+        "https://hgamer.tw/zh-TW/patches/my-life-as-a-cult-leader-patch",
+        "base",
+        [
+          "zh-CN"
+        ],
+        "4"
+      ]
+    }
+  ],
+  "canonical": [
+    {
+      "expected": "{\"a\":1,\"b\":[true,null,\"x\"],\"emoji\":\"😀\",\"中文\":\"值\"}",
+      "input": {
+        "a": 1,
+        "b": [
+          true,
+          null,
+          "x"
+        ],
+        "emoji": "😀",
+        "中文": "值"
+      }
+    },
+    {
+      "expected": "{\"a\":{},\"z\":[]}",
+      "input": {
+        "a": {},
+        "z": []
+      }
+    }
+  ],
+  "canonical_urls": [
+    {
+      "expected": "https://publisher.example/game/",
+      "input": "https://publisher.example/game/"
+    },
+    {
+      "expected": "https://example.com/Game/",
+      "input": "https://Example.COM/Game/?q=1#frag"
+    },
+    {
+      "expected": "https://example.com:443/x",
+      "input": "https://example.com:443/x"
+    },
+    {
+      "expected": "https://kagurafan.com/game/",
+      "input": "https://kagurafan.com/game/"
+    }
+  ],
+  "encoding_version": 1,
+  "fingerprint": [
+    {
+      "expected": "d20138122d9e078074a2249d6ecdb231bc9c27eadd97772bb4ca8228bff108e9",
+      "input": {
+        "aliases": [
+          "A Game"
+        ],
+        "cache_status": "fresh",
+        "candidate_id": "candidate-49d4abc4342bbe0aa2491fcb",
+        "capability": "discover_only",
+        "excludes_dlc": null,
+        "fingerprint": "volatile",
+        "format_observed": "unknown",
+        "format_reported": "zip",
+        "game_appid": 42,
+        "game_title": "A Game",
+        "identity_evidence": [
+          {
+            "appid": 42,
+            "kind": "steam_appid",
+            "page": "https://hgamer.tw/zh-CN/patches/game"
+          }
+        ],
+        "languages": [],
+        "match_basis": "appid",
+        "mirrors": [],
+        "observed_at": "2026-01-01T00:00:00+00:00",
+        "parent_appid": null,
+        "patch_kind": "adult_content",
+        "patch_title": "A Game",
+        "patch_updated_at": null,
+        "platforms": [
+          "steam"
+        ],
+        "provenance": [
+          {
+            "page": "https://hgamer.tw/zh-CN/patches/game",
+            "source_id": "hgamer"
+          }
+        ],
+        "published_at": null,
+        "requires_dlc": null,
+        "source_id": "hgamer",
+        "source_page": "https://hgamer.tw/zh-CN/patches/game",
+        "source_record_id": "https://hgamer.tw/zh-CN/patches/game",
+        "upstream_page": null,
+        "variant": "base",
+        "version_evidence": [
+          "1"
+        ],
+        "version_identity": "1",
+        "version_raw": "1",
+        "warnings": []
+      }
+    }
+  ],
+  "note": "Golden values produced by the frozen Rust deterministic encoding (P0 contract v0.5 §1). Byte/ID parity with the former Python implementation is explicitly NOT required. URL normalization keeps the path raw and the port as-is (port 443 is NOT folded); percent-encoding normalization remains 待调研 (p0-contracts §1.1).",
+  "query_key": [
+    {
+      "expected": "bdda1f4104a0568aba5f1dc12b63bcdc8429996b8dfc8fcae8b4b5644d5645ae",
+      "input": {
+        "appid": 42,
+        "encoding_version": 1,
+        "legacy_match": false,
+        "name": "A Game",
+        "name_hints": [],
+        "parser_version": 2,
+        "preferred_language": null,
+        "query_version": 1,
+        "source_context": [
+          "official"
+        ]
+      }
+    }
+  ],
+  "rule_fingerprint": [
+    {
+      "expected": "cd7b214b63ea43c7145d8d09f2d6592b8da6c812b2288e689a14600de637865f",
+      "input": {
+        "adapter": "patchmoe",
+        "discovery_only": false,
+        "download_hosts": [
+          "download.patch.moe"
+        ],
+        "enabled": true,
+        "id": "patchmoe",
+        "name": "PatchMoe",
+        "page_hosts": [
+          "www.patch.moe"
+        ],
+        "pages": [
+          "https://www.patch.moe/"
+        ],
+        "priority": 100,
+        "role": "publisher",
+        "root_layout": "game_root"
+      }
+    }
+  ],
+  "schema_version": 1
+}

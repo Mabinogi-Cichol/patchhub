@@ -993,6 +993,7 @@ mod sources_tests {
             "source_context": ["kagura-cn"],
             "parser_version": 2,
             "query_version": 1,
+            "encoding_version": steam_patch_core::sources::SOURCES_ENCODING_VERSION,
         }))
     }
 
