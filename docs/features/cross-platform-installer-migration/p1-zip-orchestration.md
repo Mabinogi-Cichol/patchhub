@@ -119,7 +119,7 @@ zip-selection-<hex(sha256(canonical_bytes(zip_candidate_binding)))[:24]>-<appid>
 6. **下载 URL 解析**（`acquire.validate_download` 前置）：
    - `mirrors_zip` 去重后规范化比较；`==1` 个不同 URL → 选定；`0` → `zip_download_unavailable`；`>1` → `zip_download_ambiguous`。
    - `acquire::validate_download(url, rule.download_hosts)`：HTTPS/主机/端口 443/无凭据/`.zip` 路径；失败 → `invalid_download_url`。
-7. **released 门**：按 `_released` 语义交叉核对来源缓存条目（`SourceEntry.date`：未来日期/`COMING SOON` → `source_not_released`）；无日期证据视为已发布。（candidate 现无 `date` 字段，`published_at` 恒 `None`，此门以来源缓存条目为准，登记为 P1 注记。）
+7. **released 门（F1 裁决：动态 ZIP 路径移除 `source_not_released`）**：候选模型暂无可靠日期字段（`SourceCandidate.date` 缺失、`published_at` 恒 `None`），动态路径不承诺 `source_not_released`；**待候选日期字段补齐后另行引入**。未发布条目的过滤仍由 discovery/来源缓存负责，无日期证据视为已发布。
 8. **facts 期望映射**（`FactsExpectation`）：
 
 | 期望 | 取值 |
@@ -130,10 +130,10 @@ zip-selection-<hex(sha256(canonical_bytes(zip_candidate_binding)))[:24]>-<appid>
 | `verified_buildids` | `[instance.buildid]`（“本次现场 build 自证”，对齐 Python publisher 生成 `verified_buildids=[buildid]`；publisher ZIP 无人工 build 表） |
 | `baselines` | 空（ZIP 无审核基线表；`original_sha256` 是现场快照，非原版认证，design §5.2） |
 
-9. **阻断判定**：投影 blocker 集合须为空才继续（对齐 Python `if patch["blockers"]: raise`）：`source_not_enabled`/`source_not_subscribed`/`source_not_released`/`game_not_ready`/`build_not_verified`/`zip_download_unavailable`/`zip_download_ambiguous`/`managed_install_exists_or_needs_recovery`/`publisher_existing_transaction`（同实例已 committed 且 release_id 不同）/`archive_not_allowed_for_selection`。
+9. **阻断判定**：投影 blocker 集合须为空才继续（对齐 Python `if patch["blockers"]: raise`）：`source_not_enabled`/`source_not_subscribed`/`game_not_ready`/`build_not_verified`/`zip_download_unavailable`/`zip_download_ambiguous`/`managed_install_exists_or_needs_recovery`/`publisher_existing_transaction`（同实例已 committed 且 release_id 不同）/`archive_not_allowed_for_selection`。
 10. **期望 → 下载请求**：`DownloadRequest { url, download_hosts: &rule.download_hosts, expected_sha256: None, expected_size: None }`（动态首 SHA 建立内容身份；来源若提供可靠摘要则另行核验，p0 §2.4，P1 候选暂不携带）。
 
-**不可用/歧义阻断错误码**：`selection_not_found`、`selection_stale`、`source_not_enabled`、`source_not_subscribed`、`source_not_released`、`source_requires_guidance`、`zip_download_unavailable`、`zip_download_ambiguous`、`invalid_download_url`、`game_not_ready`、`build_not_verified`、`instance_not_found`。
+**不可用/歧义阻断错误码**：`selection_not_found`、`selection_stale`、`source_not_enabled`、`source_not_subscribed`、`source_requires_guidance`、`zip_download_unavailable`、`zip_download_ambiguous`、`invalid_download_url`、`game_not_ready`、`build_not_verified`、`instance_not_found`。（`source_not_released` 已从动态 ZIP 路径移除；待候选日期字段补齐后另行引入，F1。）
 
 ### 2.2 理由
 
@@ -298,7 +298,7 @@ pub fn install_zip(
 ### 4.1 冻结值 —— `runtime::install_patch` 动态分支判定顺序
 
 1. **参数校验**：`instance_id` 必填（`instance_required`）；`selection_id` 与 `release_id` **互斥**（同给 → `invalid_request`）；二者皆缺 → `selection_or_release_required`；`operation` ∈ `install|reinstall`（否则 `invalid_operation`，R3）。
-2. **签名路由（优先）**：`release_id` 存在 → 现有签名 catalog 路径（`signed()` + `ready_release()`），迁移到 `installer/rust-v1` 根 + 新账本 + 授权（同 §3），`archive` 仍仅此路由有效。
+2. **签名路由（优先）**：`release_id` 存在 → 现有签名 catalog 路径（`signed()` + `ready_release()`），迁移到 `installer/rust-v1` 根 + 新账本 + 授权（**收窄为“根/账本迁移 + facts/撤销/租约重核”**；签名路由授权绑定实施值见 §9 第 4 条），`archive` 仍仅此路由有效。
 3. **动态路由**：`selection_id` 存在 →
    - 前缀 `zip-selection-` → 动态 ZIP orchestrator（§2/§3）。
    - 前缀 `exe-selection-` → P2/P3；P1 返回 `exe_route_unimplemented`（`links.exe.available=false` 已表达不可用）。
@@ -327,13 +327,15 @@ pub fn install_zip(
 | 阶段 | `error.code`（宿主） | 备注 |
 | --- | --- | --- |
 | 请求 | `invalid_request`、`selection_or_release_required`、`invalid_selection_id`、`invalid_operation`、`archive_not_allowed_for_selection` | |
-| resolve | `instance_not_found`、`game_not_ready`、`build_not_verified`、`selection_not_found`、`selection_stale`、`source_not_enabled`、`source_not_subscribed`、`source_not_released`、`source_requires_guidance`、`zip_download_unavailable`、`zip_download_ambiguous`、`invalid_download_url` | 直通稳定码 |
+| resolve | `instance_not_found`、`game_not_ready`、`build_not_verified`、`selection_not_found`、`selection_stale`、`source_not_enabled`、`source_not_subscribed`、`source_requires_guidance`、`zip_download_unavailable`、`zip_download_ambiguous`、`invalid_download_url` | 直通稳定码；`source_not_released` 已移除，见下表注 |
 | 下载 | `download_cancelled`、`download_hash_mismatch`、`download_size_limit` 直通；其余传输/HTTP/非 ZIP/空包归 `download_failed`（`detail` 带内部码） | |
 | 配方/分析 | `archive_entry_limit`、`archive_too_large` 直通；`zip_*`/`unsafe_relative_path`/`empty_recipe` 归 `analysis_failed`（`detail` 内部码） | |
 | 事实 | `exe_dlc_required`、`exe_dlc_excluded`、`exe_language_mismatch`、`exe_manifest_*`、`game_not_ready` | 来自 `game_facts` |
 | 计划 | `plan_failed`、`plan_has_blockers`、`insufficient_space`、`installer_busy`、`game_busy`、`managed_install_exists_or_needs_recovery`、`reinstall_content_identity_changed`、`reinstall_unowned_or_incomplete`、`plan_expired` | |
 | 授权 | `authorization_*`（12 项）、`authorization_expired`、`authorization_revoked`、`authorization_lease_inactive` | |
 | 路由占位 | `exe_route_unimplemented`（P1 临时，P3 移除） | 新增，需回写 |
+
+> 注（F1）：`source_not_released` 已从动态 ZIP 路径错误码表移除——动态 ZIP 暂无此门（候选模型无可靠日期字段）；**待候选日期字段补齐后另行引入**。
 
 ### 4.5 被否替代
 
@@ -391,7 +393,7 @@ pub fn install_zip(
 | 位置 | 追加内容 |
 | --- | --- |
 | §1.1 A（动态路由说明） | 扩展为：签名 `release_id` / `zip-selection-*` / `exe-selection-*`；判定顺序（互斥→签名→前缀分派）；`archive` 仍仅签名路由。 |
-| §1.1（错误码） | `invalid_selection_id`、`selection_not_found`、`selection_stale`、`zip_download_unavailable`、`zip_download_ambiguous`、`source_not_released`、`exe_route_unimplemented`（P1 临时）。 |
+| §1.1（错误码） | `invalid_selection_id`、`selection_not_found`、`selection_stale`、`zip_download_unavailable`、`zip_download_ambiguous`、`exe_route_unimplemented`（P1 临时）；`source_not_released` 动态 ZIP 无此门（待候选日期字段补齐后另行引入，F1）。 |
 | §2.2 | `install_progress.selection_id` 对动态 ZIP 必填说明。 |
 | §2.3 | `InstallOutcome`：动态 ZIP `release_id`=来源 release id、`content_id`=null。 |
 | §5.1 | 账本对动态 ZIP 的绑定：`selection_id` + 内部 `content_id`=`recipe_identity`；计划前失败不写 `error` 的说明。 |
@@ -407,7 +409,7 @@ pub fn install_zip(
 ## 7. 风险、待决与与现有模块的差异
 
 1. **release_id 命名空间复用**：动态 ZIP 与签名 managed_zip 共享 `patchmoe-<appid>`/`source-<id>-<appid>`；以“签名优先去重”消除投影与 UI 键冲突；账本以 `selection_id` 区分路由。需在实现与测试中固化。
-2. **候选日期/`_released`**：`SourceCandidate` 现无 `date`，`published_at` 恒 `None`；本稿以来源缓存条目日期做门，`candidate` 侧字段补齐登记为 P1 注记（不改变 resolved 语义）。
+2. **候选日期/`_released`**：`SourceCandidate` 现无 `date`，`published_at` 恒 `None`；F1 裁决后本稿动态路径**不设 `source_not_released` 门**（已从契约移除），`candidate` 日期字段补齐后另行引入（不改变现有 resolved 语义）。
 3. **`conditions_sha256`**：条件求值器未落地；本稿用候选条件 `{requires_dlc, excludes_dlc, language, verified_buildids}` 的确定性摘要占位（progress 已登记“由调用方提供”）。
 4. **锁与并发**：多任务并发由 `serve-task` 单任务 + `journal.lock`（prepare）+ game lock（apply）+ `ensure_no_active` 约束；`planned` 孤儿计划由 `recover`/`discard_plan`/`cleanup` 处理（登记 P1 收尾）。
 5. **`cleanup` 阶段**：`install::cleanup_terminal` 现不发阶段，P1 补齐（编排在 apply 后显式 emit）。
@@ -425,11 +427,15 @@ pub fn install_zip(
 
 ---
 
-## 9. 实施注记（2026-10-08，fix-12；待 P1 gate 审议）
+## 9. 实施注记（2026-10-08，fix-12；P1 gate 初审裁决已折入 fix-14/fix-15）
 
 1. §2.1(5) `!discovery_only` 实施校正为仅 `enabled`（候选来自 discovery 规则；“publisher 规则携带 download_hosts”）。
-2. §2.1(5) 的 `source_not_enabled`/`source_not_subscribed`/`selection_stale` 在 `resolve_zip` 路径不可达（`effective_discovery_rules` 已过滤、缓存重算 stale），实际表现为 `selection_not_found`；这些码保留于 scan 投影 blockers。
+2. §2.1(5) 的 `source_not_enabled`/`source_not_subscribed` 在 `resolve_zip` 路径不可达（`effective_discovery_rules` 已过滤候选），实际表现为 `selection_not_found`（含候选漂移）；两码保留于 scan 投影 blockers。**`selection_stale` 实际可达**：来源缓存条目 `cache_status == Stale` 时 `resolve_zip` 返回 `selection_stale`（测试 `stale_discovery_yields_selection_stale`），§2.1(5)/§2.1(6)/§4.4 的该码为生产路径真实返回（原注记第 2 条关于 stale 的“不可达”表述作废）。
 3. §1.4 与 §2.1(8) 的 buildid 交接经 `ResolvedZipCandidate::expectation(buildid)`/`conditions_sha256(buildid)`（orchestrator 计算）。
-4. §4.1 step 2 的签名路由授权绑定为实施确定值：`source_id="signed"`、`settings_revision=catalog.revision`、release 派生 `candidate_sha256`/`rule_fingerprint`、现场 manifest 语言；建议 P1 gate 冻结或把 §4.1 收窄为“根/账本迁移”。
+4. **签名路由授权绑定冻结为实施确定值（r6 §9.4 裁决）**：`source_id="signed"`、`settings_revision=catalog.revision`、release 派生 `candidate_sha256`/`rule_fingerprint`、现场 manifest 语言；§4.1 step 2 的“同 §3”已收窄为“根/账本迁移 + facts/撤销/租约重核”。
 5. `error.detail` 暂经内部 `\u{1}` 分隔传递（`main.rs::respond` 拆分）；建议后续 typed error。
 6. `recover_at`/`list_transactions_at` 将空 journal（无 `jobs` 表）视为空；`cleanup_cache` 保持 `{performed, removed_bytes}` 形状。
+7. **F1 裁决（r6）：`source_not_released` 从动态 ZIP 路径契约移除。** 候选模型暂无可靠日期字段（`SourceCandidate.date` 缺失、`published_at` 恒 `None`），released 门在动态路径无稳定来源可依；§2.1 step 7 与 §4.4 错误码表已同步标注“待候选日期字段补齐后另行引入”。未发布条目的过滤仍由 discovery/来源缓存负责，不变更 resolve 语义。
+8. **F3 裁决（fix-14）：租约落盘已补做。** 计划建立时写 `jobs/<plan_id>/lease.json`（`{deadline_ms, renewed_at}`，`write_atomic`），阶段边界续租刷新；不再仅内存 `LeaseState`（§3.5、p1-host-contract §5.5/§8 同步）。
+9. **F4 裁决（fix-14）：动态路由租约改为实时检查。** `install_zip_route` 不再用单次固定 `now`（原 `lease_active(fixed_now)` 恒真），改取实时时间，与签名路由对称；真实过期仍叠加看门狗（§3.5）。
+10. **F6 裁决（fix-14）：计划后失败形态统一对齐 §2.3。** 计划后取消/租约过期经恢复返回 `InstallOutcome`（恢复成功 `rolled_back`、恢复冲突 `needs_recovery`、提交已成功 `committed`），不再出现“首次 `Err(code)`、重放返回 `rolled_back`”的双形态（§3.7、p1-host-contract §2.3）。

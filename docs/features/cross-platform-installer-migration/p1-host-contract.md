@@ -15,7 +15,7 @@
 - 协议版本 `protocol_version = 3`（由现行 2 升级，p0-contracts §0）。核心与两端宿主同版本发布，**旧版本明确拒绝**（`unsupported_protocol`），不设兼容路由（design §6）。
 - 传输：stdin/stdout **单行 JSON-lines**；一行一个对象；单行错误不终止后续请求（保持 `serve`/`serve-task` 两模式）。
 - 两个执行面：
-  - `serve`：一次性短调用（扫描、来源读写、能力、缓存清理）。
+  - `serve`：一次性短调用（扫描、来源读写、能力、缓存清理）；**不含任务面方法**——任务面方法（`install_patch`）仅 `serve-task` 提供，经 `serve` 调用一律拒绝并返回 `task_required`（F2）。
   - `serve-task`：单任务、可取消、可流式（`install_patch`、`scan_sources`、`refresh_sources`）。**一个任务一个子进程**，取消/租约/EOF 走该进程 stdin 控制通道。
   - `discover_game` 为 `serve` **一次性方法（非流式）**，不得列入 `serve-task`（MF6；对齐现行 `runtime.rs` `SOURCE_STREAM_METHODS` 仅含 `scan_sources`/`refresh_sources`）。
 - 请求信封：`{protocol_version, request_id, method, params}`，`deny_unknown_fields`；`request_id` 1–128 字节、非空、无控制字符。
@@ -61,7 +61,8 @@ design §6 要求“核心与两端宿主一起更新，旧版本明确拒绝”
 | `cleanup_cache` | serve | `{}` | `CacheStatus`（新共享清单/清理；不删 active lease/receipt/journal/`.stage`/`.backup`/`revoked`） |
 
 - `install_patch` 后端判别 **签名 release**（`catalog.release_id`）与 **动态选择路由**（`zip-selection-*` / `exe-selection-*`）；后端路由，不看前端自称（design §6、§5.1）。**判定顺序**：先校验 `selection_id`/`release_id` 互斥（同给 → `invalid_request`；皆缺 → `selection_or_release_required`）→ 有 `release_id` 走**签名路由（优先）** → 否则按 `selection_id` 前缀分派：`zip-selection-` → 动态 ZIP 编排（P1）；`exe-selection-` → P2/P3，P1 返回 `exe_route_unimplemented`；其他前缀/格式 → `invalid_selection_id`。任何候选/选择身份（`candidate-*`/`zip-selection-*` 等）不得冒充 `release_id`，`archive` **仍仅签名 `release_id` 路由**有效。
-- **动态路由错误码（P1-3b-3）**：`invalid_selection_id`、`selection_not_found`、`selection_stale`、`zip_download_unavailable`、`zip_download_ambiguous`、`source_not_released`，以及 P1 临时占位 `exe_route_unimplemented`（P2/P3 EXE worker 落地后移除）。
+- **动态路由错误码（P1-3b-3）**：`invalid_selection_id`、`selection_not_found`、`selection_stale`、`zip_download_unavailable`、`zip_download_ambiguous`，以及 P1 临时占位 `exe_route_unimplemented`（P2/P3 EXE worker 落地后移除）。**`source_not_released` 已移除：动态 ZIP 暂无此门；候选日期字段补齐后另行引入（F1）。**
+- **执行面门禁（F2）**：`install_patch` 为任务面方法，**仅经 `serve-task` 执行**；经 `serve` 调用一律拒绝并返回 `task_required`（不得用永真租约/永不置位的 cancel 执行）。
 - `preview` 只接受候选/选择与 release；动态路径不返回可执行授权（`executable:false` 恒成立）。
 - `install_patch`/`preview` 的 `selection_id` 与 `release_id` **互斥**（同时提供 → `invalid_request`）；二者皆缺 → `selection_or_release_required`（替换 v2 的 `release_required`，R3）。
 - 保存的本地 ZIP 导入（`archive`）：**仅对签名 `release_id` 路由有效**；动态 selection（`zip-selection-*`/`exe-selection-*`）路由携带 `archive` 一律拒绝（`archive_not_allowed_for_selection`），防止绕过 design §2.1“动态安装只接受后端从核实来源解析的 URL、不新增任意 EXE 导入”。签名路由的 `archive` 仅允许宿主层校验后传入的**受控绝对路径**（Decky 限 `~/Downloads` 或 `state/downloads`；Windows 只接受 `.zip` 普通文件）。**UI 不传配方、不传目标路径、不传任意 URL**。
@@ -266,7 +267,7 @@ design §6 明确阶段清单、字节重置、未知 total、递增 sequence、
 ### 3.3 错误形状（新增 `detail`）
 
 - `error = { code, detail? }`；`detail` **可选、≤2 KiB、截断后的底层诊断**（核心错误串/子进程诊断），供 UI 展示真实原因。
-- 冻结新增错误码：`unsupported_protocol`（版本不匹配）、`capability_mismatch`（能力含缺失方法/协议）、`installer_schema_unsupported`（installer schema/策略不匹配）、`installer_lease_expired`、`cleanup_failed`。
+- 冻结新增错误码：`unsupported_protocol`（版本不匹配）、`capability_mismatch`（能力含缺失方法/协议）、`installer_schema_unsupported`（installer schema/策略不匹配）、`installer_lease_expired`、`cleanup_failed`、`task_required`（任务面方法经 `serve` 调用，F2）。
 - 保留并用：`request_id_binding_conflict`、`install_request_in_progress_or_interrupted`、`installer_busy`、`needs_recovery` 相关码。
 
 ### 3.4 理由
@@ -323,6 +324,7 @@ design §4.3/§6；shared-source-discovery 已把 `get_capabilities` 作为协�
 
 - 冻结绑定元组：`(instance_id, selection_id|release_id, operation, resolved content_id)`（design §6“绑定实例、选择、操作与已解析内容”）。
 - **动态 publisher ZIP 绑定（P1-3b-3）**：动态 ZIP 的 `selection_id` **必填**、`release_id` 为 null、内部 `content_id` 存 `install::recipe_identity` 摘要（p0-contracts §2.5/§3.1）。
+- **签名路由授权绑定（实施冻结值，P1 gate 裁决）**：签名 `release_id` 路由复用 `installer/rust-v1` 新授权，绑定 `source_id="signed"`、`settings_revision=catalog.revision`、由 release 派生 `candidate_sha256`/`rule_fingerprint`、现场 manifest 语言；宿主不感知也不派生该内部绑定。签名路由迁移收窄为“根/账本迁移 + facts/撤销/租约重核”（[p1-zip-orchestration.md](p1-zip-orchestration.md) §4.1 step 2/§9）。
 - **计划建立前的失败不写 `error`**（保留绑定行、允许同 `request_id` 重试）；计划建立后回填 `plan_id`/`content_id`，终态后回填 `transaction_id/state/error`。
 - 账本：`installer/rust-v1/requests.sqlite`（p0-contracts §3.1），**替代旧顶层 `install_requests.sqlite` 的读取**。
 - 行为：
@@ -355,7 +357,7 @@ design §4.3/§6；shared-source-discovery 已把 `get_capabilities` 作为协�
 
 ### 5.5 迁移动作
 
-- **P1**：`install_patch` 绑定元组扩展为含 `selection_id`/`content_id`；账本迁 `installer/rust-v1/requests.sqlite`；任务通道实现 `renew`；租约 deadline 落 job 文档。
+- **P1**：`install_patch` 绑定元组扩展为含 `selection_id`/`content_id`；账本迁 `installer/rust-v1/requests.sqlite`；任务通道实现 `renew`；租约 deadline 落 `jobs/<plan_id>/lease.json`（`{deadline_ms, renewed_at}`，`write_atomic`；F3 已补做）。
 - **P4/P5**：宿主转发 `renew`；Decky `tasks.py` 租约与 `task_status(renew)` 对齐桥接。
 
 ### 5.6 验证方式
@@ -456,7 +458,7 @@ design §6“宿主随新契约更新并只转发身份/任务/事件”“UI �
 | --- | --- | --- |
 | `install_patch` 单任务内 acquire→analyze→convert→plan→apply 的阶段映射（analyzing/extracting 与 worker action 对应） | §1/§2 | **待实现**（P1/P3） |
 | 平台隔离探针注入 `get_capabilities.installer.links` 的接口 | §3 | **待实现**（P1 接口 + P3/P4 注入） |
-| `renew` 控制行频率与租约落盘（job 文档 vs `lease.json`） | §5 | **待实现**（P1；p0 倾向 job 文档） |
+| `renew` 控制行频率与租约落盘（`jobs/<plan_id>/lease.json`） | §5 | **已冻结/已补做**（P1，F3；`{deadline_ms, renewed_at}` 阶段边界刷新） |
 | `cleanup_cache` 返回 `CacheStatus` 字段全集 | §1/§4 | **待实现**（P1，依 p0-contracts §3.2 可清目录） |
 | Windows/Linux 实机事件顺序与终态一次 | §2/§7 | **待实测**（P4/P5） |
 | `reason` 新增/删除键的最终清单 | §6.3 | **待实现**（P1 定键，P4/P5 同步） |

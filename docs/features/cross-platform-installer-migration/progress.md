@@ -221,11 +221,32 @@
 - **删除 Python 状态导入**（`sources/store.rs` 符号级）：`import_python_state`/`import_cache`/`import_status`/`import_discovery`/`import_index`/`load|save_import_report`、`ImportReport`/`RawOverrides`、`StorePaths` 的 `python_*` 访问器、导入 staging/诊断辅助与专用测试全部移除；`SourceStore::open(state_dir)` 不再接收 `builtins`。
 - **直接初始化**：`schema.json` 缺失时直接写 Rust 默认 `settings.json`（`STORE_SCHEMA_VERSION`、revision=1、空 overrides）+ 最后写 `schema.json`；不探测/不读取 Python `overrides/cache/status/discovery/index`。
 - **规则 schema 仅 2**：`mod.rs` 门槛收紧为 `schema_version == 2`（1/0/3 → `invalid_sources_config`）；`validate_rule` 拒绝语义不变（publisher 必带 `root_layout=="game_root"`、discovery 必须缺失）；schema1 接受测试删除、新增拒绝与默认值用例。
-- 验证：core lib 221 + 集成 58 + cli 32 全绿；check/clippy/fmt 通过。
+- 验证：core lib 221 + 集成 8/40/4/6/3（=61）+ cli 32 全绿；check/clippy/fmt 通过。
 - 残留（P5）：Decky `source_service.py` 导入诊断/`import_report` 引用与 `test_source_import/engine/service.py`；`engine-switch`；`MAX_OVERRIDES_BYTES` 未用常量与 `installer/store.rs` doc 引用（后续清理）。
+
+### P1 gate 初审与修订（2026-10-08 续）
+
+- **独立初审**（独立 @oracle 会话 ora-6，报告归档 [p1-gate-review.md](p1-gate-review.md)）：结论 **P1 有条件放行进入 P2**——§8 自动化门槛证据充分；实机/真实写入属 P4/P5 待验。必修 F1–F6 + 低危 F7/F8（不静默延期）。后台独立跑测 `cargo test -p steam-patch-core -p steam-patch-cli` 全绿（exit=0）。
+- **权威测试计数（P1 终态，以单次 `cargo test -p steam-patch-core -p steam-patch-cli` 为准）**：core lib **221** + 集成 **8/40/4/6/3 = 61** + cli **32**。此前各节按阶段记录的快照计数（如集成 60/58）仅为历史，不再作为终态依据。
+- **F1–F8 清单与处置**：
+
+| 项 | 级别 | 问题 | 处置 | 归属 |
+| --- | --- | --- | --- | --- |
+| F1 | 高 | `source_not_released` 在动态 ZIP 路径不可达（契约承诺 vs 实现缺口） | 从动态 ZIP 契约移除并登记“待候选日期字段补齐后另行引入”（[p1-zip-orchestration.md](p1-zip-orchestration.md) §2.1 step 7/§4.4、[p1-host-contract.md](p1-host-contract.md) §1.1） | 文档本任务 |
+| F2 | 中 | `install_patch` 可经 `serve`（非 serve-task）执行 | `serve` 拒绝任务面方法并返回 `task_required` | 代码 fix-14 / 文档标注 |
+| F3 | 中 | 租约未落盘（仅内存 `LeaseState`） | 补做 `jobs/<plan_id>/lease.json`（`{deadline_ms, renewed_at}`，`write_atomic`） | 代码 fix-14 |
+| F4 | 中 | 动态路由租约用固定 `now`（恒真） | 改实时检查，与签名路由对称 | 代码 fix-14 |
+| F5 | 中 | 只读 `scan`/`preview` 通过独占 `journal.lock` 读 plan | 走只读快照（`open_ro`） | 代码 fix-14 |
+| F6 | 中低 | 计划后失败形态不一致 / 幂等重放形态漂移 | 统一对齐 p1-host-contract §2.3（`rolled_back`/`needs_recovery` 的 `InstallOutcome`） | 代码 fix-14 |
+| F7 | 低 | `SourceStore::open` 在 `schema.json` 缺失但 `settings.json` 存在时覆盖用户设置 | 优先复用现有 settings | 代码 fix-14 |
+| F8 | 低 | 语义/文档债（头注释、`exe-policy.json` 注释、`ManagedZip` 借用、无 fixture） | 随修复/后续清理 | 代码 fix-14 / 后续 |
+
+- **文档修订（本任务）**：[p1-zip-orchestration.md](p1-zip-orchestration.md) §2.1/§4.1/§4.4/§6.2/§7/§9 同步（F1 移除、stale 更正、§4.1 step 2 收窄、签名路由绑定冻结值、F3/F4/F6 注记）；[p1-host-contract.md](p1-host-contract.md) §0.1/§1.1/§3.3/§5.1/§5.5/§8 同步（F2 门禁、错误码、绑定冻结、租约落盘）；本文件计数统一。只改文档，未改代码、未提交 Git。
+- **修复归属**：代码 fix-14（另一任务）；文档修订本任务（归档报告记 fix-15，`.slim` 计划记 fix-16）。
+- **后续**：定向复审 attempt 2/3；P2 主体（SF 对象图/AST/IR、worker 协议、LZMA2、确定性 ZIP）与动态 ZIP 路径低耦合，可并行推进。
 
 ### 待办
 
 1. 已完成：P1 全部实现与清理（P1-0/P1-1/P1-2/P1-3a/P1-3b-1..3/收尾清理）。
-2. 进行中：**P1 gate**（独立评审 P1 全阶段与 design §8 门槛）。
+2. **P1 gate**：独立初审完成（**有条件放行进入 P2**，报告归档 [p1-gate-review.md](p1-gate-review.md)）；必修 F1–F6（+F7/F8）已按归属分流——代码 fix-14（另一任务）、文档修订（本任务，见上节）；定向复审 attempt 2/3 待执行。
 3. P2 前置：SF fixture 冻结（三条旧 profile 包可得性待用户提供）、`installer-format`/`installer-worker` 开工。
