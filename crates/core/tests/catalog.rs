@@ -10,6 +10,8 @@ fn game(root: PathBuf) -> GameInstall {
         instance_id: "test:42".into(),
         appid: 42,
         name: "Synthetic game".into(),
+        localized_name: None,
+        name_language: None,
         library_path: root.clone(),
         install_path: root,
         buildid: Some("100".into()),
@@ -189,4 +191,17 @@ fn installed_detection_requires_every_recipe_target_even_when_hints_are_subset()
     assert_eq!(detect(&install, &patch).status, "partial_or_conflict");
     fs::write(temp.path().join("game/second.dat"), b"second").unwrap();
     assert_eq!(detect(&install, &patch).status, "installed_external");
+}
+
+#[test]
+fn display_name_overrides_do_not_change_appid_matches_or_detection() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut install = game(temp.path().to_owned());
+    let catalog = catalog(release());
+    let before = serde_json::to_value(matches(&install, &catalog, Platform::Windows)).unwrap();
+    assert_eq!(before.as_array().unwrap().len(), 1);
+    install.localized_name = Some("妃神会秘史".into());
+    install.name_language = Some("schinese".into());
+    let after = serde_json::to_value(matches(&install, &catalog, Platform::Windows)).unwrap();
+    assert_eq!(after, before);
 }

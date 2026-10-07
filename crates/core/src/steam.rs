@@ -1,7 +1,8 @@
 //! Read-only Steam library and app manifest discovery.
 use crate::keyvalues::{self, Value};
+use crate::steam_metadata;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::io::Read;
 use std::path::{Component, Path, PathBuf};
@@ -19,6 +20,10 @@ pub struct GameInstall {
     pub instance_id: String,
     pub appid: u32,
     pub name: String,
+    /// Appinfo display override, including its default name fallback.
+    pub localized_name: Option<String>,
+    /// Present only when the override matches a known interface language.
+    pub name_language: Option<String>,
     pub library_path: PathBuf,
     pub install_path: PathBuf,
     pub buildid: Option<String>,
@@ -107,7 +112,7 @@ pub fn scan(roots: &[PathBuf]) -> ScanReport {
                 continue;
             }
         };
-        add_library(&mut libraries, &mut seen, &mut report, &root);
+        add_library(&mut libraries, &mut seen, &mut report, &root, &root);
         let primary = root.join("steamapps/libraryfolders.vdf");
         let fallback = root.join("config/libraryfolders.vdf");
         let file = if primary.exists() {
@@ -139,15 +144,32 @@ pub fn scan(roots: &[PathBuf]) -> ScanReport {
             }) {
                 Ok(paths) => {
                     for path in paths {
-                        add_library(&mut libraries, &mut seen, &mut report, &path);
+                        add_library(&mut libraries, &mut seen, &mut report, &path, &root);
                     }
                 }
                 Err(err) => report.diagnostic("libraryfolders_invalid", &file, err),
             }
         }
     }
-    for library in libraries {
+    let mut root_installs: HashMap<PathBuf, Vec<usize>> = HashMap::new();
+    for (library, owner) in libraries {
+        let start = report.installs.len();
         scan_library(&library, &mut report);
+        root_installs
+            .entry(owner)
+            .or_default()
+            .extend(start..report.installs.len());
+    }
+    for (root, indices) in root_installs {
+        let targets = indices.iter().map(|&i| report.installs[i].appid).collect();
+        let names = steam_metadata::names_for_root(&root, &targets);
+        for i in indices {
+            let game = &mut report.installs[i];
+            if let Some(name) = names.get(&game.appid) {
+                game.localized_name = Some(name.name.clone());
+                game.name_language = name.language.clone();
+            }
+        }
     }
     report.installs.sort_by(|a, b| {
         a.appid
@@ -167,15 +189,16 @@ fn unique_existing_dirs(paths: Vec<PathBuf>) -> Vec<PathBuf> {
 }
 
 fn add_library(
-    libraries: &mut Vec<PathBuf>,
+    libraries: &mut Vec<(PathBuf, PathBuf)>,
     seen: &mut HashSet<PathBuf>,
     report: &mut ScanReport,
     path: &Path,
+    owner: &Path,
 ) {
     match fs::canonicalize(path) {
         Ok(path) if path.is_dir() => {
             if seen.insert(path.clone()) {
-                libraries.push(path);
+                libraries.push((path, owner.to_owned()));
             }
         }
         Ok(_) => report.diagnostic("library_unavailable", path, "library is not a directory"),
@@ -270,6 +293,8 @@ fn parse_manifest(file: &Path, library: &Path, filename_appid: u32) -> Result<Ga
         instance_id,
         appid,
         name,
+        localized_name: None,
+        name_language: None,
         library_path: library.to_owned(),
         install_path,
         buildid,

@@ -2,9 +2,9 @@ import { callable, definePlugin, routerHook } from "@decky/api";
 import { Button, ButtonItem, DropdownItem, Field, Focusable, Navigation, PanelSection, PanelSectionRow, SidebarNavigation, TextField, ToggleField, showModal, useParams } from "@decky/ui";
 import { FaGamepad, FaPuzzlePiece } from "react-icons/fa";
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ComponentProps, type ReactNode } from "react";
-import { canAutoInstall, candidateMatched, displayPatches, filterInstalls, installSummary, patchState, reason, workflowState, type DiscoveryResult, type Filter, type Install, type Patch, type ScanResult, type SourceCandidate, type SourceSubscription, type Transaction } from "@steam-patch/ui";
+import { canAutoInstall, candidateMatched, displayPatches, filterInstalls, gameDisplayName, installSummary, patchState, reason, workflowState, type DiscoveryResult, type Filter, type Install, type Patch, type ScanResult, type SourceCandidate, type SourceSubscription, type Transaction } from "@steam-patch/ui";
 import { getListPreferences, setListPreferences, subscribeListPreferences } from "./preferences";
-import { gamePresentation } from "./steam";
+import { gamePresentation, matchesGameQuery, transactionGameName } from "./steam";
 import { transactionResult } from "./install";
 import { createManagerSession, needsRecovery } from "./session";
 import { decodeInstance, encodeInstance, settingsPage, settingsRoutes } from "./route";
@@ -141,7 +141,7 @@ function CandidateDetails({ candidate }: { candidate: SourceCandidate }) {
   </PanelSection>;
 }
 function GameButton({ item }: { item: Install }) {
-  const { name, icon } = gamePresentation(item.game.appid, item.game.name);
+  const { name, icon } = gamePresentation(item.game.appid, gameDisplayName(item.game));
   const [badIcon, setBadIcon] = useState(false);
   const nameRef = useRef<HTMLSpanElement>(null);
   const [travel, setTravel] = useState(0);
@@ -169,9 +169,7 @@ function QuickAccess() {
   useEffect(() => { void session.ensureSnapshot(); void tasks.resume().catch(() => {}); }, []);
   useLayoutEffect(() => { if (listRef.current) listRef.current.scrollTop = listScroll; }, [report, filter, query]);
   const shown = useMemo(() => filterInstalls(report?.installs ?? [], filter, "").filter(item => {
-    const q = query.trim().toLocaleLowerCase();
-    return !q || [item.game.name, gamePresentation(item.game.appid, item.game.name).name, String(item.game.appid)]
-      .some(value => value.toLocaleLowerCase().includes(q));
+    return matchesGameQuery(item, query);
   }), [report, filter, query]);
   useLayoutEffect(() => {
     if (!lastGame || !listRef.current) return;
@@ -257,7 +255,7 @@ function GameManager({ item, seg, panel }: { item: Install; seg: string; panel?:
   const panelScroll = useRef<Record<string, number>>({});
   const contentRef = useRef<HTMLDivElement>(null);
   const mounted = useRef(true);
-  const game = gamePresentation(item.game.appid, item.game.name).name;
+  const game = gamePresentation(item.game.appid, gameDisplayName(item.game)).name;
   const selected = entries.find(entry => entry.key === selectedKey);
   const patch = selected?.kind === "installable" ? selected.patch : undefined;
   const candidate = selected?.kind === "discovery" ? selected.candidate : undefined;
@@ -421,7 +419,7 @@ function GameManager({ item, seg, panel }: { item: Install; seg: string; panel?:
   const records = <div className="patch-page" ref={activePanel === "records" ? contentRef : undefined} onScroll={e => panelScroll.current.records = e.currentTarget.scrollTop}>
     {common}
     {unfinished.length > 0 && <PanelSection title="未完成的操作"><Row><Status warning>以下操作需要恢复；请关闭相关游戏并暂停更新。</Status></Row>
-      {unfinished.map(tx => <Row key={tx.transaction_id}><Status>{report?.installs.find(i => i.game.instance_id === tx.instance_id)?.game.name ?? tx.instance_id} · {workflowState(tx.state)}</Status></Row>)}
+      {unfinished.map(tx => <Row key={tx.transaction_id}><Status>{transactionGameName(report?.installs ?? [], tx.instance_id)} · {workflowState(tx.state)}</Status></Row>)}
       <Row><Action disabled={!!busy} onClick={() => void session.work("正在恢复…", recover, values => {
         values.forEach(record); refreshAfterMutation("恢复已执行，请检查各项操作结果。");
       })}>修复未完成的操作</Action></Row>

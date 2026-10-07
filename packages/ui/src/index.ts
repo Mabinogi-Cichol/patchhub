@@ -22,6 +22,8 @@ export type Install = {
     instance_id: string;
     appid: number;
     name: string;
+    localized_name?: string | null;
+    name_language?: string | null;
     library_path: string;
     install_path: string;
     buildid: string | null;
@@ -157,6 +159,10 @@ export type Transaction = {
 
 export type Filter = "all" | "matched" | "installed" | "attention";
 
+export function gameDisplayName(game: Install["game"]): string {
+  return game.localized_name?.trim() || game.name;
+}
+
 export function isManaged(status: string): boolean {
   return ["managed", "installed_managed", "installed_owned"].includes(status);
 }
@@ -175,7 +181,7 @@ export function needsAttention(row: Install): boolean {
 export function filterInstalls(rows: Install[], filter: Filter, query: string): Install[] {
   const search = query.trim().toLocaleLowerCase();
   return rows.filter(row => {
-    if (search && !`${row.game.name} ${row.game.appid}`.toLocaleLowerCase().includes(search)) return false;
+    if (search && !`${row.game.name} ${row.game.localized_name ?? ""} ${row.game.appid}`.toLocaleLowerCase().includes(search)) return false;
     if (filter === "matched") return hasMatchedPatch(row);
     if (filter === "installed") return row.patches.some(p => isManaged(p.detection.status) || isExternal(p.detection.status));
     if (filter === "attention") return needsAttention(row);
