@@ -9,11 +9,21 @@ use std::{
     io::{self, BufRead, Write},
     path::PathBuf,
     process::ExitCode,
+    sync::{
+        atomic::{AtomicBool, AtomicU64, Ordering},
+        Arc,
+    },
 };
 use steam_patch_core::catalog::Platform;
 
 const MAX_REQUEST_BYTES: usize = 64 * 1024;
-const PROTOCOL_VERSION: u32 = 2;
+/// p1-host-contract §0.1: v3 core rejects old hosts with `unsupported_protocol`.
+const PROTOCOL_VERSION: u32 = 3;
+/// Upper bound for `error.detail` (p1-host-contract §3.3).
+const MAX_ERROR_DETAIL_BYTES: usize = 2 * 1024;
+/// Foreground lease TTL (15s, p1-host-contract §5.2); used by the task control
+/// channel's in-memory lease placeholder.
+const LEASE_TTL_MILLIS: u64 = 15_000;
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -24,8 +34,39 @@ struct Request {
     params: Params,
 }
 
+/// `request_id` is 1–128 bytes, non-empty and free of control characters
+/// (p1-host-contract §0.1).
+fn valid_request_id(id: &str) -> bool {
+    !id.is_empty() && id.len() <= 128 && !id.chars().any(char::is_control)
+}
+
+/// Truncates `detail` to the frozen 2 KiB ceiling on a UTF-8 boundary.
+fn truncate_detail(detail: &str) -> String {
+    if detail.len() <= MAX_ERROR_DETAIL_BYTES {
+        return detail.to_string();
+    }
+    let mut end = MAX_ERROR_DETAIL_BYTES;
+    while !detail.is_char_boundary(end) {
+        end -= 1;
+    }
+    detail[..end].to_string()
+}
+
+fn error_with_detail(id: Option<&str>, code: &str, detail: Option<&str>) -> Value {
+    let mut value = json!({
+        "protocol_version": PROTOCOL_VERSION,
+        "request_id": id,
+        "ok": false,
+        "error": { "code": code },
+    });
+    if let Some(detail) = detail {
+        value["error"]["detail"] = json!(truncate_detail(detail));
+    }
+    value
+}
+
 fn error(id: Option<&str>, code: &str) -> Value {
-    json!({ "protocol_version": PROTOCOL_VERSION, "request_id": id, "ok": false, "error": { "code": code } })
+    error_with_detail(id, code, None)
 }
 
 fn respond(bytes: &[u8]) -> Value {
@@ -34,9 +75,16 @@ fn respond(bytes: &[u8]) -> Value {
         Err(_) => return error(None, "invalid_request"),
     };
     if request.protocol_version != PROTOCOL_VERSION {
-        return error(Some(&request.request_id), "unsupported_protocol");
+        return error_with_detail(
+            Some(&request.request_id),
+            "unsupported_protocol",
+            Some(&format!(
+                "protocol_version {} is not supported; expected {}",
+                request.protocol_version, PROTOCOL_VERSION
+            )),
+        );
     }
-    if request.request_id.is_empty() || request.request_id.len() > 128 {
+    if !valid_request_id(&request.request_id) {
         return error(None, "invalid_request_id");
     }
     if request.method == "install_patch" && request.params.request_id.is_none() {
@@ -46,7 +94,11 @@ fn respond(bytes: &[u8]) -> Value {
         Ok(result) => {
             json!({ "protocol_version": PROTOCOL_VERSION, "request_id": request.request_id, "ok": true, "result": result })
         }
-        Err(code) => error(Some(&request.request_id), &code),
+        Err(code) => {
+            let detail = (code == "unsupported_method")
+                .then(|| format!("method not in v3 whitelist: {}", request.method));
+            error_with_detail(Some(&request.request_id), &code, detail.as_deref())
+        }
     }
 }
 
@@ -91,68 +143,121 @@ fn serve(reader: &mut impl BufRead, writer: &mut impl Write) -> io::Result<()> {
     Ok(())
 }
 
-/// One cancellable task. The controller keeps stdin open; cancellation or EOF
-/// requests cooperative stopping. In particular a disconnected Python host
-/// cannot leave an installer running unattended.
+/// One cancellable task. The controller keeps stdin open and may send `renew`
+/// (refresh the foreground lease) or `cancel` control lines; EOF is equivalent
+/// to `cancel` and reclaims the worker process group (p1-host-contract §1.1 C,
+/// §5.2, §5.3). In particular a disconnected Python host cannot leave an
+/// installer running unattended.
 fn serve_task() -> io::Result<()> {
-    use std::sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
-    };
-    let request = read_request(&mut io::stdin().lock())?;
-    let Some((bytes, oversized)) = request else {
+    let Some((bytes, oversized)) = read_request(&mut io::stdin().lock())? else {
         return Ok(());
     };
     let cancel = Arc::new(AtomicBool::new(false));
-    let signal = cancel.clone();
-    std::thread::spawn(move || {
-        use std::io::Read;
-        let _ = io::stdin().read(&mut [0u8; 1]);
-        signal.store(true, Ordering::Relaxed);
+    let lease = Arc::new(AtomicU64::new(lease_deadline()));
+    spawn_control_thread(Arc::clone(&cancel), lease);
+    let response = run_task(&bytes, oversized, cancel, |value| {
+        let mut output = io::stdout().lock();
+        // A closed output pipe must not abort the rollback path.
+        let _ = serde_json::to_writer(&mut output, &value);
+        let _ = output.write_all(b"\n");
+        let _ = output.flush();
     });
-    if !oversized {
-        if let Ok(parsed) = serde_json::from_slice::<Request>(&bytes) {
-            if parsed.protocol_version == PROTOCOL_VERSION
-                && !parsed.request_id.is_empty()
-                && parsed.request_id.len() <= 128
-                && runtime::SOURCE_STREAM_METHODS.contains(&parsed.method.as_str())
-            {
-                return stream_sources_task(parsed, &cancel);
-            }
-        }
-    }
-    let response = steam_patch_core::operation::run(
-        cancel,
-        |progress| {
-            let mut output = io::stdout().lock();
-            // A closed output pipe must not abort the rollback path.
-            let _ = serde_json::to_writer(
-                &mut output,
-                &json!({"event":"progress", "progress":progress}),
-            );
-            let _ = output.write_all(b"\n");
-            let _ = output.flush();
-        },
-        || {
-            if oversized {
-                error(None, "request_too_large")
-            } else {
-                respond(&bytes)
-            }
-        },
-    );
     let mut output = io::stdout().lock();
     serde_json::to_writer(&mut output, &response)?;
     output.write_all(b"\n")?;
     output.flush()
 }
 
+/// Current lease deadline as epoch milliseconds. TODO(P1 lease persistence):
+/// core has no on-disk lease yet; this in-memory value is a placeholder until
+/// the lease is written to the job document (p1-host-contract §5.2 / §8).
+fn lease_deadline() -> u64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or(0)
+        .saturating_add(LEASE_TTL_MILLIS)
+}
+
+/// Reads `renew`/`cancel` control lines from the task stdin. EOF (`None` or a
+/// read error) is treated as `cancel`.
+fn spawn_control_thread(cancel: Arc<AtomicBool>, lease: Arc<AtomicU64>) {
+    std::thread::spawn(move || {
+        use std::io::BufRead;
+        let stdin = io::stdin();
+        let mut lines = stdin.lock().lines();
+        while let Some(Ok(line)) = lines.next() {
+            match line.trim() {
+                "renew" => {
+                    // TODO(P1 lease persistence): placeholder refresh only; the
+                    // durable lease/expiry check lands with the job document.
+                    lease.store(lease_deadline(), Ordering::Relaxed);
+                }
+                "cancel" => {
+                    cancel.store(true, Ordering::Relaxed);
+                    return;
+                }
+                _ => {}
+            }
+        }
+        cancel.store(true, Ordering::Relaxed);
+    });
+}
+
+/// Runs one `serve-task` request: stream methods emit their events, everything
+/// else runs under `operation::run` and emits flat `install_progress` events.
+/// Returns the single final response line value.
+pub(crate) fn run_task(
+    bytes: &[u8],
+    oversized: bool,
+    cancel: Arc<AtomicBool>,
+    mut emit: impl FnMut(Value) + 'static,
+) -> Value {
+    let parsed = if oversized {
+        None
+    } else {
+        serde_json::from_slice::<Request>(bytes).ok()
+    };
+    if let Some(request) = parsed {
+        if request.protocol_version == PROTOCOL_VERSION
+            && valid_request_id(&request.request_id)
+            && runtime::SOURCE_STREAM_METHODS.contains(&request.method.as_str())
+        {
+            return stream_sources_task(request, &cancel, emit);
+        }
+        let mut cursor = runtime::ProgressCursor::new(
+            PROTOCOL_VERSION,
+            request.request_id.clone(),
+            request.params.instance_id.clone(),
+            request.params.selection_id.clone(),
+        );
+        return steam_patch_core::operation::run(
+            cancel,
+            move |progress| emit(cursor.event(progress)),
+            || {
+                if oversized {
+                    error(None, "request_too_large")
+                } else {
+                    respond(bytes)
+                }
+            },
+        );
+    }
+    if oversized {
+        error(None, "request_too_large")
+    } else {
+        respond(bytes)
+    }
+}
+
 /// Streams a sources task: `source_progress`/`source_update` lines carrying the
 /// request id and a monotonic sequence, then the single final response.
 fn stream_sources_task(
     request: Request,
-    cancel: &std::sync::Arc<std::sync::atomic::AtomicBool>,
-) -> io::Result<()> {
+    cancel: &Arc<AtomicBool>,
+    mut emit: impl FnMut(Value),
+) -> Value {
     let Request {
         request_id,
         method,
@@ -173,12 +278,9 @@ fn stream_sources_task(
         object.insert("request_id".to_string(), json!(request_id.clone()));
         object.insert("sequence".to_string(), json!(sequence));
         sequence += 1;
-        let mut output = io::stdout().lock();
-        let _ = serde_json::to_writer(&mut output, &Value::Object(object));
-        let _ = output.write_all(b"\n");
-        let _ = output.flush();
+        emit(Value::Object(object));
     });
-    let response = match response {
+    match response {
         Ok(result) => json!({
             "protocol_version": PROTOCOL_VERSION,
             "request_id": request_id,
@@ -186,11 +288,7 @@ fn stream_sources_task(
             "result": result,
         }),
         Err(code) => error(Some(&request_id), &code),
-    };
-    let mut output = io::stdout().lock();
-    serde_json::to_writer(&mut output, &response)?;
-    output.write_all(b"\n")?;
-    output.flush()
+    }
 }
 
 const HELP: &str = "Steam patch manager Alpha\n\
@@ -198,8 +296,8 @@ Usage: steam-patch scan [--steam-root PATH]... [--catalog PATH] [--platform wind
        steam-patch preview --instance ID --release ID [scan options]\n\
        steam-patch serve  (versioned JSON-lines on stdin/stdout)\n\
 Installation requires a signed catalog. Close the game and pause Steam updates before installing.
-Methods: scan preview install_patch fetch_artifact list_transactions recover migrate_state.
-Sources: get_capabilities list_sources list_source_matches list_game_sources set_source_enabled set_game_source add_source get_source_state get_source_settings refresh_sources discover_game scan_sources get_source_policy resolve_source_record.
+Methods: get_capabilities scan preview install_patch list_transactions recover discard_plan cleanup_cache.
+Sources: list_sources list_game_sources set_source_enabled set_game_source add_source refresh_sources scan_sources discover_game.
 Options: --signed-catalog --trust-keys --state-dir --archive --operation install|reinstall --request-id ID.
 Source options: --source-id ID --appid N --enabled true|false --subscribed true|false --rule JSON --name-hint TEXT --preferred-language CODE --force --generation N --record-id ID.
 Maintenance: keygen PRIVATE PUBLIC KEY_ID; sign-catalog CATALOG PRIVATE KEY_ID OUTPUT LIFETIME_SECONDS; schema OUTPUT.";
@@ -236,9 +334,6 @@ fn run() -> Result<(), String> {
     }
     if ["keygen", "sign-catalog", "schema"].contains(&command.as_str()) {
         return maintenance::run(&command, &args.collect::<Vec<_>>());
-    }
-    if ["plan_install", "start_install"].contains(&command.as_str()) {
-        return Err("internal_method_requires_task_controller".into());
     }
     let mut params = Params::default();
     while let Some(flag) = args.next() {
@@ -321,7 +416,7 @@ mod tests {
     #[test]
     fn protocol_recovers_after_bad_or_oversized_line() {
         let root = tempfile::tempdir().unwrap();
-        let valid = json!({"protocol_version":2,"request_id":"r1","method":"scan","params":{"roots":[root.path()]}}).to_string();
+        let valid = json!({"protocol_version":3,"request_id":"r1","method":"scan","params":{"roots":[root.path()]}}).to_string();
         let input = format!("broken\n{}\n{valid}\n", "x".repeat(MAX_REQUEST_BYTES + 1));
         let mut output = Vec::new();
         serve(&mut Cursor::new(input), &mut output).unwrap();
@@ -338,20 +433,189 @@ mod tests {
     }
 
     #[test]
-    fn protocol_rejects_unknown_fields_versions_and_mutations() {
+    fn protocol_rejects_old_versions_unknown_methods_and_fields() {
         let request = |version, method| {
             json!({"protocol_version":version,"request_id":"r","method":method,"params":{}})
                 .to_string()
         };
+        for old in [1, 2] {
+            let response = respond(request(old, "scan").as_bytes());
+            assert_eq!(response["error"]["code"], "unsupported_protocol");
+            assert!(response["error"]["detail"].is_string());
+        }
         assert_eq!(
-            respond(request(1, "scan").as_bytes())["error"]["code"],
-            "unsupported_protocol"
-        );
-        assert_eq!(
-            respond(request(2, "uninstall").as_bytes())["error"]["code"],
+            respond(request(3, "uninstall").as_bytes())["error"]["code"],
             "unsupported_method"
         );
-        assert_eq!(respond(br#"{"protocol_version":2,"request_id":"r","method":"scan","params":{"shell":"evil"}}"#)["error"]["code"], "invalid_request");
+        assert_eq!(respond(br#"{"protocol_version":3,"request_id":"r","method":"scan","params":{"shell":"evil"}}"#)["error"]["code"], "invalid_request");
+    }
+
+    #[test]
+    fn request_id_is_validated_for_length_and_control_characters() {
+        let with_id = |id: &str| {
+            json!({"protocol_version":3,"request_id":id,"method":"get_capabilities","params":{}})
+                .to_string()
+        };
+        assert_eq!(
+            respond(with_id("").as_bytes())["error"]["code"],
+            "invalid_request_id"
+        );
+        assert_eq!(
+            respond(with_id(&"a".repeat(129)).as_bytes())["error"]["code"],
+            "invalid_request_id"
+        );
+        assert_eq!(
+            respond(with_id("bad\u{1}id").as_bytes())["error"]["code"],
+            "invalid_request_id"
+        );
+        let accepted = respond(with_id(&"a".repeat(128)).as_bytes());
+        assert_eq!(accepted["ok"], true);
+    }
+
+    const V3_METHODS: &[&str] = &[
+        "get_capabilities",
+        "scan",
+        "preview",
+        "install_patch",
+        "list_transactions",
+        "recover",
+        "discard_plan",
+        "cleanup_cache",
+        "list_sources",
+        "list_game_sources",
+        "set_source_enabled",
+        "set_game_source",
+        "add_source",
+        "refresh_sources",
+        "scan_sources",
+        "discover_game",
+    ];
+
+    #[test]
+    fn v3_method_whitelist_is_exact() {
+        let mut expected = V3_METHODS.to_vec();
+        expected.sort_unstable();
+        let mut actual = runtime::METHODS.to_vec();
+        actual.sort_unstable();
+        assert_eq!(runtime::METHODS.len(), 16);
+        assert_eq!(actual, expected);
+
+        let capabilities = respond(
+            br#"{"protocol_version":3,"request_id":"c","method":"get_capabilities","params":{}}"#,
+        );
+        let methods: Vec<&str> = capabilities["result"]["methods"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|method| method.as_str().unwrap())
+            .collect();
+        assert_eq!(methods.len(), 16);
+        let mut sorted = methods.clone();
+        sorted.sort_unstable();
+        assert_eq!(sorted, expected);
+    }
+
+    #[test]
+    fn get_capabilities_has_v3_installer_and_sources_shape() {
+        let capabilities = respond(
+            br#"{"protocol_version":3,"request_id":"c","method":"get_capabilities","params":{}}"#,
+        );
+        let result = &capabilities["result"];
+        assert_eq!(result["protocol_version"], 3);
+        assert_eq!(result["installer"]["schema_version"], 1);
+        assert_eq!(result["installer"]["selection_version"], 1);
+        assert_eq!(result["installer"]["formats"]["zip"], "supported");
+        assert_eq!(result["installer"]["links"]["zip"]["available"], true);
+        assert_eq!(result["installer"]["links"]["exe"]["available"], false);
+        assert_eq!(
+            result["installer"]["links"]["exe"]["blockers"][0]["code"],
+            "exe_sandbox_unavailable"
+        );
+        assert_eq!(result["sources"]["parser_version"], 2);
+        assert_eq!(result["sources"]["query_version"], 1);
+        assert_eq!(result["sources"]["methods"].as_array().unwrap().len(), 8);
+    }
+
+    #[test]
+    fn deleted_methods_return_unsupported_method() {
+        for method in [
+            "plan_install",
+            "start_install",
+            "fetch_artifact",
+            "migrate_state",
+            "get_source_state",
+            "get_source_settings",
+            "list_source_matches",
+            "get_source_policy",
+            "resolve_source_record",
+        ] {
+            let request = json!({
+                "protocol_version": 3,
+                "request_id": "d",
+                "method": method,
+                "params": {},
+            })
+            .to_string();
+            assert_eq!(
+                respond(request.as_bytes())["error"]["code"],
+                "unsupported_method",
+                "deleted method {method} must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn install_progress_fields_and_monotonic_sequence() {
+        use steam_patch_core::operation::Progress;
+        let mut cursor = runtime::ProgressCursor::new(
+            3,
+            "req".to_string(),
+            Some("inst".to_string()),
+            Some("sel".to_string()),
+        );
+        let first = cursor.event(&Progress {
+            stage: "writing".to_string(),
+            bytes_done: 5,
+            total_bytes: None,
+            files_done: 1,
+            total_files: None,
+            current_file: Some("a.dat".to_string()),
+            archive_bytes: Some(99),
+        });
+        assert_eq!(first["event"], "install_progress");
+        assert_eq!(first["protocol_version"], 3);
+        assert_eq!(first["request_id"], "req");
+        assert_eq!(first["sequence"], 0);
+        assert_eq!(first["instance_id"], "inst");
+        assert_eq!(first["selection_id"], "sel");
+        assert_eq!(first["stage"], "applying");
+        assert_eq!(first["substage"], "writing");
+        assert_eq!(first["bytes_done"], 5);
+        assert!(first["total_bytes"].is_null());
+        assert_eq!(first["files_done"], 1);
+        assert!(first["total_files"].is_null());
+        assert_eq!(first["current_file"], "a.dat");
+        assert_eq!(first["archive_bytes"], 99);
+
+        let second = cursor.event(&Progress {
+            stage: "cleanup".to_string(),
+            ..Default::default()
+        });
+        assert_eq!(second["sequence"], 1);
+        assert!(second["substage"].is_null());
+        assert!(second["current_file"].is_null());
+        assert_eq!(cursor.sequence, 2);
+    }
+
+    #[test]
+    fn error_detail_is_optional_and_truncated_to_2kib() {
+        let plain = error(None, "unsupported_method");
+        assert!(plain["error"].get("detail").is_none());
+
+        let long = "d".repeat(MAX_ERROR_DETAIL_BYTES + 500);
+        let detailed = error_with_detail(Some("r"), "boom", Some(&long));
+        let detail = detailed["error"]["detail"].as_str().unwrap();
+        assert_eq!(detail.len(), MAX_ERROR_DETAIL_BYTES);
     }
 
     #[test]
@@ -402,7 +666,7 @@ mod tests {
     #[test]
     fn protocol_exposes_sources_capabilities_and_rejects_unknown() {
         let capabilities = respond(
-            br#"{"protocol_version":2,"request_id":"c","method":"get_capabilities","params":{}}"#,
+            br#"{"protocol_version":3,"request_id":"c","method":"get_capabilities","params":{}}"#,
         );
         assert_eq!(capabilities["ok"], true);
         assert!(capabilities["result"]["methods"]
@@ -411,12 +675,37 @@ mod tests {
             .iter()
             .any(|method| method == "discover_game"));
         let unknown = respond(
-            br#"{"protocol_version":2,"request_id":"u","method":"source_magic","params":{}}"#,
+            br#"{"protocol_version":3,"request_id":"u","method":"source_magic","params":{}}"#,
         );
         assert_eq!(unknown["error"]["code"], "unsupported_method");
         let missing_state = respond(
-            br#"{"protocol_version":2,"request_id":"s","method":"list_sources","params":{}}"#,
+            br#"{"protocol_version":3,"request_id":"s","method":"list_sources","params":{}}"#,
         );
         assert_eq!(missing_state["error"]["code"], "state_dir_required");
+    }
+
+    #[test]
+    fn cleanup_cache_sweeps_downloads() {
+        let temp = tempfile::tempdir().unwrap();
+        let state = temp.path().join("state");
+        let downloads = state.join("downloads");
+        std::fs::create_dir_all(&downloads).unwrap();
+        std::fs::write(downloads.join("artifact.zip"), b"stale bytes").unwrap();
+        // Recovery material must survive a cache sweep.
+        let job = state.join("jobs").join("plan-1");
+        std::fs::create_dir_all(&job).unwrap();
+        std::fs::write(job.join("0.stage"), b"stage").unwrap();
+        let result = execute(
+            "cleanup_cache",
+            Params {
+                state_dir: Some(state.clone()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(result["performed"], true);
+        assert_eq!(result["removed_bytes"], 11);
+        assert!(!downloads.join("artifact.zip").exists());
+        assert!(job.join("0.stage").exists());
     }
 }

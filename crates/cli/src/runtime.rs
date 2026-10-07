@@ -29,6 +29,9 @@ pub struct Params {
     pub state_dir: Option<PathBuf>,
     pub archive: Option<PathBuf>,
     pub plan_id: Option<String>,
+    /// Dynamic content-route selection (`exe-selection-*`), mutually exclusive
+    /// with `release_id` (p1-host-contract §1.1 A).
+    pub selection_id: Option<String>,
     #[serde(default)]
     pub operation: install::InstallOperation,
     pub request_id: Option<String>,
@@ -46,52 +49,156 @@ pub struct Params {
     pub record_id: Option<String>,
 }
 
+/// v3 method whitelist (p1-host-contract §1.1): the 8 installer/task methods
+/// plus the 8 source methods. Deleted v2 methods are intentionally absent.
 pub const METHODS: &[&str] = &[
-    "discard_plan",
+    // Installer/task face.
+    "get_capabilities",
     "scan",
     "preview",
-    "plan_install",
-    "start_install",
-    "fetch_artifact",
-    "list_transactions",
     "install_patch",
-    "migrate_state",
+    "list_transactions",
     "recover",
-    "get_capabilities",
+    "discard_plan",
+    "cleanup_cache",
+    // Source face.
     "list_sources",
-    "list_source_matches",
     "list_game_sources",
     "set_source_enabled",
     "set_game_source",
     "add_source",
-    "get_source_state",
-    "get_source_settings",
     "refresh_sources",
-    "discover_game",
     "scan_sources",
-    "get_source_policy",
-    "resolve_source_record",
+    "discover_game",
 ];
 
-/// Methods served by the shared source engine (offline unless they refresh).
+/// Installer/task methods advertised by `get_capabilities.installer`-adjacent
+/// `methods` (p1-host-contract §1.1 A).
+pub const INSTALLER_METHODS: &[&str] = &[
+    "get_capabilities",
+    "scan",
+    "preview",
+    "install_patch",
+    "list_transactions",
+    "recover",
+    "discard_plan",
+    "cleanup_cache",
+];
+
+/// Source methods advertised by `get_capabilities.sources.methods`
+/// (p1-host-contract §1.1 B).
 pub const SOURCE_METHODS: &[&str] = &[
     "list_sources",
-    "list_source_matches",
     "list_game_sources",
     "set_source_enabled",
     "set_game_source",
     "add_source",
-    "get_source_state",
-    "get_source_settings",
     "refresh_sources",
-    "discover_game",
     "scan_sources",
-    "get_source_policy",
-    "resolve_source_record",
+    "discover_game",
 ];
 
 /// Streaming source-task methods that emit `source_progress`/`source_update`.
 pub const SOURCE_STREAM_METHODS: &[&str] = &["scan_sources", "refresh_sources"];
+
+/// Per-task cursor that renders `operation::Progress` into the flat v3
+/// `install_progress` event (p1-host-contract §2.2). The cursor owns the
+/// per-task `sequence`, which starts at 0 and increments strictly per event.
+pub struct ProgressCursor {
+    pub protocol_version: u32,
+    pub request_id: String,
+    pub instance_id: Option<String>,
+    pub selection_id: Option<String>,
+    pub sequence: u64,
+}
+
+impl ProgressCursor {
+    pub fn new(
+        protocol_version: u32,
+        request_id: String,
+        instance_id: Option<String>,
+        selection_id: Option<String>,
+    ) -> Self {
+        Self {
+            protocol_version,
+            request_id,
+            instance_id,
+            selection_id,
+            sequence: 0,
+        }
+    }
+
+    /// Renders one event and advances the monotonic sequence. Internal apply
+    /// substates fold into the host-visible `applying` stage + diagnostic
+    /// `substage` (p1-host-contract §2.1).
+    pub fn event(&mut self, progress: &steam_patch_core::operation::Progress) -> Value {
+        let (stage, substage) = match progress.stage.as_str() {
+            "backing_up" | "writing" | "committing" => ("applying", Some(progress.stage.as_str())),
+            other => (other, None),
+        };
+        let event = json!({
+            "event": "install_progress",
+            "protocol_version": self.protocol_version,
+            "request_id": self.request_id,
+            "sequence": self.sequence,
+            "instance_id": self.instance_id,
+            "selection_id": self.selection_id,
+            "stage": stage,
+            "substage": substage,
+            "bytes_done": progress.bytes_done,
+            "total_bytes": progress.total_bytes,
+            "files_done": progress.files_done,
+            "total_files": progress.total_files,
+            "current_file": &progress.current_file,
+            "archive_bytes": progress.archive_bytes,
+        });
+        self.sequence += 1;
+        event
+    }
+}
+
+/// `get_capabilities` v3 payload (p1-host-contract §3.1): installer and source
+/// sub-objects merged with the full 16-method whitelist.
+fn capabilities() -> Value {
+    let mut methods: Vec<&str> = Vec::with_capacity(METHODS.len());
+    methods.extend(INSTALLER_METHODS.iter().copied());
+    methods.extend(SOURCE_METHODS.iter().copied());
+    json!({
+        "protocol_version": 3,
+        "installer": {
+            "schema_version": 1,
+            "selection_version": 1,
+            "content_version": 1,
+            "adapter_version": 1,
+            "policy_schema_version": 1,
+            "report_schema_version": 1,
+            "formats": { "zip": "supported", "exe": "supported" },
+            "strategies": ["managed_zip", "publisher_zip", "publisher_exe"],
+            // TODO(P1/P3/P4): platform isolation probes are injected by the
+            // host/runtime (LPAC/Job Object on Windows, bwrap on SteamOS).
+            // Conservative default until then; `formats` is not installability.
+            "links": {
+                "zip": { "available": true, "blockers": [] },
+                "exe": {
+                    "available": false,
+                    "blockers": [{
+                        "code": "exe_sandbox_unavailable",
+                        "detail": "isolation probe not implemented (P3/P4)",
+                    }],
+                },
+            },
+        },
+        "sources": {
+            "discovery_schema_version": 1,
+            "adapter_version": 1,
+            "parser_version": sources::PARSER_VERSION,
+            "query_version": sources::QUERY_VERSION,
+            "methods": SOURCE_METHODS,
+        },
+        "methods": methods,
+    })
+}
+
 fn err(error: impl std::fmt::Display) -> String {
     error.to_string()
 }
@@ -285,7 +392,10 @@ pub fn execute(method: &str, params: Params) -> Result<Value, String> {
         return Err("unexpected_preview_arguments".into());
     }
     if method == "get_capabilities" {
-        return value(sources::session::capabilities());
+        return Ok(capabilities());
+    }
+    if method == "cleanup_cache" {
+        return cleanup_cache(&params);
     }
     let roots = if params.roots.is_empty() {
         steam::discover_roots()
@@ -299,14 +409,7 @@ pub fn execute(method: &str, params: Params) -> Result<Value, String> {
     if SOURCE_METHODS.contains(&method) {
         return execute_source_method(method, &params, &report);
     }
-    if [
-        "discard_plan",
-        "list_transactions",
-        "migrate_state",
-        "recover",
-    ]
-    .contains(&method)
-    {
+    if ["discard_plan", "list_transactions", "recover"].contains(&method) {
         let state = state(&params)?;
         state_safe(&state)?;
         return match method {
@@ -316,86 +419,12 @@ pub fn execute(method: &str, params: Params) -> Result<Value, String> {
             ),
             "list_transactions" if !state.join("journal.sqlite").exists() => Ok(json!([])),
             "list_transactions" => value(install::list_transactions(&state).map_err(err)?),
-            "migrate_state" => value(install::migrate_state(&state).map_err(err)?),
             _ => value(install::recover(&state).map_err(err)?),
         };
     }
     let platform = params.platform.unwrap_or_else(host_platform);
     if method == "install_patch" {
         return install_patch(&params, &report, platform);
-    }
-    if method == "start_install" {
-        let state = state(&params)?;
-        let plan = install::get_plan(params.plan_id.as_deref().ok_or("plan_required")?, &state)
-            .map_err(err)?;
-        let current = report
-            .installs
-            .iter()
-            .find(|i| i.instance_id == plan.instance_id)
-            .ok_or("instance_not_found")?;
-        let catalog = signed(&params)?;
-        let release = ready_release(&catalog, &plan.release_id, current, platform)?;
-        let recipe = release.recipe.as_ref().ok_or("recipe_missing")?;
-        if plan.catalog_revision != catalog.catalog().revision
-            || plan.install.buildid != current.buildid
-            || plan.recipe_sha256.as_deref()
-                != Some(install::recipe_identity(release).map_err(err)?.as_str())
-            || plan.changes.len() != recipe.files.len()
-            || plan
-                .changes
-                .iter()
-                .zip(&recipe.files)
-                .any(|(change, mapping)| {
-                    change.path != mapping.destination
-                        || (plan.operation == install::InstallOperation::Install
-                            && change.original_sha256 != mapping.original_sha256)
-                        || change.installed_sha256 != mapping.installed_sha256
-                })
-        {
-            return Err("plan_authorization_changed".into());
-        }
-        return value(install::apply(&plan.plan_id, &state).map_err(err)?);
-    }
-    if ["plan_install", "fetch_artifact"].contains(&method) {
-        let state = state(&params)?;
-        let game = report
-            .installs
-            .iter()
-            .find(|i| Some(&i.instance_id) == params.instance_id.as_ref())
-            .ok_or("instance_not_found")?;
-        let catalog = signed(&params)?;
-        let release = ready_release(
-            &catalog,
-            params.release_id.as_deref().ok_or("release_required")?,
-            game,
-            platform,
-        )?;
-        if method == "fetch_artifact" {
-            let artifact = release
-                .artifact
-                .as_ref()
-                .ok_or("artifact_requires_manual_download")?;
-            let archive = download::fetch(
-                artifact,
-                &state.join("downloads"),
-                &AtomicBool::new(false),
-                |_, _| (),
-            )
-            .map_err(err)?;
-            return Ok(json!({"archive":archive}));
-        }
-        let archive = params.archive.as_ref().ok_or("archive_required")?;
-        return value(
-            install::prepare_with_operation(
-                game,
-                release,
-                archive,
-                &state,
-                catalog.catalog().revision,
-                params.operation,
-            )
-            .map_err(err)?,
-        );
     }
     let mut catalog_error = None;
     let verified = if params.signed_catalog.is_some() {
@@ -496,6 +525,37 @@ pub fn execute(method: &str, params: Params) -> Result<Value, String> {
     Ok(result)
 }
 
+/// Minimal P1 `cleanup_cache`: sweeps only derived, non-recoverable cache.
+///
+/// TODO(P1 store integration): replace the `downloads/` sweep with the shared
+/// cache manifest/`CacheStatus` once the installer store exposes clearable
+/// paths (p0-contracts §3.2). It must never delete an active lease, receipt,
+/// journal, `.stage`/`.backup` material, or `revoked` markers
+/// (p1-host-contract §1.1 A / §7.3).
+fn cleanup_cache(params: &Params) -> Result<Value, String> {
+    let state = state(params)?;
+    state_safe(&state)?;
+    let downloads = state.join("downloads");
+    let mut removed_bytes = 0_u64;
+    match fs::read_dir(&downloads) {
+        Ok(entries) => {
+            for entry in entries {
+                let entry = entry.map_err(|_| "cleanup_failed".to_string())?;
+                let path = entry.path();
+                let metadata =
+                    fs::symlink_metadata(&path).map_err(|_| "cleanup_failed".to_string())?;
+                if metadata.file_type().is_file() {
+                    removed_bytes += metadata.len();
+                    fs::remove_file(&path).map_err(|_| "cleanup_failed".to_string())?;
+                }
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(_) => return Err("cleanup_failed".into()),
+    }
+    Ok(json!({ "performed": true, "removed_bytes": removed_bytes }))
+}
+
 fn game_query(install: &steam::GameInstall) -> sources::GameQuery {
     sources::GameQuery {
         appid: install.appid,
@@ -580,11 +640,6 @@ fn execute_source_method(
 ) -> Result<Value, String> {
     match method {
         "list_sources" => value(open_sources(params)?.registry().list_sources()),
-        "list_source_matches" => {
-            let game = game_from_params(params, report)?;
-            let matches = open_sources(params)?.registry().matches(&game, false);
-            Ok(json!({ "matches": matches }))
-        }
         "list_game_sources" => {
             let game = game_from_params(params, report)?;
             value(open_sources(params)?.registry().list_game_sources(&game))
@@ -628,24 +683,6 @@ fn execute_source_method(
                 "rule": rule,
             }))
         }
-        "get_source_state" => {
-            let handle = open_sources(params)?;
-            let import_report = handle.store().load_import_report().map_err(err)?;
-            Ok(json!({
-                "settings_revision": handle.settings_revision(),
-                "import_report": import_report,
-            }))
-        }
-        "get_source_settings" => {
-            let handle = open_sources(params)?;
-            let settings = handle.store().settings();
-            Ok(json!({
-                "settings_revision": handle.settings_revision(),
-                "enabled": settings.enabled,
-                "added": settings.added,
-                "games": settings.games,
-            }))
-        }
         "refresh_sources" => refresh_sources_impl(params, &AtomicBool::new(false), &mut |_| ()),
         "discover_game" => {
             let install = install_for(
@@ -671,27 +708,6 @@ fn execute_source_method(
             ))
         }
         "scan_sources" => scan_sources_impl(params, &AtomicBool::new(false), &mut |_| ()),
-        "get_source_policy" => {
-            let source_id = params.source_id.as_deref().ok_or("source_id_required")?;
-            value(
-                open_sources(params)?
-                    .get_source_policy(source_id)
-                    .map_err(err)?,
-            )
-        }
-        "resolve_source_record" => {
-            let instance_id = params.instance_id.as_deref().ok_or("instance_required")?;
-            let record_id = params
-                .record_id
-                .as_deref()
-                .or(params.release_id.as_deref())
-                .ok_or("record_required")?;
-            value(
-                open_sources(params)?
-                    .resolve_source_record(instance_id, record_id)
-                    .map_err(err)?,
-            )
-        }
         _ => Err("unsupported_method".into()),
     }
 }
@@ -839,12 +855,7 @@ mod tests {
         fs::create_dir_all(&game).unwrap();
         fs::write(temp.path().join("steamapps/appmanifest_42.acf"),
             "\"AppState\" { \"appid\" \"42\" \"name\" \"Test\" \"installdir\" \"Test\" \"StateFlags\" \"4\" }").unwrap();
-        for method in [
-            "recover",
-            "plan_install",
-            "fetch_artifact",
-            "list_transactions",
-        ] {
+        for method in ["recover", "list_transactions"] {
             let result = execute(
                 method,
                 Params {
@@ -1036,8 +1047,9 @@ mod sources_tests {
             .unwrap()
             .iter()
             .any(|method| method == "discover_game"));
-        assert_eq!(capabilities["parser_version"], 2);
-        assert_eq!(capabilities["query_version"], 1);
+        assert_eq!(capabilities["sources"]["parser_version"], 2);
+        assert_eq!(capabilities["sources"]["query_version"], 1);
+        assert_eq!(capabilities["installer"]["schema_version"], 1);
         assert_eq!(
             execute("bogus", Params::default()).unwrap_err(),
             "unsupported_method"
@@ -1171,44 +1183,20 @@ mod sources_tests {
     }
 
     #[test]
-    fn list_source_matches_accepts_instance_and_appid() {
-        let temp = tempfile::tempdir().unwrap();
-        let state = temp.path().join("state");
-        seed_patchmoe(&state);
-        let root = fixture_root(temp.path());
-        let instance_id = steam::scan(std::slice::from_ref(&root))
-            .installs
-            .remove(0)
-            .instance_id;
-        let by_instance = execute(
+    fn deleted_source_methods_are_not_in_the_whitelist() {
+        for method in [
             "list_source_matches",
-            Params {
-                roots: vec![root.clone()],
-                state_dir: Some(state.clone()),
-                instance_id: Some(instance_id),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-        let matches = by_instance["matches"].as_array().unwrap();
-        assert_eq!(matches.len(), 1);
-        assert_eq!(matches[0]["source_id"], "patchmoe");
-        assert_eq!(matches[0]["release_id"], "patchmoe-42");
-
-        // AppID-only path with no installed game still matches by AppID.
-        let empty_root = temp.path().join("Empty");
-        std::fs::create_dir_all(&empty_root).unwrap();
-        let by_appid = execute(
-            "list_source_matches",
-            Params {
-                roots: vec![empty_root],
-                state_dir: Some(state),
-                appid: Some(42),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-        assert_eq!(by_appid["matches"].as_array().unwrap().len(), 1);
+            "get_source_state",
+            "get_source_settings",
+            "get_source_policy",
+            "resolve_source_record",
+        ] {
+            assert_eq!(
+                execute(method, Params::default()).unwrap_err(),
+                "unsupported_method",
+                "deleted source method {method} must be rejected"
+            );
+        }
     }
 
     #[test]
@@ -1254,24 +1242,7 @@ mod sources_tests {
     }
 
     #[test]
-    fn get_source_state_reports_first_open_import() {
-        let temp = tempfile::tempdir().unwrap();
-        let result = execute(
-            "get_source_state",
-            Params {
-                roots: vec![fixture_root(temp.path())],
-                state_dir: Some(temp.path().join("state")),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-        assert_eq!(result["import_report"]["imported_settings"], true);
-        assert_eq!(result["import_report"]["revision"], 1);
-        assert!(result["settings_revision"].as_u64().unwrap() >= 1);
-    }
-
-    #[test]
-    fn get_source_settings_shape_and_set_game_source_by_appid() {
+    fn set_game_source_by_appid_reflects_in_subscriptions() {
         let temp = tempfile::tempdir().unwrap();
         let state = temp.path().join("state");
         let root = fixture_root(temp.path());
@@ -1289,18 +1260,17 @@ mod sources_tests {
         .unwrap();
         assert!(write["settings_revision"].as_u64().unwrap() >= 2);
 
-        let settings = execute(
-            "get_source_settings",
+        let subscriptions = execute(
+            "list_game_sources",
             Params {
                 roots: vec![root],
                 state_dir: Some(state),
+                appid: Some(42),
                 ..Default::default()
             },
         )
         .unwrap();
-        assert!(settings["enabled"].is_object());
-        assert!(settings["added"].is_array());
-        assert_eq!(settings["games"]["42"]["kagura-cn"], false);
+        assert!(subscriptions.is_array());
     }
 
     #[test]
@@ -1428,25 +1398,48 @@ mod install_flow_tests {
         assert_eq!(fs::read(game.join("patch.dat")).unwrap(), b"patch content");
     }
 
+    /// End-to-end task channel: `install_patch` streams flat `install_progress`
+    /// events with a strictly increasing sequence, followed by exactly one
+    /// final response (terminal-once; p1-host-contract §2.2/§2.3).
     #[test]
-    fn signed_apply_rejects_revoked_marker_without_confirmation_gate() {
-        let (_temp, params, game) = fixture();
-        let plan = execute("plan_install", copy_params(&params)).unwrap();
-        let plan_id = plan["plan_id"].as_str().unwrap();
-        fs::write(
-            params
-                .state_dir
-                .as_ref()
-                .unwrap()
-                .join("jobs")
-                .join(plan_id)
-                .join("revoked"),
-            b"",
-        )
-        .unwrap();
-        let mut apply = copy_params(&params);
-        apply.plan_id = Some(plan_id.into());
-        assert_eq!(execute("start_install", apply).unwrap_err(), "plan_revoked");
-        assert!(!game.join("patch.dat").exists());
+    fn task_streams_install_progress_then_single_terminal_response() {
+        use std::sync::{Arc, Mutex};
+        let (_temp, params, _game) = fixture();
+        let request = json!({
+            "protocol_version": 3,
+            "request_id": "request-1",
+            "method": "install_patch",
+            "params": serde_json::to_value(&params).unwrap(),
+        })
+        .to_string();
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let sink = {
+            let events = Arc::clone(&events);
+            move |value| events.lock().unwrap().push(value)
+        };
+        let response = crate::run_task(
+            request.as_bytes(),
+            false,
+            Arc::new(AtomicBool::new(false)),
+            sink,
+        );
+        let events = events.lock().unwrap();
+        assert!(!events.is_empty(), "install_patch must stream progress");
+        assert!(events
+            .iter()
+            .all(|event| event["event"] == "install_progress"));
+        assert!(events
+            .iter()
+            .all(|event| event["request_id"] == "request-1"));
+        assert!(events.iter().all(|event| event["instance_id"].is_string()));
+        let sequences: Vec<u64> = events
+            .iter()
+            .map(|event| event["sequence"].as_u64().unwrap())
+            .collect();
+        assert_eq!(sequences, (0..sequences.len() as u64).collect::<Vec<_>>());
+        // Terminal-once: the task returns a single final response after events.
+        assert_eq!(response["ok"], true);
+        assert_eq!(response["protocol_version"], 3);
+        assert_eq!(response["result"]["state"], "committed");
     }
 }
