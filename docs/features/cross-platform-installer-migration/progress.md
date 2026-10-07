@@ -200,9 +200,17 @@
 - 验证：core lib 177（+20 新测试，含获取/缓存/304/取消与配方拒绝矩阵）、集成 39/8/6/4/3 全绿；workspace check、clippy、fmt 通过。
 - 已知偏差/注记：① `zip` crate 无 UTF-8 flag 访问器，名称编码用启发式（非 ASCII 无 flag 正确拒绝；malformed UTF-8 + flag 场景与 CPython 有差异）；② `downloads/` 新增 `<sha256>.json` sidecar（p0-contracts §3.1 已同步注明）；③ `load_cached` 按请求扫描 sidecar（预期规模下可接受）。
 
+### P1-3b-2 实例事实与新内部授权（2026-10-08 续）
+
+- `installer/facts.rs`：`GameFacts` 快照（ACF/manifest 身份、stateflags/buildid、Steam 语言、DLC 拥有/挂载、基线 sha256/crc32/存在性；`read_file` 描述符/路径身份前后校验与 `no_links`/`O_NOFOLLOW`；自实现 CRC-32 与 `binascii` 一致；失败码 `exe_manifest_*`/`exe_game_identity_changed`/`game_not_ready`/`build_not_verified`/`exe_language_mismatch`/`exe_dlc_*`/`exe_baseline_*`）。
+- `installer/authorization.rs`：完整绑定（实例/路径、候选/来源 + settings revision、规则/条件、内容/转换产物 + 有序 mapping 摘要、plan/task/request、策略版本、facts 快照、期限/撤销）；`authorize`（TTL 1..=900、拒绝带失败 facts）+ `validate` 重核矩阵（12 项有序诊断：schema → 撤销 → 租约 → 过期 → 归属 → revision → 策略 → 候选 → 规则 → 条件 → 内容 → 事实）；持久化 `jobs/<plan_id>/authorization.json`（受保护），`revoked` 标记。
+- `installer/mod.rs`/`store.rs` 注册与 `job()`/`authorization()` 路径辅助（`write_atomic` 提升 `pub(crate)`）。
+- 验证：core lib 190（+13 新测试）、集成全绿、check/clippy/fmt 通过。
+- 遗留：协议接线与编排（P1-3b-3）；`conditions_sha256`/`candidate_sha256`/`rule_fingerprint` 由调用方提供（条件求值器与来源绑定摘要为后续任务）；成功收据 schema 后续。
+
 ### 待办
 
-1. 已完成：P1-2 / P1-3a / P1-3b-1（本轮按模块分批提交）。
-2. 进行中：P1-3b 剩余（facts/授权 → 编排与协议接线）。
+1. 已完成：P1-2 / P1-3a / P1-3b-1 / P1-3b-2（本轮分批提交）。
+2. 进行中：P1-3b-3 编排 + 协议接线（前置：动态 publisher ZIP 选择/解析数据流设计）。
 3. `import_python_state`/`import_index` 删除与规则 schema 收紧（P1 后续块）。
-4. 提交：本轮按模块分批（installer 模块 / 协议外壳 / 文档）。
+4. 提交：本轮按模块分批（installer facts/授权 / 文档）。
