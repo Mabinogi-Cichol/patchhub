@@ -51,7 +51,11 @@ class _Redirect(HTTPRedirectHandler):
 
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         safe_url(newurl, self.hosts)
-        return super().redirect_request(req, fp, code, msg, headers, newurl)
+        # Ubuntu 22.04's system Python lacks urllib's HTTP 308 handler.
+        # Our discovery requests are GET; preserve them as for HTTP 307.
+        return super().redirect_request(req, fp, 307 if code == 308 else code, msg, headers, newurl)
+
+    http_error_308 = HTTPRedirectHandler.http_error_302
 
 
 class RequestContext:

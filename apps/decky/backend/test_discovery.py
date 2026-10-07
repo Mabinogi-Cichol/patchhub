@@ -82,6 +82,17 @@ class DiscoveryTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             RequestContext(f, interval=0).fetch("https://hgamer.tw/a", HG)
 
+    def test_http_308_preserves_get_and_validates_destination(self):
+        from discovery import _Redirect
+        from urllib.request import Request
+        handler = _Redirect(["hgamer.tw"])
+        request = Request("https://hgamer.tw/a")
+        redirected = handler.redirect_request(request, None, 308, "Permanent Redirect", {}, "https://hgamer.tw/a/")
+        self.assertEqual(redirected.get_method(), "GET")
+        self.assertEqual(redirected.full_url, "https://hgamer.tw/a/")
+        with self.assertRaises(ValueError):
+            handler.redirect_request(request, None, 308, "Permanent Redirect", {}, "https://evil.example/a/")
+
     def test_response_limit_and_deadline(self):
         for context in [RequestContext(Fetcher({"*": "x" * (MAX_HTML + 1)}), interval=0),
                         RequestContext(Fetcher({"*": "html"}), deadline=time.monotonic() - 1),
