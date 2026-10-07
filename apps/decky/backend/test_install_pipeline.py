@@ -78,3 +78,26 @@ class InstallPipelineTests(unittest.IsolatedAsyncioTestCase):
         bridge.migrate_state = AsyncMock(side_effect=RuntimeError("journal_invalid_identity"))
         with self.assertRaisesRegex(RuntimeError, "journal_invalid_identity"):
             await plugin._migrate_startup(bridge)
+
+
+    async def test_public_status_renews_foreground_but_task_list_does_not(self):
+        import asyncio
+        plugin = module.Plugin()
+        plugin.tasks = module.TaskManager(lease_seconds=60)
+        finish = asyncio.Event()
+        async def work(task):
+            await finish.wait()
+            task.check()
+            return {"state": "committed"}
+        task = plugin.tasks.get(plugin.tasks.start("install", work)["task_id"])
+        try:
+            task.lease -= 5
+            previous = task.lease
+            await plugin.list_tasks()
+            self.assertEqual(task.lease, previous)
+            self.assertEqual((await plugin.task_status(task.value["task_id"]))["state"], "running")
+            self.assertGreater(task.lease, previous)
+        finally:
+            task.request_cancel()
+            finish.set()
+            await task.worker

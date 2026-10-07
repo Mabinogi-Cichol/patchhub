@@ -1,4 +1,4 @@
-"""Backend-owned tasks; observing or leaving the UI never cancels work."""
+"""Foreground tasks with cancellation and safe rollback after UI lease expiry."""
 import asyncio
 from collections import deque
 from contextvars import ContextVar
@@ -74,6 +74,7 @@ class Task:
 
 class TaskManager:
     def __init__(self, lease_seconds=LEASE_SECONDS, state_dir=None):
+        self.lease_seconds = lease_seconds
         self.tasks = {}
         self.path = Path(state_dir) / "tasks.json" if state_dir else None
         self.requests = {}
@@ -134,6 +135,7 @@ class TaskManager:
 
     async def _run(self, task, work):
         token = current_task.set(task)
+        guard = asyncio.create_task(self._watch_lease(task))
         try:
             task.check()
             result = await work(task)
@@ -153,12 +155,30 @@ class TaskManager:
             code = str(error)
             task.update(state="cancelled" if code in ("task_cancelled", "download_cancelled") else "failed", error=code)
         finally:
+            guard.cancel()
+            await asyncio.gather(guard, return_exceptions=True)
             current_task.reset(token)
             try:
                 self._save()
             except (OSError, ValueError):
                 # The durable core receipt is authoritative after a commit.
                 pass
+
+    def _expire_lease(self, task):
+        with task.lock:
+            if time.monotonic() - task.lease >= self.lease_seconds:
+                task.request_cancel()
+
+    async def _watch_lease(self, task):
+        while task.value["state"] not in TERMINAL and not task.cancel.is_set():
+            self._expire_lease(task)
+            await asyncio.sleep(min(1, self.lease_seconds / 4))
+
+    def status(self, task_id):
+        task = self.get(task_id)
+        # A late reconnect cannot revive an expired foreground lease.
+        self._expire_lease(task)
+        return task.snapshot(renew=not task.cancel.is_set())
 
     def get(self, task_id):
         if not isinstance(task_id, str) or task_id not in self.tasks:

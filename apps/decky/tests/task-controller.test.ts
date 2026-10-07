@@ -19,7 +19,7 @@ function api(overrides: Partial<TaskApi> = {}): TaskApi {
 }
 const tick = (ms = 15) => new Promise(resolve => setTimeout(resolve, ms));
 
-test("a pending start is single flight, and leaving before its reply does not cancel", async () => {
+test("a pending start is single flight, and leaving cancels its late reply", async () => {
   const start = deferred<{ task_id: string }>();
   let cancelled = 0, polled = 0;
   const controller = createTaskController(api({ install: () => start.promise,
@@ -31,7 +31,7 @@ test("a pending start is single flight, and leaving before its reply does not ca
   start.resolve({ task_id: "task-1" });
   await first;
   await tick();
-  assert.equal(cancelled, 0);
+  assert.equal(cancelled, 1);
   assert.equal(polled, 0);
   assert.equal(controller.getSnapshot(), null);
 });
@@ -52,7 +52,7 @@ test("failed explicit cancel RPC retries without status polling", async () => {
   controller.dismount();
 });
 
-test("dismount ignores an in-flight status reply without cancelling", async () => {
+test("dismount cancels and ignores a late completed status reply", async () => {
   const pending = deferred<TaskSnapshot>();
   let cancelled = 0;
   const controller = createTaskController(api({ status: () => pending.promise,
@@ -61,8 +61,8 @@ test("dismount ignores an in-flight status reply without cancelling", async () =
   controller.dismount();
   pending.resolve(snapshot("completed"));
   await tick();
-  assert.equal(cancelled, 0);
-  assert.equal(controller.getSnapshot()?.state, "running");
+  assert.equal(cancelled, 1);
+  assert.equal(controller.getSnapshot()?.state, "cancelling");
 });
 
 test("reconnect surfaces retained cancellation result without renewing its lease", async () => {
@@ -111,4 +111,66 @@ test("install and reinstall preserve request ID and optional archive", async () 
   assert.deepEqual(calls[0], ["game", "exe-release", "install", "req-exe", ""]);
   assert.deepEqual(calls[1], ["game", "zip-release", "reinstall", "req-zip", "local.zip"]);
   controller.dismount();
+});
+
+
+test("closing during startup cancels before any status renewal", async () => {
+  const start = deferred<{ task_id: string }>();
+  let cancelled = 0, polled = 0;
+  const controller = createTaskController(api({ install: () => start.promise,
+    cancel: async () => { cancelled++; return snapshot("cancelled"); },
+    status: async () => { polled++; return snapshot(); } }), 5, 5);
+  const pending = controller.startInstall("game", "patch", "install", "req-1");
+  assert.equal(controller.isBusy(), true);
+  await controller.requestCancel();
+  start.resolve({ task_id: "task-1" });
+  await pending;
+  await tick();
+  assert.equal(cancelled, 1);
+  assert.equal(polled, 0);
+  assert.equal(controller.getSnapshot()?.state, "cancelled");
+  assert.equal(controller.isBusy(), false);
+});
+
+test("reconnecting cancels orphan work and observes only its restoration", async () => {
+  let cancelled = 0;
+  const controller = createTaskController(api({ list: async () => [snapshot()],
+    cancel: async () => { cancelled++; return snapshot("rolling_back"); },
+    status: async () => snapshot("cancelled") }), 5, 5);
+  await controller.resume();
+  await tick();
+  assert.equal(cancelled, 1);
+  assert.equal(controller.getSnapshot()?.state, "cancelled");
+  controller.dismount();
+});
+
+test("returning after dismount reads the retained result without resuming installation", async () => {
+  let cancelled = 0, polled = 0;
+  const controller = createTaskController(api({
+    cancel: async () => { cancelled++; return snapshot("cancelled"); },
+    status: async () => { polled++; return snapshot(); },
+    list: async () => [snapshot("cancelled")],
+  }), 100, 5);
+  await controller.startInstall("game", "patch", "install", "req-1");
+  controller.dismount();
+  await controller.resume();
+  await tick();
+  assert.equal(cancelled, 1);
+  assert.equal(polled, 1);
+  assert.equal(controller.getSnapshot()?.state, "cancelled");
+  controller.clear();
+  await controller.resume();
+  assert.equal(controller.getSnapshot(), null);
+});
+
+test("closing a terminal result never sends cancellation", async () => {
+  let cancelled = 0;
+  const controller = createTaskController(api({ list: async () => [snapshot("completed")],
+    cancel: async () => { cancelled++; return snapshot("cancelled"); } }));
+  await controller.resume();
+  await controller.requestCancel();
+  controller.clear();
+  controller.dismount();
+  assert.equal(cancelled, 0);
+  assert.equal(controller.getSnapshot(), null);
 });

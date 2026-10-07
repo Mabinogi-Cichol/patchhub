@@ -28,7 +28,7 @@ export type TaskApi = {
 };
 export const taskIsTerminal = (state: TaskSnapshot["state"]) => ["cancelled", "completed", "failed"].includes(state);
 
-// The backend owns task lifetime. Closing the UI only stops observation.
+// Only the foreground installation UI observes work; leaving requests cancellation.
 export function createTaskController(api: TaskApi, pollMs = 750, retryMs = 1500) {
   let current: TaskSnapshot | null = null;
   let timer: ReturnType<typeof setTimeout> | null = null;
@@ -54,6 +54,7 @@ export function createTaskController(api: TaskApi, pollMs = 750, retryMs = 1500)
     }
   }
   async function requestCancel() {
+    if (disposed) return;
     if (starting) { cancelling = true; return; }
     const value = current;
     if (!value || taskIsTerminal(value.state) || cancelling) return;
@@ -79,38 +80,52 @@ export function createTaskController(api: TaskApi, pollMs = 750, retryMs = 1500)
   async function begin(instance: string, release: string, action: () => Promise<{ task_id: string }>) {
     if (starting || (current && !taskIsTerminal(current.state))) throw new Error("installer_busy");
     starting = true; cancelling = false; disposed = false; stopTimer();
+    publish(null);
     const epoch = ++generation;
     try {
       const value = await action();
       if (epoch !== generation || disposed) {
+        // The user may leave before the start RPC returns its task ID.
+        await api.cancel(value.task_id).catch(() => {});
         return value.task_id;
       }
       publish({ task_id: value.task_id, kind: "install", state: "running", stage: "starting", bytes_done: 0,
         total_bytes: null, files_done: 0, total_files: null, current_file: null, archive_bytes: null,
         elapsed_seconds: 0, speed_bps: 0, eta_seconds: null, result: null, error: null,
         instance_id: instance, release_id: release });
-      void poll(value.task_id, epoch);
-      if (cancelling) { cancelling = false; setTimeout(() => void requestCancel(), 0); }
+      starting = false;
+      if (cancelling) { cancelling = false; void requestCancel(); }
+      else void poll(value.task_id, epoch);
       return value.task_id;
     } finally { starting = false; }
   }
   async function resume() {
-    if (starting || (current && !taskIsTerminal(current.state))) return;
+    if (starting || (!disposed && current && !taskIsTerminal(current.state))) return;
+    disposed = false; cancelling = false;
     const epoch = generation;
     const values = await api.list();
     if (epoch !== generation || disposed) return;
     const latest = values.filter(value => !handled.has(value.task_id)).at(-1);
     if (!latest) return;
     publish(latest);
-    if (!taskIsTerminal(latest.state)) { const next = ++generation; void poll(latest.task_id, next); }
+    // Reconnection must not revive work that lost its foreground UI.
+    if (!taskIsTerminal(latest.state)) { ++generation; void requestCancel(); }
   }
   return {
     getSnapshot: () => current,
+    isBusy: () => starting || !!current && !taskIsTerminal(current.state),
     subscribe(listener: () => void) { listeners.add(listener); return () => { listeners.delete(listener); }; },
     startInstall: (instance: string, release: string, operation: "install" | "reinstall", requestId: string, archive = "") => begin(instance, release, () => api.install(instance, release, operation, requestId, archive)),
     requestCancel, resume,
     clear() { if (current && taskIsTerminal(current.state)) { handled.add(current.task_id); publish(null); } },
     dismount() {
+      const value = current;
+      if (starting) cancelling = true;
+      if (value && !taskIsTerminal(value.state)) {
+        publish({ ...value, state: value.state === "rolling_back" ? "rolling_back" : "cancelling" });
+        // Stop renewing the foreground lease; the backend guards lost cancel RPCs.
+        void api.cancel(value.task_id).catch(() => {});
+      }
       disposed = true; stopTimer();
       generation++;
     },

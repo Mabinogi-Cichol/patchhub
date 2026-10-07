@@ -605,7 +605,7 @@ class Plugin:
                                 operation=operation, request_id=request_id, archive_path=archive_path)
 
     async def task_status(self, task_id: str):
-        return self.tasks.get(task_id).snapshot()
+        return self.tasks.status(task_id)
 
     async def cancel_task(self, task_id: str):
         task = self.tasks.get(task_id)

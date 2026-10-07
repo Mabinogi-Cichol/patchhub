@@ -104,7 +104,7 @@ class ControlledBridgeTests(unittest.IsolatedAsyncioTestCase):
 
 
 class TaskTests(unittest.IsolatedAsyncioTestCase):
-    async def test_ui_lease_expiry_never_cancels_backend_work(self):
+    async def test_ui_lease_expiry_cancels_backend_work(self):
         manager = TaskManager(lease_seconds=.01)
         finish = asyncio.Event()
         async def work(task):
@@ -113,11 +113,11 @@ class TaskTests(unittest.IsolatedAsyncioTestCase):
             return {"state": "committed"}
         task = manager.get(manager.start("install", work)["task_id"])
         await asyncio.sleep(.04)
-        self.assertFalse(task.cancel.is_set())
+        self.assertTrue(task.cancel.is_set())
         self.assertTrue(manager.busy())
         finish.set()
         await task.worker
-        self.assertEqual(task.snapshot()["state"], "completed")
+        self.assertEqual(task.snapshot()["state"], "cancelled")
 
     async def test_renewal_keeps_work_alive_and_cancellation_waits_for_rollback(self):
         manager = TaskManager(lease_seconds=.04)
@@ -133,7 +133,7 @@ class TaskTests(unittest.IsolatedAsyncioTestCase):
         task = manager.get(manager.start("install", work)["task_id"])
         for _ in range(8):
             await asyncio.sleep(.01)
-            self.assertEqual(task.snapshot(renew=True)["state"], "running")
+            self.assertEqual(manager.status(task.value["task_id"])["state"], "running")
         task.request_cancel()
         await restoring.wait()
         self.assertEqual(task.snapshot()["state"], "rolling_back")
@@ -141,6 +141,57 @@ class TaskTests(unittest.IsolatedAsyncioTestCase):
             manager.start("prepare", work)
         task.request_cancel()
         self.assertEqual(task.snapshot()["state"], "rolling_back")
+        finish.set()
+        await task.worker
+        self.assertEqual(task.snapshot()["state"], "cancelled")
+
+    async def test_expired_status_cannot_renew_or_revive_work(self):
+        manager = TaskManager(lease_seconds=1)
+        finish = asyncio.Event()
+        async def work(task):
+            await finish.wait()
+            task.check()
+            return {"state": "committed"}
+        task = manager.get(manager.start("install", work)["task_id"])
+        task.lease -= 2
+        expired = task.lease
+        self.assertEqual(manager.status(task.value["task_id"])["state"], "cancelling")
+        self.assertEqual(task.lease, expired)
+        finish.set()
+        await task.worker
+        self.assertEqual(task.snapshot()["state"], "cancelled")
+
+    async def test_listing_or_reading_receipts_does_not_keep_work_alive(self):
+        manager = TaskManager(lease_seconds=.01)
+        finish = asyncio.Event()
+        async def work(task):
+            await finish.wait()
+            task.check()
+            return {"state": "committed"}
+        task = manager.get(manager.start("install", work)["task_id"])
+        for _ in range(4):
+            await asyncio.sleep(.01)
+            [t.snapshot() for t in manager.tasks.values()]
+        self.assertTrue(task.cancel.is_set())
+        finish.set()
+        await task.worker
+        self.assertEqual(task.snapshot()["state"], "cancelled")
+
+    async def test_lease_expiry_waits_for_safe_rollback(self):
+        manager = TaskManager(lease_seconds=.01)
+        restoring, finish = asyncio.Event(), asyncio.Event()
+        async def work(task):
+            while not task.cancel.is_set():
+                await asyncio.sleep(.001)
+            task.stage("rolling_back")
+            restoring.set()
+            await finish.wait()
+            return {"state": "rolled_back", "error": "task_cancelled"}
+        task = manager.get(manager.start("install", work)["task_id"])
+        await asyncio.wait_for(restoring.wait(), 1)
+        self.assertEqual(task.snapshot()["state"], "rolling_back")
+        self.assertTrue(manager.busy())
+        self.assertFalse(task.worker.done())
         finish.set()
         await task.worker
         self.assertEqual(task.snapshot()["state"], "cancelled")

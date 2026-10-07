@@ -10,7 +10,7 @@ import { createManagerSession, needsRecovery } from "./session";
 import { decodeInstance, encodeInstance, settingsPage, settingsRoutes } from "./route";
 import { autoCleanupNote, cacheClearNote, cacheSummary, type CacheStatus, type Settings } from "./cache";
 import { tasks, taskIsTerminal, type TaskSnapshot } from "./tasks";
-import { TaskProgressView } from "./task-progress-view";
+import { TaskProgressView, TaskResultView } from "./task-progress-view";
 import { candidateConditions, candidateLanguage, candidateSource, discoveryStatus, safeSourceUrl, unqueriedCount } from "./discovery";
 
 const scan = callable<[boolean], ScanResult>("scan");
@@ -206,7 +206,8 @@ function QuickAccess() {
   </div>;
 }
 
-function TaskModal({ game, patch, onTerminal }: { game: string; patch: string; onTerminal: (task: TaskSnapshot) => void }) {
+function TaskModal({ game, patch, onTerminal, onExit }: { game: string; patch: string; onTerminal: (task: TaskSnapshot) => void; onExit: () => void }) {
+  useEffect(() => onExit, [onExit]);
   const task = useSyncExternalStore(tasks.subscribe, tasks.getSnapshot);
   const handled = useRef<string | null>(null);
   useEffect(() => {
@@ -215,18 +216,29 @@ function TaskModal({ game, patch, onTerminal }: { game: string; patch: string; o
     }
   }, [task, onTerminal]);
   const cancelOrClose = () => {
-    if (task && !taskIsTerminal(task.state)) { void tasks.requestCancel(); return; }
-    modal?.Close(); tasks.clear();
+    if (!task || !taskIsTerminal(task.state)) { void tasks.requestCancel(); return; }
+    hideTask(); tasks.clear();
   };
-  return <TaskProgressView task={task} game={game} patch={patch} onCancel={cancelOrClose} onClose={() => { modal?.Close(); modal = null; }} />;
+  return task && taskIsTerminal(task.state)
+    ? <TaskResultView task={task} onClose={cancelOrClose} />
+    : <TaskProgressView task={task} game={game} patch={patch} onClose={cancelOrClose} />;
 }
 let modal: ReturnType<typeof showModal> | null = null;
+let modalOwner: object | null = null;
+function hideTask() {
+  const previous = modal;
+  modalOwner = null; modal = null;
+  previous?.Close();
+}
 function showTask(game: string, patch: string, onTerminal: (task: TaskSnapshot) => void) {
-  modal?.Close();
-  modal = showModal(<TaskModal game={game} patch={patch} onTerminal={value => {
-    onTerminal(value);
-    if (value.state === "cancelled") { modal?.Close(); modal = null; tasks.clear(); }
-  }} />, undefined, { strTitle: "补丁进度", bHideMainWindowForPopouts: false });
+  if (modal) return;
+  const owner = {};
+  modalOwner = owner;
+  modal = showModal(<TaskModal game={game} patch={patch} onTerminal={onTerminal} onExit={() => {
+    // Programmatic replacement must not let an old modal cancel a new task.
+    if (modalOwner !== owner) return;
+    modalOwner = null; modal = null; tasks.dismount();
+  }} />, undefined, { strTitle: "补丁安装", bHideMainWindowForPopouts: false });
 }
 
 function GameManager({ item, seg, panel }: { item: Install; seg: string; panel?: string }) {
@@ -263,16 +275,26 @@ function GameManager({ item, seg, panel }: { item: Install; seg: string; panel?:
   useEffect(() => {
     mounted.current = true;
     void session.ensureSnapshot();
-    void tasks.resume().then(() => {
-      const task = tasks.getSnapshot();
-      if (!mounted.current || !task || task.instance_id !== item.game.instance_id) return;
-      if (taskIsTerminal(task.state)) { finishTask(task); tasks.clear(); }
-      else {
+    const restoreTask = () => {
+      if (document.hidden) return;
+      void tasks.resume().then(() => {
+        const task = tasks.getSnapshot();
+        if (!mounted.current || document.hidden || !task || task.instance_id !== item.game.instance_id) return;
         const name = item.patches.find(p => p.release_id === task.release_id)?.name ?? task.release_id ?? "补丁";
         showTask(game, name, finishTask);
-      }
-    }).catch(() => {});
-    return () => { mounted.current = false; };
+      }).catch(() => {});
+    };
+    const leave = () => { tasks.dismount(); hideTask(); };
+    const visibility = () => { if (document.hidden) leave(); else restoreTask(); };
+    restoreTask();
+    document.addEventListener("visibilitychange", visibility);
+    window.addEventListener("pagehide", leave);
+    return () => {
+      mounted.current = false;
+      document.removeEventListener("visibilitychange", visibility);
+      window.removeEventListener("pagehide", leave);
+      leave();
+    };
   }, []);
   useLayoutEffect(() => { if (contentRef.current) contentRef.current.scrollTop = panelScroll.current[activePanel] ?? 0; }, [activePanel]);
   function navigatePanel(next: string) {
@@ -305,16 +327,20 @@ function GameManager({ item, seg, panel }: { item: Install; seg: string; panel?:
     }
   }
   async function beginInstall(manualArchive = "") {
-    if (!patch || busy || (manualArchive ? manualBlocked : !!blocked)) return;
+    if (!patch || busy || tasks.isBusy() || (manualArchive ? manualBlocked : !!blocked)) return;
     try {
       const operation = installed ? "reinstall" : "install";
       const key = `${item.game.instance_id}\0${release}\0${operation}\0${manualArchive}`;
       const requestId = pendingRequestIds.get(key) ?? crypto.randomUUID();
       pendingRequestIds.set(key, requestId);
-      const id = await tasks.startInstall(item.game.instance_id, release, operation, requestId, manualArchive);
+      hideTask();
+      const pending = tasks.startInstall(item.game.instance_id, release, operation, requestId, manualArchive);
+      // Show the foreground UI before the start RPC returns, so B can cancel startup.
+      showTask(game, patch.name, finishTask);
+      await pending;
       pendingRequestIds.delete(key);
-      if (mounted.current && tasks.getSnapshot()?.task_id === id) showTask(game, patch.name, finishTask); }
-    catch (e) { session.update({ error: reason(String(e)) }); }
+    }
+    catch (e) { hideTask(); session.update({ error: reason(String(e)) }); }
   }
   const finding = discoveries[item.game.instance_id];
   const common = <>{busy && <Status>{busy}</Status>}{error && <Status warning>{error}</Status>}{note && <Status>{note}</Status>}
@@ -385,7 +411,7 @@ function GameManager({ item, seg, panel }: { item: Install; seg: string; panel?:
       <PanelSection title={installed ? "重新安装" : "安装补丁"}>
         <Row><Status>安装时请关闭游戏并暂停 Steam 更新。</Status></Row>
         {blocked && <Row><Status warning>{blocked}</Status></Row>}
-        <Row><Action disabled={!!busy || !!blocked || !!tasks.getSnapshot() && !taskIsTerminal(tasks.getSnapshot()!.state)} onClick={() => void beginInstall()}>{installed ? "重新安装补丁" : "安装补丁"}</Action></Row>
+        <Row><Action disabled={!!busy || !!blocked || tasks.isBusy()} onClick={() => void beginInstall()}>{installed ? "重新安装补丁" : "安装补丁"}</Action></Row>
         {patch.support_level === "managed_zip" && <Row><Action onClick={() => setManual(value => !value)}>使用本地 ZIP（高级）{manual ? " ▴" : " ▾"}</Action></Row>}
         {manual && patch.support_level === "managed_zip" && <><Row><TextField label="Downloads 内的 ZIP 路径" value={archive} onChange={e => setArchive(e.target.value)} /></Row>
           <Row><Action disabled={!archive.trim() || manualBlocked || !!busy} onClick={() => void beginInstall(archive)}>使用本地 ZIP {installed ? "重新安装" : "安装"}</Action></Row></>}
@@ -517,6 +543,6 @@ function GlobalSources() {
 export default definePlugin(() => {
   routerHook.addRoute(route, Manager);
   return { name: "Steam 补丁管理", titleView: <div>Steam 补丁管理</div>, content: <QuickAccess />, icon: <FaPuzzlePiece />,
-    onDismount() { tasks.dismount(); modal?.Close(); routerHook.removeRoute(route); },
+    onDismount() { tasks.dismount(); hideTask(); routerHook.removeRoute(route); },
   };
 });
