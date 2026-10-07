@@ -1,6 +1,6 @@
 # Steam 游戏补丁管理工具：调研与开发计划
 
-调研日期：2026-09-30。此文档保留开发前方案；制定时仓库没有应用代码或提交历史。本计划中的技术选型、规模和工期均为建议，不表示已完成实现。2026-10-01 已开始 P0 首批实现，实际交付与未完成事项见 [进度记录](progress.md)。
+调研日期：2026-09-30。此文档保留开发前方案；制定时仓库没有应用代码或提交历史。本计划中的技术选型、规模和工期均为建议，不表示已完成实现。2026-10-01 已开始 P0 首批实现，实际交付与未完成事项见 [进度记录](progress.md)。2026-10-08 来源发现与订阅已迁入共享 Rust 核心（[shared-source-discovery](features/shared-source-discovery/design.md)，P0–P5）。
 
 ## 1. 产品目标与边界
 
@@ -57,7 +57,7 @@ Decky 首版以插件内部列表为稳定入口；游戏详情页快捷入口�
 
 ## 5. 技术架构与选择
 
-来源能力核心化的具体迁移拆分见[独立设计](features/shared-source-discovery/design.md)与[施工记录](features/shared-source-discovery/progress.md)，当前为迁移方案、待实现；Windows 接入与验收先于 Decky 切换。
+来源能力已迁入共享 Rust 核心并完成双端切换与实机验证（P0–P5）：[独立设计](features/shared-source-discovery/design.md)与[施工记录](features/shared-source-discovery/progress.md)。安装器逻辑（publisher ZIP / EXE）仍分别在两端，尚未迁入跨平台核心。
 
 建议采用共享 Rust 核心，负责 Steam 库解析、匹配、指纹、下载验证、文件事务、恢复和 SQLite 存储。Windows 使用 Tauri 2 + React / TypeScript；SteamOS 使用 Decky React / TypeScript 前端 + Python 桥接后端，再调用随插件打包的 Linux 核心进程。
 

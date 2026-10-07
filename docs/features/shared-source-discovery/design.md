@@ -1,6 +1,6 @@
 # 来源发现与订阅迁入共享 Rust 后端
 
-施工记录：[progress.md](progress.md)。状态：**迁移方案（待实现）**。日期：2026-10-07（Asia/Shanghai）。
+施工记录：[progress.md](progress.md)。P0/P1 实现规范：[p0-p1-rust-design.md](p0-p1-rust-design.md)。P0 实机基线：[p0-baseline.md](p0-baseline.md)。P5 集成契约：[p5-decky-design.md](p5-decky-design.md)。状态：**P0–P6 已完成（迁移收口）；Rust 为唯一来源引擎，Windows 与 Decky 实机验证通过；安装器逻辑仍分端（后续独立 feature）**。日期：2026-10-08（Asia/Shanghai）。
 
 ## 1. 目标与交付范围
 
