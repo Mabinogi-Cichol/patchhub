@@ -109,3 +109,11 @@
 - 按方案 A 只修订文案，不改判定行为：README“使用方法”第 4 条改为说明“找到补丁来源”不排除自动安装，并区分官方通用 EXE（详情安装时自动检查条件）与需按官方说明手动处理的来源；README 首段同步放宽自动安装适用范围描述，纳入通用 EXE 包。
 - 同步修订本功能 `design.md` 展示状态章节，补充通用 EXE `check_required` 归入“找到补丁来源”但仍提供安装入口，并链接通用 EXE 设计。
 - 本轮仅改用户文案与文档，未修改插件代码、测试或后端；未运行测试、构建、部署或实机验证。
+
+## 2026-10-07 状态口径修订：通用 EXE 归入“有可用补丁”
+
+- 用户确认按方案 A 实施：详情可自动安装的通用 EXE 应在列表显示“有可用补丁”，不再归“找到补丁来源”；上一条“状态文案澄清”作为该问题的首次缓解保留为历史，README 相关措辞随本次口径修订调整。
+- 代码改动：`packages/ui/src/index.ts` 的 `installSummary` 去掉 `compatibility !== "check_required"` 门槛，改为凡 `canAutoInstall`（无 blockers、具备下载能力、非 HGamer）即判“有可用补丁”；`compatibility` 仍用于详情显示“安装时自动检查条件”。HGamer fallback、存在 blockers 或安装链路不可用（reviews 为 guidance，不进入 patches）仍归“找到补丁来源”。
+- 测试：`apps/decky/tests/install.test.ts` 将 `check_required` 用例期望改为“有可用补丁”，并新增 HGamer 与 blocker 仍为“找到补丁来源”的断言。
+- 文档：README 第 4 条改回“工具无法自动安装”语义（通用 EXE 不再属于来源指引），第 32 条补充通用 EXE 安装时检查；本功能 design 展示状态说明同步；通用 EXE 功能的 design/progress 记录本次修订。
+- 未改后端判定、扫描或安装流水线；未运行构建、部署或实机验证。
