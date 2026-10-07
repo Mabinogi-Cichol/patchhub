@@ -128,6 +128,17 @@ impl InstallerPaths {
         self.child(&self.reports_dir(), content_id)
     }
 
+    /// `jobs/<plan_id>/` transaction recovery/authorization material
+    /// (protected; p0-contracts §3.2).
+    pub fn job(&self, plan_id: &str) -> Result<PathBuf> {
+        self.child(&self.jobs_dir(), plan_id)
+    }
+
+    /// `jobs/<plan_id>/authorization.json` (protected; design §5.2).
+    pub fn authorization(&self, plan_id: &str) -> Result<PathBuf> {
+        Ok(self.job(plan_id)?.join("authorization.json"))
+    }
+
     fn child(&self, parent: &Path, id: &str) -> Result<PathBuf> {
         safe_component(id)?;
         let path = parent.join(id);
@@ -247,7 +258,7 @@ pub fn init_atomic(paths: &InstallerPaths) -> Result<()> {
 
 /// Same-directory `create_new` tmp + `sync_all` + rename, bounded Windows
 /// overwrite retry. Never remove-then-write (p0-contracts §3.3).
-fn write_atomic(path: &Path, bytes: &[u8], max: u64) -> Result<()> {
+pub(crate) fn write_atomic(path: &Path, bytes: &[u8], max: u64) -> Result<()> {
     if bytes.len() as u64 > max {
         return Err(invalid("file_too_large"));
     }

@@ -7,6 +7,8 @@
 //! P1 task switches them over.
 
 pub mod acquire;
+pub mod authorization;
+pub mod facts;
 pub mod requests;
 pub mod store;
 pub mod zip_recipe;
@@ -14,6 +16,16 @@ pub mod zip_recipe;
 pub use acquire::{
     acquire, acquire_with, validate_download, AcquiredArchive, Acquisition, DownloadRequest,
     HttpResponse, Transport,
+};
+pub use authorization::{
+    authorization_path, authorize, is_revoked, mapping_digest, validate, write, AuthResult,
+    Authorization, AuthorizeInput, ContentBinding, CurrentState, Invalidation, MappingBinding,
+    PolicyVersions, AUTHORIZATION_SCHEMA_VERSION, MAX_AUTHORIZATION_BYTES,
+};
+pub use facts::{
+    digest_file, game_facts, read_file, BaselineExpectation, BaselineFact, BuildFacts, DlcFacts,
+    Fact, FactFailure, FactsExpectation, FileDigest, GameFacts, InstanceFacts, LanguageFacts,
+    ManifestFacts, MAX_BASELINE_BYTES, MAX_MANIFEST_BYTES,
 };
 pub use requests::{RequestBinding, RequestLedger, RequestRecord};
 pub use store::{init_atomic, instance_hash, InstallerPaths};
