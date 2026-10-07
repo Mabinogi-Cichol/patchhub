@@ -1,6 +1,6 @@
 # 来源发现与订阅迁入共享 Rust 后端施工记录
 
-设计：[design.md](design.md)。P0/P1 实现规范：[p0-p1-rust-design.md](p0-p1-rust-design.md)。P0 实机基线：[p0-baseline.md](p0-baseline.md)。状态：**P0–P3 已实现并自动化验证（待 P4 起实机验收）**。日期：2026-10-07（Asia/Shanghai）。
+设计：[design.md](design.md)。P0/P1 实现规范：[p0-p1-rust-design.md](p0-p1-rust-design.md)。P0 实机基线：[p0-baseline.md](p0-baseline.md)。状态：**P0–P6 已完成；2026-10-08 Decky 状态误报修复已实现并自动化及实机隔离验证，已正式部署并通过 RPC / 真实页面验证；实体手柄待验收**。日期：2026-10-08（Asia/Shanghai）。
 
 ## 当前状态
 
@@ -10,9 +10,9 @@
 | 迁移设计与功能归档 | 已完成设计与文档复核 | 本目录、设计/施工互链、索引；链接检查和独立审阅已执行，迁移代码待实现 |
 | P0 基线fixture及最终契约冻结 | 已完成 | 契约/golden 冻结；2303800 实机结果已核对并并入 golden；页面证据存忽略目录。见 [p0-baseline.md](p0-baseline.md) |
 | P1–P3 Rust配置/cache/适配器/CLI会话 | 已完成（自动化验证） | P1 配置/存储 + P2 HTTP/identity/五适配器 + P3 会话/CLI 全部实现；core lib 126 + CLI 14 测试、clippy、改动范围 fmt、两端 typecheck+build 通过 |
-| P4 Windows接入与验收 | 待实现、待验证 | 先Windows；既有中文展示验收不替代动态来源验收 |
-| P5 Decky切换与消费者兼容 | 待实现、待验证 | 保留旧设置、receipt及publisher/EXE接口 |
-| P6 双端收口 | 待实现、待验证 | Python来源逻辑退场及完整证据尚未执行 |
+| P4 Windows接入与验收 | 已实现、实机验证通过 | RPC、来源身份及 GUI 验收见下文 P4 记录 |
+| P5 Decky切换与消费者兼容 | 已实现、实机验证通过 | 旧设置、receipt及publisher/EXE接口保留，证据见下文 P5 |
+| P6 双端收口 | 已完成、实机验证通过 | Python来源逻辑已退场；本轮状态误报修复已部署，RPC / 真实页面验证通过 |
 
 ## 2026-10-07 计划制定
 
@@ -245,3 +245,36 @@
 
 - 用户后续授权提交 Git；迁移设计、施工记录及关联索引按独立文档提交归档，不包含功能实现代码。
 - 本地化名称代码、Windows 扫描锁修复及各自文档分别提交；其他既有修改保留在工作区。迁移阶段状态仍为待实现，验收项仍待执行。
+
+## 2026-10-08 Decky 状态误报修复（已部署并实机验证）
+
+- 用户实机反馈：未安装却出现 installer_busy；进入详情显示旧取消结果，返回后又扫描。
+- 当前 Devkit 配对已核实，SSH/RPC 读取证明 5 条安装任务全部为终态、Loader active、插件实例 1；日志 01:15:11 的 list_transactions 报 installer_busy。
+- 独立只读实机探针：6 个 CoreBridge 对同一状态目录并发 list_transactions，2 个成功、4 个 installer_busy。核心 scan/list_transactions 均短暂持有排他 journal.lock，来源投影与页面读取可互相争用。
+- 前端 resume 自动读取旧终态历史，TaskModal 的终态去重仅位于组件 useRef，重新挂载可重复执行 finishTask/refresh。
+- 修复方案：按事件循环/state_dir 协调日志读取；仅恢复当前前端任务或非终态孤立任务；会话内去重终态回调。保留数据库、任务历史和核心安装互斥。
+- 实施：bridge.py 使用事件循环/state_dir 共享弱引用队列协调 scan/list_transactions（覆盖 Publisher 新建桥接）；来源 RPC 不占该队列，真实核心忙碌错误仍返回。task-controller.ts 仅恢复当前会话任务或非终态孤立任务，并通过 claimTerminal 在会话内去重；TaskModal 使用该回调。
+- 验证：前端 55/55 通过；后端共 177 项，174 通过、3 skipped；Decky typecheck、Rollup build、package:plugin 与 git diff --check 通过。回归覆盖历史成功/失败/取消不复播、当前取消/恢复与结果保留、终态重新挂载仅刷新一次、跨桥接同目录排队、不同目录/来源独立、等待取消、错误后释放队列。
+- 实机隔离验证：仅上传修复 bridge.py 到独立验证目录，用设备真实 Linux CLI 与现有状态执行同样 6 个并发只读查询，6/6 成功、errors=[]；tasks.json 前后 SHA-256 均为 8a9b913cbd83f2b90d991cd054781d0a31ceb98a88a7326ca4bdb037c28cdf04。正式插件文件未替换，未启动安装/下载，任务历史未删除。
+- 当前 2303800 详情正常读取缓存，未再次观测旧取消弹窗；取消复播和重复刷新路径已由持久历史、代码与前端回归验证，不将隔离后端探针等同正式前端验收。
+- 修复包：5,899,992 bytes，SHA-256 9e6d9bf9edc15c1b4c915e63db551c1180bdf56125437f77f5ac662fa9ccc2c2；完整包及 JSON 探针保存于忽略目录 .artifacts/source-state-fix-20261008/。
+- 当时授权边界：本轮前半段仅远端查看状态/日志，后端隔离探针不替代正式部署验收；随后用户明确要求“是的，直接部署”，实际结果见下节。无 Git 提交。
+
+### 用户授权后的正式部署与验收（2026-10-08，Asia/Shanghai）
+
+- 部署沿用本项目 decky-deploy-verify：当前 Devkit 配对 deck@192.168.31.186；部署前真实 list_tasks 的 5 条任务均终态。沿用未变化代码的前轮测试/构建结果，未重复运行。
+- 完整备份：old-plugin.tar.gz SHA-256 c66fa923fab416a04af1395b2640411c46db3f2cace5da383a0dd9542bc4c7bf 已取回；42 个旧文件（含 7 个派生 pycache）生成 rollback.zip，SHA-256 c78b4e4c3e68123cddb50880dcd20dd3c4bd2558d7559afc2b10365756325dd3。保留首次备份、权限和旧清单。
+- 部署包与旧包仅 backend/bridge.py、dist/index.js、dist/index.js.map 内容变化；上传 ZIP SHA-256 一致，35 个成员逐一核验，Linux CLI ELF 和执行位正确。
+- 使用当前 Decky 3.2.10 的 utilities/install_plugin 本地 ZIP + 精确哈希 / REINSTALL=1，经实际确认事件校验名称、版本、哈希、类型和唯一 request ID，再点击正常重装确认。Loader 完成替换并启动新后端，最终 PID 7797，plugin_loader active、前端插件实例 1；没有手工结束后端进程或重启整机。
+- 重载过程的真实日志：旧后端卸载超过 5 秒，由 Loader 自行结束；安装后文件监听又触发一次正常重载，最终后端稳定。首个聚合 CDP 探针超时，其返回不能当通过；随后分阶段保存的独立探针获得完整 RPC / HTTP / 页面证据。
+- 正式目录 35 个文件 SHA-256 全部与新清单一致；正式文件、本机构建和真实 HTTP bundle SHA-256 均为 74c4bf06cddcd8c2b599e63b5e84d020cb11f6d5ad4ca28d03e7d16be45bc64f，运行中 bundle 含 claimTerminal。
+- 正式后端真实 6 路并发 list_transactions 全部成功，每路读取 8 条安装事务；scan(false) 返回 27 个实例，来源扫描最终 23/23、running=false。新版 GUI 初次挂载产生 generation=2；后续进入 2303800、返回、进入旧 installer_busy 记录的 2743810、返回并重新挂载 QAM 后仍为 generation=2，未自动重新扫描。手动读取旧 generation=1 的探针被 scan_stale 拒绝，随后使用当前 generation=2 验证，未将此探针误用当成用户界面错误。
+- 真实界面：2303800 / 2743810 详情正常显示来源及补丁，QAM 正常显示游戏列表；无 installer_busy 提示、旧取消/失败结果弹窗；保存并查看 qam-after.png、detail-after.png、kudo-after.png。DevTools 导航和 DOM 点击仅证明对应页面行为，实体手柄 A/B 与焦点仍待用户验收。
+- 数据保留：tasks.json SHA-256 与前轮一致；根 journal.sqlite SHA-256 部署前后均为 ce8049d6f0e24db91f3a0e9d3f1cbbf7b684197151400900bc0e2f6be6c6a330。Loader pluginOrder、frozenPlugins、hiddenPlugins、disabledPlugins 均与部署前一致；未修改订阅、安装/下载补丁或删除历史。
+- 证据与回滚材料全部保存在 .artifacts/source-state-fix-20261008/；远端本轮暂存目录已校验绝对路径后清理、本次 SSH 隧道已关闭，本地材料保留。
+
+### 2026-10-08 修复 Git 归档
+
+- 用户要求提交本轮修复；代码及必要回归测试已独立提交为 6d89d58，设计、施工记录与功能索引另作文档提交。
+- 沿用本会话对应代码的自动化、构建与已部署实机验证，未重复运行；提交前工作区与暂存区 diff --check 通过。
+- 忽略目录中的修复包、旧版备份、截图和完整探针未入库；仅创建本地提交。
