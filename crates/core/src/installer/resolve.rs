@@ -672,7 +672,7 @@ mod tests {
             .iter()
             .map(|raw| validate::validate_rule(raw).unwrap())
             .collect();
-        let store = SourceStore::open(temp.path(), &builtins).unwrap();
+        let store = SourceStore::open(temp.path()).unwrap();
         let mut registry = SourceRegistry::load_with_clock(
             store,
             builtins,

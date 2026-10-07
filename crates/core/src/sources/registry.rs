@@ -1007,7 +1007,7 @@ mod tests {
     }
 
     fn registry_at(dir: &Path, now: u64) -> SourceRegistry {
-        let store = SourceStore::open(dir, &builtins()).unwrap();
+        let store = SourceStore::open(dir).unwrap();
         SourceRegistry::load_with_clock(
             store,
             builtins(),
@@ -1442,7 +1442,7 @@ mod tests {
     #[test]
     fn custom_rule_shadows_builtin_and_preserves_selection() {
         let temp = tempfile::tempdir().unwrap();
-        let store = SourceStore::open(temp.path(), &builtins()).unwrap();
+        let store = SourceStore::open(temp.path()).unwrap();
         let custom = validate::validate_rule(&RawSourceRule {
             id: "patchmoe".to_string(),
             name: "Custom patch".to_string(),
@@ -1619,7 +1619,7 @@ mod tests {
     #[test]
     fn stale_revision_never_publishes() {
         let temp = tempfile::tempdir().unwrap();
-        let store = SourceStore::open(temp.path(), &builtins()).unwrap();
+        let store = SourceStore::open(temp.path()).unwrap();
         let registry = SourceRegistry::load(store, builtins()).unwrap();
         let captured = registry.settings_revision();
         registry.store().bump_revision().unwrap();
@@ -1721,7 +1721,7 @@ mod tests {
             success: Some(old_success),
             attempt: None,
         };
-        let store = SourceStore::open(temp.path(), &builtins()).unwrap();
+        let store = SourceStore::open(temp.path()).unwrap();
         store.save_discovery(&rule.id, 42, &record).unwrap();
         store
             .save_discovery_index(

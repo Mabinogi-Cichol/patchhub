@@ -148,7 +148,7 @@ impl Sources {
         Self::open_with_rules(state_dir, DEFAULT_RULES_JSON)
     }
 
-    /// Opens with an explicit rules document (`schema_version` 1 or 2).
+    /// Opens with an explicit rules document (`schema_version` must be 2).
     pub fn open_with_rules(state_dir: &Path, rules_json: &str) -> Result<Self> {
         Self::open_with_rules_and_fetcher(state_dir, rules_json, default_fetcher())
     }
@@ -161,7 +161,7 @@ impl Sources {
     ) -> Result<Self> {
         let config: RulesConfig =
             serde_json::from_str(rules_json).map_err(|_| invalid("invalid_sources_config"))?;
-        if config.schema_version != 1 && config.schema_version != 2 {
+        if config.schema_version != 2 {
             return Err(invalid("invalid_sources_config"));
         }
         let builtins: Vec<SourceRule> = config
@@ -169,7 +169,7 @@ impl Sources {
             .iter()
             .map(validate::validate_rule)
             .collect::<Result<Vec<_>>>()?;
-        let store = store::SourceStore::open(state_dir, &builtins)?;
+        let store = store::SourceStore::open(state_dir)?;
         let registry = registry::SourceRegistry::load(store, builtins)?;
         Ok(Self { registry, fetcher })
     }
@@ -285,4 +285,33 @@ impl Sources {
 
 fn default_fetcher() -> FetcherFactory {
     Box::new(|| Ok(Box::new(http::ReqwestFetcher::new()?)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rules_schema_version_must_be_two() {
+        let temp = tempfile::tempdir().unwrap();
+        for version in [0_u32, 1, 3] {
+            let json = format!(r#"{{"schema_version":{version},"sources":[]}}"#);
+            let error = match Sources::open_with_rules(temp.path(), &json) {
+                Ok(_) => panic!("schema_version {version} must be rejected"),
+                Err(error) => error,
+            };
+            assert_eq!(
+                error.to_string(),
+                "invalid_sources_config",
+                "schema_version {version} must be rejected"
+            );
+        }
+
+        // Schema 2 is accepted (empty rules are structurally valid).
+        if let Err(error) =
+            Sources::open_with_rules(temp.path(), r#"{"schema_version":2,"sources":[]}"#)
+        {
+            panic!("schema 2 rules must be accepted: {error}");
+        }
+    }
 }

@@ -1,18 +1,15 @@
 //! Persistent `rust-v1` store: atomic writes, short lock + monotonic revision,
-//! cache/status/discovery/index persistence, one-shot Python import and the
-//! dual-engine checkpoint model (design §4.1–§4.6, §5, R6/R9/R12).
+//! cache/status/discovery/index persistence and the dual-engine checkpoint
+//! model (design §4.1–§4.6, §5, R6/R9/R12).
 //!
-//! The store never writes to `<state_dir>/sources/` (the Python namespace); it
-//! only reads it once during [`SourceStore::import_python_state`].
+//! First open initializes the Rust default state directly; the legacy Python
+//! `<state_dir>/sources/` namespace is never read (p0-contracts §1.3, §7.3).
 
 use super::model::{
-    Diagnostic, DiscoveryIndexRecord, DiscoveryRecord, Overrides, RawSourceRule, SettingsFile,
-    SourceCache, SourceRule, SourceStatus,
+    DiscoveryIndexRecord, DiscoveryRecord, Overrides, SettingsFile, SourceCache, SourceStatus,
 };
-use super::validate;
 use super::{
-    invalid, Result, MAX_CACHE_BYTES, MAX_DISCOVERY_OUTPUT, MAX_OVERRIDES_BYTES, MAX_STATUS_BYTES,
-    PARSER_VERSION, STORE_SCHEMA_VERSION,
+    invalid, Result, MAX_CACHE_BYTES, MAX_DISCOVERY_OUTPUT, MAX_STATUS_BYTES, STORE_SCHEMA_VERSION,
 };
 use fs2::FileExt;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
@@ -26,10 +23,6 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 /// `rust-v1/settings.json`; the store caps it well above the overrides cap so
 /// 32 added rules plus per-game subscriptions fit.
 const MAX_SETTINGS_BYTES: u64 = 4 * 1024 * 1024;
-/// Ceiling used when publishing staged files of any kind.
-const MAX_STORE_FILE: u64 = 8 * 1024 * 1024;
-/// Ceiling for the persisted first-open [`ImportReport`].
-const MAX_IMPORT_REPORT_BYTES: u64 = 512 * 1024;
 const SHORT_LOCK_TIMEOUT: Duration = Duration::from_secs(2);
 const WRITE_RETRY_DELAY: Duration = Duration::from_millis(20);
 const WRITE_RETRIES: u32 = 5;
@@ -37,19 +30,14 @@ const WRITE_RETRIES: u32 = 5;
 /// Namespace layout (design §4.1).
 #[derive(Debug, Clone)]
 pub struct StorePaths {
-    python_root: PathBuf,
     root: PathBuf,
 }
 
 impl StorePaths {
     pub fn new(state_dir: &Path) -> Self {
-        let python_root = state_dir.join("sources");
-        let root = python_root.join("rust-v1");
-        Self { python_root, root }
-    }
-
-    pub fn python_root(&self) -> &Path {
-        &self.python_root
+        Self {
+            root: state_dir.join("sources").join("rust-v1"),
+        }
     }
 
     pub fn root(&self) -> &Path {
@@ -70,11 +58,6 @@ impl StorePaths {
 
     pub fn engine_switch(&self) -> PathBuf {
         self.root.join("engine-switch.json")
-    }
-
-    /// Persisted first-open import summary (P5 §1, `get_source_state`).
-    pub fn import_report(&self) -> PathBuf {
-        self.root.join("import-report.json")
     }
 
     pub fn conflicts_dir(&self) -> PathBuf {
@@ -101,51 +84,6 @@ impl StorePaths {
             .join("discovery-index")
             .join(format!("{source_id}.json"))
     }
-
-    // --- read-only Python namespace ---------------------------------------
-
-    pub fn python_overrides(&self) -> PathBuf {
-        self.python_root.join("overrides.json")
-    }
-
-    pub fn python_cache(&self, source_id: &str) -> PathBuf {
-        self.python_root
-            .join("cache")
-            .join(format!("{source_id}.json"))
-    }
-
-    pub fn python_status(&self, source_id: &str) -> PathBuf {
-        self.python_root
-            .join("status")
-            .join(format!("{source_id}.json"))
-    }
-
-    pub fn python_discovery_dir(&self, source_id: &str) -> PathBuf {
-        self.python_root.join("discovery").join(source_id)
-    }
-
-    pub fn python_discovery(&self, source_id: &str, appid: u32) -> PathBuf {
-        self.python_discovery_dir(source_id)
-            .join(format!("{appid}.json"))
-    }
-
-    pub fn python_discovery_index(&self, source_id: &str) -> PathBuf {
-        self.python_root
-            .join("discovery-index")
-            .join(format!("{source_id}.json"))
-    }
-}
-
-/// Result of one import pass (design §4.5).
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct ImportReport {
-    pub imported_settings: bool,
-    pub imported_cache: u64,
-    pub imported_discovery: u64,
-    pub imported_index: u64,
-    pub diagnostics: Vec<Diagnostic>,
-    pub revision: u64,
 }
 
 /// `engine-switch.json` (design §4.6). Frozen data model; the reentry algorithm
@@ -183,18 +121,6 @@ pub struct EngineSwitchCommon {
     pub captured_at: u64,
 }
 
-/// Raw shape of the Python `overrides.json` (added rules still need validation).
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RawOverrides {
-    #[serde(default)]
-    enabled: BTreeMap<String, bool>,
-    #[serde(default)]
-    added: Vec<RawSourceRule>,
-    #[serde(default)]
-    games: BTreeMap<String, BTreeMap<String, bool>>,
-}
-
 /// RAII guard releasing the advisory `settings.lock`.
 struct FileLock(File);
 
@@ -213,9 +139,9 @@ pub struct SourceStore {
 }
 
 impl SourceStore {
-    /// Opens (and on first use imports) the store. `builtins` are only needed for
-    /// the one-shot Python import.
-    pub fn open(state_dir: &Path, builtins: &[SourceRule]) -> Result<Self> {
+    /// Opens the store, initializing the Rust default state directly on first
+    /// use. The legacy Python `sources/` namespace is never read.
+    pub fn open(state_dir: &Path) -> Result<Self> {
         let paths = StorePaths::new(state_dir);
         ensure_directory(paths.root())?;
         let store = Self {
@@ -227,8 +153,24 @@ impl SourceStore {
             let settings = store.load_settings()?;
             *store.settings_guard()? = settings;
         } else {
-            let report = store.import_python_state(builtins)?;
-            let _ = report;
+            // First start: persist the default settings and write the
+            // `schema.json` completion marker last, so a crash mid-init simply
+            // re-runs on the next open (idempotent).
+            let settings = default_settings();
+            write_json(&store.paths.settings(), &settings, MAX_SETTINGS_BYTES)?;
+            let created_at = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|elapsed| elapsed.as_secs())
+                .unwrap_or(0);
+            write_atomic(
+                &store.paths.schema(),
+                format!(
+                    "{{\"schema_version\":{STORE_SCHEMA_VERSION},\"created_at\":{created_at}}}"
+                )
+                .as_bytes(),
+                MAX_STATUS_BYTES,
+            )?;
+            *store.settings_guard()? = settings;
         }
         Ok(store)
     }
@@ -374,287 +316,6 @@ impl SourceStore {
         write_json(&self.paths.engine_switch(), value, MAX_SETTINGS_BYTES)
     }
 
-    // --- first-open import report -----------------------------------------
-
-    /// Reads the persisted first-open [`ImportReport`], or `None` when the file
-    /// was never written (P5 §1; `get_source_state`).
-    pub fn load_import_report(&self) -> Result<Option<ImportReport>> {
-        read_json(&self.paths.import_report(), MAX_IMPORT_REPORT_BYTES)
-    }
-
-    /// Atomically persists the first-open [`ImportReport`].
-    pub fn save_import_report(&self, report: &ImportReport) -> Result<()> {
-        write_json(&self.paths.import_report(), report, MAX_IMPORT_REPORT_BYTES)
-    }
-
-    // --- import -----------------------------------------------------------
-
-    /// One-shot import of the Python namespace (design §4.5). Idempotent via the
-    /// `schema.json` completion marker; each published file is written with the
-    /// atomic tmp+rename primitive and `schema.json` is written last.
-    pub fn import_python_state(&self, builtins: &[SourceRule]) -> Result<ImportReport> {
-        if self.paths.schema().exists() {
-            return Ok(ImportReport {
-                revision: self.revision(),
-                ..ImportReport::default()
-            });
-        }
-        let mut report = ImportReport::default();
-
-        let mut enabled = BTreeMap::new();
-        let mut added: Vec<SourceRule> = Vec::new();
-        let mut games = BTreeMap::new();
-        let overrides_path = self.paths.python_overrides();
-        if overrides_path.exists() {
-            let bytes = read_bounded(&overrides_path, MAX_OVERRIDES_BYTES)
-                .map_err(|_| invalid("invalid_source_overrides"))?
-                .ok_or_else(|| invalid("invalid_source_overrides"))?;
-            let raw: RawOverrides =
-                serde_json::from_slice(&bytes).map_err(|_| invalid("invalid_source_overrides"))?;
-            enabled = raw.enabled;
-            games = raw.games;
-            for raw_rule in &raw.added {
-                added.push(validate::validate_rule(raw_rule)?);
-            }
-            validate::validate_overrides(&Overrides {
-                enabled: enabled.clone(),
-                added: added.clone(),
-                games: games.clone(),
-            })?;
-        }
-
-        let settings = SettingsFile {
-            schema_version: STORE_SCHEMA_VERSION,
-            revision: 1,
-            enabled,
-            added,
-            games,
-        };
-
-        let staging = self
-            .paths
-            .root()
-            .join(format!(".import-{}", uuid::Uuid::new_v4().simple()));
-        ensure_directory(&staging)?;
-        write_json(
-            &staging.join("settings.json"),
-            &settings,
-            MAX_SETTINGS_BYTES,
-        )?;
-        report.imported_settings = true;
-
-        let mut rules: Vec<SourceRule> = builtins
-            .iter()
-            .filter(|rule| !settings.added.iter().any(|added| added.id == rule.id))
-            .cloned()
-            .collect();
-        rules.extend(settings.added.iter().cloned());
-
-        for rule in &rules {
-            if rule.discovery_only {
-                continue;
-            }
-            self.import_cache(rule, &staging, &mut report)?;
-        }
-        for rule in &rules {
-            self.import_status(rule, &staging)?;
-        }
-        for rule in &rules {
-            if rule.discovery_only {
-                self.import_discovery(rule, &staging, &mut report)?;
-            }
-        }
-        for rule in &rules {
-            if rule.discovery_only {
-                self.import_index(rule, &staging, &mut report)?;
-            }
-        }
-
-        publish_tree(&staging, self.paths.root())?;
-        let _ = fs::remove_dir_all(&staging);
-
-        // Persist the report before the `schema.json` completion marker so a
-        // crash between the two re-runs the import (idempotency unchanged).
-        report.revision = 1;
-        self.save_import_report(&report)?;
-
-        let created_at = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|elapsed| elapsed.as_secs())
-            .unwrap_or(0);
-        write_atomic(
-            &self.paths.schema(),
-            format!("{{\"schema_version\":{STORE_SCHEMA_VERSION},\"created_at\":{created_at}}}")
-                .as_bytes(),
-            MAX_STATUS_BYTES,
-        )?;
-
-        *self.settings_guard()? = settings;
-        Ok(report)
-    }
-
-    fn import_cache(
-        &self,
-        rule: &SourceRule,
-        staging: &Path,
-        report: &mut ImportReport,
-    ) -> Result<()> {
-        let path = self.paths.python_cache(&rule.id);
-        let bytes = match read_bounded(&path, MAX_CACHE_BYTES) {
-            Ok(Some(bytes)) => bytes,
-            Ok(None) => return Ok(()),
-            Err(_) => {
-                report.diagnostics.push(invalid_cache_diagnostic(&rule.id));
-                return Ok(());
-            }
-        };
-        let cache: SourceCache = match serde_json::from_slice(&bytes) {
-            Ok(cache) => cache,
-            Err(_) => {
-                report.diagnostics.push(invalid_cache_diagnostic(&rule.id));
-                return Ok(());
-            }
-        };
-        match validate::validate_entries(rule, &cache.entries) {
-            Ok(entries) => {
-                let clean = SourceCache {
-                    entries,
-                    etag: cache.etag,
-                    modified: cache.modified,
-                    cached_at: cache.cached_at,
-                    checked_at: cache.checked_at,
-                };
-                write_json(
-                    &staging.join("cache").join(format!("{}.json", rule.id)),
-                    &clean,
-                    MAX_CACHE_BYTES,
-                )?;
-                report.imported_cache += 1;
-            }
-            Err(_) => report.diagnostics.push(invalid_cache_diagnostic(&rule.id)),
-        }
-        Ok(())
-    }
-
-    fn import_status(&self, rule: &SourceRule, staging: &Path) -> Result<()> {
-        let path = self.paths.python_status(&rule.id);
-        if let Ok(Some(bytes)) = read_bounded(&path, MAX_STATUS_BYTES) {
-            if let Ok(status) = serde_json::from_slice::<SourceStatus>(&bytes) {
-                write_json(
-                    &staging.join("status").join(format!("{}.json", rule.id)),
-                    &status,
-                    MAX_STATUS_BYTES,
-                )?;
-            }
-        }
-        Ok(())
-    }
-
-    fn import_discovery(
-        &self,
-        rule: &SourceRule,
-        staging: &Path,
-        report: &mut ImportReport,
-    ) -> Result<()> {
-        let dir = self.paths.python_discovery_dir(&rule.id);
-        let Ok(entries) = fs::read_dir(&dir) else {
-            return Ok(());
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
-                continue;
-            }
-            let Some(appid) = path
-                .file_stem()
-                .and_then(|stem| stem.to_str())
-                .and_then(|stem| stem.parse::<u32>().ok())
-            else {
-                continue;
-            };
-            let bytes = match read_bounded(&path, MAX_DISCOVERY_OUTPUT) {
-                Ok(Some(bytes)) => bytes,
-                _ => {
-                    report
-                        .diagnostics
-                        .push(invalid_discovery_diagnostic(&rule.id));
-                    continue;
-                }
-            };
-            let mut record: DiscoveryRecord = match serde_json::from_slice(&bytes) {
-                Ok(record) => record,
-                Err(_) => {
-                    report
-                        .diagnostics
-                        .push(invalid_discovery_diagnostic(&rule.id));
-                    continue;
-                }
-            };
-            if record.schema_version != 1 || record.appid != appid || record.source_id != rule.id {
-                report
-                    .diagnostics
-                    .push(invalid_discovery_diagnostic(&rule.id));
-                continue;
-            }
-            let valid = record
-                .success
-                .as_ref()
-                .map(|success| {
-                    validate::validate_candidates(rule, appid, &success.candidates).is_ok()
-                })
-                .unwrap_or(true)
-                && record
-                    .attempt
-                    .as_ref()
-                    .map(|attempt| {
-                        validate::validate_candidates(rule, appid, &attempt.candidates).is_ok()
-                    })
-                    .unwrap_or(true);
-            if !valid {
-                report
-                    .diagnostics
-                    .push(invalid_discovery_diagnostic(&rule.id));
-                continue;
-            }
-            // Imported success is a stale seed, never fresh (R9).
-            downgrade_record(&mut record);
-            write_json(
-                &staging
-                    .join("discovery")
-                    .join(&rule.id)
-                    .join(format!("{appid}.json")),
-                &record,
-                MAX_DISCOVERY_OUTPUT,
-            )?;
-            report.imported_discovery += 1;
-        }
-        Ok(())
-    }
-
-    fn import_index(
-        &self,
-        rule: &SourceRule,
-        staging: &Path,
-        report: &mut ImportReport,
-    ) -> Result<()> {
-        let path = self.paths.python_discovery_index(&rule.id);
-        if let Ok(Some(bytes)) = read_bounded(&path, MAX_DISCOVERY_OUTPUT) {
-            if let Ok(record) = serde_json::from_slice::<DiscoveryIndexRecord>(&bytes) {
-                if record.schema_version == 1 && record.index.parser_version == PARSER_VERSION {
-                    write_json(
-                        &staging
-                            .join("discovery-index")
-                            .join(format!("{}.json", rule.id)),
-                        &record,
-                        MAX_DISCOVERY_OUTPUT,
-                    )?;
-                    report.imported_index += 1;
-                }
-            }
-        }
-        Ok(())
-    }
-
     // --- internals --------------------------------------------------------
 
     fn settings_guard(&self) -> Result<MutexGuard<'_, SettingsFile>> {
@@ -692,57 +353,6 @@ fn default_settings() -> SettingsFile {
         added: Vec::new(),
         games: BTreeMap::new(),
     }
-}
-
-fn invalid_cache_diagnostic(source_id: &str) -> Diagnostic {
-    Diagnostic {
-        source_id: Some(source_id.to_string()),
-        code: "invalid_source_cache".to_string(),
-        detail: None,
-    }
-}
-
-fn invalid_discovery_diagnostic(source_id: &str) -> Diagnostic {
-    Diagnostic {
-        source_id: Some(source_id.to_string()),
-        code: "invalid_discovery_cache".to_string(),
-        detail: None,
-    }
-}
-
-fn downgrade_record(record: &mut DiscoveryRecord) {
-    if let Some(success) = &mut record.success {
-        success.checked_at = 0;
-        success.cached_at = None;
-    }
-    if let Some(attempt) = &mut record.attempt {
-        attempt.checked_at = 0;
-    }
-}
-
-/// Moves every file from `staging` into `root`, creating directories as needed.
-fn publish_tree(staging: &Path, root: &Path) -> Result<()> {
-    for entry in fs::read_dir(staging)? {
-        let entry = entry?;
-        let from = entry.path();
-        let name = entry.file_name();
-        let to = root.join(&name);
-        if from.is_dir() {
-            ensure_directory(&to)?;
-            publish_tree(&from, &to)?;
-        } else {
-            ensure_directory(root)?;
-            match fs::rename(&from, &to) {
-                Ok(()) => {}
-                Err(_) => {
-                    let bytes = fs::read(&from)?;
-                    write_atomic(&to, &bytes, MAX_STORE_FILE)?;
-                    let _ = fs::remove_file(&from);
-                }
-            }
-        }
-    }
-    Ok(())
 }
 
 // ---- atomic primitives (design §4.2) -------------------------------------
@@ -878,9 +488,10 @@ fn sync_dir(dir: &Path) {
 mod tests {
     use super::*;
     use crate::sources::model::RulesConfig;
+    use crate::sources::validate;
     use std::sync::Arc;
 
-    fn builtins() -> Vec<SourceRule> {
+    fn builtins() -> Vec<crate::sources::model::SourceRule> {
         let config: RulesConfig = serde_json::from_str(crate::sources::DEFAULT_RULES_JSON).unwrap();
         config
             .sources
@@ -904,32 +515,86 @@ mod tests {
     #[test]
     fn settings_round_trips_and_revision_is_persistent() {
         let temp = tempfile::tempdir().unwrap();
-        let store = SourceStore::open(temp.path(), &builtins()).unwrap();
+        let store = SourceStore::open(temp.path()).unwrap();
         assert_eq!(store.revision(), 1);
         let bumped = store.bump_revision().unwrap();
         assert_eq!(bumped, 2);
         drop(store);
 
-        let reopened = SourceStore::open(temp.path(), &builtins()).unwrap();
+        let reopened = SourceStore::open(temp.path()).unwrap();
         assert_eq!(reopened.revision(), 2);
         assert_eq!(reopened.load_settings().unwrap().revision, 2);
     }
 
     #[test]
-    fn import_report_persists_on_first_open_only() {
+    fn first_open_initializes_rust_default_state() {
         let temp = tempfile::tempdir().unwrap();
-        let store = SourceStore::open(temp.path(), &builtins()).unwrap();
-        let report = store
-            .load_import_report()
-            .unwrap()
-            .expect("first open persists the import report");
-        assert!(report.imported_settings);
-        assert_eq!(report.revision, 1);
+        let store = SourceStore::open(temp.path()).unwrap();
+        assert_eq!(store.revision(), 1);
+        assert!(store.paths().schema().exists());
+        assert!(store.paths().settings().exists());
+        let settings = store.load_settings().unwrap();
+        assert_eq!(settings.revision, 1);
+        assert_eq!(settings.schema_version, STORE_SCHEMA_VERSION);
+        assert!(settings.added.is_empty());
+        assert!(settings.enabled.is_empty());
+        assert!(settings.games.is_empty());
         drop(store);
 
-        // Reopen is idempotent (schema exists) and keeps the same report.
-        let reopened = SourceStore::open(temp.path(), &builtins()).unwrap();
-        assert_eq!(reopened.load_import_report().unwrap(), Some(report));
+        // Reopen reads the persisted settings (schema marker is present).
+        let reopened = SourceStore::open(temp.path()).unwrap();
+        assert_eq!(reopened.revision(), 1);
+        assert_eq!(reopened.load_settings().unwrap(), settings);
+    }
+
+    #[test]
+    fn legacy_python_state_is_not_read_on_open() {
+        let temp = tempfile::tempdir().unwrap();
+        let python = temp.path().join("sources");
+        fs::create_dir_all(python.join("cache")).unwrap();
+        fs::create_dir_all(python.join("status")).unwrap();
+        fs::create_dir_all(python.join("discovery").join("patchmoe")).unwrap();
+        fs::create_dir_all(python.join("discovery-index")).unwrap();
+        // Deliberately valid-looking legacy state that must never be imported.
+        fs::write(
+            python.join("overrides.json"),
+            br#"{"enabled":{"patchmoe":false},"added":[{"id":"legacy","name":"Legacy","adapter":"patchmoe","enabled":true,"pages":["https://www.patch.moe/"],"page_hosts":["www.patch.moe"],"download_hosts":["download.patch.moe"],"root_layout":"game_root"}],"games":{"42":{"patchmoe":true}}}"#,
+        )
+        .unwrap();
+        fs::write(python.join("cache").join("patchmoe.json"), b"{not json").unwrap();
+        fs::write(python.join("status").join("patchmoe.json"), b"{not json").unwrap();
+        fs::write(
+            python.join("discovery").join("patchmoe").join("42.json"),
+            b"{not json",
+        )
+        .unwrap();
+        fs::write(
+            python.join("discovery-index").join("patchmoe.json"),
+            b"{not json",
+        )
+        .unwrap();
+
+        let store = SourceStore::open(temp.path()).unwrap();
+        let settings = store.settings();
+        assert_eq!(settings.revision, 1);
+        assert!(
+            settings.added.is_empty(),
+            "Python added rules must not import"
+        );
+        assert!(
+            settings.enabled.is_empty(),
+            "Python enabled flags must not import"
+        );
+        assert!(
+            settings.games.is_empty(),
+            "Python subscriptions must not import"
+        );
+        // The Rust namespace is initialized independently of the legacy files.
+        assert!(store.paths().schema().exists());
+        assert!(store.load_cache("patchmoe").unwrap().is_none());
+        assert!(store.load_status("patchmoe").unwrap().is_none());
+        assert!(store.load_discovery("patchmoe", 42).unwrap().is_none());
+        assert!(store.load_discovery_index("patchmoe").unwrap().is_none());
     }
 
     #[test]
@@ -1017,7 +682,7 @@ mod tests {
     #[test]
     fn short_lock_serializes_revision_bumps() {
         let temp = tempfile::tempdir().unwrap();
-        let store = Arc::new(SourceStore::open(temp.path(), &builtins()).unwrap());
+        let store = Arc::new(SourceStore::open(temp.path()).unwrap());
         let start = store.revision();
         let mut handles = Vec::new();
         for _ in 0..4 {
@@ -1033,7 +698,7 @@ mod tests {
     #[test]
     fn source_cache_round_trips() {
         let temp = tempfile::tempdir().unwrap();
-        let store = SourceStore::open(temp.path(), &builtins()).unwrap();
+        let store = SourceStore::open(temp.path()).unwrap();
         let cache = SourceCache {
             entries: vec![entry("Game", "https://download.patch.moe/g.zip", Some(42))],
             etag: Some("etag".to_string()),

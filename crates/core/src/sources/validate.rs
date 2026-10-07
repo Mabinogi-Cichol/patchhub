@@ -682,7 +682,7 @@ mod tests {
     }
 
     #[test]
-    fn rule_validation_schema1_defaults_and_roles() {
+    fn rule_validation_applies_defaults_and_roles() {
         let rule = validate_rule(&raw_rule()).unwrap();
         assert_eq!(rule.role, SourceRole::Publisher);
         assert!(!rule.discovery_only);
@@ -703,19 +703,44 @@ mod tests {
     }
 
     #[test]
-    fn rules_config_accepts_schema1_and_schema2() {
-        let schema1 = r#"{"schema_version":1,"sources":[{"id":"patchmoe","name":"patch.moe","adapter":"patchmoe","enabled":true,"pages":["https://www.patch.moe/?flag=1"],"page_hosts":["www.patch.moe"],"download_hosts":["download.patch.moe"],"root_layout":"game_root"}]}"#;
-        let config: RulesConfig = serde_json::from_str(schema1).unwrap();
-        assert_eq!(config.schema_version, 1);
+    fn rules_config_schema2_required_defaults_and_rejections() {
+        // Minimal schema 2 publisher: required fields only, defaults applied.
+        let schema2 = r#"{"schema_version":2,"sources":[{"id":"patchmoe","name":"patch.moe","adapter":"patchmoe","enabled":true,"pages":["https://www.patch.moe/?flag=1"],"page_hosts":["www.patch.moe"],"download_hosts":["download.patch.moe"],"root_layout":"game_root"}]}"#;
+        let config: RulesConfig = serde_json::from_str(schema2).unwrap();
+        assert_eq!(config.schema_version, 2);
         let rule = validate_rule(&config.sources[0]).unwrap();
         assert_eq!(rule.role, SourceRole::Publisher);
         assert!(!rule.discovery_only);
+        assert_eq!(rule.priority, 100);
+        assert_eq!(rule.root_layout, Some(RootLayout::GameRoot));
 
-        let schema2 = r#"{"schema_version":2,"sources":[{"id":"hgamer","name":"HGamer","adapter":"hgamer_html","enabled":true,"role":"fallback_indexer","discovery_only":true,"priority":100,"pages":["https://hgamer.tw/zh-CN/patches"],"page_hosts":["hgamer.tw"],"download_hosts":[],"root_layout":null}]}"#;
-        let config: RulesConfig = serde_json::from_str(schema2).unwrap();
-        let rule = validate_rule(&config.sources[0]).unwrap();
-        assert!(rule.discovery_only);
-        assert_eq!(rule.role, SourceRole::FallbackIndexer);
+        // A publisher must carry `root_layout == "game_root"`.
+        let missing_root = r#"{"schema_version":2,"sources":[{"id":"patchmoe","name":"patch.moe","adapter":"patchmoe","enabled":true,"pages":["https://www.patch.moe/"],"page_hosts":["www.patch.moe"],"download_hosts":["download.patch.moe"]}]}"#;
+        let config: RulesConfig = serde_json::from_str(missing_root).unwrap();
+        assert_eq!(
+            validate_rule(&config.sources[0]).unwrap_err().to_string(),
+            "invalid_source_rule"
+        );
+
+        // A `discovery_only` rule must leave `root_layout` absent.
+        let discovery_root = r#"{"schema_version":2,"sources":[{"id":"hgamer","name":"HGamer","adapter":"hgamer_html","enabled":true,"role":"fallback_indexer","discovery_only":true,"pages":["https://hgamer.tw/zh-CN/patches"],"page_hosts":["hgamer.tw"],"download_hosts":[],"root_layout":"game_root"}]}"#;
+        let config: RulesConfig = serde_json::from_str(discovery_root).unwrap();
+        assert_eq!(
+            validate_rule(&config.sources[0]).unwrap_err().to_string(),
+            "invalid_source_rule"
+        );
+
+        // Required fields `enabled`/`pages`/`page_hosts` cannot be omitted.
+        for incomplete in [
+            r#"{"schema_version":2,"sources":[{"id":"patchmoe","name":"patch.moe","adapter":"patchmoe","pages":["https://www.patch.moe/"],"page_hosts":["www.patch.moe"]}]}"#,
+            r#"{"schema_version":2,"sources":[{"id":"patchmoe","name":"patch.moe","adapter":"patchmoe","enabled":true,"page_hosts":["www.patch.moe"]}]}"#,
+            r#"{"schema_version":2,"sources":[{"id":"patchmoe","name":"patch.moe","adapter":"patchmoe","enabled":true,"pages":["https://www.patch.moe/"]}]}"#,
+        ] {
+            assert!(
+                serde_json::from_str::<RulesConfig>(incomplete).is_err(),
+                "missing required field must fail: {incomplete}"
+            );
+        }
     }
 
     #[test]

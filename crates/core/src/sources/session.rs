@@ -855,7 +855,7 @@ mod tests {
     }
 
     fn registry_at(temp: &Path, rules: Vec<SourceRule>, now: u64) -> SourceRegistry {
-        let store = SourceStore::open(temp, &rules).unwrap();
+        let store = SourceStore::open(temp).unwrap();
         SourceRegistry::load_with_clock(store, rules, Box::new(FakeClock::new(now))).unwrap()
     }
 
