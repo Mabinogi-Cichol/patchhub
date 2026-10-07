@@ -110,6 +110,17 @@ fn serve_task() -> io::Result<()> {
         let _ = io::stdin().read(&mut [0u8; 1]);
         signal.store(true, Ordering::Relaxed);
     });
+    if !oversized {
+        if let Ok(parsed) = serde_json::from_slice::<Request>(&bytes) {
+            if parsed.protocol_version == PROTOCOL_VERSION
+                && !parsed.request_id.is_empty()
+                && parsed.request_id.len() <= 128
+                && runtime::SOURCE_STREAM_METHODS.contains(&parsed.method.as_str())
+            {
+                return stream_sources_task(parsed, &cancel);
+            }
+        }
+    }
     let response = steam_patch_core::operation::run(
         cancel,
         |progress| {
@@ -136,14 +147,70 @@ fn serve_task() -> io::Result<()> {
     output.flush()
 }
 
+/// Streams a sources task: `source_progress`/`source_update` lines carrying the
+/// request id and a monotonic sequence, then the single final response.
+fn stream_sources_task(
+    request: Request,
+    cancel: &std::sync::Arc<std::sync::atomic::AtomicBool>,
+) -> io::Result<()> {
+    let Request {
+        request_id,
+        method,
+        params,
+        ..
+    } = request;
+    let mut sequence = 0_u64;
+    let response = runtime::execute_streaming(&method, params, cancel.as_ref(), &mut |payload| {
+        let mut object = match payload {
+            Value::Object(map) => map,
+            other => {
+                let mut map = serde_json::Map::new();
+                map.insert("payload".to_string(), other);
+                map
+            }
+        };
+        object.insert("protocol_version".to_string(), json!(PROTOCOL_VERSION));
+        object.insert("request_id".to_string(), json!(request_id.clone()));
+        object.insert("sequence".to_string(), json!(sequence));
+        sequence += 1;
+        let mut output = io::stdout().lock();
+        let _ = serde_json::to_writer(&mut output, &Value::Object(object));
+        let _ = output.write_all(b"\n");
+        let _ = output.flush();
+    });
+    let response = match response {
+        Ok(result) => json!({
+            "protocol_version": PROTOCOL_VERSION,
+            "request_id": request_id,
+            "ok": true,
+            "result": result,
+        }),
+        Err(code) => error(Some(&request_id), &code),
+    };
+    let mut output = io::stdout().lock();
+    serde_json::to_writer(&mut output, &response)?;
+    output.write_all(b"\n")?;
+    output.flush()
+}
+
 const HELP: &str = "Steam patch manager Alpha\n\
 Usage: steam-patch scan [--steam-root PATH]... [--catalog PATH] [--platform windows|steamos]\n\
        steam-patch preview --instance ID --release ID [scan options]\n\
        steam-patch serve  (versioned JSON-lines on stdin/stdout)\n\
 Installation requires a signed catalog. Close the game and pause Steam updates before installing.
 Methods: scan preview install_patch fetch_artifact list_transactions recover migrate_state.
+Sources: get_capabilities list_sources list_source_matches list_game_sources set_source_enabled set_game_source add_source get_source_state get_source_settings refresh_sources discover_game scan_sources get_source_policy resolve_source_record.
 Options: --signed-catalog --trust-keys --state-dir --archive --operation install|reinstall --request-id ID.
+Source options: --source-id ID --appid N --enabled true|false --subscribed true|false --rule JSON --name-hint TEXT --preferred-language CODE --force --generation N --record-id ID.
 Maintenance: keygen PRIVATE PUBLIC KEY_ID; sign-catalog CATALOG PRIVATE KEY_ID OUTPUT LIFETIME_SECONDS; schema OUTPUT.";
+
+fn parse_bool(value: &str) -> Result<bool, String> {
+    match value {
+        "true" => Ok(true),
+        "false" => Ok(false),
+        _ => Err("invalid_boolean".into()),
+    }
+}
 
 fn run() -> Result<(), String> {
     let mut args = env::args().skip(1);
@@ -175,6 +242,10 @@ fn run() -> Result<(), String> {
     }
     let mut params = Params::default();
     while let Some(flag) = args.next() {
+        if flag == "--force" {
+            params.force = true;
+            continue;
+        }
         let value = args.next().ok_or_else(|| format!("missing_value:{flag}"))?;
         match flag.as_str() {
             "--signed-catalog" => params.signed_catalog = Some(PathBuf::from(value)),
@@ -182,6 +253,27 @@ fn run() -> Result<(), String> {
             "--state-dir" => params.state_dir = Some(PathBuf::from(value)),
             "--archive" => params.archive = Some(PathBuf::from(value)),
             "--request-id" => params.request_id = Some(value),
+            "--source-id" => params.source_id = Some(value),
+            "--appid" => {
+                params.appid = Some(value.parse().map_err(|_| "invalid_appid".to_string())?)
+            }
+            "--enabled" => params.enabled = Some(parse_bool(&value)?),
+            "--subscribed" => params.subscribed = Some(parse_bool(&value)?),
+            "--rule" => {
+                params.rule = Some(
+                    serde_json::from_str(&value).map_err(|_| "invalid_rule_json".to_string())?,
+                )
+            }
+            "--name-hint" => params.name_hints.push(value),
+            "--preferred-language" => params.preferred_language = Some(value),
+            "--generation" => {
+                params.generation = Some(
+                    value
+                        .parse()
+                        .map_err(|_| "invalid_generation".to_string())?,
+                )
+            }
+            "--record-id" => params.record_id = Some(value),
             "--operation" => {
                 params.operation = match value.as_str() {
                     "install" => steam_patch_core::install::InstallOperation::Install,
@@ -305,5 +397,26 @@ mod tests {
         assert_eq!(result["executable"], false);
         assert_eq!(result["changes"][0]["baseline_matches"], true);
         assert!(!root.join("steamapps/common/Test/game/patch.rpa").exists());
+    }
+
+    #[test]
+    fn protocol_exposes_sources_capabilities_and_rejects_unknown() {
+        let capabilities = respond(
+            br#"{"protocol_version":2,"request_id":"c","method":"get_capabilities","params":{}}"#,
+        );
+        assert_eq!(capabilities["ok"], true);
+        assert!(capabilities["result"]["methods"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|method| method == "discover_game"));
+        let unknown = respond(
+            br#"{"protocol_version":2,"request_id":"u","method":"source_magic","params":{}}"#,
+        );
+        assert_eq!(unknown["error"]["code"], "unsupported_method");
+        let missing_state = respond(
+            br#"{"protocol_version":2,"request_id":"s","method":"list_sources","params":{}}"#,
+        );
+        assert_eq!(missing_state["error"]["code"], "state_dir_required");
     }
 }

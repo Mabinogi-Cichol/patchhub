@@ -37,8 +37,9 @@ export type Install = {
   exe_reviews?: ExeReview[];
 };
 
-// Discovery identities belong to the Decky presentation layer. They never
-// become an installation release_id or authorize a prepare request.
+// Discovery identities are owned by the shared Rust core (Windows + Decky);
+// hosts only project them. A candidate never becomes an installation
+// release_id nor authorizes a prepare request.
 export type SourceCandidate = {
   candidate_id: string;
   source_id: string;
@@ -59,7 +60,7 @@ export type SourceCandidate = {
   patch_kind?: string;
   source_page: string;
   upstream_page?: string | null;
-  mirrors?: { url: string; label?: string; format?: string }[];
+  mirrors?: { url: string; label?: string | null; format?: string }[];
   format_reported?: string | null;
   format_observed?: string | null;
   capability: string;
@@ -69,6 +70,11 @@ export type SourceCandidate = {
   observed_at?: number | string | null;
   cache_status?: string;
   warnings?: string[];
+  version_identity?: string;
+  published_at?: string | null;
+  patch_updated_at?: string | null;
+  fingerprint?: string;
+  related_index_pages?: unknown[];
 };
 export type DiscoveryDiagnostic = { code: string; message?: string; detail?: string; source_id?: string };
 export type GameDiscovery = { status: string; candidates: SourceCandidate[]; diagnostics: DiscoveryDiagnostic[] };

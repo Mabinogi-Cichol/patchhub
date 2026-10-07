@@ -6,6 +6,7 @@ pub mod download;
 pub mod install;
 pub mod keyvalues;
 pub mod operation;
+pub mod sources;
 pub mod steam;
 mod steam_metadata;
 pub mod trust;

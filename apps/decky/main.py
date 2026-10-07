@@ -5,6 +5,7 @@ import os
 import asyncio
 from threading import Event
 import hashlib
+import inspect
 import re
 from urllib.parse import urlsplit
 
@@ -16,12 +17,41 @@ from bridge import CoreBridge
 from acquisition import find_archive, release_metadata
 from publisher import Publisher, _released, RELEASE_PATTERN
 from plugin_settings import Settings
-from sources import SourceRegistry
+from source_engine import open_source_engine
 from tasks import TaskManager, current_task
 from exe_profiles import ExeProfiles
 from exe_installation import ExeInstallation
 from scan_session import ScanSession
 from publisher import _json_new
+
+
+def _diag_key(item):
+    if not isinstance(item, dict):
+        return str(item)
+    return (item.get("source_id"), item.get("code"), item.get("detail"))
+
+
+def _merge_diagnostics(*groups):
+    """Merge diagnostic lists preserving order and dropping exact duplicates."""
+    merged = []
+    seen = set()
+    for group in groups:
+        if not isinstance(group, list):
+            continue
+        for item in group:
+            key = _diag_key(item)
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(item)
+    return merged
+
+
+async def _await_maybe(value):
+    # Both engines are duck-typed; only the Rust adapter's local writes are async.
+    if inspect.isawaitable(value):
+        return await value
+    return value
 
 
 class Plugin:
@@ -58,7 +88,7 @@ class Plugin:
         self.tasks = TaskManager(state_dir=state_dir)
         self._plan_metadata = {}
         self.settings = Settings(state_dir)
-        self.sources = SourceRegistry(state_dir, root / "backend/sources.json")
+        self.sources = await open_source_engine(state_dir, self.bridge, self.settings)
         self.publisher = Publisher(self.bridge, self.sources)
         self.exe_profiles = ExeProfiles(root / "backend/exe_profiles.json", self.sources, pipeline_ready=True)
         self.exe_installation = ExeInstallation(self.publisher, self.exe_profiles, root / "backend/exe_worker")
@@ -184,9 +214,14 @@ class Plugin:
 
     async def _read_report(self):
         report = await self.bridge.scan()
+        prime = getattr(self.sources, "prime", None)
+        if prime is not None:
+            prime(report)
         report["sources"] = self.sources.list_sources()
         report["generation"] = getattr(self, "_scan_generation", 0)
         report["settings_revision"] = self.sources.settings_revision
+        report["diagnostics"] = _merge_diagnostics(
+            report.get("diagnostics"), getattr(self.sources, "diagnostics", []))
         transactions = await self.list_transactions()
         for row in report["installs"]:
             row["discovery"] = self.sources.cached_discovery(row["game"])
@@ -202,16 +237,21 @@ class Plugin:
         report = await self._read_report()
         self._scan_games = {row["game"]["instance_id"]: dict(row["game"]) for row in report["installs"]}
         revision = self.sources.settings_revision
-        async def discover(game):
-            return await self.discover_game(game["instance_id"], [], None, refresh_sources)
-        async def refresh(report):
-            diagnostics = await self.sources.refresh(force=refresh_sources)
-            if self._scan_generation == generation and self.sources.settings_revision == revision:
+
+        def current():
+            return self._scan_generation == generation and self.sources.settings_revision == revision
+
+        async def refresh(on_event, cancel):
+            diagnostics = await self.sources.refresh(force=refresh_sources, on_event=on_event, cancel=cancel)
+            if current():
                 report["sources"] = self.sources.list_sources()
-                report["diagnostics"].extend(diagnostics)
-        session = ScanSession(report, discover, self._project_row,
-            lambda: self._scan_generation == generation and self.sources.settings_revision == revision,
-            refresh=refresh)
+                report["diagnostics"] = _merge_diagnostics(report.get("diagnostics"), diagnostics)
+            return diagnostics
+
+        async def scan_sources(on_event, cancel):
+            return await self.sources.scan_sources(force=refresh_sources, on_event=on_event, cancel=cancel)
+
+        session = ScanSession(report, refresh, scan_sources, self._project_row, current)
         self._scan_session = session
         return session.snapshot()
 
@@ -438,7 +478,7 @@ class Plugin:
     async def set_source_enabled(self, source_id: str, enabled: bool):
         if self._prepare_cancel is not None or self.tasks.busy():
             raise RuntimeError("installer_busy")
-        self.sources.set_enabled(source_id, enabled)
+        await _await_maybe(self.sources.set_enabled(source_id, enabled))
         return self.sources.list_sources()
 
     async def add_source(self, rule_json: str):
@@ -447,13 +487,13 @@ class Plugin:
         import json
         if not isinstance(rule_json, str) or len(rule_json) > 32768:
             raise ValueError("invalid_source_rule")
-        self.sources.add_source(json.loads(rule_json))
+        await _await_maybe(self.sources.add_source(json.loads(rule_json)))
         return self.sources.list_sources()
 
     async def set_game_source(self, appid: int, source_id: str, subscribed: bool):
         if self._prepare_cancel is not None or self.tasks.busy():
             raise RuntimeError("installer_busy")
-        self.sources.set_game_source(appid, source_id, subscribed)
+        await _await_maybe(self.sources.set_game_source(appid, source_id, subscribed))
         return {"appid": appid}
 
     async def cancel_download(self):

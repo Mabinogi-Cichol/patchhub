@@ -1,57 +1,102 @@
-"""Progressive, bounded discovery owned by the backend scan session."""
+"""Event-driven progressive scan session.
+
+Concurrency, budgets and dedup are owned by the shared Rust source engine. The
+session only renders cached rows up front, then feeds `source_progress` /
+`source_update` into `scan_progress` and each row's `discovery`, projecting the
+affected rows. It keeps the old `snapshot()` / `close()` API.
+"""
 import asyncio
 import copy
+from threading import Event
 
 
 class ScanSession:
-    def __init__(self, report, discover, project, current, concurrency=3, refresh=None):
+    def __init__(self, report, refresh, scan_sources, project, current):
         self.report = copy.deepcopy(report)
-        self.current = current
-        self.discover = discover
-        self.project = project
         self.refresh = refresh
-        self.semaphore = asyncio.Semaphore(concurrency)
+        self.scan_sources = scan_sources
+        self.project = project
+        self.current = current
+        self._cancel = Event()
         self.rows = [row for row in self.report["installs"] if row["game"].get("availability") == "installed"]
-        self.report["scan_progress"] = {"completed": 0, "total": len(self.rows), "running": bool(self.rows) or bool(refresh)}
+        self._by_instance = {}
+        self._by_appid = {}
+        for row in self.rows:
+            instance = row["game"].get("instance_id")
+            if isinstance(instance, str):
+                self._by_instance[instance] = row
+            appid = row["game"].get("appid")
+            if type(appid) is int:
+                self._by_appid.setdefault(appid, row)
+        progress = self.report.setdefault("scan_progress", {})
+        progress["total"] = len(self.rows)
+        progress.setdefault("completed", 0)
+        progress["running"] = True
         self.worker = asyncio.create_task(self.run())
 
     def snapshot(self):
         return copy.deepcopy(self.report)
 
+    async def on_event(self, event):
+        if not isinstance(event, dict) or not self.current():
+            return
+        kind = event.get("event")
+        if kind == "source_progress":
+            completed, total = event.get("completed"), event.get("total")
+            if type(completed) is int and type(total) is int:
+                self.report["scan_progress"] = {
+                    "completed": completed, "total": total,
+                    "running": bool(event.get("running", True))}
+        elif kind == "source_update":
+            discovery = event.get("discovery")
+            if not isinstance(discovery, dict):
+                return
+            row = None
+            instance = event.get("instance_id")
+            if isinstance(instance, str):
+                row = self._by_instance.get(instance)
+            if row is None and type(event.get("appid")) is int:
+                row = self._by_appid.get(event["appid"])
+            if row is None:
+                return
+            row["discovery"] = {key: discovery.get(key, [])
+                                for key in ("status", "candidates", "diagnostics")}
+            try:
+                await self.project(row)
+            except asyncio.CancelledError:
+                raise
+            except Exception as error:
+                row["discovery"].setdefault("diagnostics", []).append(
+                    {"code": "scan_projection_failed", "detail": str(error)[:200]})
+
     async def run(self):
-        async def one(row):
-            async with self.semaphore:
-                if not self.current():
-                    return
+        try:
+            if self.current():
                 try:
-                    result = await asyncio.wait_for(self.discover(row["game"]), 90)
-                    if not self.current() or result.get("status") == "stale":
-                        return
-                    row["discovery"] = {key: result.get(key, []) for key in ("status", "candidates", "diagnostics")}
-                    await self.project(row)
-                    failures = [d for d in self.report.get("diagnostics", [])
-                                if d.get("code") == "source_refresh_failed"]
-                    if failures and not row.get("patches") and not row["discovery"]["candidates"]:
-                        row["discovery"]["status"] = "source_partial"
-                        row["discovery"]["diagnostics"].extend(failures)
+                    await self.refresh(self.on_event, self._cancel)
                 except asyncio.CancelledError:
                     raise
                 except Exception as error:
-                    if self.current():
-                        # Preserve last successful candidates, including on timeout.
-                        row.setdefault("discovery", {}).update(status="failed", diagnostics=[{"code": "source_refresh_failed", "detail": str(error)}])
-                finally:
-                    if self.current():
-                        self.report["scan_progress"]["completed"] += 1
-        try:
-            if self.refresh and self.current():
-                await self.refresh(self.report)
+                    self._fail(error)
             if not self.current():
                 return
-            await asyncio.gather(*(one(row) for row in self.rows))
+            try:
+                await self.scan_sources(self.on_event, self._cancel)
+            except asyncio.CancelledError:
+                raise
+            except Exception as error:
+                self._fail(error)
         finally:
             self.report["scan_progress"]["running"] = False
 
+    def _fail(self, error):
+        if not self.current():
+            return
+        diagnostics = self.report.setdefault("diagnostics", [])
+        if isinstance(diagnostics, list):
+            diagnostics.append({"code": "source_refresh_failed", "detail": str(error)[:200]})
+
     async def close(self):
+        self._cancel.set()
         self.worker.cancel()
         await asyncio.gather(self.worker, return_exceptions=True)

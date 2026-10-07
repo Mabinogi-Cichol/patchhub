@@ -1,0 +1,160 @@
+{
+  "schema_version": 1,
+  "note": "Golden values produced by the authoritative Python algorithms (discovery._candidate / sources._query_key / discovery.discover fingerprint resave). The Rust canonical.rs implementation MUST reproduce payload strings byte-for-byte and the digests exactly.",
+  "separators": {
+    "item": ", ",
+    "key": ": "
+  },
+  "canonical_urls": [
+    {
+      "input": "https://publisher.example/game/",
+      "expected": "https://publisher.example/game/"
+    },
+    {
+      "input": "https://kagurafan.com/game/",
+      "expected": "https://kagurafan.com/game/"
+    }
+  ],
+  "candidate_id": [
+    {
+      "identity": [
+        "official",
+        "https://publisher.example/game/",
+        "base",
+        [
+          "en"
+        ],
+        "page-unknown"
+      ],
+      "expected": "candidate-f7f112b4599f264ff4eb69be",
+      "payload": "[\"official\", \"https://publisher.example/game/\", \"base\", [\"en\"], \"page-unknown\"]"
+    },
+    {
+      "identity": [
+        "kagura-cn",
+        "https://kagurafan.com/game/",
+        "dlc",
+        [
+          "zh-CN"
+        ],
+        "v1.2.3:patch_v1.2.3.zip"
+      ],
+      "expected": "candidate-99461727558091c8fc6e5527",
+      "payload": "[\"kagura-cn\", \"https://kagurafan.com/game/\", \"dlc\", [\"zh-CN\"], \"v1.2.3:patch_v1.2.3.zip\"]"
+    },
+    {
+      "identity": [
+        "kagura-cn",
+        "https://kagurafan.com/2023/03/24/%e5%a6%83%e7%a5%9e%e4%bc%9a%e7%a7%98%e5%8f%b2/",
+        "base",
+        [
+          "zh-CN"
+        ],
+        "4:My Life as a Cult Leader CN Patch v4.exe"
+      ],
+      "expected": "candidate-21d97c05e6cf1324b0cea5c7",
+      "payload": "[\"kagura-cn\", \"https://kagurafan.com/2023/03/24/%e5%a6%83%e7%a5%9e%e4%bc%9a%e7%a7%98%e5%8f%b2/\", \"base\", [\"zh-CN\"], \"4:My Life as a Cult Leader CN Patch v4.exe\"]",
+      "origin": "decky-2303800-real"
+    },
+    {
+      "identity": [
+        "kagura-en",
+        "https://www.kaguragames.com/product/my-life-as-a-cult-leader-patch/",
+        "base",
+        [
+          "en"
+        ],
+        "3:My Life as a Cult Leader EN Patch v3.exe"
+      ],
+      "expected": "candidate-d04331eb1335da62bedec536",
+      "payload": "[\"kagura-en\", \"https://www.kaguragames.com/product/my-life-as-a-cult-leader-patch/\", \"base\", [\"en\"], \"3:My Life as a Cult Leader EN Patch v3.exe\"]",
+      "origin": "decky-2303800-real"
+    },
+    {
+      "identity": [
+        "hgamer",
+        "https://hgamer.tw/zh-TW/patches/my-life-as-a-cult-leader-patch",
+        "base",
+        [
+          "zh-CN"
+        ],
+        "4"
+      ],
+      "expected": "candidate-625cfade8b8786da9e58842c",
+      "payload": "[\"hgamer\", \"https://hgamer.tw/zh-TW/patches/my-life-as-a-cult-leader-patch\", \"base\", [\"zh-CN\"], \"4\"]",
+      "origin": "decky-2303800-real"
+    }
+  ],
+  "query_key": [
+    {
+      "input": {
+        "appid": 42,
+        "name": "A Game",
+        "name_hints": [],
+        "preferred_language": null,
+        "legacy_match": false,
+        "source_context": [
+          "official"
+        ],
+        "parser_version": 2,
+        "query_version": 1
+      },
+      "expected": "a870a97d65b5391ec4a31ae7ddd9854c2fa745077f20e248128a3249ae4a60b4",
+      "payload": "{\"appid\": 42, \"legacy_match\": false, \"name\": \"A Game\", \"name_hints\": [], \"parser_version\": 2, \"preferred_language\": null, \"query_version\": 1, \"source_context\": [\"official\"]}"
+    }
+  ],
+  "fingerprint": [
+    {
+      "input": {
+        "aliases": [
+          "A Game"
+        ],
+        "candidate_id": "candidate-49d4abc4342bbe0aa2491fcb",
+        "capability": "discover_only",
+        "excludes_dlc": null,
+        "format_observed": "unknown",
+        "format_reported": "zip",
+        "game_appid": 42,
+        "game_title": "A Game",
+        "identity_evidence": [
+          {
+            "appid": 42,
+            "kind": "steam_appid",
+            "page": "https://hgamer.tw/zh-CN/patches/game"
+          }
+        ],
+        "languages": [],
+        "match_basis": "appid",
+        "mirrors": [],
+        "parent_appid": null,
+        "patch_kind": "adult_content",
+        "patch_title": "A Game",
+        "patch_updated_at": null,
+        "platforms": [
+          "steam"
+        ],
+        "provenance": [
+          {
+            "page": "https://hgamer.tw/zh-CN/patches/game",
+            "source_id": "hgamer"
+          }
+        ],
+        "published_at": null,
+        "requires_dlc": null,
+        "source_id": "hgamer",
+        "source_page": "https://hgamer.tw/zh-CN/patches/game",
+        "source_record_id": "https://hgamer.tw/zh-CN/patches/game",
+        "upstream_page": null,
+        "variant": "base",
+        "version_evidence": [
+          "1"
+        ],
+        "version_identity": "1",
+        "version_raw": "1",
+        "warnings": []
+      },
+      "expected": "39bc76a4c3eb68a5a4730a8f556f8ed4e7a6ee935d45cc20cc44141fc4022a9f",
+      "payload": "{\"aliases\": [\"A Game\"], \"candidate_id\": \"candidate-49d4abc4342bbe0aa2491fcb\", \"capability\": \"discover_only\", \"excludes_dlc\": null, \"format_observed\": \"unknown\", \"format_reported\": \"zip\", \"game_appid\": 42, \"game_title\": \"A Game\", \"identity_evidence\": [{\"appid\": 42, \"kind\": \"steam_appid\", \"page\": \"https://hgamer.tw/zh-CN/patches/game\"}], \"languages\": [], \"match_basis\": \"appid\", \"mirrors\": [], \"parent_appid\": null, \"patch_kind\": \"adult_content\", \"patch_title\": \"A Game\", \"patch_updated_at\": null, \"platforms\": [\"steam\"], \"provenance\": [{\"page\": \"https://hgamer.tw/zh-CN/patches/game\", \"source_id\": \"hgamer\"}], \"published_at\": null, \"requires_dlc\": null, \"source_id\": \"hgamer\", \"source_page\": \"https://hgamer.tw/zh-CN/patches/game\", \"source_record_id\": \"https://hgamer.tw/zh-CN/patches/game\", \"upstream_page\": null, \"variant\": \"base\", \"version_evidence\": [\"1\"], \"version_identity\": \"1\", \"version_raw\": \"1\", \"warnings\": []}"
+    }
+  ]
+}

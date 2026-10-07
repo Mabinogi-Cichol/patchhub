@@ -9,19 +9,79 @@ import unittest
 from unittest.mock import patch, Mock
 from urllib.error import HTTPError
 from io import BytesIO
-from sources import SourceRegistry
+from source_primitives import allowed_url, _normal, _split_names
 import zipfile
 
 from publisher import Publisher, _download, _recipe, _released
 
 
+class FakeSourceService:
+    """Duck-type stand-in for the Rust-backed adapter (no binary, no network)."""
+
+    engine = "rust"
+
+    def __init__(self, rules):
+        self._rules = [dict(rule) for rule in rules]
+        self.builtins = [dict(rule) for rule in self._rules]
+        self.settings_revision = 1
+        self.diagnostics = []
+        self.entries = {rule["id"]: [] for rule in self._rules}
+
+    def list_sources(self):
+        return [{**rule, "status": "cached", "entry_count": len(self.entries.get(rule["id"], [])),
+                 "cached_at": None, "checked_at": None, "origin": "builtin"} for rule in self._rules]
+
+    def list_game_sources(self, game):
+        return [{**source, "subscribed": self.game_subscribed(game.get("appid"), source["id"]),
+                 "matched": False} for source in self.list_sources()]
+
+    def matches(self, game, include_disabled=False):
+        name = _normal(game["name"])
+        result = []
+        for rule in self._rules:
+            if rule.get("discovery_only"):
+                continue
+            if not include_disabled and (not rule.get("enabled")
+                                         or not self.game_subscribed(game["appid"], rule["id"])):
+                continue
+            candidates = []
+            for entry in self.entries.get(rule["id"], []):
+                names = set(_normal(value) for title in (entry["title"], *entry.get("aliases", []))
+                            for value in _split_names(title))
+                if entry.get("appid") == game["appid"] or (entry.get("appid") is None and name and name in names):
+                    candidates.append(entry)
+            if not candidates or len({entry["url"] for entry in candidates}) != 1:
+                continue
+            selected = next((entry for entry in candidates
+                             if entry["language"].lower() in ("zh-cn", "zh_cn")), candidates[0])
+            release_id = (f"patchmoe-{game['appid']}" if rule["id"] == "patchmoe"
+                          else f"source-{rule['id']}-{game['appid']}")
+            result.append({**selected, "source_id": rule["id"], "release_id": release_id,
+                           "root_layout": rule["root_layout"]})
+        return result
+
+    def cached_candidates(self, game):
+        return []
+
+    def game_subscribed(self, appid, source_id):
+        return True
+
+    def source_for_release(self, release_id):
+        return None
+
+    def validate_download(self, source_id, url):
+        rule = next((item for item in self._rules if item["id"] == source_id and item.get("enabled")), None)
+        if rule is None:
+            raise ValueError("source_not_enabled")
+        return allowed_url(url, rule["download_hosts"], download=True)
+
+
 def fixture_sources(root, entries):
-    config = root / "sources.json"
-    config.write_text(json.dumps({"schema_version": 1, "sources": [{"id": "patchmoe", "name": "patch.moe",
-        "adapter": "patchmoe", "enabled": True, "pages": ["https://www.patch.moe/?flag=1"],
-        "page_hosts": ["www.patch.moe"], "download_hosts": ["download.patch.moe"], "root_layout": "game_root"}]}))
-    sources = SourceRegistry(root / "state", config)
-    sources._cache["patchmoe"] = {"entries": [{**entry, "source_page": "https://www.patch.moe/"} for entry in entries]}
+    rule = {"id": "patchmoe", "name": "patch.moe", "adapter": "patchmoe", "enabled": True,
+            "pages": ["https://www.patch.moe/?flag=1"], "page_hosts": ["www.patch.moe"],
+            "download_hosts": ["download.patch.moe"], "root_layout": "game_root"}
+    sources = FakeSourceService([rule])
+    sources.entries["patchmoe"] = [{**entry, "source_page": "https://www.patch.moe/"} for entry in entries]
     return sources
 
 
@@ -50,12 +110,12 @@ class PublisherTests(unittest.TestCase):
         self.assertIsNone(self.publisher.match({"name": "Border", "appid": 12}))
 
     def test_different_urls_make_name_ambiguous(self):
-        self.sources._cache["patchmoe"]["entries"].append({"title": "Another Game", "aliases": [],
+        self.sources.entries["patchmoe"].append({"title": "Another Game", "aliases": [],
                                        "url": "https://download.patch.moe/c.zip", "language": "en"})
         self.assertIsNone(self.publisher.match({"name": "Another Game", "appid": 14}))
 
     def test_plus_is_a_different_game_not_decoration(self):
-        self.sources._cache["patchmoe"]["entries"].append({"title": "Another Game+", "aliases": [],
+        self.sources.entries["patchmoe"].append({"title": "Another Game+", "aliases": [],
             "url": "https://download.patch.moe/plus.zip", "language": "en"})
         self.assertEqual(self.publisher.match({"name": "Another Game", "appid": 14})["url"],
             "https://download.patch.moe/b.zip")

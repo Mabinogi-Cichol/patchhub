@@ -1,0 +1,1797 @@
+//! In-memory merged rules, subscriptions and source-cache matching (design
+//! §2.2, §4.4, §5, R6/R8/R9/R15).
+//!
+//! The registry owns the [`SourceStore`]; read paths never create state, and
+//! mutations persist through the store's short lock + revision primitive.
+
+use super::adapters;
+use super::http::RequestContext;
+use super::model::*;
+use super::store::SourceStore;
+use super::validate;
+use super::{
+    invalid, Clock, Result, SystemClock, BUILTIN_ADAPTERS, DISCOVERY_FALLBACK_TTL,
+    DISCOVERY_INDEX_TTL, DISCOVERY_SUCCESS_TTL, MAX_DISCOVERY_OUTPUT, MAX_SOURCES, PARSER_VERSION,
+    QUERY_VERSION, SOURCE_CACHE_TTL,
+};
+use std::collections::{BTreeMap, HashSet};
+use std::sync::atomic::AtomicBool;
+
+/// One discovery outcome fed to [`SourceRegistry::commit`] (design §4.4).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct DiscoveryOutcome {
+    pub status: String,
+    pub candidates: Vec<SourceCandidate>,
+    pub diagnostics: Vec<Diagnostic>,
+    pub index: Option<DiscoveryIndex>,
+    pub checkpoint: Option<serde_json::Value>,
+    pub queries: Option<serde_json::Value>,
+    pub query_cache: Option<serde_json::Value>,
+}
+
+/// True while `checked_at` is within `ttl`; a clock rollback expires
+/// conservatively (design §5.3, R11).
+pub fn is_fresh(checked_at: Option<u64>, ttl: u64, now: u64) -> bool {
+    checked_at.is_some_and(|checked| checked <= now && now - checked < ttl)
+}
+
+fn empty_success() -> DiscoverySuccess {
+    DiscoverySuccess {
+        status: String::new(),
+        candidates: Vec::new(),
+        diagnostics: Vec::new(),
+        checked_at: 0,
+        cached_at: None,
+        query_key: String::new(),
+        parser_version: 0,
+        query_version: 0,
+    }
+}
+
+fn matched_basis(basis: MatchBasis) -> bool {
+    matches!(
+        basis,
+        MatchBasis::Appid | MatchBasis::VerifiedAlias | MatchBasis::OfficialTitle
+    )
+}
+
+fn valid_release_suffix(value: &str) -> bool {
+    !value.is_empty() && !value.starts_with('0') && value.bytes().all(|b| b.is_ascii_digit())
+}
+
+fn valid_language_code(value: &str) -> bool {
+    let parts: Vec<&str> = value.split('-').collect();
+    match parts.as_slice() {
+        [primary] => {
+            (2..=3).contains(&primary.len()) && primary.bytes().all(|b| b.is_ascii_alphabetic())
+        }
+        [primary, region] => {
+            (2..=3).contains(&primary.len())
+                && primary.bytes().all(|b| b.is_ascii_alphabetic())
+                && (2..=4).contains(&region.len())
+                && region.bytes().all(|b| b.is_ascii_alphabetic())
+        }
+        _ => false,
+    }
+}
+
+pub struct SourceRegistry {
+    store: SourceStore,
+    builtins: Vec<SourceRule>,
+    rules: Vec<SourceRule>,
+    overrides: Overrides,
+    revision: u64,
+    cache: BTreeMap<String, SourceCache>,
+    status: BTreeMap<String, SourceStatus>,
+    diagnostics: Vec<Diagnostic>,
+    discovery: BTreeMap<(String, u32), DiscoveryRecord>,
+    indexes: BTreeMap<String, DiscoveryIndexRecord>,
+    clock: Box<dyn Clock>,
+}
+
+impl SourceRegistry {
+    pub fn load(store: SourceStore, builtins: Vec<SourceRule>) -> Result<Self> {
+        Self::load_with_clock(store, builtins, Box::new(SystemClock))
+    }
+
+    pub fn load_with_clock(
+        store: SourceStore,
+        builtins: Vec<SourceRule>,
+        clock: Box<dyn Clock>,
+    ) -> Result<Self> {
+        let mut registry = Self {
+            store,
+            builtins,
+            rules: Vec::new(),
+            overrides: Overrides::default(),
+            revision: 0,
+            cache: BTreeMap::new(),
+            status: BTreeMap::new(),
+            diagnostics: Vec::new(),
+            discovery: BTreeMap::new(),
+            indexes: BTreeMap::new(),
+            clock,
+        };
+        registry.reload()?;
+        Ok(registry)
+    }
+
+    pub fn store(&self) -> &SourceStore {
+        &self.store
+    }
+
+    pub fn settings_revision(&self) -> u64 {
+        self.revision
+    }
+
+    pub fn diagnostics(&self) -> &[Diagnostic] {
+        &self.diagnostics
+    }
+
+    pub fn rules(&self) -> &[SourceRule] {
+        &self.rules
+    }
+
+    fn now(&self) -> u64 {
+        self.clock.now_unix()
+    }
+
+    /// Port of `_reload` merge (design §2.2): user `added` shadows builtins with
+    /// the same id, the `enabled` overlay is applied, and the result is capped.
+    fn reload(&mut self) -> Result<()> {
+        let settings = self.store.settings();
+        self.revision = settings.revision;
+        let overrides = Overrides {
+            enabled: settings.enabled.clone(),
+            added: settings.added.clone(),
+            games: settings.games.clone(),
+        };
+        validate::validate_overrides(&overrides)?;
+
+        let added_ids: HashSet<&str> = overrides
+            .added
+            .iter()
+            .map(|rule| rule.id.as_str())
+            .collect();
+        let mut rules: Vec<SourceRule> = self
+            .builtins
+            .iter()
+            .filter(|rule| !added_ids.contains(rule.id.as_str()))
+            .cloned()
+            .collect();
+        rules.extend(overrides.added.iter().cloned());
+        if rules.len() > MAX_SOURCES {
+            return Err(invalid("invalid_source_overrides"));
+        }
+        let mut seen = HashSet::new();
+        for rule in &rules {
+            if !seen.insert(rule.id.clone()) {
+                return Err(invalid("invalid_source_overrides"));
+            }
+        }
+        for rule in &mut rules {
+            if let Some(enabled) = overrides.enabled.get(&rule.id) {
+                rule.enabled = *enabled;
+            }
+        }
+
+        self.rules = rules;
+        self.overrides = overrides;
+        self.cache.clear();
+        self.status.clear();
+        self.discovery.clear();
+        self.indexes.clear();
+        self.diagnostics.clear();
+
+        for rule in &self.rules {
+            if let Ok(Some(status)) = self.store.load_status(&rule.id) {
+                self.status.insert(rule.id.clone(), status);
+            }
+            if rule.discovery_only {
+                continue;
+            }
+            match self.store.load_cache(&rule.id) {
+                Ok(Some(cache)) => match validate::validate_entries(rule, &cache.entries) {
+                    Ok(entries) => {
+                        let clean = SourceCache {
+                            entries,
+                            etag: cache.etag,
+                            modified: cache.modified,
+                            cached_at: cache.cached_at,
+                            checked_at: cache.checked_at,
+                        };
+                        self.cache.insert(rule.id.clone(), clean);
+                    }
+                    Err(_) => self.diagnostics.push(cache_diagnostic(&rule.id)),
+                },
+                Ok(None) => {}
+                Err(_) => self.diagnostics.push(cache_diagnostic(&rule.id)),
+            }
+        }
+        Ok(())
+    }
+
+    pub fn list_sources(&self) -> Vec<SourceSummary> {
+        let diagnostic_codes: BTreeMap<&str, &str> = self
+            .diagnostics
+            .iter()
+            .filter_map(|diagnostic| {
+                diagnostic
+                    .source_id
+                    .as_deref()
+                    .map(|id| (id, diagnostic.code.as_str()))
+            })
+            .collect();
+        self.rules
+            .iter()
+            .map(|rule| {
+                let status = self.status.get(&rule.id);
+                let cache = self.cache.get(&rule.id);
+                let code = diagnostic_codes
+                    .get(rule.id.as_str())
+                    .map(|code| (*code).to_string())
+                    .or_else(|| status.map(|status| status.code.clone()))
+                    .unwrap_or_else(|| {
+                        if cache.is_some() {
+                            "cached".to_string()
+                        } else {
+                            "not_refreshed".to_string()
+                        }
+                    });
+                let entry_count = if rule.discovery_only {
+                    status.map(|status| status.entry_count).unwrap_or(0)
+                } else {
+                    cache.map(|cache| cache.entries.len() as u64).unwrap_or(0)
+                };
+                let cached_at = if rule.discovery_only {
+                    status.and_then(|status| status.cached_at)
+                } else {
+                    cache.and_then(|cache| cache.cached_at)
+                };
+                let checked_at = status
+                    .map(|status| status.checked_at)
+                    .or_else(|| cache.and_then(|cache| cache.checked_at));
+                SourceSummary {
+                    rule: rule.clone(),
+                    origin: self.source_origin(&rule.id).unwrap_or("added").to_string(),
+                    status: code,
+                    entry_count,
+                    cached_at,
+                    checked_at,
+                }
+            })
+            .collect()
+    }
+
+    pub fn list_game_sources(&self, game: &GameQuery) -> Vec<GameSourceSummary> {
+        let mut matched: HashSet<String> = self
+            .matches(game, true)
+            .into_iter()
+            .map(|entry| entry.source_id)
+            .collect();
+        for rule in &self.rules {
+            if !rule.discovery_only {
+                continue;
+            }
+            let record = self.discovery_record(rule, game.appid);
+            let found = record
+                .success
+                .iter()
+                .flat_map(|success| success.candidates.iter())
+                .chain(
+                    record
+                        .attempt
+                        .iter()
+                        .flat_map(|attempt| attempt.candidates.iter()),
+                )
+                .any(|candidate| matched_basis(candidate.match_basis));
+            if found {
+                matched.insert(rule.id.clone());
+            }
+        }
+        self.list_sources()
+            .into_iter()
+            .map(|source| {
+                let subscribed = self.game_subscribed(game.appid, &source.rule.id);
+                let matched = matched.contains(&source.rule.id);
+                GameSourceSummary {
+                    source,
+                    subscribed,
+                    matched,
+                }
+            })
+            .collect()
+    }
+
+    /// Port of `matches()` (design §2.2/§5.2).
+    ///
+    /// Mirrors Python: only a non-positive AppID short-circuits. An empty name is
+    /// accepted and still matches entries carrying the AppID, which lets
+    /// `list_source_matches` resolve `appid` alone.
+    pub fn matches(&self, game: &GameQuery, include_disabled: bool) -> Vec<SourceMatch> {
+        if game.appid == 0 {
+            return Vec::new();
+        }
+        let name = validate::normal(&game.name);
+        let mut result = Vec::new();
+        for rule in &self.rules {
+            if rule.discovery_only {
+                continue;
+            }
+            if !include_disabled && (!rule.enabled || !self.game_subscribed(game.appid, &rule.id)) {
+                continue;
+            }
+            let Some(cache) = self.cache.get(&rule.id) else {
+                continue;
+            };
+            let mut candidates: Vec<&SourceEntry> = Vec::new();
+            for entry in &cache.entries {
+                let names: HashSet<String> = std::iter::once(&entry.title)
+                    .chain(entry.aliases.iter())
+                    .flat_map(|title| validate::split_names(title))
+                    .map(|title| validate::normal(&title))
+                    .collect();
+                if entry.appid == Some(game.appid)
+                    || (entry.appid.is_none() && !name.is_empty() && names.contains(&name))
+                {
+                    candidates.push(entry);
+                }
+            }
+            if candidates.is_empty() {
+                continue;
+            }
+            let urls: HashSet<&str> = candidates.iter().map(|entry| entry.url.as_str()).collect();
+            if urls.len() != 1 {
+                continue;
+            }
+            let selected = candidates
+                .iter()
+                .find(|entry| matches!(entry.language.to_lowercase().as_str(), "zh-cn" | "zh_cn"))
+                .copied()
+                .unwrap_or(candidates[0]);
+            let release_id = if rule.id == "patchmoe" {
+                format!("patchmoe-{}", game.appid)
+            } else {
+                format!("source-{}-{}", rule.id, game.appid)
+            };
+            result.push(SourceMatch {
+                title: selected.title.clone(),
+                aliases: selected.aliases.clone(),
+                url: selected.url.clone(),
+                source_page: selected.source_page.clone(),
+                language: selected.language.clone(),
+                date: selected.date.clone(),
+                appid: selected.appid,
+                source_id: rule.id.clone(),
+                release_id,
+                root_layout: rule.root_layout,
+            });
+        }
+        result
+    }
+
+    /// Port of `source_for_release` (design §5.2).
+    pub fn source_for_release(&self, release_id: &str) -> Option<SourceRule> {
+        for rule in &self.rules {
+            if rule.discovery_only {
+                continue;
+            }
+            let prefix = if rule.id == "patchmoe" {
+                "patchmoe-".to_string()
+            } else {
+                format!("source-{}-", rule.id)
+            };
+            if let Some(rest) = release_id.strip_prefix(&prefix) {
+                if valid_release_suffix(rest) {
+                    return Some(rule.clone());
+                }
+            }
+        }
+        None
+    }
+
+    /// Port of `validate_download`.
+    pub fn validate_download(&self, source_id: &str, url: &str) -> Result<String> {
+        let rule = self
+            .rules
+            .iter()
+            .find(|rule| rule.id == source_id && rule.enabled && !rule.discovery_only)
+            .ok_or_else(|| invalid("source_not_enabled"))?;
+        validate::allowed_url(url, &rule.download_hosts, true)
+    }
+
+    pub fn game_subscribed(&self, appid: u32, source_id: &str) -> bool {
+        self.overrides
+            .games
+            .get(&appid.to_string())
+            .and_then(|choices| choices.get(source_id))
+            .copied()
+            .unwrap_or(true)
+    }
+
+    /// Port of `_effective_discovery_rules`: enabled, subscribed, ordered by
+    /// `(priority, id)`.
+    pub fn effective_discovery_rules(&self, appid: u32) -> Vec<SourceRule> {
+        let mut rules: Vec<SourceRule> = self
+            .rules
+            .iter()
+            .filter(|rule| {
+                rule.discovery_only && rule.enabled && self.game_subscribed(appid, &rule.id)
+            })
+            .cloned()
+            .collect();
+        rules.sort_by(|a, b| a.priority.cmp(&b.priority).then_with(|| a.id.cmp(&b.id)));
+        rules
+    }
+
+    pub fn set_enabled(&mut self, source_id: &str, enabled: bool) -> Result<()> {
+        if !self.rules.iter().any(|rule| rule.id == source_id) {
+            return Err(invalid("unknown_source"));
+        }
+        let mut overrides = self.overrides.clone();
+        overrides.enabled.insert(source_id.to_string(), enabled);
+        self.store.apply_overrides(&overrides)?;
+        self.store.bump_revision()?;
+        self.reload()
+    }
+
+    pub fn add_source(&mut self, raw: &RawSourceRule) -> Result<SourceRule> {
+        let rule = validate::validate_rule(raw)?;
+        if !BUILTIN_ADAPTERS.contains(&rule.adapter.as_str()) {
+            return Err(invalid("source_exists_or_adapter_unavailable"));
+        }
+        if self.rules.iter().any(|existing| existing.id == rule.id) {
+            return Err(invalid("source_exists_or_adapter_unavailable"));
+        }
+        if self.rules.len() >= MAX_SOURCES {
+            return Err(invalid("source_limit"));
+        }
+        let mut overrides = self.overrides.clone();
+        overrides.added.push(rule.clone());
+        self.store.apply_overrides(&overrides)?;
+        self.store.bump_revision()?;
+        self.reload()?;
+        Ok(rule)
+    }
+
+    pub fn set_game_source(&mut self, appid: u32, source_id: &str, subscribed: bool) -> Result<()> {
+        if appid == 0 {
+            return Err(invalid("invalid_appid"));
+        }
+        if !self.rules.iter().any(|rule| rule.id == source_id) {
+            return Err(invalid("unknown_source"));
+        }
+        let mut overrides = self.overrides.clone();
+        overrides
+            .games
+            .entry(appid.to_string())
+            .or_default()
+            .insert(source_id.to_string(), subscribed);
+        if serde_json::to_vec(&overrides)
+            .map_err(|error| invalid(error.to_string()))?
+            .len()
+            > 256 * 1024
+        {
+            return Err(invalid("source_limit"));
+        }
+        self.store.apply_overrides(&overrides)?;
+        self.store.bump_revision()?;
+        self.reload()
+    }
+
+    // --- discovery --------------------------------------------------------
+
+    fn discovery_record(&self, rule: &SourceRule, appid: u32) -> DiscoveryRecord {
+        if let Some(record) = self.discovery.get(&(rule.id.clone(), appid)) {
+            return record.clone();
+        }
+        let Ok(Some(record)) = self.store.load_discovery(&rule.id, appid) else {
+            return DiscoveryRecord::default();
+        };
+        if record.schema_version != 1 || record.appid != appid || record.source_id != rule.id {
+            return DiscoveryRecord::default();
+        }
+        let valid = record
+            .success
+            .as_ref()
+            .map(|success| validate::validate_candidates(rule, appid, &success.candidates).is_ok())
+            .unwrap_or(true)
+            && record
+                .attempt
+                .as_ref()
+                .map(|attempt| {
+                    validate::validate_candidates(rule, appid, &attempt.candidates).is_ok()
+                })
+                .unwrap_or(true);
+        if !valid {
+            return DiscoveryRecord::default();
+        }
+        record
+    }
+
+    fn discovery_fresh(&self, success: &DiscoverySuccess, ttl: u64) -> bool {
+        success.parser_version == PARSER_VERSION
+            && success.query_version == QUERY_VERSION
+            && is_fresh(Some(success.checked_at), ttl, self.now())
+    }
+
+    /// Port of `cached_candidates`: a partial attempt exposes new leads but never
+    /// shadows the last complete record (design §4.4).
+    pub fn cached_candidates(&self, game: &GameQuery) -> Vec<SourceCandidate> {
+        let mut result = Vec::new();
+        for rule in self.effective_discovery_rules(game.appid) {
+            let record = self.discovery_record(&rule, game.appid);
+            let mut found: BTreeMap<String, SourceCandidate> = BTreeMap::new();
+            if let Some(attempt) = &record.attempt {
+                if attempt.status == "partial" {
+                    for candidate in &attempt.candidates {
+                        found.insert(candidate.candidate_id.clone(), candidate.clone());
+                    }
+                }
+            }
+            if let Some(success) = &record.success {
+                for candidate in &success.candidates {
+                    found.insert(candidate.candidate_id.clone(), candidate.clone());
+                }
+            }
+            let fresh = record
+                .success
+                .as_ref()
+                .is_some_and(|success| self.discovery_fresh(success, DISCOVERY_SUCCESS_TTL));
+            for (_, mut candidate) in found {
+                candidate.cache_status = if fresh {
+                    CacheStatus::Cached
+                } else {
+                    CacheStatus::Stale
+                };
+                result.push(candidate);
+            }
+        }
+        result
+    }
+
+    /// Port of `cached_discovery` status precedence (R15).
+    pub fn cached_discovery(&self, game: &GameQuery) -> GameDiscovery {
+        let rules = self.effective_discovery_rules(game.appid);
+        let records: Vec<DiscoveryRecord> = rules
+            .iter()
+            .map(|rule| self.discovery_record(rule, game.appid))
+            .collect();
+        let candidates = self.cached_candidates(game);
+        let statuses: Vec<String> = records
+            .iter()
+            .map(|record| {
+                record
+                    .attempt
+                    .as_ref()
+                    .map(|attempt| attempt.status.clone())
+                    .unwrap_or_else(|| "not_queried".to_string())
+            })
+            .collect();
+        let status = if statuses.iter().any(|status| status == "failed") {
+            if candidates.is_empty() {
+                "source_refresh_failed"
+            } else {
+                "source_offline_cached"
+            }
+        } else if statuses.iter().any(|status| status == "partial") {
+            "cache_partial"
+        } else if statuses.is_empty() || statuses.iter().any(|status| status == "not_queried") {
+            "not_queried"
+        } else {
+            "cache_complete"
+        };
+        let diagnostics: Vec<Diagnostic> = records
+            .iter()
+            .flat_map(|record| record.attempt.iter())
+            .flat_map(|attempt| attempt.diagnostics.iter().cloned())
+            .collect();
+        GameDiscovery {
+            status: status.to_string(),
+            candidates,
+            diagnostics,
+        }
+    }
+
+    /// Pending-refresh decision from `_run_discovery`: a changed query invalidates
+    /// only a non-confirmed (negative/empty) cache.
+    pub fn needs_refresh(&self, rule: &SourceRule, appid: u32, key: &str, force: bool) -> bool {
+        let record = self.discovery_record(rule, appid);
+        let old = record.success.unwrap_or_else(empty_success);
+        let ttl = if rule.role == SourceRole::FallbackIndexer && !old.candidates.is_empty() {
+            DISCOVERY_FALLBACK_TTL
+        } else {
+            DISCOVERY_SUCCESS_TTL
+        };
+        let confirmed = old.candidates.iter().any(|c| matched_basis(c.match_basis));
+        force || !self.discovery_fresh(&old, ttl) || (!confirmed && old.query_key != key)
+    }
+
+    /// Shared index reused only when fresh and produced by the current parser
+    /// (design §4.3/§5.3).
+    pub fn shared_index(&self, source_id: &str) -> Option<DiscoveryIndex> {
+        let record = match self.indexes.get(source_id) {
+            Some(record) => record.clone(),
+            None => self.store.load_discovery_index(source_id).ok().flatten()?,
+        };
+        if record.schema_version != 1 {
+            return None;
+        }
+        if !is_fresh(Some(record.checked_at), DISCOVERY_INDEX_TTL, self.now()) {
+            return None;
+        }
+        if record.index.parser_version != PARSER_VERSION {
+            return None;
+        }
+        Some(record.index)
+    }
+
+    /// Port of the layered commit (design §4.4). Only a complete success replaces
+    /// `success`; partial/failed update `attempt` and preserve the previous
+    /// success/checkpoint. Oversized records are not written.
+    pub fn commit(
+        &mut self,
+        rule: &SourceRule,
+        appid: u32,
+        result: DiscoveryOutcome,
+        previous: &DiscoveryRecord,
+        key: &str,
+    ) -> Result<DiscoveryRecord> {
+        let now = self.now();
+        let prev_success = previous.success.clone();
+        let mut attempt = DiscoveryAttempt {
+            status: result.status.clone(),
+            candidates: result.candidates.clone(),
+            diagnostics: result.diagnostics.clone(),
+            checked_at: now,
+            cached_at: if result.status == "complete" {
+                Some(now)
+            } else {
+                prev_success.as_ref().and_then(|success| success.cached_at)
+            },
+            query_key: key.to_string(),
+            parser_version: PARSER_VERSION,
+            query_version: QUERY_VERSION,
+            index: result.index.clone().or_else(|| {
+                previous
+                    .attempt
+                    .as_ref()
+                    .and_then(|attempt| attempt.index.clone())
+            }),
+            checkpoint: result.checkpoint.clone().or_else(|| {
+                previous
+                    .attempt
+                    .as_ref()
+                    .and_then(|attempt| attempt.checkpoint.clone())
+            }),
+            queries: result.queries.clone().or_else(|| {
+                previous
+                    .attempt
+                    .as_ref()
+                    .and_then(|attempt| attempt.queries.clone())
+            }),
+            query_cache: result.query_cache.clone().or_else(|| {
+                previous
+                    .attempt
+                    .as_ref()
+                    .and_then(|attempt| attempt.query_cache.clone())
+            }),
+        };
+
+        let success = if result.status == "complete"
+            || (result.status == "skipped" && prev_success.is_none())
+        {
+            Some(DiscoverySuccess {
+                status: attempt.status.clone(),
+                candidates: attempt.candidates.clone(),
+                diagnostics: attempt.diagnostics.clone(),
+                checked_at: attempt.checked_at,
+                cached_at: attempt.cached_at,
+                query_key: attempt.query_key.clone(),
+                parser_version: attempt.parser_version,
+                query_version: attempt.query_version,
+            })
+        } else {
+            prev_success
+        };
+        // `attempt.candidates` is retained only for a partial pass.
+        if result.status != "partial" {
+            attempt.candidates = Vec::new();
+        }
+
+        let record = DiscoveryRecord {
+            schema_version: 1,
+            source_id: rule.id.clone(),
+            appid,
+            success: success.clone(),
+            attempt: Some(attempt),
+        };
+        let blob = serde_json::to_vec(&record).map_err(|error| invalid(error.to_string()))?;
+        if blob.len() as u64 > MAX_DISCOVERY_OUTPUT {
+            return Ok(record);
+        }
+        self.store.save_discovery(&rule.id, appid, &record)?;
+        self.discovery
+            .insert((rule.id.clone(), appid), record.clone());
+
+        if let Some(index) = &result.index {
+            let existing_checked = self.indexes.get(&rule.id).map(|record| record.checked_at);
+            let envelope_checked = if index.checked_at != 0 {
+                index.checked_at
+            } else {
+                existing_checked.unwrap_or_else(|| {
+                    record
+                        .attempt
+                        .as_ref()
+                        .map(|attempt| attempt.checked_at)
+                        .unwrap_or(now)
+                })
+            };
+            let index_record = DiscoveryIndexRecord {
+                schema_version: 1,
+                checked_at: envelope_checked,
+                index: index.clone(),
+            };
+            let index_blob =
+                serde_json::to_vec(&index_record).map_err(|error| invalid(error.to_string()))?;
+            if index_blob.len() as u64 <= MAX_DISCOVERY_OUTPUT {
+                self.store.save_discovery_index(&rule.id, &index_record)?;
+                self.indexes.insert(rule.id.clone(), index_record);
+            }
+        }
+
+        let success_candidates = success
+            .as_ref()
+            .map(|success| success.candidates.len())
+            .unwrap_or(0);
+        let code = if result.status == "complete" {
+            "source_refreshed"
+        } else if result.status == "partial" {
+            "source_partial"
+        } else if success_candidates > 0 {
+            "source_offline_cached"
+        } else {
+            "source_refresh_failed"
+        };
+        let status = SourceStatus {
+            checked_at: record
+                .attempt
+                .as_ref()
+                .map(|attempt| attempt.checked_at)
+                .unwrap_or(now),
+            cached_at: success.as_ref().and_then(|success| success.cached_at),
+            entry_count: success_candidates as u64,
+            code: code.to_string(),
+        };
+        self.store.save_status(&rule.id, &status)?;
+        self.status.insert(rule.id.clone(), status);
+        Ok(record)
+    }
+
+    /// Previous per-game record (success + last attempt) for the commit layer.
+    pub fn previous_record(&self, rule: &SourceRule, appid: u32) -> DiscoveryRecord {
+        self.discovery_record(rule, appid)
+    }
+
+    /// Python `_discovery_sync` `all_candidates`: publisher `success` candidates
+    /// with the display `cache_status` recomputed from the 6h freshness TTL.
+    pub fn previous_success_candidates(&self, appid: u32) -> Vec<SourceCandidate> {
+        let mut out = Vec::new();
+        for rule in self.effective_discovery_rules(appid) {
+            if rule.role != SourceRole::Publisher {
+                continue;
+            }
+            let Some(success) = self.discovery_record(&rule, appid).success else {
+                continue;
+            };
+            let fresh = self.discovery_fresh(&success, DISCOVERY_SUCCESS_TTL);
+            for mut candidate in success.candidates {
+                candidate.cache_status = if fresh {
+                    CacheStatus::Cached
+                } else {
+                    CacheStatus::Stale
+                };
+                out.push(candidate);
+            }
+        }
+        out
+    }
+
+    /// Compare-and-publish: re-checks the captured settings revision under the
+    /// store short lock and only then commits. Returns whether it published.
+    pub fn commit_if_revision(
+        &mut self,
+        rule: &SourceRule,
+        appid: u32,
+        result: DiscoveryOutcome,
+        previous: &DiscoveryRecord,
+        key: &str,
+        captured: u64,
+    ) -> Result<bool> {
+        if self.revision != captured {
+            return Ok(false);
+        }
+        let store = &self.store;
+        let current = store.with_short_lock(|| Ok(store.revision()))?;
+        if current != captured {
+            return Ok(false);
+        }
+        self.commit(rule, appid, result, previous, key)?;
+        Ok(true)
+    }
+
+    /// Refreshes one ZIP-index source (design §5.3; Python `_refresh_one`).
+    /// Fresh cache (24h) short-circuits unless `force`; a failure preserves the
+    /// existing cache bytes and returns an offline/failed status (never raises).
+    pub fn refresh_source(
+        &mut self,
+        rule: &SourceRule,
+        force: bool,
+        ctx: &mut RequestContext,
+        _cancel: &AtomicBool,
+    ) -> Result<SourceStatus> {
+        let old = self.cache.get(&rule.id).cloned().unwrap_or_default();
+        if !force && is_fresh(old.checked_at, SOURCE_CACHE_TTL, self.now()) {
+            return Ok(SourceStatus {
+                checked_at: old.checked_at.unwrap_or(0),
+                cached_at: old.cached_at,
+                entry_count: old.entries.len() as u64,
+                code: "source_cache_fresh".to_string(),
+            });
+        }
+        let adapter = adapters::builtin_adapter(&rule.adapter)
+            .ok_or_else(|| invalid("unknown_source_adapter"))?;
+        let checked_at = self.now();
+        match adapter.collect(rule, &old, ctx) {
+            Ok(outcome) => {
+                if outcome.not_modified {
+                    let record = SourceCache {
+                        entries: old.entries.clone(),
+                        etag: old.etag.clone(),
+                        modified: old.modified.clone(),
+                        cached_at: old.cached_at,
+                        checked_at: Some(checked_at),
+                    };
+                    self.store.save_cache(&rule.id, &record)?;
+                    self.cache.insert(rule.id.clone(), record);
+                    let status = SourceStatus {
+                        checked_at,
+                        cached_at: old.cached_at,
+                        entry_count: old.entries.len() as u64,
+                        code: "source_not_modified".to_string(),
+                    };
+                    self.store.save_status(&rule.id, &status)?;
+                    self.status.insert(rule.id.clone(), status.clone());
+                    Ok(status)
+                } else {
+                    let entry_count = outcome.entries.len() as u64;
+                    let record = SourceCache {
+                        entries: outcome.entries,
+                        etag: outcome.etag,
+                        modified: outcome.modified,
+                        cached_at: Some(checked_at),
+                        checked_at: Some(checked_at),
+                    };
+                    self.store.save_cache(&rule.id, &record)?;
+                    self.cache.insert(rule.id.clone(), record);
+                    let status = SourceStatus {
+                        checked_at,
+                        cached_at: Some(checked_at),
+                        entry_count,
+                        code: "source_refreshed".to_string(),
+                    };
+                    self.store.save_status(&rule.id, &status)?;
+                    self.status.insert(rule.id.clone(), status.clone());
+                    Ok(status)
+                }
+            }
+            Err(_) => {
+                // Failure must not touch existing cache bytes.
+                let code = if old.entries.is_empty() {
+                    "source_refresh_failed"
+                } else {
+                    "source_offline_cached"
+                };
+                let status = SourceStatus {
+                    checked_at,
+                    cached_at: old.cached_at,
+                    entry_count: old.entries.len() as u64,
+                    code: code.to_string(),
+                };
+                let _ = self.store.save_status(&rule.id, &status);
+                self.status.insert(rule.id.clone(), status.clone());
+                Ok(status)
+            }
+        }
+    }
+
+    /// Whether a source id came from the compiled-in defaults or user `added`.
+    ///
+    /// A user `added` rule that shadows a builtin id is reported as `"added"`,
+    /// because that is the effective definition (P5 §1, §5).
+    pub fn source_origin(&self, source_id: &str) -> Option<&'static str> {
+        if self.overrides.added.iter().any(|rule| rule.id == source_id) {
+            Some("added")
+        } else if self.builtins.iter().any(|rule| rule.id == source_id) {
+            Some("builtin")
+        } else {
+            None
+        }
+    }
+
+    // --- query validation / language --------------------------------------
+
+    /// Port of the `discover_game` input bounds (design §2.6).
+    pub fn validate_query(
+        game: &GameQuery,
+        name_hints: &[String],
+        preferred_language: Option<&str>,
+    ) -> Result<()> {
+        if game.appid == 0 || game.name.trim().is_empty() || game.name.len() > 1024 {
+            return Err(invalid("invalid_discovery_game"));
+        }
+        if name_hints.len() > 3
+            || name_hints
+                .iter()
+                .any(|hint| hint.trim().is_empty() || hint.len() > 256)
+        {
+            return Err(invalid("invalid_discovery_query"));
+        }
+        if let Some(language) = preferred_language {
+            if !valid_language_code(language) {
+                return Err(invalid("invalid_discovery_query"));
+            }
+        }
+        Ok(())
+    }
+
+    /// Port of the legacy-match `preferred_language` filter (R10).
+    pub fn filter_by_language(
+        matches: &[SourceMatch],
+        preferred_language: Option<&str>,
+    ) -> Vec<SourceMatch> {
+        let Some(preferred) = preferred_language else {
+            return matches.to_vec();
+        };
+        let preferred = preferred.to_lowercase().replace('_', "-");
+        matches
+            .iter()
+            .filter(|entry| {
+                let language = entry.language.to_lowercase().replace('_', "-");
+                language == preferred
+                    || (!language.contains('-') && preferred.starts_with(&format!("{language}-")))
+            })
+            .cloned()
+            .collect()
+    }
+}
+
+fn cache_diagnostic(source_id: &str) -> Diagnostic {
+    Diagnostic {
+        source_id: Some(source_id.to_string()),
+        detail: None,
+        code: "invalid_source_cache".to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::store::{read_bounded, write_atomic};
+    use super::*;
+    use std::fs;
+    use std::path::Path;
+
+    fn builtins() -> Vec<SourceRule> {
+        let config: RulesConfig = serde_json::from_str(crate::sources::DEFAULT_RULES_JSON).unwrap();
+        config
+            .sources
+            .iter()
+            .map(|raw| validate::validate_rule(raw).unwrap())
+            .collect()
+    }
+
+    fn registry_at(dir: &Path, now: u64) -> SourceRegistry {
+        let store = SourceStore::open(dir, &builtins()).unwrap();
+        SourceRegistry::load_with_clock(
+            store,
+            builtins(),
+            Box::new(crate::sources::FakeClock::new(now)),
+        )
+        .unwrap()
+    }
+
+    fn game(appid: u32) -> GameQuery {
+        GameQuery {
+            appid,
+            name: "Game".to_string(),
+            localized_name: None,
+            instance_id: None,
+        }
+    }
+
+    fn entry(title: &str, url: &str, language: &str, appid: Option<u32>) -> SourceEntry {
+        SourceEntry {
+            title: title.to_string(),
+            aliases: Vec::new(),
+            url: url.to_string(),
+            source_page: "https://www.patch.moe/".to_string(),
+            language: language.to_string(),
+            date: None,
+            appid,
+        }
+    }
+
+    fn candidate(hex: char, appid: u32, basis: MatchBasis) -> SourceCandidate {
+        SourceCandidate {
+            candidate_id: format!("candidate-{}", hex.to_string().repeat(24)),
+            source_id: "hgamer".to_string(),
+            source_record_id: "https://hgamer.tw/zh-CN/patches/game".to_string(),
+            game_appid: Some(appid),
+            parent_appid: None,
+            aliases: Vec::new(),
+            game_title: "Game".to_string(),
+            patch_title: "Game".to_string(),
+            variant: Variant::Base,
+            requires_dlc: None,
+            excludes_dlc: None,
+            platforms: vec!["steam".to_string()],
+            patch_kind: "adult_content".to_string(),
+            languages: Vec::new(),
+            version_raw: Some("1".to_string()),
+            version_evidence: Vec::new(),
+            version_identity: "1".to_string(),
+            published_at: None,
+            patch_updated_at: None,
+            source_page: "https://hgamer.tw/zh-CN/patches/game".to_string(),
+            upstream_page: None,
+            mirrors: Vec::new(),
+            format_reported: ArtifactFormat::Unknown,
+            format_observed: ArtifactFormat::Unknown,
+            capability: Capability::DiscoverOnly,
+            identity_evidence: Vec::new(),
+            provenance: Vec::new(),
+            match_basis: basis,
+            observed_at: "2026-01-01T00:00:00+00:00".to_string(),
+            cache_status: CacheStatus::Fresh,
+            warnings: Vec::new(),
+            fingerprint: "fp".to_string(),
+            related_index_pages: Vec::new(),
+        }
+    }
+
+    fn index(checked_at: u64) -> DiscoveryIndex {
+        DiscoveryIndex {
+            parser_version: PARSER_VERSION,
+            records: Vec::new(),
+            pending: Vec::new(),
+            checked_at,
+        }
+    }
+
+    fn complete(candidates: Vec<SourceCandidate>) -> DiscoveryOutcome {
+        DiscoveryOutcome {
+            status: "complete".to_string(),
+            candidates,
+            ..DiscoveryOutcome::default()
+        }
+    }
+
+    fn rule(registry: &SourceRegistry, id: &str) -> SourceRule {
+        registry
+            .rules
+            .iter()
+            .find(|rule| rule.id == id)
+            .unwrap()
+            .clone()
+    }
+
+    fn snapshot(root: &Path) -> Vec<String> {
+        fn walk(dir: &Path, base: &Path, out: &mut Vec<String>) {
+            let mut entries: Vec<_> = fs::read_dir(dir)
+                .unwrap()
+                .flatten()
+                .map(|entry| entry.path())
+                .collect();
+            entries.sort();
+            for path in entries {
+                out.push(
+                    path.strip_prefix(base)
+                        .unwrap()
+                        .to_string_lossy()
+                        .into_owned(),
+                );
+                if path.is_dir() {
+                    walk(&path, base, out);
+                }
+            }
+        }
+        let mut out = Vec::new();
+        walk(root, root, &mut out);
+        out
+    }
+
+    #[test]
+    fn registry_reads_seeded_cache_and_separates_sources() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut registry = registry_at(temp.path(), 1000);
+        registry
+            .store()
+            .save_cache(
+                "patchmoe",
+                &SourceCache {
+                    entries: vec![entry(
+                        "Game",
+                        "https://download.patch.moe/g.zip",
+                        "zh-CN",
+                        Some(42),
+                    )],
+                    etag: None,
+                    modified: None,
+                    cached_at: Some(900),
+                    checked_at: Some(900),
+                },
+            )
+            .unwrap();
+        registry.reload().unwrap();
+        assert_eq!(registry.matches(&game(42), false).len(), 1);
+        assert!(registry.matches(&game(43), false).is_empty());
+        let summary = registry
+            .list_sources()
+            .into_iter()
+            .find(|source| source.rule.id == "patchmoe")
+            .unwrap();
+        assert_eq!(summary.status, "cached");
+        assert_eq!(summary.entry_count, 1);
+    }
+
+    #[test]
+    fn matches_refuses_multiple_distinct_urls() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut registry = registry_at(temp.path(), 1000);
+        registry
+            .store()
+            .save_cache(
+                "patchmoe",
+                &SourceCache {
+                    entries: vec![
+                        entry("Game", "https://download.patch.moe/a.zip", "en", Some(42)),
+                        entry("Game", "https://download.patch.moe/b.zip", "en", Some(42)),
+                    ],
+                    etag: None,
+                    modified: None,
+                    cached_at: None,
+                    checked_at: None,
+                },
+            )
+            .unwrap();
+        registry.reload().unwrap();
+        assert!(registry.matches(&game(42), false).is_empty());
+
+        registry
+            .store()
+            .save_cache(
+                "patchmoe",
+                &SourceCache {
+                    entries: vec![
+                        entry("Game", "https://download.patch.moe/a.zip", "en", Some(42)),
+                        entry(
+                            "Game",
+                            "https://download.patch.moe/a.zip",
+                            "zh-CN",
+                            Some(42),
+                        ),
+                    ],
+                    etag: None,
+                    modified: None,
+                    cached_at: None,
+                    checked_at: None,
+                },
+            )
+            .unwrap();
+        registry.reload().unwrap();
+        let matches = registry.matches(&game(42), false);
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].language, "zh-CN");
+        assert_eq!(matches[0].release_id, "patchmoe-42");
+    }
+
+    #[test]
+    fn matches_by_appid_without_name() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut registry = registry_at(temp.path(), 1000);
+        registry
+            .store()
+            .save_cache(
+                "patchmoe",
+                &SourceCache {
+                    entries: vec![entry(
+                        "Game",
+                        "https://download.patch.moe/g.zip",
+                        "en",
+                        Some(42),
+                    )],
+                    ..SourceCache::default()
+                },
+            )
+            .unwrap();
+        registry.reload().unwrap();
+        // An empty name still matches entries that carry the AppID (P5 §1).
+        let query = GameQuery {
+            appid: 42,
+            name: String::new(),
+            localized_name: None,
+            instance_id: None,
+        };
+        let matches = registry.matches(&query, false);
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].source_id, "patchmoe");
+        assert_eq!(matches[0].release_id, "patchmoe-42");
+        // A cache entry bound to another AppID does not match.
+        assert!(registry.matches(&game(43), false).is_empty());
+    }
+
+    #[test]
+    fn list_sources_reports_origin_for_builtin_and_added() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut registry = registry_at(temp.path(), 1000);
+        let builtin = registry
+            .list_sources()
+            .into_iter()
+            .find(|source| source.rule.id == "patchmoe")
+            .unwrap();
+        assert_eq!(builtin.origin, "builtin");
+
+        let raw = RawSourceRule {
+            id: "custom".to_string(),
+            name: "Custom".to_string(),
+            adapter: "patchmoe".to_string(),
+            role: None,
+            discovery_only: None,
+            priority: None,
+            enabled: true,
+            pages: vec!["https://custom.example/".to_string()],
+            page_hosts: vec!["custom.example".to_string()],
+            download_hosts: Some(vec!["dl.custom.example".to_string()]),
+            root_layout: Some("game_root".to_string()),
+            columns: None,
+            table_id: None,
+            language: None,
+            url: None,
+        };
+        registry.add_source(&raw).unwrap();
+        let added = registry
+            .list_sources()
+            .into_iter()
+            .find(|source| source.rule.id == "custom")
+            .unwrap();
+        assert_eq!(added.origin, "added");
+        assert_eq!(registry.source_origin("patchmoe"), Some("builtin"));
+        assert_eq!(registry.source_origin("custom"), Some("added"));
+    }
+
+    #[test]
+    fn source_for_release_and_validate_download() {
+        let temp = tempfile::tempdir().unwrap();
+        let registry = registry_at(temp.path(), 1000);
+        assert!(registry.source_for_release("patchmoe-42").is_some());
+        assert!(registry.source_for_release("patchmoe-0").is_none());
+        assert!(registry.source_for_release("patchmoe-42x").is_none());
+        assert!(registry.source_for_release("kagura-cn-42").is_none());
+
+        assert!(registry
+            .validate_download("patchmoe", "https://download.patch.moe/p.zip")
+            .is_ok());
+        assert_eq!(
+            registry
+                .validate_download("patchmoe", "https://download.patch.moe/p.rar")
+                .unwrap_err()
+                .to_string(),
+            "invalid_source_url"
+        );
+        assert_eq!(
+            registry
+                .validate_download("hgamer", "https://download.patch.moe/p.zip")
+                .unwrap_err()
+                .to_string(),
+            "source_not_enabled"
+        );
+        assert_eq!(
+            registry
+                .validate_download("missing", "https://download.patch.moe/p.zip")
+                .unwrap_err()
+                .to_string(),
+            "source_not_enabled"
+        );
+    }
+
+    #[test]
+    fn failed_refresh_preserves_cache_bytes() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut registry = registry_at(temp.path(), 1000);
+        let cache = SourceCache {
+            entries: vec![entry(
+                "Game",
+                "https://download.patch.moe/g.zip",
+                "en",
+                Some(42),
+            )],
+            etag: Some("etag".to_string()),
+            modified: None,
+            cached_at: Some(900),
+            checked_at: Some(900),
+        };
+        registry.store().save_cache("patchmoe", &cache).unwrap();
+        let before = read_bounded(&registry.store().paths().cache("patchmoe"), 4 * 1024 * 1024)
+            .unwrap()
+            .unwrap();
+        let rule = rule(&registry, "patchmoe");
+        let failed = DiscoveryOutcome {
+            status: "failed".to_string(),
+            ..DiscoveryOutcome::default()
+        };
+        registry
+            .commit(&rule, 42, failed, &DiscoveryRecord::default(), "k")
+            .unwrap();
+        let after = read_bounded(&registry.store().paths().cache("patchmoe"), 4 * 1024 * 1024)
+            .unwrap()
+            .unwrap();
+        assert_eq!(before, after);
+    }
+
+    #[test]
+    fn add_source_and_set_enabled_persist_across_reopen() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut registry = registry_at(temp.path(), 1000);
+        registry.set_enabled("patchmoe", false).unwrap();
+        let raw = RawSourceRule {
+            id: "custom".to_string(),
+            name: "Custom".to_string(),
+            adapter: "patchmoe".to_string(),
+            role: None,
+            discovery_only: None,
+            priority: None,
+            enabled: true,
+            pages: vec!["https://custom.example/".to_string()],
+            page_hosts: vec!["custom.example".to_string()],
+            download_hosts: Some(vec!["dl.custom.example".to_string()]),
+            root_layout: Some("game_root".to_string()),
+            columns: None,
+            table_id: None,
+            language: None,
+            url: None,
+        };
+        registry.add_source(&raw).unwrap();
+        drop(registry);
+
+        let reopened = registry_at(temp.path(), 1000);
+        assert!(reopened.rules.iter().any(|rule| rule.id == "custom"));
+        assert!(
+            !reopened
+                .rules
+                .iter()
+                .find(|rule| rule.id == "patchmoe")
+                .unwrap()
+                .enabled
+        );
+    }
+
+    #[test]
+    fn game_subscription_scoped_and_global_disable_wins() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut registry = registry_at(temp.path(), 1000);
+        registry.set_game_source(42, "hgamer", false).unwrap();
+        assert!(!registry.game_subscribed(42, "hgamer"));
+        assert!(registry.game_subscribed(43, "hgamer"));
+        assert!(registry
+            .effective_discovery_rules(42)
+            .iter()
+            .all(|rule| rule.id != "hgamer"));
+        assert!(registry
+            .effective_discovery_rules(43)
+            .iter()
+            .any(|rule| rule.id == "hgamer"));
+
+        registry.set_enabled("kagura-cn", false).unwrap();
+        assert!(registry
+            .effective_discovery_rules(42)
+            .iter()
+            .all(|rule| rule.id != "kagura-cn"));
+    }
+
+    #[test]
+    fn game_subscription_input_boundaries_and_missing_games() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut registry = registry_at(temp.path(), 1000);
+        // Missing `games` means all subscribed (R8).
+        assert!(registry.game_subscribed(42, "hgamer"));
+        assert_eq!(
+            registry
+                .set_game_source(0, "hgamer", true)
+                .unwrap_err()
+                .to_string(),
+            "invalid_appid"
+        );
+        assert_eq!(
+            registry
+                .set_game_source(42, "missing", true)
+                .unwrap_err()
+                .to_string(),
+            "unknown_source"
+        );
+        registry.set_game_source(42, "hgamer", true).unwrap();
+        assert!(registry.game_subscribed(42, "hgamer"));
+    }
+
+    #[test]
+    fn custom_rule_shadows_builtin_and_preserves_selection() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = SourceStore::open(temp.path(), &builtins()).unwrap();
+        let custom = validate::validate_rule(&RawSourceRule {
+            id: "patchmoe".to_string(),
+            name: "Custom patch".to_string(),
+            adapter: "patchmoe".to_string(),
+            role: None,
+            discovery_only: None,
+            priority: None,
+            enabled: true,
+            pages: vec!["https://www.patch.moe/?flag=1".to_string()],
+            page_hosts: vec!["www.patch.moe".to_string()],
+            download_hosts: Some(vec!["download.patch.moe".to_string()]),
+            root_layout: Some("game_root".to_string()),
+            columns: None,
+            table_id: None,
+            language: None,
+            url: None,
+        })
+        .unwrap();
+        let mut overrides = Overrides::default();
+        overrides.added.push(custom);
+        overrides.enabled.insert("patchmoe".to_string(), false);
+        store.apply_overrides(&overrides).unwrap();
+        store.bump_revision().unwrap();
+
+        let registry = SourceRegistry::load(store, builtins()).unwrap();
+        let patchmoe: Vec<_> = registry
+            .rules
+            .iter()
+            .filter(|rule| rule.id == "patchmoe")
+            .collect();
+        assert_eq!(patchmoe.len(), 1);
+        assert_eq!(patchmoe[0].name, "Custom patch");
+        assert!(!patchmoe[0].enabled);
+    }
+
+    #[test]
+    fn read_paths_create_no_state() {
+        let temp = tempfile::tempdir().unwrap();
+        let registry = registry_at(temp.path(), 1000);
+        let before = snapshot(temp.path());
+        let game = game(42);
+        let _ = registry.list_sources();
+        let _ = registry.matches(&game, false);
+        let _ = registry.cached_candidates(&game);
+        let _ = registry.cached_discovery(&game);
+        let _ = registry.list_game_sources(&game);
+        let _ = registry.shared_index("hgamer");
+        let _ = registry.source_for_release("patchmoe-42");
+        let _ = registry.validate_download("patchmoe", "https://download.patch.moe/p.zip");
+        let after = snapshot(temp.path());
+        assert_eq!(before, after);
+    }
+
+    #[test]
+    fn discovery_commit_layers_success_and_attempt() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut registry = registry_at(temp.path(), 1000);
+        let rule = rule(&registry, "hgamer");
+        let record = registry
+            .commit(
+                &rule,
+                42,
+                complete(vec![candidate('a', 42, MatchBasis::Appid)]),
+                &DiscoveryRecord::default(),
+                "k1",
+            )
+            .unwrap();
+        assert_eq!(record.success.as_ref().unwrap().candidates.len(), 1);
+        assert!(record.attempt.as_ref().unwrap().candidates.is_empty());
+        assert_eq!(
+            registry.status.get("hgamer").unwrap().code,
+            "source_refreshed"
+        );
+        assert_eq!(registry.cached_candidates(&game(42)).len(), 1);
+    }
+
+    #[test]
+    fn failed_attempt_preserves_success_and_pending_index() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut registry = registry_at(temp.path(), 1000);
+        let rule = rule(&registry, "hgamer");
+        let mut with_index = complete(vec![candidate('a', 42, MatchBasis::Appid)]);
+        with_index.index = Some(index(500));
+        let previous = registry
+            .commit(&rule, 42, with_index, &DiscoveryRecord::default(), "k1")
+            .unwrap();
+        assert!(previous.attempt.as_ref().unwrap().index.is_some());
+
+        let failed = DiscoveryOutcome {
+            status: "failed".to_string(),
+            ..DiscoveryOutcome::default()
+        };
+        let record = registry.commit(&rule, 42, failed, &previous, "k2").unwrap();
+        assert_eq!(record.success.as_ref().unwrap().candidates.len(), 1);
+        assert_eq!(record.attempt.as_ref().unwrap().status, "failed");
+        assert!(record.attempt.as_ref().unwrap().index.is_some());
+        assert_eq!(
+            registry.status.get("hgamer").unwrap().code,
+            "source_offline_cached"
+        );
+    }
+
+    #[test]
+    fn partial_attempt_does_not_shadow_success_candidate() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut registry = registry_at(temp.path(), 1000);
+        let rule = rule(&registry, "hgamer");
+        let previous = registry
+            .commit(
+                &rule,
+                42,
+                complete(vec![candidate('a', 42, MatchBasis::Appid)]),
+                &DiscoveryRecord::default(),
+                "k1",
+            )
+            .unwrap();
+        let partial = DiscoveryOutcome {
+            status: "partial".to_string(),
+            candidates: vec![candidate('b', 42, MatchBasis::Appid)],
+            ..DiscoveryOutcome::default()
+        };
+        let record = registry
+            .commit(&rule, 42, partial, &previous, "k2")
+            .unwrap();
+        assert_eq!(record.success.as_ref().unwrap().candidates.len(), 1);
+        assert_eq!(record.attempt.as_ref().unwrap().candidates.len(), 1);
+        let candidates = registry.cached_candidates(&game(42));
+        assert_eq!(candidates.len(), 2);
+        assert!(candidates
+            .iter()
+            .any(|c| c.candidate_id.starts_with("candidate-aaaa")));
+        assert!(candidates
+            .iter()
+            .any(|c| c.candidate_id.starts_with("candidate-bbbb")));
+    }
+
+    #[test]
+    fn negative_cache_invalidated_by_query_key_change() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut registry = registry_at(temp.path(), 1000);
+        let rule = rule(&registry, "hgamer");
+        registry
+            .commit(
+                &rule,
+                42,
+                complete(Vec::new()),
+                &DiscoveryRecord::default(),
+                "k1",
+            )
+            .unwrap();
+        assert!(!registry.needs_refresh(&rule, 42, "k1", false));
+        assert!(registry.needs_refresh(&rule, 42, "k2", false));
+    }
+
+    #[test]
+    fn toggle_filters_candidates_and_bumps_revision() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut registry = registry_at(temp.path(), 1000);
+        let before = registry.settings_revision();
+        registry.set_enabled("hgamer", false).unwrap();
+        assert!(registry.settings_revision() > before);
+        // Disabling one discovery source leaves the other enabled publishers.
+        assert!(!registry
+            .effective_discovery_rules(42)
+            .iter()
+            .any(|rule| rule.id == "hgamer"));
+        registry.set_enabled("hgamer", true).unwrap();
+        assert!(registry
+            .effective_discovery_rules(42)
+            .iter()
+            .any(|rule| rule.id == "hgamer"));
+    }
+
+    #[test]
+    fn stale_revision_never_publishes() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = SourceStore::open(temp.path(), &builtins()).unwrap();
+        let registry = SourceRegistry::load(store, builtins()).unwrap();
+        let captured = registry.settings_revision();
+        registry.store().bump_revision().unwrap();
+        let target = temp.path().join("published.json");
+        let published = registry
+            .store()
+            .run_if_revision(captured, || write_atomic(&target, b"x", 1024))
+            .unwrap();
+        assert!(!published);
+        assert!(!target.exists());
+        let published = registry
+            .store()
+            .run_if_revision(registry.store().revision(), || {
+                write_atomic(&target, b"x", 1024)
+            })
+            .unwrap();
+        assert!(published);
+        assert!(target.exists());
+    }
+
+    #[test]
+    fn shared_index_reused_and_expires_24h() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut registry = registry_at(temp.path(), 1000);
+        let rule = rule(&registry, "hgamer");
+        let mut outcome = complete(Vec::new());
+        outcome.index = Some(index(1000));
+        registry
+            .commit(&rule, 42, outcome, &DiscoveryRecord::default(), "k1")
+            .unwrap();
+        assert!(registry.shared_index("hgamer").is_some());
+
+        let fresh = registry_at(temp.path(), 1000 + DISCOVERY_INDEX_TTL - 1);
+        assert!(fresh.shared_index("hgamer").is_some());
+        let expired = registry_at(temp.path(), 1000 + DISCOVERY_INDEX_TTL);
+        assert!(expired.shared_index("hgamer").is_none());
+    }
+
+    #[test]
+    fn parser_or_query_version_change_marks_stale() {
+        let temp = tempfile::tempdir().unwrap();
+        let registry = registry_at(temp.path(), 1000);
+        let mut success = empty_success();
+        success.parser_version = PARSER_VERSION;
+        success.query_version = QUERY_VERSION;
+        success.checked_at = 1000;
+        assert!(registry.discovery_fresh(&success, DISCOVERY_SUCCESS_TTL));
+
+        let mut old_parser = success.clone();
+        old_parser.parser_version = PARSER_VERSION - 1;
+        assert!(!registry.discovery_fresh(&old_parser, DISCOVERY_SUCCESS_TTL));
+
+        let mut old_query = success.clone();
+        old_query.query_version = QUERY_VERSION + 1;
+        assert!(!registry.discovery_fresh(&old_query, DISCOVERY_SUCCESS_TTL));
+    }
+
+    #[test]
+    fn partial_status_not_hidden_by_unqueried() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut registry = registry_at(temp.path(), 1000);
+        let rule = rule(&registry, "kagura-cn");
+        let partial = DiscoveryOutcome {
+            status: "partial".to_string(),
+            ..DiscoveryOutcome::default()
+        };
+        registry
+            .commit(&rule, 42, partial, &DiscoveryRecord::default(), "k1")
+            .unwrap();
+        assert_eq!(registry.cached_discovery(&game(42)).status, "cache_partial");
+    }
+
+    #[test]
+    fn clock_rollback_expires_conservatively() {
+        assert!(!is_fresh(Some(1000), 24 * 3600, 999));
+        assert!(is_fresh(Some(1000), 24 * 3600, 1000));
+        assert!(is_fresh(Some(1000), 24 * 3600, 1000 + 24 * 3600 - 1));
+        assert!(!is_fresh(Some(1000), 24 * 3600, 1000 + 24 * 3600));
+        assert!(!is_fresh(None, 24 * 3600, 1000));
+    }
+
+    #[test]
+    fn ttl_24h_and_force_bypasses_freshness() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut registry = registry_at(temp.path(), 1000);
+        let rule = rule(&registry, "hgamer");
+        registry
+            .commit(
+                &rule,
+                42,
+                complete(vec![candidate('a', 42, MatchBasis::Appid)]),
+                &DiscoveryRecord::default(),
+                "k1",
+            )
+            .unwrap();
+        assert!(!registry.needs_refresh(&rule, 42, "k1", false));
+        assert!(registry.needs_refresh(&rule, 42, "k1", true));
+        assert!(is_fresh(Some(1000), 24 * 3600, 1000 + 3600));
+    }
+
+    #[test]
+    fn query_context_boundaries() {
+        let good = GameQuery {
+            appid: 42,
+            name: "Game".to_string(),
+            localized_name: None,
+            instance_id: None,
+        };
+        assert!(SourceRegistry::validate_query(&good, &[], None).is_ok());
+        assert!(SourceRegistry::validate_query(&good, &[], Some("zh-CN")).is_ok());
+        assert!(SourceRegistry::validate_query(&good, &[], Some("en")).is_ok());
+        assert!(SourceRegistry::validate_query(&good, &[], Some("zh-cn-x")).is_err());
+
+        let mut bad = good.clone();
+        bad.appid = 0;
+        assert_eq!(
+            SourceRegistry::validate_query(&bad, &[], None)
+                .unwrap_err()
+                .to_string(),
+            "invalid_discovery_game"
+        );
+        let mut bad = good.clone();
+        bad.name = " ".to_string();
+        assert!(SourceRegistry::validate_query(&bad, &[], None).is_err());
+        let mut bad = good.clone();
+        bad.name = "x".repeat(1025);
+        assert!(SourceRegistry::validate_query(&bad, &[], None).is_err());
+
+        let hints = vec!["a".to_string(); 4];
+        assert_eq!(
+            SourceRegistry::validate_query(&good, &hints, None)
+                .unwrap_err()
+                .to_string(),
+            "invalid_discovery_query"
+        );
+        let hints = vec!["x".repeat(257)];
+        assert!(SourceRegistry::validate_query(&good, &hints, None).is_err());
+    }
+
+    #[test]
+    fn legacy_match_language_filter() {
+        let match_a = SourceMatch {
+            title: "A".to_string(),
+            aliases: Vec::new(),
+            url: "https://download.patch.moe/a.zip".to_string(),
+            source_page: "https://www.patch.moe/".to_string(),
+            language: "zh-CN".to_string(),
+            date: None,
+            appid: Some(42),
+            source_id: "patchmoe".to_string(),
+            release_id: "patchmoe-42".to_string(),
+            root_layout: None,
+        };
+        let mut match_b = match_a.clone();
+        match_b.language = "zh_cn".to_string();
+        let mut match_c = match_a.clone();
+        match_c.language = "ja".to_string();
+        let matches = vec![match_a, match_b, match_c];
+        assert_eq!(
+            SourceRegistry::filter_by_language(&matches, Some("zh-CN")).len(),
+            2
+        );
+        // Python: `zh` equals neither `zh-cn` nor `zh_cn`, and the no-dash
+        // prefix branch requires the entry language to be dash-free (R10).
+        assert_eq!(
+            SourceRegistry::filter_by_language(&matches, Some("zh")).len(),
+            0
+        );
+        assert_eq!(
+            SourceRegistry::filter_by_language(&matches, Some("ja")).len(),
+            1
+        );
+        assert_eq!(SourceRegistry::filter_by_language(&matches, None).len(), 3);
+
+        // Entry language without a region ("zh") matches a regional preference.
+        let mut plain = matches[0].clone();
+        plain.language = "zh".to_string();
+        assert_eq!(
+            SourceRegistry::filter_by_language(&[plain, matches[1].clone()], Some("zh-CN")).len(),
+            2
+        );
+    }
+
+    #[test]
+    fn missing_games_means_all_subscribed() {
+        let temp = tempfile::tempdir().unwrap();
+        let registry = registry_at(temp.path(), 1000);
+        for id in ["patchmoe", "kagura-cn", "kagura-en", "hgamer"] {
+            assert!(registry.game_subscribed(7, id), "{id}");
+        }
+    }
+}

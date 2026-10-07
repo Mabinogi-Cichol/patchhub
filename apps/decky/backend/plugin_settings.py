@@ -11,6 +11,9 @@ import uuid
 
 MAX_SETTINGS_BYTES = 64 * 1024
 DEFAULT_AUTO_CLEANUP = True
+DEFAULT_SOURCE_ENGINE = "rust"
+# The shared Rust core is the only source engine; legacy values are rejected.
+SOURCE_ENGINES = ("rust",)
 
 
 def _no_links(path):
@@ -39,6 +42,7 @@ class Settings:
     def __init__(self, state_dir):
         self.path = Path(state_dir).absolute() / "settings.json"
         self.auto_cleanup = DEFAULT_AUTO_CLEANUP
+        self.source_engine = DEFAULT_SOURCE_ENGINE
         self.diagnostics = []
         self._load()
 
@@ -54,16 +58,25 @@ class Settings:
             if not isinstance(auto_cleanup, bool):
                 raise ValueError("invalid_settings")
             self.auto_cleanup = auto_cleanup
-            if data.get("schema_version") != 2 or "keep_backups" in data:
+            # Schema 2 predates engine selection; every old host is on the Rust
+            # default, so an absent value means "rust" rather than a migration.
+            source_engine = data.get("source_engine", DEFAULT_SOURCE_ENGINE)
+            if source_engine not in SOURCE_ENGINES:
+                source_engine = DEFAULT_SOURCE_ENGINE
+                self.diagnostics.append({"code": "invalid_source_engine"})
+            self.source_engine = source_engine
+            if data.get("schema_version") != 3 or "keep_backups" in data:
                 self._save()
         except (OSError, ValueError, json.JSONDecodeError):
             # A missing, unreadable or malformed file falls back to the safe
             # defaults and never blocks plugin startup.
             self.auto_cleanup = DEFAULT_AUTO_CLEANUP
+            self.source_engine = DEFAULT_SOURCE_ENGINE
             self.diagnostics.append({"code": "settings_unavailable", "path": str(self.path)})
 
     def _save(self):
-        _write_json(self.path, {"schema_version": 2, "auto_cleanup": self.auto_cleanup})
+        _write_json(self.path, {"schema_version": 3, "auto_cleanup": self.auto_cleanup,
+                                "source_engine": self.source_engine})
 
     def set_auto_cleanup(self, enabled):
         if not isinstance(enabled, bool):
@@ -71,5 +84,12 @@ class Settings:
         self.auto_cleanup = enabled
         self._save()
 
+    def set_source_engine(self, engine):
+        if engine not in SOURCE_ENGINES:
+            raise ValueError("invalid_settings")
+        self.source_engine = engine
+        self._save()
+
     def snapshot(self):
-        return {"schema_version": 2, "auto_cleanup": self.auto_cleanup}
+        return {"schema_version": 3, "auto_cleanup": self.auto_cleanup,
+                "source_engine": self.source_engine}

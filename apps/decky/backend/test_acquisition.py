@@ -20,6 +20,69 @@ module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
 
 
+class FakeSecondSource:
+    """Minimal Rust-backed source service stand-in for RPC integration tests."""
+
+    engine = "rust"
+
+    def __init__(self):
+        self.settings_revision = 1
+        self.diagnostics = []
+        self.subscribed = {9: True, 10: True}
+
+    def _source(self):
+        return {"id": "second", "name": "Second source", "adapter": "table_html", "enabled": True,
+                "discovery_only": False, "priority": 100, "origin": "added",
+                "page_hosts": ["patches.example.org"], "download_hosts": ["cdn.example.org"],
+                "root_layout": "game_root", "status": "cached", "entry_count": 1,
+                "cached_at": None, "checked_at": None}
+
+    def _entry(self, appid):
+        return {"title": "Game", "aliases": [], "url": "https://cdn.example.org/game.zip",
+                "language": "en", "date": "2000/1/1", "appid": appid,
+                "source_page": "https://patches.example.org/list",
+                "source_id": "second", "release_id": f"source-second-{appid}",
+                "root_layout": "game_root"}
+
+    def list_sources(self):
+        return [self._source()]
+
+    def matches(self, game, *, include_disabled=False):
+        appid = game.get("appid")
+        if appid != 9:
+            return []
+        if not include_disabled and not self.subscribed.get(appid, True):
+            return []
+        return [self._entry(appid)]
+
+    def list_game_sources(self, game):
+        appid = game.get("appid")
+        return [{**self._source(), "subscribed": self.subscribed.get(appid, True),
+                 "matched": bool(self.matches(game, include_disabled=True))}]
+
+    def game_subscribed(self, appid, source_id):
+        return self.subscribed.get(appid, True)
+
+    def cached_candidates(self, game):
+        return []
+
+    def cached_discovery(self, game):
+        return {"status": "not_queried", "candidates": [], "diagnostics": []}
+
+    async def set_enabled(self, source_id, enabled):
+        self.settings_revision += 1
+
+    async def set_game_source(self, appid, source_id, subscribed):
+        self.subscribed[appid] = subscribed
+        self.settings_revision += 1
+
+    async def refresh(self, force=False, on_event=None, cancel=None):
+        return []
+
+    async def scan_sources(self, force=False, on_event=None, cancel=None):
+        return {"results": []}
+
+
 class AcquireTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -132,6 +195,7 @@ class PublisherScanTests(unittest.IsolatedAsyncioTestCase):
         plugin.bridge = types.SimpleNamespace(scan=AsyncMock(return_value=base))
         plugin.sources = types.SimpleNamespace(refresh=AsyncMock(return_value=[]), list_sources=lambda:[],
             list_game_sources=lambda game: [], settings_revision=0,
+            scan_sources=AsyncMock(return_value={"results": []}),
             cached_discovery=lambda game: {"status": "not_queried", "candidates": [], "diagnostics": []})
         plugin.list_transactions = AsyncMock(return_value=[])
         local_patch = dict(release_id="patchmoe-9",blockers=["version_incompatible"] if old_build else [],
@@ -209,61 +273,59 @@ class PublisherScanTests(unittest.IsolatedAsyncioTestCase):
     async def test_scan_refreshes_zip_sources_and_force_refreshes_again(self):
         plugin = self.plugin()
         plugin.publisher.matches = lambda game: []
-        async def refresh(force=False):
+        async def refresh(force=False, on_event=None, cancel=None):
             plugin.publisher.matches = lambda game: [dict(release_id="patchmoe-9", source_id="patchmoe",
                 source_page="https://www.patch.moe/", language="en", date="2000/1/1")]
             return []
+        async def scan_sources(force=False, on_event=None, cancel=None):
+            # The Rust core streams a source_update per refreshed game; the
+            # session re-projects that row from the new source snapshot.
+            if on_event is not None:
+                await on_event({"event": "source_update", "instance_id": "instance", "appid": 9,
+                                "discovery": {"status": "complete", "candidates": [], "diagnostics": []}})
+            return {"results": []}
         plugin.sources.refresh.side_effect = refresh
+        plugin.sources.scan_sources.side_effect = scan_sources
         first = await plugin.scan()
         self.assertEqual(first["installs"][0]["patches"], [])
         await plugin._scan_session.worker
-        plugin.sources.refresh.assert_awaited_once_with(force=False)
+        self.assertEqual(plugin.sources.refresh.await_count, 1)
+        self.assertFalse(plugin.sources.refresh.await_args.kwargs["force"])
         updated = await plugin.scan_status(first["generation"])
         self.assertTrue(updated["installs"][0]["patches"][0]["auto_installable"])
         second = await plugin.scan(refresh_sources=True)
         await plugin._scan_session.worker
         self.assertEqual(second["generation"], 2)
         self.assertEqual(plugin.sources.refresh.await_count, 2)
-        plugin.sources.refresh.assert_awaited_with(force=True)
+        self.assertTrue(plugin.sources.refresh.await_args.kwargs["force"])
 
     async def test_game_source_rpc_changes_scan_without_changing_other_games(self):
-        from test_sources import TABLE
-        with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp)
-            config = root / "sources.json"
-            config.write_text(json.dumps({"schema_version": 1, "sources": [TABLE]}))
-            plugin = self.plugin()
-            plugin._prepare_cancel = None
-            plugin.tasks = module.TaskManager()
-            plugin.sources = module.SourceRegistry(root / "state", config)
-            plugin.sources._cache["second"] = {"entries": [dict(title="Game", aliases=[], appid=9,
-                url="https://cdn.example.org/game.zip", language="en", date="2000/1/1",
-                source_page=TABLE["pages"][0])]}
-            # Persist the cache so a settings reload can restore it.
-            cache = plugin.sources._cache_path("second")
-            cache.parent.mkdir(parents=True)
-            cache.write_text(json.dumps(plugin.sources._cache["second"]))
-            other = dict(instance_id="other", appid=10, name="Game", buildid="101", availability="installed")
-            plugin.bridge.scan.return_value["installs"].append(dict(game=other, patches=[]))
-            plugin.publisher.matches = plugin.sources.matches
-            plugin.publisher.bridge_for = lambda *args: None
-            before = await plugin.scan(refresh_sources=False)
-            self.assertEqual(len(before["installs"][0]["patches"]), 1)
+        plugin = self.plugin()
+        plugin._prepare_cancel = None
+        plugin.tasks = module.TaskManager()
+        sources = FakeSecondSource()
+        plugin.sources = sources
+        other = dict(instance_id="other", appid=10, name="Game", buildid="101", availability="installed")
+        plugin.bridge.scan.return_value["installs"].append(dict(game=other, patches=[]))
+        plugin.publisher.matches = sources.matches
+        plugin.publisher.bridge_for = lambda *args: None
+        before = await plugin.scan(refresh_sources=False)
+        self.assertEqual(len(before["installs"][0]["patches"]), 1)
+        await plugin.set_game_source(9, "second", False)
+        after = await plugin.scan(refresh_sources=False)
+        row = after["installs"][0]
+        self.assertEqual(row["patches"], [])
+        self.assertTrue(row["sources"][0]["matched"])
+        self.assertFalse(row["sources"][0]["subscribed"])
+        self.assertTrue(after["sources"][0]["enabled"])
+        self.assertTrue(after["installs"][1]["sources"][0]["subscribed"])
+        with self.assertRaisesRegex(ValueError, "release_not_found"):
+            await plugin._prepare_install("instance", "source-second-9")
+        await plugin.set_game_source(9, "second", True)
+        self.assertEqual(len((await plugin.scan(refresh_sources=False))["installs"][0]["patches"]), 1)
+        plugin._prepare_cancel = Event()
+        with self.assertRaisesRegex(RuntimeError, "installer_busy"):
             await plugin.set_game_source(9, "second", False)
-            after = await plugin.scan(refresh_sources=False)
-            row = after["installs"][0]
-            self.assertEqual(row["patches"], [])
-            self.assertTrue(row["sources"][0]["matched"])
-            self.assertFalse(row["sources"][0]["subscribed"])
-            self.assertTrue(after["sources"][0]["enabled"])
-            self.assertTrue(after["installs"][1]["sources"][0]["subscribed"])
-            with self.assertRaisesRegex(ValueError, "release_not_found"):
-                await plugin._prepare_install("instance", "source-second-9")
-            await plugin.set_game_source(9, "second", True)
-            self.assertEqual(len((await plugin.scan(refresh_sources=False))["installs"][0]["patches"]), 1)
-            plugin._prepare_cancel = Event()
-            with self.assertRaisesRegex(RuntimeError, "installer_busy"):
-                await plugin.set_game_source(9, "second", False)
 
 
 if __name__ == "__main__":

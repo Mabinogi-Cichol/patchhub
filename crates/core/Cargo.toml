@@ -17,6 +17,12 @@ fs2.workspace = true
 uuid.workspace = true
 reqwest.workspace = true
 schemars.workspace = true
+url.workspace = true
+encoding_rs.workspace = true
+scraper.workspace = true
+unicode-normalization.workspace = true
+caseless.workspace = true
+unicode-general-category.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.56"

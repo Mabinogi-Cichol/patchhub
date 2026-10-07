@@ -152,6 +152,11 @@ pub fn fetch(
             // allowing long downloads while bounding stalled cancellation.
             .timeout(Duration::from_secs(15))
             .user_agent("steam-patch-manager/0.1")
+            // Artifact integrity checks compare Content-Length to the catalog
+            // size, so force identity encoding even though the crate enables
+            // gzip/deflate for the bounded metadata fetcher.
+            .no_gzip()
+            .no_deflate()
             .build()
             .map_err(|_| invalid("http_client_failed"))?;
         let mut url = approved_url(&artifact.url, artifact)?;

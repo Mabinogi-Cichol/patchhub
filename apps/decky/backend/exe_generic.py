@@ -10,7 +10,7 @@ import time
 import uuid
 
 from acquisition import no_links
-from discovery import safe_url
+from source_primitives import safe_url
 from exe_facts import game_facts, read_file, MAX_BASELINE
 from exe_profiles import candidate_binding, digest, _path
 from exe_worker import analyze_behavior

@@ -1,5 +1,6 @@
 """Fixed-method Decky to Rust JSON-lines bridge. UI cannot select a binary or catalog."""
 import asyncio
+import inspect
 import os
 import json
 from pathlib import Path
@@ -9,7 +10,18 @@ from tasks import current_task
 
 MAX_RESPONSE_BYTES = 8 * 1024 * 1024
 MAX_REQUEST_BYTES = 64 * 1024
-METHODS = {"discard_plan", "scan", "preview", "plan_install", "fetch_artifact", "start_install", "list_transactions", "recover", "migrate_state"}
+SOURCE_METHODS = {
+    "get_capabilities", "list_sources", "list_game_sources", "set_source_enabled",
+    "set_game_source", "add_source", "refresh_sources", "discover_game", "scan_sources",
+    "get_source_policy", "resolve_source_record", "list_source_matches",
+    "get_source_state", "get_source_settings",
+}
+METHODS = {"discard_plan", "scan", "preview", "plan_install", "fetch_artifact", "start_install", "list_transactions", "recover", "migrate_state"} | SOURCE_METHODS
+# Methods served by `serve-task` (streaming/cancellable), not one-shot `serve`.
+CONTROLLED_METHODS = {"fetch_artifact", "plan_install", "start_install",
+                      "discover_game", "refresh_sources", "scan_sources"}
+# Events a source task may interleave before its single final response.
+SOURCE_EVENTS = {"source_progress", "source_update"}
 
 
 class CoreBridge:
@@ -82,7 +94,16 @@ class CoreBridge:
     async def cleanup_transactions(self):
         return await self._call("migrate_state", {})
 
-    async def _call(self, method: str, params: dict):
+    @staticmethod
+    def _source_event(row, request_id, last_sequence):
+        """Validate one interleaved source event; returns its (new) sequence."""
+        if (not isinstance(row, dict) or row.get("request_id") != request_id
+                or type(row.get("sequence")) is not int or row["sequence"] <= last_sequence):
+            raise RuntimeError("invalid_core_response")
+        return row["sequence"]
+
+    async def _call(self, method: str, params: dict, on_event=None, cancel=None,
+                    timeout=None, controlled: bool | None = None):
         if method not in METHODS:
             raise ValueError("unsupported_method")
         request_id = str(uuid.uuid4())
@@ -99,8 +120,10 @@ class CoreBridge:
         if len(payload) > MAX_REQUEST_BYTES:
             raise ValueError("request_too_large")
         task = current_task.get()
-        controlled = task is not None or method in {"fetch_artifact", "plan_install", "start_install"}
-        cancel = task.cancel if task else Event()
+        if controlled is None:
+            controlled = task is not None or method in CONTROLLED_METHODS
+        if cancel is None:
+            cancel = task.cancel if task else Event()
         process = await asyncio.create_subprocess_exec(
             str(self.binary), "serve-task" if controlled else "serve", stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
@@ -131,6 +154,7 @@ class CoreBridge:
             if not controlled:
                 process.stdin.close()
             response = None
+            last_sequence = -1
             while line := await process.stdout.readline():
                 if len(line) > MAX_RESPONSE_BYTES:
                     raise RuntimeError("response_too_large")
@@ -142,6 +166,14 @@ class CoreBridge:
                         if progress.get("archive_bytes") is None:
                             progress.pop("archive_bytes", None)
                         task.update(**progress)
+                elif controlled and row.get("event") in SOURCE_EVENTS:
+                    # Interleaved telemetry is never the final response; enforce the
+                    # request binding and monotonic sequence before forwarding it.
+                    last_sequence = self._source_event(row, request_id, last_sequence)
+                    if on_event is not None:
+                        emitted = on_event(row)
+                        if inspect.isawaitable(emitted):
+                            await emitted
                 elif response is None:
                     response = row
                 else:
@@ -158,8 +190,9 @@ class CoreBridge:
 
         guard = asyncio.create_task(signal_cancel()) if controlled else None
         running = asyncio.create_task(exchange())
+        effective_timeout = timeout if timeout is not None else (self.timeout if not controlled else None)
         try:
-            return await asyncio.wait_for(asyncio.shield(running), self.timeout if not controlled else None)
+            return await asyncio.wait_for(asyncio.shield(running), effective_timeout)
         except asyncio.CancelledError:
             # Task/UI cancellation must never kill a writer. Drain it until rollback
             # or the durable commit reports its actual outcome.
@@ -189,3 +222,11 @@ class CoreBridge:
                 guard.cancel()
             if process.stdin:
                 process.stdin.close()
+
+    async def call_sync(self, method: str, params: dict, timeout: float | None = None):
+        """One-shot `serve` call outside the task controller; returns the result.
+
+        Source config reads/writes are local and short, so they do not need the
+        cancellable `serve-task` stream.
+        """
+        return await self._call(method, params, timeout=timeout, controlled=False)

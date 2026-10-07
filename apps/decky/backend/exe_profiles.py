@@ -13,7 +13,7 @@ import time
 from urllib.parse import urlsplit
 
 from acquisition import no_links
-from discovery import safe_url
+from source_primitives import safe_url
 
 MAX_PROFILES_BYTES = 16 * 1024 * 1024
 MAX_ENTRIES = 8192
