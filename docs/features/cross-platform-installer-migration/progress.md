@@ -185,9 +185,24 @@
 - 宿主契约：独立 oracle 初审（MF1-MF6 必修 + N1-N7 登记）→ v1.1 → 定向复审（R1-R3 一行级折入）→ v1.2 定稿；编码迁移独立评审“通过（P1 基线）” → 收尾补全（`canonical_url` 文档纠错、fixture `:443`、3 个新测试）。
 - 未执行：P1-2/P1-3、两端宿主切换（P4/P5）、实机协议验证（待 P4/P5）。
 
+### P1-2/P1-3a 实施（2026-10-08 续）
+
+- **P1-2 状态骨架**（`crates/core/src/installer/`）：`InstallerPaths`（schema/journal.lock/journal/requests/jobs/content/receipts/downloads/reports）、`init_atomic()` 原子幂等初始化（staging → sync → rename，`schema.json` 最后写、残留可重试）、可清/受保护边界 API、`instance_hash`（sha256 前 16 hex）、`requests.sqlite` 幂等账本骨架（`RequestBinding`/`RequestRecord`/`RequestLedger`）；`install.rs` 增加 `Store::open_at` 可配置 root（生产调用方未切换）；8 个新测试，core lib 157 passed。
+- **P1-3a 协议外壳**（`crates/cli`）：`PROTOCOL_VERSION=3`（v1/v2 → `unsupported_protocol`；`error.detail` ≤2 KiB 截断；`request_id` 校验 1–128 字节/非空/无控制字符）；16 方法白名单（安装器 8 + 来源 8；9 个旧方法的 CLI 分支删除、核心内部实现保留）；`get_capabilities` §3.1 形状（links 探测留 TODO）；`cleanup_cache` 最小实现（downloads/ 清扫）；`install_progress` 平铺事件（阶段折叠在 CLI 层完成，`operation.rs` 保持与 HEAD 一致）+ `renew`/`cancel`/EOF 控制行；cli 25 测试通过。
+- 验证：`cargo test -p steam-patch-core -p steam-patch-cli`（lib 157 + catalog 8 + install 39 + localized 4 + steam_scan 6 + trust 3 + cli 25，全绿）、`cargo check --workspace` 通过；全量复核确认 `operation.rs` 无 diff。
+- TODO（已登记）：租约落盘（job 文档）、`installer.links` 隔离探针注入（P3/P4）、`cleanup_cache` 接入 installer store。
+
+### P1-3b-1 动态获取与 ZIP 配方（2026-10-08 续）
+
+- `installer/acquire.rs`：动态 HTTPS 获取（每跳重核 + `download_hosts` 白名单、无凭据/端口 443/.zip 路径、Content-Type 与 ZIP 魔数校验）、内容寻址缓存（`downloads/<sha256>.zip` + `.partial` + `<sha256>.json` sidecar）、ETag/Last-Modified 条件请求（304 仅同身份完整包）、复用前重哈希、中断不发布、预期摘要/大小核验、进度与取消（`download_cancelled`）、8 GiB 上限。
+- `installer/zip_recipe.rs`：publisher 配方移植（8192 条目 / 4 GiB 单文件 / 16 GiB 展开 / 压缩比 200；路径/设备名/链接/extra/大小写与 Unicode 冲突/目录-文件冲突等拒绝项与 Python 1:1；XP3 包装映射与歧义阻断；输出 `{source,destination,original_sha256,installed_sha256}`）。
+- `installer/mod.rs` 注册两模块；未改 `download.rs`/`install.rs`/CLI/Python。
+- 验证：core lib 177（+20 新测试，含获取/缓存/304/取消与配方拒绝矩阵）、集成 39/8/6/4/3 全绿；workspace check、clippy、fmt 通过。
+- 已知偏差/注记：① `zip` crate 无 UTF-8 flag 访问器，名称编码用启发式（非 ASCII 无 flag 正确拒绝；malformed UTF-8 + flag 场景与 CPython 有差异）；② `downloads/` 新增 `<sha256>.json` sidecar（p0-contracts §3.1 已同步注明）；③ `load_cached` 按请求扫描 sidecar（预期规模下可接受）。
+
 ### 待办
 
-1. P1-2：installer/rust-v1 状态骨架（Store root + 原子初始化 + `requests.sqlite`）。
-2. P1-3：共享 ZIP 服务（获取/缓存/配方/facts/授权/编排）与协议 v3 服务侧实现。
+1. 已完成：P1-2 / P1-3a / P1-3b-1（本轮按模块分批提交）。
+2. 进行中：P1-3b 剩余（facts/授权 → 编排与协议接线）。
 3. `import_python_state`/`import_index` 删除与规则 schema 收紧（P1 后续块）。
-4. 提交本批成果（文档与编码迁移拆分提交）。
+4. 提交：本轮按模块分批（installer 模块 / 协议外壳 / 文档）。

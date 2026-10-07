@@ -143,7 +143,7 @@ installer/rust-v1/
 ├── jobs/<uuid>/{<i>.stage,<i>.backup,revoked,exe-policy.json,owner.json}
 ├── content/<content_id>/       # 归一新 ZIP / 载荷缓存（可清）
 ├── receipts/<instance_hash>/   # 成功收据（受保护）
-├── downloads/                  # 动态下载缓存 <sha256>.zip / .partial（可清）
+├── downloads/                  # 动态下载缓存 <sha256>.zip / .partial + <sha256>.json（ETag/Last-Modified sidecar，可清）
 └── reports/<content_id>/       # 分析报告（可清/留档）
 ```
 
