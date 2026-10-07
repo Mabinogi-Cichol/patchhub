@@ -32,7 +32,7 @@
 - 序列化格式改用 **确定性 JSON**：对象键按 **UTF-8 字节序（等价 Unicode 码点序）升序**；分隔符无空格（`,` / `:`）；字符串按 **原样 UTF-8**（`ensure_ascii = false` 恒成立，不再有 `sort_keys`/`ensure_ascii` 参数），**仅转义 JSON 必需字符（引号、反斜杠、控制字符）**；整数十进制；**禁止浮点**（出现即 `invalid_canonical_value`）。
 - 字段集合以 **结构体 `Serialize` 的显式字段**为准（`SourceCandidate`/`SourceRule`/query 结构），不依赖 `serde_json::Value` 的运行时键集。
 - 字符串值 **不做 Unicode 规范化**（保留原始码点）；匹配用的 NFKC/casefold 仍只发生在 `validate::normal`/`discovery_normal`，二者互不混用。
-- URL 规范化保留 `canonical_url(u) = urlunsplit(scheme_lower, host_lower, path, "", "")`（丢 query/fragment、host 小写、端口 443 归并）。**path 的百分号编码归一化（大小写、未编码保留字符）待调研**；冻结前以“原样 path”为准并在 fixture 注明。**该 URL path 规范化行为变化同样须 bump 编码版本**。
+- URL 规范化保留 `canonical_url(u) = urlunsplit(scheme_lower, host_lower, path, "", "")`（丢 query/fragment、host 小写、端口**原样保留**——现行行为，P1-1 实现确认；若引入端口折叠须作为编码行为变更单独 bump 版本）。**path 的百分号编码归一化（大小写、未编码保留字符）待调研**；冻结前以“原样 path”为准并在 fixture 注明。**该 URL path 规范化行为变化同样须 bump 编码版本**。
 
 **【理由】** 现行 `canonical.rs` 的 `python_json`/`ensure_ascii`/`sort_keys` 存在目的只是逐字节复刻 Python；既然设计明确“不再要求与 Python 字节/ID 相等”，确定性 JSON 是更小、更可证的契约。**被否替代**：(a) 继续维护 `python_json`（维护成本高、无收益）；(b) 直接 `serde_json::to_string`（键序依赖 Map 实现，跨版本不稳，且保留空格）。
 
@@ -383,7 +383,7 @@ installer/rust-v1/
 | LZMA2 依赖选型/许可/体积 | §8 | 已调研（lib-2）：选定 `lzma-rust2` 0.21；parity/截断/内存/交叉构建/性能/SBOM 待实测（P1） |
 | 用户规则是否携带 `root_layout` | §7 | P1 用真实 settings 抽样确认（不作为冻结前提） |
 | `migrate_state` 去留 | §4.2 | P1 决策（倾向删除） |
-| 宿主 RPC 方法白名单/事件命名空间/终态字段 | §11（design §6） | 延后 P1 冻结 |
+| 宿主 RPC 方法白名单/事件命名空间/终态字段 | §11（design §6） | 已冻结：[p1-host-contract.md](p1-host-contract.md) v1.2（P1-0 门禁通过，2026-10-08） |
 | Linux 树级资源限额（cgroup v2 / RLIMIT_NPROC；与 Windows Job 树级约束不对称） | §6.2 | 待实现/待实测（P1/P3；P0-D 评审 M2） |
 | Linux launcher 输出限额 fail-closed（stdout 16 MiB / stderr 64 KiB，超限终止并报 `exe_worker_response_limit`） | §6.1 | 已修复（P0-D remediation，WSL 非 root + root 场景验证；评审 M3） |
 | Linux launcher P1 事项：固定 `/input/archive.exe` 命名、路径校验（no_links/输入输出不相交）、`RLIMIT_FSIZE` 默认、单进程不变量跨平台措辞、`pre_exec` 安全复核、宿主进程不可见断言 | §6.1/§6.2 | P1 登记（P0-D 评审 R1-R6） |
@@ -394,6 +394,8 @@ installer/rust-v1/
 ## 11. 显式延后到 P1 的契约
 
 **【冻结值】** 宿主 RPC 方法白名单、事件命名空间与终态字段**延后到 P1**，以 [design.md](design.md) §6（CLI、事件与任务生命周期）接口表为准；P1 开始时**先冻结这些契约再实现**，不得在未冻结前固化为生产实现。P0 已冻结的是 worker 内部协议（§6.1）与状态 schema（§3），二者不随此延后。
+
+**2026-10-08 更新：本项已冻结**——见 [p1-host-contract.md](p1-host-contract.md)（v1.2，P1-0 门禁初审 + 定向复审通过；含 R1-R3 折入）。P1 实现以该稿为基线。
 
 **【理由】** design §8 P0 交付含“锁与事件”，但 §6 接口表当前为“拟定”；本契约 P0 仅冻结 worker 协议。**被否替代**：P0 直接冻结宿主事件（会锁定未经评审的 UI/宿主面）。
 

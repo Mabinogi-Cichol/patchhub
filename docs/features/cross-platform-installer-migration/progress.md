@@ -1,6 +1,6 @@
 # 跨平台安装器迁移施工记录
 
-设计：[design.md](design.md)。日期：2026-10-08（Asia/Shanghai）。状态：**P0 实施中：契约冻结与 Windows 隔离原型已通过 Gate 1（见 [p0-contracts.md](p0-contracts.md)、[p0-sandbox-probe-windows.md](p0-sandbox-probe-windows.md)）；Linux bwrap 原型已在 WSL2 与 SteamOS Deck 双平台对照通过（见 [p0-sandbox-probe-linux.md](p0-sandbox-probe-linux.md)）；P1+ 待执行**。
+设计：[design.md](design.md)。日期：2026-10-08（Asia/Shanghai）。状态：**P1 进行中：宿主契约已冻结（[p1-host-contract.md](p1-host-contract.md) v1.2，两轮独立评审通过）、来源确定性编码迁移已完成并通过评审（149+60 测试）；P1-2/P1-3 与两端宿主切换待执行**。
 
 ## 当前状态
 
@@ -164,4 +164,30 @@
 
 1. root 降权生产化（Decky Loader root 形态、完整环境处理）与 cgroup v2 / RLIMIT_NPROC 树级限额在 P1/P3 落实。
 2. 按 [p0-sandbox-probe-linux.md](p0-sandbox-probe-linux.md) §8 建议冻结 Linux 侧生产配置（待 cgroup/seccomp 评估）。
-3. P0 收口后：提交 P0-D 成果（代码 + 文档）。
+3. 已完成：P0-D 成果提交（bbd2edd / 14ab369）。
+
+## 2026-10-08 P1 启动：宿主契约冻结与来源编码迁移
+
+### 用户目标与本轮范围
+
+用户确认启动 P1。前置（p0-contracts §11）要求先冻结宿主 RPC/方法/事件/终态契约，随后实施来源确定性编码迁移（P1-1）。本轮完成：宿主契约冻结稿（独立初审 + 定向复审通过）、来源编码迁移（独立评审通过）与评审收尾补全。未执行：P1-2（installer/rust-v1 骨架）、P1-3（共享 ZIP 服务）、两端宿主切换（P4/P5）。
+
+### 实际修改
+
+- 新增 `p1-host-contract.md`（v1.2 定稿）：`protocol_version=3` 方法白名单（安装器 8 + 来源 8；删除 `plan_install`/`start_install`/`fetch_artifact`/`migrate_state` 与 5 个来源旧方法）、`install_progress` 事件（9 阶段、平铺字段、递增 `sequence`、终态 `InstallOutcome`）、能力协商（`installer.links` 平台探测 + 错误 `detail`）、容量限制、幂等/租约/取消（15s + `renew` 控制行）、双端宿主适配与测试要求；新增 `p1-gate0-review.md`（初审 + 复审归档）。
+- `crates/core/src/sources/`：`canonical_bytes` 取代 `python_json`（确定性 JSON：UTF-8 字节序键序、无空格、原样 UTF-8 仅转义必需字符、浮点/整数溢出拒绝）；`candidate_id`/`fingerprint`/`query_key`/`rule_fingerprint` 全部改走新编码；`SOURCES_ENCODING_VERSION=1` 入 `query_key` 并持久化进 discovery/index 记录（`encoding_version` 字段，缺失=0），`discovery_fresh`/`shared_index` 比对失效；`identity-golden.json`/`gen_identity_golden.py` 删除，新增 `encoding-golden.json`。
+- `crates/cli/src/runtime.rs`：测试辅助同步 `query_key` 语义。
+- `p0-contracts.md`：§1.1 端口行为修正为“原样保留（现行行为）”；§10/§11 回写宿主契约已冻结。
+
+### 验证方式与结果
+
+- 编码迁移：`cargo test -p steam-patch-core`（lib 149 passed / 1 ignored，集成 60 passed）、`cargo test -p steam-patch-cli` 19、`cargo check --workspace`、`cargo clippy -p steam-patch-core --all-targets`、`rustfmt --check`（改动文件）通过；旧编码记录失效、版本 stale、字段重排稳定、浮点/整数溢出拒绝、NFC-NFD 不归并、大小闸门用例通过。
+- 宿主契约：独立 oracle 初审（MF1-MF6 必修 + N1-N7 登记）→ v1.1 → 定向复审（R1-R3 一行级折入）→ v1.2 定稿；编码迁移独立评审“通过（P1 基线）” → 收尾补全（`canonical_url` 文档纠错、fixture `:443`、3 个新测试）。
+- 未执行：P1-2/P1-3、两端宿主切换（P4/P5）、实机协议验证（待 P4/P5）。
+
+### 待办
+
+1. P1-2：installer/rust-v1 状态骨架（Store root + 原子初始化 + `requests.sqlite`）。
+2. P1-3：共享 ZIP 服务（获取/缓存/配方/facts/授权/编排）与协议 v3 服务侧实现。
+3. `import_python_state`/`import_index` 删除与规则 schema 收紧（P1 后续块）。
+4. 提交本批成果（文档与编码迁移拆分提交）。
