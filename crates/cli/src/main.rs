@@ -70,7 +70,14 @@ fn error(id: Option<&str>, code: &str) -> Value {
 }
 
 fn respond(bytes: &[u8]) -> Value {
-    let mut request: Request = match serde_json::from_slice(bytes) {
+    let cancel = AtomicBool::new(false);
+    respond_with(bytes, &cancel, &|_| true)
+}
+
+/// Parses and executes a request with the task control channel available to
+/// `install_patch` (cancel + foreground lease).
+fn respond_with<L: Fn(u64) -> bool>(bytes: &[u8], cancel: &AtomicBool, lease_active: &L) -> Value {
+    let request: Request = match serde_json::from_slice(bytes) {
         Ok(r) => r,
         Err(_) => return error(None, "invalid_request"),
     };
@@ -87,16 +94,23 @@ fn respond(bytes: &[u8]) -> Value {
     if !valid_request_id(&request.request_id) {
         return error(None, "invalid_request_id");
     }
-    if request.method == "install_patch" && request.params.request_id.is_none() {
-        request.params.request_id = Some(request.request_id.clone());
+    let mut params = request.params;
+    if request.method == "install_patch" && params.request_id.is_none() {
+        params.request_id = Some(request.request_id.clone());
     }
-    match execute(&request.method, request.params) {
+    match runtime::execute_controlled(&request.method, params, cancel, lease_active) {
         Ok(result) => {
             json!({ "protocol_version": PROTOCOL_VERSION, "request_id": request.request_id, "ok": true, "result": result })
         }
         Err(code) => {
-            let detail = (code == "unsupported_method")
-                .then(|| format!("method not in v3 whitelist: {}", request.method));
+            let (code, detail) = match code.split_once('\u{1}') {
+                Some((code, detail)) => (code.to_string(), Some(detail.to_string())),
+                None => {
+                    let detail = (code == "unsupported_method")
+                        .then(|| format!("method not in v3 whitelist: {}", request.method));
+                    (code, detail)
+                }
+            };
             error_with_detail(Some(&request.request_id), &code, detail.as_deref())
         }
     }
@@ -153,47 +167,76 @@ fn serve_task() -> io::Result<()> {
         return Ok(());
     };
     let cancel = Arc::new(AtomicBool::new(false));
-    let lease = Arc::new(AtomicU64::new(lease_deadline()));
-    spawn_control_thread(Arc::clone(&cancel), lease);
-    let response = run_task(&bytes, oversized, cancel, |value| {
-        let mut output = io::stdout().lock();
-        // A closed output pipe must not abort the rollback path.
-        let _ = serde_json::to_writer(&mut output, &value);
-        let _ = output.write_all(b"\n");
-        let _ = output.flush();
-    });
+    let lease = Arc::new(LeaseState::new());
+    spawn_control_thread(Arc::clone(&cancel), Arc::clone(&lease));
+    spawn_lease_watchdog(Arc::clone(&cancel), Arc::clone(&lease));
+    let response = {
+        let lease = Arc::clone(&lease);
+        run_task_with_lease(
+            &bytes,
+            oversized,
+            cancel,
+            move |now| lease.active(now),
+            |value| {
+                let mut output = io::stdout().lock();
+                // A closed output pipe must not abort the rollback path.
+                let _ = serde_json::to_writer(&mut output, &value);
+                let _ = output.write_all(b"\n");
+                let _ = output.flush();
+            },
+        )
+    };
     let mut output = io::stdout().lock();
     serde_json::to_writer(&mut output, &response)?;
     output.write_all(b"\n")?;
     output.flush()
 }
 
-/// Current lease deadline as epoch milliseconds. TODO(P1 lease persistence):
-/// core has no on-disk lease yet; this in-memory value is a placeholder until
-/// the lease is written to the job document (p1-host-contract §5.2 / §8).
-fn lease_deadline() -> u64 {
+/// Epoch milliseconds (foreground lease clock).
+fn now_millis() -> u64 {
     use std::time::{SystemTime, UNIX_EPOCH};
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_millis() as u64)
         .unwrap_or(0)
-        .saturating_add(LEASE_TTL_MILLIS)
+}
+
+/// In-memory foreground lease (15s). `renew` refreshes the shared deadline; the
+/// watchdog and the authorization re-check treat an expired deadline as
+/// inactive (p1-host-contract §5.2; p0-contracts §5.1).
+struct LeaseState {
+    deadline_ms: AtomicU64,
+}
+
+impl LeaseState {
+    fn new() -> Self {
+        Self {
+            deadline_ms: AtomicU64::new(now_millis().saturating_add(LEASE_TTL_MILLIS)),
+        }
+    }
+
+    fn renew(&self) {
+        self.deadline_ms.store(
+            now_millis().saturating_add(LEASE_TTL_MILLIS),
+            Ordering::Relaxed,
+        );
+    }
+
+    fn active(&self, now_seconds: u64) -> bool {
+        now_seconds.saturating_mul(1000) <= self.deadline_ms.load(Ordering::Relaxed)
+    }
 }
 
 /// Reads `renew`/`cancel` control lines from the task stdin. EOF (`None` or a
 /// read error) is treated as `cancel`.
-fn spawn_control_thread(cancel: Arc<AtomicBool>, lease: Arc<AtomicU64>) {
+fn spawn_control_thread(cancel: Arc<AtomicBool>, lease: Arc<LeaseState>) {
     std::thread::spawn(move || {
         use std::io::BufRead;
         let stdin = io::stdin();
         let mut lines = stdin.lock().lines();
         while let Some(Ok(line)) = lines.next() {
             match line.trim() {
-                "renew" => {
-                    // TODO(P1 lease persistence): placeholder refresh only; the
-                    // durable lease/expiry check lands with the job document.
-                    lease.store(lease_deadline(), Ordering::Relaxed);
-                }
+                "renew" => lease.renew(),
                 "cancel" => {
                     cancel.store(true, Ordering::Relaxed);
                     return;
@@ -205,13 +248,41 @@ fn spawn_control_thread(cancel: Arc<AtomicBool>, lease: Arc<AtomicU64>) {
     });
 }
 
-/// Runs one `serve-task` request: stream methods emit their events, everything
-/// else runs under `operation::run` and emits flat `install_progress` events.
-/// Returns the single final response line value.
+/// Expired lease watchdog: stops an unattended task after `LEASE_TTL_MILLIS`
+/// without a `renew` (p1-zip-orchestration §3.10).
+fn spawn_lease_watchdog(cancel: Arc<AtomicBool>, lease: Arc<LeaseState>) {
+    std::thread::spawn(move || loop {
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        if cancel.load(Ordering::Relaxed) {
+            return;
+        }
+        if !lease.active(now_millis() / 1000) {
+            cancel.store(true, Ordering::Relaxed);
+            return;
+        }
+    });
+}
+
+/// Runs one `serve-task` request with the always-active placeholder lease
+/// (used by tests); `serve_task` uses [`run_task_with_lease`].
+#[allow(dead_code)]
 pub(crate) fn run_task(
     bytes: &[u8],
     oversized: bool,
     cancel: Arc<AtomicBool>,
+    emit: impl FnMut(Value) + 'static,
+) -> Value {
+    run_task_with_lease(bytes, oversized, cancel, |_| true, emit)
+}
+
+/// Runs one `serve-task` request: stream methods emit their events, everything
+/// else runs under `operation::run` and emits flat `install_progress` events.
+/// Returns the single final response line value.
+pub(crate) fn run_task_with_lease<L: Fn(u64) -> bool>(
+    bytes: &[u8],
+    oversized: bool,
+    cancel: Arc<AtomicBool>,
+    lease_active: L,
     mut emit: impl FnMut(Value) + 'static,
 ) -> Value {
     let parsed = if oversized {
@@ -233,13 +304,13 @@ pub(crate) fn run_task(
             request.params.selection_id.clone(),
         );
         return steam_patch_core::operation::run(
-            cancel,
+            Arc::clone(&cancel),
             move |progress| emit(cursor.event(progress)),
             || {
                 if oversized {
                     error(None, "request_too_large")
                 } else {
-                    respond(bytes)
+                    respond_with(bytes, cancel.as_ref(), &lease_active)
                 }
             },
         );
@@ -247,7 +318,8 @@ pub(crate) fn run_task(
     if oversized {
         error(None, "request_too_large")
     } else {
-        respond(bytes)
+        let cancel_ref = AtomicBool::new(false);
+        respond_with(bytes, &cancel_ref, &|_| true)
     }
 }
 
@@ -685,14 +757,17 @@ mod tests {
     }
 
     #[test]
-    fn cleanup_cache_sweeps_downloads() {
+    fn cleanup_cache_sweeps_cleanable_roots_and_protects_recovery_material() {
         let temp = tempfile::tempdir().unwrap();
         let state = temp.path().join("state");
-        let downloads = state.join("downloads");
+        let paths = steam_patch_core::installer::InstallerPaths::new(&state);
+        let downloads = paths.downloads_dir();
         std::fs::create_dir_all(&downloads).unwrap();
         std::fs::write(downloads.join("artifact.zip"), b"stale bytes").unwrap();
+        std::fs::create_dir_all(paths.content("c1").unwrap()).unwrap();
+        std::fs::write(paths.content("c1").unwrap().join("payload"), b"12345").unwrap();
         // Recovery material must survive a cache sweep.
-        let job = state.join("jobs").join("plan-1");
+        let job = paths.jobs_dir().join("plan-1");
         std::fs::create_dir_all(&job).unwrap();
         std::fs::write(job.join("0.stage"), b"stage").unwrap();
         let result = execute(
@@ -704,8 +779,9 @@ mod tests {
         )
         .unwrap();
         assert_eq!(result["performed"], true);
-        assert_eq!(result["removed_bytes"], 11);
+        assert_eq!(result["removed_bytes"], 16);
         assert!(!downloads.join("artifact.zip").exists());
+        assert!(!paths.content("c1").unwrap().exists());
         assert!(job.join("0.stage").exists());
     }
 }
