@@ -1355,7 +1355,10 @@ fn restore(store: &Store, job: &mut Job, uninstalling: bool) -> io::Result<()> {
         if backup.is_some() && backup != change.original_sha256 {
             return Err(invalid("backup_missing_or_changed"));
         }
-        if live.as_deref() == Some(&change.installed_sha256)
+        // A same-content reinstall can have identical original/installed
+        // images. Before the first write no backup is needed to preserve it.
+        if live != change.original_sha256
+            && live.as_deref() == Some(&change.installed_sha256)
             && change.original_sha256.is_some()
             && backup != change.original_sha256
         {

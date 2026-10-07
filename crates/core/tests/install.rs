@@ -892,6 +892,21 @@ fn successful_install_and_reinstall_clean_temporaries_and_keep_receipts() {
 }
 
 #[test]
+fn same_content_reinstall_failure_before_backups_rolls_back() {
+    let f = Fixture::new();
+    let first = f.plan().unwrap();
+    assert_eq!(apply(&first.plan_id, &f.state).unwrap().state, "committed");
+    let second = f.reinstall().unwrap();
+    fs::write(f.job_file(&second.plan_id, "0.stage"), b"invalid stage").unwrap();
+    let result = apply(&second.plan_id, &f.state).unwrap();
+    assert_eq!(result.state, "rolled_back");
+    assert_eq!(fs::read(f.game.join("original.dat")).unwrap(), b"patched bytes");
+    assert_eq!(fs::read(f.game.join("content/new.dat")).unwrap(), b"new bytes");
+    assert!(recover(&f.state).unwrap().is_empty());
+    assert!(list_transactions(&f.state).unwrap().iter().any(|t| t.plan_id == first.plan_id && t.state == "committed"));
+}
+
+#[test]
 fn owned_missing_and_damaged_files_reinstall_and_failed_retry_preserves_preop_and_receipt() {
     use std::sync::{
         atomic::{AtomicBool, Ordering},
