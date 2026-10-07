@@ -59,6 +59,8 @@ Decky 首版以插件内部列表为稳定入口；游戏详情页快捷入口�
 
 来源能力已迁入共享 Rust 核心并完成双端切换与实机验证（P0–P5）：[独立设计](features/shared-source-discovery/design.md)与[施工记录](features/shared-source-discovery/progress.md)。安装器逻辑（publisher ZIP / EXE）仍分别在两端，尚未迁入跨平台核心。
 
+后续 [跨平台安装器迁移](features/cross-platform-installer-migration/design.md) 已建立独立设计与[施工记录](features/cross-platform-installer-migration/progress.md)，当前待实现：共享动态 ZIP/EXE 安装策略、原生隔离 worker、新状态 schema 与 Windows 动态安装能力；开发阶段允许旧缓存格式 breaking change，不承担旧版本兼容，切换前先处理未完成事务。双端验收后再收口重复 Python 安装逻辑。
+
 建议采用共享 Rust 核心，负责 Steam 库解析、匹配、指纹、下载验证、文件事务、恢复和 SQLite 存储。Windows 使用 Tauri 2 + React / TypeScript；SteamOS 使用 Decky React / TypeScript 前端 + Python 桥接后端，再调用随插件打包的 Linux 核心进程。
 
 Windows 可以直接链接核心库；Decky 桥接通过 stdin/stdout 上的版本化 JSON 消息调用核心，无监听公网或本地 TCP 服务。Python 仅转换 Decky 调用和任务事件，不复制安装逻辑。UI 共享 DTO、状态文案和业务 hooks，视觉组件按平台分别实现。

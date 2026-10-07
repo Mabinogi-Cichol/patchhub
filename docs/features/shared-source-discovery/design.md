@@ -200,5 +200,5 @@ Python退场只删除已经迁入Rust的来源逻辑及HTML解析工作进程；
 - [本地化游戏名](../localized-game-names/design.md)：名称输入依赖；[扫描状态锁修复](../windows-scan-state-lock/design.md)：独立状态锁回归基线。
 - [通用EXE安装](../generic-exe-installation/design.md)、[精简安装流程](../simplified-install-flow/design.md)：安装能力消费者，保留candidate/release、出处和旧记录契约。
 - 风险集中在HTML解析/Unicode和ID差异、partial缓存与分页、跨进程发布/限速、旧订阅导入及安装消费者；通过冻结fixture、独立状态命名空间、逐阶段门槛和可回退单引擎切换控制。
-- 后续独立任务：将publisher ZIP/EXE下载、能力评估及静态提取迁到跨平台核心，补齐Windows动态安装；本次只为其提供稳定来源契约。
+- 后续独立任务：[跨平台安装器迁移](../cross-platform-installer-migration/design.md)（[施工记录](../cross-platform-installer-migration/progress.md)）：将publisher ZIP/EXE下载、能力评估及静态提取迁到跨平台核心，补齐Windows动态安装；本次只为其提供稳定来源契约。
 - 规划和功能代码分别提交；与本地化名、状态锁修复及其他既有修改按功能/改动块分别处理。Git提交按用户后续授权单独执行，不改变待实现状态。

@@ -6,6 +6,7 @@
 
 | 功能 | 状态 | 设计文档 | 施工记录 | 附加文档 |
 | --- | --- | --- | --- | --- |
+| 跨平台安装器迁移 | 设计完成，待实现；允许旧缓存 breaking change；来源兼容遗留随迁移清理并纳入结项；自动化、Windows / Decky 实机与验收待执行 | [设计](cross-platform-installer-migration/design.md) | [施工记录](cross-platform-installer-migration/progress.md) | — |
 | 来源发现与订阅迁入共享 Rust 后端 | P0–P6 已完成（迁移收口）；2026-10-08 Decky 并发读取与旧结果复播修复已部署，RPC / 真实页面验证通过，实体手柄待验收；安装器逻辑仍分端 | [设计](shared-source-discovery/design.md) | [施工记录](shared-source-discovery/progress.md) | — |
 | Windows 扫描刷新状态锁冲突修复 | 已修复、重新部署并通过 Windows 实机验收 | [设计](windows-scan-state-lock/design.md) | [施工记录](windows-scan-state-lock/progress.md) | — |
 | 通用 EXE 自动安装（按安装器行为判定） | 实施与验收完成；四款本地矩阵及用户确认生效，Deck 部署/RPC/真实页面、合成任务 UI、只读 worker 和用户手柄验收通过；2026-10-07 列表口径修订：无阻断通用 EXE 显示“有可用补丁”，已部署并实机验证（QAM/全屏），实体手柄待验收 | [设计](generic-exe-installation/design.md) | [施工记录](generic-exe-installation/progress.md) | [调研](generic-exe-installation/research.md) |
