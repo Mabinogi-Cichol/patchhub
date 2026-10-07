@@ -12,5 +12,6 @@
 | 下载缓存清理 | 已实现并部署，后端实机验收通过，部分安装与手柄验收待完成 | [设计](cache-cleanup/design.md) | [施工记录](cache-cleanup/progress.md) | — |
 | KaguraGames 国内 / 海外内置源与 HGamer 兜底索引 | 已实现并部署，自动化、真实网络、RPC 与界面通过；重新查找后来源消失修复已自动化、离线复现并在真实 Deck 部署复验通过；严格样本与实体手柄待验证 | [设计](kagura-hgamer-fallback/design.md) | [施工记录](kagura-hgamer-fallback/progress.md) | [可行性](kagura-hgamer-fallback/feasibility.md) · [验收](kagura-hgamer-fallback/acceptance.md) · [修复计划](kagura-hgamer-fallback/fix-plan.md) |
 | EXE 补丁静态提取与安装 | P1–P4 已实现并自动化验证；2026-10-05 Deck 上 Linux Rust/后端/合成事务复跑与 QAM 修复实机复核通过；VenusBlood FRONTIER、夏日官方 DLC 补丁与夏日 CN 本体补丁完成真实下载→安装→全量恢复；2026-10-06 审阅发现两项待修；游戏内生效、英文本体与实体手柄待验收 | [设计](exe-patch-installation/design.md) | [施工记录](exe-patch-installation/progress.md) | [调研](exe-patch-installation/research.md) · [P0 审计](exe-patch-installation/p0-audit.md) · [验收](exe-patch-installation/acceptance.md) · [流程图](exe-patch-installation/flow.md) · [代码审阅](exe-patch-installation/review.md) |
+| 本地化游戏名（核心产出 + Windows 展示对接） | 已实现并自动化验证；Windows 便携部署及当前简体中文界面验收通过，Decky 实机待验收 | [设计](localized-game-names/design.md) | [施工记录](localized-game-names/progress.md) | — |
 
 功能目录至少包含 `design.md` 和 `progress.md`，额外的调研、修复计划及验收材料也放在所属功能目录内。新增功能时同步更新本索引，具体完成范围与验证证据以各功能的施工记录为准。
