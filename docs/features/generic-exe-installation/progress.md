@@ -192,3 +192,22 @@
 - 独立重新读取远端规范化 ZIP 和 data.xp3 验证 SHA，全部本地备份与远端摘要一致。确认精确绝对路径、无链接且不涉及插件/state/游戏后，清理本轮唯一远端目录，共 2,618,818,691 字节；恢复 Steam 首页/菜单，停止唯一匹配本轮的 SSH 隧道，本地首次备份及证据保留。
 - 完成审计直接读取四款 installed/fault/reinstall JSON 的实际终态与保护断言、真实 RPC cancelled/文件恢复、39 文件清单、完整备份 SHA、实际 worker 结果、真实/合成 UI 与清理记录；全部本期要求有对应范围的证据。测试结果沿用本开发 session 已通过记录，本轮仅新增验证及文档，无产品代码修改，不重复跑已通过的全套测试。
 - 最终状态：本功能实施与验收完成，未提交 Git；按未知安装器行为具体阻断的边界保留，不宣称支持所有 EXE。
+
+## 2026-10-07 列表状态口径修订
+
+- 用户反馈：妃神会秘史（AppID 2303800）列表显示“找到补丁来源”，但详情可自动安装，与旧文案“找到补丁来源表示工具暂不支持自动安装”矛盾。核对后确认该游戏为无逐游戏审核配方的通用 EXE，`check_required` 是“安装时自动检查条件”，详情安装入口可用。
+- 用户确认方案 A：详情可自动安装的通用 EXE 应在列表显示“有可用补丁”。据此修订前端汇总判定，未改后端能力判定与安装流水线。
+- 代码改动：`packages/ui/src/index.ts` 的 `installSummary` 去掉 `compatibility !== "check_required"` 门槛，改为凡 `canAutoInstall`（无 blockers、有下载能力、非 HGamer）即“有可用补丁”；`compatibility` 保留给详情显示。HGamer fallback、存在 blockers 或 reviews 为 guidance（不进入 patches）仍归“找到补丁来源”。第 107 条施工记录中“未检查时摘要不宣称‘有可用补丁’”的口径由本条目取代。
+- 测试：`apps/decky/tests/install.test.ts` 更新 `check_required` 用例为“有可用补丁”，并新增 HGamer、blocker 仍为“找到补丁来源”的断言。
+- 文档：本功能 `design.md` 第 5.2 与第 8 节追加 2026-10-07 修订说明；`simplified-install-flow` 的状态说明与 README 同步。
+
+### 2026-10-07 部署与实机验证（列表口径修订）
+
+- 构建：`npm run build:decky`。前端 `apps/decky/dist/index.js` 97,720 字节 SHA-256 `31707dd84f6bd1e0bd4262dcb8f6a6a39fa93d7c3923b907b4b0a23db0d2ed09`，`index.js.map` 1,583,748 字节 SHA-256 `5adff7e66c55f97c7ce64051f86f96ef4e2b8ca0f0814519e5ab57bc843704e7`。`npm run test -w apps/decky` 51/51、`npm run typecheck -w apps/decky` 通过。
+- 设备与授权：沿用已确认的 Devkit 设备 `steamdeck`（`deck@192.168.31.186`），独立 `known_hosts` + `StrictHostKeyChecking=yes`。设备时间 2026-10-07 16:5x。
+- 部署前门槛：`list_tasks` 3 条全部终态（completed/cancelled），插件实例 1。插件根 `/home/deck/homebrew/plugins/steam-patch-manager` 为 `root:root 755`，`dist/` 为 `deck:deck` 可写，故采用前端增量替换：上传到 `/home/deck/steam-patch-validation/statuslabel-20261007-165048/`，逐文件 SHA 核对后原子 `mv` 进 `dist/`；旧 `dist/index.js`（`80e7cdb5…`）与 map（`21b851e9…`）备份到 `.artifacts/statuslabel-deck-20261007-165048/`。
+- 重载：`DeckyPluginLoader.importPlugin('Steam 补丁管理','0.1.0')`；实例严格为 1，`hasPlugin=true`，version 0.1.0。实际 HTTP bundle `http://127.0.0.1:1337/plugins/Steam%20%E8%A1%A5%E4%B8%81%E7%AE%A1%E7%90%86/dist/index.js` 97,720 字节 SHA-256 与本地构建一致。
+- RPC：`scan(false)` 返回 40 实例；AppID 2303800 行 `patches`：kagura-cn EXE（`publisher_exe`、`auto_installable=true`、`blockers=[]`、`compatibility=check_required`）与 kagura-en EXE（`exe_language_mismatch` 阻断），按新判定归“有可用补丁”。
+- 真实界面：QAM 游戏列表显示“妃神会秘史 有可用补丁”；全屏概览“补丁状态：有可用补丁”；补丁管理页仍显示兼容性“安装时自动检查条件”、安装方式“自动提取并安装”与“安装补丁”按钮。截图 `qam.png`、`main_overview2.png`。
+- 未点击真实下载/安装；游戏文件未写入。实体手柄 A/B/焦点、真实下载/取消/恢复仍待验收。部署后 `list_tasks` 仍为 3 条全终态。
+- 清理：删除远端暂存目录 `statuslabel-20261007-165048`；正式 `dist/index.js` 复核为新 SHA。本地首次备份与证据保留于 `.artifacts/statuslabel-deck-20261007-165048/`。
