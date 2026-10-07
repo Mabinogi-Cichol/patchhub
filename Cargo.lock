@@ -3859,6 +3859,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "steam-patch-installer-worker"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tempfile",
+ "windows",
+ "winreg 0.56.0",
+]
+
+[[package]]
 name = "steam-patch-windows"
 version = "0.1.0"
 dependencies = [

@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/core", "crates/cli", "apps/windows/src-tauri"]
+members = ["crates/core", "crates/cli", "crates/installer-worker", "apps/windows/src-tauri"]
 resolver = "2"
 
 [workspace.package]
