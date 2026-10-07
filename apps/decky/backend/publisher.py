@@ -293,6 +293,33 @@ def _extra_safe(extra):
         raise ValueError("zip_invalid_extra_metadata")
 
 
+def _wrapped_xp3_paths(z, root):
+    """Recognize a flat XP3 patch package independently of title/AppID."""
+    signature = bytes.fromhex("5850330d0a200a1a8b6701")
+    base = root / "data.xp3"
+    if not no_links(base) or not base.is_file():
+        return {}
+    with base.open("rb") as stream:
+        if stream.read(len(signature)) != signature:
+            return {}
+    entries = [info for info in z.infolist() if not info.is_dir()]
+    parts = [info.filename.split("/") for info in entries]
+    if not parts or any(len(p) != 2 for p in parts) or len({p[0] for p in parts}) != 1:
+        return {}
+    patches = [info for info in entries if re.fullmatch(r"patch[0-9]*\.xp3", info.filename.split("/")[1], re.I)]
+    if not patches:
+        return {}
+    for info in entries:
+        name = info.filename.split("/")[1]
+        if info not in patches and not re.fullmatch(r"readme\.(txt|md)", name, re.I):
+            raise ValueError("zip_wrapped_layout_unsupported")
+    for info in patches:
+        with z.open(info) as stream:
+            if stream.read(len(signature)) != signature:
+                raise ValueError("zip_wrapped_layout_unsupported")
+    return {info.filename: info.filename.split("/")[1] if info in patches else None for info in entries}
+
+
 def _recipe(archive, root, cancel):
     task = current_task.get()
     files = []
@@ -333,10 +360,14 @@ def _recipe(archive, root, cancel):
             expanded += info.file_size
             if expanded > MAX_EXPANDED:
                 raise ValueError("zip_expansion_limit")
+        mapped = _wrapped_xp3_paths(z, root)
         if task:
             original_bytes = 0
             for info in z.infolist():
-                candidate = root.joinpath(*info.filename.removesuffix("/").split("/"))
+                destination = mapped.get(info.filename, info.filename.removesuffix("/"))
+                if destination is None:
+                    continue
+                candidate = root.joinpath(*destination.split("/"))
                 if no_links(candidate) and candidate.is_file():
                     original_bytes += candidate.stat().st_size
             task.stage("validating", expanded + original_bytes, sum(not i.is_dir() for i in z.infolist()), archive_bytes=Path(archive).stat().st_size)
@@ -346,6 +377,9 @@ def _recipe(archive, root, cancel):
                    for parent in _parents(name)):
                 raise ValueError("zip_file_directory_collision")
             if info.is_dir():
+                continue
+            destination = mapped.get(name, name)
+            if destination is None:
                 continue
             if cancel.is_set():
                 raise RuntimeError("download_cancelled")
@@ -365,7 +399,7 @@ def _recipe(archive, root, cancel):
                         task.update(bytes_done=task.value["bytes_done"] + len(data))
             if size != info.file_size:
                 raise ValueError("zip_size_mismatch")
-            target = root.joinpath(*name.split("/"))
+            target = root.joinpath(*destination.split("/"))
             if not no_links(target):
                 raise ValueError("linked_target")
             if target.exists():
@@ -374,7 +408,7 @@ def _recipe(archive, root, cancel):
                 original, _ = _hash_file(target, MAX_FILE, cancel, report=False)
             else:
                 original = None
-            files.append({"source": name, "destination": name,
+            files.append({"source": name, "destination": destination,
                           "original_sha256": original, "installed_sha256": digest.hexdigest()})
             if task:
                 task.update(files_done=len(files))

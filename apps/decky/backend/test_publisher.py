@@ -101,6 +101,38 @@ class PublisherTests(unittest.TestCase):
         self.assertEqual((game / "data.txt").read_bytes(), b"original")
         self.assertFalse((game / "sub").exists())
 
+    def test_wrapped_xp3_patch_maps_to_root_without_title_rule(self):
+        game = self.root / "game"
+        game.mkdir()
+        signature = bytes.fromhex("5850330d0a200a1a8b6701")
+        (game / "data.xp3").write_bytes(signature + b"base")
+        (game / "patch.xp3").write_bytes(signature + b"old")
+        archive = self.root / "patch.zip"
+        with zipfile.ZipFile(archive, "w") as z:
+            z.writestr("Arbitrary wrapper/patch.xp3", signature + b"new")
+            z.writestr("Arbitrary wrapper/Readme.txt", b"instructions")
+        files = _recipe(archive, game, Event())
+        self.assertEqual(len(files), 1)
+        self.assertEqual(files[0]["source"], "Arbitrary wrapper/patch.xp3")
+        self.assertEqual(files[0]["destination"], "patch.xp3")
+        self.assertEqual(files[0]["original_sha256"], hashlib.sha256(signature + b"old").hexdigest())
+        (game / "data.xp3").write_bytes(b"different engine")
+        self.assertEqual(_recipe(archive, game, Event())[0]["destination"], "Arbitrary wrapper/patch.xp3")
+
+    def test_wrapped_xp3_unknown_members_and_bad_signatures_blocked(self):
+        game = self.root / "game"
+        game.mkdir()
+        signature = bytes.fromhex("5850330d0a200a1a8b6701")
+        (game / "data.xp3").write_bytes(signature + b"base")
+        archive = self.root / "patch.zip"
+        for entries in ((("wrapper/patch.xp3", signature), ("wrapper/run.exe", b"unknown")),
+                        (("wrapper/patch.xp3", b"not XP3"),)):
+            with zipfile.ZipFile(archive, "w") as z:
+                for name, content in entries:
+                    z.writestr(name, content)
+            with self.assertRaisesRegex(ValueError, "zip_wrapped_layout_unsupported"):
+                _recipe(archive, game, Event())
+
     def test_zip_traversal_and_case_collision_rejected(self):
         game = self.root / "game"
         game.mkdir()
