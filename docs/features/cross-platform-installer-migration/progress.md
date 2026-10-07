@@ -216,8 +216,16 @@
 - 实施注记（设计缺口裁决，待 P1 gate 审议；已同步设计稿 §9）：① `!discovery_only` 校正为仅 `enabled`；② `source_not_enabled`/`source_not_subscribed`/`selection_stale` 在 resolve 不可达（过滤后为 `selection_not_found`），仅 scan 投影保留；③ buildid 交接经 `ResolvedZipCandidate::expectation(buildid)`；④ 签名路由授权绑定为实施确定值（`source_id="signed"`、`settings_revision=catalog.revision`、release 派生摘要）——待冻结或收窄；⑤ `error.detail` 经内部 `\u{1}` 分隔（后续 typed error）；⑥ 空 journal 容忍与 `cleanup_cache` 保持旧形状。
 - 测试补全（2026-10-08 续，fix-12）：设计 §5 清单 7 组已实现——resolve 逐码矩阵（按可达语义：`selection_not_found`/`selection_stale`/`zip_download_ambiguous`/`invalid_download_url`；不可达码以实际语义覆盖并文档化）、facts 语言/DLC/manifest 矩阵（均断言不写事务）、逐阶段取消（mid-download/planning 前/apply 中/迟到）+ 租约过期撤销、`recover_at` rolled_back/needs_recovery、动态重装三态、CLI 端到端 scan 投影（签名优先去重）/preview 只读、计划前失败可重试。测试：cli 32、core lib 219、集成 8/40/4/6/3 全绿；未改实现逻辑。
 
+### P1 收尾清理（2026-10-08 续，fix-13）
+
+- **删除 Python 状态导入**（`sources/store.rs` 符号级）：`import_python_state`/`import_cache`/`import_status`/`import_discovery`/`import_index`/`load|save_import_report`、`ImportReport`/`RawOverrides`、`StorePaths` 的 `python_*` 访问器、导入 staging/诊断辅助与专用测试全部移除；`SourceStore::open(state_dir)` 不再接收 `builtins`。
+- **直接初始化**：`schema.json` 缺失时直接写 Rust 默认 `settings.json`（`STORE_SCHEMA_VERSION`、revision=1、空 overrides）+ 最后写 `schema.json`；不探测/不读取 Python `overrides/cache/status/discovery/index`。
+- **规则 schema 仅 2**：`mod.rs` 门槛收紧为 `schema_version == 2`（1/0/3 → `invalid_sources_config`）；`validate_rule` 拒绝语义不变（publisher 必带 `root_layout=="game_root"`、discovery 必须缺失）；schema1 接受测试删除、新增拒绝与默认值用例。
+- 验证：core lib 221 + 集成 58 + cli 32 全绿；check/clippy/fmt 通过。
+- 残留（P5）：Decky `source_service.py` 导入诊断/`import_report` 引用与 `test_source_import/engine/service.py`；`engine-switch`；`MAX_OVERRIDES_BYTES` 未用常量与 `installer/store.rs` doc 引用（后续清理）。
+
 ### 待办
 
-1. 已完成：P1-2 / P1-3a / P1-3b-1 / P1-3b-2 / P1-3b-3（含测试补全）。
-2. 进行中：P1 收尾清理（`import_python_state` 删除、直接初始化、规则 schema 仅 2）→ 之后 **P1 gate**。
-3. 提交：本轮（测试补全 / 文档）。
+1. 已完成：P1 全部实现与清理（P1-0/P1-1/P1-2/P1-3a/P1-3b-1..3/收尾清理）。
+2. 进行中：**P1 gate**（独立评审 P1 全阶段与 design §8 门槛）。
+3. P2 前置：SF fixture 冻结（三条旧 profile 包可得性待用户提供）、`installer-format`/`installer-worker` 开工。
