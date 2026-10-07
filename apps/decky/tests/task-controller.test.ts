@@ -65,17 +65,22 @@ test("dismount cancels and ignores a late completed status reply", async () => {
   assert.equal(controller.getSnapshot()?.state, "cancelling");
 });
 
-test("reconnect surfaces retained cancellation result without renewing its lease", async () => {
+test("a new frontend ignores historical terminal results without renewing leases", async () => {
   let polled = 0;
-  const controller = createTaskController(api({ list: async () => [snapshot("cancelled")],
+  const controller = createTaskController(api({ list: async () => [snapshot("completed"), { ...snapshot("cancelled"), task_id: "old-cancel" }, { ...snapshot("failed"), task_id: "old-failure", error: "installer_busy" }],
     status: async () => { polled++; return snapshot(); } }), 5, 5);
   await controller.resume();
-  assert.equal(controller.getSnapshot()?.state, "cancelled");
+  assert.equal(controller.getSnapshot(), null);
   assert.equal(polled, 0);
+  controller.dismount();
+  await controller.resume();
+  assert.equal(controller.getSnapshot(), null);
 });
 
 test("returning to a game does not replay a terminal result already handled in this session", async () => {
-  const controller = createTaskController(api({ list: async () => [snapshot("completed")] }));
+  const controller = createTaskController(api({ status: async () => snapshot("completed"), list: async () => [snapshot("completed")] }));
+  await controller.startInstall("game", "patch", "install", "req-1");
+  await tick();
   await controller.resume();
   assert.equal(controller.getSnapshot()?.state, "completed");
   controller.clear();
@@ -165,12 +170,37 @@ test("returning after dismount reads the retained result without resuming instal
 
 test("closing a terminal result never sends cancellation", async () => {
   let cancelled = 0;
-  const controller = createTaskController(api({ list: async () => [snapshot("completed")],
+  const controller = createTaskController(api({ status: async () => snapshot("completed"), list: async () => [snapshot("completed")],
     cancel: async () => { cancelled++; return snapshot("cancelled"); } }));
+  await controller.startInstall("game", "patch", "install", "req-1");
+  await tick();
   await controller.resume();
+  assert.equal(controller.getSnapshot()?.state, "completed");
   await controller.requestCancel();
   controller.clear();
   controller.dismount();
   assert.equal(cancelled, 0);
+  assert.equal(controller.getSnapshot(), null);
+});
+
+test("a terminal outcome refreshes once across detail and modal remounts", async () => {
+  let scans = 0;
+  const controller = createTaskController(api({ status: async () => snapshot("cancelled"), list: async () => [snapshot("cancelled")] }));
+  await controller.startInstall("game", "patch", "install", "req-1");
+  await tick();
+  function mountedModal() {
+    const task = controller.getSnapshot();
+    if (task && controller.claimTerminal(task)) scans++;
+  }
+  mountedModal();
+  controller.dismount();
+  await controller.resume();
+  mountedModal();
+  assert.equal(scans, 1);
+  assert.equal(controller.getSnapshot()?.state, "cancelled");
+  assert.equal(controller.claimTerminal({ ...snapshot("completed"), task_id: "foreign" }), false);
+  assert.equal(controller.claimTerminal(snapshot("running")), false);
+  controller.clear();
+  await controller.resume();
   assert.equal(controller.getSnapshot(), null);
 });

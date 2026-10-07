@@ -207,11 +207,8 @@ function QuickAccess() {
 function TaskModal({ game, patch, onTerminal, onExit }: { game: string; patch: string; onTerminal: (task: TaskSnapshot) => void; onExit: () => void }) {
   useEffect(() => onExit, [onExit]);
   const task = useSyncExternalStore(tasks.subscribe, tasks.getSnapshot);
-  const handled = useRef<string | null>(null);
   useEffect(() => {
-    if (task && taskIsTerminal(task.state) && handled.current !== `${task.task_id}:${task.state}`) {
-      handled.current = `${task.task_id}:${task.state}`; onTerminal(task);
-    }
+    if (task && tasks.claimTerminal(task)) onTerminal(task);
   }, [task, onTerminal]);
   const cancelOrClose = () => {
     if (!task || !taskIsTerminal(task.state)) { void tasks.requestCancel(); return; }

@@ -37,6 +37,7 @@ export function createTaskController(api: TaskApi, pollMs = 750, retryMs = 1500)
   let cancelling = false;
   let disposed = false;
   const handled = new Set<string>();
+  const delivered = new Set<string>();
   const listeners = new Set<() => void>();
   const publish = (value: TaskSnapshot | null) => { current = value; listeners.forEach(listener => listener()); };
   const stopTimer = () => { if (timer) clearTimeout(timer); timer = null; };
@@ -105,7 +106,10 @@ export function createTaskController(api: TaskApi, pollMs = 750, retryMs = 1500)
     const epoch = generation;
     const values = await api.list();
     if (epoch !== generation || disposed) return;
-    const latest = values.filter(value => !handled.has(value.task_id)).at(-1);
+    // Persistent history belongs to records. Only work owned by this frontend
+    // or orphan work still running needs a foreground result on reconnect.
+    const latest = values.filter(value => !handled.has(value.task_id) &&
+      (!taskIsTerminal(value.state) || value.task_id === current?.task_id)).at(-1);
     if (!latest) return;
     publish(latest);
     // Reconnection must not revive work that lost its foreground UI.
@@ -117,6 +121,13 @@ export function createTaskController(api: TaskApi, pollMs = 750, retryMs = 1500)
     subscribe(listener: () => void) { listeners.add(listener); return () => { listeners.delete(listener); }; },
     startInstall: (instance: string, release: string, operation: "install" | "reinstall", requestId: string, archive = "") => begin(instance, release, () => api.install(instance, release, operation, requestId, archive)),
     requestCancel, resume,
+    claimTerminal(value: TaskSnapshot) {
+      if (!taskIsTerminal(value.state) || current?.task_id !== value.task_id || current.state !== value.state) return false;
+      const key = value.task_id + ":" + value.state;
+      if (delivered.has(key)) return false;
+      delivered.add(key);
+      return true;
+    },
     clear() { if (current && taskIsTerminal(current.state)) { handled.add(current.task_id); publish(null); } },
     dismount() {
       const value = current;

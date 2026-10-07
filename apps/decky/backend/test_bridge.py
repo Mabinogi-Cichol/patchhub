@@ -166,5 +166,65 @@ class BridgeIntegrationTests(unittest.IsolatedAsyncioTestCase):
             await self.bridge.preview("x" * 65536, "r")
 
 
+class BridgeJournalReadTests(unittest.IsolatedAsyncioTestCase):
+    async def test_same_state_reads_across_bridges_queue_and_sources_remain_independent(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            binary, catalog = root / "binary", root / "catalog.json"
+            binary.write_bytes(b"stub")
+            catalog.write_text("{}")
+            first = CoreBridge(binary, catalog, state_dir=root / "state")
+            second = CoreBridge(binary, catalog, state_dir=root / "state" / ".." / "state")
+            other = CoreBridge(binary, catalog, state_dir=root / "other")
+            entered, release = asyncio.Event(), asyncio.Event()
+
+            async def hold(*args):
+                entered.set()
+                await release.wait()
+                return []
+
+            first._exchange_call = hold
+            second._exchange_call = AsyncMock(return_value=[])
+            other._exchange_call = AsyncMock(return_value=[])
+            running = asyncio.create_task(first.scan())
+            await entered.wait()
+            queued = asyncio.create_task(second.list_transactions())
+            try:
+                await asyncio.sleep(0)
+                second._exchange_call.assert_not_awaited()
+                # Source events can project rows by calling scan/list_transactions;
+                # source network work must never own this read queue.
+                await second.call_sync("list_sources", {})
+                await second._call("scan_sources", {})
+                self.assertEqual(second._exchange_call.await_count, 2)
+                await other.list_transactions()
+                other._exchange_call.assert_awaited_once()
+                # Cancelling a queued read starts no process and releases its slot.
+                queued.cancel()
+                with self.assertRaises(asyncio.CancelledError):
+                    await queued
+                queued = asyncio.create_task(second.list_transactions())
+                await asyncio.sleep(0)
+                self.assertEqual(second._exchange_call.await_count, 2)
+                release.set()
+                await asyncio.wait_for(asyncio.gather(running, queued), 1)
+                self.assertEqual(second._exchange_call.await_count, 3)
+            finally:
+                release.set()
+                await asyncio.gather(running, queued, return_exceptions=True)
+
+    async def test_real_busy_errors_are_not_hidden_and_queue_is_released(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            binary, catalog = root / "binary", root / "catalog.json"
+            binary.write_bytes(b"stub")
+            catalog.write_text("{}")
+            bridge = CoreBridge(binary, catalog, state_dir=root / "state")
+            bridge._exchange_call = AsyncMock(side_effect=[RuntimeError("installer_busy"), []])
+            with self.assertRaisesRegex(RuntimeError, "installer_busy"):
+                await bridge.scan()
+            self.assertEqual(await bridge.list_transactions(), [])
+
+
 if __name__ == "__main__":
     unittest.main()

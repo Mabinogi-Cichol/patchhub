@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import uuid
 from threading import Event
+from weakref import WeakValueDictionary
 from tasks import current_task
 
 MAX_RESPONSE_BYTES = 8 * 1024 * 1024
@@ -22,6 +23,9 @@ CONTROLLED_METHODS = {"fetch_artifact", "plan_install", "start_install",
                       "discover_game", "refresh_sources", "scan_sources"}
 # Events a source task may interleave before its single final response.
 SOURCE_EVENTS = {"source_progress", "source_update"}
+# Publisher bridges are recreated for the same state directory. Share the
+# reader queue only while calls are alive, and never across event loops.
+_journal_read_locks = WeakValueDictionary()
 
 
 class CoreBridge:
@@ -104,6 +108,20 @@ class CoreBridge:
 
     async def _call(self, method: str, params: dict, on_event=None, cancel=None,
                     timeout=None, controlled: bool | None = None):
+        # Both reads briefly take the core journal's exclusive lock. Source
+        # event projection and UI requests must not race each other for it.
+        # Writers still use the core lock and report genuine installer_busy.
+        if method in {"scan", "list_transactions"} and self.state_dir is not None:
+            key = (asyncio.get_running_loop(), self.state_dir)
+            lock = _journal_read_locks.get(key)
+            if lock is None:
+                lock = asyncio.Lock()
+                _journal_read_locks[key] = lock
+            async with lock:
+                return await self._exchange_call(method, params, on_event, cancel, timeout, controlled)
+        return await self._exchange_call(method, params, on_event, cancel, timeout, controlled)
+
+    async def _exchange_call(self, method, params, on_event, cancel, timeout, controlled):
         if method not in METHODS:
             raise ValueError("unsupported_method")
         request_id = str(uuid.uuid4())
