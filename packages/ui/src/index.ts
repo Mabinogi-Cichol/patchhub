@@ -116,7 +116,7 @@ export function installSummary(row: Install, scanning = false): string {
   if (["failed", "source_refresh_failed", "source_offline_cached"].includes(row.discovery?.status ?? "")) return "来源查询失败";
   if (scanning && !["complete", "empty", "cache_complete"].includes(row.discovery?.status ?? "")) return "正在查找补丁";
   if (["partial", "cache_partial", "source_partial"].includes(row.discovery?.status ?? "")) return "来源查询不完整";
-  if (["not_queried", "queued", "stale"].includes(row.discovery?.status ?? "not_queried")) return "正在查找补丁";
+  if (row.discovery && ["not_queried", "queued", "stale"].includes(row.discovery.status)) return "正在查找补丁";
   return "暂未找到补丁";
 }
 
@@ -352,6 +352,19 @@ export function reason(code: string): string {
     ,download_network_error: "补丁下载网络连接失败，请检查网络后重试。"
     ,download_not_zip: "下载内容不是有效 ZIP，未执行安装。"
     ,local_archive_search_limit: "下载目录文件过多，请使用手动 ZIP 备用方式。"
+     ,task_cancelled: "已取消安装，未提交更改。"
+     ,install_in_progress: "已有安装任务正在进行，请等待完成。"
+     ,request_id_required: "安装请求缺少标识，请重试。"
+     ,invalid_request_id: "安装请求标识无效，请重试。"
+     ,request_id_binding_conflict: "安装请求与当前选择不一致，请重试。"
+     ,install_request_in_progress_or_interrupted: "上一次安装请求未完成，请稍后重试或先恢复。"
+     ,request_transaction_missing: "安装结果记录缺失，请重新扫描。"
+     ,unsupported_protocol: "核心版本与客户端协议不一致，请更新客户端。"
+     ,invalid_request: "安装请求格式无效。"
+     ,request_too_large: "安装请求过大。"
+     ,core_process_failed: "核心进程未能完成操作，请重试。"
+     ,core_binary_missing: "缺少核心程序，请重新安装客户端。"
+     ,state_dir_required: "状态目录不可用，请检查应用数据目录。"
   };
   return labels[normalized] ?? (normalized.startsWith("exe_") ? "此 EXE 补丁暂不能安全安装，请查看来源说明或稍后重试。" : normalized.replaceAll("_", " "));
 }
