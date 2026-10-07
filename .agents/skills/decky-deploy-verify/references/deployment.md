@@ -1,16 +1,47 @@
 # 连接、构建、备份与部署
 
-以下命令在仓库根目录的 PowerShell 执行。设备值来自本轮用户提供的信息及既有配对；示例不创建新的信任关系。
+以下命令在仓库根目录的 PowerShell 执行。设备值来自本轮用户提供的信息及当前 Devkit 配对；指纹记录须完成下面的设备核实，不能把历史私网地址当作当前设备身份。
 
 ## 1. Devkit SSH 和只读基线
 
-Devkit 常见私钥位置为 `$env:LOCALAPPDATA/steamos-devkit/steamos-devkit/devkit_rsa`；先检查路径存在，仅传给 SSH，勿输出密钥。历史设备为 `deck@192.168.31.186`，仅作查找线索，不能默认部署到该地址。
+### 1.1 先核对当前 Devkit
+
+用户说明 Devkit 已正常连接时，先定位正在运行的 Devkit，读取其当前所选设备和配对密钥路径，不先反复测试历史地址。当前已验证的 SteamOS Devkit Client 提供 loopback API：
+
+```powershell
+$devkitDevice = Invoke-RestMethod 'http://127.0.0.1:32010/selected_devkit' -TimeoutSec 5
+$devkitKey = Invoke-RestMethod 'http://127.0.0.1:32010/ssh_key_path' -TimeoutSec 5
+$devkitDevice | Select-Object name, address, login
+$devkitKey | Select-Object key_path
+```
+
+先核对本轮进程实际监听端口和已安装客户端实现；以上路由、字段及端口是已验证线索，不保证未来版本不变。只输出设备名、地址、登录用户和密钥路径，不输出整个 settings 或凭证。接口没有选中设备/不可用时，再查当前客户端配置或向用户补充询问，不把空结果当成旧地址确认。
+
+接口的地址/名称用于识别当前配对，不是主机公钥认证。不同局域网可以重复使用同一私网地址，当前执行电脑也可能与用户查看 Devkit 的电脑不同；有歧义时核对执行主机和用户所指设备。
+
+没有可读当前配对时，Devkit 常见私钥位置为 `$env:LOCALAPPDATA/steamos-devkit/steamos-devkit/devkit_rsa`；先检查路径存在，仅传给 SSH，勿输出密钥。历史设备为 `deck@192.168.31.186`，仅作查找线索，不能默认部署到该地址。
+
+### 1.2 处理旧主机指纹冲突
+
+Devkit 正常连接和命令行 SSH 报 host-key 变化可以同时发生。已验证的官方客户端版本使用 Paramiko AutoAddPolicy；部分外部 SSH 命令还使用 StrictHostKeyChecking=no。因此 Devkit 正常连接不表示命令行 known_hosts 已更新，也不能单凭它把扫描到的公钥当作可信身份。
+
+遇到冲突时：
+
+1. 核对当前 Devkit 所选设备、地址、登录用户及实际密钥路径，区分新网络/不同设备与旧记录；读取当前官方客户端实现确认连接方式。
+2. 获取目标的公开 SSH 主机密钥并计算指纹，记录与旧可信记录的差异。ssh-keyscan 只收集公钥，不完成身份认证。若 Windows 自带 keyscan 报 unsupported KEX，可使用本机已有且兼容的 Git OpenSSH keyscan；不因此关闭正式连接的主机校验或安装新工具。
+3. 当前用户已确认该 Devkit 所选设备就是本轮目标、且确认采用本次配对/指纹时，沿用这个确认，不重复要求用户到 Deck 敲命令，也不每次连接再询问。信息仍有歧义时，只请求必要的设备确认；当前配对无法复核时才让用户提供 Deck 本机指纹。不能自动采纳一个未确认的新密钥。
+4. 将确认过的公钥写入本轮 `.artifacts/<本轮>/known_hosts`，后续 SSH/SCP 都指定该独立文件并保持 StrictHostKeyChecking=yes。保留系统旧 known_hosts，不为单次验收删除旧条目或全局覆盖信任。连接后继续核对 id、插件身份和路径，不能跳过任务/备份/哈希门槛。
+
+设备确认和本轮指纹记录属于连接准备，不能提前写插件或游戏。公钥变化未核实时保留现场；不要反复重试相同旧记录并把每次失败当成新证据。
+
+### 1.3 SSH 与只读基线
 
 ```powershell
 $deckAddress = '<本轮确认的 IP 或主机名>'
-$deckTarget = 'deck@' + $deckAddress
-$deckKey = Join-Path $env:LOCALAPPDATA 'steamos-devkit/steamos-devkit/devkit_rsa'
-$deckKnownHosts = Join-Path (Get-Location) '.artifacts/deck-known-hosts'
+$deckLogin = '<本轮确认的登录用户，例如 deck>'
+$deckTarget = $deckLogin + '@' + $deckAddress
+$deckKey = '<当前 Devkit API 返回或已核实的密钥路径>'
+$deckKnownHosts = Join-Path (Get-Location) '.artifacts/<本轮>/known_hosts'
 $deckSsh = @('-i', $deckKey, '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=8',
   '-o', 'StrictHostKeyChecking=yes', '-o', "UserKnownHostsFile=$deckKnownHosts")
 Test-Path -LiteralPath $deckKey
@@ -19,7 +50,7 @@ Test-Path -LiteralPath $deckKey
 & ssh @deckSsh $deckTarget 'stat -c "%U:%G %a %n" /home/deck/homebrew/plugins/steam-patch-manager'
 ```
 
-先确认 known-hosts 来自现有配对/可信记录。缺失或 host-key 不匹配时核实实际设备指纹，不关闭 host-key 验证，不自动接受更换的密钥。连接失败先检查设备唤醒、网络及 SSH 服务，不自动更改防火墙或系统配置。
+先确认 known-hosts 来自已有可信记录或本轮已核实的配对/指纹；冲突按 1.2 节处理。连接失败先检查设备唤醒、网络及 SSH 服务，不自动更改防火墙或系统配置。
 
 核实下列项目，路径随实际设备调整：
 
