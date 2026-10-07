@@ -392,6 +392,31 @@ pub fn game_facts(
     }
 }
 
+/// Best-effort current selected Steam UI language for a game, read from
+/// `UserConfig.language` then `MountedConfig.language` (the same fields
+/// [`game_facts`] compares). Used to make a source that carries no language
+/// self-consistent instead of wrongly blocking with `exe_language_mismatch`.
+pub fn current_language(game: &GameInstall, cancel: &AtomicBool) -> Option<String> {
+    let manifest_path = game
+        .library_path
+        .join("steamapps")
+        .join(format!("appmanifest_{}.acf", game.appid));
+    let parsed = read_manifest(&manifest_path, cancel).ok()?;
+    let state = &parsed.state;
+    nested(state, "userconfig")
+        .ok()
+        .flatten()
+        .and_then(|object| field_text(object, "language"))
+        .map(str::to_owned)
+        .or_else(|| {
+            nested(state, "mountedconfig")
+                .ok()
+                .flatten()
+                .and_then(|object| field_text(object, "language"))
+                .map(str::to_owned)
+        })
+}
+
 struct ParsedManifest {
     digest: FileDigest,
     state: BTreeMap<String, Value>,

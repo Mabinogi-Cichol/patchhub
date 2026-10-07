@@ -64,6 +64,11 @@ pub struct PlannedChange {
     pub original_sha256: Option<String>,
     pub installed_sha256: String,
     pub size: u64,
+    /// Archive member this change was extracted from (`None` for journals written
+    /// before the field existed, or for non-recipe callers). It lets the
+    /// orchestrator rebuild the authorization `ContentBinding` from the plan.
+    #[serde(default)]
+    pub source: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
@@ -400,7 +405,7 @@ pub fn transaction_root(state_dir: &Path) -> PathBuf {
 pub struct Store {
     root: PathBuf,
     conn: Connection,
-    _lock: File,
+    _lock: Option<File>,
 }
 impl Store {
     /// Opens the legacy layout, unchanged for existing callers.
@@ -452,7 +457,42 @@ impl Store {
         Ok(Self {
             root,
             conn,
-            _lock: lock,
+            _lock: Some(lock),
+        })
+    }
+
+    /// Opens a **read-only** snapshot of the journal without taking the
+    /// cross-process write lock (p0-contracts §4.1). Used by `scan` /
+    /// `list_transactions` so a cooperating writer is not reported as busy.
+    pub fn open_ro(root: &Path) -> io::Result<Self> {
+        let root = std::path::absolute(root)?;
+        safe_path(&root)?;
+        let database = root.join("journal.sqlite");
+        if !database.exists() {
+            return Err(invalid("installer_state_missing"));
+        }
+        let root = fs::canonicalize(&root)?;
+        let database = root.join("journal.sqlite");
+        let conn =
+            Connection::open_with_flags(&database, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+                .map_err(|e| invalid(format!("journal_error:{e}")))?;
+        // An `init_atomic` bootstrap leaves an empty journal until the first
+        // writer creates the schema; an absent `jobs` table means "no
+        // transactions" for read-only callers.
+        let has_jobs: bool = conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='jobs')",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|e| invalid(format!("journal_error:{e}")))?;
+        if !has_jobs {
+            return Err(invalid("installer_state_missing"));
+        }
+        Ok(Self {
+            root,
+            conn,
+            _lock: None,
         })
     }
     fn directory(&self, id: &str) -> io::Result<PathBuf> {
@@ -670,6 +710,27 @@ pub fn prepare_with_operation(
     catalog_revision: u64,
     operation_kind: InstallOperation,
 ) -> io::Result<InstallPlan> {
+    prepare_with_operation_at(
+        &transaction_root(state_dir),
+        install,
+        release,
+        archive,
+        catalog_revision,
+        operation_kind,
+    )
+}
+
+/// Explicit-root variant of [`prepare_with_operation`] for the P1 installer
+/// layout (`<state_dir>/installer/rust-v1/`). The root is the transactional
+/// `journal.lock` / `journal.sqlite` / `jobs/` location.
+pub fn prepare_with_operation_at(
+    root: &Path,
+    install: &GameInstall,
+    release: &PatchRelease,
+    archive: &Path,
+    catalog_revision: u64,
+    operation_kind: InstallOperation,
+) -> io::Result<InstallPlan> {
     Catalog {
         schema_version: 1,
         revision: catalog_revision,
@@ -692,12 +753,12 @@ pub fn prepare_with_operation(
     if recipe.files.len() > MAX_ENTRIES {
         return Err(invalid("recipe_entry_limit"));
     }
-    let requested_state = canonical_future(&std::path::absolute(state_dir)?)?;
+    let requested_state = canonical_future(&std::path::absolute(root)?)?;
     let game_root = fs::canonicalize(&install.install_path)?;
     if requested_state.starts_with(&game_root) || game_root.starts_with(&requested_state) {
         return Err(invalid("state_overlaps_game"));
     }
-    let store = Store::open(state_dir)?;
+    let store = Store::open_at(root)?;
     validate_install(install, &store.root)?;
     ensure_no_active(
         &store,
@@ -957,6 +1018,7 @@ pub fn prepare_with_operation(
                 original_sha256: actual,
                 installed_sha256: mapping.installed_sha256.clone(),
                 size: copied,
+                source: Some(mapping.source.clone()),
             });
         }
         operation::check()?;
@@ -1026,12 +1088,22 @@ pub fn prepare_with_operation(
 }
 
 pub fn get_plan(plan_id: &str, state_dir: &Path) -> io::Result<InstallPlan> {
-    Ok(Store::open(state_dir)?.load(plan_id)?.plan)
+    get_plan_at(&transaction_root(state_dir), plan_id)
+}
+
+/// Explicit-root variant of [`get_plan`].
+pub fn get_plan_at(root: &Path, plan_id: &str) -> io::Result<InstallPlan> {
+    Ok(Store::open_at(root)?.load(plan_id)?.plan)
 }
 
 /// Invalidate unexecuted preparation, without ever touching game contents.
 pub fn discard_plan(plan_id: &str, state_dir: &Path) -> io::Result<Transaction> {
-    let store = Store::open(state_dir)?;
+    discard_plan_at(&transaction_root(state_dir), plan_id)
+}
+
+/// Explicit-root variant of [`discard_plan`].
+pub fn discard_plan_at(root: &Path, plan_id: &str) -> io::Result<Transaction> {
+    let store = Store::open_at(root)?;
     let mut job = store.load(plan_id)?;
     let _lock = game_lock(&job.plan.install)?;
     if job.transaction.state != "planned" {
@@ -1138,7 +1210,12 @@ fn verify_all(job: &Job, installed: bool) -> io::Result<()> {
 }
 
 pub fn apply(plan_id: &str, state_dir: &Path) -> io::Result<Transaction> {
-    let store = Store::open(state_dir)?;
+    apply_at(&transaction_root(state_dir), plan_id)
+}
+
+/// Explicit-root variant of [`apply`].
+pub fn apply_at(root: &Path, plan_id: &str) -> io::Result<Transaction> {
+    let store = Store::open_at(root)?;
     let mut job = store.load(plan_id)?;
     validate_install(&job.plan.install, &store.root)?;
     let _game_lock = game_lock(&job.plan.install)?;
@@ -1450,9 +1527,24 @@ fn restore(store: &Store, job: &mut Job, uninstalling: bool) -> io::Result<()> {
 }
 
 pub fn recover(state_dir: &Path) -> io::Result<Vec<Transaction>> {
-    let store = Store::open(state_dir)?;
+    recover_at(&transaction_root(state_dir))
+}
+
+/// Explicit-root variant of [`recover`]. The candidate list is read through a
+/// read-only snapshot (p0-contracts §4.1); only when work exists does it take
+/// the exclusive `journal.lock` for the restore writes.
+pub fn recover_at(root: &Path) -> io::Result<Vec<Transaction>> {
+    let ids = match Store::open_ro(root) {
+        Ok(store) => store.ids()?,
+        Err(error) if error.to_string() == "installer_state_missing" => return Ok(Vec::new()),
+        Err(error) => return Err(error),
+    };
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let store = Store::open_at(root)?;
     let mut result = Vec::new();
-    for id in store.ids()? {
+    for id in ids {
         let mut job = store.load(&id)?;
         job.transaction.has_replacements = job.plan.changes.iter().any(|c| c.action != "add");
         if ["planned", "rolled_back", "uninstalled", "superseded"]
@@ -1479,7 +1571,17 @@ pub fn recover(state_dir: &Path) -> io::Result<Vec<Transaction>> {
 }
 
 pub fn list_transactions(state_dir: &Path) -> io::Result<Vec<Transaction>> {
-    let store = Store::open(state_dir)?;
+    list_transactions_at(&transaction_root(state_dir))
+}
+
+/// Explicit-root variant of [`list_transactions`] using a read-only snapshot
+/// that does not take the `journal.lock` exclusive lock (p0-contracts §4.1).
+pub fn list_transactions_at(root: &Path) -> io::Result<Vec<Transaction>> {
+    let store = match Store::open_ro(root) {
+        Ok(store) => store,
+        Err(error) if error.to_string() == "installer_state_missing" => return Ok(Vec::new()),
+        Err(error) => return Err(error),
+    };
     let mut result = Vec::new();
     for id in store.ids()? {
         let mut job = store.load(&id)?;

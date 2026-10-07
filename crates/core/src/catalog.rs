@@ -32,6 +32,11 @@ pub enum SupportLevel {
     DiscoverOnly,
     ManualDownload,
     ManagedZip,
+    /// Dynamic publisher ZIP candidate (P1). Never authoritative for apply; the
+    /// selection still re-resolves inside `install_patch` (p1-zip-orchestration §1).
+    PublisherZip,
+    /// Dynamic publisher EXE candidate (reserved P2/P3; P1 only blocks).
+    PublisherExe,
     Unsupported,
 }
 
@@ -91,6 +96,10 @@ pub struct FileMapping {
 #[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct PatchMatch {
     pub release_id: String,
+    /// Dynamic selection route (`zip-selection-*`); absent for signed catalog
+    /// releases (p1-zip-orchestration §4.2).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub selection_id: Option<String>,
     pub name: String,
     pub source_page: String,
     pub support_level: SupportLevel,
@@ -413,6 +422,7 @@ pub fn matches(install: &GameInstall, catalog: &Catalog, platform: Platform) -> 
             let blockers = compatibility(install, r, platform);
             PatchMatch {
                 release_id: r.release_id.clone(),
+                selection_id: None,
                 name: r.name.clone(),
                 source_page: r.source_page.clone(),
                 support_level: r.support_level,

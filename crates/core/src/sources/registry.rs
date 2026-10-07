@@ -137,6 +137,12 @@ impl SourceRegistry {
         self.clock.now_unix()
     }
 
+    /// Clock reading for consumers that need the registry's notion of "now"
+    /// (e.g. dynamic release-date checks in `installer::resolve`).
+    pub fn now_unix(&self) -> u64 {
+        self.clock.now_unix()
+    }
+
     /// Port of `_reload` merge (design §2.2): user `added` shadows builtins with
     /// the same id, the `enabled` overlay is applied, and the result is capped.
     fn reload(&mut self) -> Result<()> {

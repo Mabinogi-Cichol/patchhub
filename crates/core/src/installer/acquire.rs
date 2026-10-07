@@ -112,6 +112,12 @@ pub fn acquire(
     acquire_with(&transport, request, paths, cancel, progress)
 }
 
+/// Production HTTPS transport, exposed so the orchestrator can be constructed
+/// with a real transport while tests inject an offline [`Transport`].
+pub fn https_transport() -> Result<Box<dyn Transport>> {
+    Ok(Box::new(ReqwestTransport::new()?))
+}
+
 /// Acquires `request` using a caller-supplied transport (used by tests).
 pub fn acquire_with(
     transport: &dyn Transport,

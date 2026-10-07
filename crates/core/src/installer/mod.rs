@@ -9,13 +9,15 @@
 pub mod acquire;
 pub mod authorization;
 pub mod facts;
+pub mod orchestrator;
 pub mod requests;
+pub mod resolve;
 pub mod store;
 pub mod zip_recipe;
 
 pub use acquire::{
-    acquire, acquire_with, validate_download, AcquiredArchive, Acquisition, DownloadRequest,
-    HttpResponse, Transport,
+    acquire, acquire_with, https_transport, validate_download, AcquiredArchive, Acquisition,
+    DownloadRequest, HttpResponse, Transport,
 };
 pub use authorization::{
     authorization_path, authorize, is_revoked, mapping_digest, validate, write, AuthResult,
@@ -27,7 +29,15 @@ pub use facts::{
     Fact, FactFailure, FactsExpectation, FileDigest, GameFacts, InstanceFacts, LanguageFacts,
     ManifestFacts, MAX_BASELINE_BYTES, MAX_MANIFEST_BYTES,
 };
+pub use orchestrator::{
+    begin_request, content_conflict, install_zip, record_plan, record_terminal, request_binding,
+    ZipInstallDeps, ZipInstallInputs, ZipTaskError,
+};
 pub use requests::{RequestBinding, RequestLedger, RequestRecord};
+pub use resolve::{
+    parse_zip_selection_id, resolve_zip, source_released, zip_selection_id, ResolveError,
+    ResolvedZipCandidate,
+};
 pub use store::{init_atomic, instance_hash, InstallerPaths};
 pub use zip_recipe::build_recipe;
 

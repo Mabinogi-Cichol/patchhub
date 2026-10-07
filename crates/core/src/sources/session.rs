@@ -747,7 +747,7 @@ fn query_key(query: &QueryContext) -> String {
     canonical::query_key(&serde_json::Value::Object(map))
 }
 
-fn rule_fingerprint(rule: &SourceRule) -> String {
+pub fn rule_fingerprint(rule: &SourceRule) -> String {
     canonical::canonical_sha256(rule)
 }
 

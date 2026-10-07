@@ -195,6 +195,13 @@ impl Sources {
         self.registry.settings_revision()
     }
 
+    /// Read-only effective rule fingerprint (`sha256(canonical_bytes(rule))`),
+    /// exposed so installer resolution and authorization share one definition
+    /// of a rule's identity (p1-zip-orchestration §1.4).
+    pub fn rule_fingerprint(rule: &SourceRule) -> String {
+        session::rule_fingerprint(rule)
+    }
+
     fn new_context(&self) -> Result<http::RequestContext> {
         let fetcher = (self.fetcher)()?;
         Ok(http::RequestContext::with_settings(
