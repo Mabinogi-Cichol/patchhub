@@ -1,6 +1,6 @@
 # 跨平台安装器迁移施工记录
 
-设计：[design.md](design.md)。日期：2026-10-08（Asia/Shanghai）。状态：**P1 进行中：宿主契约已冻结（[p1-host-contract.md](p1-host-contract.md) v1.2，两轮独立评审通过）、来源确定性编码迁移已完成并通过评审（149+60 测试）；P1-2/P1-3 与两端宿主切换待执行**。
+设计：[design.md](design.md)。日期：2026-10-08（Asia/Shanghai）。状态：**P1 已实现并通过自动化验证；P2 Rust SF 与固定 worker 主体已实现，双平台自动化与可得真实样本通过，三旧profile回归待验证；P3–P6 待实现/验收**。
 
 ## 当前状态
 
@@ -10,8 +10,8 @@
 | 设计与功能归档 | 已完成 | 独立设计/施工、索引与关联入口；文档检查见下文 |
 | 来源迁移兼容遗留盘点与清理规划 | 已完成只读检查与设计；代码待清理 | 六类遗留、消费者依赖、阶段门槛已纳入设计第 7.3 节；不是已清理或已验证 |
 | P0 契约/样本/平台隔离 | 契约冻结定稿并通过 Gate 1；Windows 原型完成；Linux/Deck 对照与 root 降权补测通过 | 契约 v0.5（encoding/ID/schema/锁/worker/限额/依赖冻结，Gate 1 终审通过）；Windows LPAC+Job 原型 31 项探针 27 pass；Linux bwrap 原型 22 项在 WSL2 与 SteamOS Deck 均为 21 pass/0 fail/1 info；P0-D 修订后非 root 回归 23 项与 WSL root 降权补测 26 项均 0 fail；cgroup/seccomp 与 P1+ 待执行 |
-| P1 共享 ZIP 服务 | 待实现 | 获取/缓存/配方/新授权与新 schema；来源 Rust 编码、当前规则契约和直接初始化 |
-| P2 Rust SF 与 worker | 待实现 | SF9.5–9.7 完整结构/AST/IR/转换 |
+| P1 共享 ZIP 服务 | 已实现/自动化验证 | 获取/缓存/配方/新授权与新 schema；来源 Rust 编码、当前规则契约和直接初始化 |
+| P2 Rust SF 与 worker | 主体已实现/双平台自动化与可得真实样本通过；三旧profile待验 | SF9.5–9.7 完整结构/AST/IR/固定worker/确定性转换；P3生产接线待实现 |
 | P3 隔离/授权/任务 | 待实现 | 双平台启动、facts/撤销/互斥/进度/恢复 |
 | P4 Windows | 待实现/待实机验证 | 2303800 EXE、动态/签名 ZIP、恢复/重装；移除旧核心来源降级 |
 | P5 Decky | 待实现/待实机验证 | 旧任务收尾、新 schema 初始化、删除安装来源适配/引擎检查点、薄桥接与正式包/RPC/QAM/全屏/手柄 |
@@ -250,3 +250,58 @@
 1. 已完成：P1 全部实现与清理（P1-0/P1-1/P1-2/P1-3a/P1-3b-1..3/收尾清理）。
 2. **P1 gate**：独立初审完成（**有条件放行进入 P2**，报告归档 [p1-gate-review.md](p1-gate-review.md)）；必修 F1–F6（+F7/F8）已按归属分流——代码 fix-14（另一任务）、文档修订（本任务，见上节）；定向复审 attempt 2/3 待执行。
 3. P2 前置：SF fixture 冻结（三条旧 profile 包可得性待用户提供）、`installer-format`/`installer-worker` 开工。
+
+## 2026-10-08 P2 Rust SF与固定worker
+
+用户说明P1开发完成，要求继续P2。沿用P1已有测试与修订记录，不重复P1验收。实施边界见 [p2-rust-sf.md](p2-rust-sf.md)。
+
+### 实际实现
+
+- 新增 `crates/installer-format`：完整PE/resource manifest/overlay/证书、受限raw LZMA2、SF9.5–9.7文件表/未知字段证据与完整CArchive对象图、展示文本编码、Lua AST与静态行为IR。库无宿主/网络/游戏文件访问或脚本执行依赖。
+- `installer-worker` 新增固定 `sf-worker`，严格动作/键/摘要/大小描述符、只读映射、文件身份重核、完整元数据/IR/载荷绑定、流式确定性ZIP、create_new partial及同卷原子无覆盖发布。分析始终不授予安装权限。生产CLI/宿主EXE路由仍未接线（P3）。
+- 新增黄金采集与开发隔离对照脚本、LPAC/bwrap example。合成fixture不含真实发布方代码/二进制；真实EXE只在固定worker沙箱中解析，宿主只复制/哈希。Python仅为开发黄金工具，不是Rust测试或Windows产品运行时。
+- [独立审查及修订](p2-gate-review.md)：字符串/XML namespace内存放大、精确整数/浮点比较、冻结全局作用域、循环表/大DAG、全局别名性能均修复并有回归。真实SF9.5发现的5种literal模式双重转义修复后完整报告一致。
+- 收尾发现CPython ZIP64 central/EOCD阈值为2^31−1；补齐近2GiB文件/条目偏移的central extra及结束记录，新增9组阈值等于/超过、组合extra与Unicode的独立header黄金。以最终构建重新执行真实矩阵；旧构建证据保留为历史。
+- P0契约/设计/功能索引同步P2实现边界、额外保守限额与依赖；保留前序P0/P1历史和未执行项。
+
+### 自动化与构建
+
+- 首轮Windows本机：`cargo test --locked -p steam-patch-installer-format -p steam-patch-installer-worker` **51 passed / 0 failed**，分组 format lib2 + container11 + golden6 + graph7 + semantics14 =40，worker lib6 + integration5 =11（含4项已有model测试）。
+- 首轮Linux/WSL2：同一测试命令 **51 passed / 0 failed**，冻结黄金和新增拒绝/限额矩阵通过。6个黄金测试组共75个输入：AST21、behavior20、graph13、inventory9、audit6、完整report6；worker再验证6个跨版本/中英文路径规范化产物。
+- 收尾ZIP64边界修复后，两端定向 `cargo test --locked -p steam-patch-installer-worker` **12 passed / 0 failed**（lib7 + integration5），新增1项测试读取9组独立CPython header黄金。最终P2合计 **52项**（未改动format40项沿用上轮通过记录 + worker12项）；不分配2GiB载荷，不重复未受影响的P1测试。
+- `cargo check --locked --workspace` 通过；Windows新两crate `clippy --all-targets -- -D warnings` 通过；所有P2改动Rust文件 `rustfmt --check` 通过。
+- Linux `installer-format --all-targets`及worker新增lib/bin/test/example目标严格clippy通过。Linux全worker `--all-targets -D warnings`仅触发旧 `probe_worker.rs:693` 的 `slow_vector_initialization`：原有探针刻意try_reserve捕获分配失败，不为清告警改动P0逻辑；该旧探针不计作P2新代码检查失败。
+- Windows/Linux release固定worker与隔离example构建通过；体积Windows **1,398,272字节**、Linux **1,758,856字节**。完整便携包集成/体积验收留P3/P4/P6。
+- 最终worker SHA-256：Windows `2c48291bbdbb84ba337d13dc15ad31b37ae5fcd8587e9693df0929b54b759066`；Linux `c02f853c4ec294d9f5b0d818f92e31e61d5338a9d8e6bc42df909ce862f9c163`。收尾真实矩阵重新运行，并逐一核对所复制二进制与这些最终构建一致；旧构建的结果保留为历史证据。
+- `cargo metadata --locked`与`build-sbom.py`通过，744组件、许可元数据缺失0；新lzma-rust2 0.21.0 / quick-xml 0.38.4 / memmap2 0.9.11和两个crate均入SBOM，快照 `.artifacts/p2/dependencies.cdx.json`。原sfextract MIT布局参考与commit保留。
+
+### 真实离线样本对照
+
+三条旧profile二进制当前仓库缺失；本次采用现有registry外三份真实EXE，分别覆盖9.5/9.6/9.7。不下载、不执行官方EXE/Lua、未写游戏。
+
+- **Windows本机LPAC（非标准build26300，不能代替Win11零售机矩阵）**：三版本中文路径合成转换3项 + 真实分析/转换6项 = **9/9通过**。零capability、Job单进程/3GiB内存/480s、固定参数与干净环境。完整分析report逐字段一致，元数据/行为/文件清单与摘要一致，转换产物按冻结的CPython 3.12 ZIP规则重建基准后一致。
+- 最终Windows证据 `.artifacts/p2/windows-1791473791831110600-summary.json`；SHA-256 `317af9f0f454a922b12a70e787a35703194f90357396e831d0b10ad904b208d5`。
+- 历史初轮双平台亦9/9通过：Windows `.artifacts/p2/windows-1791471990092010900-summary.json`（SHA-256 `e2be58171998bc277cbcf5fd17f205bfa276831ced4dbeb1d4a98e4250bb79cc`）；Linux `.artifacts/p2/linux-1791472393558943840-summary.json`（SHA-256 `4b9edad15de5531cb44097e01609e3b01cda186a48d7ffe0bc81753bed0510a5`）。收尾ZIP64边界修复后重新运行矩阵；最终两端摘要与初轮及彼此逐项一致，历史汇总保留在 `.artifacts/p2/pre-zip64-cross-platform-parity.json`。
+- **Linux/WSL2 bwrap**：最终构建三版本合成转换3项 + 真实分析/转换6项 = **9/9通过**；完整report逐字段、行为/元数据/载荷摘要和规范化ZIP全部与冻结Python及Windows结果一致。WSL对照不代替P5 Deck实机。
+- 最终Linux证据 `.artifacts/p2/linux-1791473908752499778-summary.json`；SHA-256 `42fc0bc94dcbb7d4fba95452e32994ae97f070cbbbf7b96d5e65a56e5d505107`。
+- 两端最终9项摘要逐项交叉复核，18个case所复制worker逐一匹配最终构建；汇总 `.artifacts/p2/cross-platform-parity.json`，SHA-256 `559ecd5047efeb41a8d272f88f9ee55dc5f1562d7a8687bd01c649dd48237279`。
+
+| AppID / 版本 | EXE SHA-256 | behavior SHA-256 | 冻结基准规范化ZIP SHA-256 |
+| --- | --- | --- | --- |
+| 2303800 / SF9.5 | 7336c5c9876bf239811478001741862256610c77298c745d3bc035a8bcdd94f3 | 7fbc67758d3af82da8d89d3c72601ebe71208bb2a80508caa84ff9c69e6258d4 | e7e232c192f06cad4cb7c5d2a13de67f4eb90834f615d5000aae8240f47fab89 |
+| 3606360 / SF9.6 | 6a1018168add626642036a70394d30562724aac645985bfefadb2f235c04f42d | 9f363cd16df9669aa0f92b33f5e1b271b0f5c8d54a2c684f9d7c8d1af979bb12 | 6d8c5d929fae5c40e526b99067639f1240f064257eac47b60b99b22368e25b3b |
+| 3721970 / SF9.7 | 67d258e9cad0f86649282862d2439fb4a796946f7a6182bcfe6880ce855182a8 | 8225c2a67934c1271a1c0bd3254cf76d0a8ce8e6ec13bc8596c79a3e2256cd36 | 24c2fbca3d2781aa8e165a607b7ffd9b5df7a63fac054db6495f28ea15c0c936 |
+
+历史normalized ZIP使用Python 3.10的local/central header版本，与冻结的CPython 3.12 force_zip64不同，第一次整包比对因此失败；未误判为载荷差异。先按冻结报告核验历史ZIP清单/各载荷SHA/大小，再以冻结的CPython 3.12 ZipInfo/force_zip64重新编码。开发oracle显式固定ZIP64版本/大小占位，在Python 3.10.12与3.12.10下分别验证6/6合成黄金一致。最终Rust与重建基准的整包摘要一致；不执行真实EXE的Python解析。`--reuse-run`只复用同worker SHA、同描述符、成功退出且再次核对报告/产物的本次结果；未拿历史P1验证冒充P2结果。
+
+### 当前结论与待验
+
+P2主体已实现，双平台自动化与可得SF9.5/9.6/9.7三份真实样本分析/转换均通过；独立审查阻断与收尾ZIP64边界均已修复。三条旧profile真实包回归仍待样本，不宣称完整P2真实样本门槛已结项。P3生产启动器/授权/facts/空间/撤销/生命周期接线、P4 Windows真安装与标准版本矩阵、P5 Decky切换、P6收口仍待执行。脚本语法、功能文档146个本地链接与新增文本空白检查通过；`git diff --check`通过。未连接Deck、未部署、未安装游戏补丁、未创建Git提交。
+
+
+## 2026-10-09 P2 Git 提交归档
+
+- 按用户“提交GIT”要求创建本地提交，代码与文档分开；代码提交 `d88d223`（`feat(installer): 实现 P2 Rust SF 解析与固定 worker`），包含解析库、固定worker、合成黄金/回归和开发隔离对照工具。
+- 本次文档提交归档P2设计、独立审查、契约增量、施工记录和功能索引；保留2026-10-08各轮验证与未提交时的历史事实。
+- 沿用本session已有双平台52项相关测试、各9/9隔离对照与构建记录，未重复运行。提交前工作区/暂存区空白、文件范围及合成黄金检查通过；未纳入真实安装包、构建产物或 `.artifacts/` 验收材料。
+- 三旧profile回归和P3–P6/两端实机状态未改变；未推送、打tag或改写历史。

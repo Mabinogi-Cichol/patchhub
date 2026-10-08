@@ -1,6 +1,6 @@
 # 跨平台安装器迁移
 
-日期：2026-10-08（Asia/Shanghai）。状态：**设计完成，待实现；本功能自动化、Windows 实机、Decky 实机验证及验收均待执行**。
+日期：2026-10-08（Asia/Shanghai）。状态：**P1已实现并通过自动化验证，P2主体已实现并通过双平台自动化与可得真实样本对照，三旧profile待验；后续阶段、Windows/Decky实机及验收待执行**。
 
 施工记录：[progress.md](progress.md)。前置功能：[共享来源发现与订阅](../shared-source-discovery/design.md)及其[施工记录](../shared-source-discovery/progress.md)。沿用产品规则：[通用 EXE](../generic-exe-installation/design.md)、[一站式安装](../simplified-install-flow/design.md)、[Decky UX](../decky-ux/design.md)。
 
@@ -92,7 +92,7 @@ flowchart TD
     O --> I[既有 install 事务与恢复]
 ```
 
-拟新增 `crates/core/src/installer/` 的 model、resolve、acquire、zip_recipe、facts、authorization、store、orchestrator。SF 布局/对象图/AST/IR 拟放入独立 `crates/installer-format/`，无宿主、网络和游戏目录依赖；固定 worker 拟放入 `crates/installer-worker/`，仅接受 analyze/convert。平台隔离启动器由核心编排调用。解析依赖、许可、SBOM、链接方式与便携体积在 P0 冻结；上述模块均尚未实施。
+拟新增 `crates/core/src/installer/` 的 model、resolve、acquire、zip_recipe、facts、authorization、store、orchestrator。SF 布局/对象图/AST/IR 放入独立 `crates/installer-format/`，无宿主、网络和游戏目录依赖；固定 worker 放入 `crates/installer-worker/`，支持 analyze/analyze_behavior/convert_behavior。平台生产隔离启动器由核心编排调用（P3待实现）。解析依赖、许可、SBOM、链接方式与便携体积在 P0 冻结；P1的核心安装器模块已实施；P2格式库与固定worker的实施边界见 [p2-rust-sf.md](p2-rust-sf.md)。
 
 正常服务只处理可信实例事实、来源策略和严格校验的报告。worker 仅获得只读包、固定运行时与独占输出，不获得游戏根、Steam manifest、用户状态、私钥或网络。Rust 核心而非 UI/worker 决定安装授权。
 
@@ -222,7 +222,7 @@ scan/list_transactions 使用一致只读快照或短时协调，保留 2026-10-
 | worker | 当前 3 GiB 地址空间/CPU 300 秒；通用分析 240 秒、转换 480 秒；无旧 profile 专用转换分支，Windows 等价内存计量待冻结 |
 | 授权/空间 | TTL ≤900 秒；实例唯一写入/受限 worker 并发；state/target 同卷合并预算，含转换、stage 与原文件恢复副本 |
 
-P0 → P1 → P2 → P3 → **P4 Windows 真实验收** → P5 Decky 切换 → P6 收口。全部待实现：
+P0 → P1 → P2 → P3 → **P4 Windows 真实验收** → P5 Decky 切换 → P6 收口。各阶段实际状态以[施工记录](progress.md)为准；P1已实现，P2主体已实现/三旧profile待验，P3–P6待实现：
 
 | 阶段 | 交付 | 放行门槛 |
 | --- | --- | --- |

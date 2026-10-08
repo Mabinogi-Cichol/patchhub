@@ -280,7 +280,8 @@ installer/rust-v1/
 | `convert_behavior` | `{action, exe_sha256, exe_size, metadata_sha256, payload:[{path,size,sha256}], behavior_sha256}` | 写 `/output/normalized.zip`，返回 `{extractor, exe_sha256, metadata_sha256, artifact_sha256, artifact_size, files}` |
 
 - 描述符/响应 **≤16 MiB**；worker 无任意 command/脚本/路径参数（设计 §6）。
-- 转换前先完成全部路径/CRC/manifest 校验，**再**首次写入独占输出目录；写 `*.partial` 后原子 `rename`。
+- P2实施：Linux固定 `/input/archive.exe` / `/output/normalized.zip`；Windows采用宿主固定隔离工作目录中的 `input/archive.exe` / `output/normalized.zip`，前端和stdin描述符均不提供路径。固定worker分析始终不能授权。实现与保守限额见 [p2-rust-sf.md](p2-rust-sf.md)。
+- 转换前先完成全部路径/CRC/manifest 校验，**再**首次写入独占输出目录；写 `*.partial` 后原子发布。P2采用同卷hard-link无覆盖发布，再删除自身partial，避免Unix rename覆盖迟到产物；不支持hard-link时失败。
 
 **【理由】** 现行协议已在 `sf95_worker.py`、`exe_worker.py` 固化且被测试覆盖。**被否替代**：重设 action（无收益、破坏 fixture）。
 
@@ -347,6 +348,8 @@ installer/rust-v1/
 | 确定性 ZIP 写 | `zip` 6（已用）需支持 `ZIP_STORED` + 手动 `ZipInfo` 头字段 | 已具备 |
 | PE/overlay/framing | 自研（现行 `sf95_audit.py` 无第三方 PE 依赖），**零新增依赖** | 已定 |
 | Windows 隔离 | `windows` crate 0.62 + LPAC（`SECURITY_CAPABILITIES`+Job Object） | 已定（lib-1） |
+| XML资源语法 | `quick-xml` 0.38.4，有界解析manifest，PE/framing仍自研 | P2实施补充（MIT），见 [P2依赖决策](p2-rust-sf.md#依赖与许可) |
+| 只读映射 | `memmap2` 0.9.11，固定worker避免整包堆复制 | P2实施补充（MIT OR Apache-2.0），输入不可变前提由P3生产沙箱保证 |
 | 哈希/序列化 | `sha2`/`serde`/`serde_json`（已有） | 已定 |
 | Unicode | 新增编码不做规范化；匹配继续用 `unicode-normalization`/`caseless`/`unicode-general-category`（已有） | 已定 |
 
