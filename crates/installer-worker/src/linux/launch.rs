@@ -39,11 +39,12 @@
 
 use std::ffi::OsString;
 use std::fs;
-use std::io::{Read, Write};
+use std::io::{Read, Seek, Write};
+use std::os::fd::AsRawFd;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -72,6 +73,7 @@ pub const MAX_STDERR_BYTES: usize = 64 * 1024;
 const OVERFLOW_NONE: u8 = 0;
 const OVERFLOW_STDOUT: u8 = 1;
 const OVERFLOW_STDERR: u8 = 2;
+const OVERFLOW_IO: u8 = 3;
 
 const TERM_GRACE: Duration = Duration::from_secs(1);
 const POLL_INTERVAL: Duration = Duration::from_millis(20);
@@ -233,19 +235,69 @@ fn append_system_binds(argv: &mut Vec<OsString>) {
 /// writes more than [`MAX_STDOUT_BYTES`] to stdout or [`MAX_STDERR_BYTES`] to
 /// stderr; the sandbox is terminated first (fail-closed, matching Python).
 pub fn run_sandboxed(cfg: &SandboxConfig) -> Result<LaunchOutcome, IsolationError> {
-    let argv = build_bwrap_command(cfg)?;
+    run_internal(cfg, None)
+}
 
+/// Production cancellation is polled while the process is running.
+pub fn run_sandboxed_cancellable(
+    cfg: &SandboxConfig,
+    cancel: &AtomicBool,
+) -> Result<LaunchOutcome, IsolationError> {
+    run_internal(cfg, Some(cancel))
+}
+fn run_internal(
+    cfg: &SandboxConfig,
+    cancel: Option<&AtomicBool>,
+) -> Result<LaunchOutcome, IsolationError> {
+    let mut argv = build_bwrap_command(cfg)?;
+    let seccomp = if cfg.production_strict {
+        Some(single_process_filter()?)
+    } else {
+        None
+    };
+    let seccomp_fd = seccomp.as_ref().map(AsRawFd::as_raw_fd);
+    if let Some(fd) = seccomp_fd {
+        let pos = argv
+            .iter()
+            .position(|s| s == "--")
+            .expect("fixed delimiter");
+        argv.splice(
+            pos..pos,
+            [OsString::from("--seccomp"), OsString::from(fd.to_string())],
+        );
+    }
+
+    // Sources are private copied directories, not shared cache/state inodes.
+    // bwrap canonicalizes bind sources, so the host must configure a stage whose
+    // existing ancestors are traversable by run_as; do not widen their ACLs.
     let limits = cfg.limits.clone();
     // Only drop privileges when the launcher is actually root. Explicit config
     // wins; otherwise fall back to the SUDO_UID/SUDO_GID environment.
     let run_as = if super::probe_os::euid() == 0 {
-        resolve_run_as(cfg)
+        if cfg.production_strict {
+            match cfg.run_as {
+                Some((uid, gid)) if uid != 0 && gid != 0 => Some((uid, gid)),
+                _ => {
+                    return Err(IsolationError::new(
+                        "identity",
+                        None,
+                        "root production host requires explicit non-root uid/gid",
+                    ))
+                }
+            }
+        } else {
+            resolve_run_as(cfg)
+        }
     } else {
         None
     };
 
     let mut command = Command::new(&argv[0]);
     command.args(&argv[1..]);
+    if cfg.production_strict {
+        command.env_clear();
+    }
+    let parent_pid = unsafe { sys::getpid() };
     command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -268,6 +320,18 @@ pub fn run_sandboxed(cfg: &SandboxConfig) -> Result<LaunchOutcome, IsolationErro
                 if sys::setuid(uid) != 0 {
                     return Err(std::io::Error::last_os_error());
                 }
+            }
+            if let Some(fd) = seccomp_fd {
+                if sys::fcntl(fd, sys::F_SETFD, 0) == -1 {
+                    return Err(std::io::Error::last_os_error());
+                }
+            }
+            // Apply after setuid because credential changes clear PDEATHSIG.
+            if sys::prctl(sys::PR_SET_PDEATHSIG, sys::SIGKILL as usize, 0, 0, 0) != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            if sys::getppid() != parent_pid {
+                return Err(std::io::Error::from_raw_os_error(10));
             }
             if sys::setsid() == -1 {
                 return Err(std::io::Error::last_os_error());
@@ -309,6 +373,9 @@ pub fn run_sandboxed(cfg: &SandboxConfig) -> Result<LaunchOutcome, IsolationErro
         thread::spawn(move || read_bounded(stderr, MAX_STDERR_BYTES, OVERFLOW_STDERR, stderr_flag));
 
     let end = loop {
+        if cancel.is_some_and(|c| c.load(Ordering::Acquire)) {
+            break End::Cancelled;
+        }
         if overflow.load(Ordering::SeqCst) != OVERFLOW_NONE {
             break End::OutputLimit;
         }
@@ -333,6 +400,11 @@ pub fn run_sandboxed(cfg: &SandboxConfig) -> Result<LaunchOutcome, IsolationErro
     match end {
         End::Exited(status) => {
             exit_code = status.code().unwrap_or(-1) as u32;
+        }
+        End::Cancelled => {
+            terminate_group(pgid, &mut child);
+            termination = TerminationReason::Cancelled;
+            exit_code = u32::MAX;
         }
         End::TimedOut => {
             terminate_group(pgid, &mut child);
@@ -394,6 +466,7 @@ pub fn run_sandboxed(cfg: &SandboxConfig) -> Result<LaunchOutcome, IsolationErro
 enum End {
     Exited(std::process::ExitStatus),
     TimedOut,
+    Cancelled,
     OutputLimit,
 }
 
@@ -401,6 +474,7 @@ fn overflow_reason(flag: &AtomicU8) -> Option<String> {
     match flag.load(Ordering::SeqCst) {
         OVERFLOW_STDOUT => Some(format!("stdout exceeded {MAX_STDOUT_BYTES} bytes")),
         OVERFLOW_STDERR => Some(format!("stderr exceeded {MAX_STDERR_BYTES} bytes")),
+        OVERFLOW_IO => Some("stdio read failed".into()),
         _ => None,
     }
 }
@@ -517,7 +591,10 @@ fn read_bounded(
                 }
                 out.extend_from_slice(&buf[..n]);
             }
-            Err(_) => return Ok(out),
+            Err(_) => {
+                flag.store(OVERFLOW_IO, Ordering::SeqCst);
+                return Err(());
+            }
         }
     }
 }
@@ -532,4 +609,52 @@ pub fn run_worker(
         .rev()
         .find_map(|line| serde_json::from_str::<WorkerResponse>(line).ok());
     Ok((outcome, response))
+}
+
+/// Deny every process/thread creation syscall in the final bwrap worker. This
+/// makes AS/CPU limits single-process aggregate limits rather than claiming
+/// per-process rlimits alone constrain an arbitrary process tree.
+fn single_process_filter() -> Result<std::fs::File, IsolationError> {
+    #[cfg(target_arch = "x86_64")]
+    let (arch, denied) = (0xc000003eu32, vec![56u32, 57, 58, 435]);
+    #[cfg(target_arch = "aarch64")]
+    let (arch, denied) = (0xc00000b7u32, vec![220u32, 435]);
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+    return Err(IsolationError::new(
+        "seccomp",
+        None,
+        "unsupported production seccomp architecture",
+    ));
+    #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+    {
+        let mut instructions: Vec<(u16, u8, u8, u32)> = vec![
+            (0x20, 0, 0, 4), // LD seccomp_data.arch
+            (0x15, 1, 0, arch),
+            (0x06, 0, 0, 0x80000000), // KILL_PROCESS on unexpected ABI
+            (0x20, 0, 0, 0),          // LD syscall number
+        ];
+        #[cfg(target_arch = "x86_64")]
+        {
+            // x32 ABI numbers otherwise bypass the x86_64 syscall deny set.
+            instructions.push((0x35, 0, 1, 0x40000000));
+            instructions.push((0x06, 0, 0, 0x80000000));
+        }
+        for nr in denied {
+            instructions.push((0x15, 0, 1, nr));
+            instructions.push((0x06, 0, 0, 0x00050001)); // ERRNO EPERM
+        }
+        instructions.push((0x06, 0, 0, 0x7fff0000)); // ALLOW
+        let mut file = tempfile::tempfile().map_err(|e| {
+            IsolationError::new("seccomp", e.raw_os_error().map(|n| n as u32), e.to_string())
+        })?;
+        for (code, jt, jf, k) in instructions {
+            file.write_all(&code.to_ne_bytes())
+                .and_then(|_| file.write_all(&[jt, jf]))
+                .and_then(|_| file.write_all(&k.to_ne_bytes()))
+                .map_err(|e| IsolationError::new("seccomp", None, e.to_string()))?;
+        }
+        file.rewind()
+            .map_err(|e| IsolationError::new("seccomp", None, e.to_string()))?;
+        Ok(file)
+    }
 }

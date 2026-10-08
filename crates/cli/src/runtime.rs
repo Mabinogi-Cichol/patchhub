@@ -161,7 +161,8 @@ impl ProgressCursor {
 
 /// `get_capabilities` v3 payload (p1-host-contract §3.1): installer and source
 /// sub-objects merged with the full 16-method whitelist.
-fn capabilities() -> Value {
+fn capabilities(_params: &Params) -> Value {
+    let availability = exe_sandbox_availability();
     let mut methods: Vec<&str> = Vec::with_capacity(METHODS.len());
     methods.extend(INSTALLER_METHODS.iter().copied());
     methods.extend(SOURCE_METHODS.iter().copied());
@@ -176,18 +177,11 @@ fn capabilities() -> Value {
             "report_schema_version": 1,
             "formats": { "zip": "supported", "exe": "supported" },
             "strategies": ["managed_zip", "publisher_zip", "publisher_exe"],
-            // TODO(P1/P3/P4): platform isolation probes are injected by the
-            // host/runtime (LPAC/Job Object on Windows, bwrap on SteamOS).
-            // Conservative default until then; `formats` is not installability.
             "links": {
-                "zip": { "available": true, "blockers": [] },
-                "exe": {
-                    "available": false,
-                    "blockers": [{
-                        "code": "exe_sandbox_unavailable",
-                        "detail": "isolation probe not implemented (P3/P4)",
-                    }],
-                },
+                "zip": { "available": installer::host_identity_blocker().is_none(),
+                    "blockers": installer::host_identity_blocker().map(|code|json!([{"code":code}])).unwrap_or_else(||json!([])) },
+                "exe": {"available": availability.available, "blockers": if availability.available {json!([])}else{
+                    json!([{"code":"exe_sandbox_unavailable","detail":availability.reason}])}},
             },
         },
         "sources": {
@@ -199,6 +193,96 @@ fn capabilities() -> Value {
         },
         "methods": methods,
     })
+}
+
+/// The bundled worker next to the running host executable. Only the trusted
+/// host fixes the executable location; RPC cannot set it.
+fn bundled_worker() -> Option<PathBuf> {
+    let host = std::env::current_exe().ok()?;
+    Some(host.parent()?.join(if cfg!(windows) {
+        "sf-worker.exe"
+    } else {
+        "sf-worker"
+    }))
+}
+
+fn worker_runtime(stage: &Path) -> Result<steam_patch_core::installer::WorkerRuntime, String> {
+    state_safe(stage)?;
+    fs::create_dir_all(stage).map_err(err)?;
+    state_safe(stage)?;
+    let worker = bundled_worker().ok_or("bundled_worker_missing")?;
+    installer::WorkerRuntime::new(worker, stage, None)
+        .map_err(|e| failed("exe_sandbox_unavailable", e.to_string()))
+}
+
+/// Process-cached EXE sandbox availability for read-only callers
+/// (`get_capabilities`/`scan`/`preview`). The probe really executes the bundled
+/// worker, but in a private OS-temp staging root that is removed afterwards, so
+/// read-only methods never create or write the installer state (p0-contracts
+/// §4.1). The install route re-probes at runtime with its state-rooted staging.
+fn exe_sandbox_availability() -> installer::SandboxAvailability {
+    if let Some(reason) = installer::host_identity_blocker() {
+        return installer::SandboxAvailability {
+            available: false,
+            reason: reason.into(),
+        };
+    }
+    let Some(worker) = bundled_worker() else {
+        return installer::SandboxAvailability {
+            available: false,
+            reason: "bundled_worker_missing".into(),
+        };
+    };
+    let key = match fs::metadata(&worker) {
+        Ok(metadata) => format!(
+            "{}|{}|{}",
+            worker.display(),
+            metadata.len(),
+            metadata
+                .modified()
+                .ok()
+                .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|age| age.as_nanos())
+                .unwrap_or(0)
+        ),
+        Err(error) => {
+            return installer::SandboxAvailability {
+                available: false,
+                reason: format!("bundled_worker_missing: {error}"),
+            };
+        }
+    };
+    type ProbeCache = std::sync::OnceLock<
+        std::sync::Mutex<std::collections::HashMap<String, installer::SandboxAvailability>>,
+    >;
+    static CACHE: ProbeCache = std::sync::OnceLock::new();
+    let mut cache = CACHE
+        .get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+        .lock()
+        .unwrap();
+    if let Some(hit) = cache.get(&key).cloned() {
+        return hit;
+    }
+    let availability = probe_in_temp_staging(&worker);
+    cache.insert(key, availability.clone());
+    availability
+}
+
+/// One real probe in a private temp staging root (never the installer state).
+fn probe_in_temp_staging(worker: &Path) -> installer::SandboxAvailability {
+    let root = std::env::temp_dir().join(format!("steam-patch-probe-{}", std::process::id()));
+    let availability = match fs::create_dir_all(&root).map_err(err).and_then(|_| {
+        installer::WorkerRuntime::new(worker, &root, None)
+            .map_err(|e| failed("exe_sandbox_unavailable", e.to_string()))
+    }) {
+        Ok(runtime) => runtime.probe(),
+        Err(reason) => installer::SandboxAvailability {
+            available: false,
+            reason,
+        },
+    };
+    let _ = fs::remove_dir_all(&root);
+    availability
 }
 
 fn err(error: impl std::fmt::Display) -> String {
@@ -394,7 +478,7 @@ fn always_active(_now: u64) -> bool {
 
 /// No task channel: no persisted foreground lease deadline.
 fn no_lease_deadline() -> u64 {
-    0
+    u64::MAX
 }
 
 /// Encode a stable `code` plus optional `detail` for the protocol envelope.
@@ -413,7 +497,7 @@ pub fn failed(code: impl Into<String>, detail: impl Into<String>) -> String {
 
 /// Executes one method with the task control channel available to
 /// `install_patch` (p1-zip-orchestration §3.10/§4.1).
-pub fn execute_controlled<L: Fn(u64) -> bool, D: Fn() -> u64>(
+pub fn execute_controlled<L: Fn(u64) -> bool, D: Fn() -> u64 + Sync>(
     method: &str,
     params: Params,
     cancel: &AtomicBool,
@@ -429,8 +513,22 @@ pub fn execute_controlled<L: Fn(u64) -> bool, D: Fn() -> u64>(
     if method == "scan" && (params.instance_id.is_some() || params.release_id.is_some()) {
         return Err("unexpected_preview_arguments".into());
     }
+    if let Some(code) = installer::host_identity_blocker() {
+        if [
+            "install_patch",
+            "apply",
+            "recover",
+            "discard_plan",
+            "migrate_state",
+            "cleanup_cache",
+        ]
+        .contains(&method)
+        {
+            return Err(code.into());
+        }
+    }
     if method == "get_capabilities" {
-        return Ok(capabilities());
+        return Ok(capabilities(&params));
     }
     if method == "cleanup_cache" {
         return cleanup_cache(&params);
@@ -591,6 +689,7 @@ fn cleanup_cache(params: &Params) -> Result<Value, String> {
     state_safe(&state)?;
     let paths = installer::InstallerPaths::new(&state);
     installer::init_atomic(&paths).map_err(err)?;
+    installer::task::cleanup_stale_tasks(&paths).map_err(|_| "cleanup_failed".to_string())?;
     let mut removed_bytes = 0_u64;
     for entry in paths.list_cache_entries().map_err(err)? {
         let metadata = fs::symlink_metadata(&entry).map_err(|_| "cleanup_failed".to_string())?;
@@ -940,7 +1039,7 @@ mod tests {
 /// Single-task install entry point (p1-host-contract §1.1 A; p1-zip-orchestration
 /// §4.1). Validates mutual exclusion and dispatches to the signed `release_id`
 /// route (priority) or the dynamic `selection_id` prefix route.
-fn install_patch<L: Fn(u64) -> bool, D: Fn() -> u64>(
+fn install_patch<L: Fn(u64) -> bool, D: Fn() -> u64 + Sync>(
     params: &Params,
     report: &steam::ScanReport,
     platform: Platform,
@@ -981,7 +1080,16 @@ fn install_patch<L: Fn(u64) -> bool, D: Fn() -> u64>(
             );
         }
         if selection_id.starts_with("exe-selection-") {
-            return Err("exe_route_unimplemented".into());
+            return install_exe_route(
+                params,
+                report,
+                &state,
+                instance,
+                request,
+                selection_id,
+                cancel,
+                lease_deadline_ms,
+            );
         }
         return Err("invalid_selection_id".into());
     }
@@ -995,6 +1103,7 @@ fn install_patch<L: Fn(u64) -> bool, D: Fn() -> u64>(
         release.expect("release route"),
         cancel,
         lease_active,
+        lease_deadline_ms,
     )
 }
 
@@ -1012,7 +1121,7 @@ fn outcome_json(transaction: &install::Transaction, selection_id: Option<&str>) 
         "plan_id": transaction.plan_id,
         "instance_id": transaction.instance_id,
         "selection_id": selection_id,
-        "content_id": Value::Null,
+        "content_id": if transaction.release_id.starts_with("exe-content-"){json!(transaction.release_id)}else{Value::Null},
         "release_id": transaction.release_id,
         "state": transaction.state,
         "error": transaction.error,
@@ -1024,14 +1133,14 @@ fn outcome_json(transaction: &install::Transaction, selection_id: Option<&str>) 
         } else {
             Value::Null
         },
-        "cleanup": { "performed": true },
+        "cleanup": { "performed": transaction.state!="needs_recovery" },
     })
 }
 
 /// Dynamic ZIP route: resolve from cached sources, then run the orchestrator
 /// with an injected transport (p1-zip-orchestration §2/§3).
 #[allow(clippy::too_many_arguments)]
-fn install_zip_route<L: Fn(u64) -> bool, D: Fn() -> u64>(
+fn install_zip_route<L: Fn(u64) -> bool, D: Fn() -> u64 + Sync>(
     params: &Params,
     report: &steam::ScanReport,
     state: PathBuf,
@@ -1079,10 +1188,91 @@ fn install_zip_route<L: Fn(u64) -> bool, D: Fn() -> u64>(
     Ok(outcome_json(&transaction, Some(selection_id)))
 }
 
+#[allow(clippy::too_many_arguments)]
+fn install_exe_route<D: Fn() -> u64 + Sync>(
+    params: &Params,
+    report: &steam::ScanReport,
+    state: &Path,
+    instance: &str,
+    request: &str,
+    selection_id: &str,
+    cancel: &AtomicBool,
+    deadline: &D,
+) -> Result<Value, String> {
+    let paths = installer::InstallerPaths::new(state);
+    installer::init_atomic(&paths).map_err(err)?;
+    let game = install_for(report, instance)?;
+    if game.availability != "installed" {
+        return Err("game_not_ready".into());
+    }
+    let sources = sources::Sources::open(state).map_err(err)?;
+    let selection =
+        installer::exe_resolve::resolve_exe(sources.registry(), &game_query(game), selection_id)
+            .map_err(|e| e.code)?;
+    let runtime = worker_runtime(&paths.root().join("runtime"))?;
+    let probe = runtime.probe();
+    if !probe.available {
+        return Err(failed("exe_sandbox_unavailable", probe.reason));
+    }
+    let transport = installer::https_transport().map_err(err)?;
+    let inputs = installer::exe_orchestrator::ExeInstallInputs {
+        game,
+        selection: &selection,
+        operation: params.operation,
+        request_id: request,
+        now: trust::now().map_err(err)?,
+        ttl_seconds: install::PLAN_TTL_SECONDS,
+    };
+    let deps = installer::exe_orchestrator::ExeInstallDeps {
+        paths: &paths,
+        state_dir: state,
+        transport: transport.as_ref(),
+        runtime: &runtime,
+        cancel,
+        lease_deadline_ms: deadline,
+    };
+    let transaction =
+        installer::exe_orchestrator::install_exe(inputs, deps).map_err(zip_task_failure)?;
+    Ok(outcome_json(&transaction, Some(selection_id)))
+}
+
 /// Signed catalog route: migrate to the P1 installer root, new ledger and the
 /// internal authorization re-check (p1-zip-orchestration §4.1 step 2).
 #[allow(clippy::too_many_arguments)]
-fn install_signed_route<L: Fn(u64) -> bool>(
+fn install_signed_route<L: Fn(u64) -> bool, D: Fn() -> u64 + Sync>(
+    params: &Params,
+    report: &steam::ScanReport,
+    platform: Platform,
+    state: PathBuf,
+    instance: &str,
+    request: &str,
+    release: &str,
+    cancel: &AtomicBool,
+    lease: &L,
+    deadline: &D,
+) -> Result<Value, String> {
+    let paths = installer::InstallerPaths::new(&state);
+    installer::init_atomic(&paths).map_err(err)?;
+    let _claim = installer::requests::RequestClaim::acquire(&paths, request).map_err(err)?;
+    let control = installer::task::TaskControl::new(&paths, request, instance, release, deadline())
+        .map_err(err)?;
+    control.run(cancel, deadline, || {
+        install_signed_route_inner(
+            params,
+            report,
+            platform,
+            state,
+            instance,
+            request,
+            release,
+            &control.cancel,
+            lease,
+            &control,
+        )
+    })
+}
+#[allow(clippy::too_many_arguments)]
+fn install_signed_route_inner<L: Fn(u64) -> bool>(
     params: &Params,
     report: &steam::ScanReport,
     platform: Platform,
@@ -1092,6 +1282,7 @@ fn install_signed_route<L: Fn(u64) -> bool>(
     release_id: &str,
     cancel: &AtomicBool,
     lease_active: &L,
+    control: &installer::task::TaskControl,
 ) -> Result<Value, String> {
     let paths = installer::InstallerPaths::new(&state);
     installer::init_atomic(&paths).map_err(err)?;
@@ -1131,114 +1322,144 @@ fn install_signed_route<L: Fn(u64) -> bool>(
         params.operation,
     )
     .map_err(err)?;
-    if !plan.blockers.is_empty() {
-        let _ = install::discard_plan_at(paths.root(), &plan.plan_id);
-        return Err(failed("plan_has_blockers", plan.blockers.join(",")));
-    }
-    installer::record_plan(&paths, request, &binding, &plan.plan_id, &identity)
-        .map_err(zip_task_failure)?;
+    let outcome = (|| {
+        if let Err(e) = control.attach_plan(&paths, &plan.plan_id) {
+            steam_patch_core::operation::restoring();
+            let _ = install::discard_plan_at(paths.root(), &plan.plan_id);
+            return Err(err(e));
+        }
+        if !plan.blockers.is_empty() {
+            let _ = install::discard_plan_at(paths.root(), &plan.plan_id);
+            return Err(failed("plan_has_blockers", plan.blockers.join(",")));
+        }
+        installer::record_plan(&paths, request, &binding, &plan.plan_id, &identity)
+            .map_err(zip_task_failure)?;
 
-    let expectation = signed_expectation(release, game, cancel);
-    let artifact_sha = release
-        .recipe
-        .as_ref()
-        .ok_or("recipe_missing")?
-        .artifact_sha256
-        .clone();
-    let artifact_size = archive_size(&archive)?;
-    let plan_mappings = |plan_id: &str| -> Result<Vec<catalog::FileMapping>, String> {
-        let stored = install::get_plan_at(paths.root(), plan_id).map_err(err)?;
-        Ok(stored
-            .changes
-            .iter()
-            .map(|change| catalog::FileMapping {
-                source: change.source.clone().unwrap_or_else(|| change.path.clone()),
-                destination: change.path.clone(),
-                original_sha256: change.original_sha256.clone(),
-                installed_sha256: change.installed_sha256.clone(),
-            })
-            .collect())
-    };
-    let facts = installer::game_facts(game, &expectation, cancel);
-    if !facts.is_valid() {
-        let _ = install::discard_plan_at(paths.root(), &plan.plan_id);
-        return Err(match facts.failures().first() {
-            Some(failure) => failed(failure.code.clone(), failure.detail.clone()),
-            None => "game_not_ready".into(),
-        });
-    }
-    let content = installer::ContentBinding::publisher_zip(
-        &artifact_sha,
-        artifact_size,
-        &plan_mappings(&plan.plan_id)?,
-    );
-    let candidate_sha256 = identity.clone();
-    let rule_fingerprint = release_fingerprint(release);
-    let conditions_sha256 = steam_patch_core::sources::canonical::canonical_sha256(&expectation);
-    let authorization = installer::authorize(installer::AuthorizeInput {
-        release_id,
-        selection_id: None,
-        source_id: "signed",
-        source_record_id: Some(&release.source_page),
-        candidate_sha256: &candidate_sha256,
-        rule_fingerprint: &rule_fingerprint,
-        settings_revision: catalog.catalog().revision,
-        conditions_sha256: &conditions_sha256,
-        content,
-        policy: installer::PolicyVersions::default(),
-        plan_id: &plan.plan_id,
-        task_id: None,
-        request_id: Some(request),
-        facts: facts.clone(),
-        now: trust::now().map_err(err)?,
-        ttl_seconds: install::PLAN_TTL_SECONDS,
-    })
-    .map_err(|invalidation| {
-        let _ = install::discard_plan_at(paths.root(), &plan.plan_id);
-        failed(invalidation.code.clone(), invalidation.to_string())
-    })?;
-    installer::write(&paths, &authorization).map_err(err)?;
-    let facts_now = installer::game_facts(game, &expectation, cancel);
-    let content_now = installer::ContentBinding::publisher_zip(
-        &artifact_sha,
-        artifact_size,
-        &plan_mappings(&plan.plan_id)?,
-    );
-    let current = installer::CurrentState {
-        now: trust::now().map_err(err)?,
-        plan_id: plan.plan_id.clone(),
-        instance_id: game.instance_id.clone(),
-        revoked: installer::is_revoked(&paths, &plan.plan_id).map_err(err)?,
-        lease_active: lease_active(trust::now().map_err(err)?),
-        facts: facts_now,
-        settings_revision: catalog.catalog().revision,
-        policy: installer::PolicyVersions::default(),
-        candidate_sha256: identity.clone(),
-        rule_fingerprint,
-        conditions_sha256,
-        content: content_now,
-    };
-    if let Err(invalidation) = installer::validate(&authorization, &current) {
-        // Lease loss / persistent revoke after the plan is a durable
-        // cancellation: roll back and return the `InstallOutcome` rather than an
-        // RPC failure (p1-host-contract §2.3). Other invalidations keep
-        // `ok:false + error{code}` (§4.4).
-        if matches!(
-            invalidation.code.as_str(),
-            "authorization_lease_inactive" | "authorization_revoked"
-        ) {
-            let transaction = install::discard_plan_at(paths.root(), &plan.plan_id).map_err(err)?;
+        let expectation = signed_expectation(release, game, cancel);
+        let artifact_sha = release
+            .recipe
+            .as_ref()
+            .ok_or("recipe_missing")?
+            .artifact_sha256
+            .clone();
+        let artifact_size = archive_size(&archive)?;
+        let plan_mappings = |plan_id: &str| -> Result<Vec<catalog::FileMapping>, String> {
+            let stored = install::get_plan_at(paths.root(), plan_id).map_err(err)?;
+            Ok(stored
+                .changes
+                .iter()
+                .map(|change| catalog::FileMapping {
+                    source: change.source.clone().unwrap_or_else(|| change.path.clone()),
+                    destination: change.path.clone(),
+                    original_sha256: change.original_sha256.clone(),
+                    installed_sha256: change.installed_sha256.clone(),
+                })
+                .collect())
+        };
+        let facts = installer::game_facts(game, &expectation, cancel);
+        if !facts.is_valid() {
+            let _ = install::discard_plan_at(paths.root(), &plan.plan_id);
+            return Err(match facts.failures().first() {
+                Some(failure) => failed(failure.code.clone(), failure.detail.clone()),
+                None => "game_not_ready".into(),
+            });
+        }
+        let content = installer::ContentBinding::publisher_zip(
+            &artifact_sha,
+            artifact_size,
+            &plan_mappings(&plan.plan_id)?,
+        );
+        let candidate_sha256 = identity.clone();
+        let rule_fingerprint = release_fingerprint(release);
+        let conditions_sha256 =
+            steam_patch_core::sources::canonical::canonical_sha256(&expectation);
+        let authorization = installer::authorize(installer::AuthorizeInput {
+            release_id,
+            selection_id: None,
+            source_id: "signed",
+            source_record_id: Some(&release.source_page),
+            candidate_sha256: &candidate_sha256,
+            rule_fingerprint: &rule_fingerprint,
+            settings_revision: catalog.catalog().revision,
+            conditions_sha256: &conditions_sha256,
+            content,
+            policy: installer::PolicyVersions::default(),
+            plan_id: &plan.plan_id,
+            task_id: Some(&control.id),
+            request_id: Some(request),
+            facts: facts.clone(),
+            now: trust::now().map_err(err)?,
+            ttl_seconds: install::PLAN_TTL_SECONDS,
+        })
+        .map_err(|invalidation| {
+            let _ = install::discard_plan_at(paths.root(), &plan.plan_id);
+            failed(invalidation.code.clone(), invalidation.to_string())
+        })?;
+        installer::write(&paths, &authorization).map_err(err)?;
+        let facts_now = installer::game_facts(game, &expectation, cancel);
+        let content_now = installer::ContentBinding::publisher_zip(
+            &artifact_sha,
+            artifact_size,
+            &plan_mappings(&plan.plan_id)?,
+        );
+        let current = installer::CurrentState {
+            now: trust::now().map_err(err)?,
+            plan_id: plan.plan_id.clone(),
+            instance_id: game.instance_id.clone(),
+            revoked: installer::is_revoked(&paths, &plan.plan_id).map_err(err)?,
+            lease_active: lease_active(trust::now().map_err(err)?),
+            facts: facts_now,
+            settings_revision: catalog.catalog().revision,
+            policy: installer::PolicyVersions::default(),
+            candidate_sha256: identity.clone(),
+            rule_fingerprint,
+            conditions_sha256,
+            content: content_now,
+        };
+        if let Err(invalidation) = installer::validate(&authorization, &current) {
+            // Lease loss / persistent revoke after the plan is a durable
+            // cancellation: roll back and return the `InstallOutcome` rather than an
+            // RPC failure (p1-host-contract §2.3). Other invalidations keep
+            // `ok:false + error{code}` (§4.4).
+            if matches!(
+                invalidation.code.as_str(),
+                "authorization_lease_inactive" | "authorization_revoked"
+            ) {
+                let transaction =
+                    install::discard_plan_at(paths.root(), &plan.plan_id).map_err(err)?;
+                installer::record_terminal(&paths, request, &binding, &identity, &transaction)
+                    .map_err(zip_task_failure)?;
+                return Ok(outcome_json(&transaction, None));
+            }
+            let _ = install::discard_plan_at(paths.root(), &plan.plan_id);
+            return Err(failed(invalidation.code.clone(), invalidation.to_string()));
+        }
+        let transaction = install::apply_at(paths.root(), &plan.plan_id).map_err(err)?;
+        installer::record_terminal(&paths, request, &binding, &identity, &transaction)
+            .map_err(zip_task_failure)?;
+        Ok(outcome_json(&transaction, None))
+    })();
+    match outcome {
+        Ok(value) => Ok(value),
+        Err(error) => {
+            control
+                .revoke()
+                .map_err(|e| failed("needs_recovery", e.to_string()))?;
+            steam_patch_core::operation::restoring();
+            let transaction = installer::orchestrator::finish_failed_plan(&paths, &plan.plan_id)
+                .map_err(|e| failed("needs_recovery", e.to_string()))?;
             installer::record_terminal(&paths, request, &binding, &identity, &transaction)
                 .map_err(zip_task_failure)?;
-            return Ok(outcome_json(&transaction, None));
+            if transaction.state == "committed"
+                || transaction.state == "needs_recovery"
+                || error.contains("cancel")
+            {
+                Ok(outcome_json(&transaction, None))
+            } else {
+                Err(error)
+            }
         }
-        let _ = install::discard_plan_at(paths.root(), &plan.plan_id);
-        return Err(failed(invalidation.code.clone(), invalidation.to_string()));
     }
-    let transaction = install::apply_at(paths.root(), &plan.plan_id).map_err(err)?;
-    installer::record_terminal(&paths, request, &binding, &identity, &transaction)
-        .map_err(zip_task_failure)?;
-    Ok(outcome_json(&transaction, None))
 }
 
 fn archive_size(path: &Path) -> Result<u64, String> {
@@ -1356,15 +1577,38 @@ fn dynamic_patches(
                 detection,
             });
         } else if has_exe {
+            let Some(selection_id) = installer::exe_resolve::exe_selection_id(&candidate) else {
+                continue;
+            };
+            // Selection identity must not masquerade as a release id
+            // (p1-host-contract §4.1); the source-scoped dynamic release id is
+            // the projection key, exactly as in the ZIP branch above.
+            if patches
+                .iter()
+                .any(|patch: &catalog::PatchMatch| patch.release_id == release_id)
+            {
+                continue;
+            }
+            let availability = exe_sandbox_availability();
+            let mut blockers = Vec::new();
+            if let Err(e) = installer::exe_resolve::resolve_exe(registry, &query, &selection_id) {
+                blockers.push(e.code);
+            }
+            if !availability.available {
+                blockers.push("exe_sandbox_unavailable".into());
+            }
+            if game.availability != "installed" {
+                blockers.push("game_not_ready".into());
+            }
             patches.push(catalog::PatchMatch {
                 release_id,
-                selection_id: None,
+                selection_id: Some(selection_id),
                 name: candidate.patch_title.clone(),
                 source_page: candidate.source_page.clone(),
                 support_level: SupportLevel::PublisherExe,
-                download_available: false,
-                compatibility: "needs_review".into(),
-                blockers: vec!["exe_sandbox_unavailable".into()],
+                download_available: blockers.is_empty(),
+                compatibility: "check_required".into(),
+                blockers,
                 detection: catalog::Detection {
                     status: "unknown".into(),
                     files: Vec::new(),
@@ -1471,14 +1715,22 @@ fn preview_route(
         );
     };
     if selection_id.starts_with("exe-selection-") {
-        return Ok(json!({
-            "instance_id": game.instance_id,
-            "selection_id": selection_id,
-            "release_id": Value::Null,
-            "executable": false,
-            "blockers": ["exe_route_unimplemented"],
-            "changes": [],
-        }));
+        let state = state(params)?;
+        state_safe(&state)?;
+        let handle = sources::Sources::open(&state).map_err(err)?;
+        let selected =
+            installer::exe_resolve::resolve_exe(handle.registry(), &game_query(game), selection_id)
+                .map_err(|e| e.code)?;
+        let availability = exe_sandbox_availability();
+        let blockers = if availability.available {
+            json!(["exe_check_required"])
+        } else {
+            json!(["exe_sandbox_unavailable"])
+        };
+        return Ok(
+            json!({"instance_id":game.instance_id,"selection_id":selected.selection_id,"release_id":null,
+            "executable":false,"blockers":blockers,"changes":[]}),
+        );
     }
     if !selection_id.starts_with("zip-selection-") {
         return Err("invalid_selection_id".into());
@@ -1614,6 +1866,29 @@ mod sources_tests {
             execute("bogus", Params::default()).unwrap_err(),
             "unsupported_method"
         );
+    }
+
+    #[test]
+    fn read_only_capabilities_never_create_installer_state() {
+        let temp = tempfile::tempdir().unwrap();
+        let state = temp.path().join("state");
+        let first = Params {
+            state_dir: Some(state.clone()),
+            ..Default::default()
+        };
+        let capabilities = execute("get_capabilities", first).unwrap();
+        assert_eq!(capabilities["installer"]["schema_version"], 1);
+        assert!(
+            !state.exists(),
+            "read-only capabilities must not create the installer root"
+        );
+        // Repeated calls stay read-only through the process probe cache.
+        let second = Params {
+            state_dir: Some(state.clone()),
+            ..Default::default()
+        };
+        execute("get_capabilities", second).unwrap();
+        assert!(!state.exists(), "cached sandbox probe must stay read-only");
     }
 
     #[test]
@@ -2036,7 +2311,7 @@ mod install_flow_tests {
         exe.selection_id = Some("exe-selection-000000000000000000000000-42".into());
         assert_eq!(
             execute("install_patch", exe).unwrap_err(),
-            "exe_route_unimplemented"
+            "selection_not_found"
         );
 
         let mut archive = copy_params(&params);
@@ -2087,9 +2362,7 @@ mod install_flow_tests {
         let mut exe = copy_params(&params);
         exe.release_id = None;
         exe.selection_id = Some("exe-selection-000000000000000000000000-42".into());
-        let result = execute("preview", exe).unwrap();
-        assert_eq!(result["executable"], false);
-        assert_eq!(result["blockers"][0], "exe_route_unimplemented");
+        assert_eq!(execute("preview", exe).unwrap_err(), "selection_not_found");
 
         let mut zip = copy_params(&params);
         zip.release_id = None;
@@ -2307,6 +2580,67 @@ mod dynamic_projection_tests {
         assert!(dynamic["blockers"].as_array().unwrap().is_empty());
         assert!(dynamic["detection"]["status"].is_string());
         assert!(dynamic["compatibility"].is_string());
+    }
+
+    #[test]
+    fn scan_projects_exe_release_id_without_masquerading_selection() {
+        let temp = tempfile::tempdir().unwrap();
+        let library = temp.path().join("Steam");
+        let install = library.join("steamapps").join("common").join("Test");
+        fs::create_dir_all(&install).unwrap();
+        fs::write(
+            library
+                .join("steamapps")
+                .join(format!("appmanifest_{APPID}.acf")),
+            "\"AppState\" { \"appid\" \"42\" \"name\" \"Test\" \"installdir\" \"Test\" \
+             \"buildid\" \"100\" \"StateFlags\" \"4\" \
+             \"UserConfig\" { \"language\" \"schinese\" } \
+             \"MountedConfig\" { \"language\" \"schinese\" } }",
+        )
+        .unwrap();
+        let state = temp.path().join("state");
+        let mut candidate = dynamic_candidate();
+        candidate.mirrors[0].format = "exe".into();
+        candidate.mirrors[0].url = "https://kaguraserver.com/a.exe".into();
+        candidate.format_reported = ArtifactFormat::Exe;
+        candidate.format_observed = ArtifactFormat::Exe;
+        let selection_id = installer::exe_resolve::exe_selection_id(&candidate).unwrap();
+        let mut handle = sources::Sources::open(&state).unwrap();
+        let rule = handle
+            .registry()
+            .rules()
+            .iter()
+            .find(|rule| rule.id == "kagura-cn")
+            .cloned()
+            .unwrap();
+        handle
+            .registry_mut()
+            .commit(
+                &rule,
+                APPID,
+                DiscoveryOutcome {
+                    status: "complete".to_string(),
+                    candidates: vec![candidate],
+                    ..DiscoveryOutcome::default()
+                },
+                &DiscoveryRecord::default(),
+                "key",
+            )
+            .unwrap();
+        let params = Params {
+            roots: vec![library],
+            state_dir: Some(state),
+            platform: Some(Platform::Windows),
+            ..Default::default()
+        };
+        let result = execute("scan", params).unwrap();
+        let patches = result["installs"][0]["patches"].as_array().unwrap();
+        let dynamic = patches
+            .iter()
+            .find(|patch| patch["selection_id"] == selection_id.as_str())
+            .expect("exe selection projected");
+        assert_eq!(dynamic["release_id"], "source-kagura-cn-42");
+        assert_eq!(dynamic["support_level"], "publisher_exe");
     }
 
     #[test]

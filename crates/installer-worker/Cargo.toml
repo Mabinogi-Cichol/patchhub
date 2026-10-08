@@ -42,8 +42,8 @@ windows = { version = "0.62", features = [
 ] }
 winreg = "0.56"
 
-[dev-dependencies]
-tempfile.workspace = true
+[dependencies.tempfile]
+workspace = true
 
 [[bin]]
 name = "sf-worker"

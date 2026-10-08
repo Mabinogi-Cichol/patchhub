@@ -126,12 +126,80 @@ pub fn acquire_with(
     cancel: &AtomicBool,
     mut progress: impl FnMut(u64, u64),
 ) -> Result<AcquiredArchive> {
-    let start_url = validate_download(request.url, request.download_hosts)?;
+    acquire_kind(
+        transport,
+        request,
+        paths,
+        cancel,
+        &mut progress,
+        ArchiveKind::Zip,
+    )
+}
+
+#[derive(Clone, Copy)]
+enum ArchiveKind {
+    Zip,
+    Exe,
+}
+impl ArchiveKind {
+    fn extension(self) -> &'static str {
+        match self {
+            Self::Zip => "zip",
+            Self::Exe => "exe",
+        }
+    }
+    fn limit(self) -> u64 {
+        match self {
+            Self::Zip => MAX_ARCHIVE_BYTES,
+            Self::Exe => 2 * 1024 * 1024 * 1024,
+        }
+    }
+    fn url(self, url: &str, hosts: &[String]) -> Result<String> {
+        let valid = crate::sources::validate::allowed_url(url, hosts, matches!(self, Self::Zip))
+            .map_err(|_| invalid("invalid_download_url"))?;
+        if matches!(self, Self::Exe)
+            && !reqwest::Url::parse(&valid)
+                .map_err(|_| invalid("invalid_download_url"))?
+                .path()
+                .to_ascii_lowercase()
+                .ends_with(".exe")
+        {
+            return Err(invalid("invalid_download_url"));
+        }
+        Ok(valid)
+    }
+}
+/// Only bytes with MZ magic are accepted here; all PE/SF parsing runs in the sandbox.
+pub fn acquire_exe_with(
+    transport: &dyn Transport,
+    request: &DownloadRequest<'_>,
+    paths: &InstallerPaths,
+    cancel: &AtomicBool,
+    mut progress: impl FnMut(u64, u64),
+) -> Result<AcquiredArchive> {
+    acquire_kind(
+        transport,
+        request,
+        paths,
+        cancel,
+        &mut progress,
+        ArchiveKind::Exe,
+    )
+}
+fn acquire_kind(
+    transport: &dyn Transport,
+    request: &DownloadRequest<'_>,
+    paths: &InstallerPaths,
+    cancel: &AtomicBool,
+    progress: &mut dyn FnMut(u64, u64),
+    kind: ArchiveKind,
+) -> Result<AcquiredArchive> {
+    let start_url = kind.url(request.url, request.download_hosts)?;
     let dir = paths.downloads_dir();
     ensure_safe_dir(&dir)?;
     let dir = fs::canonicalize(&dir)?;
 
-    let cached = load_cached(&dir, request, cancel)?;
+    let cached = load_cached(&dir, request, cancel, kind)?;
     let (etag, last_modified) = match &cached {
         Some((_, meta, _)) => (meta.etag.clone(), meta.last_modified.clone()),
         None => (None, None),
@@ -151,7 +219,8 @@ pub fn acquire_with(
         cached.as_ref(),
         &partial,
         cancel,
-        &mut progress,
+        progress,
+        kind,
     );
     if result.is_err() {
         let _ = fs::remove_file(&partial);
@@ -171,6 +240,7 @@ fn download_and_persist(
     partial: &Path,
     cancel: &AtomicBool,
     progress: &mut dyn FnMut(u64, u64),
+    kind: ArchiveKind,
 ) -> Result<AcquiredArchive> {
     let mut url = start_url.to_string();
     let mut response = None;
@@ -203,7 +273,7 @@ fn download_and_persist(
             let next = reqwest::Url::parse(&url)
                 .and_then(|base| base.join(&location))
                 .map_err(|_| invalid("invalid_redirect_url"))?;
-            url = validate_download(next.as_str(), request.download_hosts)?;
+            url = kind.url(next.as_str(), request.download_hosts)?;
             continue;
         }
         if !(200..300).contains(&current.status) {
@@ -213,7 +283,10 @@ fn download_and_persist(
         break;
     }
     let response = response.ok_or_else(|| invalid("too_many_redirects"))?;
-    let final_url = response.final_url.clone();
+    let final_url = kind.url(&response.final_url, request.download_hosts)?;
+    if final_url != url {
+        return Err(invalid("download_response_url_changed"));
+    }
 
     if response
         .content_type
@@ -224,7 +297,7 @@ fn download_and_persist(
     }
     if response
         .content_length
-        .is_some_and(|length| length > MAX_ARCHIVE_BYTES)
+        .is_some_and(|length| length > kind.limit())
     {
         return Err(invalid("download_size_limit"));
     }
@@ -238,7 +311,15 @@ fn download_and_persist(
         .content_length
         .or(request.expected_size)
         .unwrap_or(0);
-    operation::stage("downloading", Some(total_hint), None);
+    operation::stage(
+        "downloading",
+        if total_hint == 0 {
+            None
+        } else {
+            Some(total_hint)
+        },
+        None,
+    );
 
     let mut body = response.body;
     let mut file = OpenOptions::new()
@@ -248,24 +329,27 @@ fn download_and_persist(
     let expected = Expected {
         sha256: request.expected_sha256,
         size: request.expected_size,
-        max: MAX_ARCHIVE_BYTES,
+        max: kind.limit(),
+        kind,
         total_hint,
     };
     let (digest, size) = copy_verified(&mut body, &mut file, &expected, cancel, progress)?;
     file.sync_all()?;
     drop(file);
 
-    let destination = dir.join(format!("{digest}.zip"));
+    let destination = dir.join(format!("{digest}.{}", kind.extension()));
     if destination.exists() {
-        let (existing, existing_size) = hash_file(&destination, MAX_ARCHIVE_BYTES, cancel)?;
+        let (existing, existing_size) = hash_file(&destination, kind.limit(), cancel)?;
         if existing != digest || existing_size != size {
             return Err(invalid("download_cache_conflict"));
         }
         let _ = fs::remove_file(partial);
     } else {
-        fs::rename(partial, &destination)?;
+        fs::hard_link(partial, &destination)?;
+        fs::remove_file(partial)?;
     }
     let meta = CacheEntry {
+        format: kind.extension().to_string(),
         url: request.url.to_string(),
         sha256: digest.clone(),
         size,
@@ -288,6 +372,7 @@ struct Expected<'a> {
     sha256: Option<&'a str>,
     size: Option<u64>,
     max: u64,
+    kind: ArchiveKind,
     total_hint: u64,
 }
 
@@ -337,8 +422,17 @@ fn copy_verified(
             return Err(invalid("download_size_mismatch"));
         }
     }
-    if magic_len < magic.len() || (magic != ZIP_MAGIC_LOCAL && magic != ZIP_MAGIC_EMPTY) {
-        return Err(invalid("download_not_zip"));
+    let valid = match expected.kind {
+        ArchiveKind::Zip => {
+            magic_len == 4 && (magic == ZIP_MAGIC_LOCAL || magic == ZIP_MAGIC_EMPTY)
+        }
+        ArchiveKind::Exe => magic_len >= 2 && &magic[..2] == b"MZ",
+    };
+    if !valid {
+        return Err(invalid(format!(
+            "download_not_{}",
+            expected.kind.extension()
+        )));
     }
     let digest = format!("{:x}", hasher.finalize());
     if let Some(sha256) = expected.sha256 {
@@ -352,6 +446,8 @@ fn copy_verified(
 /// Content-addressed download manifest (one per `<sha256>.zip`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct CacheEntry {
+    #[serde(default = "zip_format")]
+    format: String,
     url: String,
     sha256: String,
     size: u64,
@@ -363,10 +459,15 @@ struct CacheEntry {
     final_url: Option<String>,
 }
 
+fn zip_format() -> String {
+    "zip".into()
+}
+
 fn load_cached(
     dir: &Path,
     request: &DownloadRequest<'_>,
     cancel: &AtomicBool,
+    kind: ArchiveKind,
 ) -> Result<Option<(PathBuf, CacheEntry, String)>> {
     let entries = match fs::read_dir(dir) {
         Ok(entries) => entries,
@@ -380,13 +481,17 @@ fn load_cached(
         if !zip_recipe::no_links(&path) {
             continue;
         }
+        if fs::metadata(&path).map(|m| m.len() > 65536).unwrap_or(true) {
+            continue;
+        }
         let Ok(bytes) = fs::read(&path) else {
             continue;
         };
         let Ok(meta) = serde_json::from_slice::<CacheEntry>(&bytes) else {
             continue;
         };
-        if meta.url != request.url
+        if meta.format != kind.extension()
+            || meta.url != request.url
             || !valid_sha256(&meta.sha256)
             || request
                 .expected_sha256
@@ -397,14 +502,14 @@ fn load_cached(
         {
             continue;
         }
-        let archive = dir.join(format!("{}.zip", meta.sha256));
+        let archive = dir.join(format!("{}.{}", meta.sha256, kind.extension()));
         if !zip_recipe::no_links(&archive) || !archive.is_file() {
             continue;
         }
         if cancel.load(Ordering::Relaxed) {
             return Err(invalid("download_cancelled"));
         }
-        let (digest, size) = hash_file(&archive, MAX_ARCHIVE_BYTES, cancel)?;
+        let (digest, size) = hash_file(&archive, kind.limit(), cancel)?;
         if digest != meta.sha256 || size != meta.size {
             continue;
         }
@@ -440,30 +545,8 @@ fn write_manifest(dir: &Path, meta: &CacheEntry) -> Result<()> {
 }
 
 fn hash_file(path: &Path, limit: u64, cancel: &AtomicBool) -> Result<(String, u64)> {
-    let mut file = File::open(path)?;
-    let before = file.metadata()?;
-    if !before.is_file() || before.len() > limit {
-        return Err(invalid("file_size_or_type"));
-    }
-    let mut hasher = Sha256::new();
-    let mut buffer = vec![0u8; COPY_BUFFER];
-    let mut total = 0u64;
-    loop {
-        operation::check()?;
-        if cancel.load(Ordering::Relaxed) {
-            return Err(invalid("download_cancelled"));
-        }
-        let count = file.read(&mut buffer)?;
-        if count == 0 {
-            break;
-        }
-        total += count as u64;
-        if total > limit {
-            return Err(invalid("file_size_limit"));
-        }
-        hasher.update(&buffer[..count]);
-    }
-    Ok((format!("{:x}", hasher.finalize()), total))
+    let digest = super::facts::digest_file(path, limit, cancel)?;
+    Ok((digest.sha256, digest.size))
 }
 
 fn valid_sha256(value: &str) -> bool {
@@ -483,22 +566,11 @@ fn ensure_safe_dir(dir: &Path) -> Result<()> {
 
 /// Production HTTPS transport. Never follows redirects: the algorithm
 /// revalidates each hop against `download_hosts`.
-struct ReqwestTransport {
-    client: reqwest::blocking::Client,
-}
+struct ReqwestTransport;
 
 impl ReqwestTransport {
     fn new() -> Result<Self> {
-        let client = reqwest::blocking::Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .connect_timeout(Duration::from_secs(15))
-            .timeout(Duration::from_secs(15))
-            .user_agent("steam-patch-manager/0.1")
-            .no_gzip()
-            .no_deflate()
-            .build()
-            .map_err(|_| invalid("http_client_failed"))?;
-        Ok(Self { client })
+        Ok(Self)
     }
 }
 
@@ -509,7 +581,38 @@ impl Transport for ReqwestTransport {
         etag: Option<&str>,
         last_modified: Option<&str>,
     ) -> Result<HttpResponse> {
-        let mut request = self.client.get(url);
+        use std::net::ToSocketAddrs;
+        let parsed = reqwest::Url::parse(url).map_err(|_| invalid("invalid_download_url"))?;
+        let host = parsed
+            .host_str()
+            .ok_or_else(|| invalid("invalid_download_url"))?;
+        if parsed.scheme() != "https"
+            || parsed.port_or_known_default() != Some(443)
+            || !parsed.username().is_empty()
+            || parsed.password().is_some()
+        {
+            return Err(invalid("invalid_download_url"));
+        }
+        let addresses: Vec<_> = (host, 443)
+            .to_socket_addrs()
+            .map_err(|_| invalid("download_dns_failed"))?
+            .collect();
+        if addresses.is_empty() || addresses.iter().any(|a| !public_ip(a.ip())) {
+            return Err(invalid("download_private_address"));
+        }
+        // Resolve exactly once per hop and pin every connection, preserving TLS hostname verification.
+        let client = reqwest::blocking::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .no_proxy()
+            .resolve_to_addrs(host, &addresses)
+            .connect_timeout(Duration::from_secs(15))
+            .timeout(Duration::from_secs(15))
+            .user_agent("steam-patch-manager/0.1")
+            .no_gzip()
+            .no_deflate()
+            .build()
+            .map_err(|_| invalid("http_client_failed"))?;
+        let mut request = client.get(url);
         if let Some(value) = etag {
             request = request.header(reqwest::header::IF_NONE_MATCH, value);
         }
@@ -543,6 +646,32 @@ impl Transport for ReqwestTransport {
             final_url,
             body: Box::new(response),
         })
+    }
+}
+
+/// Conservative routable-address allowlist; reject private/reserved and transition networks.
+fn public_ip(ip: std::net::IpAddr) -> bool {
+    match ip {
+        std::net::IpAddr::V4(ip) => {
+            let [a, b, c, _] = ip.octets();
+            !(a == 0
+                || a == 10
+                || a == 127
+                || a >= 224
+                || (a == 100 && (64..=127).contains(&b))
+                || (a == 169 && b == 254)
+                || (a == 172 && (16..=31).contains(&b))
+                || (a == 192 && (b == 168 || b == 0 || b == 2 || b == 88 && c == 99))
+                || (a == 198 && (b == 18 || b == 19 || b == 51 && c == 100))
+                || (a == 203 && b == 0 && c == 113))
+        }
+        std::net::IpAddr::V6(ip) => {
+            let s = ip.segments();
+            s[0] & 0xe000 == 0x2000
+                && s[0] != 0x2002
+                && s[0] != 0x3fff
+                && !(s[0] == 0x2001 && (s[1] < 0x200 || s[1] == 0xdb8))
+        }
     }
 }
 
@@ -635,6 +764,53 @@ mod tests {
         }
     }
 
+    #[test]
+    fn public_dns_policy_rejects_reserved_and_transition_ranges() {
+        for address in [
+            "0.0.0.0",
+            "10.1.2.3",
+            "127.0.0.1",
+            "100.64.0.1",
+            "169.254.1.2",
+            "172.31.1.2",
+            "192.168.1.1",
+            "192.0.2.1",
+            "198.18.1.1",
+            "198.51.100.1",
+            "203.0.113.1",
+            "224.1.1.1",
+            "::1",
+            "::ffff:8.8.8.8",
+            "fc00::1",
+            "fe80::1",
+            "2001:db8::1",
+            "2002:0808:0808::1",
+        ] {
+            assert!(!public_ip(address.parse().unwrap()), "{address}");
+        }
+        for address in ["8.8.8.8", "1.1.1.1", "2606:4700:4700::1111"] {
+            assert!(public_ip(address.parse().unwrap()));
+        }
+    }
+    #[test]
+    fn exe_magic_and_redirect_policy_are_bound() {
+        let (_temp, paths) = setup();
+        let hosts = hosts();
+        let req = request("https://download.example.com/a.exe", &hosts);
+        let fake = FakeTransport::new(vec![response(200, b"MZ inert SF fixture".to_vec(), None)]);
+        // Response URL must equal the revalidated requested hop.
+        assert!(acquire_exe_with(&fake, &req, &paths, &AtomicBool::new(false), |_, _| {}).is_err());
+        let mut r = response(200, b"MZ inert SF fixture".to_vec(), None);
+        r.final_url = req.url.into();
+        let fake = FakeTransport::new(vec![r]);
+        let archive =
+            acquire_exe_with(&fake, &req, &paths, &AtomicBool::new(false), |_, _| {}).unwrap();
+        assert_eq!(archive.path.extension().unwrap(), "exe");
+        let mut r = response(200, b"PK\x03\x04fixture".to_vec(), None);
+        r.final_url = req.url.into();
+        let fake = FakeTransport::new(vec![r]);
+        assert!(acquire_exe_with(&fake, &req, &paths, &AtomicBool::new(false), |_, _| {}).is_err());
+    }
     #[test]
     fn validate_rejects_hostile_urls() {
         let hosts = hosts();
@@ -788,10 +964,9 @@ mod tests {
         // An approved hop is followed and content identity is established.
         let mut redirect = response(302, Vec::new(), None);
         redirect.location = Some("/mirror/b.zip".to_string());
-        let transport = FakeTransport::new(vec![
-            redirect,
-            response(200, bytes.clone(), Some(bytes.len() as u64)),
-        ]);
+        let mut final_response = response(200, bytes.clone(), Some(bytes.len() as u64));
+        final_response.final_url = "https://download.example.com/mirror/b.zip".into();
+        let transport = FakeTransport::new(vec![redirect, final_response]);
         let acquired = acquire_with(
             &transport,
             &request("https://download.example.com/a.zip", &hosts),

@@ -47,6 +47,46 @@ pub struct RequestLedger {
     path: PathBuf,
 }
 
+/// Independent request ownership lock; never a journal or game lock.
+/// OS release on host death makes interrupted requests recoverable.
+pub struct RequestClaim(std::fs::File);
+impl RequestClaim {
+    pub fn acquire(paths: &super::InstallerPaths, id: &str) -> Result<Self> {
+        use fs2::FileExt;
+        use sha2::{Digest, Sha256};
+        if id.is_empty() || id.len() > MAX_ID_BYTES {
+            return Err(invalid("invalid_request_binding"));
+        }
+        let path = paths
+            .jobs_dir()
+            .join(format!("request-{:x}.lock", Sha256::digest(id.as_bytes())));
+        if !super::zip_recipe::no_links(&path) {
+            return Err(invalid("linked_installer_state"));
+        }
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).read(true).create(true).truncate(false);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.custom_flags(libc::O_NOFOLLOW);
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::OpenOptionsExt;
+            options.custom_flags(0x00200000);
+        }
+        let file = options.open(path)?;
+        file.try_lock_exclusive()
+            .map_err(|_| invalid("install_request_in_progress_or_interrupted"))?;
+        Ok(Self(file))
+    }
+}
+impl Drop for RequestClaim {
+    fn drop(&mut self) {
+        let _ = fs2::FileExt::unlock(&self.0);
+    }
+}
+
 impl RequestLedger {
     pub fn new(paths: &super::InstallerPaths) -> Self {
         Self {
@@ -72,7 +112,7 @@ impl RequestLedger {
         validate_record(record)?;
         let binding = &record.binding;
         let connection = self.connect()?;
-        connection
+        let changed=connection
             .execute(
                 "INSERT INTO requests(
                     request_id, instance_id, selection_id, release_id, operation,
@@ -89,7 +129,12 @@ impl RequestLedger {
                     plan_id=excluded.plan_id,
                     state=excluded.state,
                     error=excluded.error,
-                    updated_at=excluded.updated_at",
+                    updated_at=excluded.updated_at
+                WHERE requests.instance_id=excluded.instance_id
+                    AND requests.selection_id IS excluded.selection_id
+                    AND requests.release_id IS excluded.release_id
+                    AND requests.operation=excluded.operation
+                    AND (requests.content_id IS NULL OR requests.content_id IS excluded.content_id)",
                 params![
                     record.request_id,
                     binding.instance_id,
@@ -106,6 +151,9 @@ impl RequestLedger {
                 ],
             )
             .map_err(|error| invalid(format!("requests_error:{error}")))?;
+        if changed != 1 {
+            return Err(invalid("request_id_binding_conflict"));
+        }
         Ok(())
     }
 
@@ -246,6 +294,24 @@ mod tests {
         }
     }
 
+    #[test]
+    fn request_claim_is_exclusive_and_released() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = super::super::InstallerPaths::new(temp.path());
+        super::super::init_atomic(&paths).unwrap();
+        let first = RequestClaim::acquire(&paths, "same-request").unwrap();
+        assert_eq!(
+            RequestClaim::acquire(&paths, "same-request")
+                .err()
+                .unwrap()
+                .to_string(),
+            "install_request_in_progress_or_interrupted"
+        );
+        let unrelated = RequestClaim::acquire(&paths, "other-request").unwrap();
+        drop(unrelated);
+        drop(first);
+        assert!(RequestClaim::acquire(&paths, "same-request").is_ok());
+    }
     #[test]
     fn ledger_round_trips_and_backfills_content_id() {
         let temp = tempfile::tempdir().unwrap();

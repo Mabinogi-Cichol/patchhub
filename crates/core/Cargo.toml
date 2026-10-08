@@ -6,6 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+steam-patch-installer-worker = { path = "../installer-worker" }
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true

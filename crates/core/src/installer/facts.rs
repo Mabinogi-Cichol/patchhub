@@ -260,6 +260,8 @@ fn read_bounded(
     }
     let mut file = open_nofollow(path)?;
     let before = file.metadata()?;
+    #[cfg(windows)]
+    let identity_before = windows_handle_identity(&file)?;
     if !before.is_file() || before.len() > limit {
         return Err(invalid("exe_game_file_limit"));
     }
@@ -294,11 +296,20 @@ fn read_bounded(
     if !no_links(path) {
         return Err(invalid("exe_game_file_changed"));
     }
+    #[cfg(not(windows))]
     let current = fs::metadata(path)?;
 
-    let identity_before = file_identity(&before);
-    let identity_after = file_identity(&after);
-    let identity_current = file_identity(&current);
+    #[cfg(not(windows))]
+    let (identity_before, identity_after, identity_current) = (
+        file_identity(&before),
+        file_identity(&after),
+        file_identity(&current),
+    );
+    #[cfg(windows)]
+    let (identity_after, identity_current) = (
+        windows_handle_identity(&file)?,
+        windows_handle_identity(&open_nofollow(path)?)?,
+    );
     let changed_before = changed_time(&before);
     let changed_after = changed_time(&after);
     #[cfg(unix)]
@@ -333,6 +344,22 @@ pub fn game_facts(
     game: &GameInstall,
     expectation: &FactsExpectation,
     cancel: &AtomicBool,
+) -> GameFacts {
+    game_facts_inner(game, expectation, cancel, false)
+}
+/// Current generic EXE facts; the scanned build is drift evidence, not publisher verification.
+pub fn game_facts_unreviewed(
+    game: &GameInstall,
+    expectation: &FactsExpectation,
+    cancel: &AtomicBool,
+) -> GameFacts {
+    game_facts_inner(game, expectation, cancel, true)
+}
+fn game_facts_inner(
+    game: &GameInstall,
+    expectation: &FactsExpectation,
+    cancel: &AtomicBool,
+    unreviewed: bool,
 ) -> GameFacts {
     let instance = InstanceFacts {
         instance_id: game.instance_id.clone(),
@@ -377,9 +404,32 @@ pub fn game_facts(
     };
 
     let manifest = manifest_fact(game, &parsed);
-    let build = build_fact(game, &parsed.state, expectation);
+    let build = if unreviewed {
+        match field_text(&parsed.state, "buildid") {
+            Some(build) if valid_buildid(build) && game.buildid.as_deref() == Some(build) => {
+                Fact::evidence(BuildFacts {
+                    buildid: build.to_owned(),
+                    verified: false,
+                })
+            }
+            _ => Fact::failed_code(
+                "exe_game_identity_changed",
+                "current build missing or changed",
+            ),
+        }
+    } else {
+        build_fact(game, &parsed.state, expectation)
+    };
     let language = language_fact(&parsed.state, expectation);
-    let dlc = dlc_fact(&parsed.state, expectation);
+    let dlc = if unreviewed
+        && ["installeddepots", "installeddlc", "installdlc"]
+            .iter()
+            .all(|key| field(&parsed.state, key).is_none())
+    {
+        Fact::failed_code("exe_dlc_unknown", "manifest has no installation evidence")
+    } else {
+        dlc_fact(&parsed.state, expectation)
+    };
     let baselines = baseline_facts(&game.install_path, expectation, cancel);
 
     GameFacts {
@@ -829,7 +879,7 @@ fn file_identity(metadata: &fs::Metadata) -> FileIdentity {
     }
 }
 
-#[cfg(windows)]
+#[cfg(all(windows, test))]
 fn file_identity(metadata: &fs::Metadata) -> FileIdentity {
     use std::os::windows::fs::MetadataExt;
     // `volume_serial_number`/`file_index` are still unstable (`windows_by_handle`).
@@ -876,18 +926,64 @@ fn changed_time(_metadata: &fs::Metadata) -> i64 {
 }
 
 #[cfg(unix)]
-fn open_nofollow(path: &Path) -> Result<File> {
+pub(crate) fn open_nofollow(path: &Path) -> Result<File> {
     use std::os::unix::fs::OpenOptionsExt;
     std::fs::OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
         .open(path)
-        .map_err(Into::into)
 }
 
-#[cfg(not(unix))]
-fn open_nofollow(path: &Path) -> Result<File> {
+#[cfg(windows)]
+pub(crate) fn open_nofollow(path: &Path) -> Result<File> {
+    use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
+    let file = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(0x0020_0000)
+        .share_mode(1)
+        .open(path)?;
+    if file.metadata()?.file_attributes() & 0x400 != 0 {
+        return Err(invalid("exe_linked_game_file"));
+    }
+    Ok(file)
+}
+#[cfg(not(any(unix, windows)))]
+pub(crate) fn open_nofollow(path: &Path) -> Result<File> {
     File::open(path)
+}
+#[cfg(windows)]
+fn windows_handle_identity(file: &File) -> Result<FileIdentity> {
+    use std::os::windows::io::AsRawHandle;
+    #[repr(C)]
+    struct Information {
+        attributes: u32,
+        times: [u32; 6],
+        volume: u32,
+        size_high: u32,
+        size_low: u32,
+        links: u32,
+        index_high: u32,
+        index_low: u32,
+    }
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn GetFileInformationByHandle(handle: *mut std::ffi::c_void, info: *mut Information)
+            -> i32;
+    }
+    let mut info: Information = unsafe { std::mem::zeroed() };
+    if unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut info) } == 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    if info.attributes & 0x400 != 0 {
+        return Err(invalid("exe_linked_game_file"));
+    }
+    Ok(FileIdentity {
+        volume: info.volume as u64,
+        index: ((info.index_high as u64) << 32) | info.index_low as u64,
+        size: ((info.size_high as u64) << 32) | info.size_low as u64,
+        modified_secs: (((info.times[5] as u64) << 32) | info.times[4] as u64) as i64,
+        modified_nanos: 0,
+    })
 }
 
 // ---- CRC-32 (IEEE, matches Python `binascii.crc32` / zlib) ---------------
@@ -1181,6 +1277,82 @@ mod tests {
         assert_eq!(
             facts.manifest.failure.as_ref().unwrap().code,
             "exe_manifest_invalid"
+        );
+    }
+}
+
+#[cfg(test)]
+mod generic_current_tests {
+    use super::*;
+    fn game(temp: &Path, language: &str, dlc_evidence: &str) -> GameInstall {
+        let library = temp.join("library");
+        let install = library.join("steamapps/common/Game");
+        fs::create_dir_all(&install).unwrap();
+        let manifest = format!(
+            r#""AppState" {{ "appid" "42" "installdir" "Game" "StateFlags" "4" "buildid" "123" "UserConfig" {{ {language} }} "MountedConfig" {{ {language} }} {dlc_evidence} }}"#
+        );
+        fs::write(library.join("steamapps/appmanifest_42.acf"), manifest).unwrap();
+        GameInstall {
+            instance_id: format!("42|{}|{}", library.display(), install.display()),
+            appid: 42,
+            name: "Game".into(),
+            localized_name: None,
+            name_language: None,
+            library_path: library,
+            install_path: install,
+            buildid: Some("123".into()),
+            availability: "installed".into(),
+            kind: "unknown".into(),
+        }
+    }
+    fn expectation() -> FactsExpectation {
+        FactsExpectation {
+            appid: 42,
+            language: "zh-CN".into(),
+            verified_buildids: vec![],
+            requires_dlc: vec![],
+            excludes_dlc: vec![],
+            baselines: vec![],
+        }
+    }
+    #[test]
+    fn current_build_is_recorded_without_becoming_verified() {
+        let t = tempfile::tempdir().unwrap();
+        let g = game(
+            t.path(),
+            r#""language" "schinese""#,
+            r#""InstalledDepots" {}"#,
+        );
+        let cancel = AtomicBool::new(false);
+        let f = game_facts_unreviewed(&g, &expectation(), &cancel);
+        assert!(f.is_valid(), "{:?}", f.failures());
+        assert!(!f.build.evidence.unwrap().verified);
+        assert!(!game_facts(&g, &expectation(), &cancel).is_valid());
+        let mut changed = g;
+        changed.buildid = Some("other".into());
+        assert!(!game_facts_unreviewed(&changed, &expectation(), &cancel).is_valid());
+    }
+    #[test]
+    fn unknown_language_or_dlc_never_satisfies_constraints() {
+        let t = tempfile::tempdir().unwrap();
+        let g = game(t.path(), "", " ");
+        let f = game_facts_unreviewed(&g, &expectation(), &AtomicBool::new(false));
+        assert_eq!(f.language.failure.unwrap().code, "exe_language_mismatch");
+        assert_eq!(f.dlc.failure.unwrap().code, "exe_dlc_unknown");
+    }
+    #[cfg(windows)]
+    #[test]
+    fn windows_identity_distinguishes_equal_size_files() {
+        let t = tempfile::tempdir().unwrap();
+        let a = t.path().join("a");
+        let b = t.path().join("b");
+        fs::write(&a, b"123").unwrap();
+        fs::write(&b, b"123").unwrap();
+        let first = open_nofollow(&a).unwrap();
+        let second = open_nofollow(&b).unwrap();
+        assert_ne!(
+            windows_handle_identity(&first).unwrap(),
+            windows_handle_identity(&second).unwrap()
         );
     }
 }

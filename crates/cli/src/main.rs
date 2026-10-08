@@ -81,7 +81,7 @@ fn respond(bytes: &[u8]) -> Value {
 /// `serve` and `serve-task` share this parser/executor; only `serve-task` may
 /// dispatch the task-channel methods (`install_patch` and the streaming source
 /// tasks), carrying the live lease closures.
-fn respond_with<L: Fn(u64) -> bool, D: Fn() -> u64>(
+fn respond_with<L: Fn(u64) -> bool, D: Fn() -> u64 + Sync>(
     bytes: &[u8],
     cancel: &AtomicBool,
     lease_active: &L,
@@ -90,7 +90,7 @@ fn respond_with<L: Fn(u64) -> bool, D: Fn() -> u64>(
     respond_with_channel(bytes, cancel, lease_active, lease_deadline_ms, true)
 }
 
-fn respond_with_channel<L: Fn(u64) -> bool, D: Fn() -> u64>(
+fn respond_with_channel<L: Fn(u64) -> bool, D: Fn() -> u64 + Sync>(
     bytes: &[u8],
     cancel: &AtomicBool,
     lease_active: &L,
@@ -250,11 +250,23 @@ impl LeaseState {
         }
     }
 
-    fn renew(&self) {
-        self.deadline_ms.store(
-            now_millis().saturating_add(LEASE_TTL_MILLIS),
-            Ordering::Relaxed,
-        );
+    fn renew(&self) -> bool {
+        let now = now_millis();
+        let mut previous = self.deadline_ms.load(Ordering::Acquire);
+        loop {
+            if now >= previous {
+                return false;
+            }
+            match self.deadline_ms.compare_exchange_weak(
+                previous,
+                now.saturating_add(LEASE_TTL_MILLIS),
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => return true,
+                Err(current) => previous = current,
+            }
+        }
     }
 
     fn active(&self, now_seconds: u64) -> bool {
@@ -277,7 +289,12 @@ fn spawn_control_thread(cancel: Arc<AtomicBool>, lease: Arc<LeaseState>) {
         let mut lines = stdin.lock().lines();
         while let Some(Ok(line)) = lines.next() {
             match line.trim() {
-                "renew" => lease.renew(),
+                "renew" => {
+                    if !lease.renew() {
+                        cancel.store(true, Ordering::Release);
+                        return;
+                    }
+                }
                 "cancel" => {
                     cancel.store(true, Ordering::Relaxed);
                     return;
@@ -313,13 +330,13 @@ pub(crate) fn run_task(
     cancel: Arc<AtomicBool>,
     emit: impl FnMut(Value) + 'static,
 ) -> Value {
-    run_task_with_lease(bytes, oversized, cancel, |_| true, || 0, emit)
+    run_task_with_lease(bytes, oversized, cancel, |_| true, || u64::MAX, emit)
 }
 
 /// Runs one `serve-task` request: stream methods emit their events, everything
 /// else runs under `operation::run` and emits flat `install_progress` events.
 /// Returns the single final response line value.
-pub(crate) fn run_task_with_lease<L: Fn(u64) -> bool, D: Fn() -> u64>(
+pub(crate) fn run_task_with_lease<L: Fn(u64) -> bool, D: Fn() -> u64 + Sync>(
     bytes: &[u8],
     oversized: bool,
     cancel: Arc<AtomicBool>,
@@ -527,6 +544,17 @@ mod tests {
     use super::*;
     use std::io::Cursor;
 
+    #[test]
+    fn expired_lease_cannot_be_renewed() {
+        let lease = LeaseState {
+            deadline_ms: AtomicU64::new(now_millis().saturating_sub(1)),
+        };
+        let old = lease.deadline_ms();
+        assert!(!lease.renew());
+        assert_eq!(lease.deadline_ms(), old);
+        let active = LeaseState::new();
+        assert!(active.renew());
+    }
     #[test]
     fn protocol_recovers_after_bad_or_oversized_line() {
         let root = tempfile::tempdir().unwrap();

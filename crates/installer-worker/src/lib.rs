@@ -6,9 +6,10 @@
 //! - Other platforms: a stub so the workspace still compiles and tests.
 //!
 //! SF parsing/conversion lives in [`sf`]; core authorization and production launcher
-//! integration are separate from the worker. Probe binaries remain development tools.
+//! integration use the fixed host-owned [production] runtime. Probe binaries remain development tools.
 
 pub mod model;
+pub mod production;
 pub mod sf;
 
 #[cfg(windows)]

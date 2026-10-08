@@ -124,6 +124,8 @@ pub struct SandboxConfig {
     /// `SUDO_UID`/`SUDO_GID` environment variables, then to no drop. Ignored on
     /// Windows.
     pub run_as: Option<(u32, u32)>,
+    /// Production-only strict identity and single-process seccomp constraint.
+    pub production_strict: bool,
 }
 
 impl SandboxConfig {
@@ -149,6 +151,7 @@ impl SandboxConfig {
             tree_children: 0,
             tree_sleep_ms: 15_000,
             run_as: None,
+            production_strict: false,
         }
     }
 }
@@ -159,6 +162,8 @@ impl SandboxConfig {
 pub enum TerminationReason {
     /// The worker exited on its own before any control action.
     Completed,
+    /// Cancellation requested while the worker was running.
+    Cancelled,
     /// The caller-configured wall-clock timeout fired.
     Timeout,
     /// `TerminateJobObject` was invoked by `terminate_after`.

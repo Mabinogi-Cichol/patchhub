@@ -7,7 +7,8 @@
 //! ├── journal.lock                # cross-process instance lock
 //! ├── journal.sqlite              # transaction journal (schema owned by install::Store)
 //! ├── requests.sqlite             # request-idempotency ledger
-//! ├── jobs/<uuid>/...
+//! ├── jobs/<uuid>/...             # protected transaction material
+//! ├── tasks/<uuid>/...            # transient task runtime (reclaimed)
 //! ├── content/<content_id>/       # cleanable
 //! ├── receipts/<instance_hash>/   # protected
 //! ├── downloads/                  # cleanable
@@ -91,6 +92,15 @@ impl InstallerPaths {
         self.root.join("jobs")
     }
 
+    /// `<uuid>` **transient** task runtime directories (`task.json`,
+    /// `lease.json`, `revoked`, `owner.lock`). Reclaimed on terminal state and
+    /// swept by [`super::task::cleanup_stale_tasks`] after a crash. Deliberately
+    /// **not** part of [`Self::cleanable_dirs`] (unlocked deletes are unsafe)
+    /// and **not** protected by [`Self::is_protected`].
+    pub fn tasks_dir(&self) -> PathBuf {
+        self.root.join("tasks")
+    }
+
     /// Normalized ZIP / payload cache (cleanable).
     pub fn content_dir(&self) -> PathBuf {
         self.root.join("content")
@@ -132,6 +142,11 @@ impl InstallerPaths {
     /// (protected; p0-contracts §3.2).
     pub fn job(&self, plan_id: &str) -> Result<PathBuf> {
         self.child(&self.jobs_dir(), plan_id)
+    }
+
+    /// `tasks/<id>/` transient task runtime (reclaimed; not protected).
+    pub fn task(&self, id: &str) -> Result<PathBuf> {
+        self.child(&self.tasks_dir(), id)
     }
 
     /// `jobs/<plan_id>/authorization.json` (protected; design §5.2).

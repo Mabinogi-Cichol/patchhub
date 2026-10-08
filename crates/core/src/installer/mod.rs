@@ -10,11 +10,16 @@
 
 pub mod acquire;
 pub mod authorization;
+pub mod exe_orchestrator;
+pub mod exe_report;
+pub mod exe_resolve;
 pub mod facts;
 pub mod orchestrator;
 pub mod requests;
 pub mod resolve;
+pub mod space;
 pub mod store;
+pub mod task;
 pub mod zip_recipe;
 
 pub use acquire::{
@@ -51,4 +56,15 @@ pub type Result<T> = std::io::Result<T>;
 /// Uniform invalid-data error matching the `sources` module convention.
 pub fn invalid(code: impl Into<String>) -> std::io::Error {
     std::io::Error::new(std::io::ErrorKind::InvalidData, code.into())
+}
+
+pub use steam_patch_installer_worker::production::{SandboxAvailability, WorkerRuntime};
+
+/// The trusted Linux host must launch the whole core under its chosen non-root user.
+pub fn host_identity_blocker() -> Option<&'static str> {
+    #[cfg(target_os = "linux")]
+    if unsafe { libc::geteuid() } == 0 {
+        return Some("installer_host_requires_non_root");
+    }
+    None
 }

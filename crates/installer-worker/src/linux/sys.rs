@@ -23,6 +23,8 @@ pub const RLIMIT_FSIZE: i32 = 1;
 pub const RLIMIT_CORE: i32 = 4;
 pub const RLIMIT_AS: i32 = 9;
 
+pub const F_SETFD: i32 = 2;
+pub const PR_SET_PDEATHSIG: i32 = 1;
 pub const SIGTERM: i32 = 15;
 pub const SIGKILL: i32 = 9;
 
@@ -30,6 +32,10 @@ extern "C" {
     pub fn setrlimit(resource: i32, rlim: *const RLimit) -> i32;
     pub fn getrlimit(resource: i32, rlim: *mut RLimit) -> i32;
     pub fn setsid() -> i32;
+    pub fn getpid() -> i32;
+    pub fn getppid() -> i32;
+    pub fn fcntl(fd: i32, command: i32, arg: i32) -> i32;
+    pub fn prctl(option: i32, arg2: usize, arg3: usize, arg4: usize, arg5: usize) -> i32;
     pub fn killpg(pgrp: i32, sig: i32) -> i32;
     pub fn geteuid() -> u32;
     /// `int setgroups(size_t size, const gid_t *list)` (`gid_t == u32`).

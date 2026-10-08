@@ -7,12 +7,16 @@ use std::fs::File;
 use std::io::{Read, Write};
 use std::os::windows::io::{FromRawHandle, RawHandle};
 use std::path::PathBuf;
+use std::sync::{
+    atomic::{AtomicBool, AtomicU8, Ordering},
+    Arc,
+};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use windows::core::{PCWSTR, PWSTR};
 use windows::Win32::Foundation::{
-    SetHandleInformation, HANDLE, HANDLE_FLAGS, HANDLE_FLAG_INHERIT, WAIT_OBJECT_0,
+    SetHandleInformation, HANDLE, HANDLE_FLAGS, HANDLE_FLAG_INHERIT, WAIT_OBJECT_0, WAIT_TIMEOUT,
 };
 use windows::Win32::Security::{PSID, SECURITY_ATTRIBUTES, SECURITY_CAPABILITIES};
 use windows::Win32::System::Pipes::CreatePipe;
@@ -35,6 +39,18 @@ use crate::model::{IsolationError, LaunchOutcome, SandboxConfig, TerminationReas
 struct PipeHandles {
     read: HANDLE,
     write: HANDLE,
+}
+
+impl Drop for PipeHandles {
+    fn drop(&mut self) {
+        unsafe {
+            close_handle(self.read);
+            close_handle(self.write);
+        }
+    }
+}
+fn take_handle(handle: &mut HANDLE) -> HANDLE {
+    std::mem::take(handle)
 }
 
 fn inheritable_security_attributes() -> SECURITY_ATTRIBUTES {
@@ -76,15 +92,29 @@ fn set_inherit(handle: HANDLE, inherit: bool) -> Result<(), IsolationError> {
 
 /// Launch the worker under LPAC + Job Object and collect its output.
 pub fn run_sandboxed(cfg: &SandboxConfig) -> Result<LaunchOutcome, IsolationError> {
+    run_internal(cfg, None)
+}
+
+/// Poll cancellation while the LPAC worker runs; terminate its complete Job.
+pub fn run_sandboxed_cancellable(
+    cfg: &SandboxConfig,
+    cancel: &AtomicBool,
+) -> Result<LaunchOutcome, IsolationError> {
+    run_internal(cfg, Some(cancel))
+}
+fn run_internal(
+    cfg: &SandboxConfig,
+    cancel: Option<&AtomicBool>,
+) -> Result<LaunchOutcome, IsolationError> {
     let profile = ensure_profile(&cfg.profile_name)?;
 
     let mut job = Job::create()?;
     job.set_limits(&cfg.limits)?;
     let cpu_rate_control = job.cpu_rate_control().ok();
 
-    let stdin_pipe = create_inheritable_pipe()?;
-    let stdout_pipe = create_inheritable_pipe()?;
-    let stderr_pipe = create_inheritable_pipe()?;
+    let mut stdin_pipe = create_inheritable_pipe()?;
+    let mut stdout_pipe = create_inheritable_pipe()?;
+    let mut stderr_pipe = create_inheritable_pipe()?;
 
     // Parent-only ends must not be inherited by the child.
     set_inherit(stdin_pipe.write, false)?;
@@ -103,7 +133,6 @@ pub fn run_sandboxed(cfg: &SandboxConfig) -> Result<LaunchOutcome, IsolationErro
     let _ =
         unsafe { InitializeProcThreadAttributeList(None, attribute_count, None, &mut attr_size) };
     if attr_size == 0 {
-        cleanup_pipes(&stdin_pipe, &stdout_pipe, &stderr_pipe);
         return Err(IsolationError::new(
             "attributes",
             Some(last_error()),
@@ -116,7 +145,6 @@ pub fn run_sandboxed(cfg: &SandboxConfig) -> Result<LaunchOutcome, IsolationErro
         InitializeProcThreadAttributeList(Some(attr_list), attribute_count, None, &mut attr_size)
     }
     .map_err(|err| {
-        cleanup_pipes(&stdin_pipe, &stdout_pipe, &stderr_pipe);
         IsolationError::new(
             "attributes",
             Some(hresult_to_win32(&err)),
@@ -185,7 +213,7 @@ pub fn run_sandboxed(cfg: &SandboxConfig) -> Result<LaunchOutcome, IsolationErro
     })();
     if let Err(err) = attr_result {
         unsafe { DeleteProcThreadAttributeList(attr_list) };
-        cleanup_pipes(&stdin_pipe, &stdout_pipe, &stderr_pipe);
+
         return Err(err);
     }
 
@@ -271,7 +299,7 @@ pub fn run_sandboxed(cfg: &SandboxConfig) -> Result<LaunchOutcome, IsolationErro
             }
             Err(err2) => {
                 unsafe { DeleteProcThreadAttributeList(attr_list) };
-                cleanup_pipes(&stdin_pipe, &stdout_pipe, &stderr_pipe);
+
                 return Err(IsolationError::new(
                     "create-process",
                     Some(hresult_to_win32(&err2)),
@@ -287,9 +315,9 @@ pub fn run_sandboxed(cfg: &SandboxConfig) -> Result<LaunchOutcome, IsolationErro
 
     // Close the child's ends in the parent.
     unsafe {
-        close_handle(stdin_pipe.read);
-        close_handle(stdout_pipe.write);
-        close_handle(stderr_pipe.write);
+        close_handle(take_handle(&mut stdin_pipe.read));
+        close_handle(take_handle(&mut stdout_pipe.write));
+        close_handle(take_handle(&mut stderr_pipe.write));
     }
 
     let pid = pi.dwProcessId;
@@ -297,7 +325,8 @@ pub fn run_sandboxed(cfg: &SandboxConfig) -> Result<LaunchOutcome, IsolationErro
     let thread_handle = pi.hThread;
 
     // Reader/writer threads. `File` takes ownership of the parent pipe handles.
-    let mut stdin_file = unsafe { File::from_raw_handle(stdin_pipe.write.0 as RawHandle) };
+    let mut stdin_file =
+        unsafe { File::from_raw_handle(take_handle(&mut stdin_pipe.write).0 as RawHandle) };
     let stdin_data = cfg.stdin.clone();
     let stdin_join = thread::spawn(move || {
         let _ = stdin_file.write_all(&stdin_data);
@@ -305,19 +334,17 @@ pub fn run_sandboxed(cfg: &SandboxConfig) -> Result<LaunchOutcome, IsolationErro
         drop(stdin_file);
     });
 
-    let mut stdout_file = unsafe { File::from_raw_handle(stdout_pipe.read.0 as RawHandle) };
-    let stdout_join = thread::spawn(move || {
-        let mut buf = Vec::new();
-        let _ = stdout_file.read_to_end(&mut buf);
-        buf
-    });
+    let overflow = Arc::new(AtomicU8::new(0));
+    let stdout_flag = Arc::clone(&overflow);
+    let mut stdout_file =
+        unsafe { File::from_raw_handle(take_handle(&mut stdout_pipe.read).0 as RawHandle) };
+    let stdout_join =
+        thread::spawn(move || read_bounded(&mut stdout_file, 16 * 1024 * 1024, stdout_flag));
 
-    let mut stderr_file = unsafe { File::from_raw_handle(stderr_pipe.read.0 as RawHandle) };
-    let stderr_join = thread::spawn(move || {
-        let mut buf = Vec::new();
-        let _ = stderr_file.read_to_end(&mut buf);
-        buf
-    });
+    let stderr_flag = Arc::clone(&overflow);
+    let mut stderr_file =
+        unsafe { File::from_raw_handle(take_handle(&mut stderr_pipe.read).0 as RawHandle) };
+    let stderr_join = thread::spawn(move || read_bounded(&mut stderr_file, 64 * 1024, stderr_flag));
 
     let previous = unsafe { ResumeThread(thread_handle) };
     if previous == u32::MAX {
@@ -365,6 +392,15 @@ pub fn run_sandboxed(cfg: &SandboxConfig) -> Result<LaunchOutcome, IsolationErro
 
     loop {
         let elapsed = start.elapsed();
+        if !terminated && !job_closed && cancel.is_some_and(|c| c.load(Ordering::Acquire)) {
+            let _ = job.terminate(5);
+            terminated = true;
+            termination = TerminationReason::Cancelled;
+        }
+        if !terminated && !job_closed && overflow.load(Ordering::Acquire) != 0 {
+            let _ = job.terminate(6);
+            terminated = true;
+        }
 
         if !job_closed {
             if let Some(delay) = cfg.limits.close_job_after {
@@ -403,6 +439,10 @@ pub fn run_sandboxed(cfg: &SandboxConfig) -> Result<LaunchOutcome, IsolationErro
         if wr == WAIT_OBJECT_0 {
             break;
         }
+        if wr != WAIT_TIMEOUT {
+            let _ = job.terminate(7);
+            break;
+        }
         if job_closed && elapsed > Duration::from_secs(300) {
             // Safety valve: a KILL_ON_JOB_CLOSE member that refuses to die.
             break;
@@ -425,6 +465,13 @@ pub fn run_sandboxed(cfg: &SandboxConfig) -> Result<LaunchOutcome, IsolationErro
     let stdout = stdout_join.join().unwrap_or_default();
     let stderr = stderr_join.join().unwrap_or_default();
 
+    if overflow.load(Ordering::Acquire) != 0 {
+        return Err(IsolationError::new(
+            "output-limit",
+            None,
+            "exe_worker_response_limit: stdout/stderr capture failed or exceeded its limit",
+        ));
+    }
     Ok(LaunchOutcome {
         pid,
         exit_code,
@@ -581,17 +628,6 @@ fn spawn_tree_child(
     }
 }
 
-fn cleanup_pipes(stdin_pipe: &PipeHandles, stdout_pipe: &PipeHandles, stderr_pipe: &PipeHandles) {
-    unsafe {
-        close_handle(stdin_pipe.read);
-        close_handle(stdin_pipe.write);
-        close_handle(stdout_pipe.read);
-        close_handle(stdout_pipe.write);
-        close_handle(stderr_pipe.read);
-        close_handle(stderr_pipe.write);
-    }
-}
-
 /// Convenience: spin up the sandbox and return the parsed worker response.
 pub fn run_worker(
     cfg: &SandboxConfig,
@@ -615,4 +651,19 @@ fn command_line_ptr(buf: &mut [u16]) -> PWSTR {
 #[allow(dead_code)]
 fn null_pcwstr() -> PCWSTR {
     PCWSTR::null()
+}
+
+fn read_bounded(reader: &mut impl Read, limit: usize, overflow: Arc<AtomicU8>) -> Vec<u8> {
+    let mut out = Vec::new();
+    let mut buf = [0u8; 64 * 1024];
+    loop {
+        match reader.read(&mut buf) {
+            Ok(0) => return out,
+            Ok(n) if out.len().saturating_add(n) <= limit => out.extend_from_slice(&buf[..n]),
+            _ => {
+                overflow.store(1, Ordering::Release);
+                return Vec::new();
+            }
+        }
+    }
 }

@@ -91,7 +91,7 @@ pub struct ZipInstallDeps<'a> {
     /// Current host foreground-lease deadline in epoch milliseconds, re-read at
     /// each stage boundary so a `renew` is reflected in the persisted
     /// `jobs/<plan_id>/lease.json` (p1-zip-orchestration §3.5).
-    pub lease_deadline_ms: &'a dyn Fn() -> u64,
+    pub lease_deadline_ms: &'a (dyn Fn() -> u64 + Sync),
 }
 
 fn now_unix() -> u64 {
@@ -268,8 +268,11 @@ pub fn record_terminal(
     ledger.record(&record).map_err(internal)
 }
 
-fn map_download_error(error: io::Error) -> ZipTaskError {
+pub(crate) fn map_download_error(error: io::Error) -> ZipTaskError {
     let code = error.to_string();
+    if code == "task_cancelled" || code == "cancelled" {
+        return ZipTaskError::code("download_cancelled");
+    }
     if [
         "download_cancelled",
         "download_hash_mismatch",
@@ -295,7 +298,7 @@ fn map_recipe_error(error: io::Error) -> ZipTaskError {
     }
 }
 
-fn map_plan_error(error: io::Error) -> ZipTaskError {
+pub(crate) fn map_plan_error(error: io::Error) -> ZipTaskError {
     let code = error.to_string();
     if [
         "insufficient_space",
@@ -320,7 +323,7 @@ fn map_fact_failure(failure: &facts::FactFailure) -> ZipTaskError {
     ZipTaskError::new(failure.code.clone(), failure.detail.clone())
 }
 
-fn build_release(
+pub(crate) fn build_release(
     selection: &ResolvedZipCandidate,
     acquired: &acquire::AcquiredArchive,
     mappings: &[FileMapping],
@@ -362,7 +365,7 @@ fn build_release(
     }
 }
 
-fn plan_mappings(plan: &install::InstallPlan) -> Vec<FileMapping> {
+pub(crate) fn plan_mappings(plan: &install::InstallPlan) -> Vec<FileMapping> {
     plan.changes
         .iter()
         .map(|change| FileMapping {
@@ -385,11 +388,34 @@ fn fail_after_plan(
     code: &str,
     detail: impl Into<String>,
 ) -> ZipTaskError {
-    let transaction = install::discard_plan_at(paths.root(), plan_id).ok();
-    if let Some(transaction) = transaction {
-        let _ = record_terminal(paths, request_id, binding, content_id, &transaction);
+    match finish_failed_plan(paths, plan_id) {
+        Ok(transaction) => {
+            if let Err(e) = record_terminal(paths, request_id, binding, content_id, &transaction) {
+                return e;
+            }
+            if transaction.state == "needs_recovery" {
+                return ZipTaskError::new("needs_recovery", transaction.error.unwrap_or_default());
+            }
+        }
+        Err(e) => return ZipTaskError::new("needs_recovery", e.to_string()),
     }
     ZipTaskError::new(code, detail)
+}
+
+/// Complete post-plan failure using the journal's actual state.
+pub fn finish_failed_plan(paths: &InstallerPaths, id: &str) -> io::Result<Transaction> {
+    let current = install::list_transactions_at(paths.root())?
+        .into_iter()
+        .find(|t| t.plan_id == id)
+        .ok_or_else(|| super::invalid("transaction_missing"))?;
+    match current.state.as_str() {
+        "planned" => install::discard_plan_at(paths.root(), id),
+        "committed" | "rolled_back" | "needs_recovery" => Ok(current),
+        _ => install::recover_at(paths.root())?
+            .into_iter()
+            .find(|t| t.plan_id == id)
+            .ok_or_else(|| super::invalid("transaction_missing")),
+    }
 }
 
 /// Stage-boundary gate: local cancel flag, then the **live** foreground lease
@@ -428,6 +454,39 @@ pub fn install_zip(
     inputs: ZipInstallInputs<'_>,
     deps: ZipInstallDeps<'_>,
 ) -> ZipTaskResult<Transaction> {
+    if let Some(code) = super::host_identity_blocker() {
+        return Err(ZipTaskError::code(code));
+    }
+    let _claim =
+        super::requests::RequestClaim::acquire(deps.paths, inputs.request_id).map_err(internal)?;
+    let control = super::task::TaskControl::new(
+        deps.paths,
+        inputs.request_id,
+        &inputs.game.instance_id,
+        &inputs.selection.selection_id,
+        (deps.lease_deadline_ms)(),
+    )
+    .map_err(internal)?;
+    if !(deps.lease_active)(now_unix()) {
+        control.revoke().map_err(internal)?;
+        return Err(ZipTaskError::code("installer_lease_expired"));
+    }
+    let requested = deps.cancel;
+    control.run(requested, deps.lease_deadline_ms, || {
+        let deps = ZipInstallDeps {
+            cancel: &control.cancel,
+            ..deps
+        };
+        install_zip_inner(inputs, deps, &control, requested)
+    })
+}
+
+fn install_zip_inner(
+    inputs: ZipInstallInputs<'_>,
+    deps: ZipInstallDeps<'_>,
+    control: &super::task::TaskControl,
+    requested: &AtomicBool,
+) -> ZipTaskResult<Transaction> {
     let binding = request_binding(
         &inputs.game.instance_id,
         Some(&inputs.selection.selection_id),
@@ -439,6 +498,9 @@ pub fn install_zip(
         return Ok(transaction);
     }
 
+    control
+        .check_requested(requested, deps.lease_deadline_ms)
+        .map_err(|_| ZipTaskError::code("cancelled"))?;
     // Step 3: connecting + acquire (no journal lock held).
     operation::stage("connecting", None, None);
     boundary(&deps)?;
@@ -452,6 +514,9 @@ pub fn install_zip(
         acquire::acquire_with(deps.transport, &request, deps.paths, deps.cancel, |_, _| {})
             .map_err(map_download_error)?;
 
+    control
+        .check_requested(requested, deps.lease_deadline_ms)
+        .map_err(|_| ZipTaskError::code("download_cancelled"))?;
     // Step 4: recipe.
     let mappings = zip_recipe::build_recipe(&acquired.path, &inputs.game.install_path, deps.cancel)
         .map_err(map_recipe_error)?;
@@ -480,6 +545,9 @@ pub fn install_zip(
         return Err(ZipTaskError::code("request_id_binding_conflict"));
     }
 
+    control
+        .check_requested(requested, deps.lease_deadline_ms)
+        .map_err(|_| ZipTaskError::code("cancelled"))?;
     // Step 7: plan + authorize + re-check (journal.lock held only inside prepare).
     boundary(&deps)?;
     let plan = install::prepare_with_operation_at(
@@ -491,87 +559,134 @@ pub fn install_zip(
         inputs.operation,
     )
     .map_err(map_plan_error)?;
-    if !plan.blockers.is_empty() {
-        let _ = install::discard_plan_at(deps.paths.root(), &plan.plan_id);
-        return Err(ZipTaskError::new(
-            "plan_has_blockers",
-            plan.blockers.join(","),
-        ));
-    }
-    record_plan(
-        deps.paths,
-        inputs.request_id,
-        &binding,
-        &plan.plan_id,
-        &identity,
-    )?;
-    // The plan exists: persist the foreground lease for recovery/audit
-    // (p1-zip-orchestration §3.5).
-    if let Err(error) = write_lease(&deps, &plan.plan_id) {
-        return Err(fail_after_plan(
+    let outcome = (|| {
+        if let Err(e) = control.attach_plan(deps.paths, &plan.plan_id) {
+            operation::restoring();
+            let _ = install::discard_plan_at(deps.paths.root(), &plan.plan_id);
+            return Err(internal(e));
+        }
+        if !plan.blockers.is_empty() {
+            let _ = install::discard_plan_at(deps.paths.root(), &plan.plan_id);
+            return Err(ZipTaskError::new(
+                "plan_has_blockers",
+                plan.blockers.join(","),
+            ));
+        }
+        record_plan(
             deps.paths,
             inputs.request_id,
             &binding,
-            &identity,
             &plan.plan_id,
-            "plan_failed",
-            error.to_string(),
-        ));
-    }
+            &identity,
+        )?;
+        // The plan exists: persist the foreground lease for recovery/audit
+        // (p1-zip-orchestration §3.5).
+        if let Err(error) = write_lease(&deps, &plan.plan_id) {
+            return Err(fail_after_plan(
+                deps.paths,
+                inputs.request_id,
+                &binding,
+                &identity,
+                &plan.plan_id,
+                "plan_failed",
+                error.to_string(),
+            ));
+        }
 
-    let content = ContentBinding::publisher_zip(&acquired.sha256, acquired.size, &mappings);
-    let auth = authorize(AuthorizeInput {
-        release_id: &release.release_id,
-        selection_id: Some(&inputs.selection.selection_id),
-        source_id: &inputs.selection.source_id,
-        source_record_id: Some(&inputs.selection.source_record_id),
-        candidate_sha256: &inputs.selection.candidate_sha256,
-        rule_fingerprint: &inputs.selection.rule_fingerprint,
-        settings_revision: inputs.selection.settings_revision,
-        conditions_sha256: &conditions_sha256,
-        content,
-        policy: PolicyVersions::default(),
-        plan_id: &plan.plan_id,
-        task_id: None,
-        request_id: Some(inputs.request_id),
-        facts: facts.clone(),
-        now: inputs.now,
-        ttl_seconds: inputs.ttl_seconds,
-    })
-    .map_err(|invalidation| {
-        fail_after_plan(
-            deps.paths,
-            inputs.request_id,
-            &binding,
-            &identity,
-            &plan.plan_id,
-            &invalidation.code,
-            invalidation.to_string(),
-        )
-    })?;
-    if let Err(error) = authorization::write(deps.paths, &auth) {
-        return Err(fail_after_plan(
-            deps.paths,
-            inputs.request_id,
-            &binding,
-            &identity,
-            &plan.plan_id,
-            "plan_failed",
-            error.to_string(),
-        ));
-    }
+        let content = ContentBinding::publisher_zip(&acquired.sha256, acquired.size, &mappings);
+        let auth = authorize(AuthorizeInput {
+            release_id: &release.release_id,
+            selection_id: Some(&inputs.selection.selection_id),
+            source_id: &inputs.selection.source_id,
+            source_record_id: Some(&inputs.selection.source_record_id),
+            candidate_sha256: &inputs.selection.candidate_sha256,
+            rule_fingerprint: &inputs.selection.rule_fingerprint,
+            settings_revision: inputs.selection.settings_revision,
+            conditions_sha256: &conditions_sha256,
+            content,
+            policy: PolicyVersions::default(),
+            plan_id: &plan.plan_id,
+            task_id: None,
+            request_id: Some(inputs.request_id),
+            facts: facts.clone(),
+            now: inputs.now,
+            ttl_seconds: inputs.ttl_seconds,
+        })
+        .map_err(|invalidation| {
+            fail_after_plan(
+                deps.paths,
+                inputs.request_id,
+                &binding,
+                &identity,
+                &plan.plan_id,
+                &invalidation.code,
+                invalidation.to_string(),
+            )
+        })?;
+        if let Err(error) = authorization::write(deps.paths, &auth) {
+            return Err(fail_after_plan(
+                deps.paths,
+                inputs.request_id,
+                &binding,
+                &identity,
+                &plan.plan_id,
+                "plan_failed",
+                error.to_string(),
+            ));
+        }
 
-    let current = recheck_authorization(&deps, &inputs, &plan, &acquired, &expectation)?;
-    if let Err(invalidation) = authorization::validate(&auth, &current) {
-        // A lost/expired foreground lease or a persistent revoke after the plan
-        // is a durable cancellation, not an RPC failure: roll the plan back and
-        // return the `InstallOutcome` (p1-host-contract §2.3). Every other
-        // invalidation (candidate/rules/content/facts drift) stays
-        // `ok:false + error{code}` per §4.4.
-        if matches!(
-            invalidation.code.as_str(),
-            "authorization_lease_inactive" | "authorization_revoked"
-        ) {
+        let current = recheck_authorization(&deps, &inputs, &plan, &acquired, &expectation)?;
+        if let Err(invalidation) = authorization::validate(&auth, &current) {
+            // A lost/expired foreground lease or a persistent revoke after the plan
+            // is a durable cancellation, not an RPC failure: roll the plan back and
+            // return the `InstallOutcome` (p1-host-contract §2.3). Every other
+            // invalidation (candidate/rules/content/facts drift) stays
+            // `ok:false + error{code}` per §4.4.
+            if matches!(
+                invalidation.code.as_str(),
+                "authorization_lease_inactive" | "authorization_revoked"
+            ) {
+                let transaction =
+                    install::discard_plan_at(deps.paths.root(), &plan.plan_id).map_err(internal)?;
+                record_terminal(
+                    deps.paths,
+                    inputs.request_id,
+                    &binding,
+                    &identity,
+                    &transaction,
+                )?;
+                return Ok(transaction);
+            }
+            return Err(fail_after_plan(
+                deps.paths,
+                inputs.request_id,
+                &binding,
+                &identity,
+                &plan.plan_id,
+                &invalidation.code,
+                invalidation.to_string(),
+            ));
+        }
+
+        // Stage boundary after the plan: refresh the persisted lease so a `renew`
+        // reaches disk, then re-check cancel/lease/op before apply.
+        if let Err(error) = write_lease(&deps, &plan.plan_id) {
+            return Err(fail_after_plan(
+                deps.paths,
+                inputs.request_id,
+                &binding,
+                &identity,
+                &plan.plan_id,
+                "plan_failed",
+                error.to_string(),
+            ));
+        }
+        let _ = control.check_requested(requested, deps.lease_deadline_ms);
+        // Step 8: apply. A cancellation after the plan is a durable revoke + discard.
+        if deps.cancel.load(Ordering::Relaxed)
+            || !(deps.lease_active)(now_unix())
+            || operation::check().is_err()
+        {
             let transaction =
                 install::discard_plan_at(deps.paths.root(), &plan.plan_id).map_err(internal)?;
             record_terminal(
@@ -583,37 +698,48 @@ pub fn install_zip(
             )?;
             return Ok(transaction);
         }
-        return Err(fail_after_plan(
-            deps.paths,
-            inputs.request_id,
-            &binding,
-            &identity,
-            &plan.plan_id,
-            &invalidation.code,
-            invalidation.to_string(),
-        ));
-    }
+        // The download must still hash to the authorized artifact before apply.
+        let artifact = facts::digest_file(&acquired.path, acquire::MAX_ARCHIVE_BYTES, deps.cancel)
+            .map_err(internal)?;
+        if artifact.sha256 != acquired.sha256 {
+            return Err(fail_after_plan(
+                deps.paths,
+                inputs.request_id,
+                &binding,
+                &identity,
+                &plan.plan_id,
+                "authorization_content_changed",
+                "download artifact changed after authorization",
+            ));
+        }
+        let transaction = match install::apply_at(deps.paths.root(), &plan.plan_id) {
+            Ok(transaction) => transaction,
+            Err(error) if error.to_string() == "plan_revoked" => {
+                install::discard_plan_at(deps.paths.root(), &plan.plan_id).map_err(internal)?
+            }
+            Err(error) => {
+                control.revoke().map_err(internal)?;
+                operation::restoring();
+                let transaction =
+                    finish_failed_plan(deps.paths, &plan.plan_id).map_err(internal)?;
+                record_terminal(
+                    deps.paths,
+                    inputs.request_id,
+                    &binding,
+                    &identity,
+                    &transaction,
+                )?;
+                if matches!(
+                    transaction.state.as_str(),
+                    "committed" | "rolled_back" | "needs_recovery"
+                ) {
+                    return Ok(transaction);
+                }
+                return Err(map_plan_error(error));
+            }
+        };
 
-    // Stage boundary after the plan: refresh the persisted lease so a `renew`
-    // reaches disk, then re-check cancel/lease/op before apply.
-    if let Err(error) = write_lease(&deps, &plan.plan_id) {
-        return Err(fail_after_plan(
-            deps.paths,
-            inputs.request_id,
-            &binding,
-            &identity,
-            &plan.plan_id,
-            "plan_failed",
-            error.to_string(),
-        ));
-    }
-    // Step 8: apply. A cancellation after the plan is a durable revoke + discard.
-    if deps.cancel.load(Ordering::Relaxed)
-        || !(deps.lease_active)(now_unix())
-        || operation::check().is_err()
-    {
-        let transaction =
-            install::discard_plan_at(deps.paths.root(), &plan.plan_id).map_err(internal)?;
+        operation::stage("cleanup", None, None);
         record_terminal(
             deps.paths,
             inputs.request_id,
@@ -621,39 +747,35 @@ pub fn install_zip(
             &identity,
             &transaction,
         )?;
-        return Ok(transaction);
-    }
-    // The download must still hash to the authorized artifact before apply.
-    let artifact = facts::digest_file(&acquired.path, acquire::MAX_ARCHIVE_BYTES, deps.cancel)
-        .map_err(internal)?;
-    if artifact.sha256 != acquired.sha256 {
-        return Err(fail_after_plan(
-            deps.paths,
-            inputs.request_id,
-            &binding,
-            &identity,
-            &plan.plan_id,
-            "authorization_content_changed",
-            "download artifact changed after authorization",
-        ));
-    }
-    let transaction = match install::apply_at(deps.paths.root(), &plan.plan_id) {
-        Ok(transaction) => transaction,
-        Err(error) if error.to_string() == "plan_revoked" => {
-            install::discard_plan_at(deps.paths.root(), &plan.plan_id).map_err(internal)?
+        Ok(transaction)
+    })();
+    match outcome {
+        Ok(t) => Ok(t),
+        Err(error) => {
+            control
+                .revoke()
+                .map_err(|e| ZipTaskError::new("needs_recovery", e.to_string()))?;
+            operation::restoring();
+            let transaction = finish_failed_plan(deps.paths, &plan.plan_id)
+                .map_err(|e| ZipTaskError::new("needs_recovery", e.to_string()))?;
+            record_terminal(
+                deps.paths,
+                inputs.request_id,
+                &binding,
+                &identity,
+                &transaction,
+            )?;
+            if transaction.state == "committed"
+                || transaction.state == "needs_recovery"
+                || error.code.contains("cancel")
+                || error.code.contains("lease")
+            {
+                Ok(transaction)
+            } else {
+                Err(error)
+            }
         }
-        Err(error) => return Err(map_plan_error(error)),
-    };
-
-    operation::stage("cleanup", None, None);
-    record_terminal(
-        deps.paths,
-        inputs.request_id,
-        &binding,
-        &identity,
-        &transaction,
-    )?;
-    Ok(transaction)
+    }
 }
 
 fn recheck_authorization(
@@ -705,7 +827,7 @@ pub fn installer_error(error: impl fmt::Display) -> ZipTaskError {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::installer::acquire::{FakeTransport, HttpResponse};
     use crate::installer::zip_selection_id;
@@ -750,7 +872,7 @@ mod tests {
         buffer.into_inner()
     }
 
-    fn setup() -> (TempDir, GameInstall, Vec<u8>) {
+    pub(crate) fn setup() -> (TempDir, GameInstall, Vec<u8>) {
         let temp = tempfile::tempdir().unwrap();
         let library = temp.path().join("Steam");
         let install = library.join("steamapps").join("common").join("Test");
@@ -768,7 +890,7 @@ mod tests {
         (temp, game, archive)
     }
 
-    fn candidate() -> SourceCandidate {
+    pub(crate) fn candidate() -> SourceCandidate {
         SourceCandidate {
             candidate_id: "candidate-000000000000000000000000".to_string(),
             source_id: "kagura-cn".to_string(),
@@ -810,7 +932,7 @@ mod tests {
         }
     }
 
-    fn query() -> GameQuery {
+    pub(crate) fn query() -> GameQuery {
         GameQuery {
             appid: APPID,
             name: "Test".to_string(),
@@ -910,7 +1032,7 @@ mod tests {
         operation_kind: InstallOperation,
     ) -> ZipTaskResult<Transaction> {
         let lease = |_now: u64| true;
-        let lease_deadline = || 1_500_000_u64;
+        let lease_deadline = || u64::MAX;
         let inputs = ZipInstallInputs {
             game,
             selection,
@@ -1001,7 +1123,7 @@ mod tests {
         let transport = transport(archive);
         let cancel = AtomicBool::new(false);
         let lease = |_now: u64| true;
-        let lease_deadline = || 1_500_000_u64;
+        let lease_deadline = || u64::MAX;
         let inputs = ZipInstallInputs {
             game: &game,
             selection: &selection,
@@ -1078,7 +1200,7 @@ mod tests {
         let selection = seed_and_resolve(&state, &selection_id);
         let cancel = AtomicBool::new(false);
         let lease = |_now: u64| true;
-        let lease_deadline = || 1_500_000_u64;
+        let lease_deadline = || u64::MAX;
 
         let run = |transport: &dyn Transport| {
             let inputs = ZipInstallInputs {
@@ -1146,7 +1268,7 @@ mod tests {
         let selection = seed_and_resolve(&state, &selection_id);
         let cancel = AtomicBool::new(true);
         let lease = |_now: u64| true;
-        let lease_deadline = || 1_500_000_u64;
+        let lease_deadline = || u64::MAX;
         let transport = transport(archive);
         let inputs = ZipInstallInputs {
             game: &game,
@@ -1447,7 +1569,7 @@ mod tests {
         let cancel = Arc::new(AtomicBool::new(false));
         let transport = cancelling_transport(archive, Arc::clone(&cancel));
         let lease = |_now: u64| true;
-        let lease_deadline = || 1_500_000_u64;
+        let lease_deadline = || u64::MAX;
         let inputs = ZipInstallInputs {
             game: &game,
             selection: &selection,
@@ -1528,7 +1650,7 @@ mod tests {
         let cancel = Arc::new(AtomicBool::new(false));
         let signal = Arc::clone(&cancel);
         let lease = |_now: u64| true;
-        let lease_deadline = || 1_500_000_u64;
+        let lease_deadline = || u64::MAX;
         let inputs = ZipInstallInputs {
             game: &game,
             selection: &selection,
@@ -1607,7 +1729,7 @@ mod tests {
         let active = Arc::new(AtomicBool::new(true));
         let signal = Arc::clone(&active);
         let lease = move |_now: u64| active.load(Ordering::Relaxed);
-        let lease_deadline = || 1_500_000_u64;
+        let lease_deadline = || u64::MAX;
         let cancel = AtomicBool::new(false);
         let inputs = ZipInstallInputs {
             game: &game,
@@ -1655,7 +1777,7 @@ mod tests {
         // A replay of the same request returns the same terminal shape
         // (idempotent, §5.1), without touching the transport.
         let replay_lease = |_now: u64| true;
-        let replay_deadline = || 1_500_000_u64;
+        let replay_deadline = || u64::MAX;
         let replay_inputs = ZipInstallInputs {
             game: &game,
             selection: &selection,

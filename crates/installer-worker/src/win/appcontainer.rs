@@ -23,7 +23,7 @@ use crate::model::IsolationError;
 const DELETE: u32 = 0x0001_0000;
 
 /// An AppContainer profile plus its package SID.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug)]
 pub struct Profile {
     pub sid: PSID,
 }
@@ -195,4 +195,135 @@ pub fn sid_to_string(sid: PSID) -> Result<String, IsolationError> {
     });
     unsafe { local_free(raw.0 as *mut core::ffi::c_void) };
     out
+}
+
+impl Drop for Profile {
+    fn drop(&mut self) {
+        unsafe {
+            windows::Win32::Security::FreeSid(self.sid);
+        }
+    }
+}
+
+/// Protect a fresh, still-empty invocation directory before copying any data.
+/// Only the current host user gets inheritable full access; LPAC is granted later.
+pub fn make_private(path: &Path) -> Result<(), IsolationError> {
+    use windows::Win32::Foundation::HANDLE;
+    use windows::Win32::Security::Authorization::ConvertStringSecurityDescriptorToSecurityDescriptorW;
+    use windows::Win32::Security::{
+        GetTokenInformation, SetFileSecurityW, TokenUser, OWNER_SECURITY_INFORMATION,
+        PROTECTED_DACL_SECURITY_INFORMATION, TOKEN_QUERY, TOKEN_USER,
+    };
+    use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+    let mut token = HANDLE::default();
+    unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) }
+        .map_err(|e| IsolationError::new("acl", Some(hresult_to_win32(&e)), e.to_string()))?;
+    let result = (|| {
+        let mut size = 0u32;
+        let _ = unsafe { GetTokenInformation(token, TokenUser, None, 0, &mut size) };
+        if size == 0 {
+            return Err(IsolationError::new("acl", None, "cannot query host SID"));
+        }
+        let mut buf = vec![0usize; (size as usize).div_ceil(std::mem::size_of::<usize>())];
+        unsafe {
+            GetTokenInformation(
+                token,
+                TokenUser,
+                Some(buf.as_mut_ptr().cast()),
+                size,
+                &mut size,
+            )
+        }
+        .map_err(|e| IsolationError::new("acl", Some(hresult_to_win32(&e)), e.to_string()))?;
+        let user = unsafe { &*(buf.as_ptr() as *const TOKEN_USER) };
+        let sid = sid_to_string(user.User.Sid)?;
+        let sddl = hstring(&format!("O:{sid}D:P(A;OICI;FA;;;{sid})"));
+        let mut sd = PSECURITY_DESCRIPTOR::default();
+        unsafe { ConvertStringSecurityDescriptorToSecurityDescriptorW(&sddl, 1, &mut sd, None) }
+            .map_err(|e| IsolationError::new("acl", Some(hresult_to_win32(&e)), e.to_string()))?;
+        let ok = unsafe {
+            SetFileSecurityW(
+                &hstring(&path.to_string_lossy()),
+                DACL_SECURITY_INFORMATION
+                    | PROTECTED_DACL_SECURITY_INFORMATION
+                    | OWNER_SECURITY_INFORMATION,
+                sd,
+            )
+        };
+        let code = super::util::last_error();
+        unsafe { local_free(sd.0) };
+        if !ok.as_bool() {
+            return Err(IsolationError::new(
+                "acl",
+                Some(code),
+                "protect private staging DACL failed",
+            ));
+        }
+        Ok(())
+    })();
+    unsafe { super::util::close_handle(token) };
+    result
+}
+/// Current host token user, used only for private staging ownership markers.
+pub fn host_sid() -> Result<String, IsolationError> {
+    use windows::Win32::Foundation::HANDLE;
+    use windows::Win32::Security::{GetTokenInformation, TokenUser, TOKEN_QUERY, TOKEN_USER};
+    use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+    let mut token = HANDLE::default();
+    unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) }
+        .map_err(|e| IsolationError::new("identity", Some(hresult_to_win32(&e)), e.to_string()))?;
+    let result = (|| {
+        let mut size = 0u32;
+        let _ = unsafe { GetTokenInformation(token, TokenUser, None, 0, &mut size) };
+        if size == 0 {
+            return Err(IsolationError::new(
+                "identity",
+                None,
+                "missing host token user",
+            ));
+        }
+        let mut buf = vec![0usize; (size as usize).div_ceil(std::mem::size_of::<usize>())];
+        unsafe {
+            GetTokenInformation(
+                token,
+                TokenUser,
+                Some(buf.as_mut_ptr().cast()),
+                size,
+                &mut size,
+            )
+        }
+        .map_err(|e| IsolationError::new("identity", Some(hresult_to_win32(&e)), e.to_string()))?;
+        sid_to_string(unsafe { (*(buf.as_ptr() as *const TOKEN_USER)).User.Sid })
+    })();
+    unsafe { super::util::close_handle(token) };
+    result
+}
+/// File ownership check for startup collection. The marker alone is not proof
+/// that a directory was created by this host user.
+pub fn path_owner_sid(path: &Path) -> Result<String, IsolationError> {
+    use windows::Win32::Security::OWNER_SECURITY_INFORMATION;
+    let mut owner = PSID::default();
+    let mut sd = PSECURITY_DESCRIPTOR::default();
+    let code = unsafe {
+        GetNamedSecurityInfoW(
+            &hstring(&path.to_string_lossy()),
+            SE_FILE_OBJECT,
+            OWNER_SECURITY_INFORMATION,
+            Some(&mut owner),
+            None,
+            None,
+            None,
+            &mut sd,
+        )
+    };
+    if code.0 != 0 {
+        return Err(IsolationError::new(
+            "identity",
+            Some(code.0),
+            "cannot query staging owner",
+        ));
+    }
+    let result = sid_to_string(owner);
+    unsafe { local_free(sd.0) };
+    result
 }

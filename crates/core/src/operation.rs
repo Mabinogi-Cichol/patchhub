@@ -27,6 +27,7 @@ struct Control {
     progress: Progress,
     last: Instant,
     restoring: bool,
+    gate: Option<Box<dyn Fn() -> io::Result<()>>>,
 }
 thread_local! { static CONTROL: RefCell<Option<Control>> = const { RefCell::new(None) }; }
 
@@ -48,12 +49,72 @@ pub fn run<T>(
             progress: Progress::default(),
             last: Instant::now(),
             restoring: false,
+            gate: None,
         })
     });
     let _reset = Reset;
     work()
 }
+/// Replace the thread's raw request flag with a durably revoked effective flag.
+/// Telemetry and successful-commit precedence remain intact.
+pub fn with_cancel<T>(cancel: Arc<AtomicBool>, work: impl FnOnce() -> T) -> T {
+    if CONTROL.with(|c| c.borrow().is_none()) {
+        return run(cancel, |_| {}, work);
+    }
+    struct Restore(Option<Arc<AtomicBool>>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            if let Some(old) = self.0.take() {
+                CONTROL.with(|c| {
+                    if let Some(c) = c.borrow_mut().as_mut() {
+                        c.cancel = old;
+                    }
+                });
+            }
+        }
+    }
+    let old = CONTROL.with(|c| {
+        c.borrow_mut()
+            .as_mut()
+            .map(|c| std::mem::replace(&mut c.cancel, cancel))
+    });
+    let _restore = Restore(old);
+    work()
+}
+pub fn cancel_flag() -> Option<Arc<AtomicBool>> {
+    CONTROL.with(|c| c.borrow().as_ref().map(|c| c.cancel.clone()))
+}
+/// Host-owned durable gate runs synchronously at every copy/hash/write checkpoint.
+pub fn with_gate<T>(gate: impl Fn() -> io::Result<()> + 'static, work: impl FnOnce() -> T) -> T {
+    struct Reset(Option<Box<dyn Fn() -> io::Result<()>>>);
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            CONTROL.with(|c| {
+                if let Some(c) = c.borrow_mut().as_mut() {
+                    c.gate = self.0.take();
+                }
+            });
+        }
+    }
+    let old = CONTROL.with(|c| {
+        c.borrow_mut()
+            .as_mut()
+            .and_then(|c| c.gate.replace(Box::new(gate)))
+    });
+    let _reset = Reset(old);
+    work()
+}
 pub fn check() -> io::Result<()> {
+    CONTROL.with(|c| {
+        if let Some(c) = c.borrow().as_ref() {
+            if !c.restoring {
+                if let Some(gate) = &c.gate {
+                    gate()?;
+                }
+            }
+        }
+        Ok::<_, io::Error>(())
+    })?;
     let cancelled = CONTROL.with(|c| {
         c.borrow()
             .as_ref()
