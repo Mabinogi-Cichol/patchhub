@@ -1,13 +1,15 @@
-//! P0 prototype: platform sandbox launchers and probe workers for the
+//! Platform sandbox prototypes and the P2 fixed SF worker for the
 //! cross-platform installer migration.
 //!
 //! - Windows: LPAC (Less Privileged AppContainer) + Job Object under [`win`].
 //! - Linux: bubblewrap (`bwrap`) under [`linux`].
 //! - Other platforms: a stub so the workspace still compiles and tests.
 //!
-//! The probe binaries print an "unsupported" message on other platforms.
+//! SF parsing/conversion lives in [`sf`]; core authorization and production launcher
+//! integration are separate from the worker. Probe binaries remain development tools.
 
 pub mod model;
+pub mod sf;
 
 #[cfg(windows)]
 pub mod win;

@@ -1,0 +1,1498 @@
+{
+  "cases": [
+    {
+      "expected": {
+        "classes": [
+          {
+            "name": "CGlobalIncludeLuaFile",
+            "offset": 2,
+            "schema": 1,
+            "sha256": "c841db4f4912c1d450e921f41fc16fc66311c0994c985026c4ade50a8471566b",
+            "size": 27
+          },
+          {
+            "name": "CSetupFileData",
+            "offset": 113,
+            "schema": 1,
+            "sha256": "a58fc2965206d157d5896eb10ecec962c66636a47b7d96c7cca6df8bb6865448",
+            "size": 20
+          },
+          {
+            "name": "CIREvent",
+            "offset": 354,
+            "schema": 1,
+            "sha256": "68d88f4fad48ccb0b69664208acfe3a092b5c4b3f928c4380f7eba2a7f4c68bb",
+            "size": 14
+          }
+        ],
+        "coverage": {
+          "blockers": [
+            "exe_serialized_object_graph_incomplete"
+          ],
+          "complete": false
+        },
+        "decoder": "sf9-metadata-v1",
+        "diagnostics": [],
+        "events": [
+          {
+            "name": "On Next",
+            "offset": 368,
+            "parameters": [],
+            "script": "Screen.Next();",
+            "script_offset": 381,
+            "sha256": "ce9c1c98762a00475f247c142be08e614d611629756b98e400b9e8b834deb0d2",
+            "size": 28
+          },
+          {
+            "name": "On Shutdown",
+            "offset": 398,
+            "parameters": [],
+            "script": "",
+            "script_offset": 415,
+            "sha256": "1627b3b1b56552f876064ad3f5c09426d19aabdc0327de97098c49e0b858e83d",
+            "size": 18
+          }
+        ],
+        "include_end": 111,
+        "includes": [
+          {
+            "name": "Constants",
+            "offset": 29,
+            "script": "IDOK=1;",
+            "script_offset": 47,
+            "selectors": [
+              "All"
+            ],
+            "sha256": "a24e5e3cd01df0289d75dc68d6ea0717acb02b6ec14bf409e868d7e41aa835cd",
+            "size": 32,
+            "source_kind": 0
+          },
+          {
+            "name": "helpers.lua",
+            "offset": 61,
+            "script": "function helper() end",
+            "script_offset": 83,
+            "selectors": [
+              "All"
+            ],
+            "sha256": "e3b6703e8986587c18ed94b1cf81a58e12e6a56156d03e033b409528caab0625",
+            "size": 50,
+            "source_kind": 1
+          }
+        ],
+        "installable": false,
+        "metadata": {
+          "offset": 0,
+          "sha256": "df2397acf4159ab46149165a00c23ac95ca1b37151cf1936dfdfc1b97ef98fea",
+          "size": 416
+        },
+        "schema_version": 1
+      },
+      "id": "609e793cd4692a04f84806be8ba526238dec4ed32fb8541b635a085993afbc94",
+      "input": {
+        "data_hex": "0200ffff0100150043476c6f62616c496e636c7564654c756146696c65010000000000000009436f6e7374616e74730749444f4b3d313b010003416c6c018001000000010000000b68656c706572732e6c75611566756e6374696f6e2068656c706572282920656e64010003416c6c0100ffff01000e0043536574757046696c6544617461000000000013433a5c736f757263655c70617463682e7870330970617463682e78703309433a5c736f75726365042e7478740741726368697665000000090000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000f25417070466f6c646572255c7777770000000000000000000000000000000000000000000000000000000000000001010000000000000000000000000000000000000000001600000000000000036a982b0000000000000000ffff010008004349524576656e740100000000074f6e204e6578740e53637265656e2e4e65787428293b108001000000000b4f6e2053687574646f776e00"
+      }
+    },
+    {
+      "expected": {
+        "classes": [
+          {
+            "name": "CSetupFileData",
+            "offset": 4,
+            "schema": 1,
+            "sha256": "a58fc2965206d157d5896eb10ecec962c66636a47b7d96c7cca6df8bb6865448",
+            "size": 20
+          },
+          {
+            "name": "CSUFScreenInstallFolder",
+            "offset": 282,
+            "schema": 1,
+            "sha256": "1306c3c01aa61bfed4c5b3bf5379299d019096869c2568e5c615b9f0fa20c8b6",
+            "size": 29
+          },
+          {
+            "name": "CIREvent",
+            "offset": 381,
+            "schema": 1,
+            "sha256": "68d88f4fad48ccb0b69664208acfe3a092b5c4b3f928c4380f7eba2a7f4c68bb",
+            "size": 14
+          }
+        ],
+        "coverage": {
+          "blockers": [
+            "exe_serialized_object_graph_incomplete"
+          ],
+          "complete": false
+        },
+        "decoder": "sf9-metadata-v1",
+        "diagnostics": [],
+        "events": [
+          {
+            "name": "On Preload",
+            "offset": 395,
+            "parameters": [],
+            "script": "",
+            "script_offset": 411,
+            "sha256": "ad92567bb6bbe14571e5b4274aaa19acc4c417d6e844e79741bd2edbe75dad14",
+            "size": 17
+          },
+          {
+            "name": "On Back",
+            "offset": 414,
+            "parameters": [],
+            "script": "",
+            "script_offset": 427,
+            "sha256": "b1d4ac6d80edf06896ebebd5c32d7626b6f4995d73cd72ea0542748f6cded97a",
+            "size": 14
+          },
+          {
+            "name": "On Next",
+            "offset": 430,
+            "parameters": [],
+            "script": "if File.DoesExist(\"%AppFolder%\\\\engine.exe\") and File.GetCRC(\"%AppFolder%\\\\identity.dat\") == 123 then Screen.Next(); end",
+            "script_offset": 443,
+            "sha256": "fda182646ee7cc17dd3d36bcf23d9b32e3036fe4dbe5af0ecb38fd1dc786f81c",
+            "size": 134
+          },
+          {
+            "name": "On Cancel",
+            "offset": 566,
+            "parameters": [],
+            "script": "",
+            "script_offset": 581,
+            "sha256": "299083e54b3272d452c0e81658bee045a2b95bffc679672109f956cdf9f78005",
+            "size": 16
+          },
+          {
+            "name": "On Help",
+            "offset": 584,
+            "parameters": [],
+            "script": "",
+            "script_offset": 597,
+            "sha256": "7321b7a9a2286fda86e30328e1eca5d522a2db55377998d56c2c371bb2b291a1",
+            "size": 14
+          },
+          {
+            "name": "On Ctrl Message",
+            "offset": 600,
+            "parameters": [],
+            "script": "",
+            "script_offset": 621,
+            "sha256": "056aaa56aa0efe5c8cf323ee50c24c5f7b55dd13e6b9017c1090ee5f45e354b6",
+            "size": 22
+          },
+          {
+            "name": "On Startup",
+            "offset": 1202,
+            "parameters": [],
+            "script": "",
+            "script_offset": 1218,
+            "sha256": "14653c1d313f0b593592b2c0ed8ada5989bf2f1e6676087bf65ffc15713f3b88",
+            "size": 17
+          },
+          {
+            "name": "On Pre Uninstall",
+            "offset": 1221,
+            "parameters": [],
+            "script": "",
+            "script_offset": 1243,
+            "sha256": "b9784e546162021311c6f28ea870e98a8d3eade2dbce60b293b6d4919abaa604",
+            "size": 23
+          },
+          {
+            "name": "On Uninstall Error",
+            "offset": 1246,
+            "parameters": [],
+            "script": "",
+            "script_offset": 1270,
+            "sha256": "f98eafa1ba592de62200279505c82e10e4c5a1703473d6405630b4aabac4ff9c",
+            "size": 25
+          },
+          {
+            "name": "On Post Uninstall",
+            "offset": 1273,
+            "parameters": [],
+            "script": "",
+            "script_offset": 1296,
+            "sha256": "f8565f7febcc1b74ff213ce19aa5db20a1b5b02b46a478008b7ddc9ccaba55e3",
+            "size": 24
+          },
+          {
+            "name": "On Shutdown",
+            "offset": 1299,
+            "parameters": [],
+            "script": "",
+            "script_offset": 1316,
+            "sha256": "1627b3b1b56552f876064ad3f5c09426d19aabdc0327de97098c49e0b858e83d",
+            "size": 18
+          },
+          {
+            "name": "Global Functions",
+            "offset": 1644,
+            "parameters": [],
+            "script": "",
+            "script_offset": 1666,
+            "sha256": "66de0c5f9abf6aee4a158b7f21b97c0b06db77bd4c8722ca7425a06b46b84cfb",
+            "size": 23
+          },
+          {
+            "name": "On Startup",
+            "offset": 1669,
+            "parameters": [],
+            "script": "",
+            "script_offset": 1685,
+            "sha256": "14653c1d313f0b593592b2c0ed8ada5989bf2f1e6676087bf65ffc15713f3b88",
+            "size": 17
+          },
+          {
+            "name": "On Pre Install",
+            "offset": 1688,
+            "parameters": [],
+            "script": "",
+            "script_offset": 1708,
+            "sha256": "7590bbd53cca3cbc4ce22a4e7e18f2e2a58b8a8dd86a47323486bc093c28ae62",
+            "size": 21
+          },
+          {
+            "name": "On Install Error",
+            "offset": 1711,
+            "parameters": [],
+            "script": "",
+            "script_offset": 1733,
+            "sha256": "6161f0c43c2bab1aa48b7b73b124cd6942deca4ba947399ddf736a6d77c7b11a",
+            "size": 23
+          },
+          {
+            "name": "On Post Install",
+            "offset": 1736,
+            "parameters": [],
+            "script": "",
+            "script_offset": 1757,
+            "sha256": "e4eb76510281aa1047571269bd5e785cc5530d49fb2625cb48b833544a910142",
+            "size": 22
+          },
+          {
+            "name": "On Shutdown",
+            "offset": 1760,
+            "parameters": [],
+            "script": "",
+            "script_offset": 1777,
+            "sha256": "1627b3b1b56552f876064ad3f5c09426d19aabdc0327de97098c49e0b858e83d",
+            "size": 18
+          }
+        ],
+        "include_end": 2,
+        "includes": [],
+        "installable": false,
+        "metadata": {
+          "offset": 0,
+          "sha256": "0a27d7bebe731ff16528a2f6ab1f4a3cf207b89aedf0be039ae8b8de142177e3",
+          "size": 1796
+        },
+        "schema_version": 1
+      },
+      "id": "9431b7ac0c117f37f6cd6ab2775825d1b840ea8dcbffed1acd44f4a74ebe2e75",
+      "input": {
+        "data_hex": "00000100ffff01000e0043536574757046696c6544617461010000000011e8a1a5e4b8812de6b58be8af952e62696e11e8a1a5e4b8812de6b58be8af952e62696e09433a5c736f75726365042e62696e07417263686976650001000f00000000000000200a00008000000000000000000a00008000000000000000000a0000800000000000000000000000000000000000000000000000000000000000000000000b25417070466f6c6465722502000000000000000000000000000000000000000000000000000000000001010000000000e8030000000010000080ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff00010003416c6c044e6f6e650000001c000000000000001584fead0000000100ffff010017004353554653637265656e496e7374616c6c466f6c646572010000006e00000018416e7920696e7374616c6c20666f6c646572207469746c650200000010416e7920646973706c6179207465787400000000000000000000000000000600ffff010008004349524576656e7401000000000a4f6e205072656c6f61640005800100000000074f6e204261636b0005800100000000074f6e204e6578747869662046696c652e446f65734578697374282225417070466f6c646572255c5c656e67696e652e657865222920616e642046696c652e476574435243282225417070466f6c646572255c5c6964656e746974792e6461742229203d3d20313233207468656e2053637265656e2e4e65787428293b20656e6405800100000000094f6e2043616e63656c0005800100000000074f6e2048656c7000058001000000000f4f6e204374726c204d65737361676500000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001000000f3ffffff900100000000000005417269616c0000000001000000f3ffffff900100000000000005417269616c0000000001000000f3ffffff900100000000000005417269616c0000000001000000f3ffffff900100000000000005417269616c0000000001000000f3ffffff900100000000000005417269616c0100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000010000000b25417070466f6c64657225010000000100000000000000000000000000010000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001000000010000000100000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000100000001000000000000000500058001000000000a4f6e20537461727475700005800100000000104f6e2050726520556e696e7374616c6c0005800100000000124f6e20556e696e7374616c6c204572726f720005800100000000114f6e20506f737420556e696e7374616c6c00058001000000000b4f6e2053687574646f776e000100000000000001000001000100000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000100000000000000000000001e0000001e000000010000000a000080000000000000000000000000000000000100000001000000020000000100000000000000146172626974726172792d70726f6a6563742d696400000000000000000100000010000080ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff00000000000000000000000000000000010000000000000000000000000000000000000000000000000000000006000580010000000010476c6f62616c2046756e6374696f6e7300058001000000000a4f6e205374617274757000058001000000000e4f6e2050726520496e7374616c6c0005800100000000104f6e20496e7374616c6c204572726f7200058001000000000f4f6e20506f737420496e7374616c6c00058001000000000b4f6e2053687574646f776e000000000000000a0000800000000000000000"
+      }
+    },
+    {
+      "expected": {
+        "classes": [
+          {
+            "name": "CGlobalIncludeLuaFile",
+            "offset": 2,
+            "schema": 1,
+            "sha256": "c841db4f4912c1d450e921f41fc16fc66311c0994c985026c4ade50a8471566b",
+            "size": 27
+          },
+          {
+            "name": "CSetupFileData",
+            "offset": 113,
+            "schema": 1,
+            "sha256": "a58fc2965206d157d5896eb10ecec962c66636a47b7d96c7cca6df8bb6865448",
+            "size": 20
+          },
+          {
+            "name": "CIREvent",
+            "offset": 353,
+            "schema": 1,
+            "sha256": "68d88f4fad48ccb0b69664208acfe3a092b5c4b3f928c4380f7eba2a7f4c68bb",
+            "size": 14
+          }
+        ],
+        "coverage": {
+          "blockers": [
+            "exe_serialized_object_graph_incomplete"
+          ],
+          "complete": false
+        },
+        "decoder": "sf9-metadata-v1",
+        "diagnostics": [],
+        "events": [
+          {
+            "name": "On Next",
+            "offset": 367,
+            "parameters": [],
+            "script": "Screen.Next();",
+            "script_offset": 380,
+            "sha256": "ce9c1c98762a00475f247c142be08e614d611629756b98e400b9e8b834deb0d2",
+            "size": 28
+          },
+          {
+            "name": "On Shutdown",
+            "offset": 397,
+            "parameters": [],
+            "script": "",
+            "script_offset": 414,
+            "sha256": "1627b3b1b56552f876064ad3f5c09426d19aabdc0327de97098c49e0b858e83d",
+            "size": 18
+          }
+        ],
+        "include_end": 111,
+        "includes": [
+          {
+            "name": "Constants",
+            "offset": 29,
+            "script": "IDOK=1;",
+            "script_offset": 47,
+            "selectors": [
+              "All"
+            ],
+            "sha256": "a24e5e3cd01df0289d75dc68d6ea0717acb02b6ec14bf409e868d7e41aa835cd",
+            "size": 32,
+            "source_kind": 0
+          },
+          {
+            "name": "helpers.lua",
+            "offset": 61,
+            "script": "function helper() end",
+            "script_offset": 83,
+            "selectors": [
+              "All"
+            ],
+            "sha256": "e3b6703e8986587c18ed94b1cf81a58e12e6a56156d03e033b409528caab0625",
+            "size": 50,
+            "source_kind": 1
+          }
+        ],
+        "installable": false,
+        "metadata": {
+          "offset": 0,
+          "sha256": "bc88dd3bdf2ce0d35a71adb37b365420ac00426ebc0e0e06113af9bdba5e06b5",
+          "size": 415
+        },
+        "schema_version": 1
+      },
+      "id": "9b48d06e250c8346f13c2fae4b085cf94bb3d0618616fe49893a83a4f0eafe42",
+      "input": {
+        "data_hex": "0200ffff0100150043476c6f62616c496e636c7564654c756146696c65010000000000000009436f6e7374616e74730749444f4b3d313b010003416c6c018001000000010000000b68656c706572732e6c75611566756e6374696f6e2068656c706572282920656e64010003416c6c0100ffff01000e0043536574757046696c6544617461000000000013433a5c736f757263655c70617463682e7870330970617463682e78703309433a5c736f75726365042e7478740741726368697665000000090000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000f25417070466f6c646572255c77777700000000000000000000000000000000000000000000000000000000000001010000000000000000000000000000000000000000001600000000000000036a982b0000000000000000ffff010008004349524576656e740100000000074f6e204e6578740e53637265656e2e4e65787428293b108001000000000b4f6e2053687574646f776e00"
+      }
+    },
+    {
+      "expected": {
+        "classes": [
+          {
+            "name": "CSetupFileData",
+            "offset": 4,
+            "schema": 1,
+            "sha256": "a58fc2965206d157d5896eb10ecec962c66636a47b7d96c7cca6df8bb6865448",
+            "size": 20
+          },
+          {
+            "name": "CSUFScreenInstallFolder",
+            "offset": 276,
+            "schema": 1,
+            "sha256": "1306c3c01aa61bfed4c5b3bf5379299d019096869c2568e5c615b9f0fa20c8b6",
+            "size": 29
+          },
+          {
+            "name": "CIREvent",
+            "offset": 375,
+            "schema": 1,
+            "sha256": "68d88f4fad48ccb0b69664208acfe3a092b5c4b3f928c4380f7eba2a7f4c68bb",
+            "size": 14
+          }
+        ],
+        "coverage": {
+          "blockers": [
+            "exe_serialized_object_graph_incomplete"
+          ],
+          "complete": false
+        },
+        "decoder": "sf9-metadata-v1",
+        "diagnostics": [],
+        "events": [
+          {
+            "name": "On Preload",
+            "offset": 389,
+            "parameters": [],
+            "script": "",
+            "script_offset": 405,
+            "sha256": "ad92567bb6bbe14571e5b4274aaa19acc4c417d6e844e79741bd2edbe75dad14",
+            "size": 17
+          },
+          {
+            "name": "On Back",
+            "offset": 408,
+            "parameters": [],
+            "script": "",
+            "script_offset": 421,
+            "sha256": "b1d4ac6d80edf06896ebebd5c32d7626b6f4995d73cd72ea0542748f6cded97a",
+            "size": 14
+          },
+          {
+            "name": "On Next",
+            "offset": 424,
+            "parameters": [],
+            "script": "if File.DoesExist(\"%AppFolder%\\\\engine.exe\") and File.GetCRC(\"%AppFolder%\\\\identity.dat\") == 123 then Screen.Next(); end",
+            "script_offset": 437,
+            "sha256": "fda182646ee7cc17dd3d36bcf23d9b32e3036fe4dbe5af0ecb38fd1dc786f81c",
+            "size": 134
+          },
+          {
+            "name": "On Cancel",
+            "offset": 560,
+            "parameters": [],
+            "script": "",
+            "script_offset": 575,
+            "sha256": "299083e54b3272d452c0e81658bee045a2b95bffc679672109f956cdf9f78005",
+            "size": 16
+          },
+          {
+            "name": "On Help",
+            "offset": 578,
+            "parameters": [],
+            "script": "",
+            "script_offset": 591,
+            "sha256": "7321b7a9a2286fda86e30328e1eca5d522a2db55377998d56c2c371bb2b291a1",
+            "size": 14
+          },
+          {
+            "name": "On Ctrl Message",
+            "offset": 594,
+            "parameters": [],
+            "script": "",
+            "script_offset": 615,
+            "sha256": "056aaa56aa0efe5c8cf323ee50c24c5f7b55dd13e6b9017c1090ee5f45e354b6",
+            "size": 22
+          },
+          {
+            "name": "On Startup",
+            "offset": 1196,
+            "parameters": [],
+            "script": "",
+            "script_offset": 1212,
+            "sha256": "14653c1d313f0b593592b2c0ed8ada5989bf2f1e6676087bf65ffc15713f3b88",
+            "size": 17
+          },
+          {
+            "name": "On Pre Uninstall",
+            "offset": 1215,
+            "parameters": [],
+            "script": "",
+            "script_offset": 1237,
+            "sha256": "b9784e546162021311c6f28ea870e98a8d3eade2dbce60b293b6d4919abaa604",
+            "size": 23
+          },
+          {
+            "name": "On Uninstall Error",
+            "offset": 1240,
+            "parameters": [],
+            "script": "",
+            "script_offset": 1264,
+            "sha256": "f98eafa1ba592de62200279505c82e10e4c5a1703473d6405630b4aabac4ff9c",
+            "size": 25
+          },
+          {
+            "name": "On Post Uninstall",
+            "offset": 1267,
+            "parameters": [],
+            "script": "",
+            "script_offset": 1290,
+            "sha256": "f8565f7febcc1b74ff213ce19aa5db20a1b5b02b46a478008b7ddc9ccaba55e3",
+            "size": 24
+          },
+          {
+            "name": "On Shutdown",
+            "offset": 1293,
+            "parameters": [],
+            "script": "",
+            "script_offset": 1310,
+            "sha256": "1627b3b1b56552f876064ad3f5c09426d19aabdc0327de97098c49e0b858e83d",
+            "size": 18
+          },
+          {
+            "name": "Global Functions",
+            "offset": 1644,
+            "parameters": [],
+            "script": "",
+            "script_offset": 1666,
+            "sha256": "66de0c5f9abf6aee4a158b7f21b97c0b06db77bd4c8722ca7425a06b46b84cfb",
+            "size": 23
+          },
+          {
+            "name": "On Startup",
+            "offset": 1669,
+            "parameters": [],
+            "script": "",
+            "script_offset": 1685,
+            "sha256": "14653c1d313f0b593592b2c0ed8ada5989bf2f1e6676087bf65ffc15713f3b88",
+            "size": 17
+          },
+          {
+            "name": "On Pre Install",
+            "offset": 1688,
+            "parameters": [],
+            "script": "",
+            "script_offset": 1708,
+            "sha256": "7590bbd53cca3cbc4ce22a4e7e18f2e2a58b8a8dd86a47323486bc093c28ae62",
+            "size": 21
+          },
+          {
+            "name": "On Install Error",
+            "offset": 1711,
+            "parameters": [],
+            "script": "",
+            "script_offset": 1733,
+            "sha256": "6161f0c43c2bab1aa48b7b73b124cd6942deca4ba947399ddf736a6d77c7b11a",
+            "size": 23
+          },
+          {
+            "name": "On Post Install",
+            "offset": 1736,
+            "parameters": [],
+            "script": "",
+            "script_offset": 1757,
+            "sha256": "e4eb76510281aa1047571269bd5e785cc5530d49fb2625cb48b833544a910142",
+            "size": 22
+          },
+          {
+            "name": "On Shutdown",
+            "offset": 1760,
+            "parameters": [],
+            "script": "",
+            "script_offset": 1777,
+            "sha256": "1627b3b1b56552f876064ad3f5c09426d19aabdc0327de97098c49e0b858e83d",
+            "size": 18
+          }
+        ],
+        "include_end": 2,
+        "includes": [],
+        "installable": false,
+        "metadata": {
+          "offset": 0,
+          "sha256": "7b01eb7b5b6a0ea32d8e506a21c5807ec4b3ab84beb038f2bd301d307b028513",
+          "size": 1796
+        },
+        "schema_version": 1
+      },
+      "id": "9c425aeae3a859fa9186c05e25061ef0741ad6dc8409a0ca20ea64e69c1c3e90",
+      "input": {
+        "data_hex": "00000100ffff01000e0043536574757046696c654461746101000000000b7061796c6f61642e62696e0b7061796c6f61642e62696e09433a5c736f75726365042e62696e07417263686976650001000f00000000000000200a00008000000000000000000a00008000000000000000000a0000800000000000000000000000000000000000000000000000000000000000000000000b25417070466f6c6465722502000000000000000000000000000000000000000000000000000000000001010000000000e8030000000013000080ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff00010003416c6c044e6f6e650000001c000000000000001584fead0000000100ffff010017004353554653637265656e496e7374616c6c466f6c646572010000006e00000018416e7920696e7374616c6c20666f6c646572207469746c650200000010416e7920646973706c6179207465787400000000000000000000000000000600ffff010008004349524576656e7401000000000a4f6e205072656c6f61640005800100000000074f6e204261636b0005800100000000074f6e204e6578747869662046696c652e446f65734578697374282225417070466f6c646572255c5c656e67696e652e657865222920616e642046696c652e476574435243282225417070466f6c646572255c5c6964656e746974792e6461742229203d3d20313233207468656e2053637265656e2e4e65787428293b20656e6405800100000000094f6e2043616e63656c0005800100000000074f6e2048656c7000058001000000000f4f6e204374726c204d65737361676500000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001000000f3ffffff900100000000000005417269616c0000000001000000f3ffffff900100000000000005417269616c0000000001000000f3ffffff900100000000000005417269616c0000000001000000f3ffffff900100000000000005417269616c0000000001000000f3ffffff900100000000000005417269616c0100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000010000000b25417070466f6c64657225010000000100000000000000000000000000010000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001000000010000000100000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000100000001000000000000000500058001000000000a4f6e20537461727475700005800100000000104f6e2050726520556e696e7374616c6c0005800100000000124f6e20556e696e7374616c6c204572726f720005800100000000114f6e20506f737420556e696e7374616c6c00058001000000000b4f6e2053687574646f776e000100000000000001000001000100000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000100000000000000000000001e0000001e000000010000000a000080000000000000000000000000000000000100000001000000020000000100000000000000146172626974726172792d70726f6a6563742d696400000000000000000100000013000080ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff00000000000000000000000000000000010000000000000000000000000000000000000000000000000000000006000580010000000010476c6f62616c2046756e6374696f6e7300058001000000000a4f6e205374617274757000058001000000000e4f6e2050726520496e7374616c6c0005800100000000104f6e20496e7374616c6c204572726f7200058001000000000f4f6e20506f737420496e7374616c6c00058001000000000b4f6e2053687574646f776e000000000000000a0000800000000000000000"
+      }
+    },
+    {
+      "expected": {
+        "classes": [
+          {
+            "name": "CSetupFileData",
+            "offset": 4,
+            "schema": 1,
+            "sha256": "a58fc2965206d157d5896eb10ecec962c66636a47b7d96c7cca6df8bb6865448",
+            "size": 20
+          },
+          {
+            "name": "CSUFScreenInstallFolder",
+            "offset": 289,
+            "schema": 1,
+            "sha256": "1306c3c01aa61bfed4c5b3bf5379299d019096869c2568e5c615b9f0fa20c8b6",
+            "size": 29
+          },
+          {
+            "name": "CIREvent",
+            "offset": 388,
+            "schema": 1,
+            "sha256": "68d88f4fad48ccb0b69664208acfe3a092b5c4b3f928c4380f7eba2a7f4c68bb",
+            "size": 14
+          }
+        ],
+        "coverage": {
+          "blockers": [
+            "exe_serialized_object_graph_incomplete"
+          ],
+          "complete": false
+        },
+        "decoder": "sf9-metadata-v1",
+        "diagnostics": [],
+        "events": [
+          {
+            "name": "On Preload",
+            "offset": 402,
+            "parameters": [],
+            "script": "",
+            "script_offset": 418,
+            "sha256": "ad92567bb6bbe14571e5b4274aaa19acc4c417d6e844e79741bd2edbe75dad14",
+            "size": 17
+          },
+          {
+            "name": "On Back",
+            "offset": 421,
+            "parameters": [],
+            "script": "",
+            "script_offset": 434,
+            "sha256": "b1d4ac6d80edf06896ebebd5c32d7626b6f4995d73cd72ea0542748f6cded97a",
+            "size": 14
+          },
+          {
+            "name": "On Next",
+            "offset": 437,
+            "parameters": [],
+            "script": "if File.DoesExist(\"%AppFolder%\\\\engine.exe\") and File.GetCRC(\"%AppFolder%\\\\identity.dat\") == 123 then Screen.Next(); end",
+            "script_offset": 450,
+            "sha256": "fda182646ee7cc17dd3d36bcf23d9b32e3036fe4dbe5af0ecb38fd1dc786f81c",
+            "size": 134
+          },
+          {
+            "name": "On Cancel",
+            "offset": 573,
+            "parameters": [],
+            "script": "",
+            "script_offset": 588,
+            "sha256": "299083e54b3272d452c0e81658bee045a2b95bffc679672109f956cdf9f78005",
+            "size": 16
+          },
+          {
+            "name": "On Help",
+            "offset": 591,
+            "parameters": [],
+            "script": "",
+            "script_offset": 604,
+            "sha256": "7321b7a9a2286fda86e30328e1eca5d522a2db55377998d56c2c371bb2b291a1",
+            "size": 14
+          },
+          {
+            "name": "On Ctrl Message",
+            "offset": 607,
+            "parameters": [],
+            "script": "",
+            "script_offset": 628,
+            "sha256": "056aaa56aa0efe5c8cf323ee50c24c5f7b55dd13e6b9017c1090ee5f45e354b6",
+            "size": 22
+          },
+          {
+            "name": "On Startup",
+            "offset": 1213,
+            "parameters": [],
+            "script": "",
+            "script_offset": 1229,
+            "sha256": "14653c1d313f0b593592b2c0ed8ada5989bf2f1e6676087bf65ffc15713f3b88",
+            "size": 17
+          },
+          {
+            "name": "On Pre Uninstall",
+            "offset": 1232,
+            "parameters": [],
+            "script": "",
+            "script_offset": 1254,
+            "sha256": "b9784e546162021311c6f28ea870e98a8d3eade2dbce60b293b6d4919abaa604",
+            "size": 23
+          },
+          {
+            "name": "On Uninstall Error",
+            "offset": 1257,
+            "parameters": [],
+            "script": "",
+            "script_offset": 1281,
+            "sha256": "f98eafa1ba592de62200279505c82e10e4c5a1703473d6405630b4aabac4ff9c",
+            "size": 25
+          },
+          {
+            "name": "On Post Uninstall",
+            "offset": 1284,
+            "parameters": [],
+            "script": "",
+            "script_offset": 1307,
+            "sha256": "f8565f7febcc1b74ff213ce19aa5db20a1b5b02b46a478008b7ddc9ccaba55e3",
+            "size": 24
+          },
+          {
+            "name": "On Shutdown",
+            "offset": 1310,
+            "parameters": [],
+            "script": "",
+            "script_offset": 1327,
+            "sha256": "1627b3b1b56552f876064ad3f5c09426d19aabdc0327de97098c49e0b858e83d",
+            "size": 18
+          },
+          {
+            "name": "Global Functions",
+            "offset": 1661,
+            "parameters": [],
+            "script": "",
+            "script_offset": 1683,
+            "sha256": "66de0c5f9abf6aee4a158b7f21b97c0b06db77bd4c8722ca7425a06b46b84cfb",
+            "size": 23
+          },
+          {
+            "name": "On Startup",
+            "offset": 1686,
+            "parameters": [],
+            "script": "",
+            "script_offset": 1702,
+            "sha256": "14653c1d313f0b593592b2c0ed8ada5989bf2f1e6676087bf65ffc15713f3b88",
+            "size": 17
+          },
+          {
+            "name": "On Pre Install",
+            "offset": 1705,
+            "parameters": [],
+            "script": "",
+            "script_offset": 1725,
+            "sha256": "7590bbd53cca3cbc4ce22a4e7e18f2e2a58b8a8dd86a47323486bc093c28ae62",
+            "size": 21
+          },
+          {
+            "name": "On Install Error",
+            "offset": 1728,
+            "parameters": [],
+            "script": "",
+            "script_offset": 1750,
+            "sha256": "6161f0c43c2bab1aa48b7b73b124cd6942deca4ba947399ddf736a6d77c7b11a",
+            "size": 23
+          },
+          {
+            "name": "On Post Install",
+            "offset": 1753,
+            "parameters": [],
+            "script": "",
+            "script_offset": 1774,
+            "sha256": "e4eb76510281aa1047571269bd5e785cc5530d49fb2625cb48b833544a910142",
+            "size": 22
+          },
+          {
+            "name": "On Shutdown",
+            "offset": 1777,
+            "parameters": [],
+            "script": "",
+            "script_offset": 1794,
+            "sha256": "1627b3b1b56552f876064ad3f5c09426d19aabdc0327de97098c49e0b858e83d",
+            "size": 18
+          }
+        ],
+        "include_end": 2,
+        "includes": [],
+        "installable": false,
+        "metadata": {
+          "offset": 0,
+          "sha256": "9b3a7b1d63b5f6d970fc61b891259b9d5b72a75733998257799d6d011361f577",
+          "size": 1813
+        },
+        "schema_version": 1
+      },
+      "id": "a0a6c2f2421892c7bc92244a59e99fac24b770cb6be6eafccf95168b9e9f48af",
+      "input": {
+        "data_hex": "00000100ffff01000e0043536574757046696c6544617461010000000011e8a1a5e4b8812de6b58be8af952e62696e11e8a1a5e4b8812de6b58be8af952e62696e09433a5c736f75726365042e62696e07417263686976650001000f00000000000000200a00008000000000000000000a00008000000000000000000a0000800000000000000000000000000000000000000000000000000000000000000000000b25417070466f6c646572250200000000000000000000000000000000000000000000000000000000000001010000000000e8030000000013000080ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff00010003416c6c044e6f6e650000001c000000000000001584fead0000000100ffff010017004353554653637265656e496e7374616c6c466f6c646572010000006e00000018416e7920696e7374616c6c20666f6c646572207469746c650200000010416e7920646973706c6179207465787400000000000000000000000000000600ffff010008004349524576656e7401000000000a4f6e205072656c6f61640005800100000000074f6e204261636b0005800100000000074f6e204e6578747869662046696c652e446f65734578697374282225417070466f6c646572255c5c656e67696e652e657865222920616e642046696c652e476574435243282225417070466f6c646572255c5c6964656e746974792e6461742229203d3d20313233207468656e2053637265656e2e4e65787428293b20656e6405800100000000094f6e2043616e63656c0005800100000000074f6e2048656c7000058001000000000f4f6e204374726c204d65737361676500000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001000000f3ffffff900100000000000005417269616c0000000001000000f3ffffff900100000000000005417269616c0000000001000000f3ffffff900100000000000005417269616c0000000001000000f3ffffff900100000000000005417269616c0000000001000000f3ffffff900100000000000005417269616c010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000010000000b25417070466f6c64657225010000000100000000000000000000000000010000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001000000010000000100000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000100000001000000000000000500058001000000000a4f6e20537461727475700005800100000000104f6e2050726520556e696e7374616c6c0005800100000000124f6e20556e696e7374616c6c204572726f720005800100000000114f6e20506f737420556e696e7374616c6c00058001000000000b4f6e2053687574646f776e000100000000000001000001000100000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000100000000000000000000001e0000001e000000010000000a000080000000000000000000000000000000000100000001000000020000000100000000000000146172626974726172792d70726f6a6563742d696400000000000000000100000013000080ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff00000000000000000000000000000000010000000000000000000000000000000000000000000000000000000006000580010000000010476c6f62616c2046756e6374696f6e7300058001000000000a4f6e205374617274757000058001000000000e4f6e2050726520496e7374616c6c0005800100000000104f6e20496e7374616c6c204572726f7200058001000000000f4f6e20506f737420496e7374616c6c00058001000000000b4f6e2053687574646f776e000000000000000a0000800000000000000000"
+      }
+    },
+    {
+      "expected": {
+        "classes": [
+          {
+            "name": "CSetupFileData",
+            "offset": 4,
+            "schema": 1,
+            "sha256": "a58fc2965206d157d5896eb10ecec962c66636a47b7d96c7cca6df8bb6865448",
+            "size": 20
+          },
+          {
+            "name": "CSUFScreenInstallFolder",
+            "offset": 270,
+            "schema": 1,
+            "sha256": "1306c3c01aa61bfed4c5b3bf5379299d019096869c2568e5c615b9f0fa20c8b6",
+            "size": 29
+          },
+          {
+            "name": "CIREvent",
+            "offset": 369,
+            "schema": 1,
+            "sha256": "68d88f4fad48ccb0b69664208acfe3a092b5c4b3f928c4380f7eba2a7f4c68bb",
+            "size": 14
+          }
+        ],
+        "coverage": {
+          "blockers": [
+            "exe_serialized_object_graph_incomplete"
+          ],
+          "complete": false
+        },
+        "decoder": "sf9-metadata-v1",
+        "diagnostics": [],
+        "events": [
+          {
+            "name": "On Preload",
+            "offset": 383,
+            "parameters": [],
+            "script": "",
+            "script_offset": 399,
+            "sha256": "ad92567bb6bbe14571e5b4274aaa19acc4c417d6e844e79741bd2edbe75dad14",
+            "size": 17
+          },
+          {
+            "name": "On Back",
+            "offset": 402,
+            "parameters": [],
+            "script": "",
+            "script_offset": 415,
+            "sha256": "b1d4ac6d80edf06896ebebd5c32d7626b6f4995d73cd72ea0542748f6cded97a",
+            "size": 14
+          },
+          {
+            "name": "On Next",
+            "offset": 418,
+            "parameters": [],
+            "script": "if File.DoesExist(\"%AppFolder%\\\\engine.exe\") and File.GetCRC(\"%AppFolder%\\\\identity.dat\") == 123 then Screen.Next(); end",
+            "script_offset": 431,
+            "sha256": "fda182646ee7cc17dd3d36bcf23d9b32e3036fe4dbe5af0ecb38fd1dc786f81c",
+            "size": 134
+          },
+          {
+            "name": "On Cancel",
+            "offset": 554,
+            "parameters": [],
+            "script": "",
+            "script_offset": 569,
+            "sha256": "299083e54b3272d452c0e81658bee045a2b95bffc679672109f956cdf9f78005",
+            "size": 16
+          },
+          {
+            "name": "On Help",
+            "offset": 572,
+            "parameters": [],
+            "script": "",
+            "script_offset": 585,
+            "sha256": "7321b7a9a2286fda86e30328e1eca5d522a2db55377998d56c2c371bb2b291a1",
+            "size": 14
+          },
+          {
+            "name": "On Ctrl Message",
+            "offset": 588,
+            "parameters": [],
+            "script": "",
+            "script_offset": 609,
+            "sha256": "056aaa56aa0efe5c8cf323ee50c24c5f7b55dd13e6b9017c1090ee5f45e354b6",
+            "size": 22
+          },
+          {
+            "name": "On Startup",
+            "offset": 1190,
+            "parameters": [],
+            "script": "",
+            "script_offset": 1206,
+            "sha256": "14653c1d313f0b593592b2c0ed8ada5989bf2f1e6676087bf65ffc15713f3b88",
+            "size": 17
+          },
+          {
+            "name": "On Pre Uninstall",
+            "offset": 1209,
+            "parameters": [],
+            "script": "",
+            "script_offset": 1231,
+            "sha256": "b9784e546162021311c6f28ea870e98a8d3eade2dbce60b293b6d4919abaa604",
+            "size": 23
+          },
+          {
+            "name": "On Uninstall Error",
+            "offset": 1234,
+            "parameters": [],
+            "script": "",
+            "script_offset": 1258,
+            "sha256": "f98eafa1ba592de62200279505c82e10e4c5a1703473d6405630b4aabac4ff9c",
+            "size": 25
+          },
+          {
+            "name": "On Post Uninstall",
+            "offset": 1261,
+            "parameters": [],
+            "script": "",
+            "script_offset": 1284,
+            "sha256": "f8565f7febcc1b74ff213ce19aa5db20a1b5b02b46a478008b7ddc9ccaba55e3",
+            "size": 24
+          },
+          {
+            "name": "On Shutdown",
+            "offset": 1287,
+            "parameters": [],
+            "script": "",
+            "script_offset": 1304,
+            "sha256": "1627b3b1b56552f876064ad3f5c09426d19aabdc0327de97098c49e0b858e83d",
+            "size": 18
+          },
+          {
+            "name": "Global Functions",
+            "offset": 1632,
+            "parameters": [],
+            "script": "",
+            "script_offset": 1654,
+            "sha256": "66de0c5f9abf6aee4a158b7f21b97c0b06db77bd4c8722ca7425a06b46b84cfb",
+            "size": 23
+          },
+          {
+            "name": "On Startup",
+            "offset": 1657,
+            "parameters": [],
+            "script": "",
+            "script_offset": 1673,
+            "sha256": "14653c1d313f0b593592b2c0ed8ada5989bf2f1e6676087bf65ffc15713f3b88",
+            "size": 17
+          },
+          {
+            "name": "On Pre Install",
+            "offset": 1676,
+            "parameters": [],
+            "script": "",
+            "script_offset": 1696,
+            "sha256": "7590bbd53cca3cbc4ce22a4e7e18f2e2a58b8a8dd86a47323486bc093c28ae62",
+            "size": 21
+          },
+          {
+            "name": "On Install Error",
+            "offset": 1699,
+            "parameters": [],
+            "script": "",
+            "script_offset": 1721,
+            "sha256": "6161f0c43c2bab1aa48b7b73b124cd6942deca4ba947399ddf736a6d77c7b11a",
+            "size": 23
+          },
+          {
+            "name": "On Post Install",
+            "offset": 1724,
+            "parameters": [],
+            "script": "",
+            "script_offset": 1745,
+            "sha256": "e4eb76510281aa1047571269bd5e785cc5530d49fb2625cb48b833544a910142",
+            "size": 22
+          },
+          {
+            "name": "On Shutdown",
+            "offset": 1748,
+            "parameters": [],
+            "script": "",
+            "script_offset": 1765,
+            "sha256": "1627b3b1b56552f876064ad3f5c09426d19aabdc0327de97098c49e0b858e83d",
+            "size": 18
+          }
+        ],
+        "include_end": 2,
+        "includes": [],
+        "installable": false,
+        "metadata": {
+          "offset": 0,
+          "sha256": "88f81f152e35584d88e8828f4ecbac925e79cdb35a0b9fb1fd86eff0ee6a5552",
+          "size": 1784
+        },
+        "schema_version": 1
+      },
+      "id": "a7f3c0c1e45e23c1ae71b8159ffbfecbf0a764db2a6bcecfe9f8c88e161aed92",
+      "input": {
+        "data_hex": "00000100ffff01000e0043536574757046696c654461746101000000000b7061796c6f61642e62696e0b7061796c6f61642e62696e09433a5c736f75726365042e62696e07417263686976650001000f00000000000000200a00008000000000000000000a00008000000000000000000a0000800000000000000000000000000000000000000000000000000000000000000000000b25417070466f6c6465722502000000000000000000000000000000000000000000000000000000000001010000000000e8030000000010000080ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff00010003416c6c044e6f6e650000001c000000000000001584fead0000000100ffff010017004353554653637265656e496e7374616c6c466f6c646572010000006e00000018416e7920696e7374616c6c20666f6c646572207469746c650200000010416e7920646973706c6179207465787400000000000000000000000000000600ffff010008004349524576656e7401000000000a4f6e205072656c6f61640005800100000000074f6e204261636b0005800100000000074f6e204e6578747869662046696c652e446f65734578697374282225417070466f6c646572255c5c656e67696e652e657865222920616e642046696c652e476574435243282225417070466f6c646572255c5c6964656e746974792e6461742229203d3d20313233207468656e2053637265656e2e4e65787428293b20656e6405800100000000094f6e2043616e63656c0005800100000000074f6e2048656c7000058001000000000f4f6e204374726c204d65737361676500000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001000000f3ffffff900100000000000005417269616c0000000001000000f3ffffff900100000000000005417269616c0000000001000000f3ffffff900100000000000005417269616c0000000001000000f3ffffff900100000000000005417269616c0000000001000000f3ffffff900100000000000005417269616c0100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000010000000b25417070466f6c64657225010000000100000000000000000000000000010000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001000000010000000100000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000100000001000000000000000500058001000000000a4f6e20537461727475700005800100000000104f6e2050726520556e696e7374616c6c0005800100000000124f6e20556e696e7374616c6c204572726f720005800100000000114f6e20506f737420556e696e7374616c6c00058001000000000b4f6e2053687574646f776e000100000000000001000001000100000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000100000000000000000000001e0000001e000000010000000a000080000000000000000000000000000000000100000001000000020000000100000000000000146172626974726172792d70726f6a6563742d696400000000000000000100000010000080ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff00000000000000000000000000000000010000000000000000000000000000000000000000000000000000000006000580010000000010476c6f62616c2046756e6374696f6e7300058001000000000a4f6e205374617274757000058001000000000e4f6e2050726520496e7374616c6c0005800100000000104f6e20496e7374616c6c204572726f7200058001000000000f4f6e20506f737420496e7374616c6c00058001000000000b4f6e2053687574646f776e000000000000000a0000800000000000000000"
+      }
+    },
+    {
+      "expected": {
+        "classes": [
+          {
+            "name": "CSetupFileData",
+            "offset": 4,
+            "schema": 1,
+            "sha256": "a58fc2965206d157d5896eb10ecec962c66636a47b7d96c7cca6df8bb6865448",
+            "size": 20
+          },
+          {
+            "name": "CSUFScreenInstallFolder",
+            "offset": 288,
+            "schema": 1,
+            "sha256": "1306c3c01aa61bfed4c5b3bf5379299d019096869c2568e5c615b9f0fa20c8b6",
+            "size": 29
+          },
+          {
+            "name": "CIREvent",
+            "offset": 387,
+            "schema": 1,
+            "sha256": "68d88f4fad48ccb0b69664208acfe3a092b5c4b3f928c4380f7eba2a7f4c68bb",
+            "size": 14
+          }
+        ],
+        "coverage": {
+          "blockers": [
+            "exe_serialized_object_graph_incomplete"
+          ],
+          "complete": false
+        },
+        "decoder": "sf9-metadata-v1",
+        "diagnostics": [],
+        "events": [
+          {
+            "name": "On Preload",
+            "offset": 401,
+            "parameters": [],
+            "script": "",
+            "script_offset": 417,
+            "sha256": "ad92567bb6bbe14571e5b4274aaa19acc4c417d6e844e79741bd2edbe75dad14",
+            "size": 17
+          },
+          {
+            "name": "On Back",
+            "offset": 420,
+            "parameters": [],
+            "script": "",
+            "script_offset": 433,
+            "sha256": "b1d4ac6d80edf06896ebebd5c32d7626b6f4995d73cd72ea0542748f6cded97a",
+            "size": 14
+          },
+          {
+            "name": "On Next",
+            "offset": 436,
+            "parameters": [],
+            "script": "if File.DoesExist(\"%AppFolder%\\\\engine.exe\") and File.GetCRC(\"%AppFolder%\\\\identity.dat\") == 123 then Screen.Next(); end",
+            "script_offset": 449,
+            "sha256": "fda182646ee7cc17dd3d36bcf23d9b32e3036fe4dbe5af0ecb38fd1dc786f81c",
+            "size": 134
+          },
+          {
+            "name": "On Cancel",
+            "offset": 572,
+            "parameters": [],
+            "script": "",
+            "script_offset": 587,
+            "sha256": "299083e54b3272d452c0e81658bee045a2b95bffc679672109f956cdf9f78005",
+            "size": 16
+          },
+          {
+            "name": "On Help",
+            "offset": 590,
+            "parameters": [],
+            "script": "",
+            "script_offset": 603,
+            "sha256": "7321b7a9a2286fda86e30328e1eca5d522a2db55377998d56c2c371bb2b291a1",
+            "size": 14
+          },
+          {
+            "name": "On Ctrl Message",
+            "offset": 606,
+            "parameters": [],
+            "script": "",
+            "script_offset": 627,
+            "sha256": "056aaa56aa0efe5c8cf323ee50c24c5f7b55dd13e6b9017c1090ee5f45e354b6",
+            "size": 22
+          },
+          {
+            "name": "On Startup",
+            "offset": 1208,
+            "parameters": [],
+            "script": "",
+            "script_offset": 1224,
+            "sha256": "14653c1d313f0b593592b2c0ed8ada5989bf2f1e6676087bf65ffc15713f3b88",
+            "size": 17
+          },
+          {
+            "name": "On Pre Uninstall",
+            "offset": 1227,
+            "parameters": [],
+            "script": "",
+            "script_offset": 1249,
+            "sha256": "b9784e546162021311c6f28ea870e98a8d3eade2dbce60b293b6d4919abaa604",
+            "size": 23
+          },
+          {
+            "name": "On Uninstall Error",
+            "offset": 1252,
+            "parameters": [],
+            "script": "",
+            "script_offset": 1276,
+            "sha256": "f98eafa1ba592de62200279505c82e10e4c5a1703473d6405630b4aabac4ff9c",
+            "size": 25
+          },
+          {
+            "name": "On Post Uninstall",
+            "offset": 1279,
+            "parameters": [],
+            "script": "",
+            "script_offset": 1302,
+            "sha256": "f8565f7febcc1b74ff213ce19aa5db20a1b5b02b46a478008b7ddc9ccaba55e3",
+            "size": 24
+          },
+          {
+            "name": "On Shutdown",
+            "offset": 1305,
+            "parameters": [],
+            "script": "",
+            "script_offset": 1322,
+            "sha256": "1627b3b1b56552f876064ad3f5c09426d19aabdc0327de97098c49e0b858e83d",
+            "size": 18
+          },
+          {
+            "name": "Global Functions",
+            "offset": 1656,
+            "parameters": [],
+            "script": "",
+            "script_offset": 1678,
+            "sha256": "66de0c5f9abf6aee4a158b7f21b97c0b06db77bd4c8722ca7425a06b46b84cfb",
+            "size": 23
+          },
+          {
+            "name": "On Startup",
+            "offset": 1681,
+            "parameters": [],
+            "script": "",
+            "script_offset": 1697,
+            "sha256": "14653c1d313f0b593592b2c0ed8ada5989bf2f1e6676087bf65ffc15713f3b88",
+            "size": 17
+          },
+          {
+            "name": "On Pre Install",
+            "offset": 1700,
+            "parameters": [],
+            "script": "",
+            "script_offset": 1720,
+            "sha256": "7590bbd53cca3cbc4ce22a4e7e18f2e2a58b8a8dd86a47323486bc093c28ae62",
+            "size": 21
+          },
+          {
+            "name": "On Install Error",
+            "offset": 1723,
+            "parameters": [],
+            "script": "",
+            "script_offset": 1745,
+            "sha256": "6161f0c43c2bab1aa48b7b73b124cd6942deca4ba947399ddf736a6d77c7b11a",
+            "size": 23
+          },
+          {
+            "name": "On Post Install",
+            "offset": 1748,
+            "parameters": [],
+            "script": "",
+            "script_offset": 1769,
+            "sha256": "e4eb76510281aa1047571269bd5e785cc5530d49fb2625cb48b833544a910142",
+            "size": 22
+          },
+          {
+            "name": "On Shutdown",
+            "offset": 1772,
+            "parameters": [],
+            "script": "",
+            "script_offset": 1789,
+            "sha256": "1627b3b1b56552f876064ad3f5c09426d19aabdc0327de97098c49e0b858e83d",
+            "size": 18
+          }
+        ],
+        "include_end": 2,
+        "includes": [],
+        "installable": false,
+        "metadata": {
+          "offset": 0,
+          "sha256": "fcbcd03a77f16032170fbecc1d6a289b77b57a2ec6b9eaa5521176df4a68335a",
+          "size": 1808
+        },
+        "schema_version": 1
+      },
+      "id": "b83f14c86f111ce0ffe09c4df024bd563cb44a05e1eea11bd2ba1e142658bb50",
+      "input": {
+        "data_hex": "00000100ffff01000e0043536574757046696c6544617461010000000011e8a1a5e4b8812de6b58be8af952e62696e11e8a1a5e4b8812de6b58be8af952e62696e09433a5c736f75726365042e62696e07417263686976650001000f00000000000000200a00008000000000000000000a00008000000000000000000a0000800000000000000000000000000000000000000000000000000000000000000000000b25417070466f6c6465722502000000000000000000000000000000000000000000000000000000000001010000000000e8030000000013000080ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff00010003416c6c044e6f6e650000001c000000000000001584fead0000000100ffff010017004353554653637265656e496e7374616c6c466f6c646572010000006e00000018416e7920696e7374616c6c20666f6c646572207469746c650200000010416e7920646973706c6179207465787400000000000000000000000000000600ffff010008004349524576656e7401000000000a4f6e205072656c6f61640005800100000000074f6e204261636b0005800100000000074f6e204e6578747869662046696c652e446f65734578697374282225417070466f6c646572255c5c656e67696e652e657865222920616e642046696c652e476574435243282225417070466f6c646572255c5c6964656e746974792e6461742229203d3d20313233207468656e2053637265656e2e4e65787428293b20656e6405800100000000094f6e2043616e63656c0005800100000000074f6e2048656c7000058001000000000f4f6e204374726c204d65737361676500000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001000000f3ffffff900100000000000005417269616c0000000001000000f3ffffff900100000000000005417269616c0000000001000000f3ffffff900100000000000005417269616c0000000001000000f3ffffff900100000000000005417269616c0000000001000000f3ffffff900100000000000005417269616c0100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000010000000b25417070466f6c64657225010000000100000000000000000000000000010000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001000000010000000100000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000100000001000000000000000500058001000000000a4f6e20537461727475700005800100000000104f6e2050726520556e696e7374616c6c0005800100000000124f6e20556e696e7374616c6c204572726f720005800100000000114f6e20506f737420556e696e7374616c6c00058001000000000b4f6e2053687574646f776e000100000000000001000001000100000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000100000000000000000000001e0000001e000000010000000a000080000000000000000000000000000000000100000001000000020000000100000000000000146172626974726172792d70726f6a6563742d696400000000000000000100000013000080ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff00000000000000000000000000000000010000000000000000000000000000000000000000000000000000000006000580010000000010476c6f62616c2046756e6374696f6e7300058001000000000a4f6e205374617274757000058001000000000e4f6e2050726520496e7374616c6c0005800100000000104f6e20496e7374616c6c204572726f7200058001000000000f4f6e20506f737420496e7374616c6c00058001000000000b4f6e2053687574646f776e000000000000000a0000800000000000000000"
+      }
+    },
+    {
+      "expected": {
+        "classes": [
+          {
+            "name": "CSetupFileData",
+            "offset": 4,
+            "schema": 1,
+            "sha256": "a58fc2965206d157d5896eb10ecec962c66636a47b7d96c7cca6df8bb6865448",
+            "size": 20
+          },
+          {
+            "name": "CSUFScreenInstallFolder",
+            "offset": 277,
+            "schema": 1,
+            "sha256": "1306c3c01aa61bfed4c5b3bf5379299d019096869c2568e5c615b9f0fa20c8b6",
+            "size": 29
+          },
+          {
+            "name": "CIREvent",
+            "offset": 376,
+            "schema": 1,
+            "sha256": "68d88f4fad48ccb0b69664208acfe3a092b5c4b3f928c4380f7eba2a7f4c68bb",
+            "size": 14
+          }
+        ],
+        "coverage": {
+          "blockers": [
+            "exe_serialized_object_graph_incomplete"
+          ],
+          "complete": false
+        },
+        "decoder": "sf9-metadata-v1",
+        "diagnostics": [],
+        "events": [
+          {
+            "name": "On Preload",
+            "offset": 390,
+            "parameters": [],
+            "script": "",
+            "script_offset": 406,
+            "sha256": "ad92567bb6bbe14571e5b4274aaa19acc4c417d6e844e79741bd2edbe75dad14",
+            "size": 17
+          },
+          {
+            "name": "On Back",
+            "offset": 409,
+            "parameters": [],
+            "script": "",
+            "script_offset": 422,
+            "sha256": "b1d4ac6d80edf06896ebebd5c32d7626b6f4995d73cd72ea0542748f6cded97a",
+            "size": 14
+          },
+          {
+            "name": "On Next",
+            "offset": 425,
+            "parameters": [],
+            "script": "if File.DoesExist(\"%AppFolder%\\\\engine.exe\") and File.GetCRC(\"%AppFolder%\\\\identity.dat\") == 123 then Screen.Next(); end",
+            "script_offset": 438,
+            "sha256": "fda182646ee7cc17dd3d36bcf23d9b32e3036fe4dbe5af0ecb38fd1dc786f81c",
+            "size": 134
+          },
+          {
+            "name": "On Cancel",
+            "offset": 561,
+            "parameters": [],
+            "script": "",
+            "script_offset": 576,
+            "sha256": "299083e54b3272d452c0e81658bee045a2b95bffc679672109f956cdf9f78005",
+            "size": 16
+          },
+          {
+            "name": "On Help",
+            "offset": 579,
+            "parameters": [],
+            "script": "",
+            "script_offset": 592,
+            "sha256": "7321b7a9a2286fda86e30328e1eca5d522a2db55377998d56c2c371bb2b291a1",
+            "size": 14
+          },
+          {
+            "name": "On Ctrl Message",
+            "offset": 595,
+            "parameters": [],
+            "script": "",
+            "script_offset": 616,
+            "sha256": "056aaa56aa0efe5c8cf323ee50c24c5f7b55dd13e6b9017c1090ee5f45e354b6",
+            "size": 22
+          },
+          {
+            "name": "On Startup",
+            "offset": 1201,
+            "parameters": [],
+            "script": "",
+            "script_offset": 1217,
+            "sha256": "14653c1d313f0b593592b2c0ed8ada5989bf2f1e6676087bf65ffc15713f3b88",
+            "size": 17
+          },
+          {
+            "name": "On Pre Uninstall",
+            "offset": 1220,
+            "parameters": [],
+            "script": "",
+            "script_offset": 1242,
+            "sha256": "b9784e546162021311c6f28ea870e98a8d3eade2dbce60b293b6d4919abaa604",
+            "size": 23
+          },
+          {
+            "name": "On Uninstall Error",
+            "offset": 1245,
+            "parameters": [],
+            "script": "",
+            "script_offset": 1269,
+            "sha256": "f98eafa1ba592de62200279505c82e10e4c5a1703473d6405630b4aabac4ff9c",
+            "size": 25
+          },
+          {
+            "name": "On Post Uninstall",
+            "offset": 1272,
+            "parameters": [],
+            "script": "",
+            "script_offset": 1295,
+            "sha256": "f8565f7febcc1b74ff213ce19aa5db20a1b5b02b46a478008b7ddc9ccaba55e3",
+            "size": 24
+          },
+          {
+            "name": "On Shutdown",
+            "offset": 1298,
+            "parameters": [],
+            "script": "",
+            "script_offset": 1315,
+            "sha256": "1627b3b1b56552f876064ad3f5c09426d19aabdc0327de97098c49e0b858e83d",
+            "size": 18
+          },
+          {
+            "name": "Global Functions",
+            "offset": 1649,
+            "parameters": [],
+            "script": "",
+            "script_offset": 1671,
+            "sha256": "66de0c5f9abf6aee4a158b7f21b97c0b06db77bd4c8722ca7425a06b46b84cfb",
+            "size": 23
+          },
+          {
+            "name": "On Startup",
+            "offset": 1674,
+            "parameters": [],
+            "script": "",
+            "script_offset": 1690,
+            "sha256": "14653c1d313f0b593592b2c0ed8ada5989bf2f1e6676087bf65ffc15713f3b88",
+            "size": 17
+          },
+          {
+            "name": "On Pre Install",
+            "offset": 1693,
+            "parameters": [],
+            "script": "",
+            "script_offset": 1713,
+            "sha256": "7590bbd53cca3cbc4ce22a4e7e18f2e2a58b8a8dd86a47323486bc093c28ae62",
+            "size": 21
+          },
+          {
+            "name": "On Install Error",
+            "offset": 1716,
+            "parameters": [],
+            "script": "",
+            "script_offset": 1738,
+            "sha256": "6161f0c43c2bab1aa48b7b73b124cd6942deca4ba947399ddf736a6d77c7b11a",
+            "size": 23
+          },
+          {
+            "name": "On Post Install",
+            "offset": 1741,
+            "parameters": [],
+            "script": "",
+            "script_offset": 1762,
+            "sha256": "e4eb76510281aa1047571269bd5e785cc5530d49fb2625cb48b833544a910142",
+            "size": 22
+          },
+          {
+            "name": "On Shutdown",
+            "offset": 1765,
+            "parameters": [],
+            "script": "",
+            "script_offset": 1782,
+            "sha256": "1627b3b1b56552f876064ad3f5c09426d19aabdc0327de97098c49e0b858e83d",
+            "size": 18
+          }
+        ],
+        "include_end": 2,
+        "includes": [],
+        "installable": false,
+        "metadata": {
+          "offset": 0,
+          "sha256": "cc02b1d866b33cc16818132259235723819bcf9b5d118077c4c5d6ef9f367a0a",
+          "size": 1801
+        },
+        "schema_version": 1
+      },
+      "id": "c7776b18d088804fabd4316b08b26b63bc195dacdd51b6a6165432c614d64076",
+      "input": {
+        "data_hex": "00000100ffff01000e0043536574757046696c654461746101000000000b7061796c6f61642e62696e0b7061796c6f61642e62696e09433a5c736f75726365042e62696e07417263686976650001000f00000000000000200a00008000000000000000000a00008000000000000000000a0000800000000000000000000000000000000000000000000000000000000000000000000b25417070466f6c646572250200000000000000000000000000000000000000000000000000000000000001010000000000e8030000000013000080ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff00010003416c6c044e6f6e650000001c000000000000001584fead0000000100ffff010017004353554653637265656e496e7374616c6c466f6c646572010000006e00000018416e7920696e7374616c6c20666f6c646572207469746c650200000010416e7920646973706c6179207465787400000000000000000000000000000600ffff010008004349524576656e7401000000000a4f6e205072656c6f61640005800100000000074f6e204261636b0005800100000000074f6e204e6578747869662046696c652e446f65734578697374282225417070466f6c646572255c5c656e67696e652e657865222920616e642046696c652e476574435243282225417070466f6c646572255c5c6964656e746974792e6461742229203d3d20313233207468656e2053637265656e2e4e65787428293b20656e6405800100000000094f6e2043616e63656c0005800100000000074f6e2048656c7000058001000000000f4f6e204374726c204d65737361676500000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001000000f3ffffff900100000000000005417269616c0000000001000000f3ffffff900100000000000005417269616c0000000001000000f3ffffff900100000000000005417269616c0000000001000000f3ffffff900100000000000005417269616c0000000001000000f3ffffff900100000000000005417269616c010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000010000000b25417070466f6c64657225010000000100000000000000000000000000010000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001000000010000000100000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000100000001000000000000000500058001000000000a4f6e20537461727475700005800100000000104f6e2050726520556e696e7374616c6c0005800100000000124f6e20556e696e7374616c6c204572726f720005800100000000114f6e20506f737420556e696e7374616c6c00058001000000000b4f6e2053687574646f776e000100000000000001000001000100000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000100000000000000000000001e0000001e000000010000000a000080000000000000000000000000000000000100000001000000020000000100000000000000146172626974726172792d70726f6a6563742d696400000000000000000100000013000080ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff00000000000000000000000000000000010000000000000000000000000000000000000000000000000000000006000580010000000010476c6f62616c2046756e6374696f6e7300058001000000000a4f6e205374617274757000058001000000000e4f6e2050726520496e7374616c6c0005800100000000104f6e20496e7374616c6c204572726f7200058001000000000f4f6e20506f737420496e7374616c6c00058001000000000b4f6e2053687574646f776e000000000000000a0000800000000000000000"
+      }
+    },
+    {
+      "expected": {
+        "classes": [
+          {
+            "name": "CGlobalIncludeLuaFile",
+            "offset": 2,
+            "schema": 1,
+            "sha256": "c841db4f4912c1d450e921f41fc16fc66311c0994c985026c4ade50a8471566b",
+            "size": 27
+          },
+          {
+            "name": "CIREvent",
+            "offset": 111,
+            "schema": 1,
+            "sha256": "68d88f4fad48ccb0b69664208acfe3a092b5c4b3f928c4380f7eba2a7f4c68bb",
+            "size": 14
+          }
+        ],
+        "coverage": {
+          "blockers": [
+            "exe_serialized_object_graph_incomplete"
+          ],
+          "complete": false
+        },
+        "decoder": "sf9-metadata-v1",
+        "diagnostics": [],
+        "events": [
+          {
+            "name": "On Next",
+            "offset": 125,
+            "parameters": [],
+            "script": "Screen.Next();",
+            "script_offset": 138,
+            "sha256": "ce9c1c98762a00475f247c142be08e614d611629756b98e400b9e8b834deb0d2",
+            "size": 28
+          },
+          {
+            "name": "On Install Error",
+            "offset": 155,
+            "parameters": [
+              "string e_ErrorMsg"
+            ],
+            "script": "",
+            "script_offset": 194,
+            "sha256": "95f2610507a85f706bba851fba5f45038c23409f1fd25bbb8ebcbcd2558cbbb5",
+            "size": 40
+          }
+        ],
+        "include_end": 111,
+        "includes": [
+          {
+            "name": "Constants",
+            "offset": 29,
+            "script": "IDOK=1;",
+            "script_offset": 47,
+            "selectors": [
+              "All"
+            ],
+            "sha256": "a24e5e3cd01df0289d75dc68d6ea0717acb02b6ec14bf409e868d7e41aa835cd",
+            "size": 32,
+            "source_kind": 0
+          },
+          {
+            "name": "helpers.lua",
+            "offset": 61,
+            "script": "function helper() end",
+            "script_offset": 83,
+            "selectors": [
+              "All"
+            ],
+            "sha256": "e3b6703e8986587c18ed94b1cf81a58e12e6a56156d03e033b409528caab0625",
+            "size": 50,
+            "source_kind": 1
+          }
+        ],
+        "installable": false,
+        "metadata": {
+          "offset": 0,
+          "sha256": "cc5130c71612398c0d8e6b4d4a1f82e48a461fcb6e88ee407ca3ada36c0cfb82",
+          "size": 195
+        },
+        "schema_version": 1
+      },
+      "id": "e8b398fa9af71dab6a629bef0e976c3f99637dd005cdcfe248ca75dcc19c1822",
+      "input": {
+        "data_hex": "0200ffff0100150043476c6f62616c496e636c7564654c756146696c65010000000000000009436f6e7374616e74730749444f4b3d313b010003416c6c018001000000010000000b68656c706572732e6c75611566756e6374696f6e2068656c706572282920656e64010003416c6cffff010008004349524576656e740100000000074f6e204e6578740e53637265656e2e4e65787428293b10800100000011737472696e6720655f4572726f724d7367104f6e20496e7374616c6c204572726f7200"
+      }
+    }
+  ],
+  "oracle": "Python synthetic test fixtures",
+  "schema_version": 1
+}

@@ -1,0 +1,881 @@
+{
+  "cases": [
+    {
+      "error": "exe_lua_unterminated_string",
+      "id": "168ac8d279055fec45dd03f42e971af0c2b7fbef3bebdf4e6520265577effb98",
+      "input": {
+        "source": "\"unterminated"
+      }
+    },
+    {
+      "error": "exe_lua_depth_limit",
+      "id": "1a5a951224bac82c7d7c1990ff34595680ab8afc61fd989e5bd105e6381ff9a1",
+      "input": {
+        "source": "((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((true))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))"
+      }
+    },
+    {
+      "expected": [
+        [
+          "if",
+          [
+            [
+              [
+                "call",
+                [
+                  "index",
+                  [
+                    "name",
+                    "string"
+                  ],
+                  [
+                    "literal",
+                    "find"
+                  ]
+                ],
+                [
+                  [
+                    "name",
+                    "strInstallFolderPath"
+                  ],
+                  [
+                    "literal",
+                    "^%a:wrong$"
+                  ]
+                ]
+              ],
+              [
+                [
+                  "call",
+                  [
+                    "call",
+                    [
+                      "index",
+                      [
+                        "name",
+                        "Screen"
+                      ],
+                      [
+                        "literal",
+                        "Next"
+                      ]
+                    ],
+                    []
+                  ]
+                ]
+              ]
+            ]
+          ],
+          []
+        ]
+      ],
+      "id": "1bae68bab4330da15fb1588f4648f78728fe3cd652e76d0f999e3f056b3528b8",
+      "input": {
+        "source": "if string.find(strInstallFolderPath,\"^%a:wrong$\") then Screen.Next() end"
+      }
+    },
+    {
+      "expected": [
+        [
+          "assign",
+          [
+            [
+              "name",
+              "_NeedsReboot"
+            ]
+          ],
+          [
+            [
+              "literal",
+              true
+            ]
+          ],
+          false
+        ],
+        [
+          "call",
+          [
+            "call",
+            [
+              "index",
+              [
+                "name",
+                "System"
+              ],
+              [
+                "literal",
+                "Reboot"
+              ]
+            ],
+            []
+          ]
+        ]
+      ],
+      "id": "1d7fa6c217d649a6c1848c65d64fd81f7ad1430ce71eb9074b07f0054c9e89f2",
+      "input": {
+        "source": "_NeedsReboot=true; System.Reboot()"
+      }
+    },
+    {
+      "expected": [
+        [
+          "if",
+          [
+            [
+              [
+                "binary",
+                "and",
+                [
+                  "call",
+                  [
+                    "index",
+                    [
+                      "name",
+                      "File"
+                    ],
+                    [
+                      "literal",
+                      "DoesExist"
+                    ]
+                  ],
+                  [
+                    [
+                      "literal",
+                      "%AppFolder%\\engine.exe"
+                    ]
+                  ]
+                ],
+                [
+                  "binary",
+                  "==",
+                  [
+                    "call",
+                    [
+                      "index",
+                      [
+                        "name",
+                        "File"
+                      ],
+                      [
+                        "literal",
+                        "GetCRC"
+                      ]
+                    ],
+                    [
+                      [
+                        "literal",
+                        "%AppFolder%\\identity.dat"
+                      ]
+                    ]
+                  ],
+                  [
+                    "literal",
+                    123
+                  ]
+                ]
+              ],
+              [
+                [
+                  "call",
+                  [
+                    "call",
+                    [
+                      "index",
+                      [
+                        "name",
+                        "Screen"
+                      ],
+                      [
+                        "literal",
+                        "Next"
+                      ]
+                    ],
+                    []
+                  ]
+                ]
+              ]
+            ]
+          ],
+          []
+        ]
+      ],
+      "id": "28d5259b8d1b2c0079f6e0baa10dc39db55a9c529398b5acebd644936f8a72a2",
+      "input": {
+        "source": "if File.DoesExist(\"%AppFolder%\\\\engine.exe\") and File.GetCRC(\"%AppFolder%\\\\identity.dat\") == 123 then Screen.Next(); end"
+      }
+    },
+    {
+      "expected": [
+        [
+          "call",
+          [
+            "call",
+            [
+              "index",
+              [
+                "name",
+                "File"
+              ],
+              [
+                "literal",
+                "Run"
+              ]
+            ],
+            [
+              [
+                "literal",
+                "bad"
+              ]
+            ]
+          ]
+        ]
+      ],
+      "id": "2e349c5ed211b4e9b49d706c363e669080465463bb11db370be60771e445857f",
+      "input": {
+        "source": "-- safe\nFile.Run(\"bad\")"
+      }
+    },
+    {
+      "expected": [
+        [
+          "if",
+          [
+            [
+              [
+                "binary",
+                "==",
+                [
+                  "name",
+                  "e_Stage"
+                ],
+                [
+                  "literal",
+                  3
+                ]
+              ],
+              [
+                [
+                  "call",
+                  [
+                    "call",
+                    [
+                      "index",
+                      [
+                        "name",
+                        "File"
+                      ],
+                      [
+                        "literal",
+                        "Run"
+                      ]
+                    ],
+                    [
+                      [
+                        "literal",
+                        "bad"
+                      ]
+                    ]
+                  ]
+                ]
+              ]
+            ]
+          ],
+          []
+        ]
+      ],
+      "id": "35c5c02f1d98819d54ab20f8814ece0339ace2427f688585b2d43aa1fe93e271",
+      "input": {
+        "source": "if e_Stage == 3 then File.Run(\"bad\") end"
+      }
+    },
+    {
+      "expected": [
+        [
+          "call",
+          [
+            "call",
+            [
+              "index",
+              [
+                "name",
+                "File"
+              ],
+              [
+                "literal",
+                "Delete"
+              ]
+            ],
+            [
+              [
+                "literal",
+                "%AppFolder%\\identity.dat"
+              ]
+            ]
+          ]
+        ]
+      ],
+      "id": "4e1a7e51380c3d2849e26ade7c59fa883342196240e905931af3f89bc73d37fe",
+      "input": {
+        "source": "File.Delete(\"%AppFolder%\\\\identity.dat\")"
+      }
+    },
+    {
+      "expected": [
+        [
+          "if",
+          [
+            [
+              [
+                "binary",
+                "==",
+                [
+                  "call",
+                  [
+                    "index",
+                    [
+                      "name",
+                      "File"
+                    ],
+                    [
+                      "literal",
+                      "GetCRC"
+                    ]
+                  ],
+                  [
+                    [
+                      "literal",
+                      "%AppFolder%\\anything.dat"
+                    ]
+                  ]
+                ],
+                [
+                  "literal",
+                  4294967295
+                ]
+              ],
+              [
+                [
+                  "call",
+                  [
+                    "call",
+                    [
+                      "index",
+                      [
+                        "name",
+                        "Screen"
+                      ],
+                      [
+                        "literal",
+                        "Next"
+                      ]
+                    ],
+                    []
+                  ]
+                ]
+              ]
+            ]
+          ],
+          []
+        ]
+      ],
+      "id": "77ea40bb2ed57c98e0b6828c260a5f7813bf79178e5ed2e0cc211aa2f7bc6b41",
+      "input": {
+        "source": "if File.GetCRC(\"%AppFolder%\\\\anything.dat\") == 4294967295 then Screen.Next() end"
+      }
+    },
+    {
+      "error": "exe_lua_syntax_invalid",
+      "id": "7a95a7199bbd28c455d95c11593e41cd0108e39cb169d0b54fa1ed7ad7e3996e",
+      "input": {
+        "source": "if true then"
+      }
+    },
+    {
+      "expected": [
+        [
+          "if",
+          [
+            [
+              [
+                "binary",
+                "~=",
+                [
+                  "name",
+                  "e_CurrentItemText"
+                ],
+                [
+                  "literal",
+                  ""
+                ]
+              ],
+              [
+                [
+                  "call",
+                  [
+                    "call",
+                    [
+                      "index",
+                      [
+                        "name",
+                        "File"
+                      ],
+                      [
+                        "literal",
+                        "Run"
+                      ]
+                    ],
+                    [
+                      [
+                        "literal",
+                        "bad"
+                      ]
+                    ]
+                  ]
+                ]
+              ]
+            ]
+          ],
+          []
+        ]
+      ],
+      "id": "7d7b018df21bfeaeca90c0eaaeefe1f89a5a33a46a37164746ccdef2c575b101",
+      "input": {
+        "source": "if e_CurrentItemText ~= \"\" then File.Run(\"bad\") end"
+      }
+    },
+    {
+      "expected": [
+        [
+          "assign",
+          [
+            [
+              "name",
+              "f"
+            ]
+          ],
+          [
+            [
+              "index",
+              [
+                "name",
+                "File"
+              ],
+              [
+                "literal",
+                "Run"
+              ]
+            ]
+          ],
+          true
+        ],
+        [
+          "call",
+          [
+            "call",
+            [
+              "name",
+              "f"
+            ],
+            [
+              [
+                "literal",
+                "payload"
+              ]
+            ]
+          ]
+        ]
+      ],
+      "id": "91c81ed1fce268dc00ebef0820896d996fc1863921f6bd9acffc5ceb9088b6e3",
+      "input": {
+        "source": "local f=File.Run; f(\"payload\")"
+      }
+    },
+    {
+      "expected": [
+        [
+          "assign",
+          [
+            [
+              "name",
+              "_NeedsReboot"
+            ]
+          ],
+          [
+            [
+              "literal",
+              true
+            ]
+          ],
+          false
+        ]
+      ],
+      "id": "a798f041c8e7a270e060f71bf4ef4a3f0266a2e3ab8b34dc4008d27a528913f7",
+      "input": {
+        "source": "_NeedsReboot=true"
+      }
+    },
+    {
+      "expected": [
+        [
+          "assign",
+          [
+            [
+              "name",
+              "x"
+            ]
+          ],
+          [
+            [
+              "literal",
+              "File"
+            ]
+          ],
+          true
+        ],
+        [
+          "call",
+          [
+            "call",
+            [
+              "index",
+              [
+                "index",
+                [
+                  "name",
+                  "_G"
+                ],
+                [
+                  "name",
+                  "x"
+                ]
+              ],
+              [
+                "literal",
+                "Run"
+              ]
+            ],
+            [
+              [
+                "literal",
+                "payload"
+              ]
+            ]
+          ]
+        ]
+      ],
+      "id": "be61656ca3342fb1071c33255784403f0e16931775c1b3b1b1df2fbad648103f",
+      "input": {
+        "source": "local x=\"File\"; _G[x].Run(\"payload\")"
+      }
+    },
+    {
+      "expected": [
+        [
+          "assign",
+          [
+            [
+              "name",
+              "string_value"
+            ]
+          ],
+          [
+            [
+              "literal",
+              "ok"
+            ]
+          ],
+          true
+        ],
+        [
+          "assign",
+          [
+            [
+              "name",
+              "x"
+            ]
+          ],
+          [
+            [
+              "call",
+              [
+                "index",
+                [
+                  "name",
+                  "string"
+                ],
+                [
+                  "literal",
+                  "find"
+                ]
+              ],
+              [
+                [
+                  "name",
+                  "strInstallFolderPath"
+                ],
+                [
+                  "literal",
+                  "x"
+                ]
+              ]
+            ]
+          ],
+          true
+        ]
+      ],
+      "id": "becfa4de3cc8d2060093b867383713b6c746d865d70e2bbb9f6a5e014e86d2a6",
+      "input": {
+        "source": "local string_value=\"ok\"; local x=string.find(strInstallFolderPath,\"x\")"
+      }
+    },
+    {
+      "expected": [
+        [
+          "if",
+          [
+            [
+              [
+                "literal",
+                false
+              ],
+              [
+                [
+                  "call",
+                  [
+                    "call",
+                    [
+                      "index",
+                      [
+                        "name",
+                        "File"
+                      ],
+                      [
+                        "literal",
+                        "Run"
+                      ]
+                    ],
+                    [
+                      [
+                        "literal",
+                        "bad"
+                      ]
+                    ]
+                  ]
+                ]
+              ]
+            ]
+          ],
+          [
+            [
+              "call",
+              [
+                "call",
+                [
+                  "index",
+                  [
+                    "name",
+                    "Screen"
+                  ],
+                  [
+                    "literal",
+                    "Next"
+                  ]
+                ],
+                []
+              ]
+            ]
+          ]
+        ]
+      ],
+      "id": "d036ed85c8bb8e54714d300a00e3935d2aff32668edc3b1aa6a40e245ea6fd44",
+      "input": {
+        "source": "--[=[ File.Run(\"bad\") ]=]\nif false then File.Run(\"bad\") else Screen.Next() end"
+      }
+    },
+    {
+      "error": "exe_lua_unterminated_long_string",
+      "id": "d9f2bc3203177169761e85cf67a9ace568ad3692f86bfb152f75176e41b582d1",
+      "input": {
+        "source": "--[[ unfinished"
+      }
+    },
+    {
+      "expected": [],
+      "id": "e7c48d0f8441f4f1b7233ea8680d7be15d781d4a885eb0957144d6e6775a2261",
+      "input": {
+        "source": ""
+      }
+    },
+    {
+      "expected": [
+        [
+          "assign",
+          [
+            [
+              "name",
+              "value"
+            ]
+          ],
+          [
+            [
+              "binary",
+              "and",
+              [
+                "literal",
+                true
+              ],
+              [
+                "literal",
+                "original"
+              ]
+            ]
+          ],
+          true
+        ],
+        [
+          "assign",
+          [
+            [
+              "name",
+              "fallback"
+            ]
+          ],
+          [
+            [
+              "binary",
+              "or",
+              [
+                "literal",
+                false
+              ],
+              [
+                "literal",
+                "fallback"
+              ]
+            ]
+          ],
+          true
+        ]
+      ],
+      "id": "e873b7639948416fedba83741a60b64a06f3800c412be797618972bd93191f25",
+      "input": {
+        "source": "local value=true and \"original\"; local fallback=false or \"fallback\""
+      }
+    },
+    {
+      "expected": [
+        [
+          "define",
+          "evil",
+          [
+            "function",
+            [],
+            [
+              [
+                "assign",
+                [
+                  [
+                    "name",
+                    "_NeedsReboot"
+                  ]
+                ],
+                [
+                  [
+                    "literal",
+                    true
+                  ]
+                ],
+                false
+              ]
+            ]
+          ],
+          false
+        ],
+        [
+          "call",
+          [
+            "call",
+            [
+              "name",
+              "evil"
+            ],
+            []
+          ]
+        ],
+        [
+          "if",
+          [
+            [
+              [
+                "name",
+                "_NeedsReboot"
+              ],
+              [
+                [
+                  "call",
+                  [
+                    "call",
+                    [
+                      "index",
+                      [
+                        "name",
+                        "System"
+                      ],
+                      [
+                        "literal",
+                        "Reboot"
+                      ]
+                    ],
+                    []
+                  ]
+                ]
+              ]
+            ]
+          ],
+          []
+        ]
+      ],
+      "id": "ede0bdb2c1e115ee58cdb5ad1f4724511f72165675e778c8a92d4135accc46a9",
+      "input": {
+        "source": "function evil() _NeedsReboot=true end evil(); if _NeedsReboot then System.Reboot() end"
+      }
+    },
+    {
+      "expected": [
+        [
+          "while",
+          [
+            "literal",
+            true
+          ],
+          [
+            [
+              "call",
+              [
+                "call",
+                [
+                  "index",
+                  [
+                    "name",
+                    "Screen"
+                  ],
+                  [
+                    "literal",
+                    "Next"
+                  ]
+                ],
+                []
+              ]
+            ]
+          ]
+        ]
+      ],
+      "id": "f9c438d9888f050ec71b379b12f1450b8141e298e93ac78e9c791c5f06f037da",
+      "input": {
+        "source": "while true do Screen.Next() end"
+      }
+    }
+  ],
+  "oracle": "Python synthetic test fixtures",
+  "schema_version": 1
+}

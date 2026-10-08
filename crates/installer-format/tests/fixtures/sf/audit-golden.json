@@ -1,0 +1,2508 @@
+{
+  "cases": [
+    {
+      "expected": {
+        "auditor": "sf9-audit-v3",
+        "blockers": [
+          "unparsed_installer_events",
+          "unreviewed_serialized_file_fields",
+          "game_language_build_dlc_not_verified",
+          "steamos_install_restore_not_verified"
+        ],
+        "capability": "discover_only",
+        "certificate": null,
+        "certificate_alignment_bytes": 0,
+        "diagnostics": [
+          {
+            "crc32": 3492925374,
+            "hashed_representation": "stored_blob",
+            "name": "irsetup.exe",
+            "offset": 1570,
+            "packed_size": 17,
+            "sha256": "7dd4418f90bf9cc6c47fb82f4c0eb654f049e8d2157baa5e3feb7844d2e770c4",
+            "size": 17
+          },
+          {
+            "crc32": 3975044453,
+            "hashed_representation": "stored_blob",
+            "name": "lua5.1.dll",
+            "offset": 1595,
+            "packed_size": 9,
+            "sha256": "4be431c8e91674f39e6da5516eacd7558ec7565e83308d8f6efef634ff02d061",
+            "size": 9
+          },
+          {
+            "crc32": 789169588,
+            "name": "irsetup.dat",
+            "offset": 1888,
+            "packed_size": 524,
+            "sha256": "cc02b1d866b33cc16818132259235723819bcf9b5d118077c4c5d6ef9f367a0a",
+            "size": 1801,
+            "unknown_header_base64": "AAAAAA=="
+          },
+          {
+            "crc32": 2026741462,
+            "name": "IRIMG1.BMP",
+            "offset": 2692,
+            "packed_size": 19,
+            "sha256": "cc292b92ce7f10f2e4f727ecdf4b12528127c51b6ddf6058e213674603190d06",
+            "size": 6,
+            "unknown_header_base64": "AAAAAA=="
+          },
+          {
+            "crc32": 3787771756,
+            "name": "IRIMG2.BMP",
+            "offset": 2991,
+            "packed_size": 19,
+            "sha256": "5bb21ac469b5e7df4e17899d4aae0adfb430f0f0b336a2242ef1a22d25bd2e53",
+            "size": 6,
+            "unknown_header_base64": "AAAAAA=="
+          }
+        ],
+        "exe": {
+          "offset": 0,
+          "sha256": "2fc9f1267821dc3993ce1006619a1c0ca09798161a3116b68598b7bde4f4d8e4",
+          "size": 3038
+        },
+        "expanded_total": 1854,
+        "file_table": {
+          "end": 272,
+          "end_basis": "last_known_crc_end_not_serialized_object_end",
+          "header_base64": "AQAAAAA=",
+          "start": 2,
+          "unparsed_regions": [
+            {
+              "offset": 0,
+              "sha256": "96a296d224f285c67bee93c30f8a309157f0daa35dc5b87e410b78630a09cfc7",
+              "size": 2
+            },
+            {
+              "offset": 272,
+              "sha256": "fbc53226350fac406c11e5a6ee1950e66759ce98fee2e572e95ee10e3f25fab4",
+              "size": 1529
+            }
+          ]
+        },
+        "files": [
+          {
+            "attributes": 32,
+            "compressed": true,
+            "condition": "",
+            "crc32": 2919138325,
+            "creation_time": 0,
+            "description": "",
+            "destination": "payload.bin",
+            "extra": "None",
+            "font": "",
+            "forced_attributes": 0,
+            "icon": "",
+            "index": 0,
+            "install_type": "All",
+            "modified_time": 0,
+            "notes": "",
+            "packages": [],
+            "packed_size": 28,
+            "payload": {
+              "crc32": 2919138325,
+              "sha256": "0e2d9c71bc985204d7c8fd81afcdb6c2f4df0c207afe4cb796ff9d1e28e28a60",
+              "size": 15
+            },
+            "payload_offset": 3010,
+            "runtime_folder": "Archive",
+            "serialized_record": {
+              "offset": 29,
+              "sha256": "677e38365cbdb550958a78a6e8197c02fe155870afc083ea5f6b0292c8faefd4",
+              "size": 243
+            },
+            "shortcuts": [
+              "",
+              "",
+              "",
+              "",
+              ""
+            ],
+            "source": "payload.bin",
+            "source_directory": "C:\\source",
+            "suffix": ".bin",
+            "unpacked_size": 15,
+            "unparsed_inter_record_framing": null,
+            "unreviewed_fields": [
+              {
+                "base64": "AQA=",
+                "offset": 77,
+                "sha256": "47dc540c94ceb704a23875c11273e16bb0b8a87aed84de911f2133568115f254",
+                "size": 2
+              },
+              {
+                "base64": "CgAAgA==",
+                "offset": 88,
+                "sha256": "4785852659ce0273c2d7769cf4181877f0d71e6424084c1801c62a2462853c4f",
+                "size": 4
+              },
+              {
+                "base64": "CgAAgAAAAAAAAAAACgAAgA==",
+                "offset": 100,
+                "sha256": "10c444a9d76bc1e2930c97dba8508858b659ba9d7042b2e1fd5c516db460ab11",
+                "size": 16
+              },
+              {
+                "base64": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==",
+                "offset": 124,
+                "sha256": "61126de1b795b976f3ac878f48e88fa77a87d7308ba57c7642b9e1068403a496",
+                "size": 25
+              },
+              {
+                "base64": "AgAAAAAAAAAAAAA=",
+                "offset": 161,
+                "sha256": "5563cc1568e244183804e0db3cec6ff9bf577f4a403924096177bf4a586160da",
+                "size": 11
+              },
+              {
+                "base64": "AA==",
+                "offset": 177,
+                "sha256": "6e340b9cffb37a989ca544e6bb780a2c78901d3fb33738768511a30617afa01d",
+                "size": 1
+              },
+              {
+                "base64": "AAAAAAAAAAA=",
+                "offset": 179,
+                "sha256": "af5570f5a1810b7af78caf4bc70a660f0df51e42baf91d4de5b2328de0e83dfc",
+                "size": 8
+              },
+              {
+                "base64": "AAAAAA==",
+                "offset": 188,
+                "sha256": "df3f619804a92fdb4057192dc43dd748ea778adc52bc498ce80524c014b81119",
+                "size": 4
+              },
+              {
+                "base64": "AAAAAOgDAAAAAA==",
+                "offset": 195,
+                "sha256": "05c48cd66fd77b70529dc781eaf451474a46e88ab3dcab712fd0aba1119db727",
+                "size": 10
+              },
+              {
+                "base64": "AID///////////////////////////////////////////////8=",
+                "offset": 207,
+                "sha256": "e3b5f3412c85edc7d0d1d711382c9d34c320d994d1f5c55b7cdeed03025c9586",
+                "size": 38
+              },
+              {
+                "base64": "AQA=",
+                "offset": 246,
+                "sha256": "47dc540c94ceb704a23875c11273e16bb0b8a87aed84de911f2133568115f254",
+                "size": 2
+              }
+            ],
+            "use_original_attributes": 1
+          }
+        ],
+        "installable": false,
+        "installer": "Setup Factory 9.7",
+        "manifest": {
+          "offset": 0,
+          "sha256": "63dc219de3085b6c23860b792f79c33dd091cff0884b270067430291eb1387bb",
+          "size": 169,
+          "version": "9.7.0.0"
+        },
+        "metadata": {
+          "offset": 0,
+          "sha256": "cc02b1d866b33cc16818132259235723819bcf9b5d118077c4c5d6ef9f367a0a",
+          "size": 1801
+        },
+        "overlay_header_base64": "AAAAAAAAAAAAAA==",
+        "overlay_offset": 1536,
+        "schema_version": 1,
+        "script_inventory": {
+          "classes": [
+            {
+              "name": "CSetupFileData",
+              "offset": 4,
+              "schema": 1,
+              "sha256": "a58fc2965206d157d5896eb10ecec962c66636a47b7d96c7cca6df8bb6865448",
+              "size": 20
+            },
+            {
+              "name": "CSUFScreenInstallFolder",
+              "offset": 277,
+              "schema": 1,
+              "sha256": "1306c3c01aa61bfed4c5b3bf5379299d019096869c2568e5c615b9f0fa20c8b6",
+              "size": 29
+            },
+            {
+              "name": "CIREvent",
+              "offset": 376,
+              "schema": 1,
+              "sha256": "68d88f4fad48ccb0b69664208acfe3a092b5c4b3f928c4380f7eba2a7f4c68bb",
+              "size": 14
+            }
+          ],
+          "coverage": {
+            "blockers": [
+              "exe_serialized_object_graph_incomplete"
+            ],
+            "complete": false
+          },
+          "decoder": "sf9-metadata-v1",
+          "diagnostics": [],
+          "events": [
+            {
+              "name": "On Preload",
+              "offset": 390,
+              "parameters": [],
+              "script": "",
+              "script_offset": 406,
+              "sha256": "ad92567bb6bbe14571e5b4274aaa19acc4c417d6e844e79741bd2edbe75dad14",
+              "size": 17
+            },
+            {
+              "name": "On Back",
+              "offset": 409,
+              "parameters": [],
+              "script": "",
+              "script_offset": 422,
+              "sha256": "b1d4ac6d80edf06896ebebd5c32d7626b6f4995d73cd72ea0542748f6cded97a",
+              "size": 14
+            },
+            {
+              "name": "On Next",
+              "offset": 425,
+              "parameters": [],
+              "script": "if File.DoesExist(\"%AppFolder%\\\\engine.exe\") and File.GetCRC(\"%AppFolder%\\\\identity.dat\") == 123 then Screen.Next(); end",
+              "script_offset": 438,
+              "sha256": "fda182646ee7cc17dd3d36bcf23d9b32e3036fe4dbe5af0ecb38fd1dc786f81c",
+              "size": 134
+            },
+            {
+              "name": "On Cancel",
+              "offset": 561,
+              "parameters": [],
+              "script": "",
+              "script_offset": 576,
+              "sha256": "299083e54b3272d452c0e81658bee045a2b95bffc679672109f956cdf9f78005",
+              "size": 16
+            },
+            {
+              "name": "On Help",
+              "offset": 579,
+              "parameters": [],
+              "script": "",
+              "script_offset": 592,
+              "sha256": "7321b7a9a2286fda86e30328e1eca5d522a2db55377998d56c2c371bb2b291a1",
+              "size": 14
+            },
+            {
+              "name": "On Ctrl Message",
+              "offset": 595,
+              "parameters": [],
+              "script": "",
+              "script_offset": 616,
+              "sha256": "056aaa56aa0efe5c8cf323ee50c24c5f7b55dd13e6b9017c1090ee5f45e354b6",
+              "size": 22
+            },
+            {
+              "name": "On Startup",
+              "offset": 1201,
+              "parameters": [],
+              "script": "",
+              "script_offset": 1217,
+              "sha256": "14653c1d313f0b593592b2c0ed8ada5989bf2f1e6676087bf65ffc15713f3b88",
+              "size": 17
+            },
+            {
+              "name": "On Pre Uninstall",
+              "offset": 1220,
+              "parameters": [],
+              "script": "",
+              "script_offset": 1242,
+              "sha256": "b9784e546162021311c6f28ea870e98a8d3eade2dbce60b293b6d4919abaa604",
+              "size": 23
+            },
+            {
+              "name": "On Uninstall Error",
+              "offset": 1245,
+              "parameters": [],
+              "script": "",
+              "script_offset": 1269,
+              "sha256": "f98eafa1ba592de62200279505c82e10e4c5a1703473d6405630b4aabac4ff9c",
+              "size": 25
+            },
+            {
+              "name": "On Post Uninstall",
+              "offset": 1272,
+              "parameters": [],
+              "script": "",
+              "script_offset": 1295,
+              "sha256": "f8565f7febcc1b74ff213ce19aa5db20a1b5b02b46a478008b7ddc9ccaba55e3",
+              "size": 24
+            },
+            {
+              "name": "On Shutdown",
+              "offset": 1298,
+              "parameters": [],
+              "script": "",
+              "script_offset": 1315,
+              "sha256": "1627b3b1b56552f876064ad3f5c09426d19aabdc0327de97098c49e0b858e83d",
+              "size": 18
+            },
+            {
+              "name": "Global Functions",
+              "offset": 1649,
+              "parameters": [],
+              "script": "",
+              "script_offset": 1671,
+              "sha256": "66de0c5f9abf6aee4a158b7f21b97c0b06db77bd4c8722ca7425a06b46b84cfb",
+              "size": 23
+            },
+            {
+              "name": "On Startup",
+              "offset": 1674,
+              "parameters": [],
+              "script": "",
+              "script_offset": 1690,
+              "sha256": "14653c1d313f0b593592b2c0ed8ada5989bf2f1e6676087bf65ffc15713f3b88",
+              "size": 17
+            },
+            {
+              "name": "On Pre Install",
+              "offset": 1693,
+              "parameters": [],
+              "script": "",
+              "script_offset": 1713,
+              "sha256": "7590bbd53cca3cbc4ce22a4e7e18f2e2a58b8a8dd86a47323486bc093c28ae62",
+              "size": 21
+            },
+            {
+              "name": "On Install Error",
+              "offset": 1716,
+              "parameters": [],
+              "script": "",
+              "script_offset": 1738,
+              "sha256": "6161f0c43c2bab1aa48b7b73b124cd6942deca4ba947399ddf736a6d77c7b11a",
+              "size": 23
+            },
+            {
+              "name": "On Post Install",
+              "offset": 1741,
+              "parameters": [],
+              "script": "",
+              "script_offset": 1762,
+              "sha256": "e4eb76510281aa1047571269bd5e785cc5530d49fb2625cb48b833544a910142",
+              "size": 22
+            },
+            {
+              "name": "On Shutdown",
+              "offset": 1765,
+              "parameters": [],
+              "script": "",
+              "script_offset": 1782,
+              "sha256": "1627b3b1b56552f876064ad3f5c09426d19aabdc0327de97098c49e0b858e83d",
+              "size": 18
+            }
+          ],
+          "include_end": 2,
+          "includes": [],
+          "installable": false,
+          "metadata": {
+            "offset": 0,
+            "sha256": "cc02b1d866b33cc16818132259235723819bcf9b5d118077c4c5d6ef9f367a0a",
+            "size": 1801
+          },
+          "schema_version": 1
+        },
+        "semantics_reviewed": false
+      },
+      "id": "3d6044bb43260a3bab570062b26b00c370aed9da3d4c4ffc3129ffe07d85f3d8",
+      "input": {
+        "data_hex": "4d5a00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000400000005045000000000100000000000000000000000000e00000000b01000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000100000000400000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000040000001000000004000000020000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000100180000002000008000000000000000000000000000000000000000000000010001000000400000800000000000000000000000000000000000000000000001000904000060000000000000000000000080100000a90000000000000000000000000000000000000000000000000000003c617373656d626c793e3c617373656d626c794964656e746974792076657273696f6e3d22392e372e302e30222f3e3c6465736372697074696f6e3e536574757020466163746f72792052756e2d74696d653c2f6465736372697074696f6e3e3c646570656e64656e63793e3c617373656d626c794964656e746974792076657273696f6e3d22362e302e302e30222f3e3c2f646570656e64656e63793e3c2f617373656d626c793e00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000e0e0e1e1e2e2e3e3e4e4e5e5e6e6e7e70000000000000000000011000000000000006e6f742d616e2d65786563757461626c6509000000000000006e6f742d612d646c6c03000000697273657475702e646174000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000c02000000000000b4c5092f00000000100907000000000000e0070801fb5d0000600281371d84d2d3b57cff23d5913421ebab27447236a5aba4e60ebe9ff18c3e349d861f38ee304b0b1d745671dbb9e347b99bd90720fc15a835ddaaed0da6bc721a68cb51c9b42c484d41a61f451a8b517ff4c123e43eb87f2c686bf517c5a3549e29e0236b4b50e88e665cca5f64eb638d77e86ca0da991ae96a2d9e546a30a588aa1efd2708eac066ecbffe28ee8fbf68a4da488b2ec6d0563550dd9d5a911196c0d58ce54ac693d36e1359070959311b1c976ef838092ea1595839a554015bf773c5401c2bef8769d6927a068fbc40b4a9165640547922354c9311b118fd3d04dbbc9073bc0440851a6c4dbc71dd05439cddf0d75d96f84032ff3ce9d09b318682bc3ddae6ab782fc4e3d83172053c41175eaf61db19bb343a3e78250b5f325cc89d7c4db18f1e045718aed1241ddfd230047f193514644c8a1f494a14302553854f7aa5eadf79a80c840e75a03fe6743ac31c360c6d9d960dc088095e5b1470d57a58a0b84c48215e2df67ba13cfd23a229a0d318464bee0423ec36747011e76be37f537ee80764544209f157dd9535dd5041f0e64372f6f9a75fa66aa0a959439faa6d2a2fc14cfad5c34905506579d2fb2275ba68b7ae939d44af9d49ba4803aac139a5acab6d9bc03f93e5cca1ac245abbfbd0572f0b0baf6ece0be6a41a5dc6ae7952e96bbfbf56b2f54efff55e083da0988b90916d004952494d47312e424d5000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001300000000000000d69ecd7800000000100600000000000000010005696d61676531004952494d47322e424d50000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000013000000000000006ccfc4e100000000100600000000000000010005696d6167653200100f0000000000000001000e67656e657269632d636f6e74656e7400"
+      }
+    },
+    {
+      "expected": {
+        "auditor": "sf9-audit-v3",
+        "blockers": [
+          "unparsed_installer_events",
+          "unreviewed_serialized_file_fields",
+          "game_language_build_dlc_not_verified",
+          "steamos_install_restore_not_verified"
+        ],
+        "capability": "discover_only",
+        "certificate": null,
+        "certificate_alignment_bytes": 0,
+        "diagnostics": [
+          {
+            "crc32": 3492925374,
+            "hashed_representation": "stored_blob",
+            "name": "irsetup.exe",
+            "offset": 1570,
+            "packed_size": 17,
+            "sha256": "7dd4418f90bf9cc6c47fb82f4c0eb654f049e8d2157baa5e3feb7844d2e770c4",
+            "size": 17
+          },
+          {
+            "crc32": 3975044453,
+            "hashed_representation": "stored_blob",
+            "name": "lua5.1.dll",
+            "offset": 1595,
+            "packed_size": 9,
+            "sha256": "4be431c8e91674f39e6da5516eacd7558ec7565e83308d8f6efef634ff02d061",
+            "size": 9
+          },
+          {
+            "crc32": 1724715185,
+            "name": "irsetup.dat",
+            "offset": 1888,
+            "packed_size": 524,
+            "sha256": "88f81f152e35584d88e8828f4ecbac925e79cdb35a0b9fb1fd86eff0ee6a5552",
+            "size": 1784,
+            "unknown_header_base64": "AAAAAA=="
+          },
+          {
+            "crc32": 2026741462,
+            "name": "IRIMG1.BMP",
+            "offset": 2692,
+            "packed_size": 19,
+            "sha256": "cc292b92ce7f10f2e4f727ecdf4b12528127c51b6ddf6058e213674603190d06",
+            "size": 6,
+            "unknown_header_base64": "AAAAAA=="
+          },
+          {
+            "crc32": 3787771756,
+            "name": "IRIMG2.BMP",
+            "offset": 2991,
+            "packed_size": 19,
+            "sha256": "5bb21ac469b5e7df4e17899d4aae0adfb430f0f0b336a2242ef1a22d25bd2e53",
+            "size": 6,
+            "unknown_header_base64": "AAAAAA=="
+          }
+        ],
+        "exe": {
+          "offset": 0,
+          "sha256": "a9d33da105a311332786ec01efbf9e1f9ded1ed4f0a6f9c4f1011cf4eced1c9f",
+          "size": 3038
+        },
+        "expanded_total": 1837,
+        "file_table": {
+          "end": 265,
+          "end_basis": "last_known_crc_end_not_serialized_object_end",
+          "header_base64": "AQAAAAA=",
+          "start": 2,
+          "unparsed_regions": [
+            {
+              "offset": 0,
+              "sha256": "96a296d224f285c67bee93c30f8a309157f0daa35dc5b87e410b78630a09cfc7",
+              "size": 2
+            },
+            {
+              "offset": 265,
+              "sha256": "60ec98d24f800fc07e59ebadc6fef80fe6e768e5ef0cb929ebbbcef1ef431f25",
+              "size": 1519
+            }
+          ]
+        },
+        "files": [
+          {
+            "attributes": 32,
+            "compressed": true,
+            "condition": "",
+            "crc32": 2919138325,
+            "creation_time": 0,
+            "description": "",
+            "destination": "payload.bin",
+            "extra": "None",
+            "font": "",
+            "forced_attributes": 0,
+            "icon": "",
+            "index": 0,
+            "install_type": "All",
+            "modified_time": 0,
+            "notes": "",
+            "packages": [],
+            "packed_size": 28,
+            "payload": {
+              "crc32": 2919138325,
+              "sha256": "0e2d9c71bc985204d7c8fd81afcdb6c2f4df0c207afe4cb796ff9d1e28e28a60",
+              "size": 15
+            },
+            "payload_offset": 3010,
+            "runtime_folder": "Archive",
+            "serialized_record": {
+              "offset": 29,
+              "sha256": "4af805cd052960eb1fafd00a3d2af26d9eb06fbeeb9d72cc00e7a59f6cfee751",
+              "size": 236
+            },
+            "shortcuts": [
+              "",
+              "",
+              "",
+              "",
+              ""
+            ],
+            "source": "payload.bin",
+            "source_directory": "C:\\source",
+            "suffix": ".bin",
+            "unpacked_size": 15,
+            "unparsed_inter_record_framing": null,
+            "unreviewed_fields": [
+              {
+                "base64": "AQA=",
+                "offset": 77,
+                "sha256": "47dc540c94ceb704a23875c11273e16bb0b8a87aed84de911f2133568115f254",
+                "size": 2
+              },
+              {
+                "base64": "CgAAgA==",
+                "offset": 88,
+                "sha256": "4785852659ce0273c2d7769cf4181877f0d71e6424084c1801c62a2462853c4f",
+                "size": 4
+              },
+              {
+                "base64": "CgAAgAAAAAAAAAAACgAAgA==",
+                "offset": 100,
+                "sha256": "10c444a9d76bc1e2930c97dba8508858b659ba9d7042b2e1fd5c516db460ab11",
+                "size": 16
+              },
+              {
+                "base64": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==",
+                "offset": 124,
+                "sha256": "61126de1b795b976f3ac878f48e88fa77a87d7308ba57c7642b9e1068403a496",
+                "size": 25
+              },
+              {
+                "base64": "AgAAAAAAAAAAAAA=",
+                "offset": 161,
+                "sha256": "5563cc1568e244183804e0db3cec6ff9bf577f4a403924096177bf4a586160da",
+                "size": 11
+              },
+              {
+                "base64": "AA==",
+                "offset": 177,
+                "sha256": "6e340b9cffb37a989ca544e6bb780a2c78901d3fb33738768511a30617afa01d",
+                "size": 1
+              },
+              {
+                "base64": "AAAAAAAAAAA=",
+                "offset": 179,
+                "sha256": "af5570f5a1810b7af78caf4bc70a660f0df51e42baf91d4de5b2328de0e83dfc",
+                "size": 8
+              },
+              {
+                "base64": "AAAA",
+                "offset": 188,
+                "sha256": "709e80c88487a2411e1ee4dfb9f22a861492d20c4765150c0c794abd70f8147c",
+                "size": 3
+              },
+              {
+                "base64": "AAAAAOgDAAAAAA==",
+                "offset": 194,
+                "sha256": "05c48cd66fd77b70529dc781eaf451474a46e88ab3dcab712fd0aba1119db727",
+                "size": 10
+              },
+              {
+                "base64": "AID///////////////////////////////////////8=",
+                "offset": 206,
+                "sha256": "a00b9b037daa18f0cd363089bdaaef1cb938019b890b7beae9b2b272e1aad008",
+                "size": 32
+              },
+              {
+                "base64": "AQA=",
+                "offset": 239,
+                "sha256": "47dc540c94ceb704a23875c11273e16bb0b8a87aed84de911f2133568115f254",
+                "size": 2
+              }
+            ],
+            "use_original_attributes": 1
+          }
+        ],
+        "installable": false,
+        "installer": "Setup Factory 9.5",
+        "manifest": {
+          "offset": 0,
+          "sha256": "51065e675e90c3d1ced9f1e54211b908af177d759478ebc115e2c39166a622b9",
+          "size": 169,
+          "version": "9.5.0.0"
+        },
+        "metadata": {
+          "offset": 0,
+          "sha256": "88f81f152e35584d88e8828f4ecbac925e79cdb35a0b9fb1fd86eff0ee6a5552",
+          "size": 1784
+        },
+        "overlay_header_base64": "AAAAAAAAAAAAAA==",
+        "overlay_offset": 1536,
+        "schema_version": 1,
+        "script_inventory": {
+          "classes": [
+            {
+              "name": "CSetupFileData",
+              "offset": 4,
+              "schema": 1,
+              "sha256": "a58fc2965206d157d5896eb10ecec962c66636a47b7d96c7cca6df8bb6865448",
+              "size": 20
+            },
+            {
+              "name": "CSUFScreenInstallFolder",
+              "offset": 270,
+              "schema": 1,
+              "sha256": "1306c3c01aa61bfed4c5b3bf5379299d019096869c2568e5c615b9f0fa20c8b6",
+              "size": 29
+            },
+            {
+              "name": "CIREvent",
+              "offset": 369,
+              "schema": 1,
+              "sha256": "68d88f4fad48ccb0b69664208acfe3a092b5c4b3f928c4380f7eba2a7f4c68bb",
+              "size": 14
+            }
+          ],
+          "coverage": {
+            "blockers": [
+              "exe_serialized_object_graph_incomplete"
+            ],
+            "complete": false
+          },
+          "decoder": "sf9-metadata-v1",
+          "diagnostics": [],
+          "events": [
+            {
+              "name": "On Preload",
+              "offset": 383,
+              "parameters": [],
+              "script": "",
+              "script_offset": 399,
+              "sha256": "ad92567bb6bbe14571e5b4274aaa19acc4c417d6e844e79741bd2edbe75dad14",
+              "size": 17
+            },
+            {
+              "name": "On Back",
+              "offset": 402,
+              "parameters": [],
+              "script": "",
+              "script_offset": 415,
+              "sha256": "b1d4ac6d80edf06896ebebd5c32d7626b6f4995d73cd72ea0542748f6cded97a",
+              "size": 14
+            },
+            {
+              "name": "On Next",
+              "offset": 418,
+              "parameters": [],
+              "script": "if File.DoesExist(\"%AppFolder%\\\\engine.exe\") and File.GetCRC(\"%AppFolder%\\\\identity.dat\") == 123 then Screen.Next(); end",
+              "script_offset": 431,
+              "sha256": "fda182646ee7cc17dd3d36bcf23d9b32e3036fe4dbe5af0ecb38fd1dc786f81c",
+              "size": 134
+            },
+            {
+              "name": "On Cancel",
+              "offset": 554,
+              "parameters": [],
+              "script": "",
+              "script_offset": 569,
+              "sha256": "299083e54b3272d452c0e81658bee045a2b95bffc679672109f956cdf9f78005",
+              "size": 16
+            },
+            {
+              "name": "On Help",
+              "offset": 572,
+              "parameters": [],
+              "script": "",
+              "script_offset": 585,
+              "sha256": "7321b7a9a2286fda86e30328e1eca5d522a2db55377998d56c2c371bb2b291a1",
+              "size": 14
+            },
+            {
+              "name": "On Ctrl Message",
+              "offset": 588,
+              "parameters": [],
+              "script": "",
+              "script_offset": 609,
+              "sha256": "056aaa56aa0efe5c8cf323ee50c24c5f7b55dd13e6b9017c1090ee5f45e354b6",
+              "size": 22
+            },
+            {
+              "name": "On Startup",
+              "offset": 1190,
+              "parameters": [],
+              "script": "",
+              "script_offset": 1206,
+              "sha256": "14653c1d313f0b593592b2c0ed8ada5989bf2f1e6676087bf65ffc15713f3b88",
+              "size": 17
+            },
+            {
+              "name": "On Pre Uninstall",
+              "offset": 1209,
+              "parameters": [],
+              "script": "",
+              "script_offset": 1231,
+              "sha256": "b9784e546162021311c6f28ea870e98a8d3eade2dbce60b293b6d4919abaa604",
+              "size": 23
+            },
+            {
+              "name": "On Uninstall Error",
+              "offset": 1234,
+              "parameters": [],
+              "script": "",
+              "script_offset": 1258,
+              "sha256": "f98eafa1ba592de62200279505c82e10e4c5a1703473d6405630b4aabac4ff9c",
+              "size": 25
+            },
+            {
+              "name": "On Post Uninstall",
+              "offset": 1261,
+              "parameters": [],
+              "script": "",
+              "script_offset": 1284,
+              "sha256": "f8565f7febcc1b74ff213ce19aa5db20a1b5b02b46a478008b7ddc9ccaba55e3",
+              "size": 24
+            },
+            {
+              "name": "On Shutdown",
+              "offset": 1287,
+              "parameters": [],
+              "script": "",
+              "script_offset": 1304,
+              "sha256": "1627b3b1b56552f876064ad3f5c09426d19aabdc0327de97098c49e0b858e83d",
+              "size": 18
+            },
+            {
+              "name": "Global Functions",
+              "offset": 1632,
+              "parameters": [],
+              "script": "",
+              "script_offset": 1654,
+              "sha256": "66de0c5f9abf6aee4a158b7f21b97c0b06db77bd4c8722ca7425a06b46b84cfb",
+              "size": 23
+            },
+            {
+              "name": "On Startup",
+              "offset": 1657,
+              "parameters": [],
+              "script": "",
+              "script_offset": 1673,
+              "sha256": "14653c1d313f0b593592b2c0ed8ada5989bf2f1e6676087bf65ffc15713f3b88",
+              "size": 17
+            },
+            {
+              "name": "On Pre Install",
+              "offset": 1676,
+              "parameters": [],
+              "script": "",
+              "script_offset": 1696,
+              "sha256": "7590bbd53cca3cbc4ce22a4e7e18f2e2a58b8a8dd86a47323486bc093c28ae62",
+              "size": 21
+            },
+            {
+              "name": "On Install Error",
+              "offset": 1699,
+              "parameters": [],
+              "script": "",
+              "script_offset": 1721,
+              "sha256": "6161f0c43c2bab1aa48b7b73b124cd6942deca4ba947399ddf736a6d77c7b11a",
+              "size": 23
+            },
+            {
+              "name": "On Post Install",
+              "offset": 1724,
+              "parameters": [],
+              "script": "",
+              "script_offset": 1745,
+              "sha256": "e4eb76510281aa1047571269bd5e785cc5530d49fb2625cb48b833544a910142",
+              "size": 22
+            },
+            {
+              "name": "On Shutdown",
+              "offset": 1748,
+              "parameters": [],
+              "script": "",
+              "script_offset": 1765,
+              "sha256": "1627b3b1b56552f876064ad3f5c09426d19aabdc0327de97098c49e0b858e83d",
+              "size": 18
+            }
+          ],
+          "include_end": 2,
+          "includes": [],
+          "installable": false,
+          "metadata": {
+            "offset": 0,
+            "sha256": "88f81f152e35584d88e8828f4ecbac925e79cdb35a0b9fb1fd86eff0ee6a5552",
+            "size": 1784
+          },
+          "schema_version": 1
+        },
+        "semantics_reviewed": false
+      },
+      "id": "7b27ed3da3acfb9761cd1071107c45bb58d7c1b2256127641c412d160bdebe04",
+      "input": {
+        "data_hex": "4d5a00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000400000005045000000000100000000000000000000000000e00000000b01000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000100000000400000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000040000001000000004000000020000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000100180000002000008000000000000000000000000000000000000000000000010001000000400000800000000000000000000000000000000000000000000001000904000060000000000000000000000080100000a90000000000000000000000000000000000000000000000000000003c617373656d626c793e3c617373656d626c794964656e746974792076657273696f6e3d22392e352e302e30222f3e3c6465736372697074696f6e3e536574757020466163746f72792052756e2d74696d653c2f6465736372697074696f6e3e3c646570656e64656e63793e3c617373656d626c794964656e746974792076657273696f6e3d22362e302e302e30222f3e3c2f646570656e64656e63793e3c2f617373656d626c793e00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000e0e0e1e1e2e2e3e3e4e4e5e5e6e6e7e70000000000000000000011000000000000006e6f742d616e2d65786563757461626c6509000000000000006e6f742d612d646c6c03000000697273657475702e646174000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000c02000000000000b110cd660000000010f806000000000000e006f701fb5d0000600281371d84d2d3b57cff23d5913421ebab27447236a5aba4e60ebe9ff18c3e349d861f38ee304b0b1d745671dbb9e347b99bd90720fc15a835ddaaed0da6bc721a68cb51c9b42c484d41a61f451a8b517ff4c123e43eb87f2c686be844a67fed2be0dd295d8002c6ee2255ce539855bb432da3415c96e9a0cf800440fb8d458fe0262222b2c157172e27a7a534a0b34f651229c695c97b0f171a1443f71a753de8931607c851d4dfdca66a3e345d5e63ffb0618707cc997d9100b0da96d5103e4124ea4a122dc86d33c12fa23d9d0e4f895c1cfdbd23fd89117a234963e27d3563a9817e206636a87bd3854075df675de695f6ac2b174e08d57c39e3214ac992908c2849b2f6c7fc1100b38b81c48ec30fce1eb103725f568414743c369be555605c71214577c28626639300eeb13e6834f78c9f526a70f83ec0005e390f821b141b9e0121cf5905a6e444d7fffbd2b21ec279e316e44115ee882ed74b81964128e2404f4a8f6afd4e922e8744f561dd7998c14618f3db2954448dbf9707e62d54706a79e8f547b6ccb5f64e113434f50e0ff7cf0cf224d04b4fc4dde5fa6b840269c487af5788c08e3064352854b7d5d6adb48b46ee7976e655e383137bf66efcd2889bacb0fca309785693205335890b858652c06d96c856e3f5c03b10a6f0d6c98231baf957ac325536b10e4fbb977a17d36c0f34b16c77004952494d47312e424d5000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001300000000000000d69ecd7800000000100600000000000000010005696d61676531004952494d47322e424d50000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000013000000000000006ccfc4e100000000100600000000000000010005696d6167653200100f0000000000000001000e67656e657269632d636f6e74656e7400"
+      }
+    },
+    {
+      "expected": {
+        "auditor": "sf9-audit-v3",
+        "blockers": [
+          "unparsed_installer_events",
+          "unreviewed_serialized_file_fields",
+          "game_language_build_dlc_not_verified",
+          "steamos_install_restore_not_verified"
+        ],
+        "capability": "discover_only",
+        "certificate": null,
+        "certificate_alignment_bytes": 0,
+        "diagnostics": [
+          {
+            "crc32": 3492925374,
+            "hashed_representation": "stored_blob",
+            "name": "irsetup.exe",
+            "offset": 1570,
+            "packed_size": 17,
+            "sha256": "7dd4418f90bf9cc6c47fb82f4c0eb654f049e8d2157baa5e3feb7844d2e770c4",
+            "size": 17
+          },
+          {
+            "crc32": 3975044453,
+            "hashed_representation": "stored_blob",
+            "name": "lua5.1.dll",
+            "offset": 1595,
+            "packed_size": 9,
+            "sha256": "4be431c8e91674f39e6da5516eacd7558ec7565e83308d8f6efef634ff02d061",
+            "size": 9
+          },
+          {
+            "crc32": 4039046917,
+            "name": "irsetup.dat",
+            "offset": 1888,
+            "packed_size": 524,
+            "sha256": "7b01eb7b5b6a0ea32d8e506a21c5807ec4b3ab84beb038f2bd301d307b028513",
+            "size": 1796,
+            "unknown_header_base64": "AAAAAA=="
+          },
+          {
+            "crc32": 2026741462,
+            "name": "IRIMG1.BMP",
+            "offset": 2692,
+            "packed_size": 19,
+            "sha256": "cc292b92ce7f10f2e4f727ecdf4b12528127c51b6ddf6058e213674603190d06",
+            "size": 6,
+            "unknown_header_base64": "AAAAAA=="
+          },
+          {
+            "crc32": 3787771756,
+            "name": "IRIMG2.BMP",
+            "offset": 2991,
+            "packed_size": 19,
+            "sha256": "5bb21ac469b5e7df4e17899d4aae0adfb430f0f0b336a2242ef1a22d25bd2e53",
+            "size": 6,
+            "unknown_header_base64": "AAAAAA=="
+          }
+        ],
+        "exe": {
+          "offset": 0,
+          "sha256": "a8679b4a3cc5e1b3d7e6c4c7ed1ead8d8a08b70382a48c00cb192d9b40957a1a",
+          "size": 3038
+        },
+        "expanded_total": 1849,
+        "file_table": {
+          "end": 271,
+          "end_basis": "last_known_crc_end_not_serialized_object_end",
+          "header_base64": "AQAAAAA=",
+          "start": 2,
+          "unparsed_regions": [
+            {
+              "offset": 0,
+              "sha256": "96a296d224f285c67bee93c30f8a309157f0daa35dc5b87e410b78630a09cfc7",
+              "size": 2
+            },
+            {
+              "offset": 271,
+              "sha256": "f5239f23aa1d800fd37c40b3d56d509d42c4219a08918b141e25871cee826f92",
+              "size": 1525
+            }
+          ]
+        },
+        "files": [
+          {
+            "attributes": 32,
+            "compressed": true,
+            "condition": "",
+            "crc32": 2919138325,
+            "creation_time": 0,
+            "description": "",
+            "destination": "payload.bin",
+            "extra": "None",
+            "font": "",
+            "forced_attributes": 0,
+            "icon": "",
+            "index": 0,
+            "install_type": "All",
+            "modified_time": 0,
+            "notes": "",
+            "packages": [],
+            "packed_size": 28,
+            "payload": {
+              "crc32": 2919138325,
+              "sha256": "0e2d9c71bc985204d7c8fd81afcdb6c2f4df0c207afe4cb796ff9d1e28e28a60",
+              "size": 15
+            },
+            "payload_offset": 3010,
+            "runtime_folder": "Archive",
+            "serialized_record": {
+              "offset": 29,
+              "sha256": "e01cbe655d2fff49a85bb5ca04478c022240fffaee85c5f035a05c3efff2f247",
+              "size": 242
+            },
+            "shortcuts": [
+              "",
+              "",
+              "",
+              "",
+              ""
+            ],
+            "source": "payload.bin",
+            "source_directory": "C:\\source",
+            "suffix": ".bin",
+            "unpacked_size": 15,
+            "unparsed_inter_record_framing": null,
+            "unreviewed_fields": [
+              {
+                "base64": "AQA=",
+                "offset": 77,
+                "sha256": "47dc540c94ceb704a23875c11273e16bb0b8a87aed84de911f2133568115f254",
+                "size": 2
+              },
+              {
+                "base64": "CgAAgA==",
+                "offset": 88,
+                "sha256": "4785852659ce0273c2d7769cf4181877f0d71e6424084c1801c62a2462853c4f",
+                "size": 4
+              },
+              {
+                "base64": "CgAAgAAAAAAAAAAACgAAgA==",
+                "offset": 100,
+                "sha256": "10c444a9d76bc1e2930c97dba8508858b659ba9d7042b2e1fd5c516db460ab11",
+                "size": 16
+              },
+              {
+                "base64": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==",
+                "offset": 124,
+                "sha256": "61126de1b795b976f3ac878f48e88fa77a87d7308ba57c7642b9e1068403a496",
+                "size": 25
+              },
+              {
+                "base64": "AgAAAAAAAAAAAAA=",
+                "offset": 161,
+                "sha256": "5563cc1568e244183804e0db3cec6ff9bf577f4a403924096177bf4a586160da",
+                "size": 11
+              },
+              {
+                "base64": "AA==",
+                "offset": 177,
+                "sha256": "6e340b9cffb37a989ca544e6bb780a2c78901d3fb33738768511a30617afa01d",
+                "size": 1
+              },
+              {
+                "base64": "AAAAAAAAAAA=",
+                "offset": 179,
+                "sha256": "af5570f5a1810b7af78caf4bc70a660f0df51e42baf91d4de5b2328de0e83dfc",
+                "size": 8
+              },
+              {
+                "base64": "AAAA",
+                "offset": 188,
+                "sha256": "709e80c88487a2411e1ee4dfb9f22a861492d20c4765150c0c794abd70f8147c",
+                "size": 3
+              },
+              {
+                "base64": "AAAAAOgDAAAAAA==",
+                "offset": 194,
+                "sha256": "05c48cd66fd77b70529dc781eaf451474a46e88ab3dcab712fd0aba1119db727",
+                "size": 10
+              },
+              {
+                "base64": "AID///////////////////////////////////////////////8=",
+                "offset": 206,
+                "sha256": "e3b5f3412c85edc7d0d1d711382c9d34c320d994d1f5c55b7cdeed03025c9586",
+                "size": 38
+              },
+              {
+                "base64": "AQA=",
+                "offset": 245,
+                "sha256": "47dc540c94ceb704a23875c11273e16bb0b8a87aed84de911f2133568115f254",
+                "size": 2
+              }
+            ],
+            "use_original_attributes": 1
+          }
+        ],
+        "installable": false,
+        "installer": "Setup Factory 9.6",
+        "manifest": {
+          "offset": 0,
+          "sha256": "1cdc6dc77bbd5d9c39b55e247603f5296a23f9f37e8f472b61088ab57acc9b7e",
+          "size": 169,
+          "version": "9.6.0.0"
+        },
+        "metadata": {
+          "offset": 0,
+          "sha256": "7b01eb7b5b6a0ea32d8e506a21c5807ec4b3ab84beb038f2bd301d307b028513",
+          "size": 1796
+        },
+        "overlay_header_base64": "AAAAAAAAAAAAAA==",
+        "overlay_offset": 1536,
+        "schema_version": 1,
+        "script_inventory": {
+          "classes": [
+            {
+              "name": "CSetupFileData",
+              "offset": 4,
+              "schema": 1,
+              "sha256": "a58fc2965206d157d5896eb10ecec962c66636a47b7d96c7cca6df8bb6865448",
+              "size": 20
+            },
+            {
+              "name": "CSUFScreenInstallFolder",
+              "offset": 276,
+              "schema": 1,
+              "sha256": "1306c3c01aa61bfed4c5b3bf5379299d019096869c2568e5c615b9f0fa20c8b6",
+              "size": 29
+            },
+            {
+              "name": "CIREvent",
+              "offset": 375,
+              "schema": 1,
+              "sha256": "68d88f4fad48ccb0b69664208acfe3a092b5c4b3f928c4380f7eba2a7f4c68bb",
+              "size": 14
+            }
+          ],
+          "coverage": {
+            "blockers": [
+              "exe_serialized_object_graph_incomplete"
+            ],
+            "complete": false
+          },
+          "decoder": "sf9-metadata-v1",
+          "diagnostics": [],
+          "events": [
+            {
+              "name": "On Preload",
+              "offset": 389,
+              "parameters": [],
+              "script": "",
+              "script_offset": 405,
+              "sha256": "ad92567bb6bbe14571e5b4274aaa19acc4c417d6e844e79741bd2edbe75dad14",
+              "size": 17
+            },
+            {
+              "name": "On Back",
+              "offset": 408,
+              "parameters": [],
+              "script": "",
+              "script_offset": 421,
+              "sha256": "b1d4ac6d80edf06896ebebd5c32d7626b6f4995d73cd72ea0542748f6cded97a",
+              "size": 14
+            },
+            {
+              "name": "On Next",
+              "offset": 424,
+              "parameters": [],
+              "script": "if File.DoesExist(\"%AppFolder%\\\\engine.exe\") and File.GetCRC(\"%AppFolder%\\\\identity.dat\") == 123 then Screen.Next(); end",
+              "script_offset": 437,
+              "sha256": "fda182646ee7cc17dd3d36bcf23d9b32e3036fe4dbe5af0ecb38fd1dc786f81c",
+              "size": 134
+            },
+            {
+              "name": "On Cancel",
+              "offset": 560,
+              "parameters": [],
+              "script": "",
+              "script_offset": 575,
+              "sha256": "299083e54b3272d452c0e81658bee045a2b95bffc679672109f956cdf9f78005",
+              "size": 16
+            },
+            {
+              "name": "On Help",
+              "offset": 578,
+              "parameters": [],
+              "script": "",
+              "script_offset": 591,
+              "sha256": "7321b7a9a2286fda86e30328e1eca5d522a2db55377998d56c2c371bb2b291a1",
+              "size": 14
+            },
+            {
+              "name": "On Ctrl Message",
+              "offset": 594,
+              "parameters": [],
+              "script": "",
+              "script_offset": 615,
+              "sha256": "056aaa56aa0efe5c8cf323ee50c24c5f7b55dd13e6b9017c1090ee5f45e354b6",
+              "size": 22
+            },
+            {
+              "name": "On Startup",
+              "offset": 1196,
+              "parameters": [],
+              "script": "",
+              "script_offset": 1212,
+              "sha256": "14653c1d313f0b593592b2c0ed8ada5989bf2f1e6676087bf65ffc15713f3b88",
+              "size": 17
+            },
+            {
+              "name": "On Pre Uninstall",
+              "offset": 1215,
+              "parameters": [],
+              "script": "",
+              "script_offset": 1237,
+              "sha256": "b9784e546162021311c6f28ea870e98a8d3eade2dbce60b293b6d4919abaa604",
+              "size": 23
+            },
+            {
+              "name": "On Uninstall Error",
+              "offset": 1240,
+              "parameters": [],
+              "script": "",
+              "script_offset": 1264,
+              "sha256": "f98eafa1ba592de62200279505c82e10e4c5a1703473d6405630b4aabac4ff9c",
+              "size": 25
+            },
+            {
+              "name": "On Post Uninstall",
+              "offset": 1267,
+              "parameters": [],
+              "script": "",
+              "script_offset": 1290,
+              "sha256": "f8565f7febcc1b74ff213ce19aa5db20a1b5b02b46a478008b7ddc9ccaba55e3",
+              "size": 24
+            },
+            {
+              "name": "On Shutdown",
+              "offset": 1293,
+              "parameters": [],
+              "script": "",
+              "script_offset": 1310,
+              "sha256": "1627b3b1b56552f876064ad3f5c09426d19aabdc0327de97098c49e0b858e83d",
+              "size": 18
+            },
+            {
+              "name": "Global Functions",
+              "offset": 1644,
+              "parameters": [],
+              "script": "",
+              "script_offset": 1666,
+              "sha256": "66de0c5f9abf6aee4a158b7f21b97c0b06db77bd4c8722ca7425a06b46b84cfb",
+              "size": 23
+            },
+            {
+              "name": "On Startup",
+              "offset": 1669,
+              "parameters": [],
+              "script": "",
+              "script_offset": 1685,
+              "sha256": "14653c1d313f0b593592b2c0ed8ada5989bf2f1e6676087bf65ffc15713f3b88",
+              "size": 17
+            },
+            {
+              "name": "On Pre Install",
+              "offset": 1688,
+              "parameters": [],
+              "script": "",
+              "script_offset": 1708,
+              "sha256": "7590bbd53cca3cbc4ce22a4e7e18f2e2a58b8a8dd86a47323486bc093c28ae62",
+              "size": 21
+            },
+            {
+              "name": "On Install Error",
+              "offset": 1711,
+              "parameters": [],
+              "script": "",
+              "script_offset": 1733,
+              "sha256": "6161f0c43c2bab1aa48b7b73b124cd6942deca4ba947399ddf736a6d77c7b11a",
+              "size": 23
+            },
+            {
+              "name": "On Post Install",
+              "offset": 1736,
+              "parameters": [],
+              "script": "",
+              "script_offset": 1757,
+              "sha256": "e4eb76510281aa1047571269bd5e785cc5530d49fb2625cb48b833544a910142",
+              "size": 22
+            },
+            {
+              "name": "On Shutdown",
+              "offset": 1760,
+              "parameters": [],
+              "script": "",
+              "script_offset": 1777,
+              "sha256": "1627b3b1b56552f876064ad3f5c09426d19aabdc0327de97098c49e0b858e83d",
+              "size": 18
+            }
+          ],
+          "include_end": 2,
+          "includes": [],
+          "installable": false,
+          "metadata": {
+            "offset": 0,
+            "sha256": "7b01eb7b5b6a0ea32d8e506a21c5807ec4b3ab84beb038f2bd301d307b028513",
+            "size": 1796
+          },
+          "schema_version": 1
+        },
+        "semantics_reviewed": false
+      },
+      "id": "bb76d19b8db5b2190747be6573feb49dc13629e98343efe2078fe904ab1b3c9e",
+      "input": {
+        "data_hex": "4d5a00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000400000005045000000000100000000000000000000000000e00000000b01000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000100000000400000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000040000001000000004000000020000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000100180000002000008000000000000000000000000000000000000000000000010001000000400000800000000000000000000000000000000000000000000001000904000060000000000000000000000080100000a90000000000000000000000000000000000000000000000000000003c617373656d626c793e3c617373656d626c794964656e746974792076657273696f6e3d22392e362e302e30222f3e3c6465736372697074696f6e3e536574757020466163746f72792052756e2d74696d653c2f6465736372697074696f6e3e3c646570656e64656e63793e3c617373656d626c794964656e746974792076657273696f6e3d22362e302e302e30222f3e3c2f646570656e64656e63793e3c2f617373656d626c793e00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000e0e0e1e1e2e2e3e3e4e4e5e5e6e6e7e70000000000000000000011000000000000006e6f742d616e2d65786563757461626c6509000000000000006e6f742d612d646c6c03000000697273657475702e646174000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000c0200000000000005f7bef000000000100407000000000000e0070301fb5d0000600281371d84d2d3b57cff23d5913421ebab27447236a5aba4e60ebe9ff18c3e349d861f38ee304b0b1d745671dbb9e347b99bd90720fc15a835ddaaed0da6bc721a68cb51c9b42c484d41a61f451a8b517ff4c123e43eb87f2c686be844a67fed2be0f956716002eff39e4abab66f1ad98712fbff8aa207cff7a997b189664c7384034472b5aec43fa472b510878615b6e8b8127f2ae8d4bde56840fb2adc86d7ffe2f7ec9dfa1b6e2f9c09ec35b4477daae465363f11d202fde7f6a1548443286e65c9e1aace70da2546b4ec702afd37fccbf9d26df13ee5c52af41c1752c0b1f922200c374427353b6a0c0f5a6109b9df40c750b3a991cdefd216e3e650f6f03978334a01034c47f72fdeea2e82aad5696d018a0297aa478e0f4851379238aeec0c58b7f79e8db2e6e4d454e90a99856a823ba21d445b05efcf504bc5c2f4b27689dd367b63b7fcd505e8f1856c6af7cdfca0d8cd6184050d67e138533deb9b4b9267a3867b08ef701f7b6e28f1681e4551bc740d55e24271d8f59d1208a52ee4687c9b1325e98e8c9c699355cddd5976b83bd6ee48afbe2487c30056e880673f597ee2d4c6fbbf349f70ffcf2d28bfcbd56bccb298848f0685ca9c0a13145eb22401982e784472cad0bc844a4292cf2da3daf045ac5daf0b1dc844cd52dd2b071534cd6531830ffd5a69056569b1df8d04f493a9699b70f3004952494d47312e424d5000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001300000000000000d69ecd7800000000100600000000000000010005696d61676531004952494d47322e424d50000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000013000000000000006ccfc4e100000000100600000000000000010005696d6167653200100f0000000000000001000e67656e657269632d636f6e74656e7400"
+      }
+    },
+    {
+      "expected": {
+        "auditor": "sf9-audit-v3",
+        "blockers": [
+          "unparsed_installer_events",
+          "unreviewed_serialized_file_fields",
+          "game_language_build_dlc_not_verified",
+          "steamos_install_restore_not_verified"
+        ],
+        "capability": "discover_only",
+        "certificate": null,
+        "certificate_alignment_bytes": 0,
+        "diagnostics": [
+          {
+            "crc32": 3492925374,
+            "hashed_representation": "stored_blob",
+            "name": "irsetup.exe",
+            "offset": 1570,
+            "packed_size": 17,
+            "sha256": "7dd4418f90bf9cc6c47fb82f4c0eb654f049e8d2157baa5e3feb7844d2e770c4",
+            "size": 17
+          },
+          {
+            "crc32": 3975044453,
+            "hashed_representation": "stored_blob",
+            "name": "lua5.1.dll",
+            "offset": 1595,
+            "packed_size": 9,
+            "sha256": "4be431c8e91674f39e6da5516eacd7558ec7565e83308d8f6efef634ff02d061",
+            "size": 9
+          },
+          {
+            "crc32": 235883317,
+            "name": "irsetup.dat",
+            "offset": 1888,
+            "packed_size": 533,
+            "sha256": "9b3a7b1d63b5f6d970fc61b891259b9d5b72a75733998257799d6d011361f577",
+            "size": 1813,
+            "unknown_header_base64": "AAAAAA=="
+          },
+          {
+            "crc32": 2026741462,
+            "name": "IRIMG1.BMP",
+            "offset": 2701,
+            "packed_size": 19,
+            "sha256": "cc292b92ce7f10f2e4f727ecdf4b12528127c51b6ddf6058e213674603190d06",
+            "size": 6,
+            "unknown_header_base64": "AAAAAA=="
+          },
+          {
+            "crc32": 3787771756,
+            "name": "IRIMG2.BMP",
+            "offset": 3000,
+            "packed_size": 19,
+            "sha256": "5bb21ac469b5e7df4e17899d4aae0adfb430f0f0b336a2242ef1a22d25bd2e53",
+            "size": 6,
+            "unknown_header_base64": "AAAAAA=="
+          }
+        ],
+        "exe": {
+          "offset": 0,
+          "sha256": "898acc68d1eb665d8b4dfac69fc4dbdee91b45fd0ad5476202758e478e727ace",
+          "size": 3047
+        },
+        "expanded_total": 1866,
+        "file_table": {
+          "end": 284,
+          "end_basis": "last_known_crc_end_not_serialized_object_end",
+          "header_base64": "AQAAAAA=",
+          "start": 2,
+          "unparsed_regions": [
+            {
+              "offset": 0,
+              "sha256": "96a296d224f285c67bee93c30f8a309157f0daa35dc5b87e410b78630a09cfc7",
+              "size": 2
+            },
+            {
+              "offset": 284,
+              "sha256": "fbc53226350fac406c11e5a6ee1950e66759ce98fee2e572e95ee10e3f25fab4",
+              "size": 1529
+            }
+          ]
+        },
+        "files": [
+          {
+            "attributes": 32,
+            "compressed": true,
+            "condition": "",
+            "crc32": 2919138325,
+            "creation_time": 0,
+            "description": "",
+            "destination": "\u8865\u4e01-\u6d4b\u8bd5.bin",
+            "extra": "None",
+            "font": "",
+            "forced_attributes": 0,
+            "icon": "",
+            "index": 0,
+            "install_type": "All",
+            "modified_time": 0,
+            "notes": "",
+            "packages": [],
+            "packed_size": 28,
+            "payload": {
+              "crc32": 2919138325,
+              "sha256": "0e2d9c71bc985204d7c8fd81afcdb6c2f4df0c207afe4cb796ff9d1e28e28a60",
+              "size": 15
+            },
+            "payload_offset": 3019,
+            "runtime_folder": "Archive",
+            "serialized_record": {
+              "offset": 29,
+              "sha256": "2fc47659e44aece94106cac6a578cf82018e99577606e1294114f42ff44d2082",
+              "size": 255
+            },
+            "shortcuts": [
+              "",
+              "",
+              "",
+              "",
+              ""
+            ],
+            "source": "\u8865\u4e01-\u6d4b\u8bd5.bin",
+            "source_directory": "C:\\source",
+            "suffix": ".bin",
+            "unpacked_size": 15,
+            "unparsed_inter_record_framing": null,
+            "unreviewed_fields": [
+              {
+                "base64": "AQA=",
+                "offset": 89,
+                "sha256": "47dc540c94ceb704a23875c11273e16bb0b8a87aed84de911f2133568115f254",
+                "size": 2
+              },
+              {
+                "base64": "CgAAgA==",
+                "offset": 100,
+                "sha256": "4785852659ce0273c2d7769cf4181877f0d71e6424084c1801c62a2462853c4f",
+                "size": 4
+              },
+              {
+                "base64": "CgAAgAAAAAAAAAAACgAAgA==",
+                "offset": 112,
+                "sha256": "10c444a9d76bc1e2930c97dba8508858b659ba9d7042b2e1fd5c516db460ab11",
+                "size": 16
+              },
+              {
+                "base64": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==",
+                "offset": 136,
+                "sha256": "61126de1b795b976f3ac878f48e88fa77a87d7308ba57c7642b9e1068403a496",
+                "size": 25
+              },
+              {
+                "base64": "AgAAAAAAAAAAAAA=",
+                "offset": 173,
+                "sha256": "5563cc1568e244183804e0db3cec6ff9bf577f4a403924096177bf4a586160da",
+                "size": 11
+              },
+              {
+                "base64": "AA==",
+                "offset": 189,
+                "sha256": "6e340b9cffb37a989ca544e6bb780a2c78901d3fb33738768511a30617afa01d",
+                "size": 1
+              },
+              {
+                "base64": "AAAAAAAAAAA=",
+                "offset": 191,
+                "sha256": "af5570f5a1810b7af78caf4bc70a660f0df51e42baf91d4de5b2328de0e83dfc",
+                "size": 8
+              },
+              {
+                "base64": "AAAAAA==",
+                "offset": 200,
+                "sha256": "df3f619804a92fdb4057192dc43dd748ea778adc52bc498ce80524c014b81119",
+                "size": 4
+              },
+              {
+                "base64": "AAAAAOgDAAAAAA==",
+                "offset": 207,
+                "sha256": "05c48cd66fd77b70529dc781eaf451474a46e88ab3dcab712fd0aba1119db727",
+                "size": 10
+              },
+              {
+                "base64": "AID///////////////////////////////////////////////8=",
+                "offset": 219,
+                "sha256": "e3b5f3412c85edc7d0d1d711382c9d34c320d994d1f5c55b7cdeed03025c9586",
+                "size": 38
+              },
+              {
+                "base64": "AQA=",
+                "offset": 258,
+                "sha256": "47dc540c94ceb704a23875c11273e16bb0b8a87aed84de911f2133568115f254",
+                "size": 2
+              }
+            ],
+            "use_original_attributes": 1
+          }
+        ],
+        "installable": false,
+        "installer": "Setup Factory 9.7",
+        "manifest": {
+          "offset": 0,
+          "sha256": "63dc219de3085b6c23860b792f79c33dd091cff0884b270067430291eb1387bb",
+          "size": 169,
+          "version": "9.7.0.0"
+        },
+        "metadata": {
+          "offset": 0,
+          "sha256": "9b3a7b1d63b5f6d970fc61b891259b9d5b72a75733998257799d6d011361f577",
+          "size": 1813
+        },
+        "overlay_header_base64": "AAAAAAAAAAAAAA==",
+        "overlay_offset": 1536,
+        "schema_version": 1,
+        "script_inventory": {
+          "classes": [
+            {
+              "name": "CSetupFileData",
+              "offset": 4,
+              "schema": 1,
+              "sha256": "a58fc2965206d157d5896eb10ecec962c66636a47b7d96c7cca6df8bb6865448",
+              "size": 20
+            },
+            {
+              "name": "CSUFScreenInstallFolder",
+              "offset": 289,
+              "schema": 1,
+              "sha256": "1306c3c01aa61bfed4c5b3bf5379299d019096869c2568e5c615b9f0fa20c8b6",
+              "size": 29
+            },
+            {
+              "name": "CIREvent",
+              "offset": 388,
+              "schema": 1,
+              "sha256": "68d88f4fad48ccb0b69664208acfe3a092b5c4b3f928c4380f7eba2a7f4c68bb",
+              "size": 14
+            }
+          ],
+          "coverage": {
+            "blockers": [
+              "exe_serialized_object_graph_incomplete"
+            ],
+            "complete": false
+          },
+          "decoder": "sf9-metadata-v1",
+          "diagnostics": [],
+          "events": [
+            {
+              "name": "On Preload",
+              "offset": 402,
+              "parameters": [],
+              "script": "",
+              "script_offset": 418,
+              "sha256": "ad92567bb6bbe14571e5b4274aaa19acc4c417d6e844e79741bd2edbe75dad14",
+              "size": 17
+            },
+            {
+              "name": "On Back",
+              "offset": 421,
+              "parameters": [],
+              "script": "",
+              "script_offset": 434,
+              "sha256": "b1d4ac6d80edf06896ebebd5c32d7626b6f4995d73cd72ea0542748f6cded97a",
+              "size": 14
+            },
+            {
+              "name": "On Next",
+              "offset": 437,
+              "parameters": [],
+              "script": "if File.DoesExist(\"%AppFolder%\\\\engine.exe\") and File.GetCRC(\"%AppFolder%\\\\identity.dat\") == 123 then Screen.Next(); end",
+              "script_offset": 450,
+              "sha256": "fda182646ee7cc17dd3d36bcf23d9b32e3036fe4dbe5af0ecb38fd1dc786f81c",
+              "size": 134
+            },
+            {
+              "name": "On Cancel",
+              "offset": 573,
+              "parameters": [],
+              "script": "",
+              "script_offset": 588,
+              "sha256": "299083e54b3272d452c0e81658bee045a2b95bffc679672109f956cdf9f78005",
+              "size": 16
+            },
+            {
+              "name": "On Help",
+              "offset": 591,
+              "parameters": [],
+              "script": "",
+              "script_offset": 604,
+              "sha256": "7321b7a9a2286fda86e30328e1eca5d522a2db55377998d56c2c371bb2b291a1",
+              "size": 14
+            },
+            {
+              "name": "On Ctrl Message",
+              "offset": 607,
+              "parameters": [],
+              "script": "",
+              "script_offset": 628,
+              "sha256": "056aaa56aa0efe5c8cf323ee50c24c5f7b55dd13e6b9017c1090ee5f45e354b6",
+              "size": 22
+            },
+            {
+              "name": "On Startup",
+              "offset": 1213,
+              "parameters": [],
+              "script": "",
+              "script_offset": 1229,
+              "sha256": "14653c1d313f0b593592b2c0ed8ada5989bf2f1e6676087bf65ffc15713f3b88",
+              "size": 17
+            },
+            {
+              "name": "On Pre Uninstall",
+              "offset": 1232,
+              "parameters": [],
+              "script": "",
+              "script_offset": 1254,
+              "sha256": "b9784e546162021311c6f28ea870e98a8d3eade2dbce60b293b6d4919abaa604",
+              "size": 23
+            },
+            {
+              "name": "On Uninstall Error",
+              "offset": 1257,
+              "parameters": [],
+              "script": "",
+              "script_offset": 1281,
+              "sha256": "f98eafa1ba592de62200279505c82e10e4c5a1703473d6405630b4aabac4ff9c",
+              "size": 25
+            },
+            {
+              "name": "On Post Uninstall",
+              "offset": 1284,
+              "parameters": [],
+              "script": "",
+              "script_offset": 1307,
+              "sha256": "f8565f7febcc1b74ff213ce19aa5db20a1b5b02b46a478008b7ddc9ccaba55e3",
+              "size": 24
+            },
+            {
+              "name": "On Shutdown",
+              "offset": 1310,
+              "parameters": [],
+              "script": "",
+              "script_offset": 1327,
+              "sha256": "1627b3b1b56552f876064ad3f5c09426d19aabdc0327de97098c49e0b858e83d",
+              "size": 18
+            },
+            {
+              "name": "Global Functions",
+              "offset": 1661,
+              "parameters": [],
+              "script": "",
+              "script_offset": 1683,
+              "sha256": "66de0c5f9abf6aee4a158b7f21b97c0b06db77bd4c8722ca7425a06b46b84cfb",
+              "size": 23
+            },
+            {
+              "name": "On Startup",
+              "offset": 1686,
+              "parameters": [],
+              "script": "",
+              "script_offset": 1702,
+              "sha256": "14653c1d313f0b593592b2c0ed8ada5989bf2f1e6676087bf65ffc15713f3b88",
+              "size": 17
+            },
+            {
+              "name": "On Pre Install",
+              "offset": 1705,
+              "parameters": [],
+              "script": "",
+              "script_offset": 1725,
+              "sha256": "7590bbd53cca3cbc4ce22a4e7e18f2e2a58b8a8dd86a47323486bc093c28ae62",
+              "size": 21
+            },
+            {
+              "name": "On Install Error",
+              "offset": 1728,
+              "parameters": [],
+              "script": "",
+              "script_offset": 1750,
+              "sha256": "6161f0c43c2bab1aa48b7b73b124cd6942deca4ba947399ddf736a6d77c7b11a",
+              "size": 23
+            },
+            {
+              "name": "On Post Install",
+              "offset": 1753,
+              "parameters": [],
+              "script": "",
+              "script_offset": 1774,
+              "sha256": "e4eb76510281aa1047571269bd5e785cc5530d49fb2625cb48b833544a910142",
+              "size": 22
+            },
+            {
+              "name": "On Shutdown",
+              "offset": 1777,
+              "parameters": [],
+              "script": "",
+              "script_offset": 1794,
+              "sha256": "1627b3b1b56552f876064ad3f5c09426d19aabdc0327de97098c49e0b858e83d",
+              "size": 18
+            }
+          ],
+          "include_end": 2,
+          "includes": [],
+          "installable": false,
+          "metadata": {
+            "offset": 0,
+            "sha256": "9b3a7b1d63b5f6d970fc61b891259b9d5b72a75733998257799d6d011361f577",
+            "size": 1813
+          },
+          "schema_version": 1
+        },
+        "semantics_reviewed": false
+      },
+      "id": "c94cd10e05a5b590efa395291723b67ef367d888f07bcc6f3d4344bb6d6eeee8",
+      "input": {
+        "data_hex": "4d5a00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000400000005045000000000100000000000000000000000000e00000000b01000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000100000000400000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000040000001000000004000000020000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000100180000002000008000000000000000000000000000000000000000000000010001000000400000800000000000000000000000000000000000000000000001000904000060000000000000000000000080100000a90000000000000000000000000000000000000000000000000000003c617373656d626c793e3c617373656d626c794964656e746974792076657273696f6e3d22392e372e302e30222f3e3c6465736372697074696f6e3e536574757020466163746f72792052756e2d74696d653c2f6465736372697074696f6e3e3c646570656e64656e63793e3c617373656d626c794964656e746974792076657273696f6e3d22362e302e302e30222f3e3c2f646570656e64656e63793e3c2f617373656d626c793e00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000e0e0e1e1e2e2e3e3e4e4e5e5e6e6e7e70000000000000000000011000000000000006e6f742d616e2d65786563757461626c6509000000000000006e6f742d612d646c6c03000000697273657475702e646174000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001502000000000000354b0f0e00000000101507000000000000e0071402045d0000600281371d84d2d3b57cff23d5913421ebab27447236a5aba4e60f4792a1b2a7741432b405b6c71519965167f6986c929118b9aa51383096ae6de13cee83b3e0b7ac7e74fd7492cefa596f5375c189258783c777734b4ce9c7edad30ae335a194eab1b6f0e25651749314d396f88dc73c038fef2bf8af5e7b12f42f135f40831b579f338cb239d074c445340787e68d2dd3d1be28c71556c80fe43fc9894745d5b89b649064f15742bd27b3ff77570a284f0d0c9719d7d52bd7434ca56be8a77c53911ce943998251ac706378974bd829241ad0d1589fbd48f4a7cb3f93e389a06076ebfb78f674dc0675557386565739938646ad640550ef0bade5629b519650aee46c44951cb03cd32104af3bb885e7c86c9e1a3ade06e74e47a2adc107a7c15f78d8e28bb47c5e880fa23b4cbd03bac9becf88c3904d84d1944237df1480d81d948982cbfb8b025e13443cefd3585089b3509060161824e1fd14b0b39b4766b02eb125db85b75eaf5aeb55c57ec0e4998a8e87bbfadfce2f1dda899c8ba89beb197be15a0d9a20d1f1049fd421693782647f8b0bca092e56d72b169bbe974b32e0962519d98a4b88dbdfe79030afba6de69c0fb9c64dcfbb446ccf35630c88f951828f6b4aa36d5e8d11e4ce2faea344a3f5e87491964a94d5db52e93d0175dbe05e0976e3bf90516b3ad2c7acfd20afe005ec94e6ed70628797089a6945e738700004952494d47312e424d5000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001300000000000000d69ecd7800000000100600000000000000010005696d61676531004952494d47322e424d50000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000013000000000000006ccfc4e100000000100600000000000000010005696d6167653200100f0000000000000001000e67656e657269632d636f6e74656e7400"
+      }
+    },
+    {
+      "expected": {
+        "auditor": "sf9-audit-v3",
+        "blockers": [
+          "unparsed_installer_events",
+          "unreviewed_serialized_file_fields",
+          "game_language_build_dlc_not_verified",
+          "steamos_install_restore_not_verified"
+        ],
+        "capability": "discover_only",
+        "certificate": null,
+        "certificate_alignment_bytes": 0,
+        "diagnostics": [
+          {
+            "crc32": 3492925374,
+            "hashed_representation": "stored_blob",
+            "name": "irsetup.exe",
+            "offset": 1570,
+            "packed_size": 17,
+            "sha256": "7dd4418f90bf9cc6c47fb82f4c0eb654f049e8d2157baa5e3feb7844d2e770c4",
+            "size": 17
+          },
+          {
+            "crc32": 3975044453,
+            "hashed_representation": "stored_blob",
+            "name": "lua5.1.dll",
+            "offset": 1595,
+            "packed_size": 9,
+            "sha256": "4be431c8e91674f39e6da5516eacd7558ec7565e83308d8f6efef634ff02d061",
+            "size": 9
+          },
+          {
+            "crc32": 3671958979,
+            "name": "irsetup.dat",
+            "offset": 1888,
+            "packed_size": 534,
+            "sha256": "0a27d7bebe731ff16528a2f6ab1f4a3cf207b89aedf0be039ae8b8de142177e3",
+            "size": 1796,
+            "unknown_header_base64": "AAAAAA=="
+          },
+          {
+            "crc32": 2026741462,
+            "name": "IRIMG1.BMP",
+            "offset": 2702,
+            "packed_size": 19,
+            "sha256": "cc292b92ce7f10f2e4f727ecdf4b12528127c51b6ddf6058e213674603190d06",
+            "size": 6,
+            "unknown_header_base64": "AAAAAA=="
+          },
+          {
+            "crc32": 3787771756,
+            "name": "IRIMG2.BMP",
+            "offset": 3001,
+            "packed_size": 19,
+            "sha256": "5bb21ac469b5e7df4e17899d4aae0adfb430f0f0b336a2242ef1a22d25bd2e53",
+            "size": 6,
+            "unknown_header_base64": "AAAAAA=="
+          }
+        ],
+        "exe": {
+          "offset": 0,
+          "sha256": "f673ac20ee297959edd16339fc1e11eb4849274642d115abd54abb9a4cb90e92",
+          "size": 3048
+        },
+        "expanded_total": 1849,
+        "file_table": {
+          "end": 277,
+          "end_basis": "last_known_crc_end_not_serialized_object_end",
+          "header_base64": "AQAAAAA=",
+          "start": 2,
+          "unparsed_regions": [
+            {
+              "offset": 0,
+              "sha256": "96a296d224f285c67bee93c30f8a309157f0daa35dc5b87e410b78630a09cfc7",
+              "size": 2
+            },
+            {
+              "offset": 277,
+              "sha256": "60ec98d24f800fc07e59ebadc6fef80fe6e768e5ef0cb929ebbbcef1ef431f25",
+              "size": 1519
+            }
+          ]
+        },
+        "files": [
+          {
+            "attributes": 32,
+            "compressed": true,
+            "condition": "",
+            "crc32": 2919138325,
+            "creation_time": 0,
+            "description": "",
+            "destination": "\u8865\u4e01-\u6d4b\u8bd5.bin",
+            "extra": "None",
+            "font": "",
+            "forced_attributes": 0,
+            "icon": "",
+            "index": 0,
+            "install_type": "All",
+            "modified_time": 0,
+            "notes": "",
+            "packages": [],
+            "packed_size": 28,
+            "payload": {
+              "crc32": 2919138325,
+              "sha256": "0e2d9c71bc985204d7c8fd81afcdb6c2f4df0c207afe4cb796ff9d1e28e28a60",
+              "size": 15
+            },
+            "payload_offset": 3020,
+            "runtime_folder": "Archive",
+            "serialized_record": {
+              "offset": 29,
+              "sha256": "ea4790876038252814beb5b53d183c52b59355c3f5a2a150a39bca9ca7797a44",
+              "size": 248
+            },
+            "shortcuts": [
+              "",
+              "",
+              "",
+              "",
+              ""
+            ],
+            "source": "\u8865\u4e01-\u6d4b\u8bd5.bin",
+            "source_directory": "C:\\source",
+            "suffix": ".bin",
+            "unpacked_size": 15,
+            "unparsed_inter_record_framing": null,
+            "unreviewed_fields": [
+              {
+                "base64": "AQA=",
+                "offset": 89,
+                "sha256": "47dc540c94ceb704a23875c11273e16bb0b8a87aed84de911f2133568115f254",
+                "size": 2
+              },
+              {
+                "base64": "CgAAgA==",
+                "offset": 100,
+                "sha256": "4785852659ce0273c2d7769cf4181877f0d71e6424084c1801c62a2462853c4f",
+                "size": 4
+              },
+              {
+                "base64": "CgAAgAAAAAAAAAAACgAAgA==",
+                "offset": 112,
+                "sha256": "10c444a9d76bc1e2930c97dba8508858b659ba9d7042b2e1fd5c516db460ab11",
+                "size": 16
+              },
+              {
+                "base64": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==",
+                "offset": 136,
+                "sha256": "61126de1b795b976f3ac878f48e88fa77a87d7308ba57c7642b9e1068403a496",
+                "size": 25
+              },
+              {
+                "base64": "AgAAAAAAAAAAAAA=",
+                "offset": 173,
+                "sha256": "5563cc1568e244183804e0db3cec6ff9bf577f4a403924096177bf4a586160da",
+                "size": 11
+              },
+              {
+                "base64": "AA==",
+                "offset": 189,
+                "sha256": "6e340b9cffb37a989ca544e6bb780a2c78901d3fb33738768511a30617afa01d",
+                "size": 1
+              },
+              {
+                "base64": "AAAAAAAAAAA=",
+                "offset": 191,
+                "sha256": "af5570f5a1810b7af78caf4bc70a660f0df51e42baf91d4de5b2328de0e83dfc",
+                "size": 8
+              },
+              {
+                "base64": "AAAA",
+                "offset": 200,
+                "sha256": "709e80c88487a2411e1ee4dfb9f22a861492d20c4765150c0c794abd70f8147c",
+                "size": 3
+              },
+              {
+                "base64": "AAAAAOgDAAAAAA==",
+                "offset": 206,
+                "sha256": "05c48cd66fd77b70529dc781eaf451474a46e88ab3dcab712fd0aba1119db727",
+                "size": 10
+              },
+              {
+                "base64": "AID///////////////////////////////////////8=",
+                "offset": 218,
+                "sha256": "a00b9b037daa18f0cd363089bdaaef1cb938019b890b7beae9b2b272e1aad008",
+                "size": 32
+              },
+              {
+                "base64": "AQA=",
+                "offset": 251,
+                "sha256": "47dc540c94ceb704a23875c11273e16bb0b8a87aed84de911f2133568115f254",
+                "size": 2
+              }
+            ],
+            "use_original_attributes": 1
+          }
+        ],
+        "installable": false,
+        "installer": "Setup Factory 9.5",
+        "manifest": {
+          "offset": 0,
+          "sha256": "51065e675e90c3d1ced9f1e54211b908af177d759478ebc115e2c39166a622b9",
+          "size": 169,
+          "version": "9.5.0.0"
+        },
+        "metadata": {
+          "offset": 0,
+          "sha256": "0a27d7bebe731ff16528a2f6ab1f4a3cf207b89aedf0be039ae8b8de142177e3",
+          "size": 1796
+        },
+        "overlay_header_base64": "AAAAAAAAAAAAAA==",
+        "overlay_offset": 1536,
+        "schema_version": 1,
+        "script_inventory": {
+          "classes": [
+            {
+              "name": "CSetupFileData",
+              "offset": 4,
+              "schema": 1,
+              "sha256": "a58fc2965206d157d5896eb10ecec962c66636a47b7d96c7cca6df8bb6865448",
+              "size": 20
+            },
+            {
+              "name": "CSUFScreenInstallFolder",
+              "offset": 282,
+              "schema": 1,
+              "sha256": "1306c3c01aa61bfed4c5b3bf5379299d019096869c2568e5c615b9f0fa20c8b6",
+              "size": 29
+            },
+            {
+              "name": "CIREvent",
+              "offset": 381,
+              "schema": 1,
+              "sha256": "68d88f4fad48ccb0b69664208acfe3a092b5c4b3f928c4380f7eba2a7f4c68bb",
+              "size": 14
+            }
+          ],
+          "coverage": {
+            "blockers": [
+              "exe_serialized_object_graph_incomplete"
+            ],
+            "complete": false
+          },
+          "decoder": "sf9-metadata-v1",
+          "diagnostics": [],
+          "events": [
+            {
+              "name": "On Preload",
+              "offset": 395,
+              "parameters": [],
+              "script": "",
+              "script_offset": 411,
+              "sha256": "ad92567bb6bbe14571e5b4274aaa19acc4c417d6e844e79741bd2edbe75dad14",
+              "size": 17
+            },
+            {
+              "name": "On Back",
+              "offset": 414,
+              "parameters": [],
+              "script": "",
+              "script_offset": 427,
+              "sha256": "b1d4ac6d80edf06896ebebd5c32d7626b6f4995d73cd72ea0542748f6cded97a",
+              "size": 14
+            },
+            {
+              "name": "On Next",
+              "offset": 430,
+              "parameters": [],
+              "script": "if File.DoesExist(\"%AppFolder%\\\\engine.exe\") and File.GetCRC(\"%AppFolder%\\\\identity.dat\") == 123 then Screen.Next(); end",
+              "script_offset": 443,
+              "sha256": "fda182646ee7cc17dd3d36bcf23d9b32e3036fe4dbe5af0ecb38fd1dc786f81c",
+              "size": 134
+            },
+            {
+              "name": "On Cancel",
+              "offset": 566,
+              "parameters": [],
+              "script": "",
+              "script_offset": 581,
+              "sha256": "299083e54b3272d452c0e81658bee045a2b95bffc679672109f956cdf9f78005",
+              "size": 16
+            },
+            {
+              "name": "On Help",
+              "offset": 584,
+              "parameters": [],
+              "script": "",
+              "script_offset": 597,
+              "sha256": "7321b7a9a2286fda86e30328e1eca5d522a2db55377998d56c2c371bb2b291a1",
+              "size": 14
+            },
+            {
+              "name": "On Ctrl Message",
+              "offset": 600,
+              "parameters": [],
+              "script": "",
+              "script_offset": 621,
+              "sha256": "056aaa56aa0efe5c8cf323ee50c24c5f7b55dd13e6b9017c1090ee5f45e354b6",
+              "size": 22
+            },
+            {
+              "name": "On Startup",
+              "offset": 1202,
+              "parameters": [],
+              "script": "",
+              "script_offset": 1218,
+              "sha256": "14653c1d313f0b593592b2c0ed8ada5989bf2f1e6676087bf65ffc15713f3b88",
+              "size": 17
+            },
+            {
+              "name": "On Pre Uninstall",
+              "offset": 1221,
+              "parameters": [],
+              "script": "",
+              "script_offset": 1243,
+              "sha256": "b9784e546162021311c6f28ea870e98a8d3eade2dbce60b293b6d4919abaa604",
+              "size": 23
+            },
+            {
+              "name": "On Uninstall Error",
+              "offset": 1246,
+              "parameters": [],
+              "script": "",
+              "script_offset": 1270,
+              "sha256": "f98eafa1ba592de62200279505c82e10e4c5a1703473d6405630b4aabac4ff9c",
+              "size": 25
+            },
+            {
+              "name": "On Post Uninstall",
+              "offset": 1273,
+              "parameters": [],
+              "script": "",
+              "script_offset": 1296,
+              "sha256": "f8565f7febcc1b74ff213ce19aa5db20a1b5b02b46a478008b7ddc9ccaba55e3",
+              "size": 24
+            },
+            {
+              "name": "On Shutdown",
+              "offset": 1299,
+              "parameters": [],
+              "script": "",
+              "script_offset": 1316,
+              "sha256": "1627b3b1b56552f876064ad3f5c09426d19aabdc0327de97098c49e0b858e83d",
+              "size": 18
+            },
+            {
+              "name": "Global Functions",
+              "offset": 1644,
+              "parameters": [],
+              "script": "",
+              "script_offset": 1666,
+              "sha256": "66de0c5f9abf6aee4a158b7f21b97c0b06db77bd4c8722ca7425a06b46b84cfb",
+              "size": 23
+            },
+            {
+              "name": "On Startup",
+              "offset": 1669,
+              "parameters": [],
+              "script": "",
+              "script_offset": 1685,
+              "sha256": "14653c1d313f0b593592b2c0ed8ada5989bf2f1e6676087bf65ffc15713f3b88",
+              "size": 17
+            },
+            {
+              "name": "On Pre Install",
+              "offset": 1688,
+              "parameters": [],
+              "script": "",
+              "script_offset": 1708,
+              "sha256": "7590bbd53cca3cbc4ce22a4e7e18f2e2a58b8a8dd86a47323486bc093c28ae62",
+              "size": 21
+            },
+            {
+              "name": "On Install Error",
+              "offset": 1711,
+              "parameters": [],
+              "script": "",
+              "script_offset": 1733,
+              "sha256": "6161f0c43c2bab1aa48b7b73b124cd6942deca4ba947399ddf736a6d77c7b11a",
+              "size": 23
+            },
+            {
+              "name": "On Post Install",
+              "offset": 1736,
+              "parameters": [],
+              "script": "",
+              "script_offset": 1757,
+              "sha256": "e4eb76510281aa1047571269bd5e785cc5530d49fb2625cb48b833544a910142",
+              "size": 22
+            },
+            {
+              "name": "On Shutdown",
+              "offset": 1760,
+              "parameters": [],
+              "script": "",
+              "script_offset": 1777,
+              "sha256": "1627b3b1b56552f876064ad3f5c09426d19aabdc0327de97098c49e0b858e83d",
+              "size": 18
+            }
+          ],
+          "include_end": 2,
+          "includes": [],
+          "installable": false,
+          "metadata": {
+            "offset": 0,
+            "sha256": "0a27d7bebe731ff16528a2f6ab1f4a3cf207b89aedf0be039ae8b8de142177e3",
+            "size": 1796
+          },
+          "schema_version": 1
+        },
+        "semantics_reviewed": false
+      },
+      "id": "e703ca64100791c466a6a5ebeac2f25d92d3e4c95508885d528e9ae6470cf51d",
+      "input": {
+        "data_hex": "4d5a00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000400000005045000000000100000000000000000000000000e00000000b01000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000100000000400000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000040000001000000004000000020000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000100180000002000008000000000000000000000000000000000000000000000010001000000400000800000000000000000000000000000000000000000000001000904000060000000000000000000000080100000a90000000000000000000000000000000000000000000000000000003c617373656d626c793e3c617373656d626c794964656e746974792076657273696f6e3d22392e352e302e30222f3e3c6465736372697074696f6e3e536574757020466163746f72792052756e2d74696d653c2f6465736372697074696f6e3e3c646570656e64656e63793e3c617373656d626c794964656e746974792076657273696f6e3d22362e302e302e30222f3e3c2f646570656e64656e63793e3c2f617373656d626c793e00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000e0e0e1e1e2e2e3e3e4e4e5e5e6e6e7e70000000000000000000011000000000000006e6f742d616e2d65786563757461626c6509000000000000006e6f742d612d646c6c03000000697273657475702e646174000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001602000000000000c3a5ddda00000000100407000000000000e0070302055d0000600281371d84d2d3b57cff23d5913421ebab27447236a5aba4e60f4792a1b2a7741432b405b6c71519965167f6986c929118b9aa51383096ae6de13cee83b3e0b7ac7e74fd7492cefa596f5375c189258783c777734b4ce9c7edad30ae335a194eab1b6ed0b2c706615e0df8830fa2553d6c001a69587b366449d970eee70febc8cfa07010379a075393047af1dcf17bb888455f10dd1d26bf8cc1b3d54f1ed3a73e8b9bbad5ae95938de91c709abb6b5538d99297bd5ddfaf659b9a0284995d973dfa9f5b02f4f36149767f39250584a509d24ae2ee615f91c6f99063c2f2b85a4883a95b65bf9b818e508f7886cd0576d5e21224e87131aaf0ca492dafaaccb8567e58d9bd7a4b66160612636282fb8b1b8146bd620710ebe941ac08a7659bfbb7390f23ca5e688c172f482a1db32d14adcf83c807c1d57a60c4dba8b9f804e80ebcb212f19371c73546412ee279a8364bc001e46bc5bee9349922e4ed5f92ce7d45f95bf1801ec01a4638673e20b671e4e3327f14b71e197c375319e10452219e0022172e761d5f8229a4a10707a3e47356e4e0b944dc90fefe98cd31f7f164fc1267fb898760c8d49e8beb971aae80482ef260e7c506e1f7c45b65bf5c18e67704a8dca6458307a1465238c9b7ca5d2a3a929a8f16f511290a96f5bd495cb18360df5e166fe57d37e44ab7389f36b8dbce4f0c2baaaec57e86763073164c24033954004952494d47312e424d5000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001300000000000000d69ecd7800000000100600000000000000010005696d61676531004952494d47322e424d50000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000013000000000000006ccfc4e100000000100600000000000000010005696d6167653200100f0000000000000001000e67656e657269632d636f6e74656e7400"
+      }
+    },
+    {
+      "expected": {
+        "auditor": "sf9-audit-v3",
+        "blockers": [
+          "unparsed_installer_events",
+          "unreviewed_serialized_file_fields",
+          "game_language_build_dlc_not_verified",
+          "steamos_install_restore_not_verified"
+        ],
+        "capability": "discover_only",
+        "certificate": null,
+        "certificate_alignment_bytes": 0,
+        "diagnostics": [
+          {
+            "crc32": 3492925374,
+            "hashed_representation": "stored_blob",
+            "name": "irsetup.exe",
+            "offset": 1570,
+            "packed_size": 17,
+            "sha256": "7dd4418f90bf9cc6c47fb82f4c0eb654f049e8d2157baa5e3feb7844d2e770c4",
+            "size": 17
+          },
+          {
+            "crc32": 3975044453,
+            "hashed_representation": "stored_blob",
+            "name": "lua5.1.dll",
+            "offset": 1595,
+            "packed_size": 9,
+            "sha256": "4be431c8e91674f39e6da5516eacd7558ec7565e83308d8f6efef634ff02d061",
+            "size": 9
+          },
+          {
+            "crc32": 2683144398,
+            "name": "irsetup.dat",
+            "offset": 1888,
+            "packed_size": 534,
+            "sha256": "fcbcd03a77f16032170fbecc1d6a289b77b57a2ec6b9eaa5521176df4a68335a",
+            "size": 1808,
+            "unknown_header_base64": "AAAAAA=="
+          },
+          {
+            "crc32": 2026741462,
+            "name": "IRIMG1.BMP",
+            "offset": 2702,
+            "packed_size": 19,
+            "sha256": "cc292b92ce7f10f2e4f727ecdf4b12528127c51b6ddf6058e213674603190d06",
+            "size": 6,
+            "unknown_header_base64": "AAAAAA=="
+          },
+          {
+            "crc32": 3787771756,
+            "name": "IRIMG2.BMP",
+            "offset": 3001,
+            "packed_size": 19,
+            "sha256": "5bb21ac469b5e7df4e17899d4aae0adfb430f0f0b336a2242ef1a22d25bd2e53",
+            "size": 6,
+            "unknown_header_base64": "AAAAAA=="
+          }
+        ],
+        "exe": {
+          "offset": 0,
+          "sha256": "2849e3fed0a5b9f4a477ee8a7d2244d2f13dce707a4d2339a897697a0af029cb",
+          "size": 3048
+        },
+        "expanded_total": 1861,
+        "file_table": {
+          "end": 283,
+          "end_basis": "last_known_crc_end_not_serialized_object_end",
+          "header_base64": "AQAAAAA=",
+          "start": 2,
+          "unparsed_regions": [
+            {
+              "offset": 0,
+              "sha256": "96a296d224f285c67bee93c30f8a309157f0daa35dc5b87e410b78630a09cfc7",
+              "size": 2
+            },
+            {
+              "offset": 283,
+              "sha256": "f5239f23aa1d800fd37c40b3d56d509d42c4219a08918b141e25871cee826f92",
+              "size": 1525
+            }
+          ]
+        },
+        "files": [
+          {
+            "attributes": 32,
+            "compressed": true,
+            "condition": "",
+            "crc32": 2919138325,
+            "creation_time": 0,
+            "description": "",
+            "destination": "\u8865\u4e01-\u6d4b\u8bd5.bin",
+            "extra": "None",
+            "font": "",
+            "forced_attributes": 0,
+            "icon": "",
+            "index": 0,
+            "install_type": "All",
+            "modified_time": 0,
+            "notes": "",
+            "packages": [],
+            "packed_size": 28,
+            "payload": {
+              "crc32": 2919138325,
+              "sha256": "0e2d9c71bc985204d7c8fd81afcdb6c2f4df0c207afe4cb796ff9d1e28e28a60",
+              "size": 15
+            },
+            "payload_offset": 3020,
+            "runtime_folder": "Archive",
+            "serialized_record": {
+              "offset": 29,
+              "sha256": "67c47c84e4a92d8c358d93dc5b19cf2e97ab9bd1eb33bf51c269dc6fe33bd419",
+              "size": 254
+            },
+            "shortcuts": [
+              "",
+              "",
+              "",
+              "",
+              ""
+            ],
+            "source": "\u8865\u4e01-\u6d4b\u8bd5.bin",
+            "source_directory": "C:\\source",
+            "suffix": ".bin",
+            "unpacked_size": 15,
+            "unparsed_inter_record_framing": null,
+            "unreviewed_fields": [
+              {
+                "base64": "AQA=",
+                "offset": 89,
+                "sha256": "47dc540c94ceb704a23875c11273e16bb0b8a87aed84de911f2133568115f254",
+                "size": 2
+              },
+              {
+                "base64": "CgAAgA==",
+                "offset": 100,
+                "sha256": "4785852659ce0273c2d7769cf4181877f0d71e6424084c1801c62a2462853c4f",
+                "size": 4
+              },
+              {
+                "base64": "CgAAgAAAAAAAAAAACgAAgA==",
+                "offset": 112,
+                "sha256": "10c444a9d76bc1e2930c97dba8508858b659ba9d7042b2e1fd5c516db460ab11",
+                "size": 16
+              },
+              {
+                "base64": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==",
+                "offset": 136,
+                "sha256": "61126de1b795b976f3ac878f48e88fa77a87d7308ba57c7642b9e1068403a496",
+                "size": 25
+              },
+              {
+                "base64": "AgAAAAAAAAAAAAA=",
+                "offset": 173,
+                "sha256": "5563cc1568e244183804e0db3cec6ff9bf577f4a403924096177bf4a586160da",
+                "size": 11
+              },
+              {
+                "base64": "AA==",
+                "offset": 189,
+                "sha256": "6e340b9cffb37a989ca544e6bb780a2c78901d3fb33738768511a30617afa01d",
+                "size": 1
+              },
+              {
+                "base64": "AAAAAAAAAAA=",
+                "offset": 191,
+                "sha256": "af5570f5a1810b7af78caf4bc70a660f0df51e42baf91d4de5b2328de0e83dfc",
+                "size": 8
+              },
+              {
+                "base64": "AAAA",
+                "offset": 200,
+                "sha256": "709e80c88487a2411e1ee4dfb9f22a861492d20c4765150c0c794abd70f8147c",
+                "size": 3
+              },
+              {
+                "base64": "AAAAAOgDAAAAAA==",
+                "offset": 206,
+                "sha256": "05c48cd66fd77b70529dc781eaf451474a46e88ab3dcab712fd0aba1119db727",
+                "size": 10
+              },
+              {
+                "base64": "AID///////////////////////////////////////////////8=",
+                "offset": 218,
+                "sha256": "e3b5f3412c85edc7d0d1d711382c9d34c320d994d1f5c55b7cdeed03025c9586",
+                "size": 38
+              },
+              {
+                "base64": "AQA=",
+                "offset": 257,
+                "sha256": "47dc540c94ceb704a23875c11273e16bb0b8a87aed84de911f2133568115f254",
+                "size": 2
+              }
+            ],
+            "use_original_attributes": 1
+          }
+        ],
+        "installable": false,
+        "installer": "Setup Factory 9.6",
+        "manifest": {
+          "offset": 0,
+          "sha256": "1cdc6dc77bbd5d9c39b55e247603f5296a23f9f37e8f472b61088ab57acc9b7e",
+          "size": 169,
+          "version": "9.6.0.0"
+        },
+        "metadata": {
+          "offset": 0,
+          "sha256": "fcbcd03a77f16032170fbecc1d6a289b77b57a2ec6b9eaa5521176df4a68335a",
+          "size": 1808
+        },
+        "overlay_header_base64": "AAAAAAAAAAAAAA==",
+        "overlay_offset": 1536,
+        "schema_version": 1,
+        "script_inventory": {
+          "classes": [
+            {
+              "name": "CSetupFileData",
+              "offset": 4,
+              "schema": 1,
+              "sha256": "a58fc2965206d157d5896eb10ecec962c66636a47b7d96c7cca6df8bb6865448",
+              "size": 20
+            },
+            {
+              "name": "CSUFScreenInstallFolder",
+              "offset": 288,
+              "schema": 1,
+              "sha256": "1306c3c01aa61bfed4c5b3bf5379299d019096869c2568e5c615b9f0fa20c8b6",
+              "size": 29
+            },
+            {
+              "name": "CIREvent",
+              "offset": 387,
+              "schema": 1,
+              "sha256": "68d88f4fad48ccb0b69664208acfe3a092b5c4b3f928c4380f7eba2a7f4c68bb",
+              "size": 14
+            }
+          ],
+          "coverage": {
+            "blockers": [
+              "exe_serialized_object_graph_incomplete"
+            ],
+            "complete": false
+          },
+          "decoder": "sf9-metadata-v1",
+          "diagnostics": [],
+          "events": [
+            {
+              "name": "On Preload",
+              "offset": 401,
+              "parameters": [],
+              "script": "",
+              "script_offset": 417,
+              "sha256": "ad92567bb6bbe14571e5b4274aaa19acc4c417d6e844e79741bd2edbe75dad14",
+              "size": 17
+            },
+            {
+              "name": "On Back",
+              "offset": 420,
+              "parameters": [],
+              "script": "",
+              "script_offset": 433,
+              "sha256": "b1d4ac6d80edf06896ebebd5c32d7626b6f4995d73cd72ea0542748f6cded97a",
+              "size": 14
+            },
+            {
+              "name": "On Next",
+              "offset": 436,
+              "parameters": [],
+              "script": "if File.DoesExist(\"%AppFolder%\\\\engine.exe\") and File.GetCRC(\"%AppFolder%\\\\identity.dat\") == 123 then Screen.Next(); end",
+              "script_offset": 449,
+              "sha256": "fda182646ee7cc17dd3d36bcf23d9b32e3036fe4dbe5af0ecb38fd1dc786f81c",
+              "size": 134
+            },
+            {
+              "name": "On Cancel",
+              "offset": 572,
+              "parameters": [],
+              "script": "",
+              "script_offset": 587,
+              "sha256": "299083e54b3272d452c0e81658bee045a2b95bffc679672109f956cdf9f78005",
+              "size": 16
+            },
+            {
+              "name": "On Help",
+              "offset": 590,
+              "parameters": [],
+              "script": "",
+              "script_offset": 603,
+              "sha256": "7321b7a9a2286fda86e30328e1eca5d522a2db55377998d56c2c371bb2b291a1",
+              "size": 14
+            },
+            {
+              "name": "On Ctrl Message",
+              "offset": 606,
+              "parameters": [],
+              "script": "",
+              "script_offset": 627,
+              "sha256": "056aaa56aa0efe5c8cf323ee50c24c5f7b55dd13e6b9017c1090ee5f45e354b6",
+              "size": 22
+            },
+            {
+              "name": "On Startup",
+              "offset": 1208,
+              "parameters": [],
+              "script": "",
+              "script_offset": 1224,
+              "sha256": "14653c1d313f0b593592b2c0ed8ada5989bf2f1e6676087bf65ffc15713f3b88",
+              "size": 17
+            },
+            {
+              "name": "On Pre Uninstall",
+              "offset": 1227,
+              "parameters": [],
+              "script": "",
+              "script_offset": 1249,
+              "sha256": "b9784e546162021311c6f28ea870e98a8d3eade2dbce60b293b6d4919abaa604",
+              "size": 23
+            },
+            {
+              "name": "On Uninstall Error",
+              "offset": 1252,
+              "parameters": [],
+              "script": "",
+              "script_offset": 1276,
+              "sha256": "f98eafa1ba592de62200279505c82e10e4c5a1703473d6405630b4aabac4ff9c",
+              "size": 25
+            },
+            {
+              "name": "On Post Uninstall",
+              "offset": 1279,
+              "parameters": [],
+              "script": "",
+              "script_offset": 1302,
+              "sha256": "f8565f7febcc1b74ff213ce19aa5db20a1b5b02b46a478008b7ddc9ccaba55e3",
+              "size": 24
+            },
+            {
+              "name": "On Shutdown",
+              "offset": 1305,
+              "parameters": [],
+              "script": "",
+              "script_offset": 1322,
+              "sha256": "1627b3b1b56552f876064ad3f5c09426d19aabdc0327de97098c49e0b858e83d",
+              "size": 18
+            },
+            {
+              "name": "Global Functions",
+              "offset": 1656,
+              "parameters": [],
+              "script": "",
+              "script_offset": 1678,
+              "sha256": "66de0c5f9abf6aee4a158b7f21b97c0b06db77bd4c8722ca7425a06b46b84cfb",
+              "size": 23
+            },
+            {
+              "name": "On Startup",
+              "offset": 1681,
+              "parameters": [],
+              "script": "",
+              "script_offset": 1697,
+              "sha256": "14653c1d313f0b593592b2c0ed8ada5989bf2f1e6676087bf65ffc15713f3b88",
+              "size": 17
+            },
+            {
+              "name": "On Pre Install",
+              "offset": 1700,
+              "parameters": [],
+              "script": "",
+              "script_offset": 1720,
+              "sha256": "7590bbd53cca3cbc4ce22a4e7e18f2e2a58b8a8dd86a47323486bc093c28ae62",
+              "size": 21
+            },
+            {
+              "name": "On Install Error",
+              "offset": 1723,
+              "parameters": [],
+              "script": "",
+              "script_offset": 1745,
+              "sha256": "6161f0c43c2bab1aa48b7b73b124cd6942deca4ba947399ddf736a6d77c7b11a",
+              "size": 23
+            },
+            {
+              "name": "On Post Install",
+              "offset": 1748,
+              "parameters": [],
+              "script": "",
+              "script_offset": 1769,
+              "sha256": "e4eb76510281aa1047571269bd5e785cc5530d49fb2625cb48b833544a910142",
+              "size": 22
+            },
+            {
+              "name": "On Shutdown",
+              "offset": 1772,
+              "parameters": [],
+              "script": "",
+              "script_offset": 1789,
+              "sha256": "1627b3b1b56552f876064ad3f5c09426d19aabdc0327de97098c49e0b858e83d",
+              "size": 18
+            }
+          ],
+          "include_end": 2,
+          "includes": [],
+          "installable": false,
+          "metadata": {
+            "offset": 0,
+            "sha256": "fcbcd03a77f16032170fbecc1d6a289b77b57a2ec6b9eaa5521176df4a68335a",
+            "size": 1808
+          },
+          "schema_version": 1
+        },
+        "semantics_reviewed": false
+      },
+      "id": "f68922925c8601bdd2c33d1538c135a7034c1c563bb43ef9ede464e3eb59969c",
+      "input": {
+        "data_hex": "4d5a00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000400000005045000000000100000000000000000000000000e00000000b01000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000100000000400000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000040000001000000004000000020000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000100180000002000008000000000000000000000000000000000000000000000010001000000400000800000000000000000000000000000000000000000000001000904000060000000000000000000000080100000a90000000000000000000000000000000000000000000000000000003c617373656d626c793e3c617373656d626c794964656e746974792076657273696f6e3d22392e362e302e30222f3e3c6465736372697074696f6e3e536574757020466163746f72792052756e2d74696d653c2f6465736372697074696f6e3e3c646570656e64656e63793e3c617373656d626c794964656e746974792076657273696f6e3d22362e302e302e30222f3e3c2f646570656e64656e63793e3c2f617373656d626c793e00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000e0e0e1e1e2e2e3e3e4e4e5e5e6e6e7e70000000000000000000011000000000000006e6f742d616e2d65786563757461626c6509000000000000006e6f742d612d646c6c03000000697273657475702e646174000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001602000000000000ce88ed9f00000000101007000000000000e0070f02055d0000600281371d84d2d3b57cff23d5913421ebab27447236a5aba4e60f4792a1b2a7741432b405b6c71519965167f6986c929118b9aa51383096ae6de13cee83b3e0b7ac7e74fd7492cefa596f5375c189258783c777734b4ce9c7edad30ae335a194eab1b6ed0b2c706615e0e0da7b24b8edd185b5ff76ae2fc95fd9470b1b45d2d17310f0b3bc0b364107e7e5d497869ba9f6389041aba81347aec209d04fca72b6e384d1fb4b7b891a3781abca2441f7d5b3f89a73d655e85f758cab15cbfd1e0f772fb0d602b4b41d54cdebec364d8462c1d24295bff922a61f6dbdcb2bc2fc28d6d337b9ae5ca88f73750b16cedbdee27eb1b6c3c79a1675e219c8f081593d7903a92de1d91823f9cd668ddc5e6934939ae580942a29ae7dacf36466a94bbf04bfab703b15887de47235ed97c20722d308be79278a2fdb0683cf1371fb53e87a133956efbbf9c90bf215c2cb671782f69f35c29393b0ded30054c610e6916043fc2dd7b64f84c0adf8c601e0e0d336f5dc2eb1d6516ffdb82987434913074bcebbbe9017aba127c5a0d0bc956ba38082142b8911e4ea7a22ae6d4e31dcea31b7796d6e0d3df0e0c39ff009918170bb295a8e2f497534bc86c3fe7536356c9a79f7fbaec49ec674fa7e2f59f2cb79cfc1f0319c33cffa482153715d17e121437bb4301eb2af001f1277d5a048bfc3d926dad490bc09db795f5315e8c8da673a82624c000004952494d47312e424d5000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001300000000000000d69ecd7800000000100600000000000000010005696d61676531004952494d47322e424d50000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000013000000000000006ccfc4e100000000100600000000000000010005696d6167653200100f0000000000000001000e67656e657269632d636f6e74656e7400"
+      }
+    }
+  ],
+  "oracle": "Python synthetic test fixtures",
+  "schema_version": 1
+}

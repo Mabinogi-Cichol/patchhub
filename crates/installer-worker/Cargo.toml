@@ -20,6 +20,9 @@ path = "src/bin/probe_worker.rs"
 [dependencies]
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
+memmap2 = "0.9"
+steam-patch-installer-format = { path = "../installer-format" }
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62", features = [
@@ -41,3 +44,7 @@ winreg = "0.56"
 
 [dev-dependencies]
 tempfile.workspace = true
+
+[[bin]]
+name = "sf-worker"
+path = "src/bin/sf_worker.rs"

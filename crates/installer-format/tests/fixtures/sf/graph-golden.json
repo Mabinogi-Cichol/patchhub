@@ -1,0 +1,2522 @@
+{
+  "cases": [
+    {
+      "error": "truncated_record",
+      "id": "22bc71ac7e1436be3f43d7554dd9f8059825612626d4d710c2324ad8fbd15608",
+      "input": {
+        "data_hex": "00000100ffff01000e0043536574757046696c654461746101000000000b7061796c6f61642e62696e0b7061796c6f61642e62696e09433a5c736f75726365042e62696e07417263686976650001000f00000000000000200a00008000000000000000000a00008000000000000000000a0000800000000000000000000000000000000000000000000000000000000000000000000b25417070466f6c6465722502000000000000000000000000000000000000000000000000000000000001010000000000e8030000000010000080ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff00010003416c6c044e6f6e650000001c000000000000001584fead0000000100ffff010017004353554653637265656e496e7374616c6c466f6c646572010000006e00000018416e7920696e7374616c6c20666f6c646572207469746c650200000010416e7920646973706c6179207465787400000000000000000000000000000600ffff010008004349524576656e7401000000000a4f6e205072656c6f61640005800100000000074f6e204261636b0005800100000000074f6e204e6578747869662046696c652e446f65734578697374282225417070466f6c646572255c5c656e67696e652e657865222920616e642046696c652e476574435243282225417070466f6c646572255c5c6964656e746974792e6461742229203d3d20313233207468656e2053637265656e2e4e65787428293b20656e6405800100000000094f6e2043616e63656c0005800100000000074f6e2048656c7000058001000000000f4f6e204374726c204d65737361676500000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001000000f3ffffff900100000000000005417269616c0000000001000000f3ffffff900100000000000005417269616c0000000001000000f3ffffff900100000000000005417269616c0000000001000000f3ffffff900100000000000005417269616c0000000001000000f3ffffff900100000000000005417269616c0100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000010000000b25417070466f6c64657225010000000100000000000000000000000000010000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001000000010000000100000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000100000001000000000000000500058001000000000a4f6e20537461727475700005800100000000104f6e2050726520556e696e7374616c6c0005800100000000124f6e20556e696e7374616c6c204572726f720005800100000000114f6e20506f737420556e696e7374616c6c00058001000000000b4f6e2053687574646f776e000100000000000001000001000100000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000100000000000000000000001e0000001e000000010000000a000080000000000000000000000000000000000100000001000000020000000100000000000000146172626974726172792d70726f6a6563742d696400000000000000000100000010000080ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff00000000000000000000000000000000010000000000000000000000000000000000000000000000000000000006000580010000000010476c6f62616c2046756e6374696f6e7300058001000000000a4f6e205374617274757000058001000000000e4f6e2050726520496e7374616c6c0005800100000000104f6e20496e7374616c6c204572726f7200058001000000000f4f6e20506f737420496e7374616c6c00058001000000000b4f6e2053687574646f776e000000000000000a00008000000000000000",
+        "version": "9.5"
+      }
+    },
+    {
+      "expected": {
+        "coverage": {
+          "bytes": 1808,
+          "complete": true
+        },
+        "decoder": "sf9-graph-v1",
+        "disabled_packages": [],
+        "events": [
+          {
+            "class": "CIREvent",
+            "context": "CSUFScreenInstallFolder:Any install folder title",
+            "name": "On Preload",
+            "offset": 387,
+            "parameters": "",
+            "script": "",
+            "size": 31
+          },
+          {
+            "class": "CIREvent",
+            "context": "CSUFScreenInstallFolder:Any install folder title",
+            "name": "On Back",
+            "offset": 418,
+            "parameters": "",
+            "script": "",
+            "size": 16
+          },
+          {
+            "class": "CIREvent",
+            "context": "CSUFScreenInstallFolder:Any install folder title",
+            "name": "On Next",
+            "offset": 434,
+            "parameters": "",
+            "script": "if File.DoesExist(\"%AppFolder%\\\\engine.exe\") and File.GetCRC(\"%AppFolder%\\\\identity.dat\") == 123 then Screen.Next(); end",
+            "size": 136
+          },
+          {
+            "class": "CIREvent",
+            "context": "CSUFScreenInstallFolder:Any install folder title",
+            "name": "On Cancel",
+            "offset": 570,
+            "parameters": "",
+            "script": "",
+            "size": 18
+          },
+          {
+            "class": "CIREvent",
+            "context": "CSUFScreenInstallFolder:Any install folder title",
+            "name": "On Help",
+            "offset": 588,
+            "parameters": "",
+            "script": "",
+            "size": 16
+          },
+          {
+            "class": "CIREvent",
+            "context": "CSUFScreenInstallFolder:Any install folder title",
+            "name": "On Ctrl Message",
+            "offset": 604,
+            "parameters": "",
+            "script": "",
+            "size": 24
+          },
+          {
+            "class": "CIREvent",
+            "context": "uninstall",
+            "name": "On Startup",
+            "offset": 1206,
+            "parameters": "",
+            "script": "",
+            "size": 19
+          },
+          {
+            "class": "CIREvent",
+            "context": "uninstall",
+            "name": "On Pre Uninstall",
+            "offset": 1225,
+            "parameters": "",
+            "script": "",
+            "size": 25
+          },
+          {
+            "class": "CIREvent",
+            "context": "uninstall",
+            "name": "On Uninstall Error",
+            "offset": 1250,
+            "parameters": "",
+            "script": "",
+            "size": 27
+          },
+          {
+            "class": "CIREvent",
+            "context": "uninstall",
+            "name": "On Post Uninstall",
+            "offset": 1277,
+            "parameters": "",
+            "script": "",
+            "size": 26
+          },
+          {
+            "class": "CIREvent",
+            "context": "uninstall",
+            "name": "On Shutdown",
+            "offset": 1303,
+            "parameters": "",
+            "script": "",
+            "size": 20
+          },
+          {
+            "class": "CIREvent",
+            "context": "project",
+            "name": "Global Functions",
+            "offset": 1654,
+            "parameters": "",
+            "script": "",
+            "size": 25
+          },
+          {
+            "class": "CIREvent",
+            "context": "project",
+            "name": "On Startup",
+            "offset": 1679,
+            "parameters": "",
+            "script": "",
+            "size": 19
+          },
+          {
+            "class": "CIREvent",
+            "context": "project",
+            "name": "On Pre Install",
+            "offset": 1698,
+            "parameters": "",
+            "script": "",
+            "size": 23
+          },
+          {
+            "class": "CIREvent",
+            "context": "project",
+            "name": "On Install Error",
+            "offset": 1721,
+            "parameters": "",
+            "script": "",
+            "size": 25
+          },
+          {
+            "class": "CIREvent",
+            "context": "project",
+            "name": "On Post Install",
+            "offset": 1746,
+            "parameters": "",
+            "script": "",
+            "size": 24
+          },
+          {
+            "class": "CIREvent",
+            "context": "project",
+            "name": "On Shutdown",
+            "offset": 1770,
+            "parameters": "",
+            "script": "",
+            "size": 20
+          }
+        ],
+        "includes": [],
+        "installable": false,
+        "metadata": {
+          "offset": 0,
+          "sha256": "fcbcd03a77f16032170fbecc1d6a289b77b57a2ec6b9eaa5521176df4a68335a",
+          "size": 1808
+        },
+        "objects": [
+          {
+            "class": "CSetupFileData",
+            "offset": 4,
+            "size": 280
+          },
+          {
+            "class": "CIREvent",
+            "offset": 387,
+            "size": 31
+          },
+          {
+            "class": "CIREvent",
+            "offset": 418,
+            "size": 16
+          },
+          {
+            "class": "CIREvent",
+            "offset": 434,
+            "size": 136
+          },
+          {
+            "class": "CIREvent",
+            "offset": 570,
+            "size": 18
+          },
+          {
+            "class": "CIREvent",
+            "offset": 588,
+            "size": 16
+          },
+          {
+            "class": "CIREvent",
+            "offset": 604,
+            "size": 24
+          },
+          {
+            "class": "CSUFScreenInstallFolder",
+            "offset": 288,
+            "size": 663
+          },
+          {
+            "class": "CIREvent",
+            "offset": 1206,
+            "size": 19
+          },
+          {
+            "class": "CIREvent",
+            "offset": 1225,
+            "size": 25
+          },
+          {
+            "class": "CIREvent",
+            "offset": 1250,
+            "size": 27
+          },
+          {
+            "class": "CIREvent",
+            "offset": 1277,
+            "size": 26
+          },
+          {
+            "class": "CIREvent",
+            "offset": 1303,
+            "size": 20
+          },
+          {
+            "class": "CIREvent",
+            "offset": 1654,
+            "size": 25
+          },
+          {
+            "class": "CIREvent",
+            "offset": 1679,
+            "size": 19
+          },
+          {
+            "class": "CIREvent",
+            "offset": 1698,
+            "size": 23
+          },
+          {
+            "class": "CIREvent",
+            "offset": 1721,
+            "size": 25
+          },
+          {
+            "class": "CIREvent",
+            "offset": 1746,
+            "size": 24
+          },
+          {
+            "class": "CIREvent",
+            "offset": 1770,
+            "size": 20
+          }
+        ],
+        "terms": [],
+        "variables": {}
+      },
+      "id": "26ae6080b446cfc0fb72c730818a7eb1880e1c2575ed89dc36d79116d0b59f03",
+      "input": {
+        "data_hex": "00000100ffff01000e0043536574757046696c6544617461010000000011e8a1a5e4b8812de6b58be8af952e62696e11e8a1a5e4b8812de6b58be8af952e62696e09433a5c736f75726365042e62696e07417263686976650001000f00000000000000200a00008000000000000000000a00008000000000000000000a0000800000000000000000000000000000000000000000000000000000000000000000000b25417070466f6c6465722502000000000000000000000000000000000000000000000000000000000001010000000000e8030000000013000080ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff00010003416c6c044e6f6e650000001c000000000000001584fead0000000100ffff010017004353554653637265656e496e7374616c6c466f6c646572010000006e00000018416e7920696e7374616c6c20666f6c646572207469746c650200000010416e7920646973706c6179207465787400000000000000000000000000000600ffff010008004349524576656e7401000000000a4f6e205072656c6f61640005800100000000074f6e204261636b0005800100000000074f6e204e6578747869662046696c652e446f65734578697374282225417070466f6c646572255c5c656e67696e652e657865222920616e642046696c652e476574435243282225417070466f6c646572255c5c6964656e746974792e6461742229203d3d20313233207468656e2053637265656e2e4e65787428293b20656e6405800100000000094f6e2043616e63656c0005800100000000074f6e2048656c7000058001000000000f4f6e204374726c204d65737361676500000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001000000f3ffffff900100000000000005417269616c0000000001000000f3ffffff900100000000000005417269616c0000000001000000f3ffffff900100000000000005417269616c0000000001000000f3ffffff900100000000000005417269616c0000000001000000f3ffffff900100000000000005417269616c0100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000010000000b25417070466f6c64657225010000000100000000000000000000000000010000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001000000010000000100000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000100000001000000000000000500058001000000000a4f6e20537461727475700005800100000000104f6e2050726520556e696e7374616c6c0005800100000000124f6e20556e696e7374616c6c204572726f720005800100000000114f6e20506f737420556e696e7374616c6c00058001000000000b4f6e2053687574646f776e000100000000000001000001000100000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000100000000000000000000001e0000001e000000010000000a000080000000000000000000000000000000000100000001000000020000000100000000000000146172626974726172792d70726f6a6563742d696400000000000000000100000013000080ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff00000000000000000000000000000000010000000000000000000000000000000000000000000000000000000006000580010000000010476c6f62616c2046756e6374696f6e7300058001000000000a4f6e205374617274757000058001000000000e4f6e2050726520496e7374616c6c0005800100000000104f6e20496e7374616c6c204572726f7200058001000000000f4f6e20506f737420496e7374616c6c00058001000000000b4f6e2053687574646f776e000000000000000a0000800000000000000000",
+        "version": "9.6"
+      }
+    },
+    {
+      "expected": {
+        "coverage": {
+          "bytes": 1796,
+          "complete": true
+        },
+        "decoder": "sf9-graph-v1",
+        "disabled_packages": [],
+        "events": [
+          {
+            "class": "CIREvent",
+            "context": "CSUFScreenInstallFolder:Any install folder title",
+            "name": "On Preload",
+            "offset": 375,
+            "parameters": "",
+            "script": "",
+            "size": 31
+          },
+          {
+            "class": "CIREvent",
+            "context": "CSUFScreenInstallFolder:Any install folder title",
+            "name": "On Back",
+            "offset": 406,
+            "parameters": "",
+            "script": "",
+            "size": 16
+          },
+          {
+            "class": "CIREvent",
+            "context": "CSUFScreenInstallFolder:Any install folder title",
+            "name": "On Next",
+            "offset": 422,
+            "parameters": "",
+            "script": "if File.DoesExist(\"%AppFolder%\\\\engine.exe\") and File.GetCRC(\"%AppFolder%\\\\identity.dat\") == 123 then Screen.Next(); end",
+            "size": 136
+          },
+          {
+            "class": "CIREvent",
+            "context": "CSUFScreenInstallFolder:Any install folder title",
+            "name": "On Cancel",
+            "offset": 558,
+            "parameters": "",
+            "script": "",
+            "size": 18
+          },
+          {
+            "class": "CIREvent",
+            "context": "CSUFScreenInstallFolder:Any install folder title",
+            "name": "On Help",
+            "offset": 576,
+            "parameters": "",
+            "script": "",
+            "size": 16
+          },
+          {
+            "class": "CIREvent",
+            "context": "CSUFScreenInstallFolder:Any install folder title",
+            "name": "On Ctrl Message",
+            "offset": 592,
+            "parameters": "",
+            "script": "",
+            "size": 24
+          },
+          {
+            "class": "CIREvent",
+            "context": "uninstall",
+            "name": "On Startup",
+            "offset": 1194,
+            "parameters": "",
+            "script": "",
+            "size": 19
+          },
+          {
+            "class": "CIREvent",
+            "context": "uninstall",
+            "name": "On Pre Uninstall",
+            "offset": 1213,
+            "parameters": "",
+            "script": "",
+            "size": 25
+          },
+          {
+            "class": "CIREvent",
+            "context": "uninstall",
+            "name": "On Uninstall Error",
+            "offset": 1238,
+            "parameters": "",
+            "script": "",
+            "size": 27
+          },
+          {
+            "class": "CIREvent",
+            "context": "uninstall",
+            "name": "On Post Uninstall",
+            "offset": 1265,
+            "parameters": "",
+            "script": "",
+            "size": 26
+          },
+          {
+            "class": "CIREvent",
+            "context": "uninstall",
+            "name": "On Shutdown",
+            "offset": 1291,
+            "parameters": "",
+            "script": "",
+            "size": 20
+          },
+          {
+            "class": "CIREvent",
+            "context": "project",
+            "name": "Global Functions",
+            "offset": 1642,
+            "parameters": "",
+            "script": "",
+            "size": 25
+          },
+          {
+            "class": "CIREvent",
+            "context": "project",
+            "name": "On Startup",
+            "offset": 1667,
+            "parameters": "",
+            "script": "",
+            "size": 19
+          },
+          {
+            "class": "CIREvent",
+            "context": "project",
+            "name": "On Pre Install",
+            "offset": 1686,
+            "parameters": "",
+            "script": "",
+            "size": 23
+          },
+          {
+            "class": "CIREvent",
+            "context": "project",
+            "name": "On Install Error",
+            "offset": 1709,
+            "parameters": "",
+            "script": "",
+            "size": 25
+          },
+          {
+            "class": "CIREvent",
+            "context": "project",
+            "name": "On Post Install",
+            "offset": 1734,
+            "parameters": "",
+            "script": "",
+            "size": 24
+          },
+          {
+            "class": "CIREvent",
+            "context": "project",
+            "name": "On Shutdown",
+            "offset": 1758,
+            "parameters": "",
+            "script": "",
+            "size": 20
+          }
+        ],
+        "includes": [],
+        "installable": false,
+        "metadata": {
+          "offset": 0,
+          "sha256": "7b01eb7b5b6a0ea32d8e506a21c5807ec4b3ab84beb038f2bd301d307b028513",
+          "size": 1796
+        },
+        "objects": [
+          {
+            "class": "CSetupFileData",
+            "offset": 4,
+            "size": 268
+          },
+          {
+            "class": "CIREvent",
+            "offset": 375,
+            "size": 31
+          },
+          {
+            "class": "CIREvent",
+            "offset": 406,
+            "size": 16
+          },
+          {
+            "class": "CIREvent",
+            "offset": 422,
+            "size": 136
+          },
+          {
+            "class": "CIREvent",
+            "offset": 558,
+            "size": 18
+          },
+          {
+            "class": "CIREvent",
+            "offset": 576,
+            "size": 16
+          },
+          {
+            "class": "CIREvent",
+            "offset": 592,
+            "size": 24
+          },
+          {
+            "class": "CSUFScreenInstallFolder",
+            "offset": 276,
+            "size": 663
+          },
+          {
+            "class": "CIREvent",
+            "offset": 1194,
+            "size": 19
+          },
+          {
+            "class": "CIREvent",
+            "offset": 1213,
+            "size": 25
+          },
+          {
+            "class": "CIREvent",
+            "offset": 1238,
+            "size": 27
+          },
+          {
+            "class": "CIREvent",
+            "offset": 1265,
+            "size": 26
+          },
+          {
+            "class": "CIREvent",
+            "offset": 1291,
+            "size": 20
+          },
+          {
+            "class": "CIREvent",
+            "offset": 1642,
+            "size": 25
+          },
+          {
+            "class": "CIREvent",
+            "offset": 1667,
+            "size": 19
+          },
+          {
+            "class": "CIREvent",
+            "offset": 1686,
+            "size": 23
+          },
+          {
+            "class": "CIREvent",
+            "offset": 1709,
+            "size": 25
+          },
+          {
+            "class": "CIREvent",
+            "offset": 1734,
+            "size": 24
+          },
+          {
+            "class": "CIREvent",
+            "offset": 1758,
+            "size": 20
+          }
+        ],
+        "terms": [],
+        "variables": {}
+      },
+      "id": "53e33a5991b9eab2c2d5fbb09170028e3e8f8f46c8b6115b369af1b0087b7653",
+      "input": {
+        "data_hex": "00000100ffff01000e0043536574757046696c654461746101000000000b7061796c6f61642e62696e0b7061796c6f61642e62696e09433a5c736f75726365042e62696e07417263686976650001000f00000000000000200a00008000000000000000000a00008000000000000000000a0000800000000000000000000000000000000000000000000000000000000000000000000b25417070466f6c6465722502000000000000000000000000000000000000000000000000000000000001010000000000e8030000000013000080ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff00010003416c6c044e6f6e650000001c000000000000001584fead0000000100ffff010017004353554653637265656e496e7374616c6c466f6c646572010000006e00000018416e7920696e7374616c6c20666f6c646572207469746c650200000010416e7920646973706c6179207465787400000000000000000000000000000600ffff010008004349524576656e7401000000000a4f6e205072656c6f61640005800100000000074f6e204261636b0005800100000000074f6e204e6578747869662046696c652e446f65734578697374282225417070466f6c646572255c5c656e67696e652e657865222920616e642046696c652e476574435243282225417070466f6c646572255c5c6964656e746974792e6461742229203d3d20313233207468656e2053637265656e2e4e65787428293b20656e6405800100000000094f6e2043616e63656c0005800100000000074f6e2048656c7000058001000000000f4f6e204374726c204d65737361676500000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001000000f3ffffff900100000000000005417269616c0000000001000000f3ffffff900100000000000005417269616c0000000001000000f3ffffff900100000000000005417269616c0000000001000000f3ffffff900100000000000005417269616c0000000001000000f3ffffff900100000000000005417269616c0100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000010000000b25417070466f6c64657225010000000100000000000000000000000000010000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001000000010000000100000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000100000001000000000000000500058001000000000a4f6e20537461727475700005800100000000104f6e2050726520556e696e7374616c6c0005800100000000124f6e20556e696e7374616c6c204572726f720005800100000000114f6e20506f737420556e696e7374616c6c00058001000000000b4f6e2053687574646f776e000100000000000001000001000100000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000100000000000000000000001e0000001e000000010000000a000080000000000000000000000000000000000100000001000000020000000100000000000000146172626974726172792d70726f6a6563742d696400000000000000000100000013000080ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff00000000000000000000000000000000010000000000000000000000000000000000000000000000000000000006000580010000000010476c6f62616c2046756e6374696f6e7300058001000000000a4f6e205374617274757000058001000000000e4f6e2050726520496e7374616c6c0005800100000000104f6e20496e7374616c6c204572726f7200058001000000000f4f6e20506f737420496e7374616c6c00058001000000000b4f6e2053687574646f776e000000000000000a0000800000000000000000",
+        "version": "9.6"
+      }
+    },
+    {
+      "expected": {
+        "coverage": {
+          "bytes": 1798,
+          "complete": true
+        },
+        "decoder": "sf9-graph-v1",
+        "disabled_packages": [],
+        "events": [
+          {
+            "class": "CIREvent",
+            "context": "CSUFScreenInstallFolder:Any install folder title",
+            "name": "On Preload",
+            "offset": 383,
+            "parameters": "",
+            "script": "",
+            "size": 31
+          },
+          {
+            "class": "CIREvent",
+            "context": "CSUFScreenInstallFolder:Any install folder title",
+            "name": "On Back",
+            "offset": 414,
+            "parameters": "",
+            "script": "",
+            "size": 16
+          },
+          {
+            "class": "CIREvent",
+            "context": "CSUFScreenInstallFolder:Any install folder title",
+            "name": "On Next",
+            "offset": 430,
+            "parameters": "",
+            "script": "if File.DoesExist(\"%AppFolder%\\\\engine.exe\") and File.GetCRC(\"%AppFolder%\\\\identity.dat\") == 123 then Screen.Next(); end",
+            "size": 136
+          },
+          {
+            "class": "CIREvent",
+            "context": "CSUFScreenInstallFolder:Any install folder title",
+            "name": "On Cancel",
+            "offset": 566,
+            "parameters": "",
+            "script": "",
+            "size": 18
+          },
+          {
+            "class": "CIREvent",
+            "context": "CSUFScreenInstallFolder:Any install folder title",
+            "name": "On Help",
+            "offset": 584,
+            "parameters": "",
+            "script": "",
+            "size": 16
+          },
+          {
+            "class": "CIREvent",
+            "context": "CSUFScreenInstallFolder:Any install folder title",
+            "name": "On Ctrl Message",
+            "offset": 600,
+            "parameters": "",
+            "script": "",
+            "size": 24
+          },
+          {
+            "class": "CIREvent",
+            "context": "uninstall",
+            "name": "On Startup",
+            "offset": 1202,
+            "parameters": "",
+            "script": "",
+            "size": 19
+          },
+          {
+            "class": "CIREvent",
+            "context": "uninstall",
+            "name": "On Pre Uninstall",
+            "offset": 1221,
+            "parameters": "",
+            "script": "",
+            "size": 25
+          },
+          {
+            "class": "CIREvent",
+            "context": "uninstall",
+            "name": "On Uninstall Error",
+            "offset": 1246,
+            "parameters": "",
+            "script": "",
+            "size": 27
+          },
+          {
+            "class": "CIREvent",
+            "context": "uninstall",
+            "name": "On Post Uninstall",
+            "offset": 1273,
+            "parameters": "",
+            "script": "",
+            "size": 26
+          },
+          {
+            "class": "CIREvent",
+            "context": "uninstall",
+            "name": "On Shutdown",
+            "offset": 1299,
+            "parameters": "",
+            "script": "",
+            "size": 20
+          },
+          {
+            "class": "CIREvent",
+            "context": "project",
+            "name": "Global Functions",
+            "offset": 1644,
+            "parameters": "",
+            "script": "",
+            "size": 25
+          },
+          {
+            "class": "CIREvent",
+            "context": "project",
+            "name": "On Startup",
+            "offset": 1669,
+            "parameters": "",
+            "script": "",
+            "size": 19
+          },
+          {
+            "class": "CIREvent",
+            "context": "project",
+            "name": "On Pre Install",
+            "offset": 1688,
+            "parameters": "",
+            "script": "",
+            "size": 23
+          },
+          {
+            "class": "CIREvent",
+            "context": "project",
+            "name": "On Install Error",
+            "offset": 1711,
+            "parameters": "",
+            "script": "",
+            "size": 25
+          },
+          {
+            "class": "CIREvent",
+            "context": "project",
+            "name": "On Post Install",
+            "offset": 1736,
+            "parameters": "",
+            "script": "",
+            "size": 24
+          },
+          {
+            "class": "CIREvent",
+            "context": "project",
+            "name": "On Shutdown",
+            "offset": 1760,
+            "parameters": "",
+            "script": "",
+            "size": 20
+          }
+        ],
+        "includes": [],
+        "installable": false,
+        "metadata": {
+          "offset": 0,
+          "sha256": "7940f4ea32ec54b952bdd26337f1e0fc711ddc0a65d0e8b96f16809f3ffb5a6c",
+          "size": 1798
+        },
+        "objects": [
+          {
+            "class": "CSetupFileData",
+            "offset": 4,
+            "size": 276
+          },
+          {
+            "class": "CIREvent",
+            "offset": 383,
+            "size": 31
+          },
+          {
+            "class": "CIREvent",
+            "offset": 414,
+            "size": 16
+          },
+          {
+            "class": "CIREvent",
+            "offset": 430,
+            "size": 136
+          },
+          {
+            "class": "CIREvent",
+            "offset": 566,
+            "size": 18
+          },
+          {
+            "class": "CIREvent",
+            "offset": 584,
+            "size": 16
+          },
+          {
+            "class": "CIREvent",
+            "offset": 600,
+            "size": 24
+          },
+          {
+            "class": "CSUFScreenInstallFolder",
+            "offset": 284,
+            "size": 663
+          },
+          {
+            "class": "CIREvent",
+            "offset": 1202,
+            "size": 19
+          },
+          {
+            "class": "CIREvent",
+            "offset": 1221,
+            "size": 25
+          },
+          {
+            "class": "CIREvent",
+            "offset": 1246,
+            "size": 27
+          },
+          {
+            "class": "CIREvent",
+            "offset": 1273,
+            "size": 26
+          },
+          {
+            "class": "CIREvent",
+            "offset": 1299,
+            "size": 20
+          },
+          {
+            "class": "CIREvent",
+            "offset": 1644,
+            "size": 25
+          },
+          {
+            "class": "CIREvent",
+            "offset": 1669,
+            "size": 19
+          },
+          {
+            "class": "CIREvent",
+            "offset": 1688,
+            "size": 23
+          },
+          {
+            "class": "CIREvent",
+            "offset": 1711,
+            "size": 25
+          },
+          {
+            "class": "CIREvent",
+            "offset": 1736,
+            "size": 24
+          },
+          {
+            "class": "CIREvent",
+            "offset": 1760,
+            "size": 20
+          }
+        ],
+        "terms": [],
+        "variables": {}
+      },
+      "id": "772d6d9172570860bba6c4eef57b43c101a8498f487502092da3feac8ae02ddc",
+      "input": {
+        "data_hex": "00000100ffff01000e0043536574757046696c65446174610100000000126172626974726172792d6e616d652e62696e126172626974726172792d6e616d652e62696e09433a5c736f75726365042e62696e07417263686976650001000f00000000000000200a00008000000000000000000a00008000000000000000000a0000800000000000000000000000000000000000000000000000000000000000000000000b25417070466f6c6465722502000000000000000000000000000000000000000000000000000000000001010000000000e8030000000010000080ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff00010003416c6c044e6f6e650000001c000000000000001584fead0000000100ffff010017004353554653637265656e496e7374616c6c466f6c646572010000006e00000018416e7920696e7374616c6c20666f6c646572207469746c650200000010416e7920646973706c6179207465787400000000000000000000000000000600ffff010008004349524576656e7401000000000a4f6e205072656c6f61640005800100000000074f6e204261636b0005800100000000074f6e204e6578747869662046696c652e446f65734578697374282225417070466f6c646572255c5c656e67696e652e657865222920616e642046696c652e476574435243282225417070466f6c646572255c5c6964656e746974792e6461742229203d3d20313233207468656e2053637265656e2e4e65787428293b20656e6405800100000000094f6e2043616e63656c0005800100000000074f6e2048656c7000058001000000000f4f6e204374726c204d65737361676500000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001000000f3ffffff900100000000000005417269616c0000000001000000f3ffffff900100000000000005417269616c0000000001000000f3ffffff900100000000000005417269616c0000000001000000f3ffffff900100000000000005417269616c0000000001000000f3ffffff900100000000000005417269616c0100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000010000000b25417070466f6c64657225010000000100000000000000000000000000010000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001000000010000000100000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000100000001000000000000000500058001000000000a4f6e20537461727475700005800100000000104f6e2050726520556e696e7374616c6c0005800100000000124f6e20556e696e7374616c6c204572726f720005800100000000114f6e20506f737420556e696e7374616c6c00058001000000000b4f6e2053687574646f776e000100000000000001000001000100000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000100000000000000000000001e0000001e000000010000000a000080000000000000000000000000000000000100000001000000020000000100000000000000146172626974726172792d70726f6a6563742d696400000000000000000100000010000080ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff00000000000000000000000000000000010000000000000000000000000000000000000000000000000000000006000580010000000010476c6f62616c2046756e6374696f6e7300058001000000000a4f6e205374617274757000058001000000000e4f6e2050726520496e7374616c6c0005800100000000104f6e20496e7374616c6c204572726f7200058001000000000f4f6e20506f737420496e7374616c6c00058001000000000b4f6e2053687574646f776e000000000000000a0000800000000000000000",
+        "version": "9.5"
+      }
+    },
+    {
+      "expected": {
+        "coverage": {
+          "bytes": 1810,
+          "complete": true
+        },
+        "decoder": "sf9-graph-v1",
+        "disabled_packages": [],
+        "events": [
+          {
+            "class": "CIREvent",
+            "context": "CSUFScreenInstallFolder:Any install folder title",
+            "name": "On Preload",
+            "offset": 389,
+            "parameters": "",
+            "script": "",
+            "size": 31
+          },
+          {
+            "class": "CIREvent",
+            "context": "CSUFScreenInstallFolder:Any install folder title",
+            "name": "On Back",
+            "offset": 420,
+            "parameters": "",
+            "script": "",
+            "size": 16
+          },
+          {
+            "class": "CIREvent",
+            "context": "CSUFScreenInstallFolder:Any install folder title",
+            "name": "On Next",
+            "offset": 436,
+            "parameters": "",
+            "script": "if File.DoesExist(\"%AppFolder%\\\\engine.exe\") and File.GetCRC(\"%AppFolder%\\\\identity.dat\") == 123 then Screen.Next(); end",
+            "size": 136
+          },
+          {
+            "class": "CIREvent",
+            "context": "CSUFScreenInstallFolder:Any install folder title",
+            "name": "On Cancel",
+            "offset": 572,
+            "parameters": "",
+            "script": "",
+            "size": 18
+          },
+          {
+            "class": "CIREvent",
+            "context": "CSUFScreenInstallFolder:Any install folder title",
+            "name": "On Help",
+            "offset": 590,
+            "parameters": "",
+            "script": "",
+            "size": 16
+          },
+          {
+            "class": "CIREvent",
+            "context": "CSUFScreenInstallFolder:Any install folder title",
+            "name": "On Ctrl Message",
+            "offset": 606,
+            "parameters": "",
+            "script": "",
+            "size": 24
+          },
+          {
+            "class": "CIREvent",
+            "context": "uninstall",
+            "name": "On Startup",
+            "offset": 1208,
+            "parameters": "",
+            "script": "",
+            "size": 19
+          },
+          {
+            "class": "CIREvent",
+            "context": "uninstall",
+            "name": "On Pre Uninstall",
+            "offset": 1227,
+            "parameters": "",
+            "script": "",
+            "size": 25
+          },
+          {
+            "class": "CIREvent",
+            "context": "uninstall",
+            "name": "On Uninstall Error",
+            "offset": 1252,
+            "parameters": "",
+            "script": "",
+            "size": 27
+          },
+          {
+            "class": "CIREvent",
+            "context": "uninstall",
+            "name": "On Post Uninstall",
+            "offset": 1279,
+            "parameters": "",
+            "script": "",
+            "size": 26
+          },
+          {
+            "class": "CIREvent",
+            "context": "uninstall",
+            "name": "On Shutdown",
+            "offset": 1305,
+            "parameters": "",
+            "script": "",
+            "size": 20
+          },
+          {
+            "class": "CIREvent",
+            "context": "project",
+            "name": "Global Functions",
+            "offset": 1656,
+            "parameters": "",
+            "script": "",
+            "size": 25
+          },
+          {
+            "class": "CIREvent",
+            "context": "project",
+            "name": "On Startup",
+            "offset": 1681,
+            "parameters": "",
+            "script": "",
+            "size": 19
+          },
+          {
+            "class": "CIREvent",
+            "context": "project",
+            "name": "On Pre Install",
+            "offset": 1700,
+            "parameters": "",
+            "script": "",
+            "size": 23
+          },
+          {
+            "class": "CIREvent",
+            "context": "project",
+            "name": "On Install Error",
+            "offset": 1723,
+            "parameters": "",
+            "script": "",
+            "size": 25
+          },
+          {
+            "class": "CIREvent",
+            "context": "project",
+            "name": "On Post Install",
+            "offset": 1748,
+            "parameters": "",
+            "script": "",
+            "size": 24
+          },
+          {
+            "class": "CIREvent",
+            "context": "project",
+            "name": "On Shutdown",
+            "offset": 1772,
+            "parameters": "",
+            "script": "",
+            "size": 20
+          }
+        ],
+        "includes": [],
+        "installable": false,
+        "metadata": {
+          "offset": 0,
+          "sha256": "55926227f2f68a5e6ab6669b256cb29020be5ea0bb4f7c69c5d334b5f68ada01",
+          "size": 1810
+        },
+        "objects": [
+          {
+            "class": "CSetupFileData",
+            "offset": 4,
+            "size": 282
+          },
+          {
+            "class": "CIREvent",
+            "offset": 389,
+            "size": 31
+          },
+          {
+            "class": "CIREvent",
+            "offset": 420,
+            "size": 16
+          },
+          {
+            "class": "CIREvent",
+            "offset": 436,
+            "size": 136
+          },
+          {
+            "class": "CIREvent",
+            "offset": 572,
+            "size": 18
+          },
+          {
+            "class": "CIREvent",
+            "offset": 590,
+            "size": 16
+          },
+          {
+            "class": "CIREvent",
+            "offset": 606,
+            "size": 24
+          },
+          {
+            "class": "CSUFScreenInstallFolder",
+            "offset": 290,
+            "size": 663
+          },
+          {
+            "class": "CIREvent",
+            "offset": 1208,
+            "size": 19
+          },
+          {
+            "class": "CIREvent",
+            "offset": 1227,
+            "size": 25
+          },
+          {
+            "class": "CIREvent",
+            "offset": 1252,
+            "size": 27
+          },
+          {
+            "class": "CIREvent",
+            "offset": 1279,
+            "size": 26
+          },
+          {
+            "class": "CIREvent",
+            "offset": 1305,
+            "size": 20
+          },
+          {
+            "class": "CIREvent",
+            "offset": 1656,
+            "size": 25
+          },
+          {
+            "class": "CIREvent",
+            "offset": 1681,
+            "size": 19
+          },
+          {
+            "class": "CIREvent",
+            "offset": 1700,
+            "size": 23
+          },
+          {
+            "class": "CIREvent",
+            "offset": 1723,
+            "size": 25
+          },
+          {
+            "class": "CIREvent",
+            "offset": 1748,
+            "size": 24
+          },
+          {
+            "class": "CIREvent",
+            "offset": 1772,
+            "size": 20
+          }
+        ],
+        "terms": [],
+        "variables": {}
+      },
+      "id": "7e8856ac9ddd51b4e27f96f9606c522405b30821d60c9d6becf7f6bc5d5575ee",
+      "input": {
+        "data_hex": "00000100ffff01000e0043536574757046696c65446174610100000000126172626974726172792d6e616d652e62696e126172626974726172792d6e616d652e62696e09433a5c736f75726365042e62696e07417263686976650001000f00000000000000200a00008000000000000000000a00008000000000000000000a0000800000000000000000000000000000000000000000000000000000000000000000000b25417070466f6c6465722502000000000000000000000000000000000000000000000000000000000001010000000000e8030000000013000080ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff00010003416c6c044e6f6e650000001c000000000000001584fead0000000100ffff010017004353554653637265656e496e7374616c6c466f6c646572010000006e00000018416e7920696e7374616c6c20666f6c646572207469746c650200000010416e7920646973706c6179207465787400000000000000000000000000000600ffff010008004349524576656e7401000000000a4f6e205072656c6f61640005800100000000074f6e204261636b0005800100000000074f6e204e6578747869662046696c652e446f65734578697374282225417070466f6c646572255c5c656e67696e652e657865222920616e642046696c652e476574435243282225417070466f6c646572255c5c6964656e746974792e6461742229203d3d20313233207468656e2053637265656e2e4e65787428293b20656e6405800100000000094f6e2043616e63656c0005800100000000074f6e2048656c7000058001000000000f4f6e204374726c204d65737361676500000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001000000f3ffffff900100000000000005417269616c0000000001000000f3ffffff900100000000000005417269616c0000000001000000f3ffffff900100000000000005417269616c0000000001000000f3ffffff900100000000000005417269616c0000000001000000f3ffffff900100000000000005417269616c0100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000010000000b25417070466f6c64657225010000000100000000000000000000000000010000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001000000010000000100000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000100000001000000000000000500058001000000000a4f6e20537461727475700005800100000000104f6e2050726520556e696e7374616c6c0005800100000000124f6e20556e696e7374616c6c204572726f720005800100000000114f6e20506f737420556e696e7374616c6c00058001000000000b4f6e2053687574646f776e000100000000000001000001000100000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000100000000000000000000001e0000001e000000010000000a000080000000000000000000000000000000000100000001000000020000000100000000000000146172626974726172792d70726f6a6563742d696400000000000000000100000013000080ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff00000000000000000000000000000000010000000000000000000000000000000000000000000000000000000006000580010000000010476c6f62616c2046756e6374696f6e7300058001000000000a4f6e205374617274757000058001000000000e4f6e2050726520496e7374616c6c0005800100000000104f6e20496e7374616c6c204572726f7200058001000000000f4f6e20506f737420496e7374616c6c00058001000000000b4f6e2053687574646f776e000000000000000a0000800000000000000000",
+        "version": "9.6"
+      }
+    },
+    {
+      "error": "exe_event_order_unsupported",
+      "id": "81754813c0b373269b23d5dcd305d0bdab37cb401d35e175cfc169d156609161",
+      "input": {
+        "data_hex": "00000100ffff01000e0043536574757046696c654461746101000000000b7061796c6f61642e62696e0b7061796c6f61642e62696e09433a5c736f75726365042e62696e07417263686976650001000f00000000000000200a00008000000000000000000a00008000000000000000000a0000800000000000000000000000000000000000000000000000000000000000000000000b25417070466f6c6465722502000000000000000000000000000000000000000000000000000000000001010000000000e8030000000010000080ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff00010003416c6c044e6f6e650000001c000000000000001584fead0000000100ffff010017004353554653637265656e496e7374616c6c466f6c646572010000006e00000018416e7920696e7374616c6c20666f6c646572207469746c650200000010416e7920646973706c6179207465787400000000000000000000000000000600ffff010008004349524576656e7401000000000a4f6e205072656c6f61640005800100000000074f6e204261636b0005800100000000074f6e2048656c707869662046696c652e446f65734578697374282225417070466f6c646572255c5c656e67696e652e657865222920616e642046696c652e476574435243282225417070466f6c646572255c5c6964656e746974792e6461742229203d3d20313233207468656e2053637265656e2e4e65787428293b20656e6405800100000000094f6e2043616e63656c0005800100000000074f6e2048656c7000058001000000000f4f6e204374726c204d65737361676500000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001000000f3ffffff900100000000000005417269616c0000000001000000f3ffffff900100000000000005417269616c0000000001000000f3ffffff900100000000000005417269616c0000000001000000f3ffffff900100000000000005417269616c0000000001000000f3ffffff900100000000000005417269616c0100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000010000000b25417070466f6c64657225010000000100000000000000000000000000010000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001000000010000000100000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000100000001000000000000000500058001000000000a4f6e20537461727475700005800100000000104f6e2050726520556e696e7374616c6c0005800100000000124f6e20556e696e7374616c6c204572726f720005800100000000114f6e20506f737420556e696e7374616c6c00058001000000000b4f6e2053687574646f776e000100000000000001000001000100000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000100000000000000000000001e0000001e000000010000000a000080000000000000000000000000000000000100000001000000020000000100000000000000146172626974726172792d70726f6a6563742d696400000000000000000100000010000080ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff00000000000000000000000000000000010000000000000000000000000000000000000000000000000000000006000580010000000010476c6f62616c2046756e6374696f6e7300058001000000000a4f6e205374617274757000058001000000000e4f6e2050726520496e7374616c6c0005800100000000104f6e20496e7374616c6c204572726f7200058001000000000f4f6e20506f737420496e7374616c6c00058001000000000b4f6e2053687574646f776e000000000000000a0000800000000000000000",
+        "version": "9.5"
+      }
+    },
+    {
+      "expected": {
+        "coverage": {
+          "bytes": 1784,
+          "complete": true
+        },
+        "decoder": "sf9-graph-v1",
+        "disabled_packages": [],
+        "events": [
+          {
+            "class": "CIREvent",
+            "context": "CSUFScreenInstallFolder:Any install folder title",
+            "name": "On Preload",
+            "offset": 369,
+            "parameters": "",
+            "script": "",
+            "size": 31
+          },
+          {
+            "class": "CIREvent",
+            "context": "CSUFScreenInstallFolder:Any install folder title",
+            "name": "On Back",
+            "offset": 400,
+            "parameters": "",
+            "script": "",
+            "size": 16
+          },
+          {
+            "class": "CIREvent",
+            "context": "CSUFScreenInstallFolder:Any install folder title",
+            "name": "On Next",
+            "offset": 416,
+            "parameters": "",
+            "script": "if File.DoesExist(\"%AppFolder%\\\\engine.exe\") and File.GetCRC(\"%AppFolder%\\\\identity.dat\") == 123 then Screen.Next(); end",
+            "size": 136
+          },
+          {
+            "class": "CIREvent",
+            "context": "CSUFScreenInstallFolder:Any install folder title",
+            "name": "On Cancel",
+            "offset": 552,
+            "parameters": "",
+            "script": "",
+            "size": 18
+          },
+          {
+            "class": "CIREvent",
+            "context": "CSUFScreenInstallFolder:Any install folder title",
+            "name": "On Help",
+            "offset": 570,
+            "parameters": "",
+            "script": "",
+            "size": 16
+          },
+          {
+            "class": "CIREvent",
+            "context": "CSUFScreenInstallFolder:Any install folder title",
+            "name": "On Ctrl Message",
+            "offset": 586,
+            "parameters": "",
+            "script": "",
+            "size": 24
+          },
+          {
+            "class": "CIREvent",
+            "context": "uninstall",
+            "name": "On Startup",
+            "offset": 1188,
+            "parameters": "",
+            "script": "",
+            "size": 19
+          },
+          {
+            "class": "CIREvent",
+            "context": "uninstall",
+            "name": "On Pre Uninstall",
+            "offset": 1207,
+            "parameters": "",
+            "script": "",
+            "size": 25
+          },
+          {
+            "class": "CIREvent",
+            "context": "uninstall",
+            "name": "On Uninstall Error",
+            "offset": 1232,
+            "parameters": "",
+            "script": "",
+            "size": 27
+          },
+          {
+            "class": "CIREvent",
+            "context": "uninstall",
+            "name": "On Post Uninstall",
+            "offset": 1259,
+            "parameters": "",
+            "script": "",
+            "size": 26
+          },
+          {
+            "class": "CIREvent",
+            "context": "uninstall",
+            "name": "On Shutdown",
+            "offset": 1285,
+            "parameters": "",
+            "script": "",
+            "size": 20
+          },
+          {
+            "class": "CIREvent",
+            "context": "project",
+            "name": "Global Functions",
+            "offset": 1630,
+            "parameters": "",
+            "script": "",
+            "size": 25
+          },
+          {
+            "class": "CIREvent",
+            "context": "project",
+            "name": "On Startup",
+            "offset": 1655,
+            "parameters": "",
+            "script": "",
+            "size": 19
+          },
+          {
+            "class": "CIREvent",
+            "context": "project",
+            "name": "On Pre Install",
+            "offset": 1674,
+            "parameters": "",
+            "script": "",
+            "size": 23
+          },
+          {
+            "class": "CIREvent",
+            "context": "project",
+            "name": "On Install Error",
+            "offset": 1697,
+            "parameters": "",
+            "script": "",
+            "size": 25
+          },
+          {
+            "class": "CIREvent",
+            "context": "project",
+            "name": "On Post Install",
+            "offset": 1722,
+            "parameters": "",
+            "script": "",
+            "size": 24
+          },
+          {
+            "class": "CIREvent",
+            "context": "project",
+            "name": "On Shutdown",
+            "offset": 1746,
+            "parameters": "",
+            "script": "",
+            "size": 20
+          }
+        ],
+        "includes": [],
+        "installable": false,
+        "metadata": {
+          "offset": 0,
+          "sha256": "88f81f152e35584d88e8828f4ecbac925e79cdb35a0b9fb1fd86eff0ee6a5552",
+          "size": 1784
+        },
+        "objects": [
+          {
+            "class": "CSetupFileData",
+            "offset": 4,
+            "size": 262
+          },
+          {
+            "class": "CIREvent",
+            "offset": 369,
+            "size": 31
+          },
+          {
+            "class": "CIREvent",
+            "offset": 400,
+            "size": 16
+          },
+          {
+            "class": "CIREvent",
+            "offset": 416,
+            "size": 136
+          },
+          {
+            "class": "CIREvent",
+            "offset": 552,
+            "size": 18
+          },
+          {
+            "class": "CIREvent",
+            "offset": 570,
+            "size": 16
+          },
+          {
+            "class": "CIREvent",
+            "offset": 586,
+            "size": 24
+          },
+          {
+            "class": "CSUFScreenInstallFolder",
+            "offset": 270,
+            "size": 663
+          },
+          {
+            "class": "CIREvent",
+            "offset": 1188,
+            "size": 19
+          },
+          {
+            "class": "CIREvent",
+            "offset": 1207,
+            "size": 25
+          },
+          {
+            "class": "CIREvent",
+            "offset": 1232,
+            "size": 27
+          },
+          {
+            "class": "CIREvent",
+            "offset": 1259,
+            "size": 26
+          },
+          {
+            "class": "CIREvent",
+            "offset": 1285,
+            "size": 20
+          },
+          {
+            "class": "CIREvent",
+            "offset": 1630,
+            "size": 25
+          },
+          {
+            "class": "CIREvent",
+            "offset": 1655,
+            "size": 19
+          },
+          {
+            "class": "CIREvent",
+            "offset": 1674,
+            "size": 23
+          },
+          {
+            "class": "CIREvent",
+            "offset": 1697,
+            "size": 25
+          },
+          {
+            "class": "CIREvent",
+            "offset": 1722,
+            "size": 24
+          },
+          {
+            "class": "CIREvent",
+            "offset": 1746,
+            "size": 20
+          }
+        ],
+        "terms": [],
+        "variables": {}
+      },
+      "id": "85725f3cc036ca8641f78cd846c5ceddfbc584d2adc4cd6e32ed03a52a8b8ffb",
+      "input": {
+        "data_hex": "00000100ffff01000e0043536574757046696c654461746101000000000b7061796c6f61642e62696e0b7061796c6f61642e62696e09433a5c736f75726365042e62696e07417263686976650001000f00000000000000200a00008000000000000000000a00008000000000000000000a0000800000000000000000000000000000000000000000000000000000000000000000000b25417070466f6c6465722502000000000000000000000000000000000000000000000000000000000001010000000000e8030000000010000080ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff00010003416c6c044e6f6e650000001c000000000000001584fead0000000100ffff010017004353554653637265656e496e7374616c6c466f6c646572010000006e00000018416e7920696e7374616c6c20666f6c646572207469746c650200000010416e7920646973706c6179207465787400000000000000000000000000000600ffff010008004349524576656e7401000000000a4f6e205072656c6f61640005800100000000074f6e204261636b0005800100000000074f6e204e6578747869662046696c652e446f65734578697374282225417070466f6c646572255c5c656e67696e652e657865222920616e642046696c652e476574435243282225417070466f6c646572255c5c6964656e746974792e6461742229203d3d20313233207468656e2053637265656e2e4e65787428293b20656e6405800100000000094f6e2043616e63656c0005800100000000074f6e2048656c7000058001000000000f4f6e204374726c204d65737361676500000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001000000f3ffffff900100000000000005417269616c0000000001000000f3ffffff900100000000000005417269616c0000000001000000f3ffffff900100000000000005417269616c0000000001000000f3ffffff900100000000000005417269616c0000000001000000f3ffffff900100000000000005417269616c0100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000010000000b25417070466f6c64657225010000000100000000000000000000000000010000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001000000010000000100000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000100000001000000000000000500058001000000000a4f6e20537461727475700005800100000000104f6e2050726520556e696e7374616c6c0005800100000000124f6e20556e696e7374616c6c204572726f720005800100000000114f6e20506f737420556e696e7374616c6c00058001000000000b4f6e2053687574646f776e000100000000000001000001000100000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000100000000000000000000001e0000001e000000010000000a000080000000000000000000000000000000000100000001000000020000000100000000000000146172626974726172792d70726f6a6563742d696400000000000000000100000010000080ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff00000000000000000000000000000000010000000000000000000000000000000000000000000000000000000006000580010000000010476c6f62616c2046756e6374696f6e7300058001000000000a4f6e205374617274757000058001000000000e4f6e2050726520496e7374616c6c0005800100000000104f6e20496e7374616c6c204572726f7200058001000000000f4f6e20506f737420496e7374616c6c00058001000000000b4f6e2053687574646f776e000000000000000a0000800000000000000000",
+        "version": "9.5"
+      }
+    },
+    {
+      "error": "exe_object_class_unsupported",
+      "id": "8bd4d7c0794995063964d4e345efbdc1500573b748b7b34b6b52d5e6630a524f",
+      "input": {
+        "data_hex": "00000100ffff01000e0043536574757046696c654461746101000000000b7061796c6f61642e62696e0b7061796c6f61642e62696e09433a5c736f75726365042e62696e07417263686976650001000f00000000000000200a00008000000000000000000a00008000000000000000000a0000800000000000000000000000000000000000000000000000000000000000000000000b25417070466f6c6465722502000000000000000000000000000000000000000000000000000000000001010000000000e8030000000010000080ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff00010003416c6c044e6f6e650000001c000000000000001584fead0000000100ffff010017004353554653637265656e457865637574655374756666010000006e00000018416e7920696e7374616c6c20666f6c646572207469746c650200000010416e7920646973706c6179207465787400000000000000000000000000000600ffff010008004349524576656e7401000000000a4f6e205072656c6f61640005800100000000074f6e204261636b0005800100000000074f6e204e6578747869662046696c652e446f65734578697374282225417070466f6c646572255c5c656e67696e652e657865222920616e642046696c652e476574435243282225417070466f6c646572255c5c6964656e746974792e6461742229203d3d20313233207468656e2053637265656e2e4e65787428293b20656e6405800100000000094f6e2043616e63656c0005800100000000074f6e2048656c7000058001000000000f4f6e204374726c204d65737361676500000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001000000f3ffffff900100000000000005417269616c0000000001000000f3ffffff900100000000000005417269616c0000000001000000f3ffffff900100000000000005417269616c0000000001000000f3ffffff900100000000000005417269616c0000000001000000f3ffffff900100000000000005417269616c0100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000010000000b25417070466f6c64657225010000000100000000000000000000000000010000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001000000010000000100000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000100000001000000000000000500058001000000000a4f6e20537461727475700005800100000000104f6e2050726520556e696e7374616c6c0005800100000000124f6e20556e696e7374616c6c204572726f720005800100000000114f6e20506f737420556e696e7374616c6c00058001000000000b4f6e2053687574646f776e000100000000000001000001000100000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000100000000000000000000001e0000001e000000010000000a000080000000000000000000000000000000000100000001000000020000000100000000000000146172626974726172792d70726f6a6563742d696400000000000000000100000010000080ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff00000000000000000000000000000000010000000000000000000000000000000000000000000000000000000006000580010000000010476c6f62616c2046756e6374696f6e7300058001000000000a4f6e205374617274757000058001000000000e4f6e2050726520496e7374616c6c0005800100000000104f6e20496e7374616c6c204572726f7200058001000000000f4f6e20506f737420496e7374616c6c00058001000000000b4f6e2053687574646f776e000000000000000a0000800000000000000000",
+        "version": "9.5"
+      }
+    },
+    {
+      "expected": {
+        "coverage": {
+          "bytes": 1801,
+          "complete": true
+        },
+        "decoder": "sf9-graph-v1",
+        "disabled_packages": [],
+        "events": [
+          {
+            "class": "CIREvent",
+            "context": "CSUFScreenInstallFolder:Any install folder title",
+            "name": "On Preload",
+            "offset": 376,
+            "parameters": "",
+            "script": "",
+            "size": 31
+          },
+          {
+            "class": "CIREvent",
+            "context": "CSUFScreenInstallFolder:Any install folder title",
+            "name": "On Back",
+            "offset": 407,
+            "parameters": "",
+            "script": "",
+            "size": 16
+          },
+          {
+            "class": "CIREvent",
+            "context": "CSUFScreenInstallFolder:Any install folder title",
+            "name": "On Next",
+            "offset": 423,
+            "parameters": "",
+            "script": "if File.DoesExist(\"%AppFolder%\\\\engine.exe\") and File.GetCRC(\"%AppFolder%\\\\identity.dat\") == 123 then Screen.Next(); end",
+            "size": 136
+          },
+          {
+            "class": "CIREvent",
+            "context": "CSUFScreenInstallFolder:Any install folder title",
+            "name": "On Cancel",
+            "offset": 559,
+            "parameters": "",
+            "script": "",
+            "size": 18
+          },
+          {
+            "class": "CIREvent",
+            "context": "CSUFScreenInstallFolder:Any install folder title",
+            "name": "On Help",
+            "offset": 577,
+            "parameters": "",
+            "script": "",
+            "size": 16
+          },
+          {
+            "class": "CIREvent",
+            "context": "CSUFScreenInstallFolder:Any install folder title",
+            "name": "On Ctrl Message",
+            "offset": 593,
+            "parameters": "",
+            "script": "",
+            "size": 24
+          },
+          {
+            "class": "CIREvent",
+            "context": "uninstall",
+            "name": "On Startup",
+            "offset": 1199,
+            "parameters": "",
+            "script": "",
+            "size": 19
+          },
+          {
+            "class": "CIREvent",
+            "context": "uninstall",
+            "name": "On Pre Uninstall",
+            "offset": 1218,
+            "parameters": "",
+            "script": "",
+            "size": 25
+          },
+          {
+            "class": "CIREvent",
+            "context": "uninstall",
+            "name": "On Uninstall Error",
+            "offset": 1243,
+            "parameters": "",
+            "script": "",
+            "size": 27
+          },
+          {
+            "class": "CIREvent",
+            "context": "uninstall",
+            "name": "On Post Uninstall",
+            "offset": 1270,
+            "parameters": "",
+            "script": "",
+            "size": 26
+          },
+          {
+            "class": "CIREvent",
+            "context": "uninstall",
+            "name": "On Shutdown",
+            "offset": 1296,
+            "parameters": "",
+            "script": "",
+            "size": 20
+          },
+          {
+            "class": "CIREvent",
+            "context": "project",
+            "name": "Global Functions",
+            "offset": 1647,
+            "parameters": "",
+            "script": "",
+            "size": 25
+          },
+          {
+            "class": "CIREvent",
+            "context": "project",
+            "name": "On Startup",
+            "offset": 1672,
+            "parameters": "",
+            "script": "",
+            "size": 19
+          },
+          {
+            "class": "CIREvent",
+            "context": "project",
+            "name": "On Pre Install",
+            "offset": 1691,
+            "parameters": "",
+            "script": "",
+            "size": 23
+          },
+          {
+            "class": "CIREvent",
+            "context": "project",
+            "name": "On Install Error",
+            "offset": 1714,
+            "parameters": "",
+            "script": "",
+            "size": 25
+          },
+          {
+            "class": "CIREvent",
+            "context": "project",
+            "name": "On Post Install",
+            "offset": 1739,
+            "parameters": "",
+            "script": "",
+            "size": 24
+          },
+          {
+            "class": "CIREvent",
+            "context": "project",
+            "name": "On Shutdown",
+            "offset": 1763,
+            "parameters": "",
+            "script": "",
+            "size": 20
+          }
+        ],
+        "includes": [],
+        "installable": false,
+        "metadata": {
+          "offset": 0,
+          "sha256": "cc02b1d866b33cc16818132259235723819bcf9b5d118077c4c5d6ef9f367a0a",
+          "size": 1801
+        },
+        "objects": [
+          {
+            "class": "CSetupFileData",
+            "offset": 4,
+            "size": 269
+          },
+          {
+            "class": "CIREvent",
+            "offset": 376,
+            "size": 31
+          },
+          {
+            "class": "CIREvent",
+            "offset": 407,
+            "size": 16
+          },
+          {
+            "class": "CIREvent",
+            "offset": 423,
+            "size": 136
+          },
+          {
+            "class": "CIREvent",
+            "offset": 559,
+            "size": 18
+          },
+          {
+            "class": "CIREvent",
+            "offset": 577,
+            "size": 16
+          },
+          {
+            "class": "CIREvent",
+            "offset": 593,
+            "size": 24
+          },
+          {
+            "class": "CSUFScreenInstallFolder",
+            "offset": 277,
+            "size": 667
+          },
+          {
+            "class": "CIREvent",
+            "offset": 1199,
+            "size": 19
+          },
+          {
+            "class": "CIREvent",
+            "offset": 1218,
+            "size": 25
+          },
+          {
+            "class": "CIREvent",
+            "offset": 1243,
+            "size": 27
+          },
+          {
+            "class": "CIREvent",
+            "offset": 1270,
+            "size": 26
+          },
+          {
+            "class": "CIREvent",
+            "offset": 1296,
+            "size": 20
+          },
+          {
+            "class": "CIREvent",
+            "offset": 1647,
+            "size": 25
+          },
+          {
+            "class": "CIREvent",
+            "offset": 1672,
+            "size": 19
+          },
+          {
+            "class": "CIREvent",
+            "offset": 1691,
+            "size": 23
+          },
+          {
+            "class": "CIREvent",
+            "offset": 1714,
+            "size": 25
+          },
+          {
+            "class": "CIREvent",
+            "offset": 1739,
+            "size": 24
+          },
+          {
+            "class": "CIREvent",
+            "offset": 1763,
+            "size": 20
+          }
+        ],
+        "terms": [],
+        "variables": {}
+      },
+      "id": "affa0b3861142ed06999bd035b9c3ba5a80c1164672e8df4bb499b098175a72d",
+      "input": {
+        "data_hex": "00000100ffff01000e0043536574757046696c654461746101000000000b7061796c6f61642e62696e0b7061796c6f61642e62696e09433a5c736f75726365042e62696e07417263686976650001000f00000000000000200a00008000000000000000000a00008000000000000000000a0000800000000000000000000000000000000000000000000000000000000000000000000b25417070466f6c646572250200000000000000000000000000000000000000000000000000000000000001010000000000e8030000000013000080ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff00010003416c6c044e6f6e650000001c000000000000001584fead0000000100ffff010017004353554653637265656e496e7374616c6c466f6c646572010000006e00000018416e7920696e7374616c6c20666f6c646572207469746c650200000010416e7920646973706c6179207465787400000000000000000000000000000600ffff010008004349524576656e7401000000000a4f6e205072656c6f61640005800100000000074f6e204261636b0005800100000000074f6e204e6578747869662046696c652e446f65734578697374282225417070466f6c646572255c5c656e67696e652e657865222920616e642046696c652e476574435243282225417070466f6c646572255c5c6964656e746974792e6461742229203d3d20313233207468656e2053637265656e2e4e65787428293b20656e6405800100000000094f6e2043616e63656c0005800100000000074f6e2048656c7000058001000000000f4f6e204374726c204d65737361676500000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001000000f3ffffff900100000000000005417269616c0000000001000000f3ffffff900100000000000005417269616c0000000001000000f3ffffff900100000000000005417269616c0000000001000000f3ffffff900100000000000005417269616c0000000001000000f3ffffff900100000000000005417269616c010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000010000000b25417070466f6c64657225010000000100000000000000000000000000010000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001000000010000000100000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000100000001000000000000000500058001000000000a4f6e20537461727475700005800100000000104f6e2050726520556e696e7374616c6c0005800100000000124f6e20556e696e7374616c6c204572726f720005800100000000114f6e20506f737420556e696e7374616c6c00058001000000000b4f6e2053687574646f776e000100000000000001000001000100000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000100000000000000000000001e0000001e000000010000000a000080000000000000000000000000000000000100000001000000020000000100000000000000146172626974726172792d70726f6a6563742d696400000000000000000100000013000080ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff00000000000000000000000000000000010000000000000000000000000000000000000000000000000000000006000580010000000010476c6f62616c2046756e6374696f6e7300058001000000000a4f6e205374617274757000058001000000000e4f6e2050726520496e7374616c6c0005800100000000104f6e20496e7374616c6c204572726f7200058001000000000f4f6e20506f737420496e7374616c6c00058001000000000b4f6e2053687574646f776e000000000000000a0000800000000000000000",
+        "version": "9.7"
+      }
+    },
+    {
+      "error": "exe_metadata_trailing_data",
+      "id": "bb13f74b57cefc80274cc84f04953bccb2481dbbd6d1cf20ebf05bb497aca0ed",
+      "input": {
+        "data_hex": "00000100ffff01000e0043536574757046696c654461746101000000000b7061796c6f61642e62696e0b7061796c6f61642e62696e09433a5c736f75726365042e62696e07417263686976650001000f00000000000000200a00008000000000000000000a00008000000000000000000a0000800000000000000000000000000000000000000000000000000000000000000000000b25417070466f6c6465722502000000000000000000000000000000000000000000000000000000000001010000000000e8030000000010000080ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff00010003416c6c044e6f6e650000001c000000000000001584fead0000000100ffff010017004353554653637265656e496e7374616c6c466f6c646572010000006e00000018416e7920696e7374616c6c20666f6c646572207469746c650200000010416e7920646973706c6179207465787400000000000000000000000000000600ffff010008004349524576656e7401000000000a4f6e205072656c6f61640005800100000000074f6e204261636b0005800100000000074f6e204e6578747869662046696c652e446f65734578697374282225417070466f6c646572255c5c656e67696e652e657865222920616e642046696c652e476574435243282225417070466f6c646572255c5c6964656e746974792e6461742229203d3d20313233207468656e2053637265656e2e4e65787428293b20656e6405800100000000094f6e2043616e63656c0005800100000000074f6e2048656c7000058001000000000f4f6e204374726c204d65737361676500000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001000000f3ffffff900100000000000005417269616c0000000001000000f3ffffff900100000000000005417269616c0000000001000000f3ffffff900100000000000005417269616c0000000001000000f3ffffff900100000000000005417269616c0000000001000000f3ffffff900100000000000005417269616c0100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000010000000b25417070466f6c64657225010000000100000000000000000000000000010000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001000000010000000100000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000100000001000000000000000500058001000000000a4f6e20537461727475700005800100000000104f6e2050726520556e696e7374616c6c0005800100000000124f6e20556e696e7374616c6c204572726f720005800100000000114f6e20506f737420556e696e7374616c6c00058001000000000b4f6e2053687574646f776e000100000000000001000001000100000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000100000000000000000000001e0000001e000000010000000a000080000000000000000000000000000000000100000001000000020000000100000000000000146172626974726172792d70726f6a6563742d696400000000000000000100000010000080ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff00000000000000000000000000000000010000000000000000000000000000000000000000000000000000000006000580010000000010476c6f62616c2046756e6374696f6e7300058001000000000a4f6e205374617274757000058001000000000e4f6e2050726520496e7374616c6c0005800100000000104f6e20496e7374616c6c204572726f7200058001000000000f4f6e20506f737420496e7374616c6c00058001000000000b4f6e2053687574646f776e000000000000000a0000800000000000000000756e6578706563746564",
+        "version": "9.5"
+      }
+    },
+    {
+      "expected": {
+        "coverage": {
+          "bytes": 1815,
+          "complete": true
+        },
+        "decoder": "sf9-graph-v1",
+        "disabled_packages": [],
+        "events": [
+          {
+            "class": "CIREvent",
+            "context": "CSUFScreenInstallFolder:Any install folder title",
+            "name": "On Preload",
+            "offset": 390,
+            "parameters": "",
+            "script": "",
+            "size": 31
+          },
+          {
+            "class": "CIREvent",
+            "context": "CSUFScreenInstallFolder:Any install folder title",
+            "name": "On Back",
+            "offset": 421,
+            "parameters": "",
+            "script": "",
+            "size": 16
+          },
+          {
+            "class": "CIREvent",
+            "context": "CSUFScreenInstallFolder:Any install folder title",
+            "name": "On Next",
+            "offset": 437,
+            "parameters": "",
+            "script": "if File.DoesExist(\"%AppFolder%\\\\engine.exe\") and File.GetCRC(\"%AppFolder%\\\\identity.dat\") == 123 then Screen.Next(); end",
+            "size": 136
+          },
+          {
+            "class": "CIREvent",
+            "context": "CSUFScreenInstallFolder:Any install folder title",
+            "name": "On Cancel",
+            "offset": 573,
+            "parameters": "",
+            "script": "",
+            "size": 18
+          },
+          {
+            "class": "CIREvent",
+            "context": "CSUFScreenInstallFolder:Any install folder title",
+            "name": "On Help",
+            "offset": 591,
+            "parameters": "",
+            "script": "",
+            "size": 16
+          },
+          {
+            "class": "CIREvent",
+            "context": "CSUFScreenInstallFolder:Any install folder title",
+            "name": "On Ctrl Message",
+            "offset": 607,
+            "parameters": "",
+            "script": "",
+            "size": 24
+          },
+          {
+            "class": "CIREvent",
+            "context": "uninstall",
+            "name": "On Startup",
+            "offset": 1213,
+            "parameters": "",
+            "script": "",
+            "size": 19
+          },
+          {
+            "class": "CIREvent",
+            "context": "uninstall",
+            "name": "On Pre Uninstall",
+            "offset": 1232,
+            "parameters": "",
+            "script": "",
+            "size": 25
+          },
+          {
+            "class": "CIREvent",
+            "context": "uninstall",
+            "name": "On Uninstall Error",
+            "offset": 1257,
+            "parameters": "",
+            "script": "",
+            "size": 27
+          },
+          {
+            "class": "CIREvent",
+            "context": "uninstall",
+            "name": "On Post Uninstall",
+            "offset": 1284,
+            "parameters": "",
+            "script": "",
+            "size": 26
+          },
+          {
+            "class": "CIREvent",
+            "context": "uninstall",
+            "name": "On Shutdown",
+            "offset": 1310,
+            "parameters": "",
+            "script": "",
+            "size": 20
+          },
+          {
+            "class": "CIREvent",
+            "context": "project",
+            "name": "Global Functions",
+            "offset": 1661,
+            "parameters": "",
+            "script": "",
+            "size": 25
+          },
+          {
+            "class": "CIREvent",
+            "context": "project",
+            "name": "On Startup",
+            "offset": 1686,
+            "parameters": "",
+            "script": "",
+            "size": 19
+          },
+          {
+            "class": "CIREvent",
+            "context": "project",
+            "name": "On Pre Install",
+            "offset": 1705,
+            "parameters": "",
+            "script": "",
+            "size": 23
+          },
+          {
+            "class": "CIREvent",
+            "context": "project",
+            "name": "On Install Error",
+            "offset": 1728,
+            "parameters": "",
+            "script": "",
+            "size": 25
+          },
+          {
+            "class": "CIREvent",
+            "context": "project",
+            "name": "On Post Install",
+            "offset": 1753,
+            "parameters": "",
+            "script": "",
+            "size": 24
+          },
+          {
+            "class": "CIREvent",
+            "context": "project",
+            "name": "On Shutdown",
+            "offset": 1777,
+            "parameters": "",
+            "script": "",
+            "size": 20
+          }
+        ],
+        "includes": [],
+        "installable": false,
+        "metadata": {
+          "offset": 0,
+          "sha256": "dd66ce820c016dd84cd96e5c708fc1e6bad58e0d5dc9d5c139bd9d49002746fa",
+          "size": 1815
+        },
+        "objects": [
+          {
+            "class": "CSetupFileData",
+            "offset": 4,
+            "size": 283
+          },
+          {
+            "class": "CIREvent",
+            "offset": 390,
+            "size": 31
+          },
+          {
+            "class": "CIREvent",
+            "offset": 421,
+            "size": 16
+          },
+          {
+            "class": "CIREvent",
+            "offset": 437,
+            "size": 136
+          },
+          {
+            "class": "CIREvent",
+            "offset": 573,
+            "size": 18
+          },
+          {
+            "class": "CIREvent",
+            "offset": 591,
+            "size": 16
+          },
+          {
+            "class": "CIREvent",
+            "offset": 607,
+            "size": 24
+          },
+          {
+            "class": "CSUFScreenInstallFolder",
+            "offset": 291,
+            "size": 667
+          },
+          {
+            "class": "CIREvent",
+            "offset": 1213,
+            "size": 19
+          },
+          {
+            "class": "CIREvent",
+            "offset": 1232,
+            "size": 25
+          },
+          {
+            "class": "CIREvent",
+            "offset": 1257,
+            "size": 27
+          },
+          {
+            "class": "CIREvent",
+            "offset": 1284,
+            "size": 26
+          },
+          {
+            "class": "CIREvent",
+            "offset": 1310,
+            "size": 20
+          },
+          {
+            "class": "CIREvent",
+            "offset": 1661,
+            "size": 25
+          },
+          {
+            "class": "CIREvent",
+            "offset": 1686,
+            "size": 19
+          },
+          {
+            "class": "CIREvent",
+            "offset": 1705,
+            "size": 23
+          },
+          {
+            "class": "CIREvent",
+            "offset": 1728,
+            "size": 25
+          },
+          {
+            "class": "CIREvent",
+            "offset": 1753,
+            "size": 24
+          },
+          {
+            "class": "CIREvent",
+            "offset": 1777,
+            "size": 20
+          }
+        ],
+        "terms": [],
+        "variables": {}
+      },
+      "id": "bddb883b545459a58b5182b893b492e2bb0381b50be0069c6a531a935df2bb51",
+      "input": {
+        "data_hex": "00000100ffff01000e0043536574757046696c65446174610100000000126172626974726172792d6e616d652e62696e126172626974726172792d6e616d652e62696e09433a5c736f75726365042e62696e07417263686976650001000f00000000000000200a00008000000000000000000a00008000000000000000000a0000800000000000000000000000000000000000000000000000000000000000000000000b25417070466f6c646572250200000000000000000000000000000000000000000000000000000000000001010000000000e8030000000013000080ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff00010003416c6c044e6f6e650000001c000000000000001584fead0000000100ffff010017004353554653637265656e496e7374616c6c466f6c646572010000006e00000018416e7920696e7374616c6c20666f6c646572207469746c650200000010416e7920646973706c6179207465787400000000000000000000000000000600ffff010008004349524576656e7401000000000a4f6e205072656c6f61640005800100000000074f6e204261636b0005800100000000074f6e204e6578747869662046696c652e446f65734578697374282225417070466f6c646572255c5c656e67696e652e657865222920616e642046696c652e476574435243282225417070466f6c646572255c5c6964656e746974792e6461742229203d3d20313233207468656e2053637265656e2e4e65787428293b20656e6405800100000000094f6e2043616e63656c0005800100000000074f6e2048656c7000058001000000000f4f6e204374726c204d65737361676500000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001000000f3ffffff900100000000000005417269616c0000000001000000f3ffffff900100000000000005417269616c0000000001000000f3ffffff900100000000000005417269616c0000000001000000f3ffffff900100000000000005417269616c0000000001000000f3ffffff900100000000000005417269616c010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000010000000b25417070466f6c64657225010000000100000000000000000000000000010000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001000000010000000100000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000100000001000000000000000500058001000000000a4f6e20537461727475700005800100000000104f6e2050726520556e696e7374616c6c0005800100000000124f6e20556e696e7374616c6c204572726f720005800100000000114f6e20506f737420556e696e7374616c6c00058001000000000b4f6e2053687574646f776e000100000000000001000001000100000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000100000000000000000000001e0000001e000000010000000a000080000000000000000000000000000000000100000001000000020000000100000000000000146172626974726172792d70726f6a6563742d696400000000000000000100000013000080ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff00000000000000000000000000000000010000000000000000000000000000000000000000000000000000000006000580010000000010476c6f62616c2046756e6374696f6e7300058001000000000a4f6e205374617274757000058001000000000e4f6e2050726520496e7374616c6c0005800100000000104f6e20496e7374616c6c204572726f7200058001000000000f4f6e20506f737420496e7374616c6c00058001000000000b4f6e2053687574646f776e000000000000000a0000800000000000000000",
+        "version": "9.7"
+      }
+    },
+    {
+      "expected": {
+        "coverage": {
+          "bytes": 1813,
+          "complete": true
+        },
+        "decoder": "sf9-graph-v1",
+        "disabled_packages": [],
+        "events": [
+          {
+            "class": "CIREvent",
+            "context": "CSUFScreenInstallFolder:Any install folder title",
+            "name": "On Preload",
+            "offset": 388,
+            "parameters": "",
+            "script": "",
+            "size": 31
+          },
+          {
+            "class": "CIREvent",
+            "context": "CSUFScreenInstallFolder:Any install folder title",
+            "name": "On Back",
+            "offset": 419,
+            "parameters": "",
+            "script": "",
+            "size": 16
+          },
+          {
+            "class": "CIREvent",
+            "context": "CSUFScreenInstallFolder:Any install folder title",
+            "name": "On Next",
+            "offset": 435,
+            "parameters": "",
+            "script": "if File.DoesExist(\"%AppFolder%\\\\engine.exe\") and File.GetCRC(\"%AppFolder%\\\\identity.dat\") == 123 then Screen.Next(); end",
+            "size": 136
+          },
+          {
+            "class": "CIREvent",
+            "context": "CSUFScreenInstallFolder:Any install folder title",
+            "name": "On Cancel",
+            "offset": 571,
+            "parameters": "",
+            "script": "",
+            "size": 18
+          },
+          {
+            "class": "CIREvent",
+            "context": "CSUFScreenInstallFolder:Any install folder title",
+            "name": "On Help",
+            "offset": 589,
+            "parameters": "",
+            "script": "",
+            "size": 16
+          },
+          {
+            "class": "CIREvent",
+            "context": "CSUFScreenInstallFolder:Any install folder title",
+            "name": "On Ctrl Message",
+            "offset": 605,
+            "parameters": "",
+            "script": "",
+            "size": 24
+          },
+          {
+            "class": "CIREvent",
+            "context": "uninstall",
+            "name": "On Startup",
+            "offset": 1211,
+            "parameters": "",
+            "script": "",
+            "size": 19
+          },
+          {
+            "class": "CIREvent",
+            "context": "uninstall",
+            "name": "On Pre Uninstall",
+            "offset": 1230,
+            "parameters": "",
+            "script": "",
+            "size": 25
+          },
+          {
+            "class": "CIREvent",
+            "context": "uninstall",
+            "name": "On Uninstall Error",
+            "offset": 1255,
+            "parameters": "",
+            "script": "",
+            "size": 27
+          },
+          {
+            "class": "CIREvent",
+            "context": "uninstall",
+            "name": "On Post Uninstall",
+            "offset": 1282,
+            "parameters": "",
+            "script": "",
+            "size": 26
+          },
+          {
+            "class": "CIREvent",
+            "context": "uninstall",
+            "name": "On Shutdown",
+            "offset": 1308,
+            "parameters": "",
+            "script": "",
+            "size": 20
+          },
+          {
+            "class": "CIREvent",
+            "context": "project",
+            "name": "Global Functions",
+            "offset": 1659,
+            "parameters": "",
+            "script": "",
+            "size": 25
+          },
+          {
+            "class": "CIREvent",
+            "context": "project",
+            "name": "On Startup",
+            "offset": 1684,
+            "parameters": "",
+            "script": "",
+            "size": 19
+          },
+          {
+            "class": "CIREvent",
+            "context": "project",
+            "name": "On Pre Install",
+            "offset": 1703,
+            "parameters": "",
+            "script": "",
+            "size": 23
+          },
+          {
+            "class": "CIREvent",
+            "context": "project",
+            "name": "On Install Error",
+            "offset": 1726,
+            "parameters": "",
+            "script": "",
+            "size": 25
+          },
+          {
+            "class": "CIREvent",
+            "context": "project",
+            "name": "On Post Install",
+            "offset": 1751,
+            "parameters": "",
+            "script": "",
+            "size": 24
+          },
+          {
+            "class": "CIREvent",
+            "context": "project",
+            "name": "On Shutdown",
+            "offset": 1775,
+            "parameters": "",
+            "script": "",
+            "size": 20
+          }
+        ],
+        "includes": [],
+        "installable": false,
+        "metadata": {
+          "offset": 0,
+          "sha256": "9b3a7b1d63b5f6d970fc61b891259b9d5b72a75733998257799d6d011361f577",
+          "size": 1813
+        },
+        "objects": [
+          {
+            "class": "CSetupFileData",
+            "offset": 4,
+            "size": 281
+          },
+          {
+            "class": "CIREvent",
+            "offset": 388,
+            "size": 31
+          },
+          {
+            "class": "CIREvent",
+            "offset": 419,
+            "size": 16
+          },
+          {
+            "class": "CIREvent",
+            "offset": 435,
+            "size": 136
+          },
+          {
+            "class": "CIREvent",
+            "offset": 571,
+            "size": 18
+          },
+          {
+            "class": "CIREvent",
+            "offset": 589,
+            "size": 16
+          },
+          {
+            "class": "CIREvent",
+            "offset": 605,
+            "size": 24
+          },
+          {
+            "class": "CSUFScreenInstallFolder",
+            "offset": 289,
+            "size": 667
+          },
+          {
+            "class": "CIREvent",
+            "offset": 1211,
+            "size": 19
+          },
+          {
+            "class": "CIREvent",
+            "offset": 1230,
+            "size": 25
+          },
+          {
+            "class": "CIREvent",
+            "offset": 1255,
+            "size": 27
+          },
+          {
+            "class": "CIREvent",
+            "offset": 1282,
+            "size": 26
+          },
+          {
+            "class": "CIREvent",
+            "offset": 1308,
+            "size": 20
+          },
+          {
+            "class": "CIREvent",
+            "offset": 1659,
+            "size": 25
+          },
+          {
+            "class": "CIREvent",
+            "offset": 1684,
+            "size": 19
+          },
+          {
+            "class": "CIREvent",
+            "offset": 1703,
+            "size": 23
+          },
+          {
+            "class": "CIREvent",
+            "offset": 1726,
+            "size": 25
+          },
+          {
+            "class": "CIREvent",
+            "offset": 1751,
+            "size": 24
+          },
+          {
+            "class": "CIREvent",
+            "offset": 1775,
+            "size": 20
+          }
+        ],
+        "terms": [],
+        "variables": {}
+      },
+      "id": "ecbcd26fddb8d725d9f083c3b195c9eeaa217fab745e336ae8a54f14b6311372",
+      "input": {
+        "data_hex": "00000100ffff01000e0043536574757046696c6544617461010000000011e8a1a5e4b8812de6b58be8af952e62696e11e8a1a5e4b8812de6b58be8af952e62696e09433a5c736f75726365042e62696e07417263686976650001000f00000000000000200a00008000000000000000000a00008000000000000000000a0000800000000000000000000000000000000000000000000000000000000000000000000b25417070466f6c646572250200000000000000000000000000000000000000000000000000000000000001010000000000e8030000000013000080ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff00010003416c6c044e6f6e650000001c000000000000001584fead0000000100ffff010017004353554653637265656e496e7374616c6c466f6c646572010000006e00000018416e7920696e7374616c6c20666f6c646572207469746c650200000010416e7920646973706c6179207465787400000000000000000000000000000600ffff010008004349524576656e7401000000000a4f6e205072656c6f61640005800100000000074f6e204261636b0005800100000000074f6e204e6578747869662046696c652e446f65734578697374282225417070466f6c646572255c5c656e67696e652e657865222920616e642046696c652e476574435243282225417070466f6c646572255c5c6964656e746974792e6461742229203d3d20313233207468656e2053637265656e2e4e65787428293b20656e6405800100000000094f6e2043616e63656c0005800100000000074f6e2048656c7000058001000000000f4f6e204374726c204d65737361676500000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001000000f3ffffff900100000000000005417269616c0000000001000000f3ffffff900100000000000005417269616c0000000001000000f3ffffff900100000000000005417269616c0000000001000000f3ffffff900100000000000005417269616c0000000001000000f3ffffff900100000000000005417269616c010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000010000000b25417070466f6c64657225010000000100000000000000000000000000010000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001000000010000000100000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000100000001000000000000000500058001000000000a4f6e20537461727475700005800100000000104f6e2050726520556e696e7374616c6c0005800100000000124f6e20556e696e7374616c6c204572726f720005800100000000114f6e20506f737420556e696e7374616c6c00058001000000000b4f6e2053687574646f776e000100000000000001000001000100000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000100000000000000000000001e0000001e000000010000000a000080000000000000000000000000000000000100000001000000020000000100000000000000146172626974726172792d70726f6a6563742d696400000000000000000100000013000080ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff00000000000000000000000000000000010000000000000000000000000000000000000000000000000000000006000580010000000010476c6f62616c2046756e6374696f6e7300058001000000000a4f6e205374617274757000058001000000000e4f6e2050726520496e7374616c6c0005800100000000104f6e20496e7374616c6c204572726f7200058001000000000f4f6e20506f737420496e7374616c6c00058001000000000b4f6e2053687574646f776e000000000000000a0000800000000000000000",
+        "version": "9.7"
+      }
+    },
+    {
+      "expected": {
+        "coverage": {
+          "bytes": 1796,
+          "complete": true
+        },
+        "decoder": "sf9-graph-v1",
+        "disabled_packages": [],
+        "events": [
+          {
+            "class": "CIREvent",
+            "context": "CSUFScreenInstallFolder:Any install folder title",
+            "name": "On Preload",
+            "offset": 381,
+            "parameters": "",
+            "script": "",
+            "size": 31
+          },
+          {
+            "class": "CIREvent",
+            "context": "CSUFScreenInstallFolder:Any install folder title",
+            "name": "On Back",
+            "offset": 412,
+            "parameters": "",
+            "script": "",
+            "size": 16
+          },
+          {
+            "class": "CIREvent",
+            "context": "CSUFScreenInstallFolder:Any install folder title",
+            "name": "On Next",
+            "offset": 428,
+            "parameters": "",
+            "script": "if File.DoesExist(\"%AppFolder%\\\\engine.exe\") and File.GetCRC(\"%AppFolder%\\\\identity.dat\") == 123 then Screen.Next(); end",
+            "size": 136
+          },
+          {
+            "class": "CIREvent",
+            "context": "CSUFScreenInstallFolder:Any install folder title",
+            "name": "On Cancel",
+            "offset": 564,
+            "parameters": "",
+            "script": "",
+            "size": 18
+          },
+          {
+            "class": "CIREvent",
+            "context": "CSUFScreenInstallFolder:Any install folder title",
+            "name": "On Help",
+            "offset": 582,
+            "parameters": "",
+            "script": "",
+            "size": 16
+          },
+          {
+            "class": "CIREvent",
+            "context": "CSUFScreenInstallFolder:Any install folder title",
+            "name": "On Ctrl Message",
+            "offset": 598,
+            "parameters": "",
+            "script": "",
+            "size": 24
+          },
+          {
+            "class": "CIREvent",
+            "context": "uninstall",
+            "name": "On Startup",
+            "offset": 1200,
+            "parameters": "",
+            "script": "",
+            "size": 19
+          },
+          {
+            "class": "CIREvent",
+            "context": "uninstall",
+            "name": "On Pre Uninstall",
+            "offset": 1219,
+            "parameters": "",
+            "script": "",
+            "size": 25
+          },
+          {
+            "class": "CIREvent",
+            "context": "uninstall",
+            "name": "On Uninstall Error",
+            "offset": 1244,
+            "parameters": "",
+            "script": "",
+            "size": 27
+          },
+          {
+            "class": "CIREvent",
+            "context": "uninstall",
+            "name": "On Post Uninstall",
+            "offset": 1271,
+            "parameters": "",
+            "script": "",
+            "size": 26
+          },
+          {
+            "class": "CIREvent",
+            "context": "uninstall",
+            "name": "On Shutdown",
+            "offset": 1297,
+            "parameters": "",
+            "script": "",
+            "size": 20
+          },
+          {
+            "class": "CIREvent",
+            "context": "project",
+            "name": "Global Functions",
+            "offset": 1642,
+            "parameters": "",
+            "script": "",
+            "size": 25
+          },
+          {
+            "class": "CIREvent",
+            "context": "project",
+            "name": "On Startup",
+            "offset": 1667,
+            "parameters": "",
+            "script": "",
+            "size": 19
+          },
+          {
+            "class": "CIREvent",
+            "context": "project",
+            "name": "On Pre Install",
+            "offset": 1686,
+            "parameters": "",
+            "script": "",
+            "size": 23
+          },
+          {
+            "class": "CIREvent",
+            "context": "project",
+            "name": "On Install Error",
+            "offset": 1709,
+            "parameters": "",
+            "script": "",
+            "size": 25
+          },
+          {
+            "class": "CIREvent",
+            "context": "project",
+            "name": "On Post Install",
+            "offset": 1734,
+            "parameters": "",
+            "script": "",
+            "size": 24
+          },
+          {
+            "class": "CIREvent",
+            "context": "project",
+            "name": "On Shutdown",
+            "offset": 1758,
+            "parameters": "",
+            "script": "",
+            "size": 20
+          }
+        ],
+        "includes": [],
+        "installable": false,
+        "metadata": {
+          "offset": 0,
+          "sha256": "0a27d7bebe731ff16528a2f6ab1f4a3cf207b89aedf0be039ae8b8de142177e3",
+          "size": 1796
+        },
+        "objects": [
+          {
+            "class": "CSetupFileData",
+            "offset": 4,
+            "size": 274
+          },
+          {
+            "class": "CIREvent",
+            "offset": 381,
+            "size": 31
+          },
+          {
+            "class": "CIREvent",
+            "offset": 412,
+            "size": 16
+          },
+          {
+            "class": "CIREvent",
+            "offset": 428,
+            "size": 136
+          },
+          {
+            "class": "CIREvent",
+            "offset": 564,
+            "size": 18
+          },
+          {
+            "class": "CIREvent",
+            "offset": 582,
+            "size": 16
+          },
+          {
+            "class": "CIREvent",
+            "offset": 598,
+            "size": 24
+          },
+          {
+            "class": "CSUFScreenInstallFolder",
+            "offset": 282,
+            "size": 663
+          },
+          {
+            "class": "CIREvent",
+            "offset": 1200,
+            "size": 19
+          },
+          {
+            "class": "CIREvent",
+            "offset": 1219,
+            "size": 25
+          },
+          {
+            "class": "CIREvent",
+            "offset": 1244,
+            "size": 27
+          },
+          {
+            "class": "CIREvent",
+            "offset": 1271,
+            "size": 26
+          },
+          {
+            "class": "CIREvent",
+            "offset": 1297,
+            "size": 20
+          },
+          {
+            "class": "CIREvent",
+            "offset": 1642,
+            "size": 25
+          },
+          {
+            "class": "CIREvent",
+            "offset": 1667,
+            "size": 19
+          },
+          {
+            "class": "CIREvent",
+            "offset": 1686,
+            "size": 23
+          },
+          {
+            "class": "CIREvent",
+            "offset": 1709,
+            "size": 25
+          },
+          {
+            "class": "CIREvent",
+            "offset": 1734,
+            "size": 24
+          },
+          {
+            "class": "CIREvent",
+            "offset": 1758,
+            "size": 20
+          }
+        ],
+        "terms": [],
+        "variables": {}
+      },
+      "id": "f437e3f6df19059887e46bbf9fc77e6eba06a932317087f5b653395ac894e490",
+      "input": {
+        "data_hex": "00000100ffff01000e0043536574757046696c6544617461010000000011e8a1a5e4b8812de6b58be8af952e62696e11e8a1a5e4b8812de6b58be8af952e62696e09433a5c736f75726365042e62696e07417263686976650001000f00000000000000200a00008000000000000000000a00008000000000000000000a0000800000000000000000000000000000000000000000000000000000000000000000000b25417070466f6c6465722502000000000000000000000000000000000000000000000000000000000001010000000000e8030000000010000080ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff00010003416c6c044e6f6e650000001c000000000000001584fead0000000100ffff010017004353554653637265656e496e7374616c6c466f6c646572010000006e00000018416e7920696e7374616c6c20666f6c646572207469746c650200000010416e7920646973706c6179207465787400000000000000000000000000000600ffff010008004349524576656e7401000000000a4f6e205072656c6f61640005800100000000074f6e204261636b0005800100000000074f6e204e6578747869662046696c652e446f65734578697374282225417070466f6c646572255c5c656e67696e652e657865222920616e642046696c652e476574435243282225417070466f6c646572255c5c6964656e746974792e6461742229203d3d20313233207468656e2053637265656e2e4e65787428293b20656e6405800100000000094f6e2043616e63656c0005800100000000074f6e2048656c7000058001000000000f4f6e204374726c204d65737361676500000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001000000f3ffffff900100000000000005417269616c0000000001000000f3ffffff900100000000000005417269616c0000000001000000f3ffffff900100000000000005417269616c0000000001000000f3ffffff900100000000000005417269616c0000000001000000f3ffffff900100000000000005417269616c0100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000010000000b25417070466f6c64657225010000000100000000000000000000000000010000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001000000010000000100000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000100000001000000000000000500058001000000000a4f6e20537461727475700005800100000000104f6e2050726520556e696e7374616c6c0005800100000000124f6e20556e696e7374616c6c204572726f720005800100000000114f6e20506f737420556e696e7374616c6c00058001000000000b4f6e2053687574646f776e000100000000000001000001000100000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000100000000000000000000001e0000001e000000010000000a000080000000000000000000000000000000000100000001000000020000000100000000000000146172626974726172792d70726f6a6563742d696400000000000000000100000010000080ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff00000000000000000000000000000000010000000000000000000000000000000000000000000000000000000006000580010000000010476c6f62616c2046756e6374696f6e7300058001000000000a4f6e205374617274757000058001000000000e4f6e2050726520496e7374616c6c0005800100000000104f6e20496e7374616c6c204572726f7200058001000000000f4f6e20506f737420496e7374616c6c00058001000000000b4f6e2053687574646f776e000000000000000a0000800000000000000000",
+        "version": "9.5"
+      }
+    }
+  ],
+  "oracle": "Python synthetic test fixtures",
+  "schema_version": 1
+}
