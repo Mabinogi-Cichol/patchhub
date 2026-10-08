@@ -163,6 +163,7 @@ installer/rust-v1/
 ├── journal.sqlite              # 事务日志（DELETE + synchronous=FULL）
 ├── requests.sqlite             # 新请求幂等账本（替代旧顶层 install_requests.sqlite 的读取）
 ├── jobs/<uuid>/{<i>.stage,<i>.backup,revoked,exe-policy.json,owner.json}
+├── tasks/<uuid>/{task.json,lease.json,revoked,owner.lock}  # 任务运行态（终态回收；崩溃残留由 cleanup_stale_tasks 清扫；非恢复材料）
 ├── content/<content_id>/       # 归一新 ZIP / 载荷缓存（可清）
 ├── receipts/<instance_hash>/   # 成功收据（受保护）
 ├── downloads/                  # 动态下载缓存 <sha256>.zip / .partial + <sha256>.json（ETag/Last-Modified sidecar，可清）
@@ -185,7 +186,7 @@ installer/rust-v1/
 
 ### 3.2 与 journal.sqlite 的关系
 
-**【冻结值】** `journal.sqlite` 仍是唯一事务真相源；`jobs/<uuid>/` 中 `.stage/.backup/revoked` 是受保护恢复材料；`content/`、`downloads/`、`reports/` 为可清缓存。`exe-policy.json`（授权收据）受保护。
+**【冻结值】** `journal.sqlite` 仍是唯一事务真相源；`jobs/<uuid>/` 中 `.stage/.backup/revoked` 是受保护恢复材料；`content/`、`downloads/`、`reports/` 为可清缓存。`exe-policy.json`（授权收据）受保护。`tasks/<uuid>/` 为任务运行态（P3 复核后新增）：终态即回收，崩溃残留由 `cleanup_stale_tasks` 按 `owner.lock` 活跃性清扫，**不是恢复材料**；`cleanup_cache` 经该清扫处理已无锁残留，不无锁删除活跃任务。
 
 **【理由】** 现行 `apply`/`restore` 依赖 `.stage/.backup`；`revoked` 是持久撤销标记。**被否替代**：把授权收据放可清目录（会绕过恢复与重装判断）。
 

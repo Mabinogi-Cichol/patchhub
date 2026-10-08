@@ -222,7 +222,7 @@ scan/list_transactions 使用一致只读快照或短时协调，保留 2026-10-
 | worker | 当前 3 GiB 地址空间/CPU 300 秒；通用分析 240 秒、转换 480 秒；无旧 profile 专用转换分支，Windows 等价内存计量待冻结 |
 | 授权/空间 | TTL ≤900 秒；实例唯一写入/受限 worker 并发；state/target 同卷合并预算，含转换、stage 与原文件恢复副本 |
 
-P0 → P1 → P2 → P3 → **P4 Windows 真实验收** → P5 Decky 切换 → P6 收口。各阶段实际状态以[施工记录](progress.md)为准；P1已实现，P2主体已实现/三旧profile待验，P3–P6待实现：
+P0 → P1 → P2 → P3 → **P4 Windows 真实验收** → P5 Decky 切换 → P6 收口。各阶段实际状态以[施工记录](progress.md)为准；P1已实现，P2主体已实现/三旧profile待验，P3已实现并通过双平台自动化与隔离对照（独立复核修复归档 [p3-gate-review.md](p3-gate-review.md)），P4–P6待实现：
 
 | 阶段 | 交付 | 放行门槛 |
 | --- | --- | --- |
@@ -269,3 +269,8 @@ P0 → P1 → P2 → P3 → **P4 Windows 真实验收** → P5 Decky 切换 → 
 P0 待冻结：Windows 支持版本/隔离配置、Rust 解析/解压依赖与许可、worker schema/等价内存限额、来源与安装 ID/确定性编码/版本、新规则必填项与合法默认值、可丢弃来源/安装缓存与受保护设置/恢复材料边界、新状态 schema、锁顺序、取消租约/关闭细节。未冻结不能先以“全部可安装”开放入口。
 
 实施时更新 [契约](../../../packages/contracts/README.md)、[公共安装设计](../../install-design.md)、[来源指南](../../source-adapters.md)、[客户端指南](../../client-guide.md)、[总体架构](../../development-plan.md)、[发布清单](../../release-checklist.md)；按实际阶段修订分工，不提前写成已迁移。设计/功能代码分别提交，本轮仅文档，无 Git 提交；前序未提交改动和历史事实保留。
+
+
+### P3 生产接线细化
+
+[P3 运行时设计](p3-runtime.md)落实固定 worker、严格报告/静态条件、内容身份、空间和持久撤销。每个 request_id 另有独立跨进程认领锁，贯穿任务但不持 journal/game 锁；账本更新同时使用绑定条件 CAS。acquire 前持久 task job，计划产生时立即关联并同步 lease；同实例同内容 EXE 重装要求成功授权/收据且全部 owned 当前 SHA 匹配。Windows LPAC/Job 与 Linux bwrap 单进程生产启动器均执行实际能力探针；Linux 受信宿主必须先将整个 CLI/core 降权，RPC 不提供 uid/gid 参数。临时运行目录有受信 owner marker/锁，启动回收仅处理已拥有且不活跃的崩溃残留。

@@ -1,6 +1,6 @@
 # 跨平台安装器迁移施工记录
 
-设计：[design.md](design.md)。日期：2026-10-08（Asia/Shanghai）。状态：**P1 已实现并通过自动化验证；P2 Rust SF 与固定 worker 主体已实现，双平台自动化与可得真实样本通过，三旧profile回归待验证；P3–P6 待实现/验收**。
+设计：[design.md](design.md)。日期：2026-10-09（Asia/Shanghai）。状态：**P1 已实现并通过自动化验证；P2 Rust SF 与固定 worker 主体已实现，双平台自动化与可得真实样本通过，三旧profile回归待验证；P3 已实现并通过双平台自动化、隔离对照与独立复核（复核修复已归档 [p3-gate-review.md](p3-gate-review.md)）；P4–P6 待实现/实机验收**。
 
 ## 当前状态
 
@@ -12,7 +12,7 @@
 | P0 契约/样本/平台隔离 | 契约冻结定稿并通过 Gate 1；Windows 原型完成；Linux/Deck 对照与 root 降权补测通过 | 契约 v0.5（encoding/ID/schema/锁/worker/限额/依赖冻结，Gate 1 终审通过）；Windows LPAC+Job 原型 31 项探针 27 pass；Linux bwrap 原型 22 项在 WSL2 与 SteamOS Deck 均为 21 pass/0 fail/1 info；P0-D 修订后非 root 回归 23 项与 WSL root 降权补测 26 项均 0 fail；cgroup/seccomp 与 P1+ 待执行 |
 | P1 共享 ZIP 服务 | 已实现/自动化验证 | 获取/缓存/配方/新授权与新 schema；来源 Rust 编码、当前规则契约和直接初始化 |
 | P2 Rust SF 与 worker | 主体已实现/双平台自动化与可得真实样本通过；三旧profile待验 | SF9.5–9.7 完整结构/AST/IR/固定worker/确定性转换；P3生产接线待实现 |
-| P3 隔离/授权/任务 | 待实现 | 双平台启动、facts/撤销/互斥/进度/恢复 |
+| P3 隔离/授权/任务 | 已实现/自动化与隔离验证；独立复核修复完成 | 生产启动器、EXE 编排、facts/空间/撤销/任务回收；双平台 release 证据与 [复核归档](p3-gate-review.md) |
 | P4 Windows | 待实现/待实机验证 | 2303800 EXE、动态/签名 ZIP、恢复/重装；移除旧核心来源降级 |
 | P5 Decky | 待实现/待实机验证 | 旧任务收尾、新 schema 初始化、删除安装来源适配/引擎检查点、薄桥接与正式包/RPC/QAM/全屏/手柄 |
 | P6 收口 | 待实现/待验收 | 单一生产策略、移除 Python SF 依赖、来源兼容遗留逐项检查、打包与文档 |
@@ -305,3 +305,51 @@ P2主体已实现，双平台自动化与可得SF9.5/9.6/9.7三份真实样本�
 - 本次文档提交归档P2设计、独立审查、契约增量、施工记录和功能索引；保留2026-10-08各轮验证与未提交时的历史事实。
 - 沿用本session已有双平台52项相关测试、各9/9隔离对照与构建记录，未重复运行。提交前工作区/暂存区空白、文件范围及合成黄金检查通过；未纳入真实安装包、构建产物或 `.artifacts/` 验收材料。
 - 三旧profile回归和P3–P6/两端实机状态未改变；未推送、打tag或改写历史。
+
+
+## 2026-10-09 — P3 开发启动（待验证）
+
+- 实施范围：[P3 生产运行时](p3-runtime.md)：固定隔离 worker 生产启动器、EXE 来源选择/内容身份、下载公共 IP 连接绑定、严格报告与现场条件核验、空间预算、任务租约及持久撤销、CLI 能力探测与 EXE 接线。
+- 使用 Sol 子 Agent 分担启动器、纯报告/条件/空间与独立安全复核；不使用 Astra。
+- 此时仅进入开发，不表示实现/自动化/实机验收完成。P4 Windows 版本矩阵/真实安装及 P5 Decky 部署不在本次操作范围。
+
+## 2026-10-09 P3 实施、复核修复与双平台证据
+
+### 用户目标与本轮范围
+
+用户说明 P3 施工进行到一半，要求继续完成剩余任务。本轮在既有工作区实现基础上：确认编译与测试状态、补齐独立复核修复（M1/M2/R1）、完成双平台真实样本与隔离证据、归档复核并回写功能文档；并裁定 P3 验收自动化必须使用 release worker。未执行：P4 Windows 真安装、P5 Decky 部署、三条旧 profile 真包回归（样本不在仓库）。未创建 Git 提交。
+
+### 实际实现（P3 生产运行时与 EXE 编排）
+
+- **worker 生产启动器**（`crates/installer-worker/src/production.rs`）：受信宿主注入的固定 `WorkerRuntime`（exe/stage/run_as 均不由 RPC 提供）；`probe()` 真实执行固定 worker（inert 无效输入必须以 `not_pe` 失败）；每次调用私有 staging（`owner.lock`/`owner.json`、跨进程锁、崩溃残留回收）；`copy_bound` 身份核验后复制输入，只读绑定；派发 descriptor 严格解析（动作/摘要/大小/载荷清单，16 MiB 上限）；超时 analyze 180s / analyze_behavior 240s / convert_behavior 480s、内存 3 GiB、单进程、CPU 300s、输出 16 MiB/64 KiB fail-closed、取消轮询、父退出回收；响应二次校验（binding、路径/动作不可被响应篡改）。
+- **双平台启动器生产化**：Windows LPAC+Job（`PROC_THREAD_ATTRIBUTE_ALL_APPLICATION_PACKAGES_POLICY`、`JOB_LIST`、句柄白名单与 PipeHandles Drop、`WAIT_TIMEOUT` 处理、profile 清理）；Linux bwrap（`run_sandboxed_cancellable`、seccomp 单进程过滤器 deny `clone/fork/vfork/clone3`、root 宿主强制显式非 root `run_as`、`PR_SET_PDEATHSIG`、`env_clear`、`OVERFLOW_IO`）。
+- **core EXE 编排**（`installer/{exe_orchestrator,exe_report,exe_resolve,space,task}.rs`）：来源缓存重算 selection 与解析；EXE 获取（download_hosts 白名单、公共 IP 解析并 `resolve_to_addrs` 绑定连接、`no_proxy`、MZ 魔数）；报告严格校验（exe sha/size、metadata/behavior/有序载荷摘要、`installable=false` 不授权、未知动作/字段/数值/深度拒绝）；静态条件求值（`GameFacts` + 重装证据，仅 owned 且当前 SHA 匹配可复用原条件）；空间预算（下载/转换/stage/原文件恢复，同卷合并，`insufficient_space`）；任务控制（acquire 前建立任务 job；撤销/租约先持久 `revoked`/`lease.json` 再触发有效取消）；apply 前重核（fresh resolve + facts + condition + report 读回 + artifact 重哈希）。
+- **CLI 接线**（`crates/cli/src/runtime.rs`）：`install_patch` 按 `exe-selection-` 前缀路由；`get_capabilities` 返回真实沙箱可用性；scan/preview EXE 投影；`cleanup_cache` 接入任务清扫。
+- **获取扩展**（`installer/acquire.rs`）：`acquire_exe_with`（2 GiB、MZ、`.exe` 路径）与公共 IP 策略测试。
+
+### 独立复核与修复
+
+[独立复核](p3-gate-review.md)（只读 oracle）：**有条件放行**。必修 M1（任务目录无回收、报告写入受保护 `jobs/`）、M2（只读路径写 installer root 且逐候选起沙箱）；契约偏离 R1（EXE 投影 release_id 冒充选择身份）。修复：
+- M1：任务运行态迁移 `tasks/<uuid>/`（owner.lock 排它锁、终态回收、`cleanup_stale_tasks` 崩溃残留清扫、cleanup_cache 接入）；`report.json`/`space.json` 改落 `reports/<content_id>/`。
+- M2：`exe_sandbox_availability` 进程内缓存 + OS 临时 staging，只读路径不写 installer state；安装路由保持状态根 staging 与运行时重探。
+- R1：EXE 投影 `release_id` 改 `dynamic_release_id(source_id, appid)` 并去重，`selection_id` 仍为路由句柄。
+- R2/R3/R5/R6/R7/R8 建议项登记（[p3-gate-review.md](p3-gate-review.md) §3），不阻塞 P3。
+
+### 验证方式与结果
+
+- **修复后自动化（最终代码）**：Windows `cargo test -p steam-patch-core -p steam-patch-cli` → core lib 249 passed / 4 ignored，集成 catalog 8 / install 40 / localized 4 / steam_scan 6 / trust 3 全绿，cli 36 passed；WSL2（Ubuntu 22.04）core lib 250 passed / 4 ignored、cli 36 passed。两平台 `cargo clippy -p steam-patch-core -p steam-patch-cli -p steam-patch-installer-worker --all-targets -- -D warnings` 通过；本次改动文件 rustfmt 通过（`apps/windows/src-tauri/src/main.rs` 的既有格式差异为 HEAD 遗留，非本次引入）。
+- **双平台 ignored 生产测试（release worker）**：`precancel_persists_revocation_without_worker_or_game_writes`、`sandbox_to_authorization_install_retry_reinstall_and_external_edit`（沙箱→报告→授权→安装→幂等→重装→外部修改拒绝）、`production_available_real_samples_admitted_and_converted` 在 Windows 与 WSL2 全通过（Windows 957s / WSL 1040s，含 3 份真实样本）。
+- **真实样本产物摘要**（双平台一致且与 P2 冻结基准 3/3 全等）：`.artifacts/p3-production/windows-real-sf.json`、`.artifacts/p3-production/linux-real-sf.json`——2303800 `e7e232c1…`（1,373,855,199）、3606360 `6d8c5d92…`（1,296,894,639）、3721970 `24c2fbca…`（914,931,193）。
+- **隔离对照**（`.artifacts/p3-production/{windows,linux,linux-root}-controls.json`，P3 早期会话产出）：17/18/17 项全 pass（stage 权限失败、canary、子进程拒绝、只读输入、禁网、env 清理、fd 泄漏、取消、超输出、父退出回收、janitor 保留/回收、超时回收）。
+- **失败定位与裁定**：debug worker 无法在 300s CPU 限额内完成 1.2 GiB 样本转换（Windows 311s 后 `0xC0000142`、WSL `exit=137`）；release worker 59s 成功、摘要一致。P3 验收命令固定 release worker（`SF_WORKER_TEST_BIN`；`core-linux-check.sh`/`run-linux-check.sh` 已改为构建并使用 release）。
+
+### 未执行（保持待验证）
+
+- Windows 标准 Win11 零售机 LPAC/版本矩阵（P4 发布条件）；SteamOS Deck 实机部署与插件集成（P5）；三条旧 profile 真实包回归（样本不在仓库，沿用 P2 待验记录）。
+- P0 登记的 Deck root 形态（Decky Loader 降权链路）与 cgroup v2/seccomp 生产配置在实机上的最终验证（P5）。
+
+### 待办
+
+1. P4：Windows 页面动态安装接线（传 `selection_id`，不再以投影 `release_id` 作为动态路由句柄）与动态 ZIP/EXE 实机路径。
+2. P5：Decky 宿主降权、任务收尾、新 schema 初始化与部署验证。
+3. 提交：按用户明确要求另行执行（代码/文档分提交）。
