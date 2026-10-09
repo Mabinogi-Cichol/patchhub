@@ -29,7 +29,7 @@ runInNewContext(output, { exports, require: (id: string) => {
   return require(id);
 } });
 function task(state: TaskSnapshot["state"]): TaskSnapshot {
-  return { task_id: "one", kind: "install", state, stage: "writing", bytes_done: 5,
+  return { task_id: "one", kind: "install", state, stage: "applying", substage: "writing", bytes_done: 5,
     total_bytes: 10, files_done: 1, total_files: 2, current_file: "data.bin", archive_bytes: 10,
     elapsed_seconds: 1, speed_bps: 0, eta_seconds: null, result: null, error: null };
 }
@@ -68,4 +68,35 @@ test("recovery failure and interrupted work never claim safe cancellation", () =
   assert.doesNotMatch(html, /已安全取消/);
   value.result = null; value.error = "task_interrupted";
   assert.match(renderToStaticMarkup(React.createElement(exports.TaskResultView, { task: value, onClose() {} })), /仍需检查并恢复原文件/);
+});
+
+
+test("all nine installer stages and applying substages render native progress", () => {
+  const stages = {
+    connecting: "正在连接", downloading: "下载补丁", validating: "校验文件",
+    analyzing_installer: "分析安装包", extracting: "提取文件", planning: "检查安装条件",
+    applying: "写入文件", rolling_back: "恢复原文件", cleanup: "清理临时文件",
+  };
+  for (const [stage, label] of Object.entries(stages)) {
+    const html = renderToStaticMarkup(React.createElement(exports.TaskProgressView, {
+      task: { ...task("running"), stage, substage: null }, game: "游戏", patch: "补丁", onClose() {},
+    }));
+    assert.match(html, new RegExp(label), stage);
+  }
+  for (const [substage, label] of [["backing_up", "保护现有文件"], ["writing", "写入文件"], ["committing", "提交安装"]]) {
+    const html = renderToStaticMarkup(React.createElement(exports.TaskProgressView, {
+      task: { ...task("running"), substage }, game: "游戏", patch: "补丁", onClose() {},
+    }));
+    assert.match(html, new RegExp(label), substage);
+  }
+});
+
+test("recovery metadata overrides a cancelled-looking host state", () => {
+  const value = task("cancelled");
+  value.result = { transaction_id: "tx", instance_id: "game", release_id: "patch", state: "needs_recovery",
+    recovery: { required: true, code: "recovery_conflict", detail: "game file changed" } };
+  const html = renderToStaticMarkup(React.createElement(exports.TaskResultView, { task: value, onClose() {} }));
+  assert.match(html, /仍需检查并恢复原文件/);
+  assert.match(html, /game file changed/);
+  assert.doesNotMatch(html, /已安全取消/);
 });

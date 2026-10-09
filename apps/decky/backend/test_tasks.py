@@ -31,20 +31,22 @@ class ControlledProcess:
         self.messages.append(payload)
         if self.request is None:
             self.request = json.loads(payload)
-            self.emit({"event": "progress", "progress": {"stage": "writing", "bytes_done": 12,
-                "total_bytes": 24, "files_done": 0, "total_files": 1, "archive_bytes": None}})
+            self.emit({"event": "install_progress", "protocol_version": 3, "request_id": self.request["request_id"],
+                "instance_id": "instance", "selection_id": None, "sequence": 0, "stage": "applying", "bytes_done": 12,
+                "total_bytes": 24, "files_done": 0, "total_files": 1, "archive_bytes": 48})
             if not self.restoring:
                 self.finish("committed")
         else:
             self.cancel_received.set()
-            self.emit({"event": "progress", "progress": {"stage": "rolling_back", "bytes_done": 0,
-                "total_bytes": None, "files_done": 0, "total_files": None}})
+            self.emit({"event": "install_progress", "protocol_version": 3, "request_id": self.request["request_id"],
+                "instance_id": "instance", "selection_id": None, "sequence": 1, "stage": "rolling_back", "bytes_done": 0,
+                "total_bytes": None, "files_done": 0, "total_files": None})
 
     def emit(self, value):
         self.stdout.feed_data(json.dumps(value).encode() + b"\n")
 
     def finish(self, state):
-        self.emit({"protocol_version": 2, "request_id": self.request["request_id"], "ok": True,
+        self.emit({"protocol_version": 3, "request_id": self.request["request_id"], "ok": True,
             "result": {"state": state, "error": "task_cancelled" if state == "rolled_back" else None}})
         self.returncode = 0
         self.stdout.feed_eof()
@@ -70,7 +72,7 @@ class ControlledBridgeTests(unittest.IsolatedAsyncioTestCase):
     async def test_progress_preserves_known_archive_size_and_uses_controlled_process(self):
         process = ControlledProcess()
         with patch("bridge.asyncio.create_subprocess_exec", return_value=process) as spawn:
-            result = await self.bridge.start_install("plan")
+            result = await self.bridge.install_patch("instance", "release")
         self.assertEqual(spawn.call_args.args[1], "serve-task")
         self.assertEqual(result["state"], "committed")
         self.assertEqual(self.task.snapshot()["bytes_done"], 12)
@@ -80,9 +82,9 @@ class ControlledBridgeTests(unittest.IsolatedAsyncioTestCase):
         process = ControlledProcess(restoring=True)
         self.task.request_cancel()
         with patch("bridge.asyncio.create_subprocess_exec", return_value=process):
-            call = asyncio.create_task(self.bridge.start_install("plan"))
+            call = asyncio.create_task(self.bridge.install_patch("instance", "release"))
             await asyncio.wait_for(process.cancel_received.wait(), 1)
-            self.assertEqual(json.loads(process.messages[0])["method"], "start_install")
+            self.assertEqual(json.loads(process.messages[0])["method"], "install_patch")
             self.assertEqual(process.messages[1], b"cancel\n")
             await asyncio.sleep(.01)
             self.assertFalse(call.done())
@@ -93,7 +95,7 @@ class ControlledBridgeTests(unittest.IsolatedAsyncioTestCase):
     async def test_cancelling_rpc_waits_for_durable_rollback_receipt(self):
         process = ControlledProcess(restoring=True)
         with patch("bridge.asyncio.create_subprocess_exec", return_value=process):
-            call = asyncio.create_task(self.bridge.start_install("plan"))
+            call = asyncio.create_task(self.bridge.install_patch("instance", "release"))
             while process.request is None:
                 await asyncio.sleep(0)
             call.cancel()

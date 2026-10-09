@@ -11,11 +11,12 @@ from threading import Event
 
 
 class ScanSession:
-    def __init__(self, report, refresh, scan_sources, project, current):
+    def __init__(self, report, refresh, scan_sources, project, current, project_on_update=True):
         self.report = copy.deepcopy(report)
         self.refresh = refresh
         self.scan_sources = scan_sources
         self.project = project
+        self.project_on_update = project_on_update
         self.current = current
         self._cancel = Event()
         self.rows = [row for row in self.report["installs"] if row["game"].get("availability") == "installed"]
@@ -62,7 +63,8 @@ class ScanSession:
             row["discovery"] = {key: discovery.get(key, [])
                                 for key in ("status", "candidates", "diagnostics")}
             try:
-                await self.project(row)
+                if self.project_on_update:
+                    await self.project(row)
             except asyncio.CancelledError:
                 raise
             except Exception as error:
@@ -78,7 +80,7 @@ class ScanSession:
                     raise
                 except Exception as error:
                     self._fail(error)
-            if not self.current():
+            if self._cancel.is_set() or not self.current():
                 return
             try:
                 await self.scan_sources(self.on_event, self._cancel)

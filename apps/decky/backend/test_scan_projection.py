@@ -22,58 +22,40 @@ def entry(release="zip-release"):
 
 
 class ProjectionTests(unittest.IsolatedAsyncioTestCase):
-    def plugin(self, entries=None, bridges=None):
+    async def test_projection_uses_rust_selection_and_receipt_without_python_policy(self):
+        patch_result = {"release_id": "source-official-1", "selection_id": "zip-selection-id-1",
+            "support_level": "publisher_zip", "detection": {"status": "partial"},
+            "blockers": ["source_disabled"], "download_available": False}
+        core_row = {"game": game(), "patches": [patch_result], "discovery": {"status": "cache_complete"}}
         plugin = module.Plugin()
-        plugin.sources = types.SimpleNamespace(
-            list_game_sources=lambda _game: [],
-            list_sources=lambda: [{"id": "official", "name": "Official", "status": "fresh"}])
-        plugin.publisher = types.SimpleNamespace(matches=lambda _game: entries if entries is not None else [entry()],
-                                                 bridges=lambda: bridges or [])
-        plugin.exe_installation = None
-        return plugin
+        plugin.bridge = types.SimpleNamespace(scan=AsyncMock(return_value={"installs": [core_row]}))
+        from unittest.mock import Mock
+        plugin.sources = types.SimpleNamespace(prime=Mock())
+        row = {"game": game(), "patches": [{"release_id": "stale"}]}
+        await plugin._project_row(row)
+        self.assertEqual(row, core_row)
+        plugin.sources.prime.assert_called_once()
 
-    async def project(self, plugin, installed_game=None, transactions=None, discovery=None):
-        row = {"game": installed_game or game(), "patches": [],
-               "discovery": discovery or {"status": "complete", "candidates": [], "diagnostics": []}}
-        with patch.object(module, "_released", return_value=True):
-            await plugin._project_row(row, transactions or [])
-        return row
+    async def test_read_report_preserves_shared_projection(self):
+        report = {"installs": [{"game": game(), "patches": [{"selection_id": "exe-selection-current-1"}]}],
+                  "sources": [], "settings_revision": 4}
+        plugin = module.Plugin()
+        plugin.bridge = types.SimpleNamespace(scan=AsyncMock(return_value=report))
+        from unittest.mock import Mock
+        plugin.sources = types.SimpleNamespace(prime=Mock(), settings_revision=4)
+        plugin._scan_generation = 2
+        result = await plugin._read_report()
+        self.assertEqual(result["installs"], report["installs"])
+        self.assertEqual(result["generation"], 2)
 
-    async def test_supported_zip_is_available_but_unverified_build_is_source_only(self):
-        plugin = self.plugin()
-        ready = await self.project(plugin)
-        self.assertTrue(ready["patches"][0]["auto_installable"])
-        blocked = await self.project(plugin, installed_game=game(buildid=None))
-        self.assertFalse(blocked["patches"][0]["auto_installable"])
-        self.assertIn("build_not_verified", blocked["patches"][0]["blockers"])
 
-    async def test_hgamer_fallback_remains_discovery_only(self):
-        plugin = self.plugin(entries=[])
-        row = await self.project(plugin, discovery={"status": "complete", "candidates": [
-            {"candidate_id": "hgamer-1", "source_id": "hgamer", "match_basis": "appid"}], "diagnostics": []})
-        self.assertEqual(row["patches"], [])
-        self.assertEqual(row["match_status"], "matched")
-        self.assertEqual(row["discovery"]["candidates"][0]["source_id"], "hgamer")
-
-    async def test_committed_owned_partial_files_allow_same_release_reinstall(self):
-        observed = {"catalog_trust": "signed", "installs": [{"game": game(), "patches": [
-            {"release_id": "zip-release", "detection": {"status": "partial", "files": []}, "blockers": []}]}]}
-        local = types.SimpleNamespace(scan=AsyncMock(return_value=observed))
-        plugin = self.plugin(bridges=[("local", "zip-release", local)])
-        row = await self.project(plugin, transactions=[
-            {"instance_id": "local", "release_id": "zip-release", "state": "committed"}])
-        patch_result = row["patches"][0]
-        self.assertEqual(patch_result["detection"]["status"], "partial")
-        self.assertTrue(patch_result["auto_installable"])
-        self.assertTrue(patch_result["reinstall_available"])
-
-    async def test_other_release_and_unfinished_recovery_block_install(self):
-        plugin = self.plugin()
-        other = await self.project(plugin, transactions=[
-            {"instance_id": "local", "release_id": "different", "state": "committed"}])
-        self.assertFalse(other["patches"][0]["auto_installable"])
-        self.assertIn("publisher_existing_transaction", other["patches"][0]["blockers"])
-        interrupted = await self.project(plugin, transactions=[
-            {"instance_id": "local", "release_id": "zip-release", "state": "needs_recovery"}])
-        self.assertFalse(interrupted["patches"][0]["auto_installable"])
-        self.assertIn("managed_install_exists_or_needs_recovery", interrupted["patches"][0]["blockers"])
+    async def test_source_refresh_batches_all_rows_into_one_core_scan(self):
+        from unittest.mock import Mock
+        rows = [{"game": {**game(), "instance_id": identity}, "patches": []} for identity in ("one", "two")]
+        plugin = module.Plugin()
+        plugin.bridge = types.SimpleNamespace(scan=AsyncMock(return_value={"installs": rows, "sources": []}))
+        plugin.sources = types.SimpleNamespace(prime=Mock())
+        report = {"installs": [{"game": dict(row["game"]), "patches": [{"release_id": "old"}]} for row in rows]}
+        await plugin._refresh_rows(report)
+        plugin.bridge.scan.assert_awaited_once()
+        self.assertEqual(report["installs"], rows)

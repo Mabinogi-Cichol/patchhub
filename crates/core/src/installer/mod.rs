@@ -15,6 +15,7 @@ pub mod exe_report;
 pub mod exe_resolve;
 pub mod facts;
 pub mod orchestrator;
+pub mod preexisting;
 pub mod requests;
 pub mod resolve;
 pub mod space;

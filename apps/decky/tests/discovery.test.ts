@@ -61,3 +61,13 @@ test("only a complete empty query says no patch was found", () => {
     assert.doesNotMatch(discoverySummary(game), /未找到/);
   }
 });
+
+
+test("dynamic variants with one display release retain distinct selections", () => {
+  const game = row();
+  game.patches = ["zip-selection-a", "zip-selection-b"].map(selection_id => ({
+    release_id: "publisher-7", selection_id, name: "ZIP", source_page: "https://example.test/",
+    support_level: "publisher_zip", compatibility: "unknown", blockers: [], detection: { status: "unknown", files: [] }
+  }));
+  assert.deepEqual(displayPatches(game).filter(item => item.kind === "installable").map(item => item.key), ["zip-selection-a", "zip-selection-b"]);
+});

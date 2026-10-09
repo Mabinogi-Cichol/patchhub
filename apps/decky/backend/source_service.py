@@ -1,75 +1,23 @@
-"""Thin snapshot adapter over the shared Rust source engine.
-
-`SourceService` is duck-type equal to the retired `sources.SourceRegistry` so the
-existing publisher/EXE consumers stay unchanged: sync reads come from the last
-`scan` snapshot, local writes go through a one-shot `serve` call, and network
-work (`refresh`/`scan_sources`/`discover_game`) is streamed by Rust under
-`serve-task`. Matching, TTL, candidate validation and concurrency are Rust-owned
-and are not re-implemented here.
-"""
-import re
+"""Source display/subscription snapshots; all discovery and installation belong to Rust."""
 from pathlib import Path
+from bridge import METHODS, PROTOCOL_VERSION
 
-from source_primitives import allowed_url
-
-# `list_sources` summary keys that are not part of the rule dict.
-SOURCE_SUMMARY_KEYS = {"status", "entry_count", "cached_at", "checked_at", "origin"}
-# Methods the adapter depends on to serve scans/subscriptions; a core missing
-# any of them is demoted to Python. `get_source_settings`/`list_source_matches`/
-# `get_source_policy` are used only for optional export or Windows-host reads.
 REQUIRED_METHODS = frozenset({
     "get_capabilities", "list_sources", "list_game_sources", "set_source_enabled",
-    "add_source", "set_game_source", "refresh_sources", "scan_sources",
-    "discover_game", "get_source_state",
+    "add_source", "set_game_source", "refresh_sources", "scan_sources", "discover_game",
 })
 ENGINE = "rust"
-
-
-def normalize_diagnostics(values):
-    """Coerce arbitrary diagnostic payloads into `{"code": ...}` dicts."""
-    if not isinstance(values, list):
-        return []
-    clean = []
-    for value in values:
-        if isinstance(value, dict) and isinstance(value.get("code"), str):
-            clean.append(dict(value))
-        elif isinstance(value, str):
-            clean.append({"code": value[:200]})
-    return clean
-
-
-def aggregate_import_diagnostics(import_report):
-    """Flatten an `ImportReport` into diagnostics plus first-import count markers."""
-    if not isinstance(import_report, dict):
-        return []
-    result = []
-    if import_report.get("imported_settings"):
-        result.append({"code": "source_settings_imported"})
-    for key, code in (("imported_cache", "source_cache_imported"),
-                      ("imported_discovery", "source_discovery_imported"),
-                      ("imported_index", "source_index_imported")):
-        count = import_report.get(key)
-        if type(count) is int and count > 0:
-            result.append({"code": code, "detail": str(count)})
-    result.extend(normalize_diagnostics(import_report.get("diagnostics")))
-    return result
 
 
 class SourceService:
     engine = ENGINE
 
-    def __init__(self, bridge, state_dir, config_path=None):
+    def __init__(self, bridge, state_dir):
         self.bridge = bridge
         self._state_root = Path(state_dir).absolute()
         self.state_dir = self._state_root / "sources"
-        # `config_path` is accepted for callers that still pass the legacy
-        # sources.json path; the Rust engine owns rules and needs no local file.
-        self.config_path = Path(config_path) if config_path is not None else None
         self.settings_revision = 0
         self.diagnostics = []
-        self._import_diagnostics = []
-        self._rules = []
-        self.builtins = []
         self._summaries = []
         self._rows = {}
         self._rows_by_instance = {}
@@ -80,16 +28,10 @@ class SourceService:
     async def initialize(self):
         caps = await self.bridge.call_sync("get_capabilities", {})
         methods = caps.get("methods") if isinstance(caps, dict) else None
-        if not isinstance(methods, list) or not REQUIRED_METHODS.issubset(set(methods)):
+        if (not isinstance(methods, list) or set(methods) != METHODS
+                or caps.get("protocol_version") != PROTOCOL_VERSION):
             raise ValueError("source_capability_unavailable")
         self._apply_summaries(await self.bridge.call_sync("list_sources", {}))
-        state = await self.bridge.call_sync("get_source_state", {})
-        if isinstance(state, dict):
-            revision = state.get("settings_revision")
-            if type(revision) is int:
-                self.settings_revision = revision
-            self._import_diagnostics = aggregate_import_diagnostics(state.get("import_report"))
-        self.diagnostics = list(self._import_diagnostics)
         return self
 
     def prime(self, scan_report):
@@ -110,7 +52,6 @@ class SourceService:
             entry = {
                 "sources": row.get("sources") if isinstance(row.get("sources"), list) else None,
                 "discovery": row.get("discovery") if isinstance(row.get("discovery"), dict) else None,
-                "matches": row.get("matches") if isinstance(row.get("matches"), list) else None,
             }
             if type(game.get("appid")) is int:
                 rows[game["appid"]] = entry
@@ -129,10 +70,10 @@ class SourceService:
             return
         clean = [dict(item) for item in summaries if isinstance(item, dict)]
         self._summaries = clean
-        self._rules = [{key: value for key, value in item.items() if key not in SOURCE_SUMMARY_KEYS}
-                       for item in clean]
-        self.builtins = [{key: value for key, value in item.items() if key not in SOURCE_SUMMARY_KEYS}
-                         for item in clean if item.get("origin") == "builtin"]
+        for item in clean:
+            revision = item.get("settings_revision")
+            if type(revision) is int:
+                self.settings_revision = max(self.settings_revision, revision)
 
     def _entry(self, game):
         if not isinstance(game, dict):
@@ -157,27 +98,6 @@ class SourceService:
         return [{**item, "subscribed": self.game_subscribed(appid, item.get("id")),
                  "matched": bool(item.get("matched", False))} for item in self._summaries]
 
-    def matches(self, game, *, include_disabled=False):
-        entry = self._entry(game)
-        stored = entry["matches"] if entry is not None else None
-        if stored is None:
-            return []
-        result = []
-        for match in stored:
-            if not isinstance(match, dict):
-                continue
-            if not include_disabled and (match.get("enabled") is False or match.get("subscribed") is False):
-                continue
-            result.append(dict(match))
-        return result
-
-    def cached_candidates(self, game):
-        entry = self._entry(game)
-        discovery = entry["discovery"] if entry is not None else None
-        if not isinstance(discovery, dict):
-            return []
-        return [dict(candidate) for candidate in discovery.get("candidates", [])]
-
     def cached_discovery(self, game):
         entry = self._entry(game)
         discovery = entry["discovery"] if entry is not None else None
@@ -200,23 +120,6 @@ class SourceService:
                         return bool(source.get("subscribed", True))
         return True
 
-    def source_for_release(self, release_id):
-        if not isinstance(release_id, str):
-            return None
-        for rule in self._rules:
-            if rule.get("discovery_only"):
-                continue
-            prefix = "patchmoe-" if rule["id"] == "patchmoe" else f"source-{rule['id']}-"
-            if release_id.startswith(prefix) and re.fullmatch(r"[1-9][0-9]*", release_id[len(prefix):]):
-                return dict(rule)
-        return None
-
-    def validate_download(self, source_id, url):
-        rule = next((r for r in self._rules if r["id"] == source_id and r.get("enabled")), None)
-        if rule is None or rule.get("discovery_only"):
-            raise ValueError("source_not_enabled")
-        return allowed_url(url, rule["download_hosts"], download=True)
-
     # -- local writes (one-shot serve) ------------------------------------
     async def _call_sync(self, method, params):
         result = await self.bridge.call_sync(method, params)
@@ -228,10 +131,7 @@ class SourceService:
         return result
 
     async def _reload_snapshot(self):
-        try:
-            self._apply_summaries(await self.bridge.call_sync("list_sources", {}))
-        except Exception:
-            pass
+        self._apply_summaries(await self.bridge.call_sync("list_sources", {}))
 
     async def set_enabled(self, source_id, enabled):
         return await self._call_sync("set_source_enabled",
@@ -247,7 +147,7 @@ class SourceService:
 
     # -- async network work (serve-task stream) ---------------------------
     def _status_diagnostics(self, statuses):
-        ids = [rule["id"] for rule in self._rules
+        ids = [rule["id"] for rule in self._summaries
                if rule.get("enabled") and not rule.get("discovery_only")]
         diagnostics = []
         for index, status in enumerate(statuses if isinstance(statuses, list) else []):
@@ -273,7 +173,7 @@ class SourceService:
                 self.settings_revision = revision
         diagnostics = self._status_diagnostics(result.get("statuses") if isinstance(result, dict) else [])
         await self._reload_snapshot()
-        self.diagnostics = [*self._import_diagnostics, *diagnostics]
+        self.diagnostics = diagnostics
         return diagnostics
 
     async def scan_sources(self, force=False, on_event=None, cancel=None):
@@ -286,7 +186,7 @@ class SourceService:
             for item in result.get("results") or []:
                 if not isinstance(item, dict) or type(item.get("appid")) is not int:
                     continue
-                entry = self._rows.setdefault(item["appid"], {"sources": None, "discovery": None, "matches": None})
+                entry = self._rows.setdefault(item["appid"], {"sources": None, "discovery": None})
                 entry["discovery"] = {"appid": item["appid"], "status": item.get("status", "not_queried"),
                                       "candidates": item.get("candidates", []),
                                       "diagnostics": item.get("diagnostics", [])}
@@ -302,8 +202,6 @@ class SourceService:
                   "force": bool(force)}
         if preferred_language is not None:
             params["preferred_language"] = preferred_language
-        if generation is not None:
-            params["generation"] = generation
         result = await self.bridge._call("discover_game", params)
         if not isinstance(result, dict):
             raise ValueError("invalid_core_response")
@@ -312,7 +210,7 @@ class SourceService:
                      "candidates": result.get("candidates", []),
                      "diagnostics": result.get("diagnostics", [])}
         if type(appid) is int:
-            entry = self._rows.setdefault(appid, {"sources": None, "discovery": None, "matches": None})
+            entry = self._rows.setdefault(appid, {"sources": None, "discovery": None})
             entry["discovery"] = discovery
         revision = result.get("settings_revision")
         if type(revision) is int:

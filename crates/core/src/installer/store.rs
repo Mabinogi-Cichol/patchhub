@@ -427,7 +427,7 @@ fn safe_component(value: &str) -> Result<()> {
 }
 
 /// Rejects paths that escape or resolve outside the installer root.
-fn safe_path(path: &Path) -> Result<()> {
+pub(crate) fn safe_path(path: &Path) -> Result<()> {
     for component in path.components() {
         if matches!(component, Component::ParentDir) {
             return Err(invalid("invalid_installer_path"));

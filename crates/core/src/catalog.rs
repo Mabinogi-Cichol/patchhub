@@ -96,6 +96,11 @@ pub struct FileMapping {
 #[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct PatchMatch {
     pub release_id: String,
+    /// Display attribution from the current trusted source candidate.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub candidate_id: Option<String>,
     /// Dynamic selection route (`zip-selection-*`); absent for signed catalog
     /// releases (p1-zip-orchestration §4.2).
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -421,6 +426,8 @@ pub fn matches(install: &GameInstall, catalog: &Catalog, platform: Platform) -> 
         .map(|r| {
             let blockers = compatibility(install, r, platform);
             PatchMatch {
+                source_id: None,
+                candidate_id: None,
                 release_id: r.release_id.clone(),
                 selection_id: None,
                 name: r.name.clone(),

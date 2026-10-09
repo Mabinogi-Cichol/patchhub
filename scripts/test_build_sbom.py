@@ -21,16 +21,12 @@ class BuildSbomTests(unittest.TestCase):
             licenses = scripts / 'licenses'
             licenses.mkdir(parents=True)
             shutil.copyfile(SCRIPT, scripts / 'build-sbom.py')
-            audit = b'VERSION = "sf95-audit-v-test"\n'
-            worker = b'import sf95_audit\n'
-            license_text = b'MIT License\n'
+            for name in ('installer-format', 'installer-worker'):
+                manifest = root / 'crates' / name / 'Cargo.toml'
+                manifest.parent.mkdir(parents=True)
+                manifest.write_bytes(name.encode())
+            license_text = b'MIT reference license\n'
             project_license = b'MIT License\nCopyright (c) test contributors\n'
-            (scripts / 'sf95_audit.py').write_bytes(audit)
-            (scripts / 'sf95_worker.py').write_bytes(worker)
-            metadata_decoder = b'VERSION = "sf9-metadata-v-test"\n'
-            (scripts / 'sf9_metadata.py').write_bytes(metadata_decoder)
-            for module in ('sf9_graph', 'sf9_lua', 'sf9_behavior'):
-                (scripts / f'{module}.py').write_bytes(b'# synthetic module\n')
             (licenses / 'sfextract-MIT.txt').write_bytes(license_text)
             (root / 'LICENSE').write_bytes(project_license)
             cargo_checksum = 'ab' * 32
@@ -57,22 +53,19 @@ checksum = "{cargo_checksum}"
             inventory = json.loads((root / '.artifacts/dependencies.cdx.json').read_text(encoding='utf-8'))
             components = {entry['name']: entry for entry in inventory['components']}
             self.assertEqual(summary['components'], 3)
-            self.assertEqual(set(components), {'locked-rust', 'locked-npm', 'steam-patch-sf95-worker'})
+            self.assertEqual(set(components), {'locked-rust', 'locked-npm', 'steam-patch-rust-installer'})
             self.assertEqual(components['locked-rust']['hashes'][0]['content'], 'ab' * 32)
             self.assertEqual(components['locked-npm']['hashes'][0]['content'], npm_digest.hex())
-            sf95 = components['steam-patch-sf95-worker']
-            self.assertEqual(sf95['version'], 'sf95-audit-v-test')
+            sf95 = components['steam-patch-rust-installer']
+            self.assertEqual(sf95['version'], '1')
             self.assertEqual(sf95['licenses'], [{'expression': 'MIT'}])
             properties = {entry['name']: entry['value'] for entry in sf95['properties']}
-            self.assertEqual(properties['steam-patch:bundled-audit-sha256'], hashlib.sha256(audit).hexdigest())
-            self.assertEqual(properties['steam-patch:bundled-worker-sha256'], hashlib.sha256(worker).hexdigest())
-            self.assertEqual(properties['steam-patch:bundled-metadata-sha256'], hashlib.sha256(metadata_decoder).hexdigest())
-            self.assertEqual(properties['steam-patch:bundled-license-sha256'], hashlib.sha256(license_text).hexdigest())
+            self.assertEqual(properties['steam-patch:format-manifest-sha256'], hashlib.sha256(b'installer-format').hexdigest())
+            self.assertEqual(properties['steam-patch:reference-license-sha256'], hashlib.sha256(license_text).hexdigest())
             self.assertEqual(properties['steam-patch:project-license-path'], 'LICENSE')
             self.assertEqual(properties['steam-patch:project-license-sha256'], hashlib.sha256(project_license).hexdigest())
             self.assertEqual(properties['steam-patch:reference-commit'], '21f5c5595a70e9284fff83476c0e307d5b92f573')
-            self.assertIn('not the complete sfextract runtime', properties['steam-patch:implementation'])
-            self.assertIn('MIT notice', properties['steam-patch:license-source'])
+            self.assertIn('Python developer oracles are not bundled', properties['steam-patch:implementation'])
             self.assertIn('build, development and target-specific packages',
                           inventory['metadata']['properties'][0]['value'])
 

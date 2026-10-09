@@ -1,4 +1,4 @@
-"""Exercise platform packaging with isolated fixture files."""
+"""Packaging boundaries: fixed Rust runtimes, provenance and no second engine."""
 import hashlib
 import importlib.util
 import json
@@ -15,127 +15,102 @@ spec.loader.exec_module(packager)
 
 
 class PackagingTests(unittest.TestCase):
+    def write(self, root, path, data=b'fixture'):
+        target = root / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(data)
+
     def run_package(self, root, platform):
         with patch.object(packager, 'ROOT', root), patch.object(packager, 'OUTPUT', root / '.artifacts'), patch.object(sys, 'argv', ['package-artifacts.py', '--platform', platform]):
             packager.main()
 
-    def write(self, root, path, content=b'fixture'):
-        target = root / path
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(content)
-
-    def sbom_fixture(self, root):
-        self.write(root, 'Cargo.lock', b'locked cargo')
-        self.write(root, 'package-lock.json', b'locked npm')
-        self.write(root, 'apps/decky/plugin-output/bin/steam-patch')
-        sources = {
-            'scripts/sf95_audit.py': ('backend/exe_worker/sf95_audit.py', 'bundled-audit', b'VERSION = "sf95-audit-v-test"\n'),
-            'scripts/sf95_worker.py': ('backend/exe_worker/sf95_worker.py', 'bundled-worker', b'import sf95_audit\n'),
-            'scripts/sf9_metadata.py': ('backend/exe_worker/sf9_metadata.py', 'bundled-metadata', b'VERSION = "sf9-metadata-v-test"\n'),
-            'scripts/sf9_graph.py': ('backend/exe_worker/sf9_graph.py', 'bundled-graph', b'# synthetic sf9_graph\n'),
-            'scripts/sf9_lua.py': ('backend/exe_worker/sf9_lua.py', 'bundled-lua', b'# synthetic sf9_lua\n'),
-            'scripts/sf9_behavior.py': ('backend/exe_worker/sf9_behavior.py', 'bundled-behavior', b'# synthetic sf9_behavior\n'),
-            'LICENSE': ('LICENSE', 'project-license', b'MIT project license\n'),
-            'scripts/licenses/sfextract-MIT.txt': ('backend/exe_worker/sfextract-MIT.txt', 'bundled-license', b'MIT reference license\n'),
-        }
-        properties = [{'name': f'steam-patch:{name}-lock-sha256',
-                       'value': hashlib.sha256((root / path).read_bytes()).hexdigest()}
-                      for name, path in [('cargo', 'Cargo.lock'), ('npm', 'package-lock.json')]]
-        sf95 = [{'name': 'steam-patch:reference-commit', 'value': packager.SFEXTRACT_COMMIT}]
-        for source, (destination, prefix, content) in sources.items():
-            self.write(root, source, content)
-            self.write(root, 'apps/decky/plugin-output/' + destination, content)
-            sf95.extend([{'name': f'steam-patch:{prefix}-path', 'value': destination},
-                         {'name': f'steam-patch:{prefix}-sha256', 'value': hashlib.sha256(content).hexdigest()}])
-        inventory = {'metadata': {'properties': properties}, 'components': [
-            {'name': 'steam-patch-sf95-worker', 'version': 'sf95-audit-v-test',
-             'licenses': [{'expression': 'MIT'}], 'properties': sf95}]}
+    def fixture(self, root, windows=False):
+        self.write(root, 'Cargo.lock', b'cargo lock')
+        self.write(root, 'package-lock.json', b'npm lock')
+        plugin = root / 'apps/decky/plugin-output'
+        for name in packager.PRODUCTION_BACKEND:
+            self.write(plugin, 'backend/' + name)
+        files = []
+        for name in ('steam-patch', 'sf-worker'):
+            data = b'\x7fELF' + name.encode()
+            self.write(plugin, 'bin/' + name, data)
+            files.append({'path': 'bin/' + name, 'size': len(data), 'sha256': hashlib.sha256(data).hexdigest()})
+        self.write(plugin, 'bin/runtime.json', json.dumps({'protocol_version': 3, 'worker_protocol': 1, 'files': files}).encode())
+        properties = [{'name': 'steam-patch:reference-commit', 'value': packager.SFEXTRACT_COMMIT}]
+        for source, dest, prefix in packager.INSTALLER_FILES:
+            data = source.encode()
+            self.write(root, source, data)
+            if dest:
+                self.write(plugin, dest, data)
+                properties.append({'name': f'steam-patch:{prefix}-path', 'value': dest})
+            properties.extend([{'name': f'steam-patch:{prefix}-source', 'value': source},
+                               {'name': f'steam-patch:{prefix}-sha256', 'value': hashlib.sha256(data).hexdigest()}])
+        inventory = {'metadata': {'properties': [
+            {'name': f'steam-patch:{name}-lock-sha256', 'value': hashlib.sha256((root / path).read_bytes()).hexdigest()}
+            for name, path in [('cargo', 'Cargo.lock'), ('npm', 'package-lock.json')]]},
+            'components': [{'name': 'steam-patch-rust-installer', 'version': '1', 'licenses': [{'expression': 'MIT'}], 'properties': properties}]}
         self.write(root, '.artifacts/dependencies.cdx.json', json.dumps(inventory).encode())
-        return sources
-
-    def test_windows_without_decky(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            for path in ['target/release/steam-patch-windows.exe', 'target/release/steam-patch.exe', 'catalog/catalog.json', 'catalog/signed-catalog.json', 'catalog/trust-keys.json', 'docs/client-guide.md', 'docs/privacy.md']:
+        if windows:
+            for path in ('target/release/steam-patch-windows.exe', 'target/release/steam-patch.exe', 'target/release/sf-worker.exe',
+                         'catalog/catalog.json', 'catalog/signed-catalog.json', 'catalog/trust-keys.json', 'docs/client-guide.md', 'docs/privacy.md'):
                 self.write(root, path)
+        return plugin
+
+    def test_decky_runtime_permissions_and_provenance(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); self.fixture(root); self.run_package(root, 'decky')
+            with zipfile.ZipFile(root / '.artifacts/steam-patch-manager-decky.zip') as archive:
+                for name in ('steam-patch', 'sf-worker'):
+                    self.assertEqual(archive.getinfo('steam-patch-manager/bin/' + name).external_attr >> 16 & 0o777, 0o755)
+                self.assertIn('steam-patch-manager/dependencies.cdx.json', archive.namelist())
+                self.assertIn('steam-patch-manager/licenses/sfextract-MIT.txt', archive.namelist())
+
+    def test_windows_does_not_require_decky(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); self.fixture(root, windows=True)
+            self.write(root, 'apps/decky/plugin-output/bin/sf-worker', b'bad old Linux runtime')
             self.run_package(root, 'windows')
-            output = root / '.artifacts'
-            records = json.loads((output / 'checksums-windows.json').read_text())
-            archive = output / records[0]['file']
-            self.assertEqual(records[0]['sha256'], hashlib.sha256(archive.read_bytes()).hexdigest())
-            with zipfile.ZipFile(archive) as package:
-                self.assertIn('resources/signed-catalog.json', package.namelist())
-            self.assertFalse((output / 'steam-patch-manager-decky.zip').exists())
+            self.assertFalse((root / '.artifacts/steam-patch-manager-decky.zip').exists())
+            with zipfile.ZipFile(root / '.artifacts/steam-patch-manager-windows-portable.zip') as archive:
+                self.assertIn('sf-worker.exe', archive.namelist())
 
-    def test_decky_without_windows(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            self.write(root, 'apps/decky/plugin-output/bin/steam-patch')
-            self.run_package(root, 'decky')
-            with zipfile.ZipFile(root / '.artifacts/steam-patch-manager-decky.zip') as package:
-                info = package.getinfo('steam-patch-manager/bin/steam-patch')
-                self.assertEqual((info.external_attr >> 16) & 0o777, 0o755)
-            self.assertTrue((root / '.artifacts/checksums-decky.json').is_file())
+    def test_rejects_second_production_engine(self):
+        for name in ('publisher.py', 'source_engine.py', 'exe_worker'):
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp); plugin = self.fixture(root)
+                self.write(plugin, 'backend/' + name)
+                with self.assertRaisesRegex(ValueError, 'unexpected or missing'):
+                    self.run_package(root, 'decky')
+                self.assertFalse(list((root / '.artifacts').glob('*.zip')))
 
-    def test_missing_inputs_do_not_create_archive(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            with self.assertRaises(FileNotFoundError):
-                self.run_package(root, 'windows')
-            self.assertFalse(list((root / '.artifacts').glob('*.zip')))
+    def test_missing_or_tampered_runtime_refuses_before_zip(self):
+        for missing in (True, False):
+            with self.subTest(missing=missing), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp); plugin = self.fixture(root)
+                binary = plugin / 'bin/sf-worker'
+                if missing: binary.unlink()
+                else: binary.write_bytes(b'MZ Windows binary')
+                with self.assertRaises((ValueError, FileNotFoundError)):
+                    self.run_package(root, 'decky')
+                self.assertFalse(list((root / '.artifacts').glob('*.zip')))
 
-    def test_current_sbom_and_decky_bundle_package_together(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            self.sbom_fixture(root)
-            self.run_package(root, 'decky')
-            with zipfile.ZipFile(root / '.artifacts/steam-patch-manager-decky.zip') as package:
-                self.assertIn('steam-patch-manager/dependencies.cdx.json', package.namelist())
-                self.assertIn('steam-patch-manager/LICENSE', package.namelist())
-                self.assertIn('steam-patch-manager/backend/exe_worker/sfextract-MIT.txt', package.namelist())
-
-    def test_windows_sbom_checks_sources_without_requiring_decky_bundle(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            self.sbom_fixture(root)
-            for path in ['target/release/steam-patch-windows.exe', 'target/release/steam-patch.exe',
-                         'catalog/catalog.json', 'catalog/signed-catalog.json', 'catalog/trust-keys.json',
-                         'docs/client-guide.md', 'docs/privacy.md']:
-                self.write(root, path)
-            self.write(root, 'apps/decky/plugin-output/backend/exe_worker/sf95_worker.py', b'outdated')
-            self.run_package(root, 'windows')
-            with zipfile.ZipFile(root / '.artifacts/steam-patch-manager-windows-portable.zip') as package:
-                self.assertIn('dependencies.cdx.json', package.namelist())
-
-    def test_missing_component_and_each_changed_source_refuse_before_zip(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            sources = self.sbom_fixture(root)
-            sbom = root / '.artifacts/dependencies.cdx.json'
-            inventory = json.loads(sbom.read_text())
-            inventory['components'] = []
-            sbom.write_text(json.dumps(inventory))
-            with self.assertRaisesRegex(ValueError, 'Regenerate SBOM'):
+    def test_missing_sbom_refuses(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); self.fixture(root); (root / '.artifacts/dependencies.cdx.json').unlink()
+            with self.assertRaisesRegex(FileNotFoundError, 'SBOM'):
                 self.run_package(root, 'decky')
-            self.assertFalse(list((root / '.artifacts').glob('*.zip')))
-            for source in sources:
-                self.sbom_fixture(root)
-                changed = b'VERSION = "sf95-audit-v-other"\n' if source == 'scripts/sf95_audit.py' else b'changed source'
-                self.write(root, source, changed)
-                with self.subTest(source=source), self.assertRaisesRegex(ValueError, 'Regenerate SBOM'):
-                    self.run_package(root, 'decky')
-                self.assertFalse(list((root / '.artifacts').glob('*.zip')))
 
-    def test_outdated_decky_worker_or_license_refuses_before_zip(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            sources = self.sbom_fixture(root)
-            for destination, _, _ in sources.values():
-                self.sbom_fixture(root)
-                self.write(root, 'apps/decky/plugin-output/' + destination, b'old plugin file')
-                with self.subTest(destination=destination), self.assertRaisesRegex(ValueError, 'Rebuild Decky plugin'):
+    def test_changed_sources_or_bundled_license_refuse(self):
+        for source, dest, _ in packager.INSTALLER_FILES:
+            with self.subTest(source=source), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp); self.fixture(root); self.write(root, source, b'changed')
+                with self.assertRaisesRegex(ValueError, 'Regenerate SBOM'):
                     self.run_package(root, 'decky')
-                self.assertFalse(list((root / '.artifacts').glob('*.zip')))
+            if dest:
+                with self.subTest(dest=dest), tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp); plugin = self.fixture(root); self.write(plugin, dest, b'changed')
+                    with self.assertRaisesRegex(ValueError, 'Rebuild Decky plugin'):
+                        self.run_package(root, 'decky')
 
 
 if __name__ == '__main__':

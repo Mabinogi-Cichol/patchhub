@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { DiscoveryResult, Install, Patch, ScanResult, Transaction } from "@steam-patch/ui";
-import { createManagerSession, needsRecovery } from "../src/session.ts";
+import { createManagerSession, feedbackFor, needsRecovery } from "../src/session.ts";
 import { setListPreferences } from "../src/preferences.ts";
 
 const report: ScanResult = {
@@ -119,56 +119,66 @@ const discovery = (fields: Partial<DiscoveryResult> = {}): DiscoveryResult => ({
 const release = (id: string, support_level: string, source_id = "kagura-cn"): Patch => ({
   release_id: id, name: id, source_id, source_page: "https://kagurafan.com", support_level,
   compatibility: "verified", blockers: [], detection: { status: "absent", files: [] },
-  ...(support_level === "publisher_exe" ? { exe: { profile_id: "reviewed", backup_required: true as const, terms: { text: "terms", url: "https://kagurafan.com/terms" } } } : {}),
+  ...(support_level === "publisher_exe" ? { selection_id: `exe-selection-${id}` } : {}),
 });
 
-test("approved EXE discovery adds a release while keeping existing ZIP patches and candidate guidance", async () => {
+test("EXE selection discovery adds a release while keeping existing ZIP patches and candidate guidance", async () => {
   const base = discoveryReport();
   base.installs[0].patches = [release("zip", "managed_zip")];
   const session = createManagerSession(async () => ({ report: base, transactions: [] }), async () =>
-    discovery({ exe_patches: [release("exe-reviewed", "publisher_exe")], exe_reviews: [{ candidate_id: "candidate", release_id: "exe-reviewed", profile_id: "reviewed", status: "installable", blockers: [] }] }));
+    discovery({ patches: [release("exe-reviewed", "publisher_exe")] }));
   await session.refresh(); await session.discover("a", []);
   const row = session.getSnapshot().report!.installs[0];
   assert.deepEqual(row.patches.map(patch => patch.release_id), ["zip", "exe-reviewed"]);
   assert.equal(row.discovery?.candidates[0].capability, "discover_only");
-  assert.equal(row.exe_reviews?.[0].status, "installable");
+  assert.equal(row.patches[1].selection_id, "exe-selection-exe-reviewed");
 });
 
-test("repeated approved EXE release IDs appear only once", async () => {
+test("repeated EXE selection IDs appear only once", async () => {
   const exe = release("exe-reviewed", "publisher_exe");
   const session = createManagerSession(async () => ({ report: discoveryReport(), transactions: [] }), async () =>
-    discovery({ exe_patches: [exe, { ...exe }] }));
+    discovery({ patches: [exe, { ...exe }] }));
   await session.refresh(); await session.discover("a", []);
   assert.deepEqual(session.getSnapshot().report!.installs[0].patches.map(patch => patch.release_id), ["exe-reviewed"]);
 });
 
-test("source subscription revocation removes its approved EXE release and preserves other patches", async () => {
+test("different dynamic selections sharing a release stay selectable", async () => {
+  const first = release("same-release", "publisher_exe");
+  const second = { ...first, selection_id: "exe-selection-second" };
+  const session = createManagerSession(async () => ({ report: discoveryReport(), transactions: [] }), async () =>
+    discovery({ patches: [first, second] }));
+  await session.refresh(); await session.discover("a", []);
+  assert.deepEqual(session.getSnapshot().report!.installs[0].patches.map(patch => patch.selection_id),
+    ["exe-selection-same-release", "exe-selection-second"]);
+});
+
+test("source subscription revocation removes its EXE selection and preserves other patches", async () => {
   const base = discoveryReport();
   base.installs[0].patches = [release("zip", "managed_zip")];
   const session = createManagerSession(async () => ({ report: base, transactions: [] }), async () =>
-    discovery({ exe_patches: [release("exe-reviewed", "publisher_exe")] }));
+    discovery({ patches: [release("exe-reviewed", "publisher_exe")] }));
   await session.refresh(); await session.discover("a", []);
   session.invalidateDiscovery("kagura-cn", 1227890);
   assert.deepEqual(session.getSnapshot().report!.installs[0].patches.map(patch => patch.release_id), ["zip"]);
 });
 
-test("a stale discovery response clears a previously approved EXE release", async () => {
+test("a stale discovery response clears a previous EXE selection", async () => {
   let calls = 0;
   const session = createManagerSession(async () => ({ report: discoveryReport(), transactions: [] }), async () =>
-    ++calls === 1 ? discovery({ exe_patches: [release("exe-reviewed", "publisher_exe")] })
-      : discovery({ status: "stale", exe_patches: [] }));
+    ++calls === 1 ? discovery({ patches: [release("exe-reviewed", "publisher_exe")] })
+      : discovery({ status: "stale", patches: [] }));
   await session.refresh(); await session.discover("a", []);
   assert.equal(session.getSnapshot().report!.installs[0].patches[0].release_id, "exe-reviewed");
   await session.discover("a", [], null, true);
   assert.deepEqual(session.getSnapshot().report!.installs[0].patches, []);
 });
 
-test("failed refresh revokes a previously approved EXE without losing ZIP releases", async () => {
+test("failed refresh revokes a previous EXE selection without losing ZIP releases", async () => {
   let calls = 0;
   const base = discoveryReport();
   base.installs[0].patches = [release("zip", "managed_zip")];
   const session = createManagerSession(async () => ({ report: base, transactions: [] }), async () => {
-    if (++calls === 1) return discovery({ exe_patches: [release("exe-reviewed", "publisher_exe")] });
+    if (++calls === 1) return discovery({ patches: [release("exe-reviewed", "publisher_exe")] });
     throw new Error("source_refresh_failed");
   });
   await session.refresh(); await session.discover("a", []);
@@ -278,4 +288,47 @@ test("a stale backend result cannot replace metadata and leaves discovery retrya
   await session.discover("a", []);
   assert.equal(calls, 2);
   assert.equal(session.getSnapshot().report!.installs[0].discovery!.candidates.length, 1);
+});
+
+
+test("game feedback survives remounts without claiming another game was installed", async () => {
+  const session = createManagerSession(async () => ({ report, transactions: [] }));
+  await session.ensureSnapshot();
+  session.setFeedback({ note: "安装完成，文件已写入。" }, "night");
+  const unmount = session.subscribe(() => {});
+  unmount();
+  await session.ensureSnapshot();
+  assert.equal(feedbackFor(session.getSnapshot(), "night").note, "安装完成，文件已写入。");
+  assert.equal(feedbackFor(session.getSnapshot(), "cult").note, null);
+  assert.equal(feedbackFor(session.getSnapshot()).note, null);
+  session.acceptSnapshot({ report: { ...report }, transactions: [] });
+  assert.equal(feedbackFor(session.getSnapshot(), "cult").note, null);
+  assert.equal(session.getSnapshot().note, "安装完成，文件已写入。");
+});
+
+test("late terminal feedback stays with its game after navigation during refresh", async () => {
+  let finish!: (value: { report: ScanResult; transactions: Transaction[] }) => void;
+  const session = createManagerSession(() => new Promise(resolve => { finish = resolve; }));
+  const completion = session.refresh().then(() => session.setFeedback({ note: "任务已安全取消。", error: "安装仍需恢复。" }, "night"));
+  assert.deepEqual(feedbackFor(session.getSnapshot(), "cult"), { note: null, error: null });
+  finish({ report, transactions: [] });
+  await completion;
+  assert.deepEqual(feedbackFor(session.getSnapshot(), "cult"), { note: null, error: null });
+  assert.deepEqual(feedbackFor(session.getSnapshot(), "night"), { note: "任务已安全取消。", error: "安装仍需恢复。" });
+});
+
+test("game operation failures are scoped while scan and settings feedback remains global", async () => {
+  const session = createManagerSession(async () => ({ report, transactions: [] }));
+  for (const label of ["preview", "subscription", "recovery"]) {
+    await session.work(label, async () => { throw new Error("game_not_ready"); }, () => {}, "night");
+    assert.ok(feedbackFor(session.getSnapshot(), "night").error);
+    assert.equal(feedbackFor(session.getSnapshot(), "cult").error, null);
+    assert.equal(feedbackFor(session.getSnapshot()).error, null);
+  }
+  await session.work("scan", async () => { throw new Error("library_unavailable"); }, () => {});
+  assert.equal(feedbackFor(session.getSnapshot(), "cult").error, session.getSnapshot().error);
+  session.update({ note: "已开启自动清理。" });
+  assert.equal(feedbackFor(session.getSnapshot(), "night").note, "已开启自动清理。");
+  assert.equal(feedbackFor(session.getSnapshot(), "cult").note, "已开启自动清理。");
+  assert.equal(feedbackFor(session.getSnapshot()).note, "已开启自动清理。");
 });

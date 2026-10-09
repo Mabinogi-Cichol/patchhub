@@ -5,6 +5,7 @@ from pathlib import Path
 import unittest
 
 from source_service import SourceService, REQUIRED_METHODS
+from bridge import METHODS
 
 SUMMARIES = [
     {"id": "patchmoe", "name": "patch.moe", "adapter": "patchmoe", "role": "publisher",
@@ -65,7 +66,7 @@ class SourceServiceTests(unittest.IsolatedAsyncioTestCase):
         self.root = Path(self.temp.name)
         self.bridge = FakeBridge()
         self.bridge.sync_results = {
-            "get_capabilities": {"methods": sorted(REQUIRED_METHODS)},
+            "get_capabilities": {"methods": sorted(METHODS), "protocol_version": 3},
             "list_sources": list(SUMMARIES),
             "get_source_state": {"settings_revision": 5,
                                  "import_report": {"imported_settings": True,
@@ -73,17 +74,16 @@ class SourceServiceTests(unittest.IsolatedAsyncioTestCase):
                                                                     "source_id": "old"}]}},
             "get_source_settings": {"enabled": {}, "added": [], "games": {}},
         }
-        self.service = SourceService(self.bridge, self.root, self.root / "sources.json")
+        self.service = SourceService(self.bridge, self.root)
 
-    async def test_initialize_reads_capabilities_import_and_rules(self):
+    async def test_initialize_reads_current_summaries_without_import_adapter(self):
         await self.service.initialize()
         self.assertEqual(self.service.engine, "rust")
-        self.assertEqual(self.service.settings_revision, 5)
-        self.assertEqual({rule["id"] for rule in self.service._rules}, {"patchmoe", "kagura-cn"})
-        self.assertEqual([rule["id"] for rule in self.service.builtins], ["patchmoe"])
-        codes = [entry["code"] for entry in self.service.diagnostics]
-        self.assertIn("source_settings_imported", codes)
-        self.assertIn("invalid_source_cache", codes)
+        self.assertEqual(self.service.list_sources(), SUMMARIES)
+        self.assertEqual([call[0] for call in self.bridge.sync_calls], ["get_capabilities", "list_sources"])
+        self.assertEqual(self.service.diagnostics, [])
+        for name in ("matches", "cached_candidates", "_rules", "builtins", "validate_download", "source_for_release"):
+            self.assertFalse(hasattr(self.service, name))
 
     async def test_prime_exposes_snapshot_reads(self):
         await self.service.initialize()
@@ -91,23 +91,12 @@ class SourceServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.service.list_sources(), SUMMARIES)
         sources = self.service.list_game_sources(GAME)
         self.assertTrue(sources[0]["subscribed"])
-        self.assertEqual(self.service.matches(GAME)[0]["release_id"], "patchmoe-42")
-        self.assertEqual(self.service.matches(GAME, include_disabled=True)[0]["release_id"], "patchmoe-42")
-        self.assertEqual(self.service.cached_candidates(GAME)[0]["candidate_id"], "c1")
+        self.assertEqual(self.service.cached_discovery(GAME)["candidates"][0]["candidate_id"], "c1")
         discovery = self.service.cached_discovery(GAME)
         self.assertEqual(discovery["status"], "cache_complete")
         self.assertEqual(discovery["settings_revision"], 5)
         self.assertTrue(self.service.game_subscribed(42, "patchmoe"))
         self.assertTrue(self.service.game_subscribed(999, "unknown"))
-        self.assertEqual(self.service.source_for_release("patchmoe-42")["id"], "patchmoe")
-        self.assertIsNone(self.service.source_for_release("source-kagura-cn-42"))
-        self.assertEqual(self.service.validate_download("patchmoe", "https://download.patch.moe/a.zip"),
-                         "https://download.patch.moe/a.zip")
-        with self.assertRaisesRegex(ValueError, "source_not_enabled"):
-            self.service.validate_download("kagura-cn", "https://kagurafan.com/a.zip")
-        with self.assertRaisesRegex(ValueError, "invalid_source_url"):
-            self.service.validate_download("patchmoe", "https://evil.example/a.zip")
-
     async def test_local_writes_use_one_shot_call_and_reload(self):
         await self.service.initialize()
         updated_list = lambda _params: [{**SUMMARIES[0], "enabled": False}, SUMMARIES[1]]
@@ -116,7 +105,7 @@ class SourceServiceTests(unittest.IsolatedAsyncioTestCase):
         self.bridge.sync_results["list_sources"] = updated_list
         await self.service.set_enabled("patchmoe", False)
         self.assertEqual(self.service.settings_revision, 6)
-        self.assertFalse(self.service._rules[0]["enabled"])
+        self.assertFalse(self.service.list_sources()[0]["enabled"])
         self.assertIn(("set_source_enabled", {"source_id": "patchmoe", "enabled": False}),
                       self.bridge.sync_calls)
         await self.service.add_source({"id": "custom"})
@@ -148,7 +137,7 @@ class SourceServiceTests(unittest.IsolatedAsyncioTestCase):
             "results": [{"instance_id": "i1", "appid": 42, "status": "complete",
                          "candidates": [{"candidate_id": "c2"}], "diagnostics": []}]}
         await self.service.scan_sources(force=False)
-        self.assertEqual(self.service.cached_candidates(GAME)[0]["candidate_id"], "c2")
+        self.assertEqual(self.service.cached_discovery(GAME)["candidates"][0]["candidate_id"], "c2")
         self.bridge.stream_results["discover_game"] = {
             "instance_id": "i1", "appid": 42, "generation": 9, "settings_revision": 8,
             "status": "complete", "candidates": [{"candidate_id": "c3"}], "diagnostics": []}

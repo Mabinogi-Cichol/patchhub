@@ -135,6 +135,9 @@ impl ProgressCursor {
     /// `substage` (p1-host-contract §2.1).
     pub fn event(&mut self, progress: &steam_patch_core::operation::Progress) -> Value {
         let (stage, substage) = match progress.stage.as_str() {
+            // Archive telemetry can precede an explicit stage in signed/local ZIP
+            // routes. Protocol v3 never exposes the internal empty default.
+            "" => ("connecting", None),
             "backing_up" | "writing" | "committing" => ("applying", Some(progress.stage.as_str())),
             other => (other, None),
         };
@@ -626,6 +629,13 @@ pub fn execute_controlled<L: Fn(u64) -> bool, D: Fn() -> u64 + Sync>(
         .as_ref()
         .filter(|state| state.join("sources").join("rust-v1").exists())
         .and_then(|state| sources::Sources::open(state).ok());
+    let protected = params
+        .state_dir
+        .as_ref()
+        .map(|state| installer::preexisting::load(&installer::InstallerPaths::new(state)))
+        .transpose()
+        .map_err(err)?
+        .unwrap_or_default();
     let rows: Vec<_> = report.installs.iter().map(|game| {
         let mut patches = catalog::matches(game, &catalog, platform);
         let signed_ids: HashSet<String> =
@@ -654,7 +664,16 @@ pub fn execute_controlled<L: Fn(u64) -> bool, D: Fn() -> u64 + Sync>(
                 }
             }
         }
-        let mut row = json!({"game":game,"match_status":if patches.is_empty(){"no_catalog_match"}else{"matched"},"patches":patches});
+        if protected.is_blocked(&game.instance_id, game.appid) {
+            for patch in &mut patches {
+                patch.blockers.push("preexisting_installation_requires_review".into());
+                patch.download_available = false;
+                if patch.detection.status == "unknown" || patch.detection.status == "not_detected" {
+                    patch.detection.status = "needs_revalidation".into();
+                }
+            }
+        }
+        let mut row = json!({"preexisting_installation":protected.is_blocked(&game.instance_id, game.appid),"game":game,"match_status":if patches.is_empty(){"no_catalog_match"}else{"matched"},"patches":patches});
         if let Some(handle) = &source_handle {
             let query = game_query(game);
             if let Ok(summaries) = value(handle.registry().list_game_sources(&query)) {
@@ -1062,6 +1081,17 @@ fn install_patch<L: Fn(u64) -> bool, D: Fn() -> u64 + Sync>(
     }
     let state = state(params)?;
     state_safe(&state)?;
+    let game = report
+        .installs
+        .iter()
+        .find(|game| game.instance_id == instance)
+        .ok_or("instance_not_found")?;
+    if installer::preexisting::load(&installer::InstallerPaths::new(&state))
+        .map_err(err)?
+        .is_blocked(instance, game.appid)
+    {
+        return Err("preexisting_installation_requires_review".into());
+    }
     if let Some(selection_id) = selection {
         if params.archive.is_some() {
             return Err("archive_not_allowed_for_selection".into());
@@ -1564,6 +1594,8 @@ fn dynamic_patches(
                 continue;
             }
             patches.push(catalog::PatchMatch {
+                source_id: Some(candidate.source_id.clone()),
+                candidate_id: Some(candidate.candidate_id.clone()),
                 release_id,
                 selection_id: Some(selection_id),
                 name: candidate.patch_title.clone(),
@@ -1604,6 +1636,8 @@ fn dynamic_patches(
             }
             let detection = dynamic_detection(game, &release_id, &selection_id, transactions, root);
             patches.push(catalog::PatchMatch {
+                source_id: Some(candidate.source_id.clone()),
+                candidate_id: Some(candidate.candidate_id.clone()),
                 release_id,
                 selection_id: Some(selection_id),
                 name: candidate.patch_title.clone(),
@@ -1970,6 +2004,65 @@ mod sources_tests {
         assert_eq!(result["appid"], 42);
         assert_eq!(result["status"], "cache_complete");
         assert!(result["candidates"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn preserved_modified_instance_is_visible_and_cannot_be_overwritten() {
+        let temp = tempfile::tempdir().unwrap();
+        let state = temp.path().join("state");
+        seed(&state);
+        let roots = vec![fixture_root(temp.path())];
+        let result = execute(
+            "scan",
+            Params {
+                roots: roots.clone(),
+                state_dir: Some(state.clone()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let instance = result["installs"][0]["game"]["instance_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let paths = installer::InstallerPaths::new(&state);
+        fs::create_dir_all(paths.root()).unwrap();
+        fs::write(
+            paths.root().join("preexisting-installations.json"),
+            serde_json::to_vec(&json!({"schema_version":1,"instances":["old-library-identity"],"appids":[result["installs"][0]["game"]["appid"]]})).unwrap(),
+        )
+        .unwrap();
+        let result = execute(
+            "scan",
+            Params {
+                roots: roots.clone(),
+                state_dir: Some(state.clone()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(result["installs"][0]["preexisting_installation"], true);
+        for (release_id, selection_id) in [
+            (Some("signed".into()), None),
+            (None, Some("zip-selection-test".into())),
+            (None, Some("exe-selection-test".into())),
+        ] {
+            let error = execute(
+                "install_patch",
+                Params {
+                    roots: roots.clone(),
+                    state_dir: Some(state.clone()),
+                    instance_id: Some(instance.clone()),
+                    release_id,
+                    selection_id,
+                    request_id: Some("new-user-action".into()),
+                    ..Default::default()
+                },
+            )
+            .unwrap_err();
+            assert_eq!(error, "preexisting_installation_requires_review");
+        }
+        assert!(!paths.requests().exists());
     }
 
     #[test]

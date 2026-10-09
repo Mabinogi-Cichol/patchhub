@@ -11,19 +11,30 @@ from tasks import current_task
 
 MAX_RESPONSE_BYTES = 8 * 1024 * 1024
 MAX_REQUEST_BYTES = 64 * 1024
+PROTOCOL_VERSION = 3
+RENEW_SECONDS = 3
 SOURCE_METHODS = {
-    "get_capabilities", "list_sources", "list_game_sources", "set_source_enabled",
-    "set_game_source", "add_source", "refresh_sources", "discover_game", "scan_sources",
-    "get_source_policy", "resolve_source_record", "list_source_matches",
-    "get_source_state", "get_source_settings",
+    "list_sources", "list_game_sources", "set_source_enabled", "set_game_source",
+    "add_source", "refresh_sources", "discover_game", "scan_sources",
 }
-METHODS = {"discard_plan", "scan", "preview", "plan_install", "fetch_artifact", "start_install", "list_transactions", "recover", "migrate_state"} | SOURCE_METHODS
-# Methods served by `serve-task` (streaming/cancellable), not one-shot `serve`.
-CONTROLLED_METHODS = {"fetch_artifact", "plan_install", "start_install",
-                      "discover_game", "refresh_sources", "scan_sources"}
-# Events a source task may interleave before its single final response.
+METHODS = {"get_capabilities", "discard_plan", "scan", "preview", "install_patch",
+           "list_transactions", "recover", "cleanup_cache"} | SOURCE_METHODS
+CONTROLLED_METHODS = {"install_patch", "refresh_sources", "scan_sources"}
 SOURCE_EVENTS = {"source_progress", "source_update"}
-# Publisher bridges are recreated for the same state directory. Share the
+INSTALL_STAGES = {"connecting", "downloading", "validating", "analyzing_installer",
+                  "extracting", "planning", "applying", "rolling_back", "cleanup"}
+PROGRESS_FIELDS = {"stage", "substage", "bytes_done", "total_bytes", "files_done",
+                   "total_files", "current_file", "archive_bytes"}
+
+
+class CoreError(RuntimeError):
+    def __init__(self, code, detail=None):
+        super().__init__(code)
+        self.code = code
+        self.detail = detail
+
+
+# Calls sharing the same state directory share the
 # reader queue only while calls are alive, and never across event loops.
 _journal_read_locks = WeakValueDictionary()
 
@@ -39,8 +50,14 @@ class CoreBridge:
         self.state_dir = state_dir.resolve() if state_dir else None
         self.timeout = timeout
         self.process_identity = {"user": run_uid, "group": run_gid, "extra_groups": []} if run_uid is not None else {}
-        self.downloads = set()
+        self.active_calls = set()
         self.process_env = os.environ.copy()
+        if (run_uid == 0 or (run_uid is not None and (type(run_uid) is not int or run_uid < 1
+                or type(run_gid) is not int or run_gid < 1))
+                or (hasattr(os, "geteuid") and os.geteuid() == 0 and run_uid is None)):
+            raise ValueError("unprivileged_user_required")
+        # Rust locates sf-worker beside this fixed executable; no RPC runtime path.
+        self.worker = self.binary.with_name("sf-worker")
         if user_home is not None:
             home = str(user_home)
             self.process_env.update(HOME=home, USER=user_home.name, LOGNAME=user_home.name,
@@ -63,28 +80,34 @@ class CoreBridge:
     async def scan(self):
         return await self._call("scan", {})
 
-    async def preview(self, instance_id: str, release_id: str):
-        return await self._call("preview", {"instance_id": self._id(instance_id), "release_id": self._id(release_id)})
+    @classmethod
+    def selection(cls, instance_id, release_id=None, selection_id=None):
+        if release_id is not None and selection_id is not None:
+            raise ValueError("invalid_request")
+        if release_id is None and selection_id is None:
+            raise ValueError("selection_or_release_required")
+        params = {"instance_id": cls._id(instance_id)}
+        key, value = ("selection_id", selection_id) if selection_id is not None else ("release_id", release_id)
+        params[key] = cls._id(value)
+        return params
 
-    async def plan_install(self, instance_id: str, release_id: str, archive: Path | None = None, operation="install"):
-        params = {"instance_id": self._id(instance_id), "release_id": self._id(release_id), "operation": operation}
+    async def preview(self, instance_id, release_id=None, selection_id=None):
+        return await self._call("preview", self.selection(instance_id, release_id, selection_id))
+
+    async def install_patch(self, instance_id, release_id=None, selection_id=None,
+                            archive=None, operation="install", request_id=None):
+        params = self.selection(instance_id, release_id, selection_id)
+        if operation not in ("install", "reinstall"):
+            raise ValueError("invalid_operation")
         if archive is not None:
-            params["archive"] = str(archive.resolve(strict=True))
-        return await self._call("plan_install", params)
-
-    async def fetch_artifact(self, instance_id: str, release_id: str):
-        return await self._call("fetch_artifact", {"instance_id": self._id(instance_id), "release_id": self._id(release_id)})
-
-    async def cancel_download(self):
-        for cancel in tuple(self.downloads):
-            cancel.set()
-        return {"canceled": bool(self.downloads)}
+            if selection_id is not None:
+                raise ValueError("archive_not_allowed_for_selection")
+            params["archive"] = str(archive)
+        params.update(operation=operation, request_id=request_id or str(uuid.uuid4()))
+        return await self._call("install_patch", params)
 
     async def discard_plan(self, plan_id):
         return await self._call("discard_plan", {"plan_id": self._id(plan_id)})
-
-    async def start_install(self, plan_id: str):
-        return await self._call("start_install", {"plan_id": self._id(plan_id)})
 
     async def list_transactions(self):
         return await self._call("list_transactions", {})
@@ -92,17 +115,16 @@ class CoreBridge:
     async def recover(self):
         return await self._call("recover", {})
 
-    async def migrate_state(self):
-        return await self._call("migrate_state", {})
-
-    async def cleanup_transactions(self):
-        return await self._call("migrate_state", {})
+    async def cleanup_cache(self):
+        return await self._call("cleanup_cache", {})
 
     @staticmethod
     def _source_event(row, request_id, last_sequence):
         """Validate one interleaved source event; returns its (new) sequence."""
         if (not isinstance(row, dict) or row.get("request_id") != request_id
-                or type(row.get("sequence")) is not int or row["sequence"] <= last_sequence):
+                or row.get("protocol_version") != PROTOCOL_VERSION
+                or type(row.get("sequence")) is not int or row["sequence"] <= last_sequence
+                or (last_sequence == -1 and row["sequence"] != 0)):
             raise RuntimeError("invalid_core_response")
         return row["sequence"]
 
@@ -124,22 +146,26 @@ class CoreBridge:
     async def _exchange_call(self, method, params, on_event, cancel, timeout, controlled):
         if method not in METHODS:
             raise ValueError("unsupported_method")
-        request_id = str(uuid.uuid4())
-        host_params = {"catalog": str(self.catalog), "platform": "steamos"}
+        request_id = params.get("request_id") or str(uuid.uuid4())
+        if not isinstance(request_id, str) or not 1 <= len(request_id.encode("utf-8")) <= 128 or any(ord(c) < 32 or ord(c) == 127 for c in request_id):
+            raise ValueError("invalid_request_id")
+        if set(params) & {"roots", "catalog", "signed_catalog", "trust_keys", "state_dir", "platform"}:
+            raise ValueError("host_parameter_forbidden")
+        host_params = {"roots": [], "catalog": str(self.catalog), "platform": "steamos"}
         if self.signed_catalog:
             host_params["signed_catalog"] = str(self.signed_catalog)
         if self.trust_keys:
             host_params["trust_keys"] = str(self.trust_keys)
         if self.state_dir:
             host_params["state_dir"] = str(self.state_dir)
-        request = {"protocol_version": 2, "request_id": request_id, "method": method,
+        request = {"protocol_version": PROTOCOL_VERSION, "request_id": request_id, "method": method,
                    "params": {**host_params, **params}}
         payload = json.dumps(request, ensure_ascii=False).encode("utf-8") + b"\n"
         if len(payload) > MAX_REQUEST_BYTES:
             raise ValueError("request_too_large")
         task = current_task.get()
         if controlled is None:
-            controlled = task is not None or method in CONTROLLED_METHODS
+            controlled = method in CONTROLLED_METHODS
         if cancel is None:
             cancel = task.cancel if task else Event()
         process = await asyncio.create_subprocess_exec(
@@ -147,14 +173,15 @@ class CoreBridge:
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
             limit=MAX_RESPONSE_BYTES + 1, env=self.process_env, **self.process_identity,
         )
-        if method == "fetch_artifact":
-            self.downloads.add(cancel)
+        if controlled:
+            self.active_calls.add(cancel)
         request_sent = asyncio.Event()
 
         async def signal_cancel():
             # The control message must follow the request, including when a
             # lease expires while the subprocess is starting.
             await request_sent.wait()
+            next_renew = asyncio.get_running_loop().time() + RENEW_SECONDS
             while process.returncode is None:
                 if cancel.is_set():
                     try:
@@ -163,6 +190,13 @@ class CoreBridge:
                     except (BrokenPipeError, ConnectionResetError):
                         pass
                     return
+                if asyncio.get_running_loop().time() >= next_renew:
+                    try:
+                        process.stdin.write(b"renew\n")
+                        await process.stdin.drain()
+                    except (BrokenPipeError, ConnectionResetError):
+                        return
+                    next_renew = asyncio.get_running_loop().time() + RENEW_SECONDS
                 await asyncio.sleep(.1)
 
         async def exchange():
@@ -177,17 +211,27 @@ class CoreBridge:
                 if len(line) > MAX_RESPONSE_BYTES:
                     raise RuntimeError("response_too_large")
                 row = json.loads(line)
-                if controlled and row.get("event") == "progress":
-                    if task:
-                        progress = row["progress"]
-                        # Core subcommands may not know the already acquired package size.
-                        if progress.get("archive_bytes") is None:
-                            progress.pop("archive_bytes", None)
-                        task.update(**progress)
-                elif controlled and row.get("event") in SOURCE_EVENTS:
-                    # Interleaved telemetry is never the final response; enforce the
-                    # request binding and monotonic sequence before forwarding it.
+                if not isinstance(row, dict):
+                    raise RuntimeError("invalid_core_response")
+                if response is not None:
+                    if row.get("event") in SOURCE_EVENTS | {"install_progress"}:
+                        # The terminal receipt wins; stale telemetry cannot turn
+                        # a real commit into a transport failure.
+                        continue
+                    raise RuntimeError("invalid_core_response")
+                if "event" in row:
+                    if not controlled or row.get("event") not in SOURCE_EVENTS | {"install_progress"}:
+                        raise RuntimeError("invalid_core_response")
                     last_sequence = self._source_event(row, request_id, last_sequence)
+                    if row["event"] == "install_progress":
+                        if (method != "install_patch" or row.get("instance_id") != params.get("instance_id")
+                                or row.get("selection_id") != params.get("selection_id")
+                                or row.get("stage") not in INSTALL_STAGES):
+                            raise RuntimeError("invalid_core_response")
+                        if task:
+                            task.update(**{key: value for key, value in row.items() if key in PROGRESS_FIELDS})
+                    elif method not in {"scan_sources", "refresh_sources"}:
+                        raise RuntimeError("invalid_core_response")
                     if on_event is not None:
                         emitted = on_event(row)
                         if inspect.isawaitable(emitted):
@@ -199,11 +243,12 @@ class CoreBridge:
             await process.wait()
             if process.returncode != 0:
                 raise RuntimeError("core_process_failed")
-            if (not isinstance(response, dict) or response.get("protocol_version") != 2
+            if (not isinstance(response, dict) or response.get("protocol_version") != PROTOCOL_VERSION
                     or response.get("request_id") != request_id or not isinstance(response.get("ok"), bool)):
                 raise RuntimeError("invalid_core_response")
             if not response["ok"]:
-                raise RuntimeError(response.get("error", {}).get("code", "core_error"))
+                error = response.get("error") or {}
+                raise CoreError(error.get("code", "core_error"), error.get("detail"))
             return response["result"]
 
         guard = asyncio.create_task(signal_cancel()) if controlled else None
@@ -219,7 +264,7 @@ class CoreBridge:
                 return await running
             raise
         finally:
-            self.downloads.discard(cancel)
+            self.active_calls.discard(cancel)
             if process.returncode is None:
                 if controlled:
                     cancel.set()
@@ -238,6 +283,7 @@ class CoreBridge:
                     running.cancel()
             if guard:
                 guard.cancel()
+                await asyncio.gather(guard, return_exceptions=True)
             if process.stdin:
                 process.stdin.close()
 

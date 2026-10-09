@@ -5,7 +5,7 @@ export type TaskSnapshot = {
   kind: "install";
   state: "running" | "cancelling" | "rolling_back" | "cancelled" | "completed" | "failed";
   stage: string;
-  content_release_id?: string;
+  substage?: "backing_up" | "writing" | "committing" | null;
   bytes_done: number;
   total_bytes: number | null;
   files_done: number;
@@ -15,13 +15,15 @@ export type TaskSnapshot = {
   elapsed_seconds: number;
   speed_bps: number;
   eta_seconds: number | null;
-  result: Transaction | null;
+  result: (Transaction & { recovery?: { required: boolean; code?: string; detail?: string } | null }) | null;
   error: string | null;
+  error_detail?: string | null;
   instance_id?: string;
-  release_id?: string;
+  release_id?: string | null;
+  selection_id?: string | null;
 };
 export type TaskApi = {
-  install(instance: string, release: string, operation: "install" | "reinstall", requestId: string, archive: string): Promise<{ task_id: string }>;
+  install(instance: string, release: string | null, selection: string | null, archive: string | null, operation: "install" | "reinstall", requestId: string): Promise<{ task_id: string }>;
   status(id: string): Promise<TaskSnapshot>;
   cancel(id: string): Promise<TaskSnapshot>;
   list(): Promise<TaskSnapshot[]>;
@@ -78,7 +80,7 @@ export function createTaskController(api: TaskApi, pollMs = 750, retryMs = 1500)
     }
     void attempt();
   }
-  async function begin(instance: string, release: string, action: () => Promise<{ task_id: string }>) {
+  async function begin(instance: string, release: string | null, selection: string | null, action: () => Promise<{ task_id: string }>) {
     if (starting || (current && !taskIsTerminal(current.state))) throw new Error("installer_busy");
     starting = true; cancelling = false; disposed = false; stopTimer();
     publish(null);
@@ -93,7 +95,7 @@ export function createTaskController(api: TaskApi, pollMs = 750, retryMs = 1500)
       publish({ task_id: value.task_id, kind: "install", state: "running", stage: "starting", bytes_done: 0,
         total_bytes: null, files_done: 0, total_files: null, current_file: null, archive_bytes: null,
         elapsed_seconds: 0, speed_bps: 0, eta_seconds: null, result: null, error: null,
-        instance_id: instance, release_id: release });
+        instance_id: instance, release_id: release, selection_id: selection });
       starting = false;
       if (cancelling) { cancelling = false; void requestCancel(); }
       else void poll(value.task_id, epoch);
@@ -119,7 +121,8 @@ export function createTaskController(api: TaskApi, pollMs = 750, retryMs = 1500)
     getSnapshot: () => current,
     isBusy: () => starting || !!current && !taskIsTerminal(current.state),
     subscribe(listener: () => void) { listeners.add(listener); return () => { listeners.delete(listener); }; },
-    startInstall: (instance: string, release: string, operation: "install" | "reinstall", requestId: string, archive = "") => begin(instance, release, () => api.install(instance, release, operation, requestId, archive)),
+    startInstall: (instance: string, release: string | null, selection: string | null, operation: "install" | "reinstall", requestId: string, archive = "") =>
+      begin(instance, release, selection, () => api.install(instance, release, selection, archive || null, operation, requestId)),
     requestCancel, resume,
     claimTerminal(value: TaskSnapshot) {
       if (!taskIsTerminal(value.state) || current?.task_id !== value.task_id || current.state !== value.state) return false;

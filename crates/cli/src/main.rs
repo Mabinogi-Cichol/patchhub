@@ -731,6 +731,35 @@ mod tests {
     }
 
     #[test]
+    fn archive_before_stage_emits_valid_v3_progress() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let captured = Rc::clone(&events);
+        let mut cursor =
+            runtime::ProgressCursor::new(3, "signed".into(), Some("instance".into()), None);
+        steam_patch_core::operation::run(
+            Arc::new(AtomicBool::new(false)),
+            move |progress| captured.borrow_mut().push(cursor.event(progress)),
+            || {
+                // Same ordering as signed download and local ZIP verification.
+                steam_patch_core::operation::archive(123);
+                steam_patch_core::operation::stage("validating", Some(123), Some(1));
+            },
+        );
+        let rows = events.borrow();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0]["stage"], "connecting");
+        assert_eq!(rows[0]["archive_bytes"], 123);
+        assert_eq!(rows[0]["sequence"], 0);
+        assert_eq!(rows[0]["request_id"], "signed");
+        assert_eq!(rows[0]["instance_id"], "instance");
+        assert!(rows[0]["selection_id"].is_null());
+        assert_eq!(rows[1]["stage"], "validating");
+        assert_eq!(rows[1]["sequence"], 1);
+    }
+
+    #[test]
     fn install_progress_fields_and_monotonic_sequence() {
         use steam_patch_core::operation::Progress;
         let mut cursor = runtime::ProgressCursor::new(

@@ -61,13 +61,7 @@ class DiscoveryRpcTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(result["status"], "stale")
             self.assertEqual(result["candidates"], [])
 
-    async def test_candidates_rejected_by_all_install_entry_points(self):
+    async def test_obsolete_prepare_rpcs_are_absent(self):
         plugin = self.plugin()
-        for method in ("preview", "_plan_install", "fetch_artifact", "_prepare_install"):
-            with self.subTest(method=method):
-                with self.assertRaisesRegex(ValueError, "source_requires_guidance"):
-                    await getattr(plugin, method)("local", "candidate-123")
-        plugin.bridge.preview.assert_not_called()
-        plugin.bridge.plan_install.assert_not_called()
-        plugin.bridge.fetch_artifact.assert_not_called()
-        self.assertFalse(plugin.tasks.busy())
+        for name in ("_plan_install", "fetch_artifact", "_prepare_install", "_start_install", "exe_installation_reviews"):
+            self.assertFalse(hasattr(plugin, name))

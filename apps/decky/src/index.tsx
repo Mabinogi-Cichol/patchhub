@@ -2,11 +2,11 @@ import { callable, definePlugin, routerHook } from "@decky/api";
 import { Button, ButtonItem, DropdownItem, Field, Focusable, Navigation, PanelSection, PanelSectionRow, SidebarNavigation, TextField, ToggleField, showModal, useParams } from "@decky/ui";
 import { FaGamepad, FaPuzzlePiece } from "react-icons/fa";
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ComponentProps, type ReactNode } from "react";
-import { canAutoInstall, candidateMatched, displayPatches, filterInstalls, gameDisplayName, installSummary, patchState, reason, workflowState, type DiscoveryResult, type Filter, type Install, type Patch, type ScanResult, type SourceCandidate, type SourceSubscription, type Transaction } from "@steam-patch/ui";
+import { candidateMatched, displayPatches, patchInstallable, filterInstalls, gameDisplayName, installSummary, patchState, reason, workflowState, type DiscoveryResult, type Filter, type Install, type InstallerLinks, type Patch, type Preview, type ScanResult, type SourceCandidate, type SourceSubscription, type Transaction } from "@steam-patch/ui";
 import { getListPreferences, setListPreferences, subscribeListPreferences } from "./preferences";
 import { gamePresentation, matchesGameQuery, transactionGameName } from "./steam";
 import { transactionResult } from "./install";
-import { createManagerSession, needsRecovery } from "./session";
+import { createManagerSession, feedbackFor, needsRecovery } from "./session";
 import { decodeInstance, encodeInstance, settingsPage, settingsRoutes } from "./route";
 import { autoCleanupNote, cacheClearNote, cacheSummary, type CacheStatus, type Settings } from "./cache";
 import { tasks, taskIsTerminal, type TaskSnapshot } from "./tasks";
@@ -14,8 +14,24 @@ import { TaskProgressView, TaskResultView } from "./task-progress-view";
 import { candidateConditions, candidateLanguage, candidateSource, discoveryStatus, safeSourceUrl, unqueriedCount } from "./discovery";
 
 const scan = callable<[boolean], ScanResult>("scan");
-const scanStatus = callable<[number], ScanResult>("scan_status");
-const discoverGame = callable<[string, string[], string | null, boolean], DiscoveryResult>("discover_game");
+const scanStatusRpc = callable<[number], ScanResult>("scan_status");
+const capabilities = callable<[], { installer?: { links?: InstallerLinks } }>("get_capabilities");
+const previewRpc = callable<[string, string | null, string | null], Preview>("preview");
+let installerLinks: InstallerLinks | null = null;
+let catalogSigned = false;
+function projectPatch(patch: Patch): Patch {
+  return { ...patch, auto_installable: patchInstallable(patch, installerLinks, catalogSigned) };
+}
+function projectReport(report: ScanResult): ScanResult {
+  catalogSigned = report.catalog_trust === "signed";
+  return { ...report, installs: report.installs.map(row => ({ ...row, patches: row.patches.map(projectPatch) })) };
+}
+const scanStatus = async (generation: number) => projectReport(await scanStatusRpc(generation));
+const discoverGameRpc = callable<[string, string[], string | null, boolean], DiscoveryResult>("discover_game");
+const discoverGame = async (instance: string, names: string[], language: string | null, force: boolean): Promise<DiscoveryResult> => {
+  const result = await discoverGameRpc(instance, names, language, force);
+  return { ...result, patches: result.patches?.map(projectPatch) };
+};
 const listTransactions = callable<[], Transaction[] | { transactions: Transaction[] }>("list_transactions");
 const recover = callable<[], Transaction[]>("recover");
 const setSourceEnabled = callable<[string, boolean], SourceSubscription[]>("set_source_enabled");
@@ -26,10 +42,12 @@ const getSettings = callable<[], Settings>("get_settings");
 const setAutoCleanup = callable<[boolean], Settings>("set_auto_cleanup");
 
 async function readSnapshot(refreshSources = false) {
-  const report = await scan(refreshSources);
+  const [rawReport, caps] = await Promise.all([scan(refreshSources), capabilities()]);
+  installerLinks = caps.installer?.links ?? null;
+  const report = projectReport(rawReport);
   let transactions = session.getSnapshot().transactions;
   try { const result = await listTransactions(); transactions = Array.isArray(result) ? result : result.transactions ?? []; }
-  catch { /* Keep the last journal when an older core cannot list it. */ }
+  catch { /* Keep the last transaction snapshot during a transient read failure. */ }
   return { report, transactions };
 }
 const session = createManagerSession(readSnapshot, discoverGame, scanStatus);
@@ -79,8 +97,8 @@ function record(tx: Transaction) {
   const old = session.getSnapshot().transactions;
   session.update({ transactions: [tx, ...old.filter(item => item.transaction_id !== tx.transaction_id)] });
 }
-function refreshAfterMutation(note?: string, error?: string) {
-  void session.refresh().then(() => { if (note || error) session.update({ ...(note ? { note } : {}), ...(error ? { error } : {}) }); });
+function refreshAfterMutation(note?: string, error?: string, instance: string | null = null) {
+  void session.refresh().then(() => { if (note || error) session.setFeedback({ ...(note ? { note } : {}), ...(error ? { error } : {}) }, instance); });
 }
 const css = `
   .patch-qam { display:flex; flex-direction:column; min-height:0; height:100%; }
@@ -118,7 +136,7 @@ const css = `
 `;
 
 function matchSummary(item: Install): string {
-  return installSummary(item, !!session.getSnapshot().report?.scan_progress?.running);
+  return installSummary({ ...item, patches: item.patches.map(projectPatch) }, !!session.getSnapshot().report?.scan_progress?.running);
 }
 function CandidateDetails({ candidate }: { candidate: SourceCandidate }) {
   const format = candidate.format_observed && candidate.format_observed !== "unknown" ? candidate.format_observed : candidate.format_reported && candidate.format_reported !== "unknown" ? candidate.format_reported : "待确认";
@@ -132,7 +150,7 @@ function CandidateDetails({ candidate }: { candidate: SourceCandidate }) {
     <InfoRow label="文件格式">{format}{conflict ? `（页面标示 ${candidate.format_reported}，上游为 ${candidate.format_observed}）` : ""}</InfoRow>
     {candidate.cache_status && <InfoRow label="来源记录">{reason(candidate.cache_status)}</InfoRow>}
     {!!candidate.version_evidence?.length && candidate.warnings?.includes("version_conflict") && <InfoRow label="页面版本描述" below>{candidate.version_evidence.filter(value => typeof value === "string").join("、")}</InfoRow>}
-    <Row><Status>此来源线索用于核对游戏语言、版本与 DLC 条件。只有单独显示为已审核安装版本的补丁才能通过插件安装。</Status></Row>
+    <Row><Status>此来源线索用于核对游戏语言、版本与 DLC 条件。可安装补丁会单独列出，安装时自动检查实际文件和条件。</Status></Row>
     {!candidateMatched(candidate) && <Row><Status warning>此线索的游戏身份尚待确认，请核对来源中的游戏信息。</Status></Row>}
     {conflict && <Row><Status warning>索引标示与上游文件格式不一致，不能按 ZIP 安装。</Status></Row>}
     {candidate.warnings?.filter(warning => !conflict || warning !== "artifact_format_conflict").map((warning, index) => <Row key={index}><Status warning>{reason(warning)}</Status></Row>)}
@@ -163,7 +181,9 @@ function GameButton({ item }: { item: Install }) {
 }
 
 function QuickAccess() {
-  const { report, busy, error, note } = useSyncExternalStore(session.subscribe, session.getSnapshot);
+  const state = useSyncExternalStore(session.subscribe, session.getSnapshot);
+  const { report, busy } = state;
+  const { error, note } = feedbackFor(state);
   const { filter, query } = useSyncExternalStore(subscribeListPreferences, getListPreferences);
   const listRef = useRef<HTMLDivElement>(null);
   useEffect(() => { void session.ensureSnapshot(); void tasks.resume().catch(() => {}); }, []);
@@ -237,7 +257,9 @@ function showTask(game: string, patch: string, onTerminal: (task: TaskSnapshot) 
 }
 
 function GameManager({ item, seg, panel }: { item: Install; seg: string; panel?: string }) {
-  const { report, transactions, busy, error, note, discoveries } = useSyncExternalStore(session.subscribe, session.getSnapshot);
+  const state = useSyncExternalStore(session.subscribe, session.getSnapshot);
+  const { report, transactions, busy, discoveries } = state;
+  const { error, note } = feedbackFor(state, item.game.instance_id);
   // The decky SidebarNavigation is route-driven: it renders the page whose
   // `route` matches the URL and switches by replacing the URL. Keep one
   // sub-route per panel so selection and content follow the URL.
@@ -248,6 +270,7 @@ function GameManager({ item, seg, panel }: { item: Install; seg: string; panel?:
   const entries = displayPatches(item, preferredLanguage);
   const [selectedKey, setSelectedKey] = useState(entries[0]?.key ?? "");
   const [archive, setArchive] = useState("");
+  const [preview, setPreview] = useState<Preview | null>(null);
   const [manual, setManual] = useState(false);
   const panelScroll = useRef<Record<string, number>>({});
   const contentRef = useRef<HTMLDivElement>(null);
@@ -256,9 +279,11 @@ function GameManager({ item, seg, panel }: { item: Install; seg: string; panel?:
   const selected = entries.find(entry => entry.key === selectedKey);
   const patch = selected?.kind === "installable" ? selected.patch : undefined;
   const candidate = selected?.kind === "discovery" ? selected.candidate : undefined;
-  const release = patch?.release_id ?? "";
-  const blocked = patch && !canAutoInstall(patch) ? patch.blockers.map(reason).join(" ") || "此来源目前不能自动安装。" : null;
-  const manualBlocked = !patch || patch.support_level !== "managed_zip" || patch.blockers.length > 0;
+  const identity = patch?.selection_id ?? patch?.release_id ?? "";
+  const available = !!patch && patchInstallable(patch, installerLinks, report?.catalog_trust === "signed");
+  const link = patch?.support_level === "publisher_exe" ? installerLinks?.exe : installerLinks?.zip;
+  const blocked = patch && !available ? [...patch.blockers, ...(link?.blockers ?? []).map(value => value.code)].map(reason).join(" ") || "此来源目前不能自动安装。" : null;
+  const manualBlocked = !patch || patch.support_level !== "managed_zip" || patch.blockers.length > 0 || report?.catalog_trust !== "signed" || installerLinks?.zip?.available !== true;
   const owned = transactions.filter(t => t.instance_id === item.game.instance_id).reverse();
   const installed = !!patch && (patch.reinstall_available === true || ["managed", "installed_managed", "installed_owned", "external", "installed_external"].includes(patch.detection.status));
   const unfinished = transactions.filter(needsRecovery);
@@ -275,7 +300,7 @@ function GameManager({ item, seg, panel }: { item: Install; seg: string; panel?:
       void tasks.resume().then(() => {
         const task = tasks.getSnapshot();
         if (!mounted.current || document.hidden || !task || task.instance_id !== item.game.instance_id) return;
-        const name = item.patches.find(p => p.release_id === task.release_id)?.name ?? task.release_id ?? "补丁";
+        const name = item.patches.find(p => p.selection_id ? p.selection_id === task.selection_id : p.release_id === task.release_id)?.name ?? task.selection_id ?? task.release_id ?? "补丁";
         showTask(game, name, finishTask);
       }).catch(() => {});
     };
@@ -300,42 +325,52 @@ function GameManager({ item, seg, panel }: { item: Install; seg: string; panel?:
     // registers on the first render.
     if (navigate.current) navigate.current(target); else Navigation.Navigate(target);
   }
-  function chooseRelease(next: string) { setSelectedKey(next); setArchive(""); }
+  function chooseRelease(next: string) { setSelectedKey(next); setArchive(""); setPreview(null); }
   function changeGameSource(sourceId: string, subscribed: boolean) {
     void session.work("正在更新此游戏的订阅源…", async () => {
       await setGameSource(item.game.appid, sourceId, subscribed); session.invalidateDiscovery(sourceId, item.game.appid); return readSnapshot();
     }, snapshot => {
-      session.acceptSnapshot(snapshot); session.update({ note: "此游戏的订阅源已更新。" });
-    });
+      session.acceptSnapshot(snapshot); session.setFeedback({ note: "此游戏的订阅源已更新。" }, item.game.instance_id);
+    }, item.game.instance_id);
   }
   function finishTask(task: TaskSnapshot) {
-    if (task.state === "completed") {
+    const instance = task.instance_id ?? item.game.instance_id;
+    if (task.result?.state === "needs_recovery" || task.result?.recovery?.required) {
+      if (task.result?.transaction_id) record(task.result);
+      const diagnostic = task.result?.recovery?.code ?? task.result?.error ?? task.error ?? "needs_recovery";
+      refreshAfterMutation(undefined, `安装仍需恢复：${reason(diagnostic)}${task.result?.recovery?.detail ? ` · ${task.result.recovery.detail}` : ""}`, instance);
+    } else if (task.state === "completed") {
       const tx = task.result as Transaction;
       if (tx?.transaction_id) record(tx);
-      refreshAfterMutation(tx ? transactionResult(tx) : "安装完成，正在核对文件状态。");
+      refreshAfterMutation(tx ? transactionResult(tx) : "安装完成，正在核对文件状态。", undefined, instance);
     } else if (task.state === "failed") {
-      const error = reason(task.error ?? "任务失败，请检查操作记录。");
-      session.update({ error });
-      refreshAfterMutation(undefined, error);
+      const error = `${reason(task.error ?? "任务失败，请检查操作记录。")}${task.error_detail ? ` · ${task.error_detail}` : ""}`;
+      session.setFeedback({ error }, instance);
+      refreshAfterMutation(undefined, error, instance);
     } else if (task.state === "cancelled") {
-      session.update({ note: "任务已安全取消。" }); refreshAfterMutation();
+      refreshAfterMutation("任务已安全取消。", undefined, instance);
     }
   }
   async function beginInstall(manualArchive = "") {
     if (!patch || busy || tasks.isBusy() || (manualArchive ? manualBlocked : !!blocked)) return;
     try {
       const operation = installed ? "reinstall" : "install";
-      const key = `${item.game.instance_id}\0${release}\0${operation}\0${manualArchive}`;
+      const key = `${item.game.instance_id}\0${identity}\0${operation}\0${manualArchive}`;
       const requestId = pendingRequestIds.get(key) ?? crypto.randomUUID();
       pendingRequestIds.set(key, requestId);
       hideTask();
-      const pending = tasks.startInstall(item.game.instance_id, release, operation, requestId, manualArchive);
+      const pending = tasks.startInstall(item.game.instance_id, patch.selection_id ? null : patch.release_id, patch.selection_id ?? null, operation, requestId, manualArchive);
       // Show the foreground UI before the start RPC returns, so B can cancel startup.
       showTask(game, patch.name, finishTask);
       await pending;
       pendingRequestIds.delete(key);
     }
-    catch (e) { hideTask(); session.update({ error: reason(String(e)) }); }
+    catch (e) { hideTask(); session.setFeedback({ error: reason(String(e)) }, item.game.instance_id); }
+  }
+  function viewPreview() {
+    if (!patch || busy) return;
+    setPreview(null);
+    void session.work("正在检查文件变更…", () => previewRpc(item.game.instance_id, patch.selection_id ? null : patch.release_id, patch.selection_id ?? null), setPreview, item.game.instance_id);
   }
   const finding = discoveries[item.game.instance_id];
   const common = <>{busy && <Status>{busy}</Status>}{error && <Status warning>{error}</Status>}{note && <Status>{note}</Status>}
@@ -358,12 +393,12 @@ function GameManager({ item, seg, panel }: { item: Install; seg: string; panel?:
       <Row><Action disabled={!!busy} onClick={() => void session.refresh()}>重新查找补丁</Action></Row>
       {item.discovery?.diagnostics.map((diagnostic, index) => <Row key={index}><Status warning>{diagnostic.message || reason(diagnostic.code)}{diagnostic.detail && diagnostic.detail !== diagnostic.code ? ` · ${reason(diagnostic.detail)}` : ""}</Status></Row>)}
     </PanelSection>
-    {(!!item.patches.length || !item.discovery?.candidates.length) && <PanelSection title="匹配到的补丁">{item.patches.length ? item.patches.map(p => <PanelSectionRow key={p.release_id}>
+    {(!!item.patches.length || !item.discovery?.candidates.length) && <PanelSection title="匹配到的补丁">{item.patches.length ? item.patches.map(p => <PanelSectionRow key={p.selection_id ?? p.release_id}>
       <div className="patch-patch">
         <div className="patch-patch-name">{p.name}</div>
         <div className="patch-patch-source">匹配源：{sourceInfo(p, report?.sources)}</div>
         <div className="patch-actions">
-          <Button onClick={() => { chooseRelease(p.release_id); navigatePanel("patches"); }}>查看补丁</Button>
+          <Button onClick={() => { chooseRelease(p.selection_id ?? p.release_id); navigatePanel("patches"); }}>查看补丁</Button>
           <Button onClick={() => openSource(p.source_page)}>打开来源网页 ↗</Button>
         </div>
       </div>
@@ -380,6 +415,7 @@ function GameManager({ item, seg, panel }: { item: Install; seg: string; panel?:
       <InfoRow label="安装位置" below>{item.game.install_path}</InfoRow>
     </PanelSection>
   </div>;
+  const patchCandidate = item.discovery?.candidates.find(value => value.candidate_id === patch?.candidate_id);
   const patches = <div className="patch-page" ref={activePanel === "patches" ? contentRef : undefined} onScroll={e => panelScroll.current.patches = e.currentTarget.scrollTop}>
     {common}
     {selection}
@@ -391,14 +427,10 @@ function GameManager({ item, seg, panel }: { item: Install; seg: string; panel?:
         <InfoRow label="当前状态">{patchState(patch.detection.status)}</InfoRow>
         <InfoRow label="兼容性">{workflowState(patch.compatibility)}</InfoRow>
         <InfoRow label="安装方式">{workflowState(patch.support_level)}</InfoRow>
-        {patch.support_level === "publisher_exe" && patch.exe && <>
-          <InfoRow label="补丁语言">{patch.exe.language || "请核对来源说明"}</InfoRow>
-          <InfoRow label="补丁版本">{patch.exe.version || "请核对来源说明"}</InfoRow>
-          <InfoRow label="适用版本">{patch.exe.variant === "base" ? "游戏本体" : patch.exe.variant === "dlc" ? "DLC" : patch.exe.variant || "请核对来源说明"}</InfoRow>
-          {!!(patch.exe.requires_dlc?.length || patch.exe.excludes_dlc?.length) && <InfoRow label="DLC 条件" below>{[
-            patch.exe.requires_dlc?.length ? `需要 DLC ${patch.exe.requires_dlc.join("、")}` : "",
-            patch.exe.excludes_dlc?.length ? `不可使用 DLC ${patch.exe.excludes_dlc.join("、")}` : "",
-          ].filter(Boolean).join("；")}</InfoRow>}
+        {patch.support_level === "publisher_exe" && patchCandidate && <>
+          <InfoRow label="补丁语言">{candidateLanguage(patchCandidate)}</InfoRow>
+          <InfoRow label="补丁版本">{patchCandidate.version_raw || "请核对来源说明"}</InfoRow>
+          <InfoRow label="适用条件" below>{candidateConditions(patchCandidate)}</InfoRow>
         </>}
         {patch.blockers.map((b, i) => <Row key={i}><Status warning>{reason(b)}</Status></Row>)}
         <Row><Action onClick={() => openSource(patch.source_page)}>打开来源网页 ↗</Action></Row>
@@ -406,6 +438,8 @@ function GameManager({ item, seg, panel }: { item: Install; seg: string; panel?:
       <PanelSection title={installed ? "重新安装" : "安装补丁"}>
         <Row><Status>安装时请关闭游戏并暂停 Steam 更新。</Status></Row>
         {blocked && <Row><Status warning>{blocked}</Status></Row>}
+        <Row><Action disabled={!!busy || tasks.isBusy()} onClick={viewPreview}>查看文件变更（只读）</Action></Row>
+        {preview && <Row><Status>{preview.changes.length ? preview.changes.map(change => `${change.action}：${change.path}`).join("；") : preview.blockers.length ? preview.blockers.map(reason).join("；") : "暂无文件变更。"}</Status></Row>}
         <Row><Action disabled={!!busy || !!blocked || tasks.isBusy()} onClick={() => void beginInstall()}>{installed ? "重新安装补丁" : "安装补丁"}</Action></Row>
         {patch.support_level === "managed_zip" && <Row><Action onClick={() => setManual(value => !value)}>使用本地 ZIP（高级）{manual ? " ▴" : " ▾"}</Action></Row>}
         {manual && patch.support_level === "managed_zip" && <><Row><TextField label="Downloads 内的 ZIP 路径" value={archive} onChange={e => setArchive(e.target.value)} /></Row>
@@ -418,10 +452,10 @@ function GameManager({ item, seg, panel }: { item: Install; seg: string; panel?:
     {unfinished.length > 0 && <PanelSection title="未完成的操作"><Row><Status warning>以下操作需要恢复；请关闭相关游戏并暂停更新。</Status></Row>
       {unfinished.map(tx => <Row key={tx.transaction_id}><Status>{transactionGameName(report?.installs ?? [], tx.instance_id)} · {workflowState(tx.state)}</Status></Row>)}
       <Row><Action disabled={!!busy} onClick={() => void session.work("正在恢复…", recover, values => {
-        values.forEach(record); refreshAfterMutation("恢复已执行，请检查各项操作结果。");
-      })}>修复未完成的操作</Action></Row>
+        values.forEach(record); refreshAfterMutation("恢复已执行，请检查各项操作结果。", undefined, item.game.instance_id);
+      }, item.game.instance_id)}>修复未完成的操作</Action></Row>
     </PanelSection>}
-    <PanelSection title="当前游戏记录">{owned.length ? owned.map(tx => <Row key={tx.transaction_id}><Status>{tx.release_id} · {workflowState(tx.state)}{tx.error ? ` · ${reason(tx.error)}` : ""}</Status>
+    <PanelSection title="当前游戏记录">{owned.length ? owned.map(tx => <Row key={tx.transaction_id}><Status>{tx.selection_id ?? tx.release_id ?? tx.content_id ?? tx.transaction_id} · {workflowState(tx.state)}{tx.error ? ` · ${reason(tx.error)}` : ""}</Status>
       </Row>)
       : <Row><Status>没有本工具的操作记录。</Status></Row>}</PanelSection>
   </div>;
@@ -479,7 +513,9 @@ function SourcesPage({ report, busy, rule, setRule, changeSources, contentRef, o
 }
 
 function GlobalCache() {
-  const { busy, error, note } = useSyncExternalStore(session.subscribe, session.getSnapshot);
+  const state = useSyncExternalStore(session.subscribe, session.getSnapshot);
+  const { busy } = state;
+  const { error, note } = feedbackFor(state);
   const [settings, setSettings] = useState<Settings | null>(null);
   const [failed, setFailed] = useState(false);
   useEffect(() => {
@@ -487,14 +523,12 @@ function GlobalCache() {
     getSettings().then(value => { if (live) setSettings(value); }).catch(() => { if (live) setFailed(true); });
     return () => { live = false; };
   }, []);
-  const status = settings?.cache;
   const toggle = (enabled: boolean) => void session.work(enabled ? "正在开启自动清理…" : "正在关闭自动清理…",
     () => setAutoCleanup(enabled),
     value => { setSettings(value); session.update({ note: autoCleanupNote(value.auto_cleanup) }); });
   const clean = () => {
     void session.work("正在清理下载缓存…", clearCache, value => {
-        setSettings(current => current ? { ...current, cache: value } : current);
-        session.update({ note: cacheClearNote(value.removed_bytes ?? 0) });
+        session.update({ note: cacheClearNote(value.removed_bytes, value.performed) });
       });
   };
   return <div className="patch-page">
@@ -503,9 +537,9 @@ function GlobalCache() {
     <PanelSection title="下载缓存">
       {settings ? <>
         <Row><ToggleField label="安装成功后自动删除下载缓存" checked={settings.auto_cleanup} disabled={!!busy} onChange={toggle} /></Row>
-        <InfoRow label="当前占用">{cacheSummary(status)}</InfoRow>
+        <InfoRow label="当前占用">{cacheSummary()}</InfoRow>
         <Row><Status>{settings.auto_cleanup ? "安装成功后删除本次下载的补丁包。" : "缓存将保留直至手动清理。"}</Status></Row>
-        <Row><Action disabled={!!busy || !status?.file_count} onClick={clean}>清理下载缓存</Action></Row>
+        <Row><Action disabled={!!busy} onClick={clean}>清理下载缓存</Action></Row>
       </> : <Row><Status warning={failed}>{failed ? "读取缓存设置失败。" : "正在读取缓存设置…"}</Status></Row>}
     </PanelSection>
   </div>;
@@ -528,7 +562,9 @@ function Manager() {
   </Focusable>;
 }
 function GlobalSources() {
-  const { report, busy, error, note } = useSyncExternalStore(session.subscribe, session.getSnapshot);
+  const state = useSyncExternalStore(session.subscribe, session.getSnapshot);
+  const { report, busy } = state;
+  const { error, note } = feedbackFor(state);
   const [rule, setRule] = useState("");
   return <><div>{busy && <Status>{busy}</Status>}{error && <Status warning>{error}</Status>}{note && <Status>{note}</Status>}</div>
     <SourcesPage report={report} busy={!!busy} rule={rule} setRule={setRule} changeSources={action => void session.work("正在更新补丁源…", async () => { await action(); session.invalidateDiscovery(); return readSnapshot(); }, snapshot => { session.acceptSnapshot(snapshot); setRule(""); })} />

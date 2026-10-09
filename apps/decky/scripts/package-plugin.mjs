@@ -1,24 +1,39 @@
-import { cpSync, copyFileSync, existsSync, mkdirSync, rmSync, statSync } from "node:fs";
+import { cpSync, copyFileSync, existsSync, mkdirSync, rmSync, statSync, readFileSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const app = resolve(here, "..");
 const root = resolve(app, "../..");
-const binary = join(root, "target", "linux", "release", "steam-patch");
-if (!existsSync(binary) || !statSync(binary).isFile()) throw new Error("Build the Linux x86_64 CLI first: cargo build --release --target x86_64-unknown-linux-gnu -p steam-patch-cli");
+const binaries = ["steam-patch", "sf-worker"];
+for (const name of binaries) {
+  const binary = join(root, "target/linux/release", name);
+  if (!existsSync(binary) || !statSync(binary).isFile() || !readFileSync(binary).subarray(0, 4).equals(Buffer.from([0x7f, 0x45, 0x4c, 0x46])))
+    throw new Error(`Build the Linux ELF ${name} first: scripts/build-linux.sh`);
+}
 const output = join(app, "plugin-output");
 rmSync(output, { recursive: true, force: true });
 mkdirSync(join(output, "bin"), { recursive: true });
+mkdirSync(join(output, "backend"), { recursive: true });
 for (const file of ["main.py", "plugin.json", "package.json", "README.md"]) copyFileSync(join(app, file), join(output, file));
 copyFileSync(join(root, "LICENSE"), join(output, "LICENSE"));
-cpSync(join(app, "backend"), join(output, "backend"), { recursive: true, filter: path => !path.includes("__pycache__") && !/[\\/]fixtures(?:[\\/]|$)/.test(path) && !/[\\/]test_[^\\/]*\.py$/.test(path) });
+// An explicit production allowlist prevents developer Python oracles from
+// becoming a second installation engine in the deployed plugin.
+for (const file of ["bridge.py", "source_service.py", "tasks.py", "scan_session.py", "plugin_settings.py", "state_host.py"])
+  copyFileSync(join(app, "backend", file), join(output, "backend", file));
 cpSync(join(app, "dist"), join(output, "dist"), { recursive: true });
-mkdirSync(join(output, "backend", "exe_worker"), { recursive: true });
-for (const file of ["sf95_audit.py", "sf95_worker.py", "sf9_metadata.py", "sf9_graph.py", "sf9_lua.py", "sf9_behavior.py"]) copyFileSync(join(root, "scripts", file), join(output, "backend", "exe_worker", file));
-copyFileSync(join(root, "scripts", "licenses", "sfextract-MIT.txt"), join(output, "backend", "exe_worker", "sfextract-MIT.txt"));
-copyFileSync(binary, join(output, "bin", "steam-patch"));
-copyFileSync(join(root, "catalog", "catalog.json"), join(output, "bin", "catalog.json"));
+mkdirSync(join(output, "licenses"), { recursive: true });
+copyFileSync(join(root, "scripts/licenses/sfextract-MIT.txt"), join(output, "licenses/sfextract-MIT.txt"));
+const runtime = [];
+for (const name of binaries) {
+  const binary = join(root, "target/linux/release", name);
+  const bytes = readFileSync(binary);
+  copyFileSync(binary, join(output, "bin", name));
+  runtime.push({ path: `bin/${name}`, size: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex") });
+}
+writeFileSync(join(output, "bin/runtime.json"), JSON.stringify({ protocol_version: 3, worker_protocol: 1, files: runtime }, null, 2) + "\n");
+copyFileSync(join(root, "catalog/catalog.json"), join(output, "bin/catalog.json"));
 for (const file of ["signed-catalog.json", "trust-keys.json"]) {
   const source = join(root, "catalog", file);
   if (existsSync(source)) copyFileSync(source, join(output, "bin", file));

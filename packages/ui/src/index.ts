@@ -21,6 +21,7 @@ export type Patch = {
 };
 
 export type Install = {
+  preexisting_installation?: boolean;
   game: {
     instance_id: string;
     appid: number;
@@ -94,7 +95,7 @@ export function displayPatches(row: Install, preferredLanguage: string | null = 
     .sort((a, b) => Number(a.source_id === "hgamer") - Number(b.source_id === "hgamer")
       || Number(!!preferredLanguage && !a.languages?.includes(preferredLanguage)) - Number(!!preferredLanguage && !b.languages?.includes(preferredLanguage)))
     .map(candidate => ({ kind: "discovery", key: candidate.candidate_id, candidate }));
-  return [...row.patches.map(patch => ({ kind: "installable" as const, key: patch.release_id, patch })), ...discovery];
+  return [...row.patches.map(patch => ({ kind: "installable" as const, key: patch.selection_id ?? patch.release_id, patch })), ...discovery];
 }
 export function hasMatchedPatch(row: Install): boolean {
   return row.patches.length > 0 || !!row.discovery?.candidates.some(candidateMatched);
@@ -132,7 +133,7 @@ export function patchInstallable(patch: Patch, links: InstallerLinks | null | un
   if (patch.download_available !== true) return false;
   switch (patch.support_level) {
     case "managed_zip":
-      return signed;
+      return signed && links?.zip?.available === true;
     case "publisher_zip":
       return !!patch.selection_id && links?.zip?.available === true;
     case "publisher_exe":
@@ -147,6 +148,7 @@ export function canAutoInstall(patch: Patch): boolean {
 }
 
 export function installSummary(row: Install, scanning = false): string {
+  if (row.preexisting_installation) return "已有补丁，需检查";
   if (row.patches.some(p => isManaged(p.detection.status) || isExternal(p.detection.status))) return "已安装补丁";
   if (row.patches.some(p => p.reinstall_available && ["partial", "conflict", "partial_or_conflict", "needs_revalidation"].includes(p.detection.status))) return "补丁文件不完整，需重新安装";
   if (row.patches.some(canAutoInstall)) return "有可用补丁";
@@ -213,6 +215,7 @@ export function isExternal(status: string): boolean {
 }
 
 export function needsAttention(row: Install): boolean {
+  if (row.preexisting_installation) return true;
   return row.game.availability !== "installed" || row.patches.some(p =>
     p.blockers.length > 0 || ["partial", "conflict", "partial_or_conflict", "needs_revalidation"].includes(p.detection.status)
     || (p.detection.status === "unknown" && p.support_level !== "discover_only")
@@ -373,7 +376,9 @@ export function reason(code: string): string {
     plan_has_blockers: "安装计划存在阻止条件，请先处理列出的问题。",
     game_closed_confirmation_required: "请关闭游戏并暂停 Steam 更新后确认。",
     game_changed_or_unavailable: "游戏版本或库状态已变化，请重新扫描和预检。",
-    installer_busy: "另一项安装或恢复正在执行，请等待完成。",
+    preexisting_installation_requires_review: "已有补丁内容尚未核验，已阻止覆盖；请先检查现有安装。",
+  preexisting_protection_invalid: "已有安装保护记录损坏，已停止安装。",
+  installer_busy: "另一项安装或恢复正在执行，请等待完成。",
     game_busy: "此游戏正在被另一项事务处理，请等待完成。",
     insufficient_space: "可用磁盘空间不足，请清理空间后重新预检。",
     managed_install_exists_or_needs_recovery: "已有托管安装或待恢复事务，请先卸载或恢复。",

@@ -1,64 +1,67 @@
 """Package already-built clients without game assets or private signing keys."""
 from pathlib import Path
 import argparse
-import ast
 import hashlib
 import json
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
 OUTPUT = ROOT / '.artifacts'
-SF95_FILES = (
-    ('scripts/sf95_audit.py', 'backend/exe_worker/sf95_audit.py', 'bundled-audit'),
-    ('scripts/sf95_worker.py', 'backend/exe_worker/sf95_worker.py', 'bundled-worker'),
-    ('scripts/sf9_metadata.py', 'backend/exe_worker/sf9_metadata.py', 'bundled-metadata'),
-    ('scripts/sf9_graph.py', 'backend/exe_worker/sf9_graph.py', 'bundled-graph'),
-    ('scripts/sf9_lua.py', 'backend/exe_worker/sf9_lua.py', 'bundled-lua'),
-    ('scripts/sf9_behavior.py', 'backend/exe_worker/sf9_behavior.py', 'bundled-behavior'),
+INSTALLER_FILES = (
+    ('crates/installer-format/Cargo.toml', None, 'format-manifest'),
+    ('crates/installer-worker/Cargo.toml', None, 'worker-manifest'),
     ('LICENSE', 'LICENSE', 'project-license'),
-    ('scripts/licenses/sfextract-MIT.txt', 'backend/exe_worker/sfextract-MIT.txt', 'bundled-license'),
+    ('scripts/licenses/sfextract-MIT.txt', 'licenses/sfextract-MIT.txt', 'reference-license'),
 )
 SFEXTRACT_COMMIT = '21f5c5595a70e9284fff83476c0e307d5b92f573'
-
-
-def sf95_version(path):
-    module = ast.parse(path.read_text(encoding='utf-8'), filename=str(path))
-    versions = [node.value.value for node in module.body
-                if isinstance(node, ast.Assign)
-                and any(isinstance(target, ast.Name) and target.id == 'VERSION' for target in node.targets)
-                and isinstance(node.value, ast.Constant) and isinstance(node.value.value, str)]
-    if len(versions) != 1:
-        raise ValueError('SF95 audit version is missing; rebuild SBOM after fixing the worker')
-    return versions[0]
+PRODUCTION_BACKEND = {'bridge.py', 'source_service.py', 'tasks.py', 'scan_session.py', 'plugin_settings.py', 'state_host.py'}
 
 
 def validate_sbom(sbom, plugin, decky):
     data = json.loads(sbom.read_text(encoding='utf-8'))
     try:
         properties = {item['name']: item['value'] for item in data['metadata']['properties']}
-        matches = [item for item in data['components'] if item.get('name') == 'steam-patch-sf95-worker']
+        matches = [item for item in data['components'] if item.get('name') == 'steam-patch-rust-installer']
     except (KeyError, TypeError) as error:
         raise ValueError('Regenerate SBOM for current dependencies before packaging') from error
     for name, path in [('cargo', 'Cargo.lock'), ('npm', 'package-lock.json')]:
         if properties.get(f'steam-patch:{name}-lock-sha256') != hashlib.sha256((ROOT / path).read_bytes()).hexdigest():
             raise ValueError('Regenerate SBOM for current lockfiles before packaging')
     if len(matches) != 1:
-        raise ValueError('Regenerate SBOM with the maintained SF95 worker before packaging')
-    sf95 = matches[0]
-    details = {item['name']: item['value'] for item in sf95.get('properties', [])}
-    if (sf95.get('version') != sf95_version(ROOT / SF95_FILES[0][0])
-            or sf95.get('licenses') != [{'expression': 'MIT'}]
+        raise ValueError('Regenerate SBOM with the Rust installer before packaging')
+    installer = matches[0]
+    details = {item['name']: item['value'] for item in installer.get('properties', [])}
+    if (installer.get('version') != '1' or installer.get('licenses') != [{'expression': 'MIT'}]
             or details.get('steam-patch:reference-commit') != SFEXTRACT_COMMIT):
-        raise ValueError('Regenerate SBOM for the current SF95 worker before packaging')
-    for source, packaged, prefix in SF95_FILES:
+        raise ValueError('Regenerate SBOM for the current Rust installer before packaging')
+    for source, packaged, prefix in INSTALLER_FILES:
         digest = hashlib.sha256((ROOT / source).read_bytes()).hexdigest()
-        if (details.get(f'steam-patch:{prefix}-path') != packaged
-                or details.get(f'steam-patch:{prefix}-sha256') != digest):
+        if (details.get(f'steam-patch:{prefix}-source') != source
+                or details.get(f'steam-patch:{prefix}-sha256') != digest
+                or (packaged and details.get(f'steam-patch:{prefix}-path') != packaged)):
             raise ValueError(f'Regenerate SBOM for current {source} before packaging')
-        if decky:
+        if decky and packaged:
             bundled = plugin / packaged
             if not bundled.is_file() or hashlib.sha256(bundled.read_bytes()).hexdigest() != digest:
                 raise ValueError(f'Rebuild Decky plugin for current {source} before packaging')
+
+
+def validate_decky(plugin):
+    actual = {path.name for path in (plugin / 'backend').iterdir()}
+    if actual != PRODUCTION_BACKEND:
+        raise ValueError('Rebuild Decky plugin: unexpected or missing production backend modules')
+    runtime = json.loads((plugin / 'bin/runtime.json').read_text(encoding='utf-8'))
+    if runtime.get('protocol_version') != 3 or runtime.get('worker_protocol') != 1:
+        raise ValueError('Rebuild Decky plugin: invalid runtime manifest')
+    files = runtime.get('files', [])
+    if {item.get('path') for item in files} != {'bin/steam-patch', 'bin/sf-worker'} or len(files) != 2:
+        raise ValueError('Rebuild Decky plugin: incomplete runtime manifest')
+    for item in files:
+        binary = plugin / item['path']
+        data = binary.read_bytes()
+        if (not data.startswith(b'\x7fELF') or len(data) != item.get('size')
+                or hashlib.sha256(data).hexdigest() != item.get('sha256')):
+            raise ValueError('Rebuild Decky plugin: runtime hash mismatch')
 
 
 def archive(name, entries):
@@ -87,12 +90,16 @@ def main():
     windows.append((ROOT / 'docs/client-guide.md', 'client-guide.md', False))
     windows.append((ROOT / 'docs/privacy.md', 'privacy.md', False))
     plugin = ROOT / 'apps/decky/plugin-output'
-    if platform in ('all', 'decky') and not plugin.is_dir():
-        raise FileNotFoundError('Build apps/decky package:plugin first')
+    if platform in ('all', 'decky'):
+        if not plugin.is_dir():
+            raise FileNotFoundError('Build apps/decky package:plugin first')
+        validate_decky(plugin)
     decky = [(path, 'steam-patch-manager/' + path.relative_to(plugin).as_posix(),
-              path.relative_to(plugin).as_posix() == 'bin/steam-patch')
+              path.relative_to(plugin).as_posix() in ('bin/steam-patch', 'bin/sf-worker'))
              for path in sorted(plugin.rglob('*')) if path.is_file()]
     sbom = OUTPUT / 'dependencies.cdx.json'
+    if platform in ('all', 'decky') and not sbom.is_file():
+        raise FileNotFoundError('Generate the current SBOM before Decky packaging')
     if sbom.is_file():
         validate_sbom(sbom, plugin, platform in ('all', 'decky'))
         windows.append((sbom, sbom.name, False))

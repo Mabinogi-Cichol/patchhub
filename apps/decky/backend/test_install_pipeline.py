@@ -15,43 +15,37 @@ spec.loader.exec_module(module)
 
 
 class InstallPipelineTests(unittest.IsolatedAsyncioTestCase):
-    async def test_single_rpc_prepares_applies_and_deduplicates_retry(self):
+    async def test_single_rpc_installs_selection_and_deduplicates_retry(self):
         with tempfile.TemporaryDirectory() as temporary:
-            archive = Path(temporary) / "patch.zip"
-            archive.write_bytes(b"archive")
             plugin = module.Plugin()
             plugin.tasks = module.TaskManager(state_dir=temporary)
-            plugin._prepare_install = AsyncMock(return_value={
-                "archive": str(archive), "plan": {"plan_id": "plan-1"}})
-            plugin._start_install = AsyncMock(return_value={"state": "committed", "transaction_id": "tx-1"})
+            plugin.settings = types.SimpleNamespace(auto_cleanup=True)
+            plugin.bridge = types.SimpleNamespace(selection=module.CoreBridge.selection,
+                install_patch=AsyncMock(return_value={"state": "committed", "transaction_id": "tx-1"}),
+                cleanup_cache=AsyncMock(return_value={"performed": True, "removed_bytes": 12}))
             request_id = str(uuid.uuid4())
-
-            first = await plugin.start_patch_install_task("local", "zip-release", "install", request_id)
+            args = ("local", None, "zip-selection-value-1", None, "install", request_id)
+            first = await plugin.start_patch_install_task(*args)
             task = plugin.tasks.get(first["task_id"])
             await task.worker
-            retry = await plugin.start_patch_install_task("local", "zip-release", "install", request_id)
-
+            retry = await plugin.start_patch_install_task(*args)
             self.assertEqual(first, retry)
             self.assertEqual(task.snapshot()["state"], "completed")
             self.assertEqual(task.snapshot()["result"]["transaction_id"], "tx-1")
-            plugin._prepare_install.assert_awaited_once_with("local", "zip-release", "", "install")
-            plugin._start_install.assert_awaited_once_with("plan-1")
+            plugin.bridge.install_patch.assert_awaited_once_with("local", None, "zip-selection-value-1", None, "install", request_id)
+            plugin.bridge.cleanup_cache.assert_awaited_once()
+            with self.assertRaisesRegex(ValueError, "request_identity_changed"):
+                await plugin.start_patch_install_task("local", None, "zip-selection-changed-1", None, "install", request_id)
 
-    async def test_startup_revokes_unbound_planned_job_even_if_discard_rpc_fails(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            state = Path(temporary)
-            plan_id = str(uuid.uuid4())
-            (state / "jobs" / plan_id).mkdir(parents=True)
-            bridge = types.SimpleNamespace(state_dir=state,
-                discard_plan=AsyncMock(side_effect=RuntimeError("rpc_failed")))
-            plugin = module.Plugin()
-            plugin.bridge = bridge
-            plugin._list_transactions = AsyncMock(return_value=[
-                {"state": "planned", "plan_id": plan_id},
-                {"state": "committed", "plan_id": "committed-untouched"}])
-            await plugin._reclaim_plans()
-            self.assertTrue((state / "jobs" / plan_id / "revoked").is_file())
-            bridge.discard_plan.assert_awaited_once_with(plan_id)
+    async def test_selection_archive_and_conflicting_ids_are_rejected_before_task(self):
+        plugin = module.Plugin()
+        plugin.tasks = module.TaskManager()
+        plugin.bridge = types.SimpleNamespace(selection=module.CoreBridge.selection)
+        with self.assertRaisesRegex(ValueError, "archive_not_allowed_for_selection"):
+            await plugin.start_patch_install_task("local", None, "exe-selection-a-1", "a.zip")
+        with self.assertRaisesRegex(ValueError, "invalid_request"):
+            await plugin.start_patch_install_task("local", "release", "exe-selection-a-1")
+        self.assertFalse(plugin.tasks.busy())
 
     async def test_public_rpc_waits_for_startup_migration_and_reports_failure(self):
         import asyncio
@@ -67,18 +61,6 @@ class InstallPipelineTests(unittest.IsolatedAsyncioTestCase):
         plugin._startup_error = RuntimeError("installer_busy")
         with self.assertRaisesRegex(RuntimeError, "plugin_startup_failed"):
             await plugin.list_tasks()
-
-    async def test_startup_waits_for_exiting_core_lock_but_not_other_errors(self):
-        from unittest.mock import patch
-        plugin = module.Plugin()
-        bridge = types.SimpleNamespace(migrate_state=AsyncMock(side_effect=[RuntimeError("installer_busy"), []]))
-        with patch.object(module.asyncio, "sleep", new_callable=AsyncMock) as pause:
-            self.assertEqual(await plugin._migrate_startup(bridge), [])
-            pause.assert_awaited_once_with(.25)
-        bridge.migrate_state = AsyncMock(side_effect=RuntimeError("journal_invalid_identity"))
-        with self.assertRaisesRegex(RuntimeError, "journal_invalid_identity"):
-            await plugin._migrate_startup(bridge)
-
 
     async def test_public_status_renews_foreground_but_task_list_does_not(self):
         import asyncio

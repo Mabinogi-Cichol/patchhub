@@ -7,7 +7,7 @@ from pathlib import Path
 from threading import Event, RLock
 import time
 import uuid
-from plugin_settings import _write_json
+from plugin_settings import _write_json, _no_links
 
 current_task = ContextVar("patch_task", default=None)
 TERMINAL = {"completed", "cancelled", "failed"}
@@ -20,7 +20,7 @@ class Task:
         self.lock = RLock()
         self.started = self.lease = time.monotonic()
         self.samples = deque()
-        self.value = dict(task_id=str(uuid.uuid4()), kind=kind, state="running", stage="scanning",
+        self.value = dict(task_id=str(uuid.uuid4()), kind=kind, state="running", stage="connecting",
                           bytes_done=0, total_bytes=None, files_done=0, total_files=None,
                           current_file=None, archive_bytes=None, result=None, error=None, **metadata)
         self.worker = None
@@ -32,6 +32,8 @@ class Task:
     def update(self, **progress):
         with self.lock:
             previous = self.value
+            if previous["state"] in TERMINAL:
+                return
             if progress.get("stage", previous["stage"]) != previous["stage"] or progress.get("bytes_done", previous["bytes_done"]) < previous["bytes_done"]:
                 self.samples.clear()
             previous.update(progress)
@@ -79,8 +81,7 @@ class TaskManager:
         self.path = Path(state_dir) / "tasks.json" if state_dir else None
         self.requests = {}
         if self.path and self.path.exists():
-            from acquisition import no_links
-            if not no_links(self.path) or self.path.stat().st_size > 1024 * 1024:
+            if not _no_links(self.path) or self.path.stat().st_size > 1024 * 1024:
                 raise ValueError("invalid_task_history")
             data = json.loads(self.path.read_text(encoding="utf-8"))
             if data.get("schema_version") != 1 or not isinstance(data.get("tasks"), list):
@@ -106,11 +107,12 @@ class TaskManager:
     def start(self, kind, work, **metadata):
         request_id = metadata.get("request_id")
         if request_id is not None:
-            if not isinstance(request_id, str) or len(request_id) > 64 or str(uuid.UUID(request_id)) != request_id:
+            if (not isinstance(request_id, str) or not 1 <= len(request_id.encode("utf-8")) <= 128
+                    or any(ord(c) < 32 or ord(c) == 127 for c in request_id)):
                 raise ValueError("invalid_request_id")
             previous = self.tasks.get(self.requests.get(request_id))
             if previous:
-                if any(previous.value.get(k) != metadata.get(k) for k in ("instance_id", "release_id", "operation", "archive_path")):
+                if any(previous.value.get(k) != metadata.get(k) for k in ("instance_id", "release_id", "selection_id", "operation", "archive_path")):
                     raise ValueError("request_identity_changed")
                 return {"task_id": previous.value["task_id"]}
         if self.busy():
@@ -144,7 +146,7 @@ class TaskManager:
                 if state == "committed":
                     # Commit wins a late cancellation race.
                     task.update(state="completed", result=result)
-                elif state == "rolled_back" and "task_cancelled" in (result.get("error") or ""):
+                elif state == "rolled_back" and result.get("error") in ("cancelled", "task_cancelled", "lease_expired"):
                     task.update(state="cancelled", result=result)
                 else:
                     task.update(state="failed", result=result, error=result.get("error") or state or "install_failed")
@@ -153,7 +155,8 @@ class TaskManager:
                 task.update(state="completed", result=result)
         except Exception as error:
             code = str(error)
-            task.update(state="cancelled" if code in ("task_cancelled", "download_cancelled") else "failed", error=code)
+            task.update(state="cancelled" if code in ("cancelled", "task_cancelled") else "failed",
+                        error=code, error_detail=getattr(error, "detail", None))
         finally:
             guard.cancel()
             await asyncio.gather(guard, return_exceptions=True)

@@ -1,6 +1,5 @@
-export type JobsStatus = { stage_bytes: number; backup_bytes: number };
-export type CacheStatus = { total_bytes: number; file_count: number; publisher_bytes: number; core_bytes: number; removed_bytes?: number; jobs: JobsStatus };
-export type Settings = { auto_cleanup: boolean; cache: CacheStatus };
+export type CacheStatus = { performed: boolean; removed_bytes: number };
+export type Settings = { schema_version: number; auto_cleanup: boolean; cache: CacheStatus | null };
 
 // One binary-unit formatter shared by progress and cache rows.
 export function formatSize(bytes: number) {
@@ -11,12 +10,12 @@ export function formatSize(bytes: number) {
   return `${i ? n.toFixed(1) : Math.round(n)} ${units[i]}`;
 }
 
-export function cacheSummary(status?: CacheStatus | null) {
-  return `${formatSize(status?.total_bytes ?? 0)} · ${status?.file_count ?? 0} 个文件`;
+export function cacheSummary() {
+  return "当前版本不提供占用统计";
 }
 
-export function cacheClearNote(removed: number) {
-  return `已清理 ${formatSize(removed)} 下载缓存。`;
+export function cacheClearNote(removed: number, performed = true) {
+  return performed ? `已清理 ${formatSize(removed)} 下载缓存。` : "当前没有可清理的下载缓存。";
 }
 
 export function autoCleanupNote(enabled: boolean) {

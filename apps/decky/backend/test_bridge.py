@@ -54,16 +54,16 @@ class BridgeContractTests(unittest.TestCase):
         self.assertTrue(CONTROLLED_METHODS.issubset(METHODS))
         self.assertEqual(SOURCE_EVENTS, {"source_progress", "source_update"})
         for method in ("list_source_matches", "get_source_state", "get_source_settings"):
-            self.assertIn(method, SOURCE_METHODS)
+            self.assertNotIn(method, SOURCE_METHODS)
 
     def test_source_event_requires_binding_and_monotonic_sequence(self):
-        self.assertEqual(CoreBridge._source_event({"request_id": "r", "sequence": 0}, "r", -1), 0)
+        self.assertEqual(CoreBridge._source_event({"protocol_version": 3, "request_id": "r", "sequence": 0}, "r", -1), 0)
         with self.assertRaisesRegex(RuntimeError, "invalid_core_response"):
-            CoreBridge._source_event({"request_id": "other", "sequence": 0}, "r", -1)
+            CoreBridge._source_event({"protocol_version": 3, "request_id": "other", "sequence": 0}, "r", -1)
         with self.assertRaisesRegex(RuntimeError, "invalid_core_response"):
-            CoreBridge._source_event({"request_id": "r", "sequence": 1}, "r", 1)
+            CoreBridge._source_event({"protocol_version": 3, "request_id": "r", "sequence": 1}, "r", 1)
         with self.assertRaisesRegex(RuntimeError, "invalid_core_response"):
-            CoreBridge._source_event({"request_id": "r", "sequence": "1"}, "r", -1)
+            CoreBridge._source_event({"protocol_version": 3, "request_id": "r", "sequence": "1"}, "r", -1)
 
     def test_call_sync_is_async(self):
         self.assertTrue(asyncio.iscoroutinefunction(CoreBridge.call_sync))
@@ -85,12 +85,12 @@ class BridgeStreamTests(unittest.IsolatedAsyncioTestCase):
 
         def factory(request_id, request):
             events = [
-                {"event": "source_progress", "request_id": request_id, "sequence": 0,
+                {"event": "source_progress", "protocol_version": 3, "request_id": request_id, "sequence": 0,
                  "completed": 0, "total": 1, "running": True},
-                {"event": "source_update", "request_id": request_id, "sequence": 1, "appid": 7,
+                {"event": "source_update", "protocol_version": 3, "request_id": request_id, "sequence": 1, "appid": 7,
                  "discovery": {"status": "complete", "candidates": [], "diagnostics": []}},
             ]
-            response = {"protocol_version": 2, "request_id": request_id, "ok": True,
+            response = {"protocol_version": 3, "request_id": request_id, "ok": True,
                         "result": {"settings_revision": 3, "results": []}}
             return events, response
 
@@ -104,7 +104,7 @@ class BridgeStreamTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_foreign_source_event_is_rejected(self):
         def factory(request_id, request):
-            events = [{"event": "source_progress", "request_id": "foreign", "sequence": 0}]
+            events = [{"event": "source_progress", "protocol_version": 3, "request_id": "foreign", "sequence": 0}]
             return events, {"ok": True}
 
         process = _FakeProcess(factory)
@@ -114,7 +114,7 @@ class BridgeStreamTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_call_sync_uses_one_shot_serve(self):
         def factory(request_id, request):
-            return [], {"protocol_version": 2, "request_id": request_id, "ok": True,
+            return [], {"protocol_version": 3, "request_id": request_id, "ok": True,
                         "result": {"settings_revision": 4}}
 
         process = _FakeProcess(factory)
@@ -126,7 +126,7 @@ class BridgeStreamTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_missing_capability_surfaces_core_error(self):
         def factory(request_id, request):
-            return [], {"protocol_version": 2, "request_id": request_id, "ok": False,
+            return [], {"protocol_version": 3, "request_id": request_id, "ok": False,
                         "error": {"code": "unsupported_method"}}
 
         process = _FakeProcess(factory)
