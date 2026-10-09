@@ -114,10 +114,10 @@ zip-selection-<hex(sha256(canonical_bytes(zip_candidate_binding)))[:24]>-<appid>
 1. **选择解析**：`^zip-selection-[0-9a-f]{24}-[1-9][0-9]*$`；提取 `appid`。不匹配 → `invalid_selection_id`（见 §4 判定顺序）。
 2. **实例**：`steam::scan(roots)` 找 `instance_id`；校验 `appid` 等于 selection 后缀、`availability=="installed"`、`buildid` 存在；否则 `instance_not_found`/`game_not_ready`/`build_not_verified`。
 3. **来源装载**：`Sources::open(state_dir)`；取 `registry`、`settings_revision`；`game_query(instance)`。
-4. **候选定位**：`registry.cached_discovery(&game)` 的候选逐个计算 `zip_selection_id`，匹配请求值。无命中 → `selection_not_found`（含候选漂移：重算摘要不同即视为未命中）。
+4. **候选定位**：`registry.dynamic_zip_candidates(&game)`（discovery 候选 ∪ 索引来源投影候选；后者为 2026-10-09 修订）的候选逐个计算 `zip_selection_id`，匹配请求值。无命中 → `selection_not_found`（含候选漂移：重算摘要不同即视为未命中）。
 5. **来源重核**（design §5.1）：rule 存在、`enabled`、`!discovery_only`、`game_subscribed(appid, source_id)`；`candidate.cache_status != Stale`。否则 `source_not_enabled`/`source_not_subscribed`/`source_requires_guidance`/`selection_stale`。
 6. **下载 URL 解析**（`acquire.validate_download` 前置）：
-   - `mirrors_zip` 去重后规范化比较；`==1` 个不同 URL → 选定；`0` → `zip_download_unavailable`；`>1` → `zip_download_ambiguous`。
+   - `mirrors_zip` 按原顺序过滤（`allowed_url` 校验；非法镜像跳过）后规范化去重：该格式镜像为 0 → `zip_download_unavailable`；过滤后合法集合为空 → `invalid_download_url`；合法集合 basename 异构（≥2 种）→ `zip_download_ambiguous`；否则取首个合法 URL（**确定性择一**；2026-10-09 P4 实机验收修订，见 §2.3）。
    - `acquire::validate_download(url, rule.download_hosts)`：HTTPS/主机/端口 443/无凭据/`.zip` 路径；失败 → `invalid_download_url`。
 7. **released 门（F1 裁决：动态 ZIP 路径移除 `source_not_released`）**：候选模型暂无可靠日期字段（`SourceCandidate.date` 缺失、`published_at` 恒 `None`），动态路径不承诺 `source_not_released`；**待候选日期字段补齐后另行引入**。未发布条目的过滤仍由 discovery/来源缓存负责，无日期证据视为已发布。
 8. **facts 期望映射**（`FactsExpectation`）：
@@ -125,12 +125,13 @@ zip-selection-<hex(sha256(canonical_bytes(zip_candidate_binding)))[:24]>-<appid>
 | 期望 | 取值 |
 | --- | --- |
 | `appid` | selection appid |
-| `language` | 候选选中语言（`languages` 含 `zh-CN` 取之，否则首个）；为空时回退 rule.`language`，再回退现场选中语言（自洽，不因来源无语言而阻断） |
+| `language` | 候选选中语言（`languages` 含 `zh-CN` 取之，否则首个）；为空时回退 rule.`language`，再回退现场选中语言（自洽，不因来源无语言而阻断）。**是否作为准入条件 = `rule.discovery_only`**：发布商来源（kagura）设门；索引投影来源（patchmoe，2026-10-09 修订）不设门；语言仍进 `recipe_identity` |
+| `require_language` | 语言准入开关（2026-10-09 修订新增）：发布商 ZIP/EXE 为 `true`（默认），索引来源 ZIP 为 `false`；`false` 时语言不匹配仅记录 evidence、不阻断 |
 | `requires_dlc` / `excludes_dlc` | `candidate.requires_dlc` / `excludes_dlc`（缺省空） |
 | `verified_buildids` | `[instance.buildid]`（“本次现场 build 自证”，对齐 Python publisher 生成 `verified_buildids=[buildid]`；publisher ZIP 无人工 build 表） |
 | `baselines` | 空（ZIP 无审核基线表；`original_sha256` 是现场快照，非原版认证，design §5.2） |
 
-9. **阻断判定**：投影 blocker 集合须为空才继续（对齐 Python `if patch["blockers"]: raise`）：`source_not_enabled`/`source_not_subscribed`/`game_not_ready`/`build_not_verified`/`zip_download_unavailable`/`zip_download_ambiguous`/`managed_install_exists_or_needs_recovery`/`publisher_existing_transaction`（同实例已 committed 且 release_id 不同）/`archive_not_allowed_for_selection`。
+9. **阻断判定**：投影 blocker 集合须为空才继续（对齐 Python `if patch["blockers"]: raise`）：`source_not_enabled`/`source_not_subscribed`/`game_not_ready`/`build_not_verified`/`zip_download_unavailable`/`zip_download_ambiguous`（仅合法镜像 basename 异构；同名多域镜像确定性择一，2026-10-09 修订）/`managed_install_exists_or_needs_recovery`/`publisher_existing_transaction`（同实例已 committed 且 release_id 不同）/`archive_not_allowed_for_selection`。
 10. **期望 → 下载请求**：`DownloadRequest { url, download_hosts: &rule.download_hosts, expected_sha256: None, expected_size: None }`（动态首 SHA 建立内容身份；来源若提供可靠摘要则另行核验，p0 §2.4，P1 候选暂不携带）。
 
 **不可用/歧义阻断错误码**：`selection_not_found`、`selection_stale`、`source_not_enabled`、`source_not_subscribed`、`source_requires_guidance`、`zip_download_unavailable`、`zip_download_ambiguous`、`invalid_download_url`、`game_not_ready`、`build_not_verified`、`instance_not_found`。（`source_not_released` 已从动态 ZIP 路径移除；待候选日期字段补齐后另行引入，F1。）
@@ -139,6 +140,7 @@ zip-selection-<hex(sha256(canonical_bytes(zip_candidate_binding)))[:24]>-<appid>
 
 - 只在安装路径里做**网络无关的候选重核 + 一次动态下载**，不在 `install_patch` 隐式触发 `discover_game`（避免长网络/来源刷新混入任务）；陈旧选择明确要求 UI 刷新来源。
 - 候选即来源真源，与 EXE 选择输入一致；DLC/语言来自候选条件，`requires_dlc/excludes_dlc` 未知不默认满足（`FactsExpectation` 空列表 = 无实际条件）。
+- 语言准入按来源类别收窄（2026-10-09 裁决）：发布商来源（`discovery_only`）保留语言门（ZIP 无审核基线，语言为唯一变体前提，且与 EXE 路径一致）；索引投影来源（patchmoe）语言为页面归类、同 URL 多语言已在采集期合并且优先 zh-CN，不作准入门；语言仍进 `recipe_identity`（身份不随现场语言漂移）。对齐旧 `publisher.py`（无游戏语言门）。
 - `buildid` 自证对齐 Python publisher，不引入 publisher ZIP 不存在的人工 build 门。
 
 ### 2.3 被否替代
@@ -146,7 +148,8 @@ zip-selection-<hex(sha256(canonical_bytes(zip_candidate_binding)))[:24]>-<appid>
 - resolve 内联 `discover_game`/`refresh_sources`（网络进入安装任务，取消/租约复杂化）。
 - 用 `SourceMatch`（来源缓存）做权威输入（信息不足）。
 - 把 `verified_buildids` 设为可信 build 白名单（publisher ZIP 无该数据，且会误阻断）。
-- 允许 `>1` 镜像自动择一（不确定来源，必须阻断）。
+- ~~允许 `>1` 镜像自动择一（不确定来源，必须阻断）。~~ **2026-10-09 P4 实机验收修订撤销**：真实 kagura 来源对同一 artifact 提供多域同名镜像（均在 `download_hosts` 内），按原语义会误判歧义导致动态安装不可用；冻结改为「同候选同名多域镜像按 mirrors 原顺序确定性择一，内容身份由下载字节建立；仅合法镜像 basename 异构时阻断」（见 §2.1(6)）。其余被否项不变。
+- 索引来源语言门维持（旧 `publisher.py` 无游戏语言门，属功能回退，2026-10-09 否决）；取消全部 ZIP 语言门（丢弃发布商来源真实防误装价值且与 EXE 不一致，过度）；「同 URL 多语言→现场语言」（采集期已合并为单候选，resolve 期证据不可得，成本高）。
 
 ### 2.4 迁移动作
 
@@ -156,8 +159,8 @@ zip-selection-<hex(sha256(canonical_bytes(zip_candidate_binding)))[:24]>-<appid>
 
 ### 2.5 验证方式
 
-- 逐错误码 fixture：禁用/退订/无 zip 镜像/多URL/主机越界/未来日期/未安装/无 buildid/候选漂移/缓存未查询。
-- 语言/DLC 期望矩阵：`requires_dlc` 缺失 → `exe_dlc_required`；`excludes_dlc` 命中 → `exe_dlc_excluded`；语言不符 → `exe_language_mismatch`（来自 `game_facts`，见 §3）。
+- 逐错误码 fixture：禁用/退订/无 zip 镜像/同名多镜像择一/异构多镜像阻断/主机越界/未来日期/未安装/无 buildid/候选漂移/缓存未查询。
+- 语言/DLC 期望矩阵：`requires_dlc` 缺失 → `exe_dlc_required`；`excludes_dlc` 命中 → `exe_dlc_excluded`；**发布商来源**语言不符 → `exe_language_mismatch`，**索引来源**语言不符不阻断（均来自 `game_facts`，见 §3；2026-10-09 修订）。
 - URL 校验：`http`/跨主机/带凭据/非 443/非 `.zip` → `invalid_download_url`。
 
 ---
@@ -327,10 +330,10 @@ pub fn install_zip(
 | 阶段 | `error.code`（宿主） | 备注 |
 | --- | --- | --- |
 | 请求 | `invalid_request`、`selection_or_release_required`、`invalid_selection_id`、`invalid_operation`、`archive_not_allowed_for_selection` | |
-| resolve | `instance_not_found`、`game_not_ready`、`build_not_verified`、`selection_not_found`、`selection_stale`、`source_not_enabled`、`source_not_subscribed`、`source_requires_guidance`、`zip_download_unavailable`、`zip_download_ambiguous`、`invalid_download_url` | 直通稳定码；`source_not_released` 已移除，见下表注 |
+| resolve | `instance_not_found`、`game_not_ready`、`build_not_verified`、`selection_not_found`、`selection_stale`、`source_not_enabled`、`source_not_subscribed`、`source_requires_guidance`、`zip_download_unavailable`、`zip_download_ambiguous`、`invalid_download_url` | 直通稳定码；`zip_download_ambiguous` 收窄为合法镜像 basename 异构（2026-10-09 修订）；`source_not_released` 已移除，见下表注 |
 | 下载 | `download_cancelled`、`download_hash_mismatch`、`download_size_limit` 直通；其余传输/HTTP/非 ZIP/空包归 `download_failed`（`detail` 带内部码） | |
 | 配方/分析 | `archive_entry_limit`、`archive_too_large` 直通；`zip_*`/`unsafe_relative_path`/`empty_recipe` 归 `analysis_failed`（`detail` 内部码） | |
-| 事实 | `exe_dlc_required`、`exe_dlc_excluded`、`exe_language_mismatch`、`exe_manifest_*`、`game_not_ready` | 来自 `game_facts` |
+| 事实 | `exe_dlc_required`、`exe_dlc_excluded`、`exe_language_mismatch`（仅发布商来源；2026-10-09 修订）、`exe_manifest_*`、`game_not_ready` | 来自 `game_facts` |
 | 计划 | `plan_failed`、`plan_has_blockers`、`insufficient_space`、`installer_busy`、`game_busy`、`managed_install_exists_or_needs_recovery`、`reinstall_content_identity_changed`、`reinstall_unowned_or_incomplete`、`plan_expired` | |
 | 授权 | `authorization_*`（12 项）、`authorization_expired`、`authorization_revoked`、`authorization_lease_inactive` | |
 | 路由占位 | `exe_route_unimplemented`（P1 临时，P3 移除） | 新增，需回写 |
@@ -357,10 +360,10 @@ pub fn install_zip(
 
 ### 5.1 冻结值 —— 用例清单
 
-1. **选择身份**：`zip_selection_id` 稳定性与字段敏感矩阵（`mirrors_zip`/languages/variant/version_identity/dlc）；同一 candidate 的 ZIP/EXE 前缀隔离；无 zip 镜像返回 None。
-2. **resolve**：§2.5 全部错误码；禁用/退订/未查询缓存/未来日期；多镜像歧义；主机越界；候选漂移。
+1. **选择身份**：`zip_selection_id` 稳定性与字段敏感矩阵（`mirrors_zip`/languages/variant/version_identity/dlc）；同一 candidate 的 ZIP/EXE 前缀隔离；无 zip 镜像返回 None；索引来源（patchmoe）投影候选的 `candidate_id`/`fingerprint`/`zip_selection_id` 确定性（2026-10-09 修订）。
+2. **resolve**：§2.5 全部错误码；禁用/退订/未查询缓存/未来日期；同名多镜像确定性择一与异构镜像阻断；主机越界；候选漂移。
 3. **获取/配方**（复用现有 `acquire`/`zip_recipe` fixture 合成）：正常下载→内容寻址缓存→304 复用；不同字节独立身份；XP3 包装/穿越/压缩比/条目上限拒绝。
-4. **facts 期望**：语言/DLC/build 映射；`requires_dlc` 缺失、`excludes_dlc` 命中、语言不符、manifest 缺失 → 对应码且不写事务。
+4. **facts 期望**：语言/DLC/build 映射；`requires_dlc` 缺失、`excludes_dlc` 命中、发布商来源语言不符、manifest 缺失 → 对应码且不写事务；索引来源语言不符不阻断（2026-10-09 修订）。
 5. **编排状态机**：合成游戏根 + 合成 ZIP（`tempdir`），注入 `FakeTransport`，断言阶段序列、`sequence` 严格递增、终态一次、`InstallOutcome` 字段（release_id/selection_id/content_id=null）。
 6. **幂等**：同 `request_id` 同绑定重放返回同 `transaction_id`；异 `operation`/选择 → `request_id_binding_conflict`；`content_id` 回填；崩溃窗口（绑定无 plan + 孤儿 `planned` 事务）→ `install_request_in_progress_or_interrupted`；同内容重装**换新 request_id** → 新事务。
 7. **取消/租约**：逐阶段取消（connecting/downloading/validating/planning/applying）；计划前取消无事务（`cancelled`）；计划后取消 `rolled_back`；apply 中取消恢复；迟到取消不覆盖 `committed`；不续租 15s → 撤销（写 `revoked`）；`renew` 保持授权；EOF 等价 cancel。

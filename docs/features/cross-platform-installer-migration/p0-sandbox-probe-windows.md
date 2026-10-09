@@ -16,7 +16,7 @@
 
 | 项目 | 值 |
 | --- | --- |
-| OS | Windows 10 Pro，DisplayVersion 26H2，Build 26300.9457（`CurrentBuildNumber`/`UBR`，注册表读取；无 manifest，`winver` 数值以此为准） |
+| OS | Windows 11 26H2 正式版 x64（注册表 `ProductName` 旧字段仍显示 Windows 10 Pro），DisplayVersion 26H2，Build 26300.9457（`CurrentBuildNumber`/`UBR`，注册表读取；无 manifest，`winver` 数值以此为准；2026-10-09 复核：`WindowsSelfHost` 无 Insider flighting 标记，先前“非标准 build”判断撤销） |
 | 架构 | x86_64 |
 | Rust | rustc 1.94.0 / cargo 1.94.0，host `x86_64-pc-windows-msvc`（仓库隔离工具链 `.tools/cargo`） |
 | windows crate | 0.62.2（`Cargo.lock` 既有版本，直接依赖） |
@@ -369,7 +369,7 @@ cargo check --workspace --offline                        # 工作区检查通过
 | reparse point / symlink / 跨卷 ACL | 未覆盖 | 原型未实现；不同卷与 reparse 需后续专门用例 |
 | 占用文件/杀软实时拦截 | 未覆盖 | 仅记录观察到的错误码，未做杀软矩阵 |
 | profile 崩溃后遗留清理 | 未覆盖 | 仅实现正常路径 `DeleteAppContainerProfile`；异常退出清理待补 |
-| Windows 版本矩阵 | 未覆盖 | 仅测本机单一 build（26300）；1703/1809/11 等未测 |
+| Windows 版本矩阵 | 部分覆盖 | 本机为 Win11 26H2 正式版（2026-10-09 复核）；更早 Win11 版本（23H2/24H2 等）与 1703/1809 等未测 |
 | ARM64 | 未覆盖 | 仅 x64 |
 
 ## 8. 对 P0 冻结的建议（待编排/oracle 复核）

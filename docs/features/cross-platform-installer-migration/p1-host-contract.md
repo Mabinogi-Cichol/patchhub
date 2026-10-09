@@ -200,7 +200,7 @@ design §6 表把接口收敛为 `get_capabilities / scan|preview / install_patc
 ### 2.4 乱序/旧任务约束
 
 - 宿主必须按 `(request_id, sequence)` 去重：`request_id` 与当前活动任务不符、或 `sequence ≤ 已见最大值` 的事件**丢弃**，不得更新当前页面（对齐 `apps/windows/src/main.tsx` 的 `activeEventRef` 逻辑；Decky `bridge.py::_source_event` 同理）。
-- 旧任务（上一租约/上一页）的迟到事件在终态之后一律忽略。
+- 终态之后到达的 `install_progress` 事件（无论当前任务还是旧任务）一律忽略；但终态行之后不得再出现第二个终态响应行（见 §2.8）。
 
 ### 2.5 理由
 
@@ -221,7 +221,7 @@ design §6 明确阶段清单、字节重置、未知 total、递增 sequence、
 
 - 事件顺序：合成进度流断言 `sequence` 严格递增、`total_bytes:null` 不产出百分比、阶段重置字节。
 - 乱序/旧任务：注入乱序与异 `request_id` 事件，断言 UI/桥接状态不变。
-- 终态一次：任务流在终态后再注入事件 → 宿主判 `invalid_core_response`。
+- 终态一次：终态后注入迟到 `install_progress` 事件 → 忽略（§2.4）；终态后再注入第二个终态响应行 → 宿主判 `invalid_core_response`。
 
 ---
 

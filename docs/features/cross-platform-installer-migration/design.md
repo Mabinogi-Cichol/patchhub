@@ -1,6 +1,6 @@
 # 跨平台安装器迁移
 
-日期：2026-10-08（Asia/Shanghai）。状态：**P1已实现并通过自动化验证，P2主体已实现并通过双平台自动化与可得真实样本对照，三旧profile待验；后续阶段、Windows/Decky实机及验收待执行**。
+日期：2026-10-08（Asia/Shanghai，2026-10-10 更新状态）。状态：**P1/P3 已实现并通过各自验证；P2 主体与可得真实样本通过，三旧 profile 待验；P4 Windows 按调整后验收范围完成，2303800 EXE 与 2743810 ZIP 真安装及两款游戏内确认、最终自动化、恢复/历史 RPC、便携包校验通过；用户已取消断网实测要求，该项未执行；P5/P6 待执行；更早 Windows 版本未覆盖**。
 
 施工记录：[progress.md](progress.md)。前置功能：[共享来源发现与订阅](../shared-source-discovery/design.md)及其[施工记录](../shared-source-discovery/progress.md)。沿用产品规则：[通用 EXE](../generic-exe-installation/design.md)、[一站式安装](../simplified-install-flow/design.md)、[Decky UX](../decky-ux/design.md)。
 
@@ -206,7 +206,7 @@ scan/list_transactions 使用一致只读快照或短时协调，保留 2026-10-
 | [Windows 页面](../../../apps/windows/src/main.tsx) 的 `ensureSourcesSupported` 旧核心降级 | 删除静态扫描降级及吞掉实际 RPC 错误的分支；要求同步发布的来源/安装契约。保留实际平台能力与隔离探测 | P4；旧核心报契约错误，普通 RPC 故障报告真实原因，当前核心自动查源不回归 |
 | SourceService 的旧 `config_path`、`matches/cached_candidates/_rules/builtins/validate_download` 等安装适配及旧 release 解析 | 无用途参数/可选 `prime` 调用先精简；Publisher/EXE 消费者切换后移除安装专用 Python 快照/校验接口。核对 `source_for_release`、`resolve_source_record`、`record_id/release_id` 别名及 `get_source_policy` 等方法，只保留新 Rust 业务需要的接口，删除无调用者入口、DTO、白名单与测试 | P5 随消费者切换，P6 无旧安装消费者依赖；UI 所需来源展示、订阅与事件薄桥接继续可用 |
 
-`legacy_match` 当前表示 ZIP 来源已有匹配，HGamer fallback 属于发现策略，两者不因名字含 legacy/fallback 而删除；可改为明确名称，但须保持匹配/语言/查询预算与回退语义。共享 SourceService 是否保留及其最小接口按新宿主需要确定，不以“所有 Python 文件清零”替代职责收口。
+`legacy_match` 当前表示 ZIP 来源已有匹配，HGamer fallback 属于发现策略，两者不因名字含 legacy/fallback 而删除；可改为明确名称，但须保持匹配/语言/查询预算与回退语义。2026-10-09 P4 后续修订：索引来源（patchmoe）的 `matches` 匹配经确定性 `SourceMatch → SourceCandidate` 投影接入动态 ZIP 安装（[p1-zip-orchestration.md](p1-zip-orchestration.md) §2.1(4)）；`source_for_release`/`validate_download` 仍无直接安装消费者，留 P6 核对。共享 SourceService 是否保留及其最小接口按新宿主需要确定，不以“所有 Python 文件清零”替代职责收口。
 
 清理代码不等于清空设备文件：旧来源文件/检查点可留在不读取的目录；来源设置、游戏/存档、journal 和恢复副本按第 7.1 节保护。P6 同步修订前序来源设计、P0/P1 与 P5 契约中的现行兼容要求，链接本节；历史施工与实机证据保留，不能改写为本期验证结果。
 
@@ -222,7 +222,7 @@ scan/list_transactions 使用一致只读快照或短时协调，保留 2026-10-
 | worker | 当前 3 GiB 地址空间/CPU 300 秒；通用分析 240 秒、转换 480 秒；无旧 profile 专用转换分支，Windows 等价内存计量待冻结 |
 | 授权/空间 | TTL ≤900 秒；实例唯一写入/受限 worker 并发；state/target 同卷合并预算，含转换、stage 与原文件恢复副本 |
 
-P0 → P1 → P2 → P3 → **P4 Windows 真实验收** → P5 Decky 切换 → P6 收口。各阶段实际状态以[施工记录](progress.md)为准；P1已实现，P2主体已实现/三旧profile待验，P3已实现并通过双平台自动化与隔离对照（独立复核修复归档 [p3-gate-review.md](p3-gate-review.md)），P4–P6待实现：
+P0 → P1 → P2 → P3 → **P4 Windows 真实验收** → P5 Decky 切换 → P6 收口。各阶段实际状态以[施工记录](progress.md)为准；P1已实现，P2主体已实现/三旧profile待验，P3已实现并通过双平台自动化与隔离对照（独立复核修复归档 [p3-gate-review.md](p3-gate-review.md)），P4 宿主/前端与 core 收口已实现并通过自动化与独立复核（[复核归档](p4-gate-review.md)、[实施记录](p4-windows.md)），2303800 EXE 与 2743810 ZIP 真安装/游戏内确认及恢复 RPC 通过，P4 按调整后验收范围完成（2026-10-10 用户取消断网实测；[收尾验收](p4-acceptance.md)）；P5/P6 待实现：
 
 | 阶段 | 交付 | 放行门槛 |
 | --- | --- | --- |
@@ -230,11 +230,11 @@ P0 → P1 → P2 → P3 → **P4 Windows 真实验收** → P5 Decky 切换 → 
 | P1 共享 ZIP | 获取/缓存/配方/事实、新内部授权与新状态路由；来源 Rust 编码、当前规则契约、直接初始化 | 攻击/冲突/取消/重装/恢复/幂等通过；无 Python 来源导入/哈希复刻/旧规则接受，原签名 ZIP 与来源订阅无回归 |
 | P2 Rust SF | SF9.5–9.7 对象图、覆盖、AST/IR、analyze/convert | 三旧样本与 registry 外样本语义/产物摘要一致，未知动作正确阻断 |
 | P3 隔离/授权/任务 | 双平台 worker、facts/空间/撤销、锁与进度/内容 ID | 权限拒绝/超限/父退出/进程树回收通过，事实变化不越权，恢复冲突真实上报 |
-| P4 Windows | 动态列表/详情、一键安装/重装、历史与便携包；移除旧核心来源降级 | 2303800 真安装/生效、动态 ZIP、恢复/取消/离线历史；协议/实际错误明确，无 Python/WSL |
+| P4 Windows | 动态列表/详情、一键安装/重装、历史与便携包；移除旧核心来源降级 | 2303800 真安装/生效、动态 ZIP、恢复/取消/历史；协议/实际错误明确，无 Python/WSL。2026-10-10 用户取消 P4 原生 GUI 断网实测，沿用已完成的恢复/历史 RPC 与展示验证 |
 | P5 Decky | 旧任务收尾、缓存失效/新 schema 初始化、薄桥接、租约/清理与部署；删除安装来源适配及切换检查点 | 不运行旧格式兼容代码与旧来源消费接口；游戏/订阅保留，新 ZIP/EXE 与 RPC/QAM/全屏/手柄通过 |
 | P6 收口 | 删除重复策略与生产 Python SF；第 7.3 节遗留逐项收口，单一资源/版本，契约/指南/SBOM | 双端产物/完整矩阵通过，无第二生产策略与来源迁移兼容遗留；未执行项仍待验证 |
 
-## 9. 验收矩阵（全部待执行）
+## 9. 验收矩阵（实际状态以施工记录为准）
 
 ### 9.1 离线与自动化
 
@@ -274,3 +274,7 @@ P0 待冻结：Windows 支持版本/隔离配置、Rust 解析/解压依赖与�
 ### P3 生产接线细化
 
 [P3 运行时设计](p3-runtime.md)落实固定 worker、严格报告/静态条件、内容身份、空间和持久撤销。每个 request_id 另有独立跨进程认领锁，贯穿任务但不持 journal/game 锁；账本更新同时使用绑定条件 CAS。acquire 前持久 task job，计划产生时立即关联并同步 lease；同实例同内容 EXE 重装要求成功授权/收据且全部 owned 当前 SHA 匹配。Windows LPAC/Job 与 Linux bwrap 单进程生产启动器均执行实际能力探针；Linux 受信宿主必须先将整个 CLI/core 降权，RPC 不提供 uid/gid 参数。临时运行目录有受信 owner marker/锁，启动回收仅处理已拥有且不活跃的崩溃残留。
+
+### P4 收尾产品决策（2026-10-09）
+
+Windows 游戏列表主标签展示补丁状态：已安装补丁优先于来源查询，再展示需检查/有可用补丁/未找到补丁；未查询、查询中、失败和仅线索分别展示对应待办，不能把“找到来源”等同于可安装。动态 EXE 的已安装判定复用受管事务与实际载荷摘要，不仅凭 committed 收据或可重装按钮。来源状态作为次级说明/详情保留。恢复 UI 必须报告 needs_recovery，不能统一显示成功。实施与证据：[p4-acceptance.md](p4-acceptance.md)。

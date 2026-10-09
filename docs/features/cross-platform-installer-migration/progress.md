@@ -1,6 +1,6 @@
 # 跨平台安装器迁移施工记录
 
-设计：[design.md](design.md)。日期：2026-10-09（Asia/Shanghai）。状态：**P1 已实现并通过自动化验证；P2 Rust SF 与固定 worker 主体已实现，双平台自动化与可得真实样本通过，三旧profile回归待验证；P3 已实现并通过双平台自动化、隔离对照与独立复核（复核修复已归档 [p3-gate-review.md](p3-gate-review.md)）；P4–P6 待实现/实机验收**。
+设计：[design.md](design.md)。日期：2026-10-10（Asia/Shanghai）。状态：**P1 已实现/自动化通过；P2 主体与可得真实样本通过，三旧 profile 待验；P3 已实现/双平台自动化与隔离验证通过；P4 Windows 已实现，2303800 EXE 与 2743810 ZIP 真安装/重装及两款游戏内确认通过，后续修复与最终代码回归、隔离恢复/历史 RPC、便携包校验通过，P4 按调整后验收范围完成，用户已取消断网实测要求（[收尾验收](p4-acceptance.md)）；P5/P6 待执行；更早 Windows 版本未覆盖**。
 
 ## 当前状态
 
@@ -13,7 +13,7 @@
 | P1 共享 ZIP 服务 | 已实现/自动化验证 | 获取/缓存/配方/新授权与新 schema；来源 Rust 编码、当前规则契约和直接初始化 |
 | P2 Rust SF 与 worker | 主体已实现/双平台自动化与可得真实样本通过；三旧profile待验 | SF9.5–9.7 完整结构/AST/IR/固定worker/确定性转换；P3生产接线待实现 |
 | P3 隔离/授权/任务 | 已实现/自动化与隔离验证；独立复核修复完成 | 生产启动器、EXE 编排、facts/空间/撤销/任务回收；双平台 release 证据与 [复核归档](p3-gate-review.md) |
-| P4 Windows | 待实现/待实机验证 | 2303800 EXE、动态/签名 ZIP、恢复/重装；移除旧核心来源降级 |
+| P4 Windows | 已实现/自动化与前序独立复核通过；两款真安装/生效与恢复 RPC 通过；调整后范围验收完成，断网实测已取消 | 2303800 EXE、动态/签名 ZIP、恢复/重装；移除旧核心来源降级（[实施记录](p4-windows.md) / [复核归档](p4-gate-review.md)） |
 | P5 Decky | 待实现/待实机验证 | 旧任务收尾、新 schema 初始化、删除安装来源适配/引擎检查点、薄桥接与正式包/RPC/QAM/全屏/手柄 |
 | P6 收口 | 待实现/待验收 | 单一生产策略、移除 Python SF 依赖、来源兼容遗留逐项检查、打包与文档 |
 
@@ -116,7 +116,7 @@
 
 ### 验证方式与结果
 
-- 探针（本机 Windows，非标准 build 26300）：31 项 = 27 pass / 0 fail / 1 未覆盖（CPU rate hard cap，宿主嵌套 Job 限制）/ 3 info；LPAC 身份、零 capability 无网络、越界读写/注册表拒绝、句柄白名单、进程树回收、内存与 JOB_TIME 限额、无控制台、中文长路径均通过。
+- 探针（本机 Windows，build 26300；2026-10-09 复核为 Win11 26H2 正式版）：31 项 = 27 pass / 0 fail / 1 未覆盖（CPU rate hard cap，宿主嵌套 Job 限制）/ 3 info；LPAC 身份、零 capability 无网络、越界读写/注册表拒绝、句柄白名单、进程树回收、内存与 JOB_TIME 限额、无控制台、中文长路径均通过。
 - 构建：`cargo check --workspace`、`cargo test -p steam-patch-installer-worker`（4 passed）、`cargo metadata --locked` 通过（隔离工具链）。
 - 门禁：独立 oracle 初审（条件放行）→ 15 条修订（v0.4）→ 定向复审（N1/N3 必修 + N2/N4/N5）→ 二轮修订（v0.5）→ 终审（attempt 3/3）**通过，无定稿前必修项**；结构扫描确认改动未越界（core/cli/apps 未动）。
 
@@ -279,7 +279,7 @@
 
 三条旧profile二进制当前仓库缺失；本次采用现有registry外三份真实EXE，分别覆盖9.5/9.6/9.7。不下载、不执行官方EXE/Lua、未写游戏。
 
-- **Windows本机LPAC（非标准build26300，不能代替Win11零售机矩阵）**：三版本中文路径合成转换3项 + 真实分析/转换6项 = **9/9通过**。零capability、Job单进程/3GiB内存/480s、固定参数与干净环境。完整分析report逐字段一致，元数据/行为/文件清单与摘要一致，转换产物按冻结的CPython 3.12 ZIP规则重建基准后一致。
+- **Windows本机LPAC（build26300；2026-10-09 复核为 Win11 26H2 正式版，本机证据即正式版证据）**：三版本中文路径合成转换3项 + 真实分析/转换6项 = **9/9通过**。零capability、Job单进程/3GiB内存/480s、固定参数与干净环境。完整分析report逐字段一致，元数据/行为/文件清单与摘要一致，转换产物按冻结的CPython 3.12 ZIP规则重建基准后一致。
 - 最终Windows证据 `.artifacts/p2/windows-1791473791831110600-summary.json`；SHA-256 `317af9f0f454a922b12a70e787a35703194f90357396e831d0b10ad904b208d5`。
 - 历史初轮双平台亦9/9通过：Windows `.artifacts/p2/windows-1791471990092010900-summary.json`（SHA-256 `e2be58171998bc277cbcf5fd17f205bfa276831ced4dbeb1d4a98e4250bb79cc`）；Linux `.artifacts/p2/linux-1791472393558943840-summary.json`（SHA-256 `4b9edad15de5531cb44097e01609e3b01cda186a48d7ffe0bc81753bed0510a5`）。收尾ZIP64边界修复后重新运行矩阵；最终两端摘要与初轮及彼此逐项一致，历史汇总保留在 `.artifacts/p2/pre-zip64-cross-platform-parity.json`。
 - **Linux/WSL2 bwrap**：最终构建三版本合成转换3项 + 真实分析/转换6项 = **9/9通过**；完整report逐字段、行为/元数据/载荷摘要和规范化ZIP全部与冻结Python及Windows结果一致。WSL对照不代替P5 Deck实机。
@@ -353,3 +353,107 @@ P2主体已实现，双平台自动化与可得SF9.5/9.6/9.7三份真实样本�
 1. P4：Windows 页面动态安装接线（传 `selection_id`，不再以投影 `release_id` 作为动态路由句柄）与动态 ZIP/EXE 实机路径。
 2. P5：Decky 宿主降权、任务收尾、新 schema 初始化与部署验证。
 3. 提交：按用户明确要求另行执行（代码/文档分提交）。
+
+## 2026-10-09 P4 Windows 接入实施、复核与修复
+
+### 用户目标与本轮范围
+
+用户要求推进 P4（[design.md](design.md) §8）：Windows 动态列表/详情、一键安装/重装、历史与便携包；移除旧核心来源降级。本轮完成宿主 protocol v3 接线、前端动态安装打通、core 收口（R3/R6/H2）、契约 README 与 Windows runner，并完成独立复核（初审→修复→定向复审通过）。未执行：2303800 真实下载/安装实机验收、便携包本地构建（本轮进行中）。标准 Win11 零售机矩阵经 2026-10-09 核验由本机（Win11 26H2 正式版）证据覆盖。未创建 Git 提交。
+
+### 实际实现
+
+- **Windows Tauri 宿主**（`apps/windows/src-tauri/src/main.rs`）：协议 2→3（信封/校验/任务）；`CallArguments`/`start_install` 增 `selection_id`（与 `release_id` 互斥、`archive` 仅签名路由）；`install_progress` 平铺解析 + `(request_id, sequence)` 去重（终态后迟到事件忽略、第二个终态行 `invalid_core_response`）；`renew` 3s 转发（安装与来源任务）与 `cancel`/EOF；删除 `MigrateState`/`GetSourcePolicy`/`ResolveSourceRecord` 命令与启动迁移；能力命令更名 `get_capabilities`；错误 `detail` 截断 ≤2KiB。测试 9→20。
+- **前端与共享 DTO**（`packages/ui/src/index.ts`、`apps/windows/src/main.tsx`、`sources.ts`）：`Patch.selection_id`、`Transaction.selection_id/content_id/has_replacements`、`Preview.selection_id`；新增 `patchInstallable`（N1：`installer.links.*.available`，不用 `formats`）与 `splitError`；动态路由传 `selectionId`（不以投影 `release_id` 作句柄）；删除 `ensureSourcesSupported` 降级与"（未支持）"文案；`Capabilities` 改 §3.1 形状；9 阶段 + substage 文案。
+- **core 收口**：R6 `resolve_exe` 对 demo/unknown 变体返回 `exe_candidate_variant_unsupported`（投影仍生成、blocker 呈现）；R3 `exe_report` 对 `script_inventory`/`certificate`/`diagnostics` 嵌套键严格校验；H2 `Transaction` 增 `selection_id`/`content_id` 并经 `prepare_with_binding_at` 随计划持久化（动态 ZIP/EXE；签名 `None`），修复动态 EXE 重装判据。
+- **契约/工具**：`packages/contracts/README.md` 升 v3；新增 `scripts/run-windows-check.ps1`（release worker + 真实样本 ignored 测试）；`p1-host-contract.md` §2.4/§2.8 统一终态后迟到事件语义。
+
+### 验证方式与结果
+
+- 回归（最终树）：core lib **255 passed / 4 ignored**、cli **37**、集成 8/40/4/6/3、windows 宿主 **20**；clippy `-D warnings`、rustfmt、前端 `tsc` + `vite build` 通过。
+- Windows runner（release worker）：ignored 生产测试 3/3 通过（2303800/3606360/3721970，905.76s），产物摘要与 P2 冻结基准一致；证据 `.artifacts/p4-windows/{windows-check.log,windows-real-sf.json}`。
+- 独立复核：初审**有条件放行**（H1 来源任务未续租、H2 事务归属缺失、M3 待证据）；修复后定向复审**通过**。归档 [p4-gate-review.md](p4-gate-review.md)，实施记录 [p4-windows.md](p4-windows.md)。
+- 证据溯源：runner 日志（core 251 pass）早于 H2 的 4 个绑定测试（当前 255 pass）；因 H2 不改 `exe_report` 校验路径且 ignored 测试不建事务，M3 结论不受影响；复审已独立验证最终树全绿。
+
+### 实机验收（2026-10-09）
+
+- **2303800 真安装/生效（通过）**：GUI 动态列表/详情 → kagura-cn 中文候选（多镜像确定性择一修复后）→ 真实下载 1,228,278,216 字节（下载包 SHA-256 `7336c5c9…` 与官方样本一致）→ 隔离分析（LPAC worker）→ 转换 → 写入 `data.xp3`（1,373,855,065）→ 用户游戏内确认生效。
+- **同内容重装（通过）**：事务 `superseded` + 新 `committed`，`selection_id`/`content_id` 落账；**取消（通过）**：计划前取消返回 `cancelled`、无新事务、游戏文件未动；**进度/历史/清理（通过）**：下载/分析进度展示、事务历史、`tasks/` 回收为 0、报告落 `reports/<content_id>/`、无 stage/backup 残留。
+- **验收发现与处置**：① kagura-cn 多镜像被旧歧义阻断误伤 → oracle 裁决「确定性择一」（ZIP 契约修订 + EXE 实现修复 + 测试更新，见 [p4-gate-review.md](p4-gate-review.md) §8）；② 本机 TUN/fake-IP 代理与公共地址校验冲突（`download_private_address`）→ 临时关闭 TUN 后通过，代理环境支持登记待决策；③ 取消文案 `reason("cancelled")` 缺口 → 已修复。
+- **残余（登记）**：动态 ZIP 实机路径（无匹配目标时待样本）；GUI 断网重开历史/离线项；更早 Win11 版本矩阵。
+- R2 附加条件已随 kagura-cn 中文安装满足。
+- **便携包（通过）**：最终 zip SHA-256 `c4a159cab477dec9f965875837725e3fcbaf8341d4a7307edd78001ce1238155`（8,496,461 字节，含 `sf-worker.exe`）；三件套哈希与 `target/release` 一致；便携 GUI 启动正常、`get_capabilities` smoke `installer.links.exe.available=true`。
+
+### 未执行（保持待验证）
+
+- 动态 ZIP 实机路径（待样本）；GUI 断网重开的历史/离线核对。
+- Windows 版本矩阵：更早 Win11 版本（23H2/24H2 等）未覆盖，登记为残余（本机 26H2 正式版已覆盖）。
+
+### 待办
+
+1. P4 收尾：最终便携包重建与便携运行验证已完成（zip SHA-256 `c4a159cab477dec9f965875837725e3fcbaf8341d4a7307edd78001ce1238155`；便携 GUI 启动与 `get_capabilities` smoke 通过；宿主 `18DFDEB4…` / CLI `2E942D02…` / worker `F4B27AD2…`）。
+2. P5：Decky 宿主降权、任务收尾、新 schema 初始化与部署验证。
+3. 登记项：S1（`managed_zip` 未校验 `links.zip.available` → P5）、S2/S3（前端 hgamer 硬编码、runner 变量名 → P6）、S4（`loadCapabilities` 缓存，可接受）、S5（更早 Win11 版本矩阵）、**S6（待决策：TUN/fake-IP 代理环境支持）**、S7（取消文案已补）。
+4. 提交：按用户明确要求另行执行（代码/文档分提交）。
+
+## 2026-10-09 P4 后续：用户报告问题的诊断与修复（patchmoe 动态 ZIP / cmd 弹窗）
+
+### 用户报告
+1. 「你妈真漂亮」（AppID 2743810）无法自动安装（旧 Decky 可装；patch.moe ZIP `Kudos_Kuppa_patch.zip`），"重新查找"有 warning。
+2. Windows GUI 每次查询弹出 cmd 窗口。
+
+### 诊断（只读核对 + 现场抓取归档）
+- **patchmoe 索引解析 bug**：`parse_rows(table_id=None)` 只解析文档第一个 `<table>`；patch.moe 页面含 `tbl new`（3 条"最近更新"）+ `tbl regular`（111 条完整列表），产品仅入库 3 条（临时 state 复现 `entry_count=3`）。旧 Python `_Page` 收集所有顶层 table，属移植退化（href 尾随换行已排除——`row_entry` 已 trim）。
+- **安装接线缺口**：patchmoe（非 `discovery_only` 索引来源）的 `matches`/`SourceMatch` 在 Rust 无安装消费者（旧 `publisher.py` 正是消费它）；动态 ZIP 候选仅来自 discovery 候选。
+- **语言门误伤**：候选语言 zh-CN 与游戏 acf `UserConfig/MountedConfig.language=english` 不符 → `exe_language_mismatch` 必然阻断（旧 Python publisher 路径无游戏语言门，属新引擎能力回退）。
+- **宿主 refresh 通道 bug**：GUI「刷新来源索引」经一次性 `serve` 调用 `refresh_sources`（协议服务面为 serve-task 方法）被核心拒绝（`method requires the serve-task control channel`）。
+- **cmd 弹窗**：宿主 spawn sidecar 未设 `CREATE_NO_WINDOW`（GUI 子系统进程 spawn 控制台程序弹窗）。
+- kagura 两条诊断（`discovery_pagination_cycle`、`discovery_index_incomplete`）与 patchmoe 无关，单独登记（见文末）。
+
+### 独立裁决
+- **patchmoe 缺口（ora-4）**：方案 B2——把已校验索引条目经确定性 `SourceMatch → SourceCandidate` 投影并入 `dynamic_zip_candidates`（复用 `zip-selection-*`/resolve/orchestrator/授权/配方全链路），不改 `discovery_only` 语义；先修全表解析。契约修订：p0-contracts §2.5、p1-zip-orchestration §2.1(4)/§5.1、design §7.3。
+- **语言门（ora-5）**：方案 d——`FactsExpectation.require_language`（serde 默认 true）；发布商来源（`rule.discovery_only`）保留语言门，索引来源不设门；语言仍进 `recipe_identity`（身份不随现场语言漂移）。契约修订：p1-zip-orchestration §2.1(8)/§2.2/§2.3/§2.5/§4.4/§5.1。
+
+### 修复实现
+- **解析（fix-12）**：`parse_rows` 改为收集所有顶层 table（嵌套表按节点去重、`table_id` 行为不变）；新增合成/裁剪 fixture 与 4 项测试；临时 state 实机刷新复验 **3 → 160 条**（含 `Kudos_Kuppa_patch.zip`、zh-CN、title 你妈真漂亮）。
+- **接线（fix-13）**：`registry::{index_candidates, dynamic_zip_candidates}`（确定性映射：canonical candidate_id、`mirrors=[zip]`、`version_identity="page-unknown"`、`COMING SOON` 过滤、cache-first 去重）；`resolve_zip` 与 `cli::dynamic_patches` 候选源切换；测试（映射确定性、patchmoe resolve、scan 投影）。
+- **语言门（fix-14）**：`require_language` 开关与两处 failure 收口（evidence 始终记录）；ZIP expectation `= rule.discovery_only`；EXE/签名显式 true；测试含 `index_source_language_is_not_a_gate`（patchmoe english manifest → committed；kagura → 仍 mismatch）。
+- **宿主 refresh 通道（fix-15）**：`refresh_sources` 改 serve-task 模式（复用 `SourceScans` 槽、renew 生命周期、`read_refresh_stream` 去重 reader）；23 项宿主测试。
+- **cmd 弹窗（fix-11）**：`core_command` + `CREATE_NO_WINDOW`（3 处 spawn 统一）。
+
+### 实机复验（2026-10-09，GUI 便携版）
+- 索引：用户 state `refresh_sources(force)` → patchmoe **160 条**；Kudo 条目（`你妈真漂亮`/`zh-CN`/2026-06-23/`https://download.patch.moe/Kudos_Kuppa_patch.zip`）。
+- 投影：重新扫描后 2743810 显示「有可用补丁」；详情 `ZIP · 默认解压至游戏根目录`、`zip-selection-560d6cae838993b26db4caa6-2743810`、「安装补丁」可用（语言门不再阻断）。
+- 安装：真实下载 83,964,941 字节 → 解压写入游戏根 **`patch.xp3`（840,228,417）**；原 `data.xp3`/`thekuppa.exe` 未动；事务 `committed | release_id=patchmoe-2743810 | selection_id=zip-selection-560d6cae… | content_id=None`。
+- 重装：`superseded` + 新 `committed`（「重新安装完成」）。
+- cmd 弹窗：serve-task 进程 `MainWindowHandle=0`、无控制台窗口。
+- 证据截图：`.artifacts/p4-windows/gui-2743810-detail.png`、`gui-2743810-install-done2.png`、`gui-2743810-reinstall-done.png` 等。
+
+### 未执行/登记
+- 游戏内确认（用户）；便携包最终重建（含 fix-15 宿主，进行中）。
+- **kagura 来源诊断登记**（与 patchmoe 无关，单独排查）：`discovery_pagination_cycle`（kagura-en「来源页的跳转链接重复，查询已停止」）与 `discovery_index_incomplete`（kagura-cn「来源目录尚未查完」）可能降低 kagura 候选覆盖；归入来源质量专项（随 P5/P6 评估）。
+
+## 2026-10-09 P4 收尾验收与 Windows 游戏列表状态修复
+
+用户要求继续完成验收，并指出 Windows 游戏列表不应突出“已找到来源”，应突出“有可用补丁、已安装补丁、未找到补丁”。本轮实际修复、检查、证据边界与待验详见 [p4-acceptance.md](p4-acceptance.md)。
+
+- 完成游戏列表主补丁标签；真实 EXE 检测补上同实例/选择绑定与实际文件摘要；恢复结果区分成功/无待办与 needs_recovery。
+- 最终后续修复基线回归：core lib 272 pass/5 ignored、CLI 38、Windows 23、集成 8/40/4/6/3；新增检测回归后 CLI 39 pass；主状态 10/10、clippy/TS/build 通过。
+- 实际 RPC：独立合成库中 committed 历史跨进程一致；中断恢复 rolled_back/重复空；外部修改 needs_recovery/改动与原始备份保留；存档 sentinel 全保持。真实游戏仅只读扫描，两款均 installed_managed。
+- 用户明确确认 2743810 游戏内生效；关闭其游戏内确认待办。
+- 最终便携包重建/解压/三件套哈希/从包内 get_capabilities 全通过：8,513,897 字节，SHA-256 `e7204378b006ae8723dcd6e69949d7d36ad8e7878a5b19ca4c0468080d68f0f4`。前节“重建进行中”由此关闭。
+- 浏览器验证生产前端列表与恢复提示通过，桥接为真实 RPC 快照模拟，单列不计原生实机。
+- Windows GUI 控制运行时两次初始化超时；原生 GUI 断网重开/事务历史/恢复按钮结果已请用户协助，仍待确认。未关闭整机网络；合成 RPC 无目录/来源依赖不能替代物理断网验收。
+- P4 当前摘要、设计阶段描述和功能索引已按实际证据同步；历史施工事实保留。未操作 Deck、未再次写入真实游戏、未提交 Git。
+
+## 2026-10-10 P4 验收范围调整与结项
+
+- 用户明确“不需要测断网”，取消此前原生 GUI 断网重开及相关人工核对要求；不再等待此前人工验收请求。
+- P4 按调整后的验收范围完成：沿用两款真安装/重装/取消与游戏内确认、最终自动化、隔离恢复/冲突与存档保护、历史 RPC、生产前端浏览器展示和最新便携包校验记录。未执行的断网项标为用户取消，不写成通过。
+- 同步当前状态、设计 P4 门槛、验收报告和功能索引；保留 2026-10-09 的历史待验与工具超时事实。更早 Windows 版本、TUN/fake-IP 决策及 P5/P6 登记项不变。
+- 本轮仅修改文档，未重跑已通过的代码/实机测试，未重打便携包，未创建 Git 提交。
+
+## 2026-10-10 P4 Git 归档
+
+- 用户明确要求先提交 P4；代码与测试已提交为 `e1fc1d3`（`feat(windows): 接入共享安装器并完成 P4 验收修复`），设计、契约与验收文档另作独立提交。
+- 提交前完整审查暂存差异并通过 `git diff --cached --check`；沿用本 session 已完成的自动化与实机验收记录，未重复运行测试。
+- 提交范围仅含 P4 代码、测试、配套脚本及文档；`.artifacts/`、安装包、截图与真实游戏文件不纳入 Git。仅创建本地提交，未推送、未启动 P5。

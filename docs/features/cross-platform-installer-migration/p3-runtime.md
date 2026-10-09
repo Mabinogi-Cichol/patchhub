@@ -10,6 +10,7 @@
 4. 空间预算包括下载、转换、stage、原文件恢复材料；同卷合并。content_id 只绑定来源、语言、变体、EXE/元数据/有序载荷，不绑定临时 URL 或适配器版本。
 5. acquire 前创建任务 job；租约/EOF/cancel 先同步持久 revoked，再触发网络/worker 的有效取消。计划后失败回收并以 journal 终态为准；冲突保留恢复材料。
 6. CLI 固定 worker 定位和真实沙箱能力探测；不向 RPC 开放任意 runtime 路径、UID/GID、限额或命令。
+7. 动态 EXE 镜像选择（2026-10-09 P4 实机验收裁决补冻）：同一候选内合法 EXE 镜像按 mirrors 原顺序**确定性择一**（非法镜像跳过）；下载后按实际字节建立内容身份；`exe_download_ambiguous` 收窄为合法镜像 basename 异构守卫。与动态 ZIP 同一规则（[p1-zip-orchestration.md](p1-zip-orchestration.md) §2.1(6)）。
 
 ## 验收
 

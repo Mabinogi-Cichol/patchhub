@@ -133,12 +133,13 @@
 
 **【冻结值】** `zip-selection-<hex(sha256(canonical_bytes(zip_candidate_binding)))[:24]>-<appid>`。
 `zip_candidate_binding` 字段集（有序、显式）：`source_id, source_record_id, game_appid, variant, languages, version_identity, source_page, requires_dlc, excludes_dlc, mirrors_zip`。
-- `mirrors_zip` **有意收窄**：仅取 `candidate.mirrors` 中 `format=="zip"` 的条目、按原顺序取 `url`（去 label）；ZIP 路由不应因无关 EXE 镜像或标签变化而失效（相较 §2.1 绑全量 `mirrors`）。
+- `mirrors_zip` **有意收窄**：仅取 `candidate.mirrors` 中 `format=="zip"` 的条目、按原顺序取 `url`（去 label）；ZIP 路由不应因无关 EXE 镜像或标签变化而失效（相较 §2.1 绑全量 `mirrors`）。多镜像不阻断：同名多域镜像按 mirrors 原顺序确定性择一（2026-10-09 P4 实机验收修订），见 [p1-zip-orchestration.md](p1-zip-orchestration.md) §2.1(6)。
 - `game_appid` 必须 `Some(appid)` 且等于 ID 后缀 `appid`；`appid` 为正整数（`[1-9][0-9]*`）。
 - 编码使用 §1.1 确定性 JSON（键 UTF-8 字节序、无空格、`ensure_ascii=false`、禁浮点），**不新增编码版本**（新增消费者不改变字节契约）。
 - **与 §2.1 `exe-selection-*` 平行**：同一 candidate 的 ZIP/EXE 两条 selection 共享摘要、前缀不同，互不冒充。
 - **选择 ID 只代表候选，不授予 apply 权限**（设计 §5.1）；产生时机为安装器投影（`scan.installs[].patches[]` 与 `discover_game`），`list_game_sources` 不产生 selection。
 - **投影去重（签名优先）**：同一 appid 同时存在签名 `managed_zip` release 与动态 `publisher_zip` 候选且 `release_id` 相同时，只投影签名 release、抑制动态 selection。
+- **索引来源并入（2026-10-09 P4 后续修订）**：非 `discovery_only` 的 ZIP 索引来源（如 patchmoe）经确定性 `SourceMatch → SourceCandidate` 投影进入动态 ZIP 候选视图（`registry::dynamic_zip_candidates = cached_candidates ∪ index_candidates`），复用同一 `zip-selection-*` 体系与 `resolve_zip`；字段填法与过滤（`COMING SOON` 不投影）见 [p1-zip-orchestration.md](p1-zip-orchestration.md) §2.1(4)。
 
 **【理由】** 复用 §2.1 候选级绑定与 §1.1 编码，使 ZIP/EXE 选择表示同源、易证；`mirrors_zip` 收窄避免无关镜像误失效；终态身份按 §2.4 + R2 推导为“来源 `release_id` + `recipe_identity`”，不引入新 ID 家族。
 
