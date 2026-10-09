@@ -1,6 +1,6 @@
 # 跨平台安装器迁移
 
-日期：2026-10-08（Asia/Shanghai，2026-10-10 更新状态）。状态：**P1/P3 已实现并通过各自验证；P2 主体与可得真实样本通过，三旧 profile 待验；P4 Windows 按调整后验收范围完成，2303800 EXE 与 2743810 ZIP 真安装及两款游戏内确认、最终自动化、恢复/历史 RPC、便携包校验通过；用户已取消断网实测要求，该项未执行；P5/P6 待执行；更早 Windows 版本未覆盖**。
+日期：2026-10-08（Asia/Shanghai，2026-10-10 更新状态）。状态：**P1/P3 已实现并通过各自验证；P2 主体与可得真实样本通过，三旧 profile 待验；P4 Windows 按调整后验收范围完成，2303800 EXE 与 2743810 ZIP 真安装及两款游戏内确认、最终自动化、恢复/历史 RPC、便携包校验通过；用户已取消断网实测要求，该项未执行；P5 已实现/正式部署并验收完成，ZIP/EXE 真安装、写入回滚及用户实体手柄/两款游戏内确认通过；P6 待执行；更早 Windows 版本未覆盖**。
 
 施工记录：[progress.md](progress.md)。前置功能：[共享来源发现与订阅](../shared-source-discovery/design.md)及其[施工记录](../shared-source-discovery/progress.md)。沿用产品规则：[通用 EXE](../generic-exe-installation/design.md)、[一站式安装](../simplified-install-flow/design.md)、[Decky UX](../decky-ux/design.md)。
 
@@ -200,7 +200,7 @@ scan/list_transactions 使用一致只读快照或短时协调，保留 2026-10-
 | 遗留与当前入口 | 清理要求 | 时机与门槛 |
 | --- | --- | --- |
 | [SourceStore](../../../crates/core/src/sources/store.rs) 的 `import_python_state`、Python 路径、导入 staging/报告；[CLI](../../../crates/cli/src/runtime.rs) / [SourceService](../../../apps/decky/backend/source_service.py) 的导入报告及诊断链 | 首次启动直接初始化 Rust 状态；删除 Python 设置/cache/status/discovery/index 导入与专用模型/报告/测试；保留当前 Rust 设置持久化、revision、原子写与大小/路径限制。`get_source_state` 等接口仅按新消费者需要保留当前状态字段 | P1；旧 Python 文件存在、损坏或缺失均不被读取，也不影响新状态初始化 |
-| [source_engine.py](../../../apps/decky/backend/source_engine.py)、[plugin_settings.py](../../../apps/decky/backend/plugin_settings.py) 与 Rust store 的双引擎残留 | 删除只有 `rust` 的引擎选择设置/环境变量、`engine-switch.json`、设置导出/摘要/共同快照、`EngineSwitch*`/conflicts 与无调用者的读写方法；直接初始化共享来源服务。仅服务切换检查点的方法随调用者删除 | 无依赖部分可提前；P5 完成宿主启动切换，P6 无选择/切换机制与旧引擎回退 |
+| `source_engine.py`（P5 已删除）、[plugin_settings.py](../../../apps/decky/backend/plugin_settings.py) 与 Rust store 的双引擎残留 | 删除只有 `rust` 的引擎选择设置/环境变量、`engine-switch.json`、设置导出/摘要/共同快照、`EngineSwitch*`/conflicts 与无调用者的读写方法；直接初始化共享来源服务。仅服务切换检查点的方法随调用者删除 | 无依赖部分可提前；P5 完成宿主启动切换，P6 无选择/切换机制与旧引擎回退 |
 | [canonical.rs](../../../crates/core/src/sources/canonical.rs) 的 Python JSON/URL 与 ID 哈希复刻 | 用第 5.1 节冻结的 Rust 确定性编码替换生产调用；失效受影响缓存，不做旧 ID 映射。替换字节相等 golden 为新契约测试，保留身份、出处、规范化、去重和资源限额的行为覆盖 | P0 冻结、P1 实施；两端相同输入的新 ID/指纹一致，旧缓存不产生安装许可 |
 | [sources/mod.rs](../../../crates/core/src/sources/mod.rs) 的规则 schema 1/2 双接受及旧字段补全契约 | 仅接受当前规则 schema（现为 2），删除为旧版本保留的分支/测试；P0 明确当前规则的必填项与合法默认值，不能将正常可选字段一概视为兼容删除。规则格式版本与当前存储/发现 schema 分开核对 | P0/P1；旧规则 schema 明确拒绝，现有有效 Rust 用户规则与订阅保留 |
 | [Windows 页面](../../../apps/windows/src/main.tsx) 的 `ensureSourcesSupported` 旧核心降级 | 删除静态扫描降级及吞掉实际 RPC 错误的分支；要求同步发布的来源/安装契约。保留实际平台能力与隔离探测 | P4；旧核心报契约错误，普通 RPC 故障报告真实原因，当前核心自动查源不回归 |
@@ -222,7 +222,7 @@ scan/list_transactions 使用一致只读快照或短时协调，保留 2026-10-
 | worker | 当前 3 GiB 地址空间/CPU 300 秒；通用分析 240 秒、转换 480 秒；无旧 profile 专用转换分支，Windows 等价内存计量待冻结 |
 | 授权/空间 | TTL ≤900 秒；实例唯一写入/受限 worker 并发；state/target 同卷合并预算，含转换、stage 与原文件恢复副本 |
 
-P0 → P1 → P2 → P3 → **P4 Windows 真实验收** → P5 Decky 切换 → P6 收口。各阶段实际状态以[施工记录](progress.md)为准；P1已实现，P2主体已实现/三旧profile待验，P3已实现并通过双平台自动化与隔离对照（独立复核修复归档 [p3-gate-review.md](p3-gate-review.md)），P4 宿主/前端与 core 收口已实现并通过自动化与独立复核（[复核归档](p4-gate-review.md)、[实施记录](p4-windows.md)），2303800 EXE 与 2743810 ZIP 真安装/游戏内确认及恢复 RPC 通过，P4 按调整后验收范围完成（2026-10-10 用户取消断网实测；[收尾验收](p4-acceptance.md)）；P5/P6 待实现：
+P0 → P1 → P2 → P3 → **P4 Windows 真实验收** → P5 Decky 切换 → P6 收口。各阶段实际状态以[施工记录](progress.md)为准；P1已实现，P2主体已实现/三旧profile待验，P3已实现并通过双平台自动化与隔离对照（独立复核修复归档 [p3-gate-review.md](p3-gate-review.md)），P4 宿主/前端与 core 收口已实现并通过自动化与独立复核（[复核归档](p4-gate-review.md)、[实施记录](p4-windows.md)），2303800 EXE 与 2743810 ZIP 真安装/游戏内确认及恢复 RPC 通过，P4 按调整后验收范围完成（2026-10-10 用户取消断网实测；[收尾验收](p4-acceptance.md)）；P5 已实现/正式部署并验收完成，ZIP/EXE真安装与写入回滚通过，用户确认实体手柄与两款游戏内生效；分项证据见 [p5-decky.md](p5-decky.md)；P6 待实现：
 
 | 阶段 | 交付 | 放行门槛 |
 | --- | --- | --- |
@@ -278,3 +278,11 @@ P0 待冻结：Windows 支持版本/隔离配置、Rust 解析/解压依赖与�
 ### P4 收尾产品决策（2026-10-09）
 
 Windows 游戏列表主标签展示补丁状态：已安装补丁优先于来源查询，再展示需检查/有可用补丁/未找到补丁；未查询、查询中、失败和仅线索分别展示对应待办，不能把“找到来源”等同于可安装。动态 EXE 的已安装判定复用受管事务与实际载荷摘要，不仅凭 committed 收据或可重装按钮。来源状态作为次级说明/详情保留。恢复 UI 必须报告 needs_recovery，不能统一显示成功。实施与证据：[p4-acceptance.md](p4-acceptance.md)。
+
+### P5 切换保护补充（2026-10-10）
+
+旧 committed 安装的当前内容无法凭新收据核验时，切换工具在停止旧插件新任务准入后发布 `installer/rust-v1/preexisting-installations.json`（schema 1、instances 与稳定 appids）。该记录只阻断覆盖，不包含旧 release/profile/授权/收据，也不给出原版或已安装认证；新运行时不读取旧 journal。稳定 AppID 的保守保护覆盖 Steam 移库/挂载路径变化，相关副本均显示“已有补丁，需检查”；新 ZIP/EXE/签名安装入口统一拒绝 `preexisting_installation_requires_review`。当前 P5 不提供绕过或自动删除该保护的接口；现有文件保持原样，完成当前完整载荷核验或明确处理前不能直接叠加安装。后续若支持解除，必须另行设计可信现状核验和用户明确操作。
+
+旧事务与修改事实核对仅在不进入生产包的切换工具中进行。只读预检缺少保护时返回 `safe_to_replace=false`；保护发布必须原子且幂等合并，不能覆盖清空先前保护。Loader 临时禁用本插件并等待旧进程退出后再执行最终检查、备份与发布，以封闭快照到替换之间的新任务窗口。
+
+Decky 来源刷新保留逐游戏 discovery 进度，但安装/检测投影分别在刷新完成和来源查询完成后整批更新，避免逐事件全库重哈希。来源归属/candidate_id 由 Rust 投影；前端按当前候选展示语言/版本/DLC，不恢复旧 profile 模型。宿主设置留原根目录以保留 auto_cleanup 偏好，任务历史独立放 host-v3。

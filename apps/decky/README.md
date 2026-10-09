@@ -1,15 +1,13 @@
-# Decky Alpha
+# Decky 协议 v3 客户端
 
-已实现游戏模式列表、补丁详情、来源跳转、ZIP 导入、计划确认、事务卸载与恢复。固定 Rust CLI 通过 Python JSON-lines 桥接；宿主配置可信目录和状态目录，前端不能执行 shell。
+游戏模式提供游戏列表、补丁详情、来源管理与任务进度。Python 宿主只配置可信平台身份和固定运行时、桥接 RPC 与事件；Rust 核心负责来源、能力、预览、下载、配方、转换、安装、卸载和恢复。动态候选使用 selection_id，签名目录使用 release_id；前端不能指定可执行文件或执行 shell。
 
-Decky 侧边栏直接提供游戏筛选、搜索和游戏列表，长名称聚焦后单行滚动。点击游戏进入原生侧栏导航的全屏管理页，包含概览、补丁管理、操作记录及“订阅源管理”。游戏内按游戏编号保存源选择，各源显示此游戏是否匹配到补丁；关闭只影响该游戏，之后可再次打开。默认使用所有全局启用的源，全局停用的源不会参与匹配。主面板的“全局设置”管理网站启用状态、新增网站及下载缓存。概览按补丁显示匹配源和缓存状态。首次打开时扫描，筛选、搜索、切换面板及重新打开菜单沿用本次插件会话的扫描结果；“重新扫描”、订阅源变更及安装 / 卸载 / 修复完成后更新结果。恢复按钮仅在存在未完成事务时显示。
+进度覆盖九个安装阶段及应用子阶段。核心每三秒续租，宿主租约依赖界面查询；失去会话或请求取消后，结果必须等待核心实际提交或回滚。需要恢复的事务显示独立恢复状态。
 
-下载、校验和安装使用原生模态进度面板与遮罩，显示实际处理量、包大小和下载速度；未知总量使用不定进度。进度面板限制高度，长内容在内部滚动；不显示取消或关闭按钮，通过 Steam 原生右下角关闭按键提示请求取消。取消过程中展示停止 / 恢复状态，安全恢复完成后切换结果面板；安装结束只展示实际结果和原生关闭提示。后端任务依靠界面状态查询续约，失去界面连接后取消，不自动后台续装。UX 细节、当前施工状态与实机验收结果见 [UX 设计](../../docs/features/decky-ux/design.md)、[施工进度](../../docs/features/decky-ux/progress.md) 与 [修复计划](../../docs/features/decky-ux/fix-plan.md)。
+root Loader 启动时按可信用户目录降权运行整个 CLI。当前来源配置继续使用 sources/rust-v1，任务历史使用 host-v3；旧 Python 来源、任务和安装日志不会作为当前运行时输入。切换前必须通过旧插件完成事务收尾，保留完整备份，并建立已有补丁保护。被保护的游戏显示“已有补丁，需检查”，当前版本不允许覆盖安装。
 
-构建：仓库根目录运行 `npm ci`、`npm run build:decky`；构建 Linux 核心后运行 `npm run package:plugin -w apps/decky`。输出 `plugin-output`，安装后将 `bin/steam-patch` 设为可执行，并以游戏所属用户运行。完整指南见 `docs/client-guide.md`。
+生产包固定包含 bin/steam-patch、bin/sf-worker、协议与哈希清单、签名目录、许可及 SBOM，不包含旧 Python SF、publisher/exe 或引擎切换实现。可信 EXE 只由 Rust 核心在 worker 沙箱中转换；不能把任意 EXE 当作游戏安装程序运行。
 
-真实 Steam Deck 核心扫描及隔离事务已通过；插件 UI 的实机加载 / 控制器验收正在进行。不要把合成测试记作真实成人补丁或游戏内内容验证。
+仓库根目录执行 npm ci、npm run typecheck、npm run test -w apps/decky；在 Linux/WSL 执行 sh scripts/build-linux.sh，再执行 npm run package:plugin -w apps/decky。生成当前依赖元数据后运行 python scripts/build-sbom.py .artifacts/cargo-metadata.json 与 python scripts/package-artifacts.py --platform decky。完整包通过 Loader 正式 ZIP 安装，不能裸替换后手工结束后端进程。
 
-《夜勤病栋》build 16533492 已在 Deck 内置 SSD 完成真实 ZIP 安装 / 指纹检测 / 卸载恢复；用户确认桌面模式及 GE-Proton8-8 游戏模式运行、补丁生效。目录 revision 4 已配置官方下载地址。点击“自动下载并准备安装”，会复用匹配的本地 ZIP 或下载文件，自动校验并显示计划；关闭游戏及更新后确认安装，无需手填路径。安装成功后默认删除本次下载的 ZIP 缓存并清理事务 `.stage`，且默认不保留原文件备份（无法卸载、只能重新安装）；全局设置侧栏“下载缓存”页可开启“保留原文件备份”以支持卸载，或关闭自动清理、手动清理缓存与事务备份/暂存。
-
-“管理订阅源”可启用 / 停用网站或添加网站解析规则。默认扫描读缓存，显式刷新更新 ZIP 来源，选择游戏后按需查询；新游戏无需插件更新。patch.moe 按完整标题 / 明确别名匹配，歧义不自动选择。默认另启用 Kagura 国内、海外发行商源及 HGamer 兜底索引，按 AppID / 有出处的身份链核实游戏；本体、DLC、语言与版本分别展示，未知条件需确认。EXE、网盘和聚合候选提供来源网页，不能作为 ZIP 准备或安装；“全部游戏”保留未查询游戏入口。查询失败保留此前成功缓存并标明状态。ZIP 安装保持包内路径、默认目标为游戏根目录；不会执行包内 EXE。插件以 deck 用户运行。配置见 [源适配器文档](../../docs/source-adapters.md)，本次实现及验收见 [施工记录](../../docs/features/kagura-hgamer-fallback/progress.md)。
+当前实施与分项验收见 [迁移设计](../../docs/features/cross-platform-installer-migration/design.md)、[P5 记录](../../docs/features/cross-platform-installer-migration/p5-decky.md) 和 [施工进度](../../docs/features/cross-platform-installer-migration/progress.md)。历史游戏补丁验收不能作为本轮协议 v3 的安装或实体手柄验收结果。
