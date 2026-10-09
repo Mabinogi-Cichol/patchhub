@@ -109,6 +109,15 @@ pub struct Transaction {
     /// recovery. Successful new installations do not retain those snapshots.
     #[serde(default)]
     pub has_replacements: bool,
+    /// Dynamic publisher selection identity (`zip-selection-*` / `exe-selection-*`).
+    /// `None` for signed (`managed_zip`) transactions and for journals written
+    /// before the field existed (p1-host-contract §1.1/§6.3).
+    #[serde(default)]
+    pub selection_id: Option<String>,
+    /// Dynamic publisher content identity (`exe-content-*`). `None` for ZIP and
+    /// signed transactions, and for journals written before the field existed.
+    #[serde(default)]
+    pub content_id: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -722,7 +731,9 @@ pub fn prepare_with_operation(
 
 /// Explicit-root variant of [`prepare_with_operation`] for the P1 installer
 /// layout (`<state_dir>/installer/rust-v1/`). The root is the transactional
-/// `journal.lock` / `journal.sqlite` / `jobs/` location.
+/// `journal.lock` / `journal.sqlite` / `jobs/` location. Signed and legacy
+/// callers do not bind a dynamic selection/content identity, so both
+/// [`Transaction`] fields stay `None`.
 pub fn prepare_with_operation_at(
     root: &Path,
     install: &GameInstall,
@@ -730,6 +741,33 @@ pub fn prepare_with_operation_at(
     archive: &Path,
     catalog_revision: u64,
     operation_kind: InstallOperation,
+) -> io::Result<InstallPlan> {
+    prepare_with_binding_at(
+        root,
+        install,
+        release,
+        archive,
+        catalog_revision,
+        operation_kind,
+        None,
+        None,
+    )
+}
+
+/// Explicit-root prepare that additionally records the dynamic publisher
+/// `selection_id`/`content_id` binding on the journaled [`Transaction`]
+/// (p1-host-contract §1.1/§6.3). The binding is persisted with the plan in the
+/// same journal write, so a created transaction never exposes half a binding.
+#[allow(clippy::too_many_arguments)]
+pub fn prepare_with_binding_at(
+    root: &Path,
+    install: &GameInstall,
+    release: &PatchRelease,
+    archive: &Path,
+    catalog_revision: u64,
+    operation_kind: InstallOperation,
+    selection_id: Option<&str>,
+    content_id: Option<&str>,
 ) -> io::Result<InstallPlan> {
     Catalog {
         schema_version: 1,
@@ -1066,6 +1104,8 @@ pub fn prepare_with_operation_at(
         created_at: now(),
         updated_at: now(),
         has_replacements: plan.changes.iter().any(|change| change.action != "add"),
+        selection_id: selection_id.map(str::to_string),
+        content_id: content_id.map(str::to_string),
     };
     let mut job = Job {
         progress: vec!["pending".into(); plan.changes.len()],
@@ -1735,4 +1775,48 @@ pub fn migrate_state(state_dir: &Path) -> io::Result<Vec<Transaction>> {
         ))?;
     }
     Ok(result)
+}
+
+#[cfg(test)]
+mod transaction_binding_tests {
+    use super::Transaction;
+
+    /// Journals written before `selection_id`/`content_id` existed must still
+    /// deserialize: `#[serde(default)]` fills both with `None`.
+    #[test]
+    fn legacy_transaction_document_loads_without_binding_fields() {
+        let legacy = r#"{
+            "transaction_id":"t","plan_id":"p","instance_id":"i","release_id":"r",
+            "state":"committed","error":null,"created_at":1,"updated_at":2,
+            "has_replacements":false
+        }"#;
+        let transaction: Transaction = serde_json::from_str(legacy).unwrap();
+        assert_eq!(transaction.selection_id, None);
+        assert_eq!(transaction.content_id, None);
+    }
+
+    /// `list_transactions` returns the struct verbatim, so both binding fields
+    /// are part of its serialized output.
+    #[test]
+    fn transaction_binding_fields_are_serialized() {
+        let transaction = Transaction {
+            transaction_id: "t".into(),
+            plan_id: "p".into(),
+            instance_id: "i".into(),
+            release_id: "r".into(),
+            state: "planned".into(),
+            error: None,
+            created_at: 1,
+            updated_at: 2,
+            has_replacements: false,
+            selection_id: Some("zip-selection-000000000000000000000000-42".into()),
+            content_id: Some("exe-content-abc".into()),
+        };
+        let value = serde_json::to_value(&transaction).unwrap();
+        assert_eq!(
+            value["selection_id"],
+            "zip-selection-000000000000000000000000-42"
+        );
+        assert_eq!(value["content_id"], "exe-content-abc");
+    }
 }

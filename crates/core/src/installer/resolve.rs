@@ -158,6 +158,9 @@ impl ResolvedZipCandidate {
             appid: self.appid,
             language: self.language.clone(),
             verified_buildids: buildid.map(str::to_string).into_iter().collect(),
+            // Language gates publisher discoveries only; index sources record it
+            // as evidence so the selected patch language is not a blocker.
+            require_language: self.rule.discovery_only,
             requires_dlc: self.candidate.requires_dlc.clone().unwrap_or_default(),
             excludes_dlc: self.candidate.excludes_dlc.clone().unwrap_or_default(),
             baselines: Vec::new(),
@@ -218,6 +221,133 @@ fn normalized_url(url: &str) -> Option<String> {
     Some(out)
 }
 
+/// Artifact-format profile for the multi-mirror selector (P4 ruling). ZIP and
+/// EXE share the selection algorithm but differ in validation and error codes.
+#[derive(Clone, Copy)]
+pub(crate) enum MirrorKind {
+    Zip,
+    Exe,
+}
+
+impl MirrorKind {
+    fn format(self) -> &'static str {
+        match self {
+            Self::Zip => "zip",
+            Self::Exe => "exe",
+        }
+    }
+
+    /// `*_download_unavailable` for the empty-format branch. EXE returns
+    /// `None`: a selection id implies at least one EXE mirror, so the branch is
+    /// unreachable there and falls through to the existing `invalid_download_url`
+    /// instead of introducing a new host code (P4 ruling: keep the code set
+    /// stable).
+    fn unavailable_code(self) -> Option<&'static str> {
+        match self {
+            Self::Zip => Some("zip_download_unavailable"),
+            Self::Exe => None,
+        }
+    }
+
+    fn ambiguous_code(self) -> &'static str {
+        match self {
+            Self::Zip => "zip_download_ambiguous",
+            Self::Exe => "exe_download_ambiguous",
+        }
+    }
+
+    /// Validates one raw mirror under the profile `acquire` enforces: ZIP uses
+    /// `allowed_url(.., download = true)` (which requires a `.zip` path), EXE
+    /// uses `download = false` plus an explicit `.exe` path suffix check
+    /// (see `acquire.rs` `ArchiveKind::url`). Returns `None` when illegal.
+    fn validate(self, url: &str, hosts: &[String]) -> Option<String> {
+        let valid = match self {
+            Self::Zip => validate::allowed_url(url, hosts, true).ok()?,
+            Self::Exe => validate::allowed_url(url, hosts, false).ok()?,
+        };
+        if matches!(self, Self::Exe)
+            && !url::Url::parse(&valid)
+                .ok()?
+                .path()
+                .to_ascii_lowercase()
+                .ends_with(".exe")
+        {
+            return None;
+        }
+        Some(valid)
+    }
+}
+
+/// Final URL path segment, lowercased; the content-identity guard for the
+/// multi-mirror selector's `*_download_ambiguous` code.
+fn url_basename(url: &str) -> String {
+    validate::split_url(url)
+        .path
+        .rsplit('/')
+        .next()
+        .unwrap_or_default()
+        .to_lowercase()
+}
+
+/// Selects the single deterministic download URL of `kind` from a candidate's
+/// mirrors (P4 ruling). Legal mirrors are filtered in candidate order and
+/// deduplicated by normalized URL; illegal mirrors are skipped rather than
+/// failing the whole candidate. Decision order:
+/// 1. no mirror of this format at all → `*_download_unavailable`;
+/// 2. no legal mirror survives → `invalid_download_url`;
+/// 3. legal mirrors span ≥ 2 distinct basenames (suspected cross-artifact) →
+///    `*_download_ambiguous`;
+/// 4. otherwise the first legal mirror, in original order.
+pub(crate) fn select_download_url(
+    candidate: &SourceCandidate,
+    rule: &SourceRule,
+    kind: MirrorKind,
+) -> ResolveResult<String> {
+    let total = candidate
+        .mirrors
+        .iter()
+        .filter(|mirror| mirror.format == kind.format())
+        .count();
+    if total == 0 {
+        if let Some(code) = kind.unavailable_code() {
+            return Err(ResolveError::code(code));
+        }
+    }
+    let mut legal: Vec<String> = Vec::new();
+    let mut keys: Vec<String> = Vec::new();
+    for mirror in candidate
+        .mirrors
+        .iter()
+        .filter(|mirror| mirror.format == kind.format())
+    {
+        let Some(valid) = kind.validate(&mirror.url, &rule.download_hosts) else {
+            continue;
+        };
+        let key = normalized_url(&valid).unwrap_or_else(|| valid.clone());
+        if !keys.contains(&key) {
+            keys.push(key);
+            legal.push(valid);
+        }
+    }
+    if legal.is_empty() {
+        return Err(ResolveError::code("invalid_download_url"));
+    }
+    let mut basenames: Vec<String> = Vec::new();
+    for url in &legal {
+        let basename = url_basename(url);
+        if !basenames.contains(&basename) {
+            basenames.push(basename);
+        }
+    }
+    if basenames.len() >= 2 {
+        return Err(ResolveError::code(kind.ambiguous_code()));
+    }
+    legal
+        .into_iter()
+        .next()
+        .ok_or_else(|| ResolveError::code("invalid_download_url"))
+}
+
 /// Whether a source-cache date evidence means "already released"
 /// (p1-zip-orchestration §2.1 step 7). No date evidence is treated as released.
 pub fn source_released(date: Option<&str>, now_unix: u64) -> bool {
@@ -269,9 +399,8 @@ pub fn resolve_zip(
     if appid != game.appid {
         return Err(ResolveError::code("selection_not_found"));
     }
-    let discovery = registry.cached_discovery(game);
-    let candidate = discovery
-        .candidates
+    let candidate = registry
+        .dynamic_zip_candidates(game)
         .into_iter()
         .find(|candidate| zip_selection_id(candidate).as_deref() == Some(selection_id))
         .ok_or_else(|| ResolveError::code("selection_not_found"))?;
@@ -295,32 +424,15 @@ pub fn resolve_zip(
         return Err(ResolveError::code("selection_stale"));
     }
 
-    let mut distinct: Vec<String> = Vec::new();
-    for mirror in zip_mirrors(&candidate) {
-        let key = normalized_url(mirror).unwrap_or_else(|| mirror.to_string());
-        if !distinct.contains(&key) {
-            distinct.push(key);
-        }
-    }
-    let download_url = match distinct.len() {
-        0 => return Err(ResolveError::code("zip_download_unavailable")),
-        1 => {
-            let raw = zip_mirrors(&candidate)
-                .into_iter()
-                .next()
-                .ok_or_else(|| ResolveError::code("zip_download_unavailable"))?;
-            validate::allowed_url(raw, &rule.download_hosts, true)
-                .map_err(|_| ResolveError::code("invalid_download_url"))?
-        }
-        _ => return Err(ResolveError::code("zip_download_ambiguous")),
-    };
+    let download_url = select_download_url(&candidate, &rule, MirrorKind::Zip)?;
 
     // The released gate is intentionally absent: the frozen contract no longer
     // carries `source_not_released` for dynamic ZIP (fix-16 doc revision), and
-    // the gate was unreachable anyway — dynamic candidates come only from
-    // `discovery_only` rules, which `registry.matches` skips, and candidates
-    // carry no reliable date (`published_at` is always `None`). `source_released`
-    // is retained for when a candidate-level date evidence field exists.
+    // dynamic candidates carry no reliable release date (`published_at` is
+    // always `None`). Index projections additionally gate `COMING SOON` at
+    // construction (`index_candidates`), so an unreleased entry never becomes a
+    // candidate. `source_released` is retained for when a candidate-level date
+    // evidence field exists.
     let release_id = source_release_id(&rule, appid);
 
     let language = choose_language(&candidate, &rule);
@@ -573,9 +685,29 @@ mod tests {
     }
 
     #[test]
-    fn resolve_blocks_ambiguous_zip_mirrors() {
+    fn resolve_selects_first_legal_zip_mirror() {
         let temp = tempfile::tempdir().unwrap();
         let mut candidate = seedable("1");
+        // Same-named mirrors on two whitelisted hosts (the real kagura-cn v4
+        // shape): the deterministic choice is the first in original order.
+        candidate.mirrors = vec![
+            mirror("https://kaguraserver.com/a.zip", "zip"),
+            mirror("https://kaguragamespatch.com/a.zip", "zip"),
+        ];
+        let selection_id = seeded_registry(temp.path(), &candidate);
+        let sources = crate::sources::Sources::open(temp.path()).unwrap();
+        let resolved = resolve_zip(sources.registry(), &game(), &selection_id).unwrap();
+        assert_eq!(resolved.download_url, "https://kaguraserver.com/a.zip");
+        // Publisher discovery keeps the language gate.
+        assert!(resolved.expectation(None).require_language);
+    }
+
+    #[test]
+    fn resolve_blocks_heterogeneous_zip_mirrors() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut candidate = seedable("1");
+        // Distinct basenames under the same candidate look like two different
+        // artifacts, so the multi-mirror choice stays guarded.
         candidate.mirrors = vec![
             mirror("https://kaguraserver.com/a.zip", "zip"),
             mirror("https://kaguragamespatch.com/b.zip", "zip"),
@@ -597,12 +729,27 @@ mod tests {
         candidate.mirrors = vec![mirror("https://evil.example.com/a.zip", "zip")];
         let selection_id = seeded_registry(temp.path(), &candidate);
         let sources = crate::sources::Sources::open(temp.path()).unwrap();
+        // The only mirror is illegal, so nothing survives the filter.
         assert_eq!(
             resolve_zip(sources.registry(), &game(), &selection_id)
                 .unwrap_err()
                 .code,
             "invalid_download_url"
         );
+    }
+
+    #[test]
+    fn resolve_skips_illegal_and_selects_the_legal_zip_mirror() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut candidate = seedable("1");
+        candidate.mirrors = vec![
+            mirror("https://evil.example.com/a.zip", "zip"),
+            mirror("https://kaguraserver.com/a.zip", "zip"),
+        ];
+        let selection_id = seeded_registry(temp.path(), &candidate);
+        let sources = crate::sources::Sources::open(temp.path()).unwrap();
+        let resolved = resolve_zip(sources.registry(), &game(), &selection_id).unwrap();
+        assert_eq!(resolved.download_url, "https://kaguraserver.com/a.zip");
     }
 
     #[test]
@@ -641,6 +788,54 @@ mod tests {
             .code,
             "selection_not_found"
         );
+    }
+
+    #[test]
+    fn resolve_zip_projects_patchmoe_index_candidate() {
+        let temp = tempfile::tempdir().unwrap();
+        // Seed the patchmoe index cache, then reopen so the registry loads it.
+        let handle = crate::sources::Sources::open(temp.path()).unwrap();
+        handle
+            .store()
+            .save_cache(
+                "patchmoe",
+                &crate::sources::model::SourceCache {
+                    entries: vec![crate::sources::model::SourceEntry {
+                        title: "Kudo's Kuppa".to_string(),
+                        aliases: Vec::new(),
+                        url: "https://download.patch.moe/Kudos_Kuppa_patch.zip".to_string(),
+                        source_page: "https://www.patch.moe/Kudos-Kuppa".to_string(),
+                        language: "zh-CN".to_string(),
+                        date: Some("2026/6/23".to_string()),
+                        appid: Some(42),
+                    }],
+                    etag: None,
+                    modified: None,
+                    cached_at: Some(1000),
+                    checked_at: Some(1000),
+                },
+            )
+            .unwrap();
+        drop(handle);
+
+        let sources = crate::sources::Sources::open(temp.path()).unwrap();
+        let candidate = sources
+            .registry()
+            .index_candidates(&game())
+            .into_iter()
+            .next()
+            .unwrap();
+        let selection_id = zip_selection_id(&candidate).unwrap();
+        let resolved = resolve_zip(sources.registry(), &game(), &selection_id).unwrap();
+        assert_eq!(
+            resolved.download_url,
+            "https://download.patch.moe/Kudos_Kuppa_patch.zip"
+        );
+        assert_eq!(resolved.release_id, "patchmoe-42");
+        // `choose_language` prefers zh-CN.
+        assert_eq!(resolved.language, "zh-CN");
+        // Index sources record the language as content identity, not a gate.
+        assert!(!resolved.expectation(None).require_language);
     }
 
     #[test]

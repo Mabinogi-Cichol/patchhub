@@ -80,7 +80,8 @@ def main():
     platform = parser.parse_args().platform
     OUTPUT.mkdir(exist_ok=True)
     windows = [(ROOT / 'target/release/steam-patch-windows.exe', 'steam-patch-windows.exe', True),
-               (ROOT / 'target/release/steam-patch.exe', 'steam-patch.exe', True)]
+               (ROOT / 'target/release/steam-patch.exe', 'steam-patch.exe', True),
+               (ROOT / 'target/release/sf-worker.exe', 'sf-worker.exe', True)]
     for name in ['catalog.json', 'signed-catalog.json', 'trust-keys.json']:
         windows.append((ROOT / 'catalog' / name, 'resources/' + name, False))
     windows.append((ROOT / 'docs/client-guide.md', 'client-guide.md', False))

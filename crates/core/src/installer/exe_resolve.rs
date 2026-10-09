@@ -1,13 +1,12 @@
 //! EXE selections bind authoritative source candidates, never download permission.
 use super::{
     facts::FactsExpectation,
-    resolve::{ResolveError, ResolveResult},
+    resolve::{select_download_url, MirrorKind, ResolveError, ResolveResult},
 };
 use crate::sources::{
     canonical,
-    model::{CacheStatus, SourceCandidate, SourceRole},
+    model::{CacheStatus, SourceCandidate, SourceRole, Variant},
     registry::SourceRegistry,
-    validate,
 };
 use serde_json::json;
 pub type ResolvedExeCandidate = super::resolve::ResolvedZipCandidate;
@@ -34,6 +33,8 @@ pub fn expectation(selection: &ResolvedExeCandidate) -> FactsExpectation {
         appid: selection.appid,
         language: selection.language.clone(),
         verified_buildids: Vec::new(),
+        // EXE publisher sources keep the language gate (legacy behaviour).
+        require_language: true,
         requires_dlc: selection.candidate.requires_dlc.clone().unwrap_or_default(),
         excludes_dlc: selection.candidate.excludes_dlc.clone().unwrap_or_default(),
         baselines: Vec::new(),
@@ -80,25 +81,13 @@ pub fn resolve_exe(
     ) {
         return Err(ResolveError::code("exe_candidate_ambiguous"));
     }
-    let mut urls = Vec::new();
-    for m in candidate.mirrors.iter().filter(|m| m.format == "exe") {
-        let url = validate::allowed_url(&m.url, &rule.download_hosts, false)
-            .map_err(|_| ResolveError::code("invalid_download_url"))?;
-        if !url::Url::parse(&url)
-            .map_err(|_| ResolveError::code("invalid_download_url"))?
-            .path()
-            .to_ascii_lowercase()
-            .ends_with(".exe")
-        {
-            return Err(ResolveError::code("invalid_download_url"));
-        }
-        if !urls.contains(&url) {
-            urls.push(url);
-        }
+    // demo/unknown variants can never yield a supported EXE content identity;
+    // reject them at candidate admission so the CLI surfaces a clean blocker
+    // instead of failing mid-plan with `exe_content_identity_invalid`.
+    if !matches!(candidate.variant, Variant::Base | Variant::Dlc) {
+        return Err(ResolveError::code("exe_candidate_variant_unsupported"));
     }
-    if urls.len() != 1 {
-        return Err(ResolveError::code("exe_download_ambiguous"));
-    }
+    let download_url = select_download_url(&candidate, &rule, MirrorKind::Exe)?;
     let language = candidate
         .languages
         .iter()
@@ -118,7 +107,7 @@ pub fn resolve_exe(
         settings_revision: registry.settings_revision(),
         candidate,
         rule,
-        download_url: urls.remove(0),
+        download_url,
         language,
     })
 }
@@ -158,5 +147,153 @@ mod tests {
         ] {
             assert!(parse_exe_selection_id(id).is_none());
         }
+    }
+    #[test]
+    fn demo_and_unknown_variants_are_blocked_at_resolution() {
+        use crate::sources::model::{ArtifactFormat, DiscoveryRecord};
+        use crate::sources::registry::DiscoveryOutcome;
+        use crate::sources::Sources;
+        for variant in [Variant::Demo, Variant::Unknown] {
+            let temp = tempfile::tempdir().unwrap();
+            let mut candidate = super::super::orchestrator::tests::candidate();
+            candidate.variant = variant;
+            candidate.mirrors[0].format = "exe".into();
+            candidate.mirrors[0].url = "https://kaguraserver.com/a.exe".into();
+            candidate.format_reported = ArtifactFormat::Exe;
+            candidate.format_observed = ArtifactFormat::Exe;
+            // Projection identity is still generated for demo/unknown candidates;
+            // only resolution rejects them, so the CLI can emit a clean blocker.
+            let selection = exe_selection_id(&candidate).expect("projection id");
+            let mut sources = Sources::open(temp.path()).unwrap();
+            let rule = sources
+                .registry()
+                .rules()
+                .iter()
+                .find(|rule| rule.id == "kagura-cn")
+                .unwrap()
+                .clone();
+            sources
+                .registry_mut()
+                .commit(
+                    &rule,
+                    candidate.game_appid.unwrap(),
+                    DiscoveryOutcome {
+                        status: "complete".into(),
+                        candidates: vec![candidate],
+                        ..Default::default()
+                    },
+                    &DiscoveryRecord::default(),
+                    "test",
+                )
+                .unwrap();
+            assert_eq!(
+                resolve_exe(
+                    sources.registry(),
+                    &super::super::orchestrator::tests::query(),
+                    &selection,
+                )
+                .unwrap_err()
+                .code,
+                "exe_candidate_variant_unsupported",
+                "{variant:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn resolve_exe_selects_first_of_homogeneous_mirrors() {
+        use crate::sources::model::{ArtifactFormat, DiscoveryRecord};
+        use crate::sources::registry::DiscoveryOutcome;
+        use crate::sources::Sources;
+        let temp = tempfile::tempdir().unwrap();
+        let mut candidate = super::super::orchestrator::tests::candidate();
+        candidate.mirrors[0].format = "exe".into();
+        candidate.mirrors[0].url = "https://kaguraserver.com/a.exe".into();
+        let mut second = candidate.mirrors[0].clone();
+        second.url = "https://kaguragamespatch.com/a.exe".into();
+        candidate.mirrors.push(second);
+        candidate.format_reported = ArtifactFormat::Exe;
+        candidate.format_observed = ArtifactFormat::Exe;
+        let selection = exe_selection_id(&candidate).unwrap();
+        let mut sources = Sources::open(temp.path()).unwrap();
+        let rule = sources
+            .registry()
+            .rules()
+            .iter()
+            .find(|rule| rule.id == "kagura-cn")
+            .unwrap()
+            .clone();
+        sources
+            .registry_mut()
+            .commit(
+                &rule,
+                candidate.game_appid.unwrap(),
+                DiscoveryOutcome {
+                    status: "complete".into(),
+                    candidates: vec![candidate],
+                    ..Default::default()
+                },
+                &DiscoveryRecord::default(),
+                "test",
+            )
+            .unwrap();
+        let resolved = resolve_exe(
+            sources.registry(),
+            &super::super::orchestrator::tests::query(),
+            &selection,
+        )
+        .unwrap();
+        assert_eq!(resolved.download_url, "https://kaguraserver.com/a.exe");
+        // EXE publisher candidates keep the language gate.
+        assert!(expectation(&resolved).require_language);
+    }
+
+    #[test]
+    fn resolve_exe_blocks_heterogeneous_mirrors() {
+        use crate::sources::model::{ArtifactFormat, DiscoveryRecord};
+        use crate::sources::registry::DiscoveryOutcome;
+        use crate::sources::Sources;
+        let temp = tempfile::tempdir().unwrap();
+        let mut candidate = super::super::orchestrator::tests::candidate();
+        candidate.mirrors[0].format = "exe".into();
+        candidate.mirrors[0].url = "https://kaguraserver.com/a.exe".into();
+        let mut second = candidate.mirrors[0].clone();
+        second.url = "https://kaguragamespatch.com/b.exe".into();
+        candidate.mirrors.push(second);
+        candidate.format_reported = ArtifactFormat::Exe;
+        candidate.format_observed = ArtifactFormat::Exe;
+        let selection = exe_selection_id(&candidate).unwrap();
+        let mut sources = Sources::open(temp.path()).unwrap();
+        let rule = sources
+            .registry()
+            .rules()
+            .iter()
+            .find(|rule| rule.id == "kagura-cn")
+            .unwrap()
+            .clone();
+        sources
+            .registry_mut()
+            .commit(
+                &rule,
+                candidate.game_appid.unwrap(),
+                DiscoveryOutcome {
+                    status: "complete".into(),
+                    candidates: vec![candidate],
+                    ..Default::default()
+                },
+                &DiscoveryRecord::default(),
+                "test",
+            )
+            .unwrap();
+        assert_eq!(
+            resolve_exe(
+                sources.registry(),
+                &super::super::orchestrator::tests::query(),
+                &selection,
+            )
+            .unwrap_err()
+            .code,
+            "exe_download_ambiguous"
+        );
     }
 }

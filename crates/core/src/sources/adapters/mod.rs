@@ -14,7 +14,7 @@ use super::model::{
 };
 use super::validate;
 use super::{invalid, Result};
-use scraper::{Html, Selector};
+use scraper::{ElementRef, Html, Selector};
 use std::collections::HashSet;
 
 pub mod dom;
@@ -195,43 +195,60 @@ pub(crate) fn selector(css: &str) -> Selector {
     Selector::parse(css).expect("static CSS selector must be valid")
 }
 
-/// Parses the first table (or the table with `table_id`) into ordered rows of
-/// ordered `td`/`th` cells. Mirrors `_Page` table/row/cell collection.
+/// Parses table rows into ordered rows of ordered `td`/`th` cells. Mirrors
+/// `_Page` table/row/cell collection: with `table_id=None` rows are streamed
+/// from every top-level table in document order (legacy `_Page(None)` — e.g.
+/// patch.moe ships both a `tbl new` and a `tbl regular` table); otherwise only
+/// the table carrying that id is parsed.
 pub(crate) fn parse_rows(html: &str, table_id: Option<&str>) -> Vec<Vec<Cell>> {
     let document = Html::parse_document(html);
-    let table = if let Some(id) = table_id {
-        match Selector::parse(&format!("table#{id}")) {
-            Ok(selector) => document.select(&selector).next(),
-            Err(_) => None,
+    let mut tables: Vec<ElementRef> = Vec::new();
+    match table_id {
+        Some(id) => {
+            if let Ok(selector) = Selector::parse(&format!("table#{id}")) {
+                if let Some(table) = document.select(&selector).next() {
+                    tables.push(table);
+                }
+            }
         }
-    } else {
-        let selector = selector("table");
-        document.select(&selector).next()
-    };
-    let Some(table) = table else {
-        return Vec::new();
-    };
+        None => {
+            // Only top-level tables are iterated: a nested table's rows are
+            // already reached through its ancestor's descendant `tr` selection,
+            // so re-selecting them would double count.
+            let table_selector = selector("table");
+            for table in document.select(&table_selector) {
+                let nested = table
+                    .ancestors()
+                    .any(|node| node.value().as_element().map(|el| el.name()) == Some("table"));
+                if !nested {
+                    tables.push(table);
+                }
+            }
+        }
+    }
     let mut rows = Vec::new();
-    for row in table.select(&selector("tr")) {
-        let mut cells = Vec::new();
-        for cell in row.select(&selector("td, th")) {
-            cells.push(Cell {
-                class: cell
-                    .attr("class")
-                    .unwrap_or("")
-                    .split_whitespace()
-                    .next()
-                    .unwrap_or("")
-                    .to_string(),
-                text: collapse(cell.text().collect::<String>()),
-                links: cell
-                    .select(&selector("a[href]"))
-                    .filter_map(|anchor| anchor.attr("href").map(str::to_string))
-                    .collect(),
-            });
-        }
-        if !cells.is_empty() {
-            rows.push(cells);
+    for table in tables {
+        for row in table.select(&selector("tr")) {
+            let mut cells = Vec::new();
+            for cell in row.select(&selector("td, th")) {
+                cells.push(Cell {
+                    class: cell
+                        .attr("class")
+                        .unwrap_or("")
+                        .split_whitespace()
+                        .next()
+                        .unwrap_or("")
+                        .to_string(),
+                    text: collapse(cell.text().collect::<String>()),
+                    links: cell
+                        .select(&selector("a[href]"))
+                        .filter_map(|anchor| anchor.attr("href").map(str::to_string))
+                        .collect(),
+                });
+            }
+            if !cells.is_empty() {
+                rows.push(cells);
+            }
         }
     }
     rows
@@ -405,6 +422,40 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(error.to_string(), "unknown_discovery_adapter");
+    }
+
+    #[test]
+    fn parse_rows_collects_every_top_level_table() {
+        // Legacy `_Page(None)` streams rows from every table in document order.
+        let html = r#"<html><body>
+            <table><tr><th class="title">Title</th><th class="patch">Patch</th></tr>
+            <tr><td class="title">A</td><td class="patch"><a href="a.zip">dl</a></td></tr></table>
+            <table><tr><th class="title">Title</th><th class="patch">Patch</th></tr>
+            <tr><td class="title">B</td><td class="patch"><a href="b.zip">dl</a></td></tr></table>
+            </body></html>"#;
+        let rows = parse_rows(html, None);
+        assert_eq!(rows.len(), 4);
+        assert_eq!(rows[1][0].text, "A");
+        assert_eq!(rows[1][1].links, vec!["a.zip".to_string()]);
+        assert_eq!(rows[3][0].text, "B");
+        assert_eq!(rows[3][1].links, vec!["b.zip".to_string()]);
+    }
+
+    #[test]
+    fn parse_rows_with_id_selects_one_table() {
+        let html = r#"<table class="a"><tr><td>x</td></tr></table>
+            <table id="pick"><tr><td>y</td></tr></table>"#;
+        let rows = parse_rows(html, Some("pick"));
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0][0].text, "y");
+        assert!(parse_rows(html, Some("missing")).is_empty());
+    }
+
+    #[test]
+    fn parse_rows_does_not_double_count_nested_tables() {
+        let html = r#"<table><tr><td><table><tr><td>inner</td></tr></table></td></tr></table>"#;
+        let rows = parse_rows(html, None);
+        assert_eq!(rows.len(), 2);
     }
 
     #[test]

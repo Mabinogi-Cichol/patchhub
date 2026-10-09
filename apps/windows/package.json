@@ -9,7 +9,8 @@
     "typecheck": "tsc --noEmit",
     "tauri": "tauri",
     "bundle": "npm run prepare:sidecar && tauri build",
-    "prepare:sidecar": "node scripts/prepare-sidecar.mjs"
+    "prepare:sidecar": "node scripts/prepare-sidecar.mjs",
+    "test:status": "node scripts/test-game-status.mjs"
   },
   "dependencies": {
     "@steam-patch/ui": "0.1.0",

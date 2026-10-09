@@ -416,6 +416,17 @@ fn exact(v: &Value, fields: &[&str]) -> Result<()> {
         "exe_worker_invalid_response",
     )
 }
+/// Reject unknown keys inside a nested object whose key set is bounded but not
+/// fixed (e.g. diagnostic rows that carry optional evidence fields).
+fn keys_within(v: &Value, fields: &[&str]) -> Result<()> {
+    let o = v
+        .as_object()
+        .ok_or_else(|| invalid("exe_worker_invalid_response"))?;
+    require(
+        o.keys().all(|k| fields.contains(&k.as_str())),
+        "exe_worker_invalid_response",
+    )
+}
 fn text<'a>(v: &'a Value, k: &str) -> Result<&'a str> {
     v[k].as_str()
         .ok_or_else(|| invalid("exe_worker_invalid_response"))
@@ -621,6 +632,50 @@ pub fn validate_response(
                 == uint(&report["metadata"], "size")?,
         "exe_report_coverage_incomplete",
     )?;
+    exact(
+        &report["script_inventory"],
+        &[
+            "coverage",
+            "decoder",
+            "disabled_packages",
+            "events",
+            "includes",
+            "installable",
+            "metadata",
+            "objects",
+            "terms",
+            "variables",
+        ],
+    )?;
+    // A certificate is null when unsigned; when present it is exactly the
+    // bounded evidence blob the fixed worker emits.
+    if !report["certificate"].is_null() {
+        exact(
+            &report["certificate"],
+            &["offset", "sha256", "signature_verified", "size"],
+        )?;
+    }
+    // Diagnostic rows are bounded informational evidence, not a fixed shape:
+    // every key must be one the fixed worker can emit, but optional evidence
+    // fields may be absent per row. Unknown keys are still rejected fail-closed.
+    for diagnostic in report["diagnostics"]
+        .as_array()
+        .ok_or_else(|| invalid("exe_worker_invalid_response"))?
+    {
+        keys_within(
+            diagnostic,
+            &[
+                "crc32",
+                "hashed_representation",
+                "name",
+                "offset",
+                "packed_size",
+                "sha256",
+                "size",
+                "unknown_header_base64",
+            ],
+        )?;
+    }
     for k in ["events", "includes", "steps"] {
         require(
             uint(&behavior["coverage"], k)? <= 200_000,
@@ -998,6 +1053,34 @@ mod tests {
         }
     }
     #[test]
+    fn nested_unknown_keys_are_rejected() {
+        let original = initial();
+        let mut r = original.clone();
+        r["report"]["script_inventory"]["injected"] = json!(1);
+        assert!(admit(&r).is_err(), "script_inventory");
+        let mut r = original.clone();
+        r["report"]["certificate"] = json!({
+            "offset": 0,
+            "sha256": "a".repeat(64),
+            "signature_verified": false,
+            "size": 8,
+            "injected": 1
+        });
+        assert!(admit(&r).is_err(), "certificate");
+        let mut r = original.clone();
+        r["report"]["diagnostics"][0]["injected"] = json!(1);
+        assert!(admit(&r).is_err(), "diagnostics");
+        // A bounded certificate object with only known keys is still admitted.
+        let mut r = original.clone();
+        r["report"]["certificate"] = json!({
+            "offset": 0,
+            "sha256": "a".repeat(64),
+            "signature_verified": false,
+            "size": 8
+        });
+        assert!(admit(&r).is_ok(), "valid certificate");
+    }
+    #[test]
     fn tampered_binding_and_unknown_actions_are_rejected() {
         let original = initial();
         for (field, value) in [
@@ -1217,6 +1300,8 @@ mod reinstall_tests {
             created_at: 1,
             updated_at: 2,
             has_replacements: false,
+            selection_id: None,
+            content_id: None,
         };
         let evidence = ReinstallEvidence::from_committed(&tx, &auth, &original).unwrap();
         fs::write(temp.path().join("payload.bin"), patched).unwrap();

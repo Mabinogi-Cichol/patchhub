@@ -1482,6 +1482,8 @@ fn signed_expectation(
         appid: release.appid,
         language,
         verified_buildids: release.verified_buildids.clone(),
+        // Signed releases keep the language gate (EXE/signature behaviour).
+        require_language: true,
         requires_dlc: Vec::new(),
         excludes_dlc: Vec::new(),
         baselines: Vec::new(),
@@ -1511,7 +1513,7 @@ fn dynamic_patches(
 ) -> Vec<catalog::PatchMatch> {
     let query = game_query(game);
     let mut patches = Vec::new();
-    for candidate in registry.cached_discovery(&query).candidates {
+    for candidate in registry.dynamic_zip_candidates(&query) {
         let has_zip = candidate
             .mirrors
             .iter()
@@ -1553,7 +1555,7 @@ fn dynamic_patches(
             if candidate.cache_status == sources::model::CacheStatus::Stale {
                 blockers.push("selection_stale".into());
             }
-            let detection = dynamic_detection(game, &release_id, transactions, root);
+            let detection = dynamic_detection(game, &release_id, &selection_id, transactions, root);
             // Signature priority: never project a dynamic patch that collides.
             if patches
                 .iter()
@@ -1600,6 +1602,7 @@ fn dynamic_patches(
             if game.availability != "installed" {
                 blockers.push("game_not_ready".into());
             }
+            let detection = dynamic_detection(game, &release_id, &selection_id, transactions, root);
             patches.push(catalog::PatchMatch {
                 release_id,
                 selection_id: Some(selection_id),
@@ -1609,10 +1612,7 @@ fn dynamic_patches(
                 download_available: blockers.is_empty(),
                 compatibility: "check_required".into(),
                 blockers,
-                detection: catalog::Detection {
-                    status: "unknown".into(),
-                    files: Vec::new(),
-                },
+                detection,
             });
         }
     }
@@ -1620,11 +1620,12 @@ fn dynamic_patches(
 }
 
 /// Detection from the most recent committed transaction for the same instance
-/// and release id, re-hashing the recorded plan destinations (p1-zip-orchestration
+/// and release/selection identity, re-hashing the recorded plan destinations (p1-zip-orchestration
 /// §4.2).
 fn dynamic_detection(
     game: &steam::GameInstall,
     release_id: &str,
+    selection_id: &str,
     transactions: &[install::Transaction],
     root: &Path,
 ) -> catalog::Detection {
@@ -1636,7 +1637,8 @@ fn dynamic_detection(
         .iter()
         .filter(|transaction| {
             transaction.instance_id == game.instance_id
-                && transaction.release_id == release_id
+                && (transaction.release_id == release_id
+                    || transaction.selection_id.as_deref() == Some(selection_id))
                 && transaction.state == "committed"
         })
         .max_by_key(|transaction| transaction.updated_at)
@@ -2077,6 +2079,29 @@ mod sources_tests {
     }
 
     #[test]
+    fn scan_projects_index_source_candidate_as_publisher_zip() {
+        let temp = tempfile::tempdir().unwrap();
+        let state = temp.path().join("state");
+        seed_patchmoe(&state);
+        let result = execute(
+            "scan",
+            Params {
+                roots: vec![fixture_root(temp.path())],
+                state_dir: Some(state),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let patches = result["installs"][0]["patches"].as_array().unwrap();
+        let zip = patches
+            .iter()
+            .find(|patch| patch["support_level"] == "publisher_zip")
+            .expect("index candidate projected as publisher_zip");
+        assert_eq!(zip["release_id"], "patchmoe-42");
+        assert!(!zip["selection_id"].as_str().unwrap().is_empty());
+    }
+
+    #[test]
     fn set_game_source_by_appid_reflects_in_subscriptions() {
         let temp = tempfile::tempdir().unwrap();
         let state = temp.path().join("state");
@@ -2231,6 +2256,52 @@ mod install_flow_tests {
             "committed"
         );
         assert_eq!(fs::read(game.join("patch.dat")).unwrap(), b"patch content");
+    }
+
+    #[test]
+    fn dynamic_exe_detection_checks_selection_binding_and_live_files() {
+        let (temp, params, game_path) = fixture();
+        let game = steam::scan(&params.roots).installs.remove(0);
+        let mut release: catalog::PatchRelease =
+            serde_json::from_slice::<Catalog>(&fs::read(temp.path().join("catalog.json")).unwrap())
+                .unwrap()
+                .releases
+                .remove(0);
+        release.release_id = "exe-content-test".into();
+        let paths = installer::InstallerPaths::new(params.state_dir.as_ref().unwrap());
+        installer::init_atomic(&paths).unwrap();
+        let selection = "exe-selection-test-42";
+        let plan = install::prepare_with_binding_at(
+            paths.root(),
+            &game,
+            &release,
+            params.archive.as_ref().unwrap(),
+            1,
+            install::InstallOperation::Install,
+            Some(selection),
+            Some("exe-content-test"),
+        )
+        .unwrap();
+        install::apply_at(paths.root(), &plan.plan_id).unwrap();
+        let transactions = install::list_transactions_at(paths.root()).unwrap();
+        let detect = |selected: &str, target: &steam::GameInstall| {
+            dynamic_detection(
+                target,
+                "source-kagura-cn-42",
+                selected,
+                &transactions,
+                paths.root(),
+            )
+        };
+        assert_eq!(detect(selection, &game).status, "installed_managed");
+        assert_eq!(detect("exe-selection-other-42", &game).status, "unknown");
+        let mut other = steam::scan(&params.roots).installs.remove(0);
+        other.instance_id = "another-instance".into();
+        assert_eq!(detect(selection, &other).status, "unknown");
+        fs::write(game_path.join("patch.dat"), b"external modification").unwrap();
+        assert_eq!(detect(selection, &game).status, "partial_or_conflict");
+        fs::remove_file(game_path.join("patch.dat")).unwrap();
+        assert_eq!(detect(selection, &game).files[0].status, "missing");
     }
 
     /// End-to-end task channel: `install_patch` streams flat `install_progress`
@@ -2602,6 +2673,11 @@ mod dynamic_projection_tests {
         let mut candidate = dynamic_candidate();
         candidate.mirrors[0].format = "exe".into();
         candidate.mirrors[0].url = "https://kaguraserver.com/a.exe".into();
+        // Same-named second whitelisted mirror (the real kagura-cn v4 shape):
+        // resolution must deterministically pick the first, not block.
+        let mut second = candidate.mirrors[0].clone();
+        second.url = "https://kaguragamespatch.com/a.exe".into();
+        candidate.mirrors.push(second);
         candidate.format_reported = ArtifactFormat::Exe;
         candidate.format_observed = ArtifactFormat::Exe;
         let selection_id = installer::exe_resolve::exe_selection_id(&candidate).unwrap();
@@ -2641,6 +2717,90 @@ mod dynamic_projection_tests {
             .expect("exe selection projected");
         assert_eq!(dynamic["release_id"], "source-kagura-cn-42");
         assert_eq!(dynamic["support_level"], "publisher_exe");
+        let blockers = dynamic["blockers"].as_array().unwrap();
+        assert!(
+            !blockers
+                .iter()
+                .any(|blocker| blocker == "exe_download_ambiguous"),
+            "homogeneous mirrors must not block resolution: {blockers:?}"
+        );
+        // Resolution succeeded, so availability is only ever held back by the
+        // environment's EXE sandbox probe (`bundled_worker_missing` in this
+        // harness, where the unit-test binary sits in `target/debug/deps`
+        // without the worker) — never by a download-availability error.
+        let sandbox_blocked = blockers
+            .iter()
+            .any(|blocker| blocker == "exe_sandbox_unavailable");
+        assert_eq!(dynamic["download_available"], !sandbox_blocked);
+    }
+
+    #[test]
+    fn scan_blocks_exe_demo_variant_as_a_clean_blocker() {
+        let temp = tempfile::tempdir().unwrap();
+        let library = temp.path().join("Steam");
+        let install = library.join("steamapps").join("common").join("Test");
+        fs::create_dir_all(&install).unwrap();
+        fs::write(
+            library
+                .join("steamapps")
+                .join(format!("appmanifest_{APPID}.acf")),
+            "\"AppState\" { \"appid\" \"42\" \"name\" \"Test\" \"installdir\" \"Test\" \
+             \"buildid\" \"100\" \"StateFlags\" \"4\" \
+             \"UserConfig\" { \"language\" \"schinese\" } \
+             \"MountedConfig\" { \"language\" \"schinese\" } }",
+        )
+        .unwrap();
+        let state = temp.path().join("state");
+        let mut candidate = dynamic_candidate();
+        candidate.variant = steam_patch_core::sources::model::Variant::Demo;
+        candidate.mirrors[0].format = "exe".into();
+        candidate.mirrors[0].url = "https://kaguraserver.com/a.exe".into();
+        candidate.format_reported = ArtifactFormat::Exe;
+        candidate.format_observed = ArtifactFormat::Exe;
+        // The demo candidate must still be projected (with its own selection id);
+        // only resolution rejects it, which the UI surfaces as a clean blocker.
+        let selection_id = installer::exe_resolve::exe_selection_id(&candidate).unwrap();
+        let mut handle = sources::Sources::open(&state).unwrap();
+        let rule = handle
+            .registry()
+            .rules()
+            .iter()
+            .find(|rule| rule.id == "kagura-cn")
+            .cloned()
+            .unwrap();
+        handle
+            .registry_mut()
+            .commit(
+                &rule,
+                APPID,
+                DiscoveryOutcome {
+                    status: "complete".to_string(),
+                    candidates: vec![candidate],
+                    ..DiscoveryOutcome::default()
+                },
+                &DiscoveryRecord::default(),
+                "key",
+            )
+            .unwrap();
+        let params = Params {
+            roots: vec![library],
+            state_dir: Some(state),
+            platform: Some(Platform::Windows),
+            ..Default::default()
+        };
+        let result = execute("scan", params).unwrap();
+        let patches = result["installs"][0]["patches"].as_array().unwrap();
+        let dynamic = patches
+            .iter()
+            .find(|patch| patch["selection_id"] == selection_id.as_str())
+            .expect("exe demo selection projected");
+        assert_eq!(dynamic["release_id"], "source-kagura-cn-42");
+        assert_eq!(dynamic["download_available"], false);
+        assert!(dynamic["blockers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|blocker| blocker == "exe_candidate_variant_unsupported"));
     }
 
     #[test]
@@ -2724,6 +2884,8 @@ mod dynamic_projection_tests {
             created_at: 1,
             updated_at: 2,
             has_replacements: true,
+            selection_id: None,
+            content_id: None,
         };
         let value = super::outcome_json(
             &transaction,

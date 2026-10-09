@@ -1,5 +1,8 @@
 export type Patch = {
   release_id: string;
+  // Dynamic install handle (`zip-selection-*` / `exe-selection-*`). When set,
+  // installation routes by selection instead of the projected `release_id`.
+  selection_id?: string | null;
   candidate_id?: string;
   name: string;
   source_page: string;
@@ -110,6 +113,35 @@ export type ScanResult = {
   scan_progress?: { completed: number; total: number; running: boolean };
 };
 
+/**
+ * Platform link state from `get_capabilities.installer.links`. `available` is
+ * the probe result; `blockers` carries the reason codes (e.g.
+ * `exe_sandbox_unavailable`).
+ */
+export type InstallerLinkState = { available: boolean; blockers?: { code: string; detail?: string }[] };
+export type InstallerLinks = { zip?: InstallerLinkState; exe?: InstallerLinkState };
+
+/**
+ * N1 installability, evaluated once per patch by the scan projection. Whether a
+ * patch can be installed is decided from the platform link state
+ * (`installer.links.*.available`), never from `formats`: a core can support a
+ * format while this machine lacks a usable download/sandbox link.
+ */
+export function patchInstallable(patch: Patch, links: InstallerLinks | null | undefined, signed = false): boolean {
+  if (patch.blockers.length > 0 || patch.source_id === "hgamer") return false;
+  if (patch.download_available !== true) return false;
+  switch (patch.support_level) {
+    case "managed_zip":
+      return signed;
+    case "publisher_zip":
+      return !!patch.selection_id && links?.zip?.available === true;
+    case "publisher_exe":
+      return !!patch.selection_id && links?.exe?.available === true;
+    default:
+      return false;
+  }
+}
+
 export function canAutoInstall(patch: Patch): boolean {
   return patch.auto_installable === true && patch.blockers.length === 0 && patch.source_id !== "hgamer";
 }
@@ -148,6 +180,7 @@ export type Change = { path: string; action: string; baseline_matches?: boolean 
 export type Preview = {
   instance_id: string;
   release_id: string;
+  selection_id?: string | null;
   catalog_revision: number;
   executable: boolean;
   blockers: string[];
@@ -158,9 +191,11 @@ export type Transaction = {
   transaction_id: string;
   instance_id: string;
   release_id: string;
+  selection_id?: string | null;
+  content_id?: string | null;
   state: string;
   error?: string | null;
-  backups?: boolean;
+  has_replacements?: boolean;
 };
 
 export type Filter = "all" | "matched" | "installed" | "attention";
@@ -353,6 +388,7 @@ export function reason(code: string): string {
     ,publisher_state_unavailable: "本机补丁安装记录不可读取，请检查状态目录。"
     ,publisher_existing_transaction: "已有安装或待恢复记录，请先卸载或修复。"
     ,publisher_match_changed: "来源中的游戏匹配已变化，请重新扫描。"
+    ,cancelled: "安装已取消，没有修改游戏文件。"
     ,download_cancelled: "已取消获取或校验，没有执行安装。"
     ,download_http_error: "下载服务返回错误，请稍后重试。"
     ,download_network_error: "补丁下载网络连接失败，请检查网络后重试。"
@@ -371,8 +407,50 @@ export function reason(code: string): string {
      ,core_process_failed: "核心进程未能完成操作，请重试。"
      ,core_binary_missing: "缺少核心程序，请重新安装客户端。"
      ,state_dir_required: "状态目录不可用，请检查应用数据目录。"
+     ,capability_mismatch: "核心能力与客户端要求不一致，请更新客户端或核心后重试。"
+     ,contract_mismatch: "客户端与核心的安装契约不一致，请更新客户端。"
+     ,installer_schema_unsupported: "安装器数据结构版本不受支持，请更新客户端与核心。"
+     ,installer_lease_expired: "安装授权已过期，请重新发起安装。"
+     ,cleanup_failed: "临时文件清理失败；安装已完成，可稍后重新扫描确认。"
+     ,task_required: "此操作必须通过安装任务执行，请从安装按钮重新发起。"
+     ,invalid_selection_id: "补丁选择标识无效，请重新查找来源。"
+     ,selection_not_found: "补丁选择已不在来源结果中，请重新查找。"
+     ,selection_stale: "补丁选择信息已过期，请重新查找来源。"
+     ,selection_or_release_required: "缺少补丁选择或发行版本，请重新选择。"
+     ,archive_not_allowed_for_selection: "动态来源补丁不能导入本地 ZIP，请从来源直接安装。"
+     ,archive_too_large: "所选 ZIP 超过大小限制，无法安装。"
+     ,zip_download_unavailable: "此来源未提供可下载的 ZIP，请查看来源说明。"
+     ,zip_download_ambiguous: "来源提供了多个 ZIP 下载，无法唯一确定，请查看来源说明。"
+     ,exe_candidate_variant_unsupported: "此补丁的版本类型暂不支持自动安装，请查看来源说明。"
+     ,exe_candidate_ambiguous: "来源为此补丁提供了多个可下载项，无法唯一确定。"
+     ,exe_download_ambiguous: "来源提供了多个 EXE 下载地址，无法唯一确定。"
+     ,exe_conditions_not_satisfied: "当前游戏不满足安装器的条件，请检查游戏版本、语言与 DLC。"
+     ,exe_route_unimplemented: "此平台暂不支持 EXE 自动安装，请查看来源说明。"
+     ,download_hash_mismatch: "下载文件与来源记录不一致，已停止安装。"
+     ,download_failed: "补丁下载失败，请检查网络后重试。"
+     ,analysis_failed: "安装包分析失败，请查看来源说明。"
+     ,convert_failed: "安装包转换失败，请查看来源说明。"
+     ,plan_failed: "生成安装计划失败，请重试或查看来源说明。"
+     ,reinstall_content_identity_changed: "补丁内容已更新，暂不支持直接叠加安装。"
+     ,reinstall_unowned_or_incomplete: "无法确认上次安装记录，暂不能直接重装。"
+     ,source_not_subscribed: "尚未订阅此来源，请在来源管理中订阅后重试。"
   };
   return labels[normalized] ?? (normalized.startsWith("exe_") ? "此 EXE 补丁暂不能安全安装，请查看来源说明或稍后重试。" : normalized.replaceAll("_", " "));
+}
+
+/**
+ * Split a host error string (`code` or `code: detail`, both optionally prefixed
+ * with a Python exception name) into display parts. The detail is the host's
+ * truncated underlying diagnostic. This does not change `reason` semantics.
+ */
+export function splitError(message: string): { code: string; detail: string | null } {
+  const normalized = (message ?? "").trim().replace(/^(Error|RuntimeError|ValueError):\s*/, "");
+  const index = normalized.indexOf(": ");
+  if (index <= 0) return { code: normalized, detail: null };
+  const code = normalized.slice(0, index).trim();
+  const detail = normalized.slice(index + 2).trim();
+  if (!/^[A-Za-z][A-Za-z0-9_.-]*$/.test(code)) return { code: normalized, detail: null };
+  return { code, detail: detail || null };
 }
 
 export function workflowState(value: string): string {

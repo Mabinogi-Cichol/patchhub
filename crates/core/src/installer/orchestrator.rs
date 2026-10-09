@@ -550,13 +550,15 @@ fn install_zip_inner(
         .map_err(|_| ZipTaskError::code("cancelled"))?;
     // Step 7: plan + authorize + re-check (journal.lock held only inside prepare).
     boundary(&deps)?;
-    let plan = install::prepare_with_operation_at(
+    let plan = install::prepare_with_binding_at(
         deps.paths.root(),
         inputs.game,
         &release,
         &acquired.path,
         0,
         inputs.operation,
+        Some(&inputs.selection.selection_id),
+        None,
     )
     .map_err(map_plan_error)?;
     let outcome = (|| {
@@ -990,6 +992,43 @@ pub(crate) mod tests {
         }
     }
 
+    /// Seeds the patchmoe index cache and resolves an index-source candidate
+    /// (`rule.discovery_only == false`, language recorded as evidence only).
+    fn seed_and_resolve_patchmoe(state: &Path) -> crate::installer::ResolvedZipCandidate {
+        let handle = Sources::open(state).unwrap();
+        handle
+            .store()
+            .save_cache(
+                "patchmoe",
+                &crate::sources::model::SourceCache {
+                    entries: vec![crate::sources::model::SourceEntry {
+                        title: "Kudos Kuppa".to_string(),
+                        aliases: Vec::new(),
+                        url: "https://download.patch.moe/Kudos_Kuppa_patch.zip".to_string(),
+                        source_page: "https://www.patch.moe/Kudos-Kuppa".to_string(),
+                        language: "zh-CN".to_string(),
+                        date: Some("2026/6/23".to_string()),
+                        appid: Some(APPID),
+                    }],
+                    etag: None,
+                    modified: None,
+                    cached_at: Some(1000),
+                    checked_at: Some(1000),
+                },
+            )
+            .unwrap();
+        drop(handle);
+        let sources = Sources::open(state).unwrap();
+        let candidate = sources
+            .registry()
+            .index_candidates(&query())
+            .into_iter()
+            .next()
+            .unwrap();
+        let selection_id = zip_selection_id(&candidate).unwrap();
+        crate::installer::resolve_zip(sources.registry(), &query(), &selection_id).unwrap()
+    }
+
     fn write_manifest(
         game: &GameInstall,
         language: &str,
@@ -1151,6 +1190,20 @@ pub(crate) mod tests {
 
         assert_eq!(transaction.state, "committed");
         assert_eq!(transaction.release_id, "source-kagura-cn-42");
+        // The dynamic ZIP transaction carries its selection identity but no EXE
+        // content id, and the binding is visible through list_transactions.
+        assert_eq!(
+            transaction.selection_id.as_deref(),
+            Some(selection_id.as_str())
+        );
+        assert_eq!(transaction.content_id, None);
+        let listed = install::list_transactions_at(paths.root()).unwrap();
+        let listed = listed
+            .iter()
+            .find(|candidate| candidate.plan_id == transaction.plan_id)
+            .expect("committed transaction is listed");
+        assert_eq!(listed.selection_id.as_deref(), Some(selection_id.as_str()));
+        assert_eq!(listed.content_id, None);
         assert_eq!(
             fs::read(game.install_path.join("data.txt")).unwrap(),
             b"patched"
@@ -1385,14 +1438,13 @@ pub(crate) mod tests {
         .unwrap();
     }
 
-    /// Builds (without applying) a dynamic publisher ZIP plan at the P1 root.
-    fn prepare_dynamic_plan(
-        paths: &InstallerPaths,
+    /// Builds (without preparing) the in-memory dynamic release for a ZIP
+    /// selection, mirroring the production orchestrator.
+    fn dynamic_release(
         game: &GameInstall,
         selection: &ResolvedZipCandidate,
         archive: &Path,
-        operation_kind: InstallOperation,
-    ) -> install::InstallPlan {
+    ) -> crate::catalog::PatchRelease {
         let cancel = AtomicBool::new(false);
         let mappings = zip_recipe::build_recipe(archive, &game.install_path, &cancel).unwrap();
         let expectation = selection.expectation(game.buildid.as_deref());
@@ -1404,9 +1456,84 @@ pub(crate) mod tests {
             final_url: selection.download_url.clone(),
             source: acquire::Acquisition::Downloaded,
         };
-        let release = build_release(selection, &acquired, &mappings, &expectation);
+        build_release(selection, &acquired, &mappings, &expectation)
+    }
+
+    /// Builds (without applying) a dynamic publisher ZIP plan at the P1 root.
+    fn prepare_dynamic_plan(
+        paths: &InstallerPaths,
+        game: &GameInstall,
+        selection: &ResolvedZipCandidate,
+        archive: &Path,
+        operation_kind: InstallOperation,
+    ) -> install::InstallPlan {
+        let release = dynamic_release(game, selection, archive);
         install::prepare_with_operation_at(paths.root(), game, &release, archive, 0, operation_kind)
             .unwrap()
+    }
+
+    /// The signed/legacy prepare entry point leaves both dynamic binding fields
+    /// unset on the persisted transaction.
+    #[test]
+    fn prepare_with_operation_leaves_dynamic_binding_unset() {
+        let (temp, game, archive) = setup();
+        let (_state, paths) = dynamic_paths(&temp);
+        let archive_path = temp.path().join("dynamic.zip");
+        fs::write(&archive_path, &archive).unwrap();
+        let selection = manual_selection(None, None);
+        let release = dynamic_release(&game, &selection, &archive_path);
+        let plan = install::prepare_with_operation_at(
+            paths.root(),
+            &game,
+            &release,
+            &archive_path,
+            0,
+            InstallOperation::Install,
+        )
+        .unwrap();
+        let transactions = install::list_transactions_at(paths.root()).unwrap();
+        let transaction = transactions
+            .iter()
+            .find(|candidate| candidate.plan_id == plan.plan_id)
+            .expect("planning writes a transaction");
+        assert_eq!(transaction.selection_id, None);
+        assert_eq!(transaction.content_id, None);
+    }
+
+    /// `prepare_with_binding_at` persists `selection_id`/`content_id` supplied by
+    /// a dynamic orchestrator (zip here; the EXE flow uses the same entry point).
+    #[test]
+    fn prepare_with_binding_records_selection_and_content() {
+        let (temp, game, archive) = setup();
+        let (_state, paths) = dynamic_paths(&temp);
+        let archive_path = temp.path().join("dynamic.zip");
+        fs::write(&archive_path, &archive).unwrap();
+        let selection = manual_selection(None, None);
+        let release = dynamic_release(&game, &selection, &archive_path);
+        let plan = install::prepare_with_binding_at(
+            paths.root(),
+            &game,
+            &release,
+            &archive_path,
+            0,
+            InstallOperation::Install,
+            Some(&selection.selection_id),
+            Some("exe-content-000000000000000000000000"),
+        )
+        .unwrap();
+        let transactions = install::list_transactions_at(paths.root()).unwrap();
+        let transaction = transactions
+            .iter()
+            .find(|candidate| candidate.plan_id == plan.plan_id)
+            .expect("planning writes a transaction");
+        assert_eq!(
+            transaction.selection_id.as_deref(),
+            Some(selection.selection_id.as_str())
+        );
+        assert_eq!(
+            transaction.content_id.as_deref(),
+            Some("exe-content-000000000000000000000000")
+        );
     }
 
     fn assert_no_transactions(paths: &InstallerPaths) {
@@ -1466,6 +1593,8 @@ pub(crate) mod tests {
 
     #[test]
     fn facts_language_mismatch_blocks_without_a_transaction() {
+        // Publisher sources only: `rule.discovery_only == true` keeps the
+        // language gate (index sources record language as evidence instead).
         let (temp, game, archive) = setup();
         let (state, paths) = dynamic_paths(&temp);
         write_manifest(&game, "english", "4", Some("100"), None);
@@ -1485,6 +1614,57 @@ pub(crate) mod tests {
         .unwrap_err();
         assert_eq!(error.code, "exe_language_mismatch");
         assert_no_transactions(&paths);
+    }
+
+    #[test]
+    fn index_source_language_is_not_a_gate() {
+        let (temp, game, archive) = setup();
+        let (state, paths) = dynamic_paths(&temp);
+        // Manifest is English while the advertised patch language is zh-CN.
+        write_manifest(&game, "english", "4", Some("100"), None);
+        let cancel = AtomicBool::new(false);
+
+        // Index source (patchmoe): language is evidence only, so the install
+        // commits despite the manifest mismatch.
+        let index = seed_and_resolve_patchmoe(&state);
+        let index_transport = FakeTransport::new(vec![HttpResponse {
+            status: 200,
+            location: None,
+            content_type: Some("application/octet-stream".to_string()),
+            content_length: Some(archive.len() as u64),
+            etag: None,
+            last_modified: None,
+            final_url: index.download_url.clone(),
+            body: Box::new(std::io::Cursor::new(archive.clone())),
+        }]);
+        let transaction = run_install(
+            &game,
+            &index,
+            &paths,
+            &state,
+            &index_transport,
+            &cancel,
+            "req-index-language",
+            InstallOperation::Install,
+        )
+        .unwrap();
+        assert_eq!(transaction.state, "committed");
+
+        // Publisher source (kagura) against the same manifest still blocks.
+        let publisher_transport = transport(archive);
+        let publisher = manual_selection(None, None);
+        let error = run_install(
+            &game,
+            &publisher,
+            &paths,
+            &state,
+            &publisher_transport,
+            &cancel,
+            "req-publisher-language",
+            InstallOperation::Install,
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "exe_language_mismatch");
     }
 
     #[test]

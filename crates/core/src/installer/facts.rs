@@ -219,12 +219,20 @@ pub struct FactsExpectation {
     pub appid: u32,
     pub language: String,
     pub verified_buildids: Vec<String>,
+    /// Whether the manifest language is a gate. Publisher sources keep the
+    /// gate; index sources record the selected language as evidence only.
+    #[serde(default = "default_true")]
+    pub require_language: bool,
     #[serde(default)]
     pub requires_dlc: Vec<u32>,
     #[serde(default)]
     pub excludes_dlc: Vec<u32>,
     #[serde(default)]
     pub baselines: Vec<BaselineExpectation>,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 /// One baseline to hash and compare against the reviewed value.
@@ -610,12 +618,14 @@ fn language_fact(
     let expected = expected_language(&expectation.language);
 
     let mut failure = None;
-    if selected.as_deref() != Some(expected) {
+    let gate = expectation.require_language;
+    if gate && selected.as_deref() != Some(expected) {
         failure = Some(FactFailure::new(
             "exe_language_mismatch",
             format!("expected language {expected}"),
         ));
-    } else if user_language.is_some()
+    } else if gate
+        && user_language.is_some()
         && mounted_language.is_some()
         && user_language != mounted_language
     {
@@ -624,6 +634,8 @@ fn language_fact(
             "UserConfig and MountedConfig disagree",
         ));
     }
+    // `evidence` records the observed/selected language regardless of whether it
+    // is a gate, so the language stays part of the content identity.
     Fact {
         evidence: Some(LanguageFacts {
             user: user_language,
@@ -1087,6 +1099,7 @@ mod tests {
             appid: APPID,
             language: "zh-CN".into(),
             verified_buildids: vec!["12345".into()],
+            require_language: true,
             requires_dlc: vec![2303802],
             excludes_dlc: vec![2303999],
             baselines,
@@ -1232,6 +1245,60 @@ mod tests {
     }
 
     #[test]
+    fn facts_language_is_evidence_only_when_not_required() {
+        let temp = tempfile::tempdir().unwrap();
+        let (game, _) = instance(temp.path(), &manifest("english", "4", "12345", ""));
+        let mut relaxed = expectation(Vec::new());
+        relaxed.require_language = false;
+        let facts = game_facts(&game, &relaxed, &AtomicBool::new(false));
+        assert!(facts.is_valid(), "{:?}", facts.failures());
+        assert!(facts.language.failure.is_none());
+        let evidence = facts.language.evidence.as_ref().unwrap();
+        assert_eq!(evidence.user.as_deref(), Some("english"));
+        assert_eq!(evidence.mounted.as_deref(), Some("english"));
+        assert_eq!(evidence.selected.as_deref(), Some("english"));
+    }
+
+    #[test]
+    fn facts_language_mismatch_between_configs_is_suppressed_when_not_required() {
+        let temp = tempfile::tempdir().unwrap();
+        let manifest = format!(
+            r#""AppState"
+{{
+    "appid"        "{APPID}"
+    "name"         "Test Game"
+    "installdir"   "TestGame"
+    "StateFlags"   "4"
+    "buildid"      "12345"
+    "UserConfig"   {{ "language" "schinese" }}
+    "MountedConfig" {{ "language" "english" }}
+    "InstalledDepots"
+    {{
+        "2303801" {{ "dlcappid" "2303802" }}
+    }}
+}}"#
+        );
+        let (game, _) = instance(temp.path(), &manifest);
+        let mut relaxed = expectation(Vec::new());
+        relaxed.require_language = false;
+        let facts = game_facts(&game, &relaxed, &AtomicBool::new(false));
+        assert!(facts.is_valid(), "{:?}", facts.failures());
+        assert!(facts.language.failure.is_none());
+        let evidence = facts.language.evidence.as_ref().unwrap();
+        assert_eq!(evidence.user.as_deref(), Some("schinese"));
+        assert_eq!(evidence.mounted.as_deref(), Some("english"));
+        assert_eq!(evidence.selected.as_deref(), Some("schinese"));
+
+        // The same manifest still fails under the publisher gate.
+        let strict = expectation(Vec::new());
+        let facts = game_facts(&game, &strict, &AtomicBool::new(false));
+        assert_eq!(
+            facts.language.failure.as_ref().unwrap().code,
+            "exe_language_mismatch"
+        );
+    }
+
+    #[test]
     fn game_facts_rejects_appid_mismatch_and_unsafe_baseline_path() {
         let temp = tempfile::tempdir().unwrap();
         let (game, _) = instance(temp.path(), &manifest("schinese", "4", "12345", ""));
@@ -1310,6 +1377,7 @@ mod generic_current_tests {
             appid: 42,
             language: "zh-CN".into(),
             verified_buildids: vec![],
+            require_language: true,
             requires_dlc: vec![],
             excludes_dlc: vec![],
             baselines: vec![],

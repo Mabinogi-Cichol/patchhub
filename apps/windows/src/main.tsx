@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { canAutoInstall, candidateMatched, displayPatches, filterInstalls, gameDisplayName, isExternal, isManaged, patchState, reason, workflowState, type DiscoveryResult, type Filter, type GameSourceSubscription, type Install, type Preview, type ScanResult, type SourceCandidate, type Transaction } from "@steam-patch/ui";
+import { canAutoInstall, candidateMatched, displayPatches, filterInstalls, gameDisplayName, isExternal, isManaged, patchInstallable, patchState, reason, splitError, workflowState, type DiscoveryResult, type Filter, type GameSourceSubscription, type Install, type InstallerLinks, type Preview, type ScanResult, type SourceCandidate, type Transaction } from "@steam-patch/ui";
 import {
   candidateConditions,
   candidateFormat,
@@ -10,6 +10,7 @@ import {
   candidateSourceLabel,
   chipLabel,
   matchBasisLabel,
+  patchChip,
   rowSummary,
   safeSourceUrl,
   sourceChip,
@@ -26,12 +27,13 @@ import {
 import { SourcePanel } from "./SourcePanel";
 import "./style.css";
 
-type CoreOperation = "scan" | "preview" | "list_transactions" | "recover" | "migrate_state";
+type CoreOperation = "scan" | "preview" | "list_transactions" | "recover";
 type InstallStatus = {
   running: boolean;
   cancelled: boolean;
   progress: {
     stage: string;
+    substage?: string | null;
     bytes_done: number;
     total_bytes: number | null;
     files_done: number;
@@ -50,33 +52,42 @@ type SourceScanState = {
   settingsRevision: number | null;
 };
 
-function call<T>(operation: CoreOperation, args: { instanceId?: string; releaseId?: string } = {}): Promise<T> {
+function call<T>(operation: CoreOperation, args: { instanceId?: string; releaseId?: string; selectionId?: string } = {}): Promise<T> {
   return invoke<T>("core_call", { operation, args });
 }
 
-let migration: Promise<void> | null = null;
-function migrateOnce(): Promise<void> {
-  if (!migration) migration = call("migrate_state").then(() => undefined).catch(() => undefined);
-  return migration;
+/** Turn a raw host error (`code` or `code: detail`) into a real, readable message. */
+function describeError(value: unknown): string {
+  const { code, detail } = splitError(String(value));
+  const base = reason(code);
+  return detail ? `${base}（${detail}）` : base;
 }
 
 const installedStatuses = ["managed", "installed_managed", "installed_owned", "external", "installed_external"];
 
-function projectScan(value: ScanResult, transactions: Transaction[]): ScanResult {
+function projectScan(value: ScanResult, transactions: Transaction[], links: InstallerLinks | null): ScanResult {
   const signed = value.catalog_trust === "signed";
-  const committedReleaseIds = (instance: string) => new Set(transactions.filter(tx => tx.instance_id === instance && tx.state === "committed").map(tx => tx.release_id));
+  // A committed transaction is keyed by release for signed/dynamic ZIP, by
+  // selection for dynamic EXE (whose release_id carries the content id).
+  const committedKeys = (instance: string) => new Set(
+    transactions
+      .filter(tx => tx.instance_id === instance && tx.state === "committed")
+      .flatMap(tx => [tx.release_id, tx.selection_id, tx.content_id])
+      .filter((key): key is string => !!key),
+  );
   return {
     ...value,
     installs: value.installs.map(row => {
-      const committed = committedReleaseIds(row.game.instance_id);
+      const committed = committedKeys(row.game.instance_id);
       return {
         ...row,
         patches: row.patches.map(patch => {
-          const auto = signed && patch.blockers.length === 0 && patch.download_available === true && patch.support_level === "managed_zip";
+          const auto = patchInstallable(patch, links, signed);
+          const wasInstalled = committed.has(patch.release_id) || (!!patch.selection_id && committed.has(patch.selection_id));
           return {
             ...patch,
             auto_installable: auto,
-            reinstall_available: auto && (committed.has(patch.release_id) || installedStatuses.includes(patch.detection.status)),
+            reinstall_available: auto && (wasInstalled || installedStatuses.includes(patch.detection.status)),
           };
         }),
       };
@@ -148,7 +159,7 @@ function App() {
   const [installing, setInstalling] = useState(false);
   const [sourceScan, setSourceScan] = useState<SourceScanState>(EMPTY_SOURCE_SCAN);
   const [sourceNotice, setSourceNotice] = useState<string | null>(null);
-  const [sourcesSupported, setSourcesSupported] = useState(true);
+  const [capabilities, setCapabilities] = useState<Capabilities | null>(null);
   const [sourcesOpen, setSourcesOpen] = useState(false);
   const [globalSources, setGlobalSources] = useState<SourceSummary[] | null>(null);
   const [gameSources, setGameSources] = useState<GameSourceSubscription[] | null>(null);
@@ -158,8 +169,8 @@ function App() {
   const requestIds = useRef(new Map<string, string>());
   const scanRef = useRef<ScanResult | null>(null);
   const selectedRef = useRef<string | null>(null);
-  const capabilitiesPromise = useRef<Promise<boolean> | null>(null);
-  const sourcesSupportedRef = useRef(true);
+  const capabilitiesPromise = useRef<Promise<Capabilities | null> | null>(null);
+  const capabilityErrorRef = useRef<string | null>(null);
   const sourceRunningRef = useRef(false);
   const cancelledRef = useRef(false);
   const scanTokenRef = useRef(0);
@@ -175,6 +186,7 @@ function App() {
   const settling = scanBusy || sourceScan.running;
   const unqueried = useMemo(() => unqueriedCount(scan?.installs ?? []), [scan]);
   const settingsRevision = sourceScan.settingsRevision ?? scan?.settings_revision ?? null;
+  const links = capabilities?.installer?.links ?? null;
 
   useEffect(() => { scanRef.current = scan; }, [scan]);
   useEffect(() => { selectedRef.current = selected; }, [selected]);
@@ -183,17 +195,17 @@ function App() {
     setSelectedKey(entries[0]?.key ?? null);
   }, [entries, selectedKey]);
 
-  function ensureSourcesSupported(): Promise<boolean> {
+  function supportsSourceScan(caps: Capabilities | null): boolean {
+    return !!caps && Array.isArray(caps.methods) && caps.methods.includes("scan_sources");
+  }
+
+  // Capability negotiation is the single version/availability gate. A failure
+  // is a real contract error: show the host diagnostic instead of falling back.
+  function loadCapabilities(): Promise<Capabilities | null> {
     if (!capabilitiesPromise.current) {
-      capabilitiesPromise.current = invoke<Capabilities>("source_capabilities")
-        .then(caps => Array.isArray(caps?.methods) && caps.methods.includes("scan_sources"))
-        .catch(() => false)
-        .then(supported => {
-          sourcesSupportedRef.current = supported;
-          setSourcesSupported(supported);
-          if (!supported) setSourceNotice("当前核心版本尚未支持来源查询，仅显示本地目录与已安装结果。");
-          return supported;
-        });
+      capabilitiesPromise.current = invoke<Capabilities>("get_capabilities")
+        .then(caps => { setCapabilities(caps); capabilityErrorRef.current = null; return caps; })
+        .catch(e => { const message = describeError(e); capabilityErrorRef.current = message; return null; });
     }
     return capabilitiesPromise.current;
   }
@@ -201,7 +213,7 @@ function App() {
   async function run<T>(label: string, task: () => Promise<T>, done: (result: T) => void | Promise<void>) {
     setBusy(label); setError(null); setNotice(null);
     try { await done(await task()); }
-    catch (e) { setError(reason(String(e))); }
+    catch (e) { setError(describeError(e)); }
     finally { setBusy(null); }
   }
 
@@ -269,8 +281,7 @@ function App() {
   }
 
   async function startSourceScan(force: boolean) {
-    const supported = await ensureSourcesSupported();
-    if (!supported || sourceRunningRef.current) return;
+    if (sourceRunningRef.current) return;
     const token = ++scanTokenRef.current;
     activeEventRef.current = { token, id: null, seq: -1 };
     cancelledRef.current = false;
@@ -282,7 +293,7 @@ function App() {
       if (scanTokenRef.current === token) applyScanResults(result);
       if (cancelledRef.current) setSourceNotice("已取消查找，已保留取得的结果；可稍后重新查找。");
     } catch (e) {
-      if (!String(e).includes("source_scan_in_progress")) setSourceNotice(reason(String(e)));
+      if (!String(e).includes("source_scan_in_progress")) setSourceNotice(describeError(e));
     } finally {
       if (scanTokenRef.current === token) {
         activeEventRef.current = { token: 0, id: null, seq: -1 };
@@ -304,7 +315,7 @@ function App() {
         setSourceScan(prev => ({ ...prev, cancelled: false }));
       }
     } catch (e) {
-      setError(reason(String(e)));
+      setError(describeError(e));
     }
   }
 
@@ -317,7 +328,7 @@ function App() {
       const result = await invoke<DiscoveryResult>("discover_game", args);
       mergeDiscoveryResult(instanceId, result);
     } catch (e) {
-      setError(reason(String(e)));
+      setError(describeError(e));
     } finally {
       setDiscoveryBusy(null);
     }
@@ -339,14 +350,15 @@ function App() {
   }
 
   async function refresh() {
-    await migrateOnce();
+    const caps = await loadCapabilities();
+    const capLinks = caps?.installer?.links ?? null;
     let nextScan: ScanResult | null = null;
     await run("正在扫描 Steam 库…", async () => {
       // Both core calls open the same journal; finish one before starting the other.
       const value = await call<ScanResult>("scan");
       const rawTransactions = await call<Transaction[] | { transactions: Transaction[] }>("list_transactions");
       const nextTransactions = Array.isArray(rawTransactions) ? rawTransactions : rawTransactions.transactions ?? [];
-      return { nextScan: projectScan(value, nextTransactions), nextTransactions };
+      return { nextScan: projectScan(value, nextTransactions, capLinks), nextTransactions };
     }, ({ nextScan: value, nextTransactions }) => {
       nextScan = value;
       scanRef.current = value;
@@ -355,12 +367,12 @@ function App() {
       if (value.sources) setGlobalSources(value.sources);
       if (!value.installs.some(x => x.game.instance_id === selectedRef.current)) { setSelected(null); setSelectedKey(null); }
     });
-    const supported = await ensureSourcesSupported();
+    if (capabilityErrorRef.current) setError(capabilityErrorRef.current);
     const hasInstalled = nextScan ? (nextScan as ScanResult).installs.some(row => row.game.availability === "installed") : false;
-    if (supported && hasInstalled) void startSourceScan(false);
+    if (supportsSourceScan(caps) && hasInstalled) void startSourceScan(false);
   }
 
-  useEffect(() => { void ensureSourcesSupported(); void refresh(); }, []);
+  useEffect(() => { void refresh(); }, []);
 
   useEffect(() => {
     if (!sourcesOpen) return;
@@ -389,11 +401,10 @@ function App() {
     try {
       const list = await invoke<SourceSummary[]>("list_sources");
       setGlobalSources(list);
-      sourcesSupportedRef.current = true;
       if (selected) setGameSources(await invoke<GameSourceSubscription[]>("list_game_sources", { instanceId: selected }));
       else setGameSources(null);
     } catch (e) {
-      setError(reason(String(e)));
+      setError(describeError(e));
     } finally {
       setSourcesLoading(false);
     }
@@ -444,7 +455,7 @@ function App() {
 
   function openUrl(url: string) {
     if (!safeSourceUrl(url)) { setError("来源地址不是可用的公开 HTTPS 网页，已阻止打开。"); return; }
-    void invoke("open_source", { url }).catch(e => setError(reason(String(e))));
+    void invoke("open_source", { url }).catch(e => setError(describeError(e)));
   }
 
   // ---- detail / install --------------------------------------------------
@@ -454,7 +465,8 @@ function App() {
   }
   function viewPreview() {
     if (!selected || !patch) return;
-    void run("正在检查文件变更…", () => call<Preview>("preview", { instanceId: selected, releaseId: patch.release_id }), setPreview);
+    const args = patch.selection_id ? { instanceId: selected, selectionId: patch.selection_id } : { instanceId: selected, releaseId: patch.release_id };
+    void run("正在检查文件变更…", () => call<Preview>("preview", args), setPreview);
   }
   function chooseArchive() {
     void run("正在选择 ZIP 文件…", () => invoke<string | null>("choose_archive"), value => setArchive(value));
@@ -462,17 +474,20 @@ function App() {
   async function startInstall(operation: "install" | "reinstall") {
     if (!selected || !patch || installing || busy) return;
     const selectedArchive = archive ?? "";
-    const key = `${selected}|${patch.release_id}|${operation}|${selectedArchive}`;
+    const identity = patch.selection_id ?? patch.release_id;
+    const key = `${selected}|${identity}|${operation}|${selectedArchive}`;
     const requestId = requestIds.current.get(key) ?? crypto.randomUUID();
     requestIds.current.set(key, requestId);
     setInstalling(true); setJob(null); setBusy("正在安装…"); setError(null); setNotice(null);
     try {
       const tx = await invoke<Transaction>("start_install", {
         instanceId: selected,
-        releaseId: patch.release_id,
+        // Dynamic routes install by selection; only signed releases use releaseId.
+        ...(patch.selection_id ? { selectionId: patch.selection_id } : { releaseId: patch.release_id }),
         operation,
         requestId,
-        archive: archive ?? undefined,
+        // `archive` only applies to the signature release route.
+        archive: patch.support_level === "managed_zip" ? archive ?? undefined : undefined,
       });
       const message = tx.state === "committed" && operation === "reinstall" ? "重新安装完成" : transactionResult(tx);
       requestIds.current.delete(key);
@@ -480,7 +495,7 @@ function App() {
       await refresh();
       setNotice(message);
     } catch (e) {
-      const message = reason(String(e));
+      const message = describeError(e);
       requestIds.current.delete(key);
       setInstalling(false); setJob(null); setBusy(null);
       await refresh();
@@ -488,26 +503,33 @@ function App() {
     }
   }
   function recover() {
-    void run("正在检查并恢复未完成事务…", () => call("recover"), async () => {
+    void run("正在检查并恢复未完成事务…", () => call<Transaction[]>("recover"), async result => {
       await refresh();
-      setNotice("恢复检查完成。");
+      const pending = result.filter(tx => tx.state === "needs_recovery");
+      if (pending.length) {
+        setError(`有 ${pending.length} 项操作仍需恢复，已保留冲突文件和恢复材料。${pending.map(tx => tx.error ? reason(tx.error) : "").filter(Boolean).join("；")}`);
+      } else {
+        setNotice(result.length ? `恢复检查完成，已处理 ${result.length} 项操作。` : "恢复检查完成，没有待恢复操作。");
+      }
     });
   }
 
   const stageLabels: Record<string, string> = {
-    connecting: "正在连接", downloading: "下载补丁", validating: "校验文件", planning: "检查安装条件",
-    backing_up: "保护现有文件", writing: "写入文件", committing: "提交安装", rolling_back: "恢复原文件",
+    connecting: "正在连接", downloading: "下载补丁", validating: "校验文件", analyzing_installer: "分析安装包",
+    extracting: "提取文件", planning: "检查安装条件", applying: "写入文件", rolling_back: "恢复原文件",
+    cleanup: "清理临时文件",
   };
+  const substageLabels: Record<string, string> = { backing_up: "保护现有文件", writing: "写入文件", committing: "提交安装" };
   const progress = job?.progress;
-  const progressIndeterminate = !progress || !progress.total_bytes || (progress.stage === "writing" && progress.total_bytes == null);
+  const progressIndeterminate = !progress || progress.total_bytes == null || progress.total_bytes <= 0;
   const progressWidth = progress && progress.total_bytes ? Math.min(100, progress.bytes_done / progress.total_bytes * 100) : 0;
   const detailChip = game ? sourceChip(game, sourceScan.running) : null;
 
   return <div className="shell">
-    <header><div><h1>Steam 补丁管理</h1><p>本地游戏 · 已审核来源 · 文件变更先预览</p></div><div className="header-actions"><button onClick={() => setSourcesOpen(true)}>来源管理{sourcesSupported ? "" : "（未支持）"}</button><button onClick={recover} disabled={!!busy}>尝试恢复未完成操作</button><button className="primary" onClick={() => void refresh()} disabled={!!busy}>重新扫描</button></div></header>
+    <header><div><h1>Steam 补丁管理</h1><p>本地游戏 · 已审核来源 · 文件变更先预览</p></div><div className="header-actions"><button onClick={() => setSourcesOpen(true)}>来源管理</button><button onClick={recover} disabled={!!busy}>尝试恢复未完成操作</button><button className="primary" onClick={() => void refresh()} disabled={!!busy}>重新扫描</button></div></header>
     {busy && !installing && <div role="status" className="status">{busy} 任务完成后会显示结果；当前没有百分比进度。</div>}
     {error && <div role="alert" className="error">{error}</div>}{notice && <div role="status" className="notice">{notice}</div>}
-    {installing && <section className="progress" aria-live="polite"><h3>{progress ? (stageLabels[progress.stage] ?? progress.stage) : "正在准备安装"}</h3><div className={`progress-bar${progressIndeterminate ? " indeterminate" : ""}`}><div className="progress-fill" style={progressIndeterminate ? undefined : { width: `${progressWidth}%` }} /></div>{progress && <div className="progress-meta"><span>{progress.total_bytes ? `${progress.bytes_done} / ${progress.total_bytes} bytes` : "正在处理"}</span>{progress.total_files != null && <span>{progress.files_done} / {progress.total_files} 个文件</span>}</div>}{progress?.current_file && <p className="path">{progress.current_file}</p>}<button className="cancel" onClick={() => void invoke("cancel_install")} disabled={job?.cancelled === true}>{job?.cancelled ? "正在取消…" : "取消安装"}</button></section>}
+    {installing && <section className="progress" aria-live="polite"><h3>{progress ? (stageLabels[progress.stage] ?? progress.stage) : "正在准备安装"}{progress?.substage ? ` · ${substageLabels[progress.substage] ?? progress.substage}` : ""}</h3><div className={`progress-bar${progressIndeterminate ? " indeterminate" : ""}`}><div className="progress-fill" style={progressIndeterminate ? undefined : { width: `${progressWidth}%` }} /></div>{progress && <div className="progress-meta"><span>{progress.total_bytes ? `${progress.bytes_done} / ${progress.total_bytes} bytes` : "正在处理"}</span>{progress.total_files != null && <span>{progress.files_done} / {progress.total_files} 个文件</span>}</div>}{progress?.current_file && <p className="path">{progress.current_file}</p>}<button className="cancel" onClick={() => void invoke("cancel_install")} disabled={job?.cancelled === true}>{job?.cancelled ? "正在取消…" : "取消安装"}</button></section>}
     {sourceScan.running && <section className="progress source-progress" aria-live="polite"><h3>正在查找补丁来源</h3><div className={`progress-bar${sourceScan.total > 0 ? "" : " indeterminate"}`}><div className="progress-fill" style={sourceScan.total > 0 ? { width: `${Math.min(100, sourceScan.completed / sourceScan.total * 100)}%` } : undefined} /></div><div className="progress-meta"><span>{sourceScan.total > 0 ? `已查询 ${sourceScan.completed} / ${sourceScan.total} 款游戏` : "正在准备查询已安装游戏"}</span>{settingsRevision != null && <span>来源设置版本 {settingsRevision}</span>}</div><button className="cancel" onClick={() => void cancelSourceScan()} disabled={sourceScan.cancelled}>{sourceScan.cancelled ? "正在取消…" : "取消查找"}</button></section>}
     {!sourceScan.running && sourceNotice && <div role="status" className="status">{sourceNotice}</div>}
     <div className="workspace"><aside><div className="search"><input aria-label="搜索游戏" placeholder="搜索游戏或 AppID" value={query} onChange={e => setQuery(e.target.value)} /></div>
@@ -515,7 +537,7 @@ function App() {
       <div className="count">{shown.length} 个安装实例</div>
       {filter === "matched" && unqueried > 0 && <div className="count hint-row">还有 {unqueried} 款游戏未查询来源。<button type="button" className="link" onClick={() => { setFilter("all"); setQuery(""); }}>查看全部</button></div>}
       <div className="game-list">{shown.map(row => {
-        const chip = sourceChip(row, sourceScan.running);
+        const chip = patchChip(row, settling);
         return <button key={row.game.instance_id} className={`game ${selected === row.game.instance_id ? "selected" : ""}`} onClick={() => detail(row)} disabled={!!busy}><span className="game-head"><strong>{gameDisplayName(row.game)}</strong>{chip && <Chip tone={chip.tone} label={chip.label} />}</span><small>AppID {row.game.appid} · {rowSummary(row, settling)}</small><small>{row.game.availability === "installed" ? row.game.library_path : `不可用：${row.game.availability}`}</small></button>;
       })}</div>
       {scan && !scan.installs.length && <p className="empty">未找到已安装游戏。检查 Steam 是否安装，或确认库磁盘已挂载。</p>}
@@ -525,22 +547,27 @@ function App() {
         <div className="tabs">{entries.map(item => <button key={item.key} className={`${selectedKey === item.key ? "active" : ""}${item.kind === "discovery" ? " tab-source" : ""}`} onClick={() => setSelectedKey(item.key)} disabled={!!busy}>{item.kind === "installable" ? item.patch.name : item.candidate.patch_title}{item.kind === "discovery" && <span className="tab-tag">来源</span>}</button>)}</div>
         {entry?.kind === "installable" && (() => {
           const current = entry.patch;
+          const dynamic = current.support_level === "publisher_zip" || current.support_level === "publisher_exe";
+          const installRoute = ["managed_zip", "publisher_zip", "publisher_exe"].includes(current.support_level);
           const installed = current.reinstall_available === true || isManaged(current.detection.status) || isExternal(current.detection.status);
           const operation = installed ? "reinstall" : "install";
-          const allowed = canAutoInstall(current) || !!archive;
+          const auto = canAutoInstall(current);
+          const allowed = auto || (!!archive && current.support_level === "managed_zip");
+          const link = current.support_level === "publisher_exe" ? links?.exe : current.support_level === "publisher_zip" ? links?.zip : null;
+          const linkBlockers = (link && link.available === false ? link.blockers ?? [] : []).filter(b => !current.blockers.includes(b.code));
           return <>
-            <section className="card"><h3>{current.name}</h3><div className="facts"><div><label>检测状态</label><strong>{patchState(current.detection.status)}</strong></div><div><label>来源能力</label><strong>{workflowState(current.support_level)}</strong></div><div><label>兼容性</label><strong>{workflowState(current.compatibility)}</strong></div><div><label>游戏版本</label><strong>{game.game.buildid ?? "未知，需审核"}</strong></div></div><p>发行版本：{current.release_id}</p><button onClick={() => openUrl(current.source_page)}>在外部浏览器打开官方来源 ↗</button>{current.blockers.map((b, i) => <p className="warning" key={i}>{reason(b)}</p>)}{isExternal(current.detection.status) && <p className="warning">检测到外部安装；没有本工具的原版备份，不能由此卸载。</p>}</section>
-            {current.support_level === "managed_zip" && <section className="card"><h3>安装与预览</h3><p>安装将直接提交审核 ZIP 的文件变更；查看文件变更仅供只读核对。</p><div className="actions"><button onClick={viewPreview} disabled={!!busy}>查看文件变更（只读）</button>{!canAutoInstall(current) && <button onClick={chooseArchive} disabled={!!busy}>导入本地 ZIP</button>}{allowed && <button className="primary" onClick={() => void startInstall(operation)} disabled={!!busy || installing}>{installed ? "重新安装补丁" : "安装补丁"}</button>}</div>{archive && <p className="path">已选择：{archive}</p>}{preview && <ChangeList title="只读文件变更" value={preview} />}</section>}
+            <section className="card"><h3>{current.name}</h3><div className="facts"><div><label>检测状态</label><strong>{patchState(current.detection.status)}</strong></div><div><label>来源能力</label><strong>{workflowState(current.support_level)}</strong></div><div><label>兼容性</label><strong>{workflowState(current.compatibility)}</strong></div><div><label>游戏版本</label><strong>{game.game.buildid ?? "未知，需审核"}</strong></div></div><p>补丁标识：{current.selection_id ?? current.release_id}</p><button onClick={() => openUrl(current.source_page)}>在外部浏览器打开官方来源 ↗</button>{current.support_level === "publisher_exe" && <p className="hint">安装时自动检查条件；下载后会先分析安装包，条件不满足不会写入文件。</p>}{current.support_level === "publisher_zip" && !auto && current.blockers.length === 0 && <p className="hint">此动态 ZIP 补丁的下载链路当前不可用，安装前请先解决下方问题。</p>}{current.blockers.map((b, i) => <p className="warning" key={i}>{reason(b)}</p>)}{linkBlockers.map((b, i) => <p className="warning" key={`link-${i}`}>{reason(b.code)}{b.detail ? ` · ${b.detail}` : ""}</p>)}{isExternal(current.detection.status) && <p className="warning">检测到外部安装；没有本工具的原版备份，不能由此卸载。</p>}{dynamic && auto && <p className="hint">可自动安装；点击安装后会从来源下载并核对内容后写入。</p>}</section>
+            {installRoute && <section className="card"><h3>安装与预览</h3><p>{current.support_level === "managed_zip" ? "安装将直接提交审核 ZIP 的文件变更；查看文件变更仅供只读核对。" : "安装会从来源下载并检查补丁，核对通过后写入游戏文件；查看文件变更仅供只读核对。"}</p><div className="actions"><button onClick={viewPreview} disabled={!!busy}>查看文件变更（只读）</button>{!auto && current.support_level === "managed_zip" && <button onClick={chooseArchive} disabled={!!busy}>导入本地 ZIP</button>}{allowed && <button className="primary" onClick={() => void startInstall(operation)} disabled={!!busy || installing}>{installed ? "重新安装补丁" : "安装补丁"}</button>}</div>{archive && <p className="path">已选择：{archive}</p>}{preview && <ChangeList title="只读文件变更" value={preview} />}</section>}
           </>;
         })()}
         {entry?.kind === "discovery" && <CandidateCard candidate={entry.candidate} onOpen={openUrl} />}
       </>}
-      <section className="card"><div className="card-head"><h3>查找来源</h3><Chip tone={statusTone(game.discovery?.status)} label={chipLabel(game.discovery?.status, sourceScan.running)} /></div><p>{statusLabel(game.discovery?.status, sourceScan.running)}{game.discovery?.candidates?.length ? ` · 共 ${game.discovery.candidates.length} 条候选，其中 ${game.discovery.candidates.filter(candidateMatched).length} 条身份已核实` : ""}</p><div className="actions"><label className="field-label">偏好的补丁语言<select value={preferredLanguage ?? ""} onChange={e => setPreferredLanguage(e.target.value || null)} disabled={!!busy}><option value="">未指定</option><option value="zh-CN">简体中文</option><option value="zh-TW">繁体中文</option><option value="en">英文</option><option value="ja">日文</option></select></label><button onClick={() => void findGame(game.game.instance_id, true)} disabled={!!busy || discoveryBusy === game.game.instance_id || !sourcesSupported}>{discoveryBusy === game.game.instance_id ? "正在查找…" : "重新查找"}</button></div><p className="hint">语言偏好用于向来源查询时优先核对，不改变游戏身份；游戏实际语言与 DLC 状态仍需确认。</p>{game.discovery?.diagnostics.map((d, i) => <p className="warning" key={i}>{d.source_id ? `（${d.source_id}）` : ""}{reason(d.code)}{d.detail && d.detail !== d.code ? ` · ${reason(d.detail)}` : ""}</p>)}</section>
-      <section className="card"><h3>本工具事务</h3>{owned.length ? owned.map(tx => <div className="transaction" key={tx.transaction_id}><span>{tx.release_id} · {workflowState(tx.state)}{tx.error && ` · ${reason(tx.error)}`}</span></div>) : <p>没有托管安装记录。外部安装不能由本工具卸载。</p>}</section>
+      <section className="card"><div className="card-head"><h3>查找来源</h3><Chip tone={statusTone(game.discovery?.status)} label={chipLabel(game.discovery?.status, sourceScan.running)} /></div><p>{statusLabel(game.discovery?.status, sourceScan.running)}{game.discovery?.candidates?.length ? ` · 共 ${game.discovery.candidates.length} 条候选，其中 ${game.discovery.candidates.filter(candidateMatched).length} 条身份已核实` : ""}</p><div className="actions"><label className="field-label">偏好的补丁语言<select value={preferredLanguage ?? ""} onChange={e => setPreferredLanguage(e.target.value || null)} disabled={!!busy}><option value="">未指定</option><option value="zh-CN">简体中文</option><option value="zh-TW">繁体中文</option><option value="en">英文</option><option value="ja">日文</option></select></label><button onClick={() => void findGame(game.game.instance_id, true)} disabled={!!busy || discoveryBusy === game.game.instance_id}>{discoveryBusy === game.game.instance_id ? "正在查找…" : "重新查找"}</button></div><p className="hint">语言偏好用于向来源查询时优先核对，不改变游戏身份；游戏实际语言与 DLC 状态仍需确认。</p>{game.discovery?.diagnostics.map((d, i) => <p className="warning" key={i}>{d.source_id ? `（${d.source_id}）` : ""}{reason(d.code)}{d.detail && d.detail !== d.code ? ` · ${reason(d.detail)}` : ""}</p>)}</section>
+      <section className="card"><h3>本工具事务</h3>{owned.length ? owned.map(tx => <div className="transaction" key={tx.transaction_id}><span>{tx.release_id || tx.selection_id || tx.content_id || tx.transaction_id} · {workflowState(tx.state)}{tx.error && ` · ${reason(tx.error)}`}</span></div>) : <p>没有托管安装记录。外部安装不能由本工具卸载。</p>}</section>
     </>}</main></div>
     <SourcePanel
       open={sourcesOpen}
-      supported={sourcesSupported}
+      supported={true}
       onClose={() => setSourcesOpen(false)}
       globalSources={globalSources}
       gameSources={gameSources}

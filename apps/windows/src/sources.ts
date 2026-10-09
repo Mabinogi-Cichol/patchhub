@@ -1,10 +1,14 @@
 import {
   candidateMatched,
   installSummary,
+  canAutoInstall,
+  isExternal,
+  isManaged,
   reason,
   type GameDiscovery,
   type GameSourceSubscription,
   type Install,
+  type InstallerLinks,
   type SourceCandidate,
   type SourceSubscription,
 } from "@steam-patch/ui";
@@ -22,12 +26,28 @@ export type Tone = "ok" | "warn" | "fail" | "busy" | "idle";
 
 // ---- host command results -------------------------------------------------
 
+/** v3 `get_capabilities` shape (§3.1). Installability uses `installer.links`, never `formats`. */
 export type Capabilities = {
-  methods: string[];
-  discovery_schema_version?: number;
-  adapter_version?: number;
-  parser_version?: number;
-  query_version?: number;
+  protocol_version?: number;
+  installer?: {
+    schema_version?: number;
+    selection_version?: number;
+    content_version?: number;
+    adapter_version?: number;
+    policy_schema_version?: number;
+    report_schema_version?: number;
+    formats?: Record<string, string>;
+    strategies?: string[];
+    links?: InstallerLinks;
+  };
+  sources?: {
+    discovery_schema_version?: number;
+    adapter_version?: number;
+    parser_version?: number;
+    query_version?: number;
+    methods?: string[];
+  };
+  methods?: string[];
 };
 
 export type SourceSummary = SourceSubscription & { discovery_only?: boolean };
@@ -140,6 +160,31 @@ export function rowSummary(row: Install, scanning: boolean): string {
   const status = row.discovery?.status;
   if (status === "stale" || status === "cached") return "显示上次来源结果";
   return "未查询补丁来源";
+}
+
+/** Primary list status describes the patch, independently of source lookup. */
+export function patchChip(row: Install, scanning: boolean): { tone: Tone; label: string } {
+  if (row.patches.some(patch => isManaged(patch.detection.status) || isExternal(patch.detection.status))) {
+    return { tone: "ok", label: "已安装补丁" };
+  }
+  if (row.patches.some(patch => ["partial", "conflict", "partial_or_conflict", "needs_revalidation"].includes(patch.detection.status))) {
+    return { tone: "warn", label: "补丁需检查" };
+  }
+  if (row.patches.some(canAutoInstall)) return { tone: "ok", label: "有可用补丁" };
+  if (row.patches.length || row.discovery?.candidates.some(candidateMatched)) {
+    return { tone: "warn", label: "补丁待核对" };
+  }
+  const status = row.discovery?.status;
+  if (scanning && (!status || ["not_queried", "queued", "stale"].includes(status))) {
+    return { tone: "busy", label: "正在查找补丁" };
+  }
+  if (!status || ["not_queried", "queued", "stale"].includes(status)) {
+    return { tone: "idle", label: "补丁待查询" };
+  }
+  if (["empty", "complete", "cache_complete"].includes(status)) {
+    return { tone: "idle", label: "未找到补丁" };
+  }
+  return { tone: "warn", label: "补丁查询未完成" };
 }
 
 /** Compact source affordance for a game list row, or null when nothing to add. */

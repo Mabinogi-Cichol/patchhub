@@ -290,13 +290,15 @@ fn run(
     budget
         .inspect(deps.paths.root(), &inputs.game.install_path)
         .map_err(error)?;
-    let plan = install::prepare_with_operation_at(
+    let plan = install::prepare_with_binding_at(
         deps.paths.root(),
         inputs.game,
         &release,
         artifact,
         0,
         inputs.operation,
+        Some(&inputs.selection.selection_id),
+        Some(&content),
     )
     .map_err(common::map_plan_error)?;
     // Any error from here discards/recoveries the plan before reporting a terminal result.
@@ -780,6 +782,13 @@ mod tests {
         .unwrap();
         assert_eq!(first.state, "committed");
         assert!(first.release_id.starts_with("exe-content-"));
+        // The dynamic EXE transaction binds both the selection identity and the
+        // EXE content id (p1-host-contract §6.3).
+        assert_eq!(
+            first.selection_id.as_deref(),
+            Some(selection.selection_id.as_str())
+        );
+        assert_eq!(first.content_id.as_deref(), Some(first.release_id.as_str()));
         assert_eq!(
             fs::read(game.install_path.join("payload.bin")).unwrap(),
             b"generic-content"
@@ -893,5 +902,43 @@ mod tests {
                 .to_string(),
             "conversion_binding_changed"
         );
+    }
+    /// EXE publisher sources keep the language gate: a zh-CN kagura EXE against
+    /// an English manifest still fails with `exe_facts_failed`.
+    #[test]
+    #[ignore = "actual bundled worker fixture; set SF_WORKER_TEST_BIN (release profile)"]
+    fn english_manifest_blocks_kagura_exe_with_exe_facts_failed() {
+        let (temp, game, _) = fixture::setup();
+        fs::write(game.install_path.join("engine.exe"), b"inert").unwrap();
+        fs::write(game.install_path.join("identity.dat"), [87, 164, 242, 220]).unwrap();
+        let manifest = game
+            .library_path
+            .join("steamapps")
+            .join(format!("appmanifest_{}.acf", game.appid));
+        let text = fs::read_to_string(&manifest)
+            .unwrap()
+            .replace("\"schinese\"", "\"english\"");
+        fs::write(&manifest, text).unwrap();
+        let state = temp.path().join("state");
+        let paths = InstallerPaths::new(&state);
+        super::super::init_atomic(&paths).unwrap();
+        let stage = temp.path().join("runtime");
+        fs::create_dir(&stage).unwrap();
+        let runtime = runtime(&stage);
+        assert!(runtime.probe().available);
+        let selection = seed(&state);
+        let cancel = AtomicBool::new(false);
+        let error = invoke(
+            &state,
+            &paths,
+            &game,
+            &selection,
+            &runtime,
+            "exe-language",
+            InstallOperation::Install,
+            &cancel,
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "exe_facts_failed");
     }
 }

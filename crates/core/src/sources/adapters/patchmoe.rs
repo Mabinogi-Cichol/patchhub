@@ -284,6 +284,10 @@ mod tests {
 <form name="form_en" method="post" action="/en"><input type="hidden" name="lang" value="en"></form>
 </body></html>"#;
 
+    /// Cropped excerpt of the live localized index: `table.tbl.new` (recent
+    /// updates) plus `table.tbl.regular` (full list), each with a header row.
+    const INDEX_FIXTURE: &str = include_str!("../../../tests/fixtures/sources/patchmoe-index.html");
+
     fn table(title: &str) -> String {
         format!(
             r#"<table><tr><th class="title">Title</th><th class="release">Date</th><th class="patch">Patch</th></tr>
@@ -314,6 +318,38 @@ mod tests {
         assert_eq!(entry.aliases, vec!["Game English"]);
         assert_eq!(entry.url, "https://download.patch.moe/patch.zip");
         assert_eq!(entry.date.as_deref(), Some("2024/1/2"));
+    }
+
+    #[test]
+    fn parses_rows_from_new_and_regular_tables() {
+        // The live page ships two tables (`tbl new` + `tbl regular`); rows from
+        // both must be collected, with each `th` header row skipped.
+        let fake = Arc::new(FakeFetcher::new());
+        fake.push(response(200, INITIAL, "https://www.patch.moe/?flag=1"));
+        fake.push(response(200, INDEX_FIXTURE, "https://www.patch.moe/zh"));
+        fake.push(response(200, INDEX_FIXTURE, "https://www.patch.moe/en"));
+        let mut ctx = context(&fake);
+        let outcome = PatchmoeAdapter
+            .collect(&rule(), &SourceCache::default(), &mut ctx)
+            .unwrap();
+        // 3 `new` rows + 3 `regular` rows; both header rows carry no `.zip`
+        // link and are dropped.
+        assert_eq!(outcome.entries.len(), 6);
+        assert!(!outcome.entries.iter().any(|entry| entry.title == "Title"));
+        assert!(outcome
+            .entries
+            .iter()
+            .any(|entry| entry.url == "https://download.patch.moe/Fusty_Dungeon_patch.zip"));
+        let kudo = outcome
+            .entries
+            .iter()
+            .find(|entry| entry.url == "https://download.patch.moe/Kudos_Kuppa_patch.zip")
+            .expect("Kudo's Kuppa from the regular table");
+        assert_eq!(kudo.title, "Kudo’s Kuppa");
+        // Both language passes returned identical URLs, so zh-CN is chosen and
+        // the matching en title yields no alias.
+        assert_eq!(kudo.language, "zh-CN");
+        assert!(kudo.aliases.is_empty());
     }
 
     #[test]

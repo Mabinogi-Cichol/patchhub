@@ -5,6 +5,7 @@
 //! mutations persist through the store's short lock + revision primitive.
 
 use super::adapters;
+use super::canonical;
 use super::http::RequestContext;
 use super::model::*;
 use super::store::SourceStore;
@@ -375,6 +376,111 @@ impl SourceRegistry {
             });
         }
         result
+    }
+
+    /// Deterministically projects the validated legacy index matches
+    /// (`matches(game, false)`) into the dynamic ZIP [`SourceCandidate`] view
+    /// (P4 B2 ruling).
+    ///
+    /// patchmoe carries no `discovery_only`, so its validated index entries never
+    /// reached the dynamic ZIP pipeline; this pure projection makes them
+    /// first-class ZIP candidates while keeping `discovery_only` semantics
+    /// untouched. Identical cache state yields identical ids/fingerprints:
+    /// `observed_at` derives only from the source's cached `checked_at`, and
+    /// `candidate_id`/`fingerprint` follow the frozen canonical encoding.
+    pub fn index_candidates(&self, game: &GameQuery) -> Vec<SourceCandidate> {
+        let mut result = Vec::new();
+        for source_match in self.matches(game, false) {
+            // A "COMING SOON" entry has no artifact yet: never project it.
+            if source_match.date.as_deref() == Some("COMING SOON") {
+                continue;
+            }
+            let language = source_match.language.clone();
+            let version_identity = "page-unknown".to_string();
+            let identity = serde_json::Value::Array(vec![
+                serde_json::Value::String(source_match.source_id.clone()),
+                serde_json::Value::String(canonical::canonical_url(&source_match.source_page)),
+                serde_json::Value::String("base".to_string()),
+                serde_json::Value::Array(vec![serde_json::Value::String(language.clone())]),
+                serde_json::Value::String(version_identity.clone()),
+            ]);
+            let candidate_id = canonical::candidate_id(&identity);
+            let observed_at = iso8601_utc(
+                self.cache
+                    .get(&source_match.source_id)
+                    .and_then(|cache| cache.checked_at)
+                    .unwrap_or(0),
+            );
+            let mut candidate = SourceCandidate {
+                candidate_id,
+                source_id: source_match.source_id.clone(),
+                source_record_id: canonical::canonical_url(&source_match.source_page),
+                game_appid: Some(source_match.appid.unwrap_or(game.appid)),
+                parent_appid: None,
+                aliases: source_match.aliases.clone(),
+                game_title: source_match.title.clone(),
+                patch_title: source_match.title.clone(),
+                variant: Variant::Base,
+                requires_dlc: None,
+                excludes_dlc: None,
+                platforms: vec!["steam".to_string()],
+                patch_kind: "adult_content".to_string(),
+                languages: vec![language],
+                version_raw: None,
+                version_evidence: Vec::new(),
+                version_identity,
+                published_at: None,
+                patch_updated_at: None,
+                source_page: source_match.source_page.clone(),
+                upstream_page: None,
+                mirrors: vec![Mirror {
+                    url: source_match.url.clone(),
+                    label: None,
+                    format: "zip".to_string(),
+                }],
+                format_reported: ArtifactFormat::Zip,
+                format_observed: ArtifactFormat::Zip,
+                capability: Capability::DiscoverOnly,
+                identity_evidence: Vec::new(),
+                provenance: Vec::new(),
+                match_basis: if source_match.appid.is_some() {
+                    MatchBasis::Appid
+                } else {
+                    MatchBasis::Title
+                },
+                observed_at,
+                cache_status: CacheStatus::Cached,
+                warnings: Vec::new(),
+                fingerprint: String::new(),
+                related_index_pages: Vec::new(),
+            };
+            if let Ok(value) = serde_json::to_value(&candidate) {
+                candidate.fingerprint = canonical::fingerprint(&value);
+            }
+            result.push(candidate);
+        }
+        result
+    }
+
+    /// The dynamic ZIP candidate view: discovery-derived candidates
+    /// ([`Self::cached_candidates`]) plus the validated index projection
+    /// ([`Self::index_candidates`], P4 B2), deduplicated by `candidate_id`.
+    ///
+    /// Discovery candidates win a collision: they carry live freshness (their
+    /// `cache_status` is recomputed against the 6h TTL) and richer evidence,
+    /// while the index projection is a derived view of the same entries.
+    pub fn dynamic_zip_candidates(&self, game: &GameQuery) -> Vec<SourceCandidate> {
+        let mut candidates = self.cached_candidates(game);
+        let mut seen: HashSet<String> = candidates
+            .iter()
+            .map(|candidate| candidate.candidate_id.clone())
+            .collect();
+        for candidate in self.index_candidates(game) {
+            if seen.insert(candidate.candidate_id.clone()) {
+                candidates.push(candidate);
+            }
+        }
+        candidates
     }
 
     /// Port of `source_for_release` (design §5.2).
@@ -988,6 +1094,38 @@ fn cache_diagnostic(source_id: &str) -> Diagnostic {
         detail: None,
         code: "invalid_source_cache".to_string(),
     }
+}
+
+/// ISO8601 UTC rendering of a Unix second count. Used only for
+/// `SourceCandidate::observed_at` on index projections, which the fingerprint
+/// deliberately excludes; determinism comes from the cached `checked_at`.
+fn iso8601_utc(seconds: u64) -> String {
+    let days = (seconds / 86_400) as i64;
+    let remainder = seconds % 86_400;
+    let (year, month, day) = civil_from_days(days);
+    format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}+00:00",
+        year,
+        month,
+        day,
+        remainder / 3600,
+        (remainder % 3600) / 60,
+        remainder % 60
+    )
+}
+
+/// Howard Hinnant's `civil_from_days` (days since 1970-01-01).
+fn civil_from_days(days: i64) -> (i64, u32, u32) {
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let year = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
+    (if month <= 2 { year + 1 } else { year }, month, day)
 }
 
 #[cfg(test)]
@@ -1873,5 +2011,189 @@ mod tests {
         for id in ["patchmoe", "kagura-cn", "kagura-en", "hgamer"] {
             assert!(registry.game_subscribed(7, id), "{id}");
         }
+    }
+
+    fn seed_index_cache(registry: &mut SourceRegistry, entries: Vec<SourceEntry>, checked_at: u64) {
+        registry
+            .store()
+            .save_cache(
+                "patchmoe",
+                &SourceCache {
+                    entries,
+                    etag: None,
+                    modified: None,
+                    cached_at: Some(checked_at),
+                    checked_at: Some(checked_at),
+                },
+            )
+            .unwrap();
+        registry.reload().unwrap();
+    }
+
+    #[test]
+    fn index_candidates_are_deterministic_and_zip_addressable() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut registry = registry_at(temp.path(), 1000);
+        seed_index_cache(
+            &mut registry,
+            vec![entry(
+                "Game",
+                "https://download.patch.moe/g.zip",
+                "zh-CN",
+                Some(42),
+            )],
+            900,
+        );
+        let first = registry.index_candidates(&game(42));
+        let second = registry.index_candidates(&game(42));
+        assert_eq!(first.len(), 1);
+        assert_eq!(first, second);
+        let candidate = &first[0];
+        assert_eq!(candidate.cache_status, CacheStatus::Cached);
+        assert_eq!(candidate.match_basis, MatchBasis::Appid);
+        assert_eq!(candidate.variant, Variant::Base);
+        assert_eq!(candidate.format_reported, ArtifactFormat::Zip);
+        // 900s after the epoch; derived from the cached `checked_at`.
+        assert_eq!(candidate.observed_at, "1970-01-01T00:15:00+00:00");
+        assert_eq!(
+            crate::installer::zip_selection_id(candidate),
+            crate::installer::zip_selection_id(&second[0])
+        );
+        // No discovery rule produces a candidate, so the union is the projection.
+        assert_eq!(
+            registry.dynamic_zip_candidates(&game(42)),
+            registry.index_candidates(&game(42))
+        );
+    }
+
+    #[test]
+    fn index_candidate_identity_is_field_sensitive() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut registry = registry_at(temp.path(), 1000);
+        seed_index_cache(
+            &mut registry,
+            vec![entry(
+                "Game",
+                "https://download.patch.moe/g.zip",
+                "en",
+                Some(42),
+            )],
+            900,
+        );
+        let base = registry.index_candidates(&game(42)).pop().unwrap();
+
+        // Language is part of the candidate identity.
+        seed_index_cache(
+            &mut registry,
+            vec![entry(
+                "Game",
+                "https://download.patch.moe/g.zip",
+                "zh-CN",
+                Some(42),
+            )],
+            900,
+        );
+        let language = registry.index_candidates(&game(42)).pop().unwrap();
+        assert_ne!(language.candidate_id, base.candidate_id);
+
+        // A different ZIP URL changes the fingerprint and the selection id.
+        seed_index_cache(
+            &mut registry,
+            vec![entry(
+                "Game",
+                "https://download.patch.moe/other.zip",
+                "en",
+                Some(42),
+            )],
+            900,
+        );
+        let url = registry.index_candidates(&game(42)).pop().unwrap();
+        assert_eq!(url.candidate_id, base.candidate_id);
+        assert_ne!(url.fingerprint, base.fingerprint);
+        assert_ne!(
+            crate::installer::zip_selection_id(&url),
+            crate::installer::zip_selection_id(&base)
+        );
+
+        // A different title changes the fingerprint.
+        seed_index_cache(
+            &mut registry,
+            vec![entry(
+                "Other",
+                "https://download.patch.moe/g.zip",
+                "en",
+                Some(42),
+            )],
+            900,
+        );
+        let title = registry.index_candidates(&game(42)).pop().unwrap();
+        assert_eq!(title.candidate_id, base.candidate_id);
+        assert_ne!(title.fingerprint, base.fingerprint);
+        assert_eq!(title.patch_title, "Other");
+    }
+
+    #[test]
+    fn index_candidates_skip_coming_soon() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut registry = registry_at(temp.path(), 1000);
+        let mut soon = entry("Game", "https://download.patch.moe/g.zip", "en", Some(42));
+        soon.date = Some("COMING SOON".to_string());
+        seed_index_cache(&mut registry, vec![soon], 900);
+        // `matches` still reports it, but the projection must drop it.
+        assert_eq!(registry.matches(&game(42), false).len(), 1);
+        assert!(registry.index_candidates(&game(42)).is_empty());
+    }
+
+    #[test]
+    fn index_candidates_respect_disabled_and_subscription() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut registry = registry_at(temp.path(), 1000);
+        seed_index_cache(
+            &mut registry,
+            vec![entry(
+                "Game",
+                "https://download.patch.moe/g.zip",
+                "en",
+                Some(42),
+            )],
+            900,
+        );
+        assert_eq!(registry.index_candidates(&game(42)).len(), 1);
+
+        registry.set_game_source(42, "patchmoe", false).unwrap();
+        assert!(registry.matches(&game(42), false).is_empty());
+        assert!(registry.index_candidates(&game(42)).is_empty());
+
+        registry.set_game_source(42, "patchmoe", true).unwrap();
+        registry.set_enabled("patchmoe", false).unwrap();
+        assert!(registry.index_candidates(&game(42)).is_empty());
+    }
+
+    #[test]
+    fn index_candidates_preserve_aliases_for_title_match() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut registry = registry_at(temp.path(), 1000);
+        let mut kuppa = entry(
+            "Kudo's Kuppa",
+            "https://download.patch.moe/Kudos_Kuppa_patch.zip",
+            "en",
+            None,
+        );
+        kuppa.source_page = "https://www.patch.moe/Kudos-Kuppa".to_string();
+        kuppa.aliases = vec!["Kudo’s Kuppa".to_string()];
+        kuppa.date = Some("2026/6/23".to_string());
+        seed_index_cache(&mut registry, vec![kuppa], 900);
+        let query = GameQuery {
+            appid: 42,
+            name: "Kudo’s Kuppa".to_string(),
+            localized_name: None,
+            instance_id: None,
+        };
+        let candidates = registry.index_candidates(&query);
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].aliases, vec!["Kudo’s Kuppa".to_string()]);
+        assert_eq!(candidates[0].match_basis, MatchBasis::Title);
+        // The game AppID supplies the missing entry AppID.
+        assert_eq!(candidates[0].game_appid, Some(42));
     }
 }
