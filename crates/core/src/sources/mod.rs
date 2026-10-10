@@ -30,7 +30,6 @@ pub const MAX_ENTRIES: usize = 4096;
 pub const MAX_SOURCES: usize = 32;
 pub const MAX_DISCOVERY_INPUT: usize = 32 * 1024;
 pub const MAX_DISCOVERY_OUTPUT: u64 = 512 * 1024;
-pub const MAX_OVERRIDES_BYTES: u64 = 256 * 1024;
 pub const MAX_STATUS_BYTES: u64 = 4096;
 pub const MAX_CACHE_BYTES: u64 = 4 * 1024 * 1024;
 pub const MAX_CANDIDATES: usize = 128;
@@ -261,25 +260,6 @@ impl Sources {
     ) -> Result<Vec<SourceStatus>> {
         let mut ctx = self.new_context()?;
         session::refresh_sources(&mut self.registry, &mut ctx, force, cancel)
-    }
-
-    /// Capability negotiation payload.
-    pub fn get_capabilities(&self) -> session::Capabilities {
-        session::capabilities()
-    }
-
-    /// Host-only effective rule + origin + fingerprint for a source id.
-    pub fn get_source_policy(&self, source_id: &str) -> Result<session::SourcePolicy> {
-        session::source_policy(&self.registry, source_id)
-    }
-
-    /// Resolve a legacy release/record id for installation consumers.
-    pub fn resolve_source_record(
-        &self,
-        instance_id: &str,
-        record_id: &str,
-    ) -> Result<session::ResolvedSource> {
-        session::resolve_source_record(&self.registry, instance_id, record_id)
     }
 }
 

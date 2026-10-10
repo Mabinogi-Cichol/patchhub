@@ -8,7 +8,7 @@ use super::http::RequestContext;
 use super::identity;
 use super::model::{
     ArtifactFormat, Diagnostic, GameDiscovery, GameQuery, IdentityEvidence, MatchBasis, Provenance,
-    QueryContext, RootLayout, SourceCandidate, SourceRole, SourceRule, Variant,
+    QueryContext, SourceCandidate, SourceRole, SourceRule, Variant,
 };
 use super::registry::{self, SourceRegistry};
 use super::{
@@ -30,26 +30,6 @@ pub struct Capabilities {
     pub query_version: u32,
 }
 
-/// Host-only policy snapshot for a source (`get_source_policy`).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct SourcePolicy {
-    pub rule: SourceRule,
-    pub origin: String,
-    pub fingerprint: String,
-}
-
-/// Resolved source for installation consumers (`resolve_source_record`).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct ResolvedSource {
-    pub instance_id: String,
-    pub record_id: String,
-    pub release_id: Option<String>,
-    pub source_id: String,
-    pub root_layout: Option<RootLayout>,
-    pub page_hosts: Vec<String>,
-    pub download_hosts: Vec<String>,
-}
-
 /// Progressive batch-scan event; the CLI adds request_id/instance context.
 #[derive(Debug, Clone, PartialEq, Serialize, schemars::JsonSchema)]
 pub enum ScanEvent {
@@ -69,21 +49,17 @@ pub enum ScanEvent {
 /// CLI may parallelize while keeping the same per-game contract).
 pub const SCAN_CONCURRENCY: usize = 3;
 
+/// Method set advertised by [`capabilities`]; deleted v2 methods are absent.
 const METHODS: &[&str] = &[
     "get_capabilities",
     "list_sources",
-    "list_source_matches",
     "list_game_sources",
     "set_source_enabled",
     "set_game_source",
     "add_source",
-    "get_source_state",
-    "get_source_settings",
     "refresh_sources",
     "discover_game",
     "scan_sources",
-    "get_source_policy",
-    "resolve_source_record",
 ];
 
 pub fn capabilities() -> Capabilities {
@@ -642,54 +618,6 @@ pub fn refresh_sources(
     Ok(statuses)
 }
 
-/// `get_source_policy`: current effective rule + origin + fingerprint.
-pub fn source_policy(registry: &SourceRegistry, source_id: &str) -> Result<SourcePolicy> {
-    let rule = registry
-        .rules()
-        .iter()
-        .find(|rule| rule.id == source_id)
-        .cloned()
-        .ok_or_else(|| invalid("unknown_source"))?;
-    let origin = registry
-        .source_origin(source_id)
-        .unwrap_or("added")
-        .to_string();
-    let fingerprint = rule_fingerprint(&rule);
-    Ok(SourcePolicy {
-        rule,
-        origin,
-        fingerprint,
-    })
-}
-
-/// `resolve_source_record`: map a legacy release/record id to the current source
-/// and its domain rules. Never guesses on ambiguity.
-pub fn resolve_source_record(
-    registry: &SourceRegistry,
-    instance_id: &str,
-    record_id: &str,
-) -> Result<ResolvedSource> {
-    let matches: Vec<SourceRule> = registry
-        .rules()
-        .iter()
-        .filter(|rule| !rule.discovery_only && release_prefix_match(rule, record_id))
-        .cloned()
-        .collect();
-    match matches.as_slice() {
-        [] => Err(invalid("not_found")),
-        [rule] => Ok(ResolvedSource {
-            instance_id: instance_id.to_string(),
-            record_id: record_id.to_string(),
-            release_id: Some(record_id.to_string()),
-            source_id: rule.id.clone(),
-            root_layout: rule.root_layout,
-            page_hosts: rule.page_hosts.clone(),
-            download_hosts: rule.download_hosts.clone(),
-        }),
-        _ => Err(invalid("ambiguous_source")),
-    }
-}
-
 fn query_key(query: &QueryContext) -> String {
     let mut map = serde_json::Map::new();
     map.insert("appid".to_string(), serde_json::Value::from(query.appid));
@@ -751,30 +679,14 @@ pub fn rule_fingerprint(rule: &SourceRule) -> String {
     canonical::canonical_sha256(rule)
 }
 
-fn release_prefix_match(rule: &SourceRule, release_id: &str) -> bool {
-    let prefix = if rule.id == "patchmoe" {
-        "patchmoe-".to_string()
-    } else {
-        format!("source-{}-", rule.id)
-    };
-    match release_id.strip_prefix(&prefix) {
-        Some(rest) => valid_release_suffix(rest),
-        None => false,
-    }
-}
-
-fn valid_release_suffix(value: &str) -> bool {
-    !value.is_empty() && !value.starts_with('0') && value.bytes().all(|byte| byte.is_ascii_digit())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::sources::http::{FakeFetcher, FetchResponse, RequestContext};
-    use crate::sources::model::{Columns, DiscoveryRecord, RulesConfig, SourceRole};
+    use crate::sources::model::{Columns, DiscoveryRecord, RootLayout, SourceRole};
     use crate::sources::registry::SourceRegistry;
     use crate::sources::store::SourceStore;
-    use crate::sources::{validate, FakeClock};
+    use crate::sources::FakeClock;
     use std::path::Path;
     use std::sync::Arc;
     use std::time::Duration;
@@ -843,15 +755,6 @@ mod tests {
             language: None,
             url: None,
         }
-    }
-
-    fn default_rules() -> Vec<SourceRule> {
-        let config: RulesConfig = serde_json::from_str(crate::sources::DEFAULT_RULES_JSON).unwrap();
-        config
-            .sources
-            .iter()
-            .map(|raw| validate::validate_rule(raw).unwrap())
-            .collect()
     }
 
     fn registry_at(temp: &Path, rules: Vec<SourceRule>, now: u64) -> SourceRegistry {
@@ -1179,17 +1082,6 @@ mod tests {
     }
 
     #[test]
-    fn source_policy_origin_and_fingerprint() {
-        let temp = tempfile::tempdir().unwrap();
-        let registry = registry_at(temp.path(), default_rules(), 1000);
-        let policy = source_policy(&registry, "patchmoe").unwrap();
-        assert_eq!(policy.origin, "builtin");
-        assert_eq!(policy.fingerprint.len(), 64);
-        assert_eq!(policy.rule.id, "patchmoe");
-        assert!(source_policy(&registry, "missing").is_err());
-    }
-
-    #[test]
     fn query_key_and_rule_fingerprint_match_golden() {
         let raw = std::fs::read_to_string(concat!(
             env!("CARGO_MANIFEST_DIR"),
@@ -1225,15 +1117,5 @@ mod tests {
             rule_case["expected"].as_str().unwrap()
         );
         assert_eq!(rule_fingerprint(&rule).len(), 64);
-    }
-
-    #[test]
-    fn resolve_source_record_maps_release() {
-        let temp = tempfile::tempdir().unwrap();
-        let registry = registry_at(temp.path(), default_rules(), 1000);
-        let resolved = resolve_source_record(&registry, "inst", "patchmoe-42").unwrap();
-        assert_eq!(resolved.source_id, "patchmoe");
-        assert_eq!(resolved.release_id.as_deref(), Some("patchmoe-42"));
-        assert!(resolve_source_record(&registry, "inst", "unknown-42").is_err());
     }
 }

@@ -57,10 +57,6 @@ fn matched_basis(basis: MatchBasis) -> bool {
     )
 }
 
-fn valid_release_suffix(value: &str) -> bool {
-    !value.is_empty() && !value.starts_with('0') && value.bytes().all(|b| b.is_ascii_digit())
-}
-
 fn valid_language_code(value: &str) -> bool {
     let parts: Vec<&str> = value.split('-').collect();
     match parts.as_slice() {
@@ -481,36 +477,6 @@ impl SourceRegistry {
             }
         }
         candidates
-    }
-
-    /// Port of `source_for_release` (design §5.2).
-    pub fn source_for_release(&self, release_id: &str) -> Option<SourceRule> {
-        for rule in &self.rules {
-            if rule.discovery_only {
-                continue;
-            }
-            let prefix = if rule.id == "patchmoe" {
-                "patchmoe-".to_string()
-            } else {
-                format!("source-{}-", rule.id)
-            };
-            if let Some(rest) = release_id.strip_prefix(&prefix) {
-                if valid_release_suffix(rest) {
-                    return Some(rule.clone());
-                }
-            }
-        }
-        None
-    }
-
-    /// Port of `validate_download`.
-    pub fn validate_download(&self, source_id: &str, url: &str) -> Result<String> {
-        let rule = self
-            .rules
-            .iter()
-            .find(|rule| rule.id == source_id && rule.enabled && !rule.discovery_only)
-            .ok_or_else(|| invalid("source_not_enabled"))?;
-        validate::allowed_url(url, &rule.download_hosts, true)
     }
 
     pub fn game_subscribed(&self, appid: u32, source_id: &str) -> bool {
@@ -1425,41 +1391,6 @@ mod tests {
     }
 
     #[test]
-    fn source_for_release_and_validate_download() {
-        let temp = tempfile::tempdir().unwrap();
-        let registry = registry_at(temp.path(), 1000);
-        assert!(registry.source_for_release("patchmoe-42").is_some());
-        assert!(registry.source_for_release("patchmoe-0").is_none());
-        assert!(registry.source_for_release("patchmoe-42x").is_none());
-        assert!(registry.source_for_release("kagura-cn-42").is_none());
-
-        assert!(registry
-            .validate_download("patchmoe", "https://download.patch.moe/p.zip")
-            .is_ok());
-        assert_eq!(
-            registry
-                .validate_download("patchmoe", "https://download.patch.moe/p.rar")
-                .unwrap_err()
-                .to_string(),
-            "invalid_source_url"
-        );
-        assert_eq!(
-            registry
-                .validate_download("hgamer", "https://download.patch.moe/p.zip")
-                .unwrap_err()
-                .to_string(),
-            "source_not_enabled"
-        );
-        assert_eq!(
-            registry
-                .validate_download("missing", "https://download.patch.moe/p.zip")
-                .unwrap_err()
-                .to_string(),
-            "source_not_enabled"
-        );
-    }
-
-    #[test]
     fn failed_refresh_preserves_cache_bytes() {
         let temp = tempfile::tempdir().unwrap();
         let mut registry = registry_at(temp.path(), 1000);
@@ -1628,8 +1559,6 @@ mod tests {
         let _ = registry.cached_discovery(&game);
         let _ = registry.list_game_sources(&game);
         let _ = registry.shared_index("hgamer");
-        let _ = registry.source_for_release("patchmoe-42");
-        let _ = registry.validate_download("patchmoe", "https://download.patch.moe/p.zip");
         let after = snapshot(temp.path());
         assert_eq!(before, after);
     }

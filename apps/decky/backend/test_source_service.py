@@ -68,17 +68,11 @@ class SourceServiceTests(unittest.IsolatedAsyncioTestCase):
         self.bridge.sync_results = {
             "get_capabilities": {"methods": sorted(METHODS), "protocol_version": 3},
             "list_sources": list(SUMMARIES),
-            "get_source_state": {"settings_revision": 5,
-                                 "import_report": {"imported_settings": True,
-                                                   "diagnostics": [{"code": "invalid_source_cache",
-                                                                    "source_id": "old"}]}},
-            "get_source_settings": {"enabled": {}, "added": [], "games": {}},
         }
         self.service = SourceService(self.bridge, self.root)
 
     async def test_initialize_reads_current_summaries_without_import_adapter(self):
         await self.service.initialize()
-        self.assertEqual(self.service.engine, "rust")
         self.assertEqual(self.service.list_sources(), SUMMARIES)
         self.assertEqual([call[0] for call in self.bridge.sync_calls], ["get_capabilities", "list_sources"])
         self.assertEqual(self.service.diagnostics, [])
@@ -89,14 +83,11 @@ class SourceServiceTests(unittest.IsolatedAsyncioTestCase):
         await self.service.initialize()
         self.service.prime(SCAN)
         self.assertEqual(self.service.list_sources(), SUMMARIES)
-        sources = self.service.list_game_sources(GAME)
-        self.assertTrue(sources[0]["subscribed"])
         self.assertEqual(self.service.cached_discovery(GAME)["candidates"][0]["candidate_id"], "c1")
         discovery = self.service.cached_discovery(GAME)
         self.assertEqual(discovery["status"], "cache_complete")
         self.assertEqual(discovery["settings_revision"], 5)
-        self.assertTrue(self.service.game_subscribed(42, "patchmoe"))
-        self.assertTrue(self.service.game_subscribed(999, "unknown"))
+
     async def test_local_writes_use_one_shot_call_and_reload(self):
         await self.service.initialize()
         updated_list = lambda _params: [{**SUMMARIES[0], "enabled": False}, SUMMARIES[1]]

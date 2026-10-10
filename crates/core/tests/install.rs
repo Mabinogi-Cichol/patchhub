@@ -1022,53 +1022,7 @@ fn revoked_marker_alone_blocks_apply_and_during_write_rolls_back() {
 }
 
 #[test]
-fn migration_revokes_old_plans_once_and_retains_unfinished_legacy_recovery() {
-    let f = Fixture::new();
-    let old = f.legacy_plan().unwrap();
-    migrate_state(&f.state).unwrap();
-    assert!(f.job_file(&old.plan_id, "revoked").exists());
-    let fresh = f.plan().unwrap();
-    migrate_state(&f.state).unwrap();
-    assert!(!f.job_file(&fresh.plan_id, "revoked").exists());
-    assert_eq!(apply(&fresh.plan_id, &f.state).unwrap().state, "committed");
-
-    let legacy = Fixture::new();
-    let old = legacy.legacy_plan().unwrap();
-    apply(&old.plan_id, &legacy.state).unwrap();
-    legacy.edit_journal(&old.plan_id, |job| {
-        job["transaction"]["state"] = "uninstalling".into();
-        job["uninstall_requested"] = true.into();
-    });
-    migrate_state(&legacy.state).unwrap();
-    assert!(legacy.job_file(&old.plan_id, "0.backup").exists());
-    assert_eq!(recover(&legacy.state).unwrap()[0].state, "uninstalled");
-    legacy.assert_original();
-    assert!(!legacy.job_file(&old.plan_id, "0.backup").exists());
-}
-
-#[test]
-fn migration_cleans_legacy_success_but_damaged_terminal_state_never_deletes_material() {
-    let f = Fixture::new();
-    let old = f.legacy_plan().unwrap();
-    apply(&old.plan_id, &f.state).unwrap();
-    migrate_state(&f.state).unwrap();
-    assert!(!f.job_file(&old.plan_id, "0.backup").exists());
-    assert_eq!(list_transactions(&f.state).unwrap()[0].state, "committed");
-
-    let damaged = Fixture::new();
-    let old = damaged.legacy_plan().unwrap();
-    damaged.edit_journal(&old.plan_id, |job| {
-        job["transaction"]["state"] = "committed".into();
-    });
-    assert_eq!(
-        migrate_state(&damaged.state).unwrap_err().to_string(),
-        "journal_invalid_terminal"
-    );
-    assert!(damaged.job_file(&old.plan_id, "0.stage").exists());
-}
-
-#[test]
-fn committed_success_wins_over_late_cancel_and_cleanup_failure_can_retry() {
+fn committed_success_wins_over_late_cancel() {
     use std::sync::{atomic::AtomicBool, Arc};
     use steam_patch_core::operation;
     let f = Fixture::new();
@@ -1082,10 +1036,6 @@ fn committed_success_wins_over_late_cancel_and_cleanup_failure_can_retry() {
         .as_deref()
         .unwrap()
         .contains("cleanup_pending"));
-    fs::remove_dir(f.job_file(&plan.plan_id, "1.backup")).unwrap();
-    migrate_state(&f.state).unwrap();
-    assert!(!f.job_file(&plan.plan_id, "1.stage").exists());
-    assert_eq!(list_transactions(&f.state).unwrap()[0].error, None);
     fs::write(f.job_file(&plan.plan_id, "revoked"), b"").unwrap();
     let repeated = operation::run(
         Arc::new(AtomicBool::new(true)),

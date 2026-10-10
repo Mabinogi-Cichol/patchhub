@@ -4,7 +4,6 @@ import { chipLabel, formatTime, sourceRoleOf, statusLabel, statusTone, type Sour
 
 export type SourcePanelProps = {
   open: boolean;
-  supported: boolean;
   onClose: () => void;
   globalSources: SourceSummary[] | null;
   gameSources: GameSourceSubscription[] | null;
@@ -72,7 +71,6 @@ export function SourcePanel(props: SourcePanelProps) {
         {busy && <div role="status" className="status inline">{busy}</div>}
         {props.error && <div role="alert" className="error inline">{props.error}</div>}
         {props.notice && <div role="status" className="notice inline">{props.notice}</div>}
-        {!props.supported && <div role="status" className="status inline">当前核心版本尚未支持来源查询，这里只显示本地目录能力。</div>}
 
         {props.scan?.running && <section className="drawer-section">
           <h3>查询进度</h3>
@@ -85,9 +83,9 @@ export function SourcePanel(props: SourcePanelProps) {
         <section className="drawer-section">
           <h3>全局来源</h3>
           <div className="source-actions">
-            <button type="button" disabled={!!busy || !props.supported} onClick={props.onReload}>刷新列表</button>
-            <button type="button" disabled={!!busy || !props.supported} onClick={() => props.onRefreshSources(false)}>刷新来源索引</button>
-            <button type="button" disabled={!!busy || !props.supported} onClick={() => props.onRefreshSources(true)}>强制刷新索引</button>
+            <button type="button" disabled={!!busy} onClick={props.onReload}>刷新列表</button>
+            <button type="button" disabled={!!busy} onClick={() => props.onRefreshSources(false)}>刷新来源索引</button>
+            <button type="button" disabled={!!busy} onClick={() => props.onRefreshSources(true)}>强制刷新索引</button>
           </div>
           <p className="hint">刷新会按需请求各来源网站（受缓存与限速约束），可能需要数十秒；失败时保留上次成功数据。</p>
           {props.loading && <p className="hint">正在读取来源列表…</p>}

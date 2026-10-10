@@ -48,7 +48,6 @@ pub struct Params {
     #[serde(default)]
     pub force: bool,
     pub generation: Option<u64>,
-    pub record_id: Option<String>,
 }
 
 /// v3 method whitelist (p1-host-contract §1.1): the 8 installer/task methods
@@ -522,7 +521,6 @@ pub fn execute_controlled<L: Fn(u64) -> bool, D: Fn() -> u64 + Sync>(
             "apply",
             "recover",
             "discard_plan",
-            "migrate_state",
             "cleanup_cache",
         ]
         .contains(&method)

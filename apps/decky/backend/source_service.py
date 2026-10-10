@@ -6,12 +6,9 @@ REQUIRED_METHODS = frozenset({
     "get_capabilities", "list_sources", "list_game_sources", "set_source_enabled",
     "add_source", "set_game_source", "refresh_sources", "scan_sources", "discover_game",
 })
-ENGINE = "rust"
 
 
 class SourceService:
-    engine = ENGINE
-
     def __init__(self, bridge, state_dir):
         self.bridge = bridge
         self._state_root = Path(state_dir).absolute()
@@ -90,14 +87,6 @@ class SourceService:
     def list_sources(self):
         return [dict(item) for item in self._summaries]
 
-    def list_game_sources(self, game):
-        entry = self._entry(game)
-        if entry is not None and entry["sources"] is not None:
-            return [dict(item) for item in entry["sources"]]
-        appid = game.get("appid") if isinstance(game, dict) else None
-        return [{**item, "subscribed": self.game_subscribed(appid, item.get("id")),
-                 "matched": bool(item.get("matched", False))} for item in self._summaries]
-
     def cached_discovery(self, game):
         entry = self._entry(game)
         discovery = entry["discovery"] if entry is not None else None
@@ -110,15 +99,6 @@ class SourceService:
         result.setdefault("diagnostics", [])
         result["settings_revision"] = self.settings_revision
         return result
-
-    def game_subscribed(self, appid, source_id):
-        if type(appid) is int and appid in self._rows:
-            sources = self._rows[appid]["sources"]
-            if isinstance(sources, list):
-                for source in sources:
-                    if source.get("id") == source_id:
-                        return bool(source.get("subscribed", True))
-        return True
 
     # -- local writes (one-shot serve) ------------------------------------
     async def _call_sync(self, method, params):

@@ -569,7 +569,6 @@ function App() {
     </>}</main></div>
     <SourcePanel
       open={sourcesOpen}
-      supported={true}
       onClose={() => setSourcesOpen(false)}
       globalSources={globalSources}
       gameSources={gameSources}

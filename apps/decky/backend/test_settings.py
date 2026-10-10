@@ -21,13 +21,12 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(settings.snapshot(), {"schema_version":4,"auto_cleanup":False})
         self.assertEqual(json.loads(path.read_text()), settings.snapshot())
         self.assertEqual(Settings(self.root).snapshot(), settings.snapshot())
-    def test_engine_selector_is_not_persisted(self):
+    def test_unknown_legacy_fields_are_dropped_on_migration(self):
         path = self.root / "settings.json"
-        path.write_text(json.dumps({"schema_version": 3, "auto_cleanup": False, "source_engine": "python"}))
+        path.write_text(json.dumps({"schema_version": 3, "auto_cleanup": False, "legacy_engine": "python"}))
         settings = Settings(self.root)
         self.assertEqual(settings.snapshot(), {"schema_version": 4, "auto_cleanup": False})
         self.assertEqual(json.loads(path.read_text()), settings.snapshot())
-        self.assertFalse(hasattr(settings, "set_source_engine"))
 
     def test_invalid_config_and_non_boolean_set(self):
         for content in ("broken",json.dumps({"auto_cleanup":"yes"})):

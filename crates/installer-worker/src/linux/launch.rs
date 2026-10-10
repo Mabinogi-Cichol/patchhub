@@ -1,7 +1,8 @@
 //! Linux `bwrap` (bubblewrap) sandbox launcher.
 //!
-//! Generalises the fixed-path argv template used by the Python prototype
-//! (`apps/decky/backend/exe_worker.py:15-30`) to an arbitrary worker binary:
+//! Generalises the fixed-path argv template used by the Python prototype to an
+//! arbitrary worker binary (P6: Python host oracle removed from production; dev
+//! golden tool remains):
 //!
 //! ```text
 //! /usr/bin/bwrap --unshare-all --die-with-parent --new-session --clearenv
@@ -33,9 +34,10 @@
 //! when the monitor exits.
 //!
 //! stdout/stderr capture is **fail-closed**: exceeding the limit is a hard
-//! error (`exe_worker_response_limit`), matching the Python `_bounded` helper,
-//! and the sandbox is terminated instead of silently truncating. The stdout
-//! limit is the contract §6.1 16 MiB; stderr uses 64 KiB as in Python.
+//! error (`exe_worker_response_limit`), matching the removed Python `_bounded`
+//! helper (P6: host oracle removed from production), and the sandbox is
+//! terminated instead of silently truncating. The stdout limit is the contract
+//! §6.1 16 MiB; stderr uses 64 KiB as in Python.
 
 use std::ffi::OsString;
 use std::fs;
@@ -58,9 +60,9 @@ use super::sys;
 /// Fixed bubblewrap path required by the Python prototype.
 pub const BWRAP_PATH: &str = "/usr/bin/bwrap";
 
-/// Production `RLIMIT_AS` (3 GiB). Matches `sf95_worker.py`.
+/// Production `RLIMIT_AS` (3 GiB). Matches `scripts/sf95_worker.py`.
 pub const DEFAULT_ADDRESS_SPACE_BYTES: u64 = 3 * 1024 * 1024 * 1024;
-/// Production `RLIMIT_CPU` (300 s). Matches `sf95_worker.py`.
+/// Production `RLIMIT_CPU` (300 s). Matches `scripts/sf95_worker.py`.
 pub const DEFAULT_CPU_SECONDS: u64 = 300;
 /// Production `RLIMIT_CORE` (0, never dump core).
 pub const DEFAULT_CORE_BYTES: u64 = 0;

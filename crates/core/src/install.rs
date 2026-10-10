@@ -433,11 +433,6 @@ pub struct Store {
     _lock: Option<File>,
 }
 impl Store {
-    /// Opens the legacy layout, unchanged for existing callers.
-    fn open(state_dir: &Path) -> io::Result<Self> {
-        Self::open_at(&transaction_root(state_dir))
-    }
-
     /// Opens the transactional store with an explicit root, letting callers
     /// point `journal.lock` / `journal.sqlite` / `jobs/` at the P1 installer
     /// directory (`<state_dir>/installer/rust-v1/`).
@@ -1896,64 +1891,6 @@ fn cleanup_terminal(store: &Store, job: &mut Job) -> io::Result<()> {
         let _ = store.save(job);
     }
     Ok(())
-}
-
-/// One-time upgrade invalidates old executable plans. Subsequent calls only
-/// retry safe terminal cleanup and never revoke current-version preparations.
-pub fn migrate_state(state_dir: &Path) -> io::Result<Vec<Transaction>> {
-    let store = Store::open(state_dir)?;
-    sql(store
-        .conn
-        .execute_batch("CREATE TABLE IF NOT EXISTS migrations(name TEXT PRIMARY KEY NOT NULL)"))?;
-    let migrated: bool = sql(store.conn.query_row(
-        "SELECT EXISTS(SELECT 1 FROM migrations WHERE name='simplified_install_v1')",
-        [],
-        |r| r.get(0),
-    ))?;
-    let ids = store.ids()?;
-    // Validate the complete journal before deleting any material.
-    for id in &ids {
-        let _ = store.load(id)?;
-    }
-    let mut result = Vec::new();
-    for id in ids {
-        let mut job = store.load(&id)?;
-        if !migrated && job.transaction.state == "planned" {
-            revoke(&store, &id)?;
-            job.transaction.state = "rolled_back".into();
-            job.transaction.error = Some("upgrade_plan_revoked".into());
-        }
-        // Legacy unfinished operations keep their materials until recovery;
-        // once settled, their compatibility backups have no further product use.
-        job.transient_recovery = true;
-        store.save(&mut job)?;
-        if ["committed", "superseded", "rolled_back", "uninstalled"]
-            .contains(&job.transaction.state.as_str())
-            && (!job.uninstall_requested || job.transaction.state == "uninstalled")
-        {
-            // Check the recorded instance still resolves to this Steam game.
-            match validate_install(&job.plan.install, &store.root) {
-                Ok(()) => {
-                    let _lock = game_lock(&job.plan.install)?;
-                    job.transient_recovery = true;
-                    store.save(&mut job)?;
-                    cleanup_terminal(&store, &mut job)?;
-                }
-                Err(error) => {
-                    job.transaction.error = Some(format!("migration_cleanup_blocked:{error}"));
-                    store.save(&mut job)?;
-                }
-            }
-        }
-        result.push(job.transaction);
-    }
-    if !migrated {
-        sql(store.conn.execute(
-            "INSERT INTO migrations(name) VALUES('simplified_install_v1')",
-            [],
-        ))?;
-    }
-    Ok(result)
 }
 
 #[cfg(test)]

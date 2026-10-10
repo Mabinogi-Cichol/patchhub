@@ -1,6 +1,5 @@
 //! Persistent `rust-v1` store: atomic writes, short lock + monotonic revision,
-//! cache/status/discovery/index persistence and the dual-engine checkpoint
-//! model (design §4.1–§4.6, §5, R6/R9/R12).
+//! cache/status/discovery/index persistence (design §4.1–§4.6, §5, R6/R9/R12).
 //!
 //! First open initializes the Rust default state directly; the legacy Python
 //! `<state_dir>/sources/` namespace is never read (p0-contracts §1.3, §7.3).
@@ -12,7 +11,7 @@ use super::{
     invalid, Result, MAX_CACHE_BYTES, MAX_DISCOVERY_OUTPUT, MAX_STATUS_BYTES, STORE_SCHEMA_VERSION,
 };
 use fs2::FileExt;
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Serialize};
 use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
@@ -56,14 +55,6 @@ impl StorePaths {
         self.root.join("settings.lock")
     }
 
-    pub fn engine_switch(&self) -> PathBuf {
-        self.root.join("engine-switch.json")
-    }
-
-    pub fn conflicts_dir(&self) -> PathBuf {
-        self.root.join("conflicts")
-    }
-
     pub fn cache(&self, source_id: &str) -> PathBuf {
         self.root.join("cache").join(format!("{source_id}.json"))
     }
@@ -84,41 +75,6 @@ impl StorePaths {
             .join("discovery-index")
             .join(format!("{source_id}.json"))
     }
-}
-
-/// `engine-switch.json` (design §4.6). Frozen data model; the reentry algorithm
-/// is driven by the session layer in P3.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct EngineSwitch {
-    pub schema_version: u32,
-    pub active_engine: String,
-    pub switch_seq: u64,
-    pub rust: EngineSwitchRust,
-    pub python: EngineSwitchPython,
-    pub last_common: EngineSwitchCommon,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct EngineSwitchRust {
-    pub revision: u64,
-    pub settings_hash: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct EngineSwitchPython {
-    pub settings_hash: String,
-    pub captured_at: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct EngineSwitchCommon {
-    pub settings: Overrides,
-    pub hash: String,
-    pub captured_at: u64,
 }
 
 /// RAII guard releasing the advisory `settings.lock`.
@@ -320,16 +276,6 @@ impl SourceStore {
             record,
             MAX_DISCOVERY_OUTPUT,
         )
-    }
-
-    // --- engine switch checkpoint -----------------------------------------
-
-    pub fn load_engine_switch(&self) -> Result<Option<EngineSwitch>> {
-        read_json(&self.paths.engine_switch(), MAX_SETTINGS_BYTES)
-    }
-
-    pub fn save_engine_switch(&self, value: &EngineSwitch) -> Result<()> {
-        write_json(&self.paths.engine_switch(), value, MAX_SETTINGS_BYTES)
     }
 
     // --- internals --------------------------------------------------------

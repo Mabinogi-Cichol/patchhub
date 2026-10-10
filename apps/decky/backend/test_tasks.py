@@ -1,5 +1,4 @@
 import asyncio
-from io import BytesIO
 import json
 from pathlib import Path
 import tempfile
@@ -8,7 +7,6 @@ import unittest
 from unittest.mock import Mock, patch
 
 from tasks import Task, TaskManager, current_task
-from publisher import _download, _hash_file, _recipe
 from bridge import CoreBridge
 
 
@@ -223,76 +221,6 @@ class TaskTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(task.snapshot()["speed_bps"], 0)
         task.stage("connecting")
         self.assertEqual(task.snapshot()["speed_bps"], 0)
-
-
-class AcquisitionProgressTests(unittest.TestCase):
-    def setUp(self):
-        self.temp = tempfile.TemporaryDirectory()
-        self.addCleanup(self.temp.cleanup)
-        self.root = Path(self.temp.name)
-        self.task = Task("prepare", {})
-        token = current_task.set(self.task)
-        self.addCleanup(current_task.reset, token)
-
-    def response(self, content, headers):
-        response = BytesIO(content)
-        response.geturl = lambda: "https://download.patch.moe/a.zip"
-        response.headers = headers
-        opener = Mock()
-        opener.open.return_value = response
-        return opener
-
-    def test_unknown_and_known_length_report_received_bytes(self):
-        for headers in ({}, {"Content-Length": "11"}):
-            with patch("publisher.build_opener", return_value=self.response(b"PK\x03\x04payload", headers)):
-                _download("https://download.patch.moe/a.zip", self.root, self.task.cancel)
-            value = self.task.snapshot()
-            self.assertEqual(value["bytes_done"], 11)
-            self.assertEqual(value["total_bytes"], 11 if headers else None)
-            self.assertEqual(value["archive_bytes"], 11)
-
-    def test_cancel_removes_partial_and_preserves_old_archive(self):
-        previous = self.root / "archive.zip"
-        previous.write_bytes(b"previous complete cache")
-        class CancelAfterRead(BytesIO):
-            def read1(stream, size):
-                data = super().read1(size)
-                self.task.cancel.set()
-                return data
-        response = CancelAfterRead(b"PK\x03\x04payload")
-        response.headers = {"Content-Length": "11"}
-        response.geturl = lambda: "https://download.patch.moe/a.zip"
-        opener = Mock(open=Mock(return_value=response))
-        with patch("publisher.build_opener", return_value=opener):
-            with self.assertRaisesRegex(RuntimeError, "download_cancelled"):
-                _download(response.geturl(), self.root, self.task.cancel)
-        self.assertEqual(previous.read_bytes(), b"previous complete cache")
-        self.assertEqual(list(self.root.glob("download-*.tmp")), [])
-
-    def test_local_hash_reports_real_processed_bytes_without_download(self):
-        archive = self.root / "local.zip"
-        archive.write_bytes(b"x" * (2 * 1024 * 1024 + 31))
-        _hash_file(archive, 3 * 1024 * 1024, self.task.cancel)
-        value = self.task.snapshot()
-        self.assertEqual(value["stage"], "validating")
-        self.assertEqual(value["bytes_done"], archive.stat().st_size)
-        self.assertEqual(value["total_bytes"], archive.stat().st_size)
-
-    def test_recipe_counts_expanded_and_baseline_bytes(self):
-        import zipfile
-        game = self.root / "game"
-        game.mkdir()
-        (game / "data.bin").write_bytes(b"original")
-        archive = self.root / "archive.zip"
-        with zipfile.ZipFile(archive, "w") as output:
-            output.writestr("data.bin", b"replacement")
-            output.writestr("new.bin", b"new")
-        _recipe(archive, game, self.task.cancel)
-        value = self.task.snapshot()
-        self.assertEqual(value["bytes_done"], 22)
-        self.assertEqual(value["total_bytes"], 22)
-        self.assertEqual(value["files_done"], 2)
-        self.assertEqual(value["total_files"], 2)
 
 
 if __name__ == "__main__":

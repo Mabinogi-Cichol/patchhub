@@ -430,7 +430,7 @@ Installation requires a signed catalog. Close the game and pause Steam updates b
 Methods: get_capabilities scan preview install_patch list_transactions recover discard_plan cleanup_cache.
 Sources: list_sources list_game_sources set_source_enabled set_game_source add_source refresh_sources scan_sources discover_game.
 Options: --signed-catalog --trust-keys --state-dir --archive --operation install|reinstall --request-id ID.
-Source options: --source-id ID --appid N --enabled true|false --subscribed true|false --rule JSON --name-hint TEXT --preferred-language CODE --force --generation N --record-id ID.
+Source options: --source-id ID --appid N --enabled true|false --subscribed true|false --rule JSON --name-hint TEXT --preferred-language CODE --force --generation N.
 Maintenance: keygen PRIVATE PUBLIC KEY_ID; sign-catalog CATALOG PRIVATE KEY_ID OUTPUT LIFETIME_SECONDS; schema OUTPUT.";
 
 fn parse_bool(value: &str) -> Result<bool, String> {
@@ -499,7 +499,6 @@ fn run() -> Result<(), String> {
                         .map_err(|_| "invalid_generation".to_string())?,
                 )
             }
-            "--record-id" => params.record_id = Some(value),
             "--operation" => {
                 params.operation = match value.as_str() {
                     "install" => steam_patch_core::install::InstallOperation::Install,
