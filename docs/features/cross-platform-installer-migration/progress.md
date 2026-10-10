@@ -495,3 +495,99 @@ P2主体已实现，双平台自动化与可得SF9.5/9.6/9.7三份真实样本�
 - 用户明确要求提交 GIT；P5 代码、测试与构建/打包/切换工具已本地提交为 `1a81469`（`feat(decky): 接入共享 Rust 安装器并完成 P5 验收修复`），共 49 文件。设计、验收记录与 README 另作独立文档提交。
 - 提交前审查暂存范围及差异，通过 `git diff --cached --check`；沿用本 session 已完成的自动化、正式部署、真安装/回滚、文件摘要和用户实体手柄/两款游戏内确认，未重复测试或部署。
 - `.artifacts/` 中完整备份、安装包、截图、日志与真实库材料不纳入 Git，继续本地保留。仅创建本地提交，不推送、不改写历史；P6 未启动。
+
+## 2026-10-10 Decky 运行问题调研：覆盖安装与 SACRIFICE VILLAINS ZIP（修复待实现）
+
+设计：[design.md](design.md) 第 10 节；修复方案：[fix-plan.md](fix-plan.md)。本轮用户最初要求只调研和写方案，随后明确授权在自己的 Steam Deck 测试 SACRIFICE VILLAINS 安装。未修改功能代码、构建、部署或创建 Git 提交。
+
+### 已完成调研
+
+- 源码追踪切换工具 → `preexisting-installations.json` → CLI 扫描/安装门 → 共享 UI。确认 P5 新增保护按实例/AppID 阻断，没有实际载荷核验或用户解除手段；当前正式保护包含 1788100/2743810（以及 1189440），本轮实际扫描两款均命中。
+- 正式 RPC 原失败记录显示 3137110 完整下载 6,780,570,933 bytes 后 `analysis_failed / zip_expansion_limit`。只读缓存目录检查：11 条目、9 文件，总展开 6,885,849,408；最大 `update1.ypf` 为 6,073,754,660 bytes，确定超过单文件 4 GiB，其余包/总展开/数量/压缩比均未超现有限额。
+- 旧 Python 与 Rust 均含相同大小上限和 XP3 包装规则；不能把 ZIP 上限和 YPF 映射缺口归为迁移新引入。当前游戏无 data.xp3，包中唯一外层为 `sacrifice_villains_fullpatch/pac/`；只放宽上限会保留错误外层。真实 YPF/ASF 首部与游戏 pac 布局支持去包装映射，尚未做修复后生效验证。
+- 用户进一步指出固定大小/数量限制过多；方案改为实际磁盘峰值、流式处理及有依据的元数据资源预算，不以再设较高单文件常量作为最终解决方式。修改面覆盖 ZIP 获取、配方、事务、恢复与安装后检测，SF EXE 格式能力独立。
+
+### 本轮实机失败复现与数据保护
+
+- 当前 Devkit 与可信 SSH 记录匹配；正式插件实例 1、Loader active、UID/GID 1000、无活动任务。正式 CLI SHA `cf14ba30b9411b3175a08914de3cd470e2f582f3aefff62bad59c0ee1f6b95c4`。
+- 游戏先完整备份并取回验哈希：19 文件、183,185,706 bytes；本地 `game-baseline.tar` SHA `ebfa718afe2d30f55ce1fbeac7fe45f5ad74c52662fa05ff12565c56628de541`。原始证据与备份保留于忽略目录 `.artifacts/decky-install-fix-20261010/`。
+- 首次 RPC 测试遗漏前台续租，终态 `download_cancelled`；登记测试控制错误，不归为用户原问题。补足每秒 task_status 续租后正式重试，任务 `706ccd07-9625-4109-bc88-e98bf57214af` 终态 `failed / analysis_failed / zip_expansion_limit`，复用旧完整缓存走正常获取/重核，不是新增全量下载。
+- 前后全量 SHA 复核通过：19 文件全部未变、新增文件 0、3137110 事务 0、无错误包装目录；复现结束无活动任务。未安装新载荷，不标记为补丁成功或生效。
+- 本地备份取回并验哈希后，仅删除本轮远端验证目录的两份备份材料，关闭本轮 18081 SSH 隧道；本地完整备份和 RPC/缓存结构证据保留，未触碰其他用户会话。
+
+### 产出与待办
+
+- 创建专项 fix 文档，同步设计最新目标及功能索引；保留此前 P5 历史施工/验收结论。
+- **待实现**：F1 一键覆盖及操作契约、F2 ZIP 资源策略、F3 YPF/pac 映射、关联错误/缓存进度；**待验证**：新增自动化与数量/内存压测、正式部署、两款旧保护游戏及 3137110 修复后实装/覆盖/取消回滚、游戏内生效、共享 Windows 回归。（2026-10-11 晚：以上全部完成并通过验收，见本文件“续”与“续二”节。）
+- 本轮只做调研与当前正式版失败复现，未重跑无改动的既有测试，未修改/删除保护文件、数据库、缓存包或游戏文件。
+
+
+## 2026-10-11 覆盖安装与 ZIP 运行问题开始修复
+
+用户要求开始修复，按 [fix-plan.md](fix-plan.md) 推进。当前代码已完成主要实现并通过首轮自动化；Decky 正式构建/部署与真实游戏安装仍在进行，不能视为功能结项。
+
+- **F1 覆盖安装（实现完成，集成验证中）**：CLI、Decky/Windows UI、请求操作与事务新增 `overwrite`；正常扫描与安装不再读取旧 marker，切换工具不再发布阻断名单。终态旧记录可被新覆盖原子标为 superseded；中断事务仍阻止冲突操作。EXE 覆盖按现场条件分析，只有历史 `reinstall` 使用旧收据证据。
+- **F2 ZIP 资源策略（实现完成，集成验证中）**：动态/签名 ZIP 下载和缓存哈希按实际长度流式处理，已知长度按下载卷检查空间；EXE 的 2 GiB worker 边界保留。普通 ZIP 去掉 4/8/16 GiB、8192 entries 与 200 倍压缩比拒绝；事务 stage/hash/备份/恢复与安装后指纹同步使用实际长度，按状态卷/游戏卷的峰值空间预算预检。64 MiB 中央目录/计划元数据预算与路径、CRC、字节数、取消检查保留。
+- **F3 YPF 映射（实现完成，合成测试通过）**：按唯一包装层和游戏现有 `pac/` 布局去掉一层外壳，保留 `pac/`，支持载荷中经验证的 YPF 与 ASF 文件；冲突、路径安全及 XP3 旧规则继续检查。
+- **安全与规模审查**：ZIP 6 会在候选 ZIP 目录解析失败时回退到较早 EOCD。预检现扫描并预算解析器可选择的候选目录，新增 65,000 条早期目录回退回归；完整 6.78 GB ZIP 的预检额外扫描成本仍待实测。普通小文件压测：10,000 文件 recipe 21.4 秒、JSON 1.64 MB、取消响应 92 ms；50,000 文件 recipe 106.0 秒、JSON 8.28 MB、取消响应 453 ms。采样工作集 46.8 MB，仅为过程采样值，非已确认峰值。
+- **逐文件日志**：新事务用独立 SQLite 增量表持久化每个文件/目录的恢复意图，写入前 FULL 同步；旧 journal 默认沿用原内嵌进度格式。整份事务保存与增量清理同一 SQLite savepoint，读取基文档和增量使用单条快照查询。用户明确授权接入并验证；孤立 50,000 文件 JSON/SQLite 原型的原子回滚、读取快照、历史文档兼容通过。完整并发/崩溃边界回归正在补齐。
+- **已知自动化**：46 项核心安装事务集成测试已通过；下载、目录检测、元数据/recipe、Decky/切换脚本与 TS 检查由对应工作流报告通过。新增日志 overlay 中断写入/回滚、损坏索引拒绝、旧 journal 无 overlay 表读取及模拟提交失败后恢复证据保留等用例包含在上述46项内，全部通过。
+- **本轮限制**：未执行真实 6 GB 文件提取；真实 Deck RPC 复验、插件部署、三款目标游戏实装/覆盖/取消回滚、文件摘要/游戏内生效与 Windows 安装器实装均待验证。设备基线和完整 3137110 游戏备份仍保存在 `.artifacts/decky-install-fix-20261010/`；本轮前后尚未写入任何游戏内容。（2026-10-11 晚：上述项均已执行完毕，见“续”与“续二”节；6.78 GB 真实校验/提取随 3137110 安装完成。）
+- 用户明确禁止 Astra；实现与只读复核使用 Sol 路线。此前文档批量编辑曾被自动审批拒绝，已按反馈拆分处理；后续日志改动取得用户明确授权。无 Git 提交。
+
+## 2026-10-11 续：双平台全量回归、独立复核与收口修复
+
+### 双平台全量回归（本轮实测）
+
+- Windows：`cargo test -p steam-patch-core -p steam-patch-cli` → core lib 287、catalog 8、install 集成 46、localized 4、steam_scan 6、trust 3、CLI 41，0 失败；宿主 `cargo test -p steam-patch-windows` 23，0 失败；`npm run typecheck` 与两端前端构建通过。
+- WSL2 Linux：同一套件 → core lib 288、catalog 9、install 集成 48（含 2 个 `#[cfg(unix)]`）、localized 4、steam_scan 6、trust 3、CLI 41，0 失败；release 构建（`steam-patch` + `sf-worker`）成功。
+- Decky：Python `unittest discover` 159（5 平台跳过）全绿；TS 63 全绿（发现并同步 `task-progress-view.test.ts` 的 `validating` 文案期望为“检查已下载补丁”——Decky 与 Windows 实现早已为新文案，符合 fix-plan §6）；`scripts/test_decky_cutover.py` 5、`test_package_artifacts.py`、`test_build_sbom.py` 通过。
+- 前节“46 项”为当时快照；`tests/install.rs` 完整集合为 **48 项**（Windows 运行 46，另 2 项 `#[cfg(unix)]` 仅 Linux 运行），本轮两端均已全量运行并 0 失败。
+
+### 独立复核与收口
+
+- [fix-gate-review.md](fix-gate-review.md)：独立 oracle 只读复核（对照 zip 6 源码验证 EOCD 回退 fail-closed）结论**有条件放行、无阻断**；I1/I2 文档矛盾按本轮修订，I3（6.78 GB 预检开销与动态路径潜在双次预检）保留为部署后实测，A1/A3/A4 登记为可接受权衡。
+- **复核收口修复（已完成）**：`validate_metadata_budget` 改为逐条 `state.len()+32` 与 load 读取路径同口径预留，避免预检低估导致写入成功后才在恢复阶段拒绝；u64 溢出错误码改报 `zip_size_overflow`（原 `zip_expansion_limit`）；`map_recipe_error` 移除不再产生的 `archive_entry_limit/archive_too_large` 直通；删除无生产消费者的 `installer::preexisting` 模块与声明（CLI“marker 存在/损坏不阻断”回归保留）；Windows 完成文案按按钮语义区分“覆盖安装补丁/安装补丁”；另修复工作区引入的 `zip_recipe.rs:418` clippy `useless_conversion`（原会使 `-D warnings` 门禁失败）。
+- **收口后复跑**：core lib 286（-1 为删除的 preexisting 单测）、install 集成 46、CLI 41、宿主 23、typecheck、Windows 前端构建、clippy `-D warnings`、rustfmt 全通过；Linux 复跑与 release 重建见下节。
+- 复核跟进项：Task 1 未新增“近预算上限”集成用例（fixture 构造成本高，按复核许可改为注释说明）；如需强制覆盖另行安排。
+
+### 正式构建与部署
+
+- 发布产物冻结：Linux release `steam-patch` SHA-256 `a49299b8d8e57ee21e1140f29ed2fe00770a179edbfb112b96f14942d678f911`（13,399,752 bytes）；`sf-worker` 与正式版一致 `570300b3…`（F1–F3 未改动 worker）；Decky 包 `steam-patch-manager-decky.zip` 6,852,177 bytes `5545e84b…`（收口修复后按版本重建，见下）。
+- 设备基线（只读核对）：Devkit 配对设备与上轮用户确认指纹一致（`SHA256:1eQWToCx…`）；无活动任务；三款目标游戏现场确认；3137110 安装前 19 文件 / 183,185,706 bytes 基线已存档；6.78 GB 缓存 ZIP 完好；旧插件完整备份已取回校验（`ee8ddd1d…`）。
+- 详细部署与实机结果见下节（进行中）。
+
+## 2026-10-11 续二：收口修复后重新构建与正式部署
+
+### 构建与包（已完成）
+
+- 收口修复后 Linux 复跑：core lib 287、install 集成 48、CLI 41，0 失败；release 重建 `steam-patch` SHA-256 `7904876e6569a761441cfd3cd98a3f6b35978474abe4dbe121929e80f027e2c4`（13,403,072 bytes），`sf-worker` 不变 `570300b3…`。
+- 全量包 `steam-patch-manager-decky.zip` 6,855,032 bytes，SHA-256 `cfbf65a41b8ef388267ddb36d01b416dd67a94763c7483e1140c80874657553d`；plugin-output 清单含新 CLI 与 `bin/runtime.json` 更新哈希。
+
+### 正式部署（已完成）
+
+- 设备与指纹：Devkit 配对设备 `deck@192.168.31.186`；本轮 known_hosts 公钥与上轮用户确认指纹一致（`SHA256:1eQWToCx…`）；部署前 `tasks.json` 无活动任务、Loader `plugin_loader` active。
+- 旧版备份：`plugin-backup-20261011-0110.tar.gz`（6,837,031 bytes，SHA-256 `ee8ddd1d…`）已取回本地校验。
+- 上传：`/home/deck/steam-patch-validation/installer-fix-20261011-0110/steam-patch-manager-decky.zip`，远端 SHA-256 与本地一致。
+- Loader v3.2.10 本地 ZIP 安装：`utilities/install_plugin`（versionLabel `dev`、installType 2）→ prompt 校验 name/version/hash/type 一致 → `confirm_plugin_install`（requestId `1791652502.556158`）。
+- 安装后核对：正式目录 21 文件 SHA-256 与清单逐项一致（CLI `7904876e…`、worker `570300b3…`、`dist/index.js` `08b040d0…`、SBOM `6415c1b6…`）；CLI/worker 具备执行位；`plugin_loader` active，插件实例 1、`hasPlugin=true`；后端进程于 01:15 重启为新版本；HTTP bundle 实测字节 SHA-256 `08b040d0…` 与构建一致。
+- 安装完成时 Loader 确认对话框（modal）因 API 侧确认未随 UI 关闭；参照 P5 方式经 React fiber 调用 `closeModal()` 安全关闭（不触发 `cancel_plugin_install`，避免已消费 requestId 的 KeyError），截图确认页面恢复。
+
+### 实机验证（已完成，用户游戏内生效已确认）
+
+- `scan(false)`：28 个实例；3137110 候选 `zip-selection-31d6b3f6b3e978c50b500c59-3137110` `available=true`、blockers 空；2743810/1788100 的旧保护 blocker 消失、候选可直接安装。
+- **3137110 安装（通过）**：从全屏页面"安装补丁"按钮点击发起（任务 `802ee199-b9d3-485a-8ff7-e925606ff243`）；`validating` 阶段 UI 显示"检查已下载补丁"（6.78 GB 缓存重哈希实测约 70 秒），随后 planning → applying → committed（事务 `75b03b41-4d98-4be4-8e8d-e7ace3f9aa0b`），全程约 2 分 40 秒；成功后按 `auto_cleanup` 自动清理下载缓存（6,780,571,275 bytes）。I3 复核登记的中央目录预检开销实测未形成可感知延迟（全流程含两次预检仅约 160 秒），不再优化。
+- **3137110 文件核对（通过）**：安装后全量 28 文件快照对比基线（19 文件/183,185,706 bytes）——9 个目标全部正确（`pac/bn.ypf` 替换为 `32a2ab67…`、`pac/update1.ypf` 6,073,754,660 bytes 及 `op.ypf`、`SV_NORMAL_ED_*`、`SV_TRUE_ED_*` 共 8 个新增，与包内 9 文件一一对应）；其余基线文件零变化；原 `SV_NOMAL_ED_en.ypf` 保留未动；无 `sacrifice_villains_fullpatch/` 外层目录；仅固定空锁文件 `.steam-patch-manager.lock` 单列。复扫 `installed_managed`，9 个目标逐一 `match`。
+- **2743810 覆盖（通过）**：页面"安装补丁"按钮可直接发起、无核验阻断（任务 `9d1c9fb1-…`，下载 839,649,041 bytes）；committed（事务 `d3ac85a9-74e9-4797-b57f-70638925f3ad`）；覆盖后全量 diff 为空（服务器补丁与已装内容相同，字节一致），非目标文件与锁文件零变化。
+- **1788100 覆盖（通过）**：同样直接发起（任务 `1170dc5e-…`，下载 813,370,375 bytes，写入 2 文件/2.1 GB）；committed（事务 `298451e0-76e9-468c-883e-413d82d301ee`）；全量 diff 为空，7 个存档文件保全。
+- **写入阶段取消回滚（通过）**：Saimin 再次覆盖由页面发起（按钮实机文本已为"覆盖安装补丁"）；取消守护在 `applying/writing` 写 `pac/update1.ypf`（64 KiB）时调用 `cancel_task`（任务 `f0ab6e3c-e8f6-4d1f-8bfb-958193492d32` → `cancelling`）；终态 `cancelled`/`rolled_back`（事务 `f9aa66eb-…` `rolled_back`）；取消后全量 diff 为空（文件恢复至本次开始前）、存档完好；上一成功事务 `298451e0-…` 保持 committed。
+- **复扫（通过）**：3137110/2743810/1788100 三款均 `installed_managed`、无 blockers。
+- **清理**：旧插件备份 `ee8ddd1d…` 与部署包 `cfbf65a4…` 已取回本地校验；远端本轮暂存目录删除（历史轮次目录未动）；本轮 18080 隧道关闭；此前遗留的 18081 隧道一并清理。
+- **用户确认（通过）**：SACRIFICE VILLAINS 启动后补丁正常生效（用户 2026-10-11 回复确认）；其余两款为同内容覆盖，与用户既有体验一致。
+
+### Windows 共享事务回归（已完成）
+
+- 收口修复后重建 Windows 前端与 release 宿主/CLI/worker；使用与 Windows 宿主相同的 state 目录（`%APPDATA%\io.github.steampatch.manager`）经 `steam-patch.exe serve`/`serve-task` 驱动共享事务；绑定同一判据：`scan` 确认 2743810 `installed_managed` 且候选 `zip-selection-560d6cae838993b26db4caa6-2743810` 可用。
+- 首次重跑被本机 fake-IP 代理阻断（`download_failed/download_private_address`，域名解析为 198.18.0.0/15 保留段；S6 登记环境项，非本次修复缺陷，核心按设计直连并要求公共地址）；用户临时关闭 TUN 后通过。
+- **覆盖安装（通过）**：事务 `91dc4cdf-8f42-44a3-be13-c2ef17d57b68` committed（阶段 connecting → validating(缓存重哈希) → planning → extracting → backing_up → writing → committing → cleanup，写入 `patch.xp3` 840,228,417 bytes）；**旧 committed `b361c6f5-e177-4e66-90a7-92458b2a79bb` 被原子标记 `superseded`**，历史 `78620697…` 保持 superseded——本轮修复的 superseded 提交语义在 Windows 实机路径确认。
+- **文件核对（通过）**：与安装前 10 文件基线全量 diff 为空（同内容覆盖；`patch.xp3` 字节不变，`data.xp3`、`plugin/`、`thekuppa.exe`、锁文件零变化）。
