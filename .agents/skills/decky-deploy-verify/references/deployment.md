@@ -88,7 +88,7 @@ npm run package:plugin -w apps/decky
 python scripts/package-artifacts.py --platform decky
 ```
 
-`package:plugin` 生成 `apps/decky/plugin-output`；ZIP 打包参数以 `scripts/package-artifacts.py --help` 为准。不要假定已有 `plugin-output` 是本轮新包。完整清单包括 `main.py`、`plugin.json`、`package.json`、`dist`、`backend`（含默认 sources/profiles、vendor、`exe_worker` 和许可证）及 `bin` 的 CLI/catalog/signature/trust 文件；排除测试、fixtures、`__pycache__`、私钥和真实游戏文件。
+`package:plugin` 生成 `apps/decky/plugin-output`；ZIP 打包参数以 `scripts/package-artifacts.py --help` 为准。不要假定已有 `plugin-output` 是本轮新包。完整清单包括 `main.py`、`plugin.json`、`package.json`、`dist`、`backend`（生产 allowlist 的六个薄桥接模块）、`LICENSE` 与 `licenses/` 及 `bin` 的 CLI/catalog/signature/trust 文件；排除测试、fixtures、`__pycache__`、私钥和真实游戏文件。
 
 ## 3. 备份、清单与上传
 

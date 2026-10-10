@@ -1,6 +1,6 @@
 # 跨平台安装器迁移施工记录
 
-设计：[design.md](design.md)。日期：2026-10-10（Asia/Shanghai）。状态：**P1 已实现/自动化通过；P2 主体与可得真实样本通过，三旧 profile 待验；P3 已实现/双平台自动化与隔离验证通过；P4 Windows 已实现，2303800 EXE 与 2743810 ZIP 真安装/重装及两款游戏内确认通过，后续修复与最终代码回归、隔离恢复/历史 RPC、便携包校验通过，P4 按调整后验收范围完成，用户已取消断网实测要求（[收尾验收](p4-acceptance.md)）；P5 已实现/正式部署并验收完成，ZIP/EXE 真安装、写入回滚及用户实体手柄/两款游戏内确认通过；P6 待执行；更早 Windows 版本未覆盖**。
+设计：[design.md](design.md)。日期：2026-10-10（Asia/Shanghai）。状态：**P1 已实现/自动化通过；P2 主体与可得真实样本通过，三旧 profile 待验；P3 已实现/双平台自动化与隔离验证通过；P4 Windows 已实现，2303800 EXE 与 2743810 ZIP 真安装/重装及两款游戏内确认通过，后续修复与最终代码回归、隔离恢复/历史 RPC、便携包校验通过，P4 按调整后验收范围完成，用户已取消断网实测要求（[收尾验收](p4-acceptance.md)）；P5 已实现/正式部署并验收完成，ZIP/EXE 真安装、写入回滚及用户实体手柄/两款游戏内确认通过；P6 已收口（独立复核闭环）：生产 Python 安装器与遗留接口删除、§7.3 六项核对、双端完整矩阵与产物重建、契约/指南/索引同步（[P6 复核](p6-gate-review.md)）；更早 Windows 版本未覆盖**。
 
 ## 当前状态
 
@@ -15,7 +15,7 @@
 | P3 隔离/授权/任务 | 已实现/自动化与隔离验证；独立复核修复完成 | 生产启动器、EXE 编排、facts/空间/撤销/任务回收；双平台 release 证据与 [复核归档](p3-gate-review.md) |
 | P4 Windows | 已实现/自动化与前序独立复核通过；两款真安装/生效与恢复 RPC 通过；调整后范围验收完成，断网实测已取消 | 2303800 EXE、动态/签名 ZIP、恢复/重装；移除旧核心来源降级（[实施记录](p4-windows.md) / [复核归档](p4-gate-review.md)） |
 | P5 Decky | 已实现/正式部署/验收完成 | v3 薄桥接、新 schema 与旧安装保护；自动化、沙箱、ZIP/EXE 真安装及回滚、正式包/RPC/QAM/全屏通过，用户确认实体手柄与两款游戏生效（[P5 记录](p5-decky.md)） |
-| P6 收口 | 待实现/待验收 | 单一生产策略、移除 Python SF 依赖、来源兼容遗留逐项检查、打包与文档 |
+| P6 收口 | 已收口/复核闭环/待提交 | 单一生产策略、Python 安装器删除、§7.3 六项逐项核对、双端产物与文档同步（[P6 复核](p6-gate-review.md)） |
 
 ## 2026-10-08 设计制定
 
@@ -591,3 +591,48 @@ P2主体已实现，双平台自动化与可得SF9.5/9.6/9.7三份真实样本�
 - 首次重跑被本机 fake-IP 代理阻断（`download_failed/download_private_address`，域名解析为 198.18.0.0/15 保留段；S6 登记环境项，非本次修复缺陷，核心按设计直连并要求公共地址）；用户临时关闭 TUN 后通过。
 - **覆盖安装（通过）**：事务 `91dc4cdf-8f42-44a3-be13-c2ef17d57b68` committed（阶段 connecting → validating(缓存重哈希) → planning → extracting → backing_up → writing → committing → cleanup，写入 `patch.xp3` 840,228,417 bytes）；**旧 committed `b361c6f5-e177-4e66-90a7-92458b2a79bb` 被原子标记 `superseded`**，历史 `78620697…` 保持 superseded——本轮修复的 superseded 提交语义在 Windows 实机路径确认。
 - **文件核对（通过）**：与安装前 10 文件基线全量 diff 为空（同内容覆盖；`patch.xp3` 字节不变，`data.xp3`、`plugin/`、`thekuppa.exe`、锁文件零变化）。
+
+## 2026-10-11 P6 收口：单引擎清理、双端产物与复核闭环
+
+### 用户目标与本轮范围
+
+用户要求完成 P6 收口（design §8）：删除重复生产策略与 Python 安装器、逐项收口 §7.3 来源兼容遗留、同步契约/指南/SBOM，并以双端完整矩阵与产物验证放行。本轮完成 §7.3 六项逐项核对与全部代码/文档清理、双平台测试矩阵、两端产物重建、独立 oracle 门禁复核（有条件通过，必修/建议已闭环）；同日完成 Deck 正式部署复验与一次性/历史工具清理（见“正式部署”与未执行节）。未创建 Git 提交。
+
+### 实际修改
+
+- **Decky 生产 Python 删除**：删除已迁出 Rust 的安装器/来源遗留与测试 20 个文件（publisher、exe_generic/exe_profiles/exe_facts/exe_installation/exe_worker、acquisition、caches、source_primitives、exe_profiles.json 及 10 个测试）；`test_tasks.py` 去除 publisher 依赖，`test_settings`/`test_source_service` 清理陈旧夹具；`source_service.py` 删除无调用者 `list_game_sources`/`game_subscribed` 与装饰性 `ENGINE/engine`。Python 测试 159 → 70（跳过 2，全绿）。
+- **Rust 遗留接口删除**：`sources/store.rs` EngineSwitch 双引擎模型与 engine_switch/conflicts 路径；`mod.rs` get_source_policy/resolve_source_record/get_capabilities 与 MAX_OVERRIDES_BYTES；`session.rs` SourcePolicy/ResolvedSource/source_policy/resolve_source_record 与陈旧 METHODS；`registry.rs` source_for_release/validate_download 及测试；`install.rs` 旧 RPC `migrate_state` 与仅其使用的 `Store::open`（含 2 项迁移测试）；`linux/launch.rs` 出处注释改指 dev 工具；CLI 删除无用途 `--record-id` 与 host-identity 禁用列表中的 `migrate_state`。
+- **Windows 前端**：`SourcePanel` 不可达的旧核心降级分支（`supported` 属性/文案/禁用）与调用点删除。
+- **文档同步**：development-plan/install-design/source-adapters/release-checklist/client-guide 与 [decky-deploy-verify](../../../.agents/skills/decky-deploy-verify/SKILL.md) 参考更新为单引擎现状（协议 v3、`installer/rust-v1`、覆盖语义、写入取消回滚、SBOM 744、cargo-audit 待重跑）；shared-source-discovery 设计/P0-P1/P5 文档加 16 条 2026-10-11 修订注记（保留历史）；本 feature 设计状态/§3 基线/§9.1/§8 与 [P6 复核](p6-gate-review.md) 归档；`docs/progress.md` 摘要。
+
+### §7.3 六项逐项核对（源码/调用链/产物）
+
+| 行 | 结论 | 证据 |
+| --- | --- | --- |
+| 1 Python 状态导入/报告 | 已清理 | store.rs 无 import_*/ImportReport；负向测试 `legacy_python_state_is_not_read_on_open` 保留 |
+| 2 引擎选择/engine-switch | 已清理 | EngineSwitch* 与路径全删；plugin_settings 仅 auto_cleanup；无 engine-switch 引用 |
+| 3 canonical python_json 复刻 | 已替换 | `canonical_bytes` 唯一入口；边界：`installer-format/audit.rs` 的 `python_json` 为 P2 冻结 SF 行为绑定（生产调用、与冻结报告逐字节一致），保留 |
+| 4 规则 schema 1/2 双接受 | 已收紧 | mod.rs 仅接受 `schema_version == 2` |
+| 5 Windows 旧核心降级 | 已删除 | main.tsx/SourcePanel 无 ensureSourcesSupported/supported |
+| 6 SourceService 旧安装适配 | 已删除 | 无 matches/cached_candidates/_rules/validate_download/source_for_release/get_source_policy 等消费者与入口；Rust 侧无调用者 API 同删 |
+
+### 验证方式与结果
+
+- Windows（最终树）：`cargo test -p steam-patch-core -p steam-patch-cli` **389 passed / 6 ignored / 0 failed**（core lib 283、cli 41、catalog 8、install 44、localized 4、steam_scan 6、trust 3）；宿主 23；`cargo check --workspace`、clippy `-D warnings`、fmt 通过；Decky 70；TS typecheck+构建通过；脚本 CI 套件 package_artifacts 6 / sbom 1 / cutover 5 / sf95_audit 16 / sf95_worker 5 全绿（cutover 用例为删除该一次性工具前的快照；删除后其余套件复跑仍全绿）。
+- Linux/WSL2：`build-linux.sh` **393 passed / 6 ignored / 0 failed**（core lib 284、install 46 含 2 个 cfg(unix)）；worker 17；clippy/fmt 通过；部署用最终重建 `steam-patch` 13,367,088 B `c124e361…`、`sf-worker` 1,771,248 B `570300b3…`（与 P5 一致；首次重建 13,368,304 B `86857c37…` 为 `--record-id` 清理前的中间产物）。
+- 两端产物重建：Windows 便携包最终重建 8,529,931 B SHA-256 `bb8ba841…`（含更新 client-guide 与 CLI 清理；前一中间产物 8,528,236 B `d9674384…`）；Decky 包部署用最终重建 6,837,618 B SHA-256 `eeda0201…`（前一中间产物 6,838,259 B `b65b55ea…`）；包内 backend 恰为 6 模块 allowlist、ELF/runtime.json 与 tree 哈希一致、`source_service.py` 哈希一致；SBOM 744 组件（license_metadata_missing 空）。
+- 独立复核（只读 @oracle）：**有条件通过** → 必修 F1（本记录与状态同步）/F2（smoke 描述改为历史工具）；建议 F3（`--record-id`）/F4（`migrate_state` 禁用项）/F6（feature 内断链注记）已修复；F5（跨功能历史断链）按先例保留并登记；[复核归档](p6-gate-review.md)。
+
+### P6 正式部署（2026-10-11）
+
+- **构建**（CLI 收尾清理后最终树）：WSL2 `build-linux.sh` 全绿；最终 Linux 二进制 `steam-patch` 13,367,088 B `c124e361…`、`sf-worker` 1,771,248 B `570300b3…`；重建 Decky 包 `steam-patch-manager-decky.zip` 6,837,618 B SHA-256 `eeda0201…`（backend 恰为 6 模块 allowlist，runtime.json 与实际 ELF 哈希一致）。
+- **部署**（沿用已确认设备 `deck@192.168.31.186`，known_hosts 指纹 `SHA256:1eQWToCx…` 与上轮用户确认一致；部署前 loader active、无活动任务、实例 1）：上传唯一暂存目录并核对远端 SHA-256；经 Loader `utilities/install_plugin`（`dev`/type 2，requestId `1791662719.4645855`）与 `confirm_plugin_install` 正式安装；安装确认框经 React fiber `closeModal` 安全关闭（不触发取消）。
+- **部署后核验（通过）**：正式目录 21 文件（plugin-output 20 + 打包注入 SBOM）逐一与本地清单 SHA-256/大小一致（`source_service.py` 为当前树）；`plugin_loader` active、后端以新进程运行；插件实例 1、`hasPlugin=true`；HTTP bundle 200 / 107,838 B / `08b040d0…` 与本轮 `dist/index.js` 一致；`scan(false)` 28 实例、settings_revision 1，3137110/2743810/1788100 均 `publisher_zip`/`installed_managed`（与部署前一致、无游戏写入）；任务 13 条全终态、无活动任务；全屏插件页真实截图渲染正常（SACRIFICE VILLAINS 补丁管理，含缓存来源与已安装状态），随后路由恢复。
+- **归档与清理**：旧插件完整备份 `plugin-backup-20261011-0354.tar.gz` 6,862,922 B `be4ed9e6…` 取回并校验；证据在 `.artifacts/p6-deck-deploy-20261011-0354/`；远端本轮暂存目录已删除、SSH 隧道关闭。实体手柄未在本轮另测（沿用 P5 用户确认）。
+
+### 未执行（保持待验证）
+
+- `smoke-transaction.py` 及一次性切换工具（`check-decky-cutover.py` + `test_decky_cutover.py`）已在 P6 收口后按用户确认（2026-10-11）删除；当前无等价 v3 冒烟替代，登记为已知限制（指南已注明）。
+- 因 P6 删除 Python 实现/测试，部分历史功能文档（exe-patch-installation、generic-exe-installation、kagura-hgamer-fallback、simplified-install-flow）保留指向已删除文件的链接；本 feature 已加注，其余按已知限制登记，不改写历史。
+- 复核为静态核对，未独立复跑证据；P2 三条旧 profile 真实包、更早 Win11 版本矩阵、S6（TUN/fake-IP）、kagura 来源质量专项沿用既有登记。
+- 未创建 Git 提交（待用户明确要求）。

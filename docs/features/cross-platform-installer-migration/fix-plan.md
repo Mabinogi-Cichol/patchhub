@@ -21,10 +21,10 @@
 - [切换保护读取](../../../crates/core/src/installer/preexisting.rs)：`Protection::is_blocked` 按 instance **或** AppID 判断；没有载荷哈希或游戏内容核验。
 - [CLI](../../../crates/cli/src/runtime.rs)：`scan` 追加 `preexisting_installation_requires_review`，令 `download_available=false`；`install_patch` 在签名 ZIP、动态 ZIP、动态 EXE 路由分发前直接拒绝。
 - [共享 UI](../../../packages/ui/src/index.ts)：`patchInstallable` 拒绝有 blocker 的候选；`installSummary` 优先显示“已有补丁，需检查”；报错文案要求用户检查，但无可执行的核验流程。
-- [切换工具](../../../scripts/check-decky-cutover.py)：`publish_protection` 从旧 committed 记录提取实例及 AppID；`safe_to_replace` 当前也依赖保护发布。
+- [切换工具](../../../scripts/check-decky-cutover.py)：`publish_protection` 从旧 committed 记录提取实例及 AppID；`safe_to_replace` 当前也依赖保护发布。（P6 收口注：切换完成后，该工具及其测试 `test_decky_cutover.py` 已于 2026-10-11 删除；此引用保留为历史记录。）
 - [ZIP 配方](../../../crates/core/src/installer/zip_recipe.rs)：`validate_entries` 限制单文件 4 GiB、总展开 16 GiB、8192 成员、压缩比 200；`wrapped_xp3_paths` 仅在游戏有签名正确的 `data.xp3` 时处理一层 XP3 包装。
 - [事务安装器](../../../crates/core/src/install.rs)：再次实施同类大小/数量限制；`hash_at`、计划加载、stage、备份、写入、恢复也受 `MAX_FILE_BYTES` 约束。因此只改 `zip_recipe` 常量不会完成修复。
-- 旧 [publisher.py](../../../apps/decky/backend/publisher.py) 的 `MAX_FILE=4*1024**3` 和 `_wrapped_xp3_paths` 证明这两项 ZIP 局限在迁移前已存在。该文件不在当前生产安装链路中，不能通过修改它修复正式版。
+- 旧 [publisher.py](../../../apps/decky/backend/publisher.py)（P6 收口注：publisher.py 等 Python 安装器实现已于 P6 删除，此链接保留为当时调研记录。）的 `MAX_FILE=4*1024**3` 和 `_wrapped_xp3_paths` 证明这两项 ZIP 局限在迁移前已存在。该文件不在当前生产安装链路中，不能通过修改它修复正式版。
 
 ### 2.2 正式 Steam Deck 证据
 

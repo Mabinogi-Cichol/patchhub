@@ -31,6 +31,8 @@
 新模块 `apps/decky/backend/source_engine.py`：`open_source_engine(...)`、`engine-switch.json` 读写、导入诊断聚合、Python↔Rust 设置摘要。
 回退引擎：`sources.py::SourceRegistry` 保持不变，可由设置/环境选择。
 
+> 2026-10-11 P6 收口：上列 `source_engine.py`、`engine-switch.json` 与 Python 回退引擎均为当时的双引擎契约，已被 [跨平台安装器迁移设计](../cross-platform-installer-migration/design.md) §7.3 第 2 行取代：`source_engine.py` 已删除，只保留单一 Rust 来源引擎。原文保留为 P5 契约记录。
+
 ### 2.1 属性
 
 | 属性 | 来源 |
@@ -82,6 +84,8 @@
 - **引擎选择**：插件设置 `source_engine`（默认 `"rust"`，可 `"python"`），环境覆盖 `STEAM_PATCH_SOURCE_ENGINE`。`_initialize` 读取；Rust 不可用（能力缺失/`unsupported_method`）→ 记录并回退 `SourceRegistry`，旧 `sources/` 状态不动。
 - **检查点**：每次切换由 `source_engine.py` 原子写 `<state>/sources/rust-v1/engine-switch.json`（schema 见 p0-p1 §4.6：`active_engine`/`switch_seq`/`rust{revision,settings_hash}`/`python{settings_hash,captured_at}`/`last_common`）；回退前用 `get_source_settings` 导出 Rust 当前设置并映射旧格式，保留迁移后新选择。
 
+> 2026-10-11 P6 收口：本节引擎选择设置/环境变量、`engine-switch.json` 检查点与 Rust→Python 设置导出/回退已被 [跨平台安装器迁移设计](../cross-platform-installer-migration/design.md) §7.3 第 2 行取代：无引擎选择、无切换/共同快照、无旧引擎回退，直接初始化共享来源服务。原文保留为 P5 契约记录。
+
 ## 4. scan / scan_status 投影
 
 - `scan` 先渲染缓存（含逐行 `discovery`/`sources`/`matches`），随后 `ScanSession.run()` 依次 `refresh_sources`→`scan_sources`，用 `source_progress`/`source_update` 事件喂 `scan_progress` 与逐行 `discovery`。
@@ -103,6 +107,10 @@
 - 新增：`test_source_service.py`、`test_source_engine.py`、`test_source_import.py`、扩展 `test_bridge.py`。
 - 委托给 Rust 的行为（规则校验/缓存 TTL/分层提交/候选校验/分页/revision/身份合并/URL 白名单）不再在 Python 重复，由 Rust 矩阵覆盖。
 
+> 2026-10-11 P6 收口：上列“回退保留”的 Python 引擎测试（`test_sources.py`/`test_discovery_registry.py`/`test_discovery.py`）与 `test_source_engine.py` 随双引擎契约一并移除（[跨平台安装器迁移设计](../cross-platform-installer-migration/design.md) §7.3 第 2、6 行）；仅删除维护兼容的测试。原文保留为 P5 契约记录。
+
 ## 7. 落地顺序
 
 1. Rust 增补（本文件 §1）。2. `bridge.py`。3. `source_service.py`。4. `source_engine.py`。5. `plugin_settings.py`。6. `main.py`/`scan_session.py`。7. 测试。8. 文档。
+
+> 2026-10-11 P6 收口：第 4、5 步的 `source_engine.py` 与 `plugin_settings` 引擎选择项已随双引擎契约退出（[跨平台安装器迁移设计](../cross-platform-installer-migration/design.md) §7.3 第 2 行）；本文件保留 P5 当时的落地顺序记录。

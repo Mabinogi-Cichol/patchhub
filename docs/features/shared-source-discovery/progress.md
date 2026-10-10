@@ -230,6 +230,8 @@
 - 前端 `npm run typecheck`（两应用）、`build:windows`、`build:decky`：通过。
 - 打包产物 `apps/decky/plugin-output`：无 `sources.py`/`discovery.py`/`sources.json`/`vendor`；保留 `exe_worker`；`bin/steam-patch` 为 Linux 新版。
 
+> 2026-10-11 更正：[跨平台安装器迁移设计](../cross-platform-installer-migration/design.md) 收口后，生产包固定为六个宿主 backend 模块白名单，`exe_worker` 与 SF Python 生产运行时已从生产包移除；上文“保留 `exe_worker`”只反映当时的中间产物。原文保留为历史事实。
+
 ### 仍未迁移的安装器逻辑（明确列出）
 
 - Decky `publisher.py`（publisher ZIP 下载/配方/事务）与 `exe_*`（EXE 提取、`exe_worker` 沙箱、`ExeProfiles`/`ExeInstallation`、能力评估）仍为 Python，属后续独立 feature（将下载/能力评估/静态提取迁入跨平台核心）。本次仅迁移来源发现与订阅。
@@ -238,6 +240,9 @@
 ### 2026-10-08 Decky 重部署（P6 包）—— 通过
 
 - 增量部署 P6 包：`plugin.json` 未变、逐文件 SHA-256 一致；设备上 `sources.py`/`discovery.py`/`sources.json`/`vendor` 已移除，`source_service/source_engine/source_primitives` 存在。
+
+> 2026-10-11 更正：跨平台安装器迁移收口后，生产包固定为六个宿主 backend 模块白名单，`source_engine.py`（引擎切换）与旧安装消费者已删除；上文 `source_engine` 存在只反映当时的设备状态。原文保留为历史事实。
+
 - 重启设备后新后端启动（PID 1578）：`list_sources` 返回 Rust 序列化来源（含 `origin`）；`scan(false)` 返回 27 个实例，2303800 `match_status=matched`，候选含 kagura-cn `verified_alias`、kagura-en `verified_alias`、hgamer `appid`。**P6 单一引擎在实机生效。**
 - 部署经验（已记入 [decky-deploy-verify](../../../.agents/skills/decky-deploy-verify/references/runtime-validation.md)）：本会话以裸文件替换部署、且 P5 曾手工结束后端进程，触发 Loader「已加载、拒绝重载」陈旧状态，只有重启 `plugin_loader`/设备才清掉；后续应走 Loader 正常安装/重载流程。
 

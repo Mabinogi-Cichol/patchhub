@@ -12,7 +12,7 @@ Decky 手动 ZIP 导入限于用户 Downloads 或本工具下载缓存；Windows
 
 Decky 点击“安装补丁 / 重新安装补丁”即开始自动获取、校验与安装；维护审核的条目先查 Downloads 和工具缓存，按完整 SHA-256 复用文件，patch.moe 的其他精确匹配游戏保留归档相对路径并解压至游戏根目录，内部按当前 build 和原文件哈希生成本地计划。安装为一次任务，成功后自动删除本次下载的 ZIP 缓存与事务 `.stage` 暂存；不再提供长期原文件备份、卸载或手动事务清理入口，失败或取消只回滚本次未提交写入。下载缓存的前台进度、取消与结果见 [精简安装流程](features/simplified-install-flow/design.md) 与 [Decky UX](features/decky-ux/design.md)。
 
-订阅源的通用安装状态位于 `~/.local/share/steam-patch-manager/publisher/<release>/<instance-hash>/`，含本机配方、独立密钥及事务备份；官方获取缓存默认在安装成功后删除。每个 Steam 库实例隔离，重启插件后安装和卸载记录仍可路由。设备上的签名只固定本机文件计划，不宣称逐游戏维护审核或运行兼容性；公开目录的签名、信任数据库与密钥不被修改。插件保持默认非 root 运行；非 ZIP 和需要执行安装程序的来源需另行处理。
+订阅源的通用安装状态位于 `~/.local/share/steam-patch-manager/installer/rust-v1/`，使用统一 schema、内容存储、任务与收据，不再复用 `publisher/<release>/<instance-hash>/` 旧布局；官方获取缓存默认在安装成功后删除。每个 Steam 库实例隔离，重启插件后安装记录仍可路由。设备上的签名只固定本机文件计划，不宣称逐游戏维护审核或运行兼容性；公开目录的签名、信任数据库与密钥不被修改。插件保持默认非 root 运行；非 ZIP 和需要执行安装程序的来源需另行处理。
 
 ## 构建
 
@@ -67,7 +67,7 @@ Linux：`sh scripts/build-linux.sh` 使用仓库内隔离工具链，测试核�
 
 ## 验证边界
 
-`python scripts/smoke-transaction.py BINARY` 在临时 Steam 库运行完整签名 → 计划 → 安装 → 托管检测 → 卸载 → 恢复闭环，保留存档。它是生产接口测试，不能替代真实游戏、Proton 或控制器验证。
+`scripts/smoke-transaction.py` 是 v3 之前协议（`protocol_version=1` 的 `plan_install` / `start_install` / `uninstall`）的开发冒烟工具；当前 v3 CLI 会以 `unsupported_protocol` / `unsupported_method` 拒绝这些调用，无法对现役 CLI 运行，已在 P6 收口后（2026-10-11）删除，当前不存在等价的 v3 冒烟工具。它历史上在临时 Steam 库运行完整签名 → 计划 → 安装 → 托管检测 → 卸载，并确认恢复队列为空、保留存档；带 `--interrupt` 时在逐文件复制中途杀死子进程，验证认证恢复为 `rolled_back`。这些冒烟覆盖不能替代真实游戏、Proton 或控制器验证；当前真实样本的生产检查在平台检查脚本（如 `scripts/run-windows-check.ps1` 及其 WSL 对照 `run-linux-check.sh`）与自动化测试套件中。
 
 默认不上传游戏库，不设置遥测。诊断与状态保存在本机；分享日志前应删除用户名、库路径与下载 URL 参数。安全安装拒绝链接、路径越界、危险 ZIP 成员、哈希错误和未知 build；同账户篡改完整 journal 与父目录 TOCTOU 的剩余风险见 install-design.md。
 

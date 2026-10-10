@@ -2,6 +2,8 @@
 
 施工记录：[progress.md](progress.md)。P0/P1 实现规范：[p0-p1-rust-design.md](p0-p1-rust-design.md)。P0 实机基线：[p0-baseline.md](p0-baseline.md)。P5 集成契约：[p5-decky-design.md](p5-decky-design.md)。状态：**P0–P6 已完成（迁移收口）；Rust 为唯一来源引擎，Windows 与 Decky 实机验证通过；安装器逻辑仍分端（后续独立 feature）**。日期：2026-10-08（Asia/Shanghai）。
 
+> 2026-10-11 P6 收口：与 [跨平台安装器迁移设计](../cross-platform-installer-migration/design.md) 收口对齐——安装器逻辑已迁入 Rust、两端共用单一生产策略；状态行中“安装器逻辑仍分端（后续独立 feature）”不再适用。本 feature 的当前兼容要求以本节各条修订为准。
+
 ## 1. 目标与交付范围
 
 将目前属于 Decky Python 宿主的来源配置、订阅、联网采集、候选发现、缓存和身份核对迁入共享 Rust 核心，由 Windows 与 Decky 使用同一份规则、结果模型和失败处理。以 Windows 中 AppID 2303800“妃神会秘史”能查询真实来源为首个产品验收点；同时让 Decky 切换后保留现有来源、逐游戏选择与安装入口。
@@ -16,6 +18,8 @@
 - 成功缓存、完整空结果、失败/partial 状态、检查点、强制刷新、失效规则和跨进程一致性。
 - 来源记录与候选 DTO、查源任务的增量结果、取消、上下文过期，以及 Windows/Decky 详情、列表筛选和订阅界面接入。
 - Decky 旧状态迁移和对现有 publisher/EXE 安装消费者的来源读取兼容接口。
+
+> 2026-10-11 P6 收口：上列“旧状态迁移”与安装消费者的来源读取兼容接口属 [跨平台安装器迁移设计](../cross-platform-installer-migration/design.md) §7.3 遗留清单第 6 行，由该节取代：消费者切换后不再保留旧状态迁移与安装适配读取接口。列表其余项继续有效，原文保留。
 
 ### 1.2 安装边界
 
@@ -73,6 +77,8 @@ flowchart LR
 
 首次迁移保持现有来源 ID、候选/记录 ID 算法和 publisher release ID 的可识别性；以跨语言 golden fixture 核对 Unicode 转义、排序、URL规范化及哈希输入。确需修改 ID 算法时必须有版本与经过身份验证的映射，不能让旧 receipt 失去路由。静态 catalog 的 match_status 仍维持原契约；新增 discovery/status 和来源匹配字段表达动态层，客户端用共享 DTO/helper 合并展示。
 
+> 2026-10-11 P6 收口：前两句（保持现有来源 ID/候选与记录 ID 算法、跨语言 golden 字节一致、旧 receipt 路由映射）被 [跨平台安装器迁移设计](../cross-platform-installer-migration/design.md) §5.1 取代：改用 Rust 确定性编码，不做旧 ID 映射，不再以与 Python 旧 golden 的字节/ID 相等作为验收。末尾关于静态 catalog match_status 与新增字段的说明继续有效。
+
 ### 4.2 查询名称与身份核对
 
 Rust 从可信本地实例读取 manifest name、非空 localized_name，按确定顺序去重。Decky appStore 名等前端提示沿用最多 3 个、每个 256 字符的上限，只能扩大查询线索，不能改变本地 AppID或直接授权安装。缓存键包含规范化后的实际查询名称集合；preferred_language 与 name_language 单独保存，不把默认名覆盖误当目标语言证据。
@@ -98,6 +104,8 @@ Windows 详情使用 displayPatches 展示候选、来源页、语言、本体/D
 ## 5. CLI 与任务接口（拟新增）
 
 保持 `protocol_version=2` 和原方法语义。新增方法经能力协商启用，未知请求仍严格拒绝；对不支持来源能力的旧核心，只走原扫描并明确“此版本未支持来源查询”，不伪装完整零结果。
+
+> 2026-10-11 P6 收口：本段被 [跨平台安装器迁移设计](../cross-platform-installer-migration/design.md) §6、§7.3 取代——协议基线升级为 `protocol_version=3`，不再保留“旧核心只走原扫描”的静态降级；P4 已完成，契约不匹配明确报错。原文保留为当时的拟新增接口。
 
 | 方法 | 关键参数 / 输出 |
 | --- | --- |
@@ -144,6 +152,8 @@ HTTPS证书校验、仅声明的page_hosts、受控跨源委托；拒绝URL凭�
 
 ### 6.3 一次性导入、双端状态与回退
 
+> 2026-10-11 P6 收口：本节“一次性导入、双端状态与回退”整体被 [跨平台安装器迁移设计](../cross-platform-installer-migration/design.md) §7.1(6)、§7.3 取代：单一 Rust 引擎，不再读取/导入 Python 旧来源状态，不做双向切换、共同快照或旧核心回退（第 4 项 Python 引擎回退、第 6 项 Windows 退回旧 CLI 均不再适用）。下列步骤保留为当时的迁移方案记录。
+
 1. Decky 从其现有用户state_dir导入；Windows使用自己的既有app_data_dir，不自动连接设备或复制设备游戏库。两端各自拥有订阅与缓存，“能力一致”不等于账号云同步。Windows无旧来源状态时初始化相同默认规则。
 2. 迁移前备份配置、来源缓存与manifest；新状态写入暂存目录并完整校验，原子发布后记录版本/完成标记。中断后可幂等恢复；不修改journal、trust、publisher、EXE收据、下载资产或安装实例ID。
 3. 同一宿主运行只选择一个来源引擎。开发影子对比只能读同一冻结fixture/缓存，输出到独立忽略目录；不得双写用户状态，不把两个引擎网络结果混合发布。
@@ -168,6 +178,8 @@ HTTPS证书校验、仅声明的page_hosts、受控跨源委托；拒绝URL凭�
 P0 → P1 → P2 → P3 → **P4 Windows验收** → P5 → P6。核心适配器通过后可独立完善共享展示契约；状态/ID冻结之前不得同时让多个实施者修改身份算法和旧安装接口。
 
 Python退场只删除已经迁入Rust的来源逻辑及HTML解析工作进程；EXE提取worker、平台降权、任务事件转发和已有安装消费者不会因“Rust迁移”一并移除。只有P6通过才把本feature标为迁移完成，不能仅以Windows找到一个来源结项。
+
+> 2026-10-11 P6 收口：上文“EXE 提取 worker…不会移除”系本 feature 当时范围；[跨平台安装器迁移设计](../cross-platform-installer-migration/design.md) §7.2 已将 publisher/exe_*/SF 的 Python 生产业务迁入 Rust 并从生产包移除，仅保留开发黄金工具（`scripts/sf9_*`、`scripts/sf95_*`）与历史 fixture 作对照、不进入生产包。P6 表行“清楚列出仍未迁移的安装器逻辑”随之收口，逐项清单见该设计 §7.3。
 
 ## 8. 验收矩阵
 
@@ -196,6 +208,9 @@ Python退场只删除已经迁入Rust的来源逻辑及HTML解析工作进程；
 ## 9. 关联、风险与后续
 
 - [来源适配器与订阅指南](../../source-adapters.md)、[总体架构](../../development-plan.md)：实施阶段更新为实际Rust入口；现在只添加迁移计划链接，不提前改写现状。
+
+> 2026-10-11 P6 收口：上条已完成——来源指南与总体架构已更新为实际 Rust 入口，本节迁移计划链接已建立。
+
 - [Kagura/HGamer](../kagura-hgamer-fallback/design.md)：迁移其已实现发现行为，保留历史施工事实。
 - [本地化游戏名](../localized-game-names/design.md)：名称输入依赖；[扫描状态锁修复](../windows-scan-state-lock/design.md)：独立状态锁回归基线。
 - [通用EXE安装](../generic-exe-installation/design.md)、[精简安装流程](../simplified-install-flow/design.md)：安装能力消费者，保留candidate/release、出处和旧记录契约。

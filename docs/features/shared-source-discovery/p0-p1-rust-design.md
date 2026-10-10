@@ -450,6 +450,8 @@ pub const DEFAULT_RULES_JSON: &str = include_str!("../resources/sources.json");
     └── discovery/<id>/<appid>.json  discovery-index/<id>.json
 ```
 
+> 2026-10-11 P6 收口：树中 `engine-switch.json`、`conflicts/<seq>.json` 属双引擎切换残留，已被 [跨平台安装器迁移设计](../cross-platform-installer-migration/design.md) §7.3 第 2 行取代：单一 Rust 引擎不再读写这些文件。原文保留为 P1 冻结契约记录。
+
 - **不复用 `journal.lock`**：来源子系统用独立 `rust-v1/settings.lock`；网络期间不持任何锁，避免 Windows 扫描文件占用回归。
 - `sources/` 与 `rust-v1/` 均做链接/reparse 检查（Windows `FILE_ATTRIBUTE_REPARSE_POINT=0x400`），风格沿用 `catalog.rs::linked` / `download.rs::no_link`。
 
@@ -511,6 +513,8 @@ pub fn bump_revision(&self) -> Result<u64>;                                     
 ```
 
 **每次切换**（非仅首次）记录 `active_engine`、`switch_seq`、双方摘要/版本、上次共同快照。重入：暂停 Python 任务 → 重读 Python overrides 与摘要 → 仅导入相对 `last_common` 变化的字段（含显式关闭/删除），未变字段保留 Rust 值 → 双方同字段/同 id 各自改动则留存 `conflicts/<seq>.json` 并报告，**禁止按墙钟静默覆盖** → 成功则原子发布设置 + `bump_revision` + 更新 `last_common`/`switch_seq+1`；失败继续原引擎，不删 Rust 状态、不覆写旧 cache。Rust→Python 回退前单独导出 Rust 设置并验证旧格式映射。
+
+> 2026-10-11 P6 收口：本节 §4.6 双引擎切换检查点（`engine-switch.json` schema、每次切换摘要、冲突留存、Rust→Python 回退）整体被 [跨平台安装器迁移设计](../cross-platform-installer-migration/design.md) §7.3 第 2 行取代：单一 Rust 引擎，无引擎选择/切换/共同快照/旧引擎回退。原文保留为 P1 冻结契约记录。
 
 ## 5. ID / TTL / 限制 golden
 
@@ -601,6 +605,8 @@ fixture 内含完整 payload 字符串与 canonical_url 期望，Rust 单测逐�
 - **R14**：`observed_at` 用 `String`（ISO8601）。
 - **R15**：`list_sources.status` 优先级：diagnostics > status 文件 > 默认 `cached`/`not_refreshed`。
 - **R16**：双引擎快照口径由 `engine-switch.json` + `conflicts/<seq>.json` 冻结。
+
+> 2026-10-11 P6 收口：R16 已被 [跨平台安装器迁移设计](../cross-platform-installer-migration/design.md) §7.3 第 2 行取代——不再有双引擎快照；其余风险项继续有效。原文保留为 P1 冻结契约记录。
 
 ## 8. 依赖锁定
 

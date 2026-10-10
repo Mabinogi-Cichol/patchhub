@@ -1,5 +1,13 @@
 # 开发进度
 
+## 2026-10-11：跨平台安装器迁移 P6 收口
+
+- 删除已迁入 Rust 的 Decky Python 安装器/来源遗留 20 个文件（publisher、exe_generic/exe_profiles/exe_facts/exe_installation/exe_worker、acquisition、caches、source_primitives、exe_profiles.json 及 10 个测试），以及 Rust 死接口（EngineSwitch 双引擎模型、旧来源策略 API、旧 RPC `migrate_state`、无用途 `--record-id`、Windows 旧核心降级 UI）；§7.3 六项来源兼容遗留逐项核对完成。
+- 双端完整矩阵：Windows 389 passed / 6 ignored（另宿主 23、Decky 70、脚本 CI 套件全绿）；WSL2 393 passed / 6 ignored、worker 17；SBOM 744 组件。
+- 两端产物重建：Windows 便携包 8,528,236 B `d9674384…`；Decky 包 6,838,259 B `b65b55ea…`（backend 恰为 6 模块 allowlist，ELF/runtime 哈希一致）。
+- 独立 oracle 门禁复核：有条件通过，必修/建议已闭环。Deck 正式部署复验通过（正式包 `eeda0201…`，21 文件哈希一致、实例 1、HTTP bundle 与 scan 正常，游戏无写入）。详见 [功能施工记录](features/cross-platform-installer-migration/progress.md) 与 [P6 复核](features/cross-platform-installer-migration/p6-gate-review.md)。
+- Deck 正式重部署未重做（生产行为无变化）；未创建 Git 提交。
+
 ## 2026-10-04：安装后下载缓存清理
 
 - 新增安装成功后自动删除本次下载 ZIP 缓存的流程，覆盖 publisher 的 `publisher/<release>/<instance-hash>/cache/archive.zip`（含 `download.json`）与核心 `downloads/<sha256>.zip`；依据“推导缓存路径 + `no_links` + 归属校验”判定，不触碰 `~/Downloads` 用户 ZIP、非摘要命名文件、事务备份与暂存。取消 / 回滚 / `needs_recovery` 保留缓存。

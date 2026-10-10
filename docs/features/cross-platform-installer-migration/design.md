@@ -1,6 +1,6 @@
 # 跨平台安装器迁移
 
-日期：2026-10-08（Asia/Shanghai，2026-10-10 更新状态）。状态：**P1/P3 已实现并通过各自验证；P2 主体与可得真实样本通过，三旧 profile 待验；P4 Windows 按调整后验收范围完成，2303800 EXE 与 2743810 ZIP 真安装及两款游戏内确认、最终自动化、恢复/历史 RPC、便携包校验通过；用户已取消断网实测要求，该项未执行；P5 已实现/正式部署并验收完成，ZIP/EXE 真安装、写入回滚及用户实体手柄/两款游戏内确认通过；P6 待执行；更早 Windows 版本未覆盖**。
+日期：2026-10-08（Asia/Shanghai，2026-10-11 更新状态）。状态：**P1/P3 已实现并通过各自验证；P2 主体与可得真实样本通过，三旧 profile 待验；P4 Windows 按调整后验收范围完成，2303800 EXE 与 2743810 ZIP 真安装及两款游戏内确认、最终自动化、恢复/历史 RPC、便携包校验通过；用户已取消断网实测要求，该项未执行；P5 已实现/正式部署并验收完成，ZIP/EXE 真安装、写入回滚及用户实体手柄/两款游戏内确认通过；P6 已收口：生产 Python 安装器与遗留接口删除、§7.3 六项逐项核对、双端完整矩阵与产物重建、独立复核闭环、Deck 正式部署复验通过（[P6 复核](p6-gate-review.md)）；更早 Windows 版本未覆盖**。
 
 2026-10-10 运行问题修订：**代码主体已实现、整合与实机待验**，见 [fix-plan.md](fix-plan.md)、[fix-gate-review.md](fix-gate-review.md)。覆盖安装、ZIP 资源与 YPF 映射的最新目标以第 10 节为准；P5 历史验收范围保留。
 
@@ -73,6 +73,8 @@ EXE 行为分析属于共享 Rust 后端，但在隔离的固定 Rust worker 进
 | [CLI runtime](../../../crates/cli/src/runtime.rs) | 协议 v2 签名 ZIP 一站式安装与 sources 方法 | 新动态路由/能力/任务/历史，候选不冒充签名 release |
 | [Decky tasks](../../../apps/decky/backend/tasks.py)、[main](../../../apps/decky/main.py) | 前台租约、任务历史、安装路由和事件投影 | 宿主随新协议更新，业务编排归核心，不保留旧 RPC 兼容层 |
 | [Windows 宿主](../../../apps/windows/src-tauri/src/main.rs)、[页面](../../../apps/windows/src/main.tsx) | 签名 ZIP 安装与来源展示，动态候选尚不启用安装 | 动态能力/任务/结果接入，删除过期逐版本审核提示 |
+
+> 2026-10-11 P6 收口注：本表所列 Python 安装链路（publisher.py、exe_generic.py、exe_profiles.py、exe_facts.py、exe_installation.py、exe_worker.py 及其测试）已在 P6 删除，以上链接保留为迁移基线历史；当前实现以共享 Rust 核心为准（见 [施工记录](progress.md) 与 [P6 复核](p6-gate-review.md)）。
 
 前序来源迁移 P0–P6 已完成，沿用其证据，不重跑验收。2026-10-08 Decky 并发读日志/旧结果复播修复已完成自动化、隔离设备验证及正式部署，RPC/真实页面通过，实体手柄待验收；本期保留该修复，不能重现 `installer_busy` 误报或历史弹窗。通用 EXE 既有四款本地验收仅作为语义/恢复基线，不视为 Rust 移植或 Windows 隔离验收。
 
@@ -197,7 +199,7 @@ scan/list_transactions 使用一致只读快照或短时协调，保留 2026-10-
 
 ### 7.3 共享来源兼容遗留清单（全部待清理）
 
-下表来自 2026-10-08 对实际代码与调用者的只读检查，不表示已修改或通过回归。P0 冻结替代契约，实施中按消费者依赖删除，P6 逐项核对源码、调用链与两端生产包。
+下表来自 2026-10-08 对实际代码与调用者的只读检查，不表示已修改或通过回归。P0 冻结替代契约，实施中按消费者依赖删除；P6 已逐项核对源码、调用链与两端生产包（结果见 [施工记录](progress.md) 与 [P6 复核](p6-gate-review.md)，六行均已清理）。
 
 | 遗留与当前入口 | 清理要求 | 时机与门槛 |
 | --- | --- | --- |
@@ -224,7 +226,7 @@ scan/list_transactions 使用一致只读快照或短时协调，保留 2026-10-
 | worker | 当前 3 GiB 地址空间/CPU 300 秒；通用分析 240 秒、转换 480 秒；无旧 profile 专用转换分支，Windows 等价内存计量待冻结 |
 | 授权/空间 | TTL ≤900 秒；实例唯一写入/受限 worker 并发；state/target 同卷合并预算，含转换、stage 与原文件恢复副本 |
 
-P0 → P1 → P2 → P3 → **P4 Windows 真实验收** → P5 Decky 切换 → P6 收口。各阶段实际状态以[施工记录](progress.md)为准；P1已实现，P2主体已实现/三旧profile待验，P3已实现并通过双平台自动化与隔离对照（独立复核修复归档 [p3-gate-review.md](p3-gate-review.md)），P4 宿主/前端与 core 收口已实现并通过自动化与独立复核（[复核归档](p4-gate-review.md)、[实施记录](p4-windows.md)），2303800 EXE 与 2743810 ZIP 真安装/游戏内确认及恢复 RPC 通过，P4 按调整后验收范围完成（2026-10-10 用户取消断网实测；[收尾验收](p4-acceptance.md)）；P5 已实现/正式部署并验收完成，ZIP/EXE真安装与写入回滚通过，用户确认实体手柄与两款游戏内生效；分项证据见 [p5-decky.md](p5-decky.md)；P6 待实现：
+P0 → P1 → P2 → P3 → **P4 Windows 真实验收** → P5 Decky 切换 → P6 收口。各阶段实际状态以[施工记录](progress.md)为准；P1已实现，P2主体已实现/三旧profile待验，P3已实现并通过双平台自动化与隔离对照（独立复核修复归档 [p3-gate-review.md](p3-gate-review.md)），P4 宿主/前端与 core 收口已实现并通过自动化与独立复核（[复核归档](p4-gate-review.md)、[实施记录](p4-windows.md)），2303800 EXE 与 2743810 ZIP 真安装/游戏内确认及恢复 RPC 通过，P4 按调整后验收范围完成（2026-10-10 用户取消断网实测；[收尾验收](p4-acceptance.md)）；P5 已实现/正式部署并验收完成，ZIP/EXE真安装与写入回滚通过，用户确认实体手柄与两款游戏内生效；分项证据见 [p5-decky.md](p5-decky.md)；P6 已收口（生产 Python 安装器/遗留接口删除、双端产物重建与完整矩阵、独立复核闭环；[P6 复核](p6-gate-review.md)）：
 
 | 阶段 | 交付 | 放行门槛 |
 | --- | --- | --- |
@@ -240,7 +242,7 @@ P0 → P1 → P2 → P3 → **P4 Windows 真实验收** → P5 Decky 切换 → 
 
 ### 9.1 离线与自动化
 
-- 黄金对照语义覆盖/IR、ZIP 映射/载荷、条件/错误/终态；新 ID 验证 Rust 确定性和跨平台一致，不要求与 Python 旧 ID 相等。参考 [publisher 测试](../../../apps/decky/backend/test_publisher.py)、[通用 EXE 测试](../../../apps/decky/backend/test_exe_generic.py)、[安装测试](../../../apps/decky/backend/test_exe_installation.py)、[worker 测试](../../../apps/decky/backend/test_exe_worker.py)、[SF 行为测试](../../../scripts/test_sf9_behavior.py)、[Rust install 测试](../../../crates/core/tests/install.rs)。不比较设备路径/时钟，不执行安装器。
+- 黄金对照语义覆盖/IR、ZIP 映射/载荷、条件/错误/终态；新 ID 验证 Rust 确定性和跨平台一致，不要求与 Python 旧 ID 相等。参考 [publisher 测试](../../../apps/decky/backend/test_publisher.py)、[通用 EXE 测试](../../../apps/decky/backend/test_exe_generic.py)、[安装测试](../../../apps/decky/backend/test_exe_installation.py)、[worker 测试](../../../apps/decky/backend/test_exe_worker.py)、[SF 行为测试](../../../scripts/test_sf9_behavior.py)、[Rust install 测试](../../../crates/core/tests/install.rs)（P6 注：publisher/通用 EXE/安装/worker 的 Python 测试已随实现删除；SF 行为与 Rust install 测试保留）。不比较设备路径/时钟，不执行安装器。
 - AppID/语言/DLC/来源冲突与未知、过期/退订/规则变化、同 URL 或镜像不同字节；HGamer、UI 任意 URL/recipe/report 不取得写权限。
 - SF 未知版本/对象/include/动作、恶意 PE/framing、解压/AST/深度/时限、同清单不同事件、任意合法文件名/CRC 泛化；各版本布局分别验证。
 - ZIP 穿越、Windows 保留名/ADS/reparse、Linux symlink、大小写/Unicode/目录冲突、XP3 歧义、CRC/长度/摘要篡改、写入前目标变化、存档/非拥有目标保护。

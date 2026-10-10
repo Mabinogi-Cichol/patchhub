@@ -1,12 +1,12 @@
 # 源适配器与订阅
 
-来源能力已迁入共享 Rust 核心并作为唯一来源引擎（P0–P5，已在 Windows 与 Decky 实机验证）：[设计](features/shared-source-discovery/design.md)、[施工记录](features/shared-source-discovery/progress.md)、[P0 基线](features/shared-source-discovery/p0-baseline.md)、[P5 契约](features/shared-source-discovery/p5-decky-design.md)。下文描述现行 Rust 入口与用户可见行为。
+来源能力已迁入共享 Rust 核心并作为单一来源引擎（P0–P5 已在 Windows 与 Decky 实机验证，P6 收口）：[设计](features/shared-source-discovery/design.md)、[施工记录](features/shared-source-discovery/progress.md)、[P0 基线](features/shared-source-discovery/p0-baseline.md)、[P5 契约](features/shared-source-discovery/p5-decky-design.md)。下文描述现行 Rust 入口与用户可见行为。
 
 工具订阅网站，不订阅固定的游戏清单。Decky 扫描先读取成功缓存，选择游戏后按需查询启用的网站。只有具备 ZIP 安装能力的记录能进入共同的根目录安装流程；发现候选单独提供来源引导。
 
 ## 配置和状态
 
-默认订阅由核心内置 `crates/core/resources/sources.json`（编译进 CLI，单一来源）。用户启用状态、新增源与逐游戏订阅写入核心命名空间 `~/.local/share/steam-patch-manager/sources/rust-v1/`（`settings.json`）；成功查询结果缓存到其 `cache/`。首次切换会把旧 `sources/overrides.json` 一次性导入 `rust-v1`（旧 Python 文件保留、不双写）。缓存只来自运行时成功查询，不附带当前游戏列表。显式刷新更新旧 ZIP 来源，游戏详情中的“重新查找 / 查看更多来源”更新该游戏发现记录；查询失败保留上次成功缓存并标明状态，结构失效不会覆盖有效缓存。停用源不会删除安装事务、备份或卸载能力。
+默认订阅由核心内置 `crates/core/resources/sources.json`（编译进 CLI，单一来源）。用户启用状态、新增源与逐游戏订阅写入核心命名空间 `~/.local/share/steam-patch-manager/sources/rust-v1/`（`settings.json`）；成功查询结果缓存到其 `cache/`。P1 已删除 Python 状态导入，首次初始化直接写入 Rust 默认状态；旧 `sources/overrides.json` 存在、损坏或缺失均不被读取（见[跨平台安装器迁移](features/cross-platform-installer-migration/design.md) §7.3）。缓存只来自运行时成功查询，不附带当前游戏列表。显式刷新更新旧 ZIP 来源，游戏详情中的“重新查找 / 查看更多来源”更新该游戏发现记录；查询失败保留上次成功缓存并标明状态，结构失效不会覆盖有效缓存。停用源不会删除安装事务、备份或卸载能力。
 
 patch.moe 专用适配器在已确认年龄的官方入口获取页面，读取官网语言表单的实际参数并提交，然后解析标题、日期、下载链接。只用完整标题、明确双语标题或实际相同 ZIP 地址关联的别名匹配；不按排列位置猜测，也不由英文文件名拼接中文链接。`+` 与普通版有区别。已公布但尚未发行的条目不能准备安装。非 ZIP 需要另行适配，当前不会执行网页或包内安装程序。
 
