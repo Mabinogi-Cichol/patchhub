@@ -21,7 +21,6 @@ export type Patch = {
 };
 
 export type Install = {
-  preexisting_installation?: boolean;
   game: {
     instance_id: string;
     appid: number;
@@ -148,9 +147,8 @@ export function canAutoInstall(patch: Patch): boolean {
 }
 
 export function installSummary(row: Install, scanning = false): string {
-  if (row.preexisting_installation) return "已有补丁，需检查";
   if (row.patches.some(p => isManaged(p.detection.status) || isExternal(p.detection.status))) return "已安装补丁";
-  if (row.patches.some(p => p.reinstall_available && ["partial", "conflict", "partial_or_conflict", "needs_revalidation"].includes(p.detection.status))) return "补丁文件不完整，需重新安装";
+  if (row.patches.some(p => p.reinstall_available && ["partial", "conflict", "partial_or_conflict", "needs_revalidation"].includes(p.detection.status))) return "补丁文件不完整，可覆盖安装";
   if (row.patches.some(canAutoInstall)) return "有可用补丁";
   if (row.patches.length || row.discovery?.candidates.some(candidateMatched)) return "找到补丁来源";
   if (["failed", "source_refresh_failed", "source_offline_cached"].includes(row.discovery?.status ?? "")) return "来源查询失败";
@@ -215,7 +213,6 @@ export function isExternal(status: string): boolean {
 }
 
 export function needsAttention(row: Install): boolean {
-  if (row.preexisting_installation) return true;
   return row.game.availability !== "installed" || row.patches.some(p =>
     p.blockers.length > 0 || ["partial", "conflict", "partial_or_conflict", "needs_revalidation"].includes(p.detection.status)
     || (p.detection.status === "unknown" && p.support_level !== "discover_only")
@@ -376,12 +373,14 @@ export function reason(code: string): string {
     plan_has_blockers: "安装计划存在阻止条件，请先处理列出的问题。",
     game_closed_confirmation_required: "请关闭游戏并暂停 Steam 更新后确认。",
     game_changed_or_unavailable: "游戏版本或库状态已变化，请重新扫描和预检。",
-    preexisting_installation_requires_review: "已有补丁内容尚未核验，已阻止覆盖；请先检查现有安装。",
-  preexisting_protection_invalid: "已有安装保护记录损坏，已停止安装。",
-  installer_busy: "另一项安装或恢复正在执行，请等待完成。",
+    installer_busy: "另一项安装或恢复正在执行，请等待完成。",
     game_busy: "此游戏正在被另一项事务处理，请等待完成。",
-    insufficient_space: "可用磁盘空间不足，请清理空间后重新预检。",
-    managed_install_exists_or_needs_recovery: "已有托管安装或待恢复事务，请先卸载或恢复。",
+    insufficient_space: "安装所需磁盘空间不足；请查看所需、可用空间与对应磁盘，清理后重试。",
+    resource_limit: "ZIP 目录或安装计划的元数据超出当前资源预算，请检查压缩包结构。",
+    zip_metadata_invalid: "ZIP 目录信息无效，请检查补丁文件是否完整。",
+    download_size_overflow: "补丁文件尺寸超出系统可表示范围，无法安全下载。",
+    zip_size_overflow: "ZIP 文件尺寸超出系统可表示范围，无法安全安装。",
+    managed_install_exists_or_needs_recovery: "已有托管安装或待恢复事务；请先恢复未完成事务，或使用覆盖安装。",
     artifact_hash_mismatch: "安装包与已审核记录不符，请重新核对下载包。",
     artifact_size_mismatch: "安装包大小与已审核记录不符，请确认下载完整。",
     state_overlaps_game: "状态目录与游戏目录重叠，已阻止写入。",

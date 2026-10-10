@@ -36,7 +36,7 @@ use uuid::Uuid;
 /// carried separately in [`PolicyVersions`]).
 pub const AUTHORIZATION_SCHEMA_VERSION: u32 = 1;
 /// Maximum serialized authorization size (design §5.2; matches `MAX_POLICY`).
-pub const MAX_AUTHORIZATION_BYTES: u64 = 4 * 1024 * 1024;
+pub const MAX_AUTHORIZATION_BYTES: u64 = crate::zip_metadata::MAX_METADATA_BYTES;
 
 /// Independent adapter/policy/report and selection/content versions
 /// (p0-contracts §0/§2.3; not part of `content_id`).
@@ -54,7 +54,7 @@ impl Default for PolicyVersions {
     fn default() -> Self {
         Self {
             adapter_version: 1,
-            policy_schema_version: 1,
+            policy_schema_version: 2,
             report_schema_version: 1,
             selection_version: 1,
             content_version: 1,

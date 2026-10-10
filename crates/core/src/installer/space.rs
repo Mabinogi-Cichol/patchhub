@@ -213,3 +213,107 @@ mod tests {
         assert!(b.inspect(t.path(), t.path()).is_err());
     }
 }
+
+/// Peak extra bytes for ZIP stage, backup, target temporary files and rollback.
+/// The downloaded ZIP already exists when this budget is checked.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ZipSpaceBudget {
+    pub payload_bytes: u64,
+    pub original_bytes: u64,
+    pub staged: bool,
+}
+impl ZipSpaceBudget {
+    pub fn for_stage(payload_bytes: u64, original_bytes: u64) -> Result<Self> {
+        let budget = Self {
+            payload_bytes,
+            original_bytes,
+            staged: false,
+        };
+        budget.required(false)?;
+        Ok(budget)
+    }
+    pub fn after_staging(&self) -> Self {
+        Self {
+            staged: true,
+            ..self.clone()
+        }
+    }
+    pub fn required(&self, same_volume: bool) -> Result<(u64, u64)> {
+        let add = |a: u64, b: u64| a.checked_add(b).ok_or_else(|| invalid("space_overflow"));
+        let state = add(
+            add(
+                if self.staged { 0 } else { self.payload_bytes },
+                self.original_bytes,
+            )?,
+            SPACE_MARGIN_BYTES,
+        )?;
+        // Payload scratch during writes and original scratch during restoration.
+        let target = add(
+            add(self.payload_bytes, self.original_bytes)?,
+            SPACE_MARGIN_BYTES,
+        )?;
+        if same_volume {
+            let total = add(state, target)?;
+            Ok((total, total))
+        } else {
+            Ok((state, target))
+        }
+    }
+    pub fn check_available(
+        &self,
+        state_free: u64,
+        target_free: u64,
+        same_volume: bool,
+    ) -> Result<()> {
+        let (state_need, target_need) = self.required(same_volume)?;
+        for (name, need, available) in [
+            ("state", state_need, state_free),
+            ("target", target_need, target_free),
+        ] {
+            if need > available {
+                return Err(invalid(format!(
+                    "insufficient_space:{name}:required={need}:available={available}"
+                )));
+            }
+        }
+        Ok(())
+    }
+    pub fn inspect(&self, state_path: &Path, target_path: &Path) -> Result<()> {
+        let state = inspect_volume(state_path)?;
+        let target = inspect_volume(target_path)?;
+        self.check_available(
+            state.available_bytes,
+            target.available_bytes,
+            state.volume_id == target.volume_id,
+        )
+    }
+}
+
+#[cfg(test)]
+mod zip_budget_tests {
+    use super::*;
+    #[test]
+    fn zip_budget_tracks_same_and_different_volumes_and_consumed_stage() {
+        let payload = 6_073_754_660;
+        let original = 123;
+        let budget = ZipSpaceBudget::for_stage(payload, original).unwrap();
+        let (state, target) = budget.required(false).unwrap();
+        assert_eq!(state, payload + original + SPACE_MARGIN_BYTES);
+        assert_eq!(
+            budget.required(true).unwrap(),
+            (state + target, state + target)
+        );
+        assert!(budget.check_available(state, target, false).is_ok());
+        assert!(budget
+            .check_available(state, target, true)
+            .unwrap_err()
+            .to_string()
+            .starts_with("insufficient_space:state:"));
+        assert_eq!(
+            budget.after_staging().required(false).unwrap().0,
+            original + SPACE_MARGIN_BYTES
+        );
+        assert!(ZipSpaceBudget::for_stage(u64::MAX, 1).is_err());
+    }
+}

@@ -988,7 +988,7 @@ fn build_install_request(
             return Err("invalid_id".into());
         }
     }
-    if !matches!(operation, "install" | "reinstall") {
+    if !matches!(operation, "install" | "reinstall" | "overwrite") {
         return Err("invalid_operation".into());
     }
     if !valid_request_id(request_id) {
@@ -1637,6 +1637,19 @@ mod tests {
         assert_eq!(dynamic["params"]["selection_id"], "zip-selection-abc");
         assert_eq!(dynamic["params"]["operation"], "reinstall");
         assert!(dynamic["params"].get("release_id").is_none());
+
+        let overwrite = build_install_request(
+            "inst-1",
+            None,
+            Some("exe-selection-abc"),
+            "overwrite",
+            "req-3",
+            None,
+            common(),
+        )
+        .unwrap();
+        assert_eq!(overwrite["params"]["operation"], "overwrite");
+        assert_eq!(overwrite["params"]["request_id"], "req-3");
     }
 
     #[test]

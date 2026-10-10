@@ -25,7 +25,7 @@ test("summary prefers installed and available over source guidance", () => {
   assert.equal(installSummary(row([{ ...available, compatibility: "check_required", source_id: "hgamer" }])), "找到补丁来源");
   assert.equal(installSummary(row([{ ...available, compatibility: "check_required", blockers: ["build_not_verified"] }])), "找到补丁来源");
   assert.equal(installSummary(row([{ ...available, detection: { status: "managed", files: [] } }])), "已安装补丁");
-  assert.equal(installSummary(row([{ ...available, reinstall_available: true, detection: { status: "partial", files: [] } }])), "补丁文件不完整，需重新安装");
+  assert.equal(installSummary(row([{ ...available, reinstall_available: true, detection: { status: "partial", files: [] } }])), "补丁文件不完整，可覆盖安装");
   assert.equal(installSummary(row([]), true), "正在查找补丁");
   assert.equal(installSummary({ ...row([]), discovery: { status: "source_refresh_failed", candidates: [], diagnostics: [] } }), "来源查询失败");
   assert.equal(installSummary({ ...row([]), discovery: { status: "cache_partial", candidates: [], diagnostics: [] } }), "来源查询不完整");

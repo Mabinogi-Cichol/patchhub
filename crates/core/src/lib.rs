@@ -11,3 +11,5 @@ pub mod sources;
 pub mod steam;
 mod steam_metadata;
 pub mod trust;
+
+pub mod zip_metadata;

@@ -471,7 +471,7 @@ function App() {
   function chooseArchive() {
     void run("正在选择 ZIP 文件…", () => invoke<string | null>("choose_archive"), value => setArchive(value));
   }
-  async function startInstall(operation: "install" | "reinstall") {
+  async function startInstall(operation: "install" | "reinstall" | "overwrite", wasInstalled: boolean) {
     if (!selected || !patch || installing || busy) return;
     const selectedArchive = archive ?? "";
     const identity = patch.selection_id ?? patch.release_id;
@@ -489,7 +489,9 @@ function App() {
         // `archive` only applies to the signature release route.
         archive: patch.support_level === "managed_zip" ? archive ?? undefined : undefined,
       });
-      const message = tx.state === "committed" && operation === "reinstall" ? "重新安装完成" : transactionResult(tx);
+      const message = tx.state === "committed"
+        ? (wasInstalled ? "覆盖安装完成" : "安装完成")
+        : transactionResult(tx);
       requestIds.current.delete(key);
       setInstalling(false); setJob(null); setBusy(null);
       await refresh();
@@ -515,7 +517,7 @@ function App() {
   }
 
   const stageLabels: Record<string, string> = {
-    connecting: "正在连接", downloading: "下载补丁", validating: "校验文件", analyzing_installer: "分析安装包",
+    connecting: "正在连接", downloading: "下载补丁", validating: "检查已下载补丁", analyzing_installer: "分析安装包",
     extracting: "提取文件", planning: "检查安装条件", applying: "写入文件", rolling_back: "恢复原文件",
     cleanup: "清理临时文件",
   };
@@ -550,14 +552,14 @@ function App() {
           const dynamic = current.support_level === "publisher_zip" || current.support_level === "publisher_exe";
           const installRoute = ["managed_zip", "publisher_zip", "publisher_exe"].includes(current.support_level);
           const installed = current.reinstall_available === true || isManaged(current.detection.status) || isExternal(current.detection.status);
-          const operation = installed ? "reinstall" : "install";
+          const operation = "overwrite";
           const auto = canAutoInstall(current);
           const allowed = auto || (!!archive && current.support_level === "managed_zip");
           const link = current.support_level === "publisher_exe" ? links?.exe : current.support_level === "publisher_zip" ? links?.zip : null;
           const linkBlockers = (link && link.available === false ? link.blockers ?? [] : []).filter(b => !current.blockers.includes(b.code));
           return <>
             <section className="card"><h3>{current.name}</h3><div className="facts"><div><label>检测状态</label><strong>{patchState(current.detection.status)}</strong></div><div><label>来源能力</label><strong>{workflowState(current.support_level)}</strong></div><div><label>兼容性</label><strong>{workflowState(current.compatibility)}</strong></div><div><label>游戏版本</label><strong>{game.game.buildid ?? "未知，需审核"}</strong></div></div><p>补丁标识：{current.selection_id ?? current.release_id}</p><button onClick={() => openUrl(current.source_page)}>在外部浏览器打开官方来源 ↗</button>{current.support_level === "publisher_exe" && <p className="hint">安装时自动检查条件；下载后会先分析安装包，条件不满足不会写入文件。</p>}{current.support_level === "publisher_zip" && !auto && current.blockers.length === 0 && <p className="hint">此动态 ZIP 补丁的下载链路当前不可用，安装前请先解决下方问题。</p>}{current.blockers.map((b, i) => <p className="warning" key={i}>{reason(b)}</p>)}{linkBlockers.map((b, i) => <p className="warning" key={`link-${i}`}>{reason(b.code)}{b.detail ? ` · ${b.detail}` : ""}</p>)}{isExternal(current.detection.status) && <p className="warning">检测到外部安装；没有本工具的原版备份，不能由此卸载。</p>}{dynamic && auto && <p className="hint">可自动安装；点击安装后会从来源下载并核对内容后写入。</p>}</section>
-            {installRoute && <section className="card"><h3>安装与预览</h3><p>{current.support_level === "managed_zip" ? "安装将直接提交审核 ZIP 的文件变更；查看文件变更仅供只读核对。" : "安装会从来源下载并检查补丁，核对通过后写入游戏文件；查看文件变更仅供只读核对。"}</p><div className="actions"><button onClick={viewPreview} disabled={!!busy}>查看文件变更（只读）</button>{!auto && current.support_level === "managed_zip" && <button onClick={chooseArchive} disabled={!!busy}>导入本地 ZIP</button>}{allowed && <button className="primary" onClick={() => void startInstall(operation)} disabled={!!busy || installing}>{installed ? "重新安装补丁" : "安装补丁"}</button>}</div>{archive && <p className="path">已选择：{archive}</p>}{preview && <ChangeList title="只读文件变更" value={preview} />}</section>}
+            {installRoute && <section className="card"><h3>安装与预览</h3><p>{current.support_level === "managed_zip" ? "安装将直接提交审核 ZIP 的文件变更；查看文件变更仅供只读核对。" : "安装会从来源下载并检查补丁，核对通过后写入游戏文件；查看文件变更仅供只读核对。"}</p><div className="actions"><button onClick={viewPreview} disabled={!!busy}>查看文件变更（只读）</button>{!auto && current.support_level === "managed_zip" && <button onClick={chooseArchive} disabled={!!busy}>导入本地 ZIP</button>}{allowed && <button className="primary" onClick={() => void startInstall(operation, installed)} disabled={!!busy || installing}>{installed ? "覆盖安装补丁" : "安装补丁"}</button>}</div>{archive && <p className="path">已选择：{archive}</p>}{preview && <ChangeList title="只读文件变更" value={preview} />}</section>}
           </>;
         })()}
         {entry?.kind === "discovery" && <CandidateCard candidate={entry.candidate} onOpen={openUrl} />}

@@ -9,7 +9,7 @@ use std::{
     time::Duration,
 };
 
-const MAX_DOWNLOAD_BYTES: u64 = 8 * 1024 * 1024 * 1024;
+const DOWNLOAD_RESERVE_BYTES: u64 = 8 * 1024 * 1024;
 fn invalid(code: &str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, code)
 }
@@ -17,7 +17,6 @@ fn invalid(code: &str) -> io::Error {
 pub fn validate_artifact(artifact: &Artifact) -> io::Result<()> {
     approved_url(&artifact.url, artifact)?;
     if artifact.size == 0
-        || artifact.size > MAX_DOWNLOAD_BYTES
         || artifact.sha256.len() != 64
         || !artifact
             .sha256
@@ -95,7 +94,7 @@ fn copy_verified(
 ) -> io::Result<()> {
     let mut hasher = Sha256::new();
     let mut buffer = [0_u8; 65536];
-    let mut total = 0;
+    let mut total = 0u64;
     let mut magic = Vec::new();
     loop {
         crate::operation::check()?;
@@ -106,7 +105,9 @@ fn copy_verified(
         if count == 0 {
             break;
         }
-        total += count as u64;
+        total = total
+            .checked_add(count as u64)
+            .ok_or_else(|| invalid("download_size_overflow"))?;
         if total > artifact.size {
             return Err(invalid("download_size_mismatch"));
         }
@@ -126,6 +127,19 @@ fn copy_verified(
     }
     if format!("{:x}", hasher.finalize()) != artifact.sha256 {
         return Err(invalid("download_hash_mismatch"));
+    }
+    Ok(())
+}
+
+fn check_download_space(cache: &Path, bytes: u64) -> io::Result<()> {
+    let available = fs2::available_space(cache)?;
+    let required = bytes
+        .checked_add(DOWNLOAD_RESERVE_BYTES)
+        .ok_or_else(|| invalid("download_size_overflow"))?;
+    if available < required {
+        return Err(invalid(&format!(
+            "insufficient_space:state:required={required}:available={available}"
+        )));
     }
     Ok(())
 }
@@ -205,6 +219,7 @@ pub fn fetch(
             break;
         }
         let mut response = response.ok_or_else(|| invalid("too_many_redirects"))?;
+        check_download_space(&cache, artifact.size)?;
         let mut file = OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -248,6 +263,19 @@ mod tests {
             allowed_redirect_hosts: vec!["cdn.example".into()],
         }
     }
+    #[test]
+    fn large_signed_zip_is_valid_but_disk_space_is_checked() {
+        let mut signed = artifact(b"PK\x03\x04data");
+        signed.size = 8 * 1024 * 1024 * 1024 + 1;
+        validate_artifact(&signed).unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let available = fs2::available_space(temp.path()).unwrap();
+        assert!(check_download_space(temp.path(), available)
+            .unwrap_err()
+            .to_string()
+            .starts_with("insufficient_space:state:"));
+    }
+
     #[test]
     fn https_and_redirect_policy_reject_credentials_local_and_unapproved_hosts() {
         let a = artifact(b"PK\x03\x04data");

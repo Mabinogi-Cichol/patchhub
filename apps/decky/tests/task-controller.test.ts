@@ -103,7 +103,7 @@ test("successful cancel keeps observing rollback until terminal state", async ()
   controller.dismount();
 });
 
-test("install and reinstall preserve request ID and optional archive", async () => {
+test("install, reinstall and overwrite preserve request ID and optional archive", async () => {
   const calls: unknown[][] = [];
   const controller = createTaskController(api({
     install: async (...args) => { calls.push(args); return { task_id: "task-1" }; },
@@ -119,6 +119,10 @@ test("install and reinstall preserve request ID and optional archive", async () 
   controller.clear();
   await controller.startInstall("game", null, "zip-selection-1", "install", "req-dynamic-zip");
   assert.deepEqual(calls[2], ["game", null, "zip-selection-1", null, "install", "req-dynamic-zip"]);
+  await tick();
+  controller.clear();
+  await controller.startInstall("game", null, "exe-selection-2", "overwrite", "req-overwrite");
+  assert.deepEqual(calls[3], ["game", null, "exe-selection-2", null, "overwrite", "req-overwrite"]);
   controller.dismount();
 });
 

@@ -18,19 +18,6 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use zip::ZipArchive;
 
-/// Maximum archive size (p0-contracts §6.2).
-pub const MAX_ARCHIVE_BYTES: u64 = 8 * 1024 * 1024 * 1024;
-/// Maximum uncompressed size of a single member (p0-contracts §6.2).
-pub const MAX_FILE_BYTES: u64 = 4 * 1024 * 1024 * 1024;
-/// Maximum total uncompressed size (p0-contracts §6.2).
-pub const MAX_EXPANDED_BYTES: u64 = 16 * 1024 * 1024 * 1024;
-/// Maximum number of archive members (p0-contracts §6.2).
-pub const MAX_ENTRIES: usize = 8192;
-/// Maximum `uncompressed / compressed` ratio (p0-contracts §6.2).
-pub const MAX_COMPRESSION_RATIO: u64 = 200;
-/// Ratio/size checks only apply above this size in the Python reference.
-const RATIO_MIN_SIZE: u64 = 1024 * 1024;
-
 /// XP3 archive signature (`58 50 33 0d 0a 20 0a 1a 8b 67 01`, 11 bytes).
 const XP3_SIGNATURE: [u8; 11] = [
     0x58, 0x50, 0x33, 0x0d, 0x0a, 0x20, 0x0a, 0x1a, 0x8b, 0x67, 0x01,
@@ -42,7 +29,6 @@ struct Entry {
     name: String,
     is_dir: bool,
     size: u64,
-    compressed: u64,
     mode: u32,
     extra: Vec<u8>,
 }
@@ -56,18 +42,17 @@ pub fn build_recipe(archive: &Path, root: &Path, cancel: &AtomicBool) -> Result<
         return Err(invalid("unsafe_game_root"));
     }
     let archive_size = fs::metadata(archive)?.len();
-    let file = File::open(archive)?;
+    let mut file = File::open(archive)?;
+    crate::zip_metadata::preflight(&mut file)?;
     let mut zip = ZipArchive::new(file).map_err(|e| invalid(format!("invalid_zip:{e}")))?;
-    if zip.len() > MAX_ENTRIES {
-        return Err(invalid("archive_entry_limit"));
-    }
 
-    let entries = collect_entries(&mut zip)?;
-    let expanded = validate_entries(&entries)?;
-    let mapped = wrapped_xp3_paths(&mut zip, root, &entries)?;
+    let entries = collect_entries(&mut zip, cancel)?;
+    let expanded = validate_entries(&entries, cancel)?;
+    let mapped = mapping_paths(&mut zip, root, &entries, cancel)?;
+    validate_destinations(&entries, &mapped, root, cancel)?;
 
     let non_dir_count = entries.iter().filter(|entry| !entry.is_dir).count();
-    let original_bytes = predicted_original_bytes(&entries, &mapped, root);
+    let original_bytes = predicted_original_bytes(&entries, &mapped, root, cancel)?;
     operation::archive(archive_size);
     operation::stage(
         "validating",
@@ -110,7 +95,7 @@ pub fn build_recipe(archive: &Path, root: &Path, cancel: &AtomicBool) -> Result<
             return Err(invalid("linked_target"));
         }
         let original = match fs::symlink_metadata(&target) {
-            Ok(metadata) if metadata.is_file() => Some(hash_file(&target, MAX_FILE_BYTES, cancel)?),
+            Ok(metadata) if metadata.is_file() => Some(hash_file(&target, cancel)?),
             Ok(_) => return Err(invalid("target_not_file")),
             Err(_) => None,
         };
@@ -129,9 +114,13 @@ pub fn build_recipe(archive: &Path, root: &Path, cancel: &AtomicBool) -> Result<
 }
 
 /// Reads member metadata once so later passes can borrow `zip` mutably.
-fn collect_entries(zip: &mut ZipArchive<File>) -> Result<Vec<Entry>> {
+fn collect_entries(zip: &mut ZipArchive<File>, cancel: &AtomicBool) -> Result<Vec<Entry>> {
     let mut entries = Vec::with_capacity(zip.len());
     for index in 0..zip.len() {
+        operation::check()?;
+        if cancel.load(Ordering::Relaxed) {
+            return Err(invalid("download_cancelled"));
+        }
         let file = zip
             .by_index(index)
             .map_err(|e| invalid(format!("invalid_zip:{e}")))?;
@@ -148,7 +137,6 @@ fn collect_entries(zip: &mut ZipArchive<File>) -> Result<Vec<Entry>> {
             name,
             is_dir: file.is_dir(),
             size: file.size(),
-            compressed: file.compressed_size(),
             mode: file.unix_mode().unwrap_or(0) & 0o170000,
             extra: file.extra_data().map(<[u8]>::to_vec).unwrap_or_default(),
         });
@@ -158,11 +146,15 @@ fn collect_entries(zip: &mut ZipArchive<File>) -> Result<Vec<Entry>> {
 
 /// Port of `publisher.py::_relative` plus the reserved-prefix and encoding
 /// checks from `_recipe`.
-fn validate_entries(entries: &[Entry]) -> Result<u64> {
+fn validate_entries(entries: &[Entry], cancel: &AtomicBool) -> Result<u64> {
     let mut names: HashSet<String> = HashSet::new();
     let mut prefixes: HashMap<String, String> = HashMap::new();
     let mut expanded: u64 = 0;
     for entry in entries {
+        operation::check()?;
+        if cancel.load(Ordering::Relaxed) {
+            return Err(invalid("download_cancelled"));
+        }
         relative(&entry.name)?;
         if entry
             .name
@@ -201,16 +193,9 @@ fn validate_entries(entries: &[Entry]) -> Result<u64> {
             return Err(invalid("zip_link_or_special_file"));
         }
         extra_safe(&entry.extra)?;
-        if entry.size > MAX_FILE_BYTES
-            || (entry.size > RATIO_MIN_SIZE
-                && entry.size / entry.compressed.max(1) > MAX_COMPRESSION_RATIO)
-        {
-            return Err(invalid("zip_expansion_limit"));
-        }
-        expanded = expanded.saturating_add(entry.size);
-        if expanded > MAX_EXPANDED_BYTES {
-            return Err(invalid("zip_expansion_limit"));
-        }
+        expanded = expanded
+            .checked_add(entry.size)
+            .ok_or_else(|| invalid("zip_size_overflow"))?;
     }
     Ok(expanded)
 }
@@ -279,11 +264,192 @@ fn name_encoding_ok(raw: &[u8], decoded: &str) -> bool {
     raw.is_ascii() || decoded == String::from_utf8_lossy(raw)
 }
 
+const YPF_SIGNATURE: [u8; 4] = *b"YPF\0";
+const ASF_SIGNATURE: [u8; 16] = [
+    0x30, 0x26, 0xb2, 0x75, 0x8e, 0x66, 0xcf, 0x11, 0xa6, 0xd9, 0x00, 0xaa, 0x00, 0x62, 0xce, 0x6c,
+];
+
+fn mapping_paths(
+    zip: &mut ZipArchive<File>,
+    root: &Path,
+    entries: &[Entry],
+    cancel: &AtomicBool,
+) -> Result<HashMap<String, Option<String>>> {
+    let xp3 = wrapped_xp3_paths(zip, root, entries, cancel)?;
+    if !xp3.is_empty() {
+        return Ok(xp3);
+    }
+    wrapped_ypf_paths(zip, root, entries, cancel)
+}
+
+fn wrapped_ypf_paths(
+    zip: &mut ZipArchive<File>,
+    root: &Path,
+    entries: &[Entry],
+    cancel: &AtomicBool,
+) -> Result<HashMap<String, Option<String>>> {
+    let pac = root.join("pac");
+    if !no_links(&pac) || !pac.is_dir() {
+        return Ok(HashMap::new());
+    }
+    let mut has_game_ypf = false;
+    for item in fs::read_dir(&pac)? {
+        operation::check()?;
+        if cancel.load(Ordering::Relaxed) {
+            return Err(invalid("download_cancelled"));
+        }
+        let path = item?.path();
+        if path
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("ypf"))
+            && no_links(&path)
+            && path.is_file()
+            && file_starts_with(&path, &YPF_SIGNATURE)?
+        {
+            has_game_ypf = true;
+            break;
+        }
+    }
+    if !has_game_ypf {
+        return Ok(HashMap::new());
+    }
+    let files: Vec<&Entry> = entries.iter().filter(|entry| !entry.is_dir).collect();
+    let candidate = files.iter().any(|entry| {
+        let parts: Vec<_> = entry.name.split('/').collect();
+        parts.len() >= 3 && parts[1].eq_ignore_ascii_case("pac")
+    });
+    if !candidate {
+        return Ok(HashMap::new());
+    }
+    let mut wrapper: Option<&str> = None;
+    let mut has_patch_ypf = false;
+    let mut mapped = HashMap::new();
+    for entry in files {
+        operation::check()?;
+        if cancel.load(Ordering::Relaxed) {
+            return Err(invalid("download_cancelled"));
+        }
+        let parts: Vec<_> = entry.name.split('/').collect();
+        if parts.len() != 3
+            || !parts[1].eq_ignore_ascii_case("pac")
+            || !parts[2].to_ascii_lowercase().ends_with(".ypf")
+        {
+            return Err(invalid("zip_wrapped_layout_unsupported"));
+        }
+        if let Some(previous) = wrapper {
+            if previous != parts[0] {
+                return Err(invalid("zip_wrapped_layout_unsupported"));
+            }
+        } else {
+            wrapper = Some(parts[0]);
+        }
+        let ypf = entry_starts_with(zip, entry.index, &YPF_SIGNATURE)?;
+        if !ypf && !entry_starts_with(zip, entry.index, &ASF_SIGNATURE)? {
+            return Err(invalid("zip_wrapped_layout_unsupported"));
+        }
+        has_patch_ypf |= ypf;
+        mapped.insert(entry.name.clone(), Some(format!("pac/{}", parts[2])));
+    }
+    if !has_patch_ypf {
+        return Err(invalid("zip_wrapped_layout_unsupported"));
+    }
+    Ok(mapped)
+}
+
+/// Revalidate final paths after optional wrapper mapping and detect existing
+/// paths that differ only in case on case-sensitive filesystems.
+fn validate_destinations(
+    entries: &[Entry],
+    mapped: &HashMap<String, Option<String>>,
+    root: &Path,
+    cancel: &AtomicBool,
+) -> Result<()> {
+    let mut files = HashSet::new();
+    let mut prefixes: HashMap<String, String> = HashMap::new();
+    let mut disk_names: HashMap<PathBuf, HashMap<String, Option<String>>> = HashMap::new();
+    for entry in entries.iter().filter(|entry| !entry.is_dir) {
+        operation::check()?;
+        if cancel.load(Ordering::Relaxed) {
+            return Err(invalid("download_cancelled"));
+        }
+        let destination = match mapped.get(&entry.name) {
+            Some(None) => continue,
+            Some(Some(path)) => path.as_str(),
+            None => entry.name.as_str(),
+        };
+        relative(destination)?;
+        let key = destination.to_lowercase();
+        if !files.insert(key) {
+            return Err(invalid("zip_duplicate_or_case_collision"));
+        }
+        let mut prefix = String::new();
+        let mut parent = root.to_path_buf();
+        for part in destination.split('/') {
+            if !prefix.is_empty() {
+                prefix.push('/');
+            }
+            prefix.push_str(part);
+            let lower = prefix.to_lowercase();
+            if let Some(previous) = prefixes.get(&lower) {
+                if previous != &prefix {
+                    return Err(invalid("zip_duplicate_or_case_collision"));
+                }
+            } else {
+                prefixes.insert(lower, prefix.clone());
+            }
+            if !disk_names.contains_key(&parent) {
+                let mut names = HashMap::new();
+                match fs::read_dir(&parent) {
+                    Ok(items) => {
+                        for item in items {
+                            let name = item?.file_name().to_string_lossy().into_owned();
+                            let folded = name.to_lowercase();
+                            names
+                                .entry(folded)
+                                .and_modify(|old: &mut Option<String>| {
+                                    if old.as_deref() != Some(name.as_str()) {
+                                        *old = None;
+                                    }
+                                })
+                                .or_insert(Some(name));
+                        }
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(error) => return Err(error),
+                }
+                disk_names.insert(parent.clone(), names);
+            }
+            if disk_names[&parent]
+                .get(&part.to_lowercase())
+                .is_some_and(|name| name.as_deref() != Some(part))
+            {
+                return Err(invalid("zip_target_case_collision"));
+            }
+            parent.push(part);
+        }
+    }
+    for entry in entries.iter().filter(|entry| !entry.is_dir) {
+        operation::check()?;
+        if cancel.load(Ordering::Relaxed) {
+            return Err(invalid("download_cancelled"));
+        }
+        let destination = match mapped.get(&entry.name) {
+            Some(None) => continue,
+            Some(Some(path)) => path.as_str(),
+            None => entry.name.as_str(),
+        };
+        if has_file_directory_collision(destination, &files, &HashSet::new()) {
+            return Err(invalid("zip_file_directory_collision"));
+        }
+    }
+    Ok(())
+}
 /// Port of `publisher.py::_wrapped_xp3_paths`.
 fn wrapped_xp3_paths(
     zip: &mut ZipArchive<File>,
     root: &Path,
     entries: &[Entry],
+    cancel: &AtomicBool,
 ) -> Result<HashMap<String, Option<String>>> {
     let base = root.join("data.xp3");
     if !no_links(&base) || !base.is_file() {
@@ -299,6 +465,10 @@ fn wrapped_xp3_paths(
     }
     let mut top: Option<&str> = None;
     for entry in &non_dirs {
+        operation::check()?;
+        if cancel.load(Ordering::Relaxed) {
+            return Err(invalid("download_cancelled"));
+        }
         let mut parts = entry.name.split('/');
         let (Some(first), Some(_), None) = (parts.next(), parts.next(), parts.next()) else {
             return Ok(HashMap::new());
@@ -372,9 +542,14 @@ fn predicted_original_bytes(
     entries: &[Entry],
     mapped: &HashMap<String, Option<String>>,
     root: &Path,
-) -> u64 {
+    cancel: &AtomicBool,
+) -> Result<u64> {
     let mut total = 0u64;
     for entry in entries.iter().filter(|entry| !entry.is_dir) {
+        operation::check()?;
+        if cancel.load(Ordering::Relaxed) {
+            return Err(invalid("download_cancelled"));
+        }
         let destination = match mapped.get(&entry.name) {
             Some(None) => continue,
             Some(Some(destination)) => destination.clone(),
@@ -389,7 +564,7 @@ fn predicted_original_bytes(
             }
         }
     }
-    total
+    Ok(total)
 }
 
 fn join_relative(root: &Path, relative: &str) -> PathBuf {
@@ -403,20 +578,25 @@ fn hash_entry(zip: &mut ZipArchive<File>, entry: &Entry, cancel: &AtomicBool) ->
         .by_index(entry.index)
         .map_err(|e| invalid(format!("invalid_zip:{e}")))?;
     let mut hasher = Sha256::new();
-    let mut buffer = vec![0u8; 65536];
+    let mut buffer = [0u8; 65536];
     let mut size = 0u64;
+    let limit = entry
+        .size
+        .checked_add(1)
+        .ok_or_else(|| invalid("zip_size_overflow"))?;
+    let mut bounded = (&mut file).take(limit);
     loop {
         operation::check()?;
         if cancel.load(Ordering::Relaxed) {
             return Err(invalid("download_cancelled"));
         }
-        let count = file.read(&mut buffer)?;
+        let count = bounded.read(&mut buffer)?;
         if count == 0 {
             break;
         }
-        size = size.saturating_add(count as u64);
-        if size > MAX_FILE_BYTES {
-            return Err(invalid("zip_expansion_limit"));
+        size += count as u64;
+        if size > entry.size {
+            return Err(invalid("zip_size_mismatch"));
         }
         hasher.update(&buffer[..count]);
         operation::advance(count as u64);
@@ -426,42 +606,48 @@ fn hash_entry(zip: &mut ZipArchive<File>, entry: &Entry, cancel: &AtomicBool) ->
     }
     Ok(format!("{:x}", hasher.finalize()))
 }
-
 /// Re-hashes an existing destination (port of `publisher.py::_hash_file`).
-fn hash_file(path: &Path, limit: u64, cancel: &AtomicBool) -> Result<String> {
+fn hash_file(path: &Path, cancel: &AtomicBool) -> Result<String> {
     if !no_links(path) {
         return Err(invalid("linked_target"));
     }
     let mut file = File::open(path)?;
     let before = file.metadata()?;
-    if !before.is_file() || before.len() > limit {
+    if !before.is_file() {
         return Err(invalid("file_size_or_type"));
     }
     let mut hasher = Sha256::new();
-    let mut buffer = vec![0u8; 65536];
+    let mut buffer = [0u8; 65536];
     let mut total = 0u64;
+    let limit = before
+        .len()
+        .checked_add(1)
+        .ok_or_else(|| invalid("file_size_limit"))?;
+    let mut bounded = (&mut file).take(limit);
     loop {
         operation::check()?;
         if cancel.load(Ordering::Relaxed) {
             return Err(invalid("download_cancelled"));
         }
-        let count = file.read(&mut buffer)?;
+        let count = bounded.read(&mut buffer)?;
         if count == 0 {
             break;
         }
-        total = total.saturating_add(count as u64);
-        if total > limit {
+        total += count as u64;
+        if total > before.len() {
             return Err(invalid("file_size_limit"));
         }
         hasher.update(&buffer[..count]);
     }
     let after = file.metadata()?;
-    if after.len() != before.len() || after.modified().ok() != before.modified().ok() {
+    if total != before.len()
+        || after.len() != before.len()
+        || after.modified().ok() != before.modified().ok()
+    {
         return Err(invalid("file_changed"));
     }
     Ok(format!("{:x}", hasher.finalize()))
 }
-
 fn file_starts_with(path: &Path, signature: &[u8]) -> Result<bool> {
     let mut file = File::open(path)?;
     let mut head = vec![0u8; signature.len()];
@@ -742,45 +928,29 @@ mod tests {
     }
 
     #[test]
-    fn compression_ratio_limit_rejected() {
+    fn high_ratio_and_more_than_8192_members_are_valid() {
         let temp = tempfile::tempdir().unwrap();
         let root = game_dir(&temp);
-        let archive = temp.path().join("bomb.zip");
-        let payload = vec![0u8; (RATIO_MIN_SIZE + 4096) as usize];
+        let archive = temp.path().join("many.zip");
         let mut zip = ZipWriter::new(File::create(&archive).unwrap());
         let options = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+        for index in 0..8200 {
+            zip.add_directory(format!("dir{index}/"), options).unwrap();
+        }
         zip.start_file("zeros.bin", options).unwrap();
-        zip.write_all(&payload).unwrap();
+        zip.write_all(&vec![0u8; 2 * 1024 * 1024]).unwrap();
         zip.finish().unwrap();
-        assert_eq!(
-            build_recipe(&archive, &root, &AtomicBool::new(false))
-                .unwrap_err()
-                .to_string(),
-            "zip_expansion_limit"
-        );
+        let files = build_recipe(&archive, &root, &AtomicBool::new(false)).unwrap();
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].destination, "zeros.bin");
     }
 
     #[test]
-    fn entry_limit_and_empty_recipe() {
+    fn empty_recipe() {
         let temp = tempfile::tempdir().unwrap();
         let root = game_dir(&temp);
-        let archive = temp.path().join("dirs.zip");
-        let mut zip = ZipWriter::new(File::create(&archive).unwrap());
-        let options = SimpleFileOptions::default();
-        for index in 0..=MAX_ENTRIES {
-            zip.add_directory(format!("dir{index}"), options).unwrap();
-        }
-        zip.finish().unwrap();
-        assert_eq!(
-            build_recipe(&archive, &root, &AtomicBool::new(false))
-                .unwrap_err()
-                .to_string(),
-            "archive_entry_limit"
-        );
-
         let empty = temp.path().join("empty.zip");
         zip_with(&empty, &[]);
-        // A member-less archive produces no files.
         assert_eq!(
             build_recipe(&empty, &root, &AtomicBool::new(false))
                 .unwrap_err()
@@ -789,6 +959,146 @@ mod tests {
         );
     }
 
+    #[test]
+    fn ypf_wrapper_maps_to_pac_and_accepts_asf_video() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = game_dir(&temp);
+        fs::create_dir(root.join("pac")).unwrap();
+        fs::write(
+            root.join("pac/bn.ypf"),
+            [YPF_SIGNATURE.as_slice(), b"old"].concat(),
+        )
+        .unwrap();
+        let archive = temp.path().join("patch.zip");
+        let ypf = [YPF_SIGNATURE.as_slice(), b"new"].concat();
+        let asf = [ASF_SIGNATURE.as_slice(), b"video"].concat();
+        zip_with(
+            &archive,
+            &[
+                ("wrapper/pac/bn.ypf", &ypf),
+                ("wrapper/pac/update1.ypf", &ypf),
+                ("wrapper/pac/video.ypf", &asf),
+            ],
+        );
+        let files = build_recipe(&archive, &root, &AtomicBool::new(false)).unwrap();
+        assert_eq!(files.len(), 3);
+        assert_eq!(files[0].destination, "pac/bn.ypf");
+        assert_eq!(
+            files[0].original_sha256.as_deref(),
+            Some(&*sha(&[YPF_SIGNATURE.as_slice(), b"old"].concat()))
+        );
+        assert_eq!(files[1].destination, "pac/update1.ypf");
+        assert_eq!(files[2].destination, "pac/video.ypf");
+    }
+
+    #[test]
+    fn ypf_wrapper_rejects_mixed_and_unsafe_layouts() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = game_dir(&temp);
+        fs::create_dir(root.join("pac")).unwrap();
+        fs::write(root.join("pac/bn.ypf"), YPF_SIGNATURE).unwrap();
+        let archive = temp.path().join("mixed.zip");
+        zip_with(
+            &archive,
+            &[
+                ("wrapper/pac/update.ypf", &YPF_SIGNATURE),
+                ("wrapper/run.exe", b"bad"),
+            ],
+        );
+        assert_eq!(
+            build_recipe(&archive, &root, &AtomicBool::new(false))
+                .unwrap_err()
+                .to_string(),
+            "zip_wrapped_layout_unsupported"
+        );
+        let archive2 = temp.path().join("unsafe.zip");
+        zip_with(&archive2, &[("wrapper/pac/update.ypf", b"unknown")]);
+        assert_eq!(
+            build_recipe(&archive2, &root, &AtomicBool::new(false))
+                .unwrap_err()
+                .to_string(),
+            "zip_wrapped_layout_unsupported"
+        );
+    }
+
+    #[test]
+    fn ypf_wrapper_rejects_existing_case_collision() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = game_dir(&temp);
+        fs::create_dir(root.join("pac")).unwrap();
+        fs::write(root.join("pac/bn.ypf"), YPF_SIGNATURE).unwrap();
+        fs::write(root.join("pac/Update.ypf"), YPF_SIGNATURE).unwrap();
+        let archive = temp.path().join("case.zip");
+        zip_with(&archive, &[("wrapper/pac/update.ypf", &YPF_SIGNATURE)]);
+        assert_eq!(
+            build_recipe(&archive, &root, &AtomicBool::new(false))
+                .unwrap_err()
+                .to_string(),
+            "zip_target_case_collision"
+        );
+    }
+    #[test]
+    fn six_gib_declared_member_has_no_recipe_size_gate() {
+        let entries = vec![Entry {
+            index: 0,
+            name: "update1.ypf".into(),
+            is_dir: false,
+            size: 6 * 1024 * 1024 * 1024,
+            mode: 0,
+            extra: Vec::new(),
+        }];
+        assert_eq!(
+            validate_entries(&entries, &AtomicBool::new(false)).unwrap(),
+            6 * 1024 * 1024 * 1024
+        );
+    }
+    #[test]
+    #[ignore = "manual ZIP metadata and recipe scaling benchmark"]
+    fn benchmark_metadata_and_recipe_10k_50k() {
+        use std::sync::Arc;
+        use std::time::{Duration, Instant};
+        for count in [10_000, 50_000] {
+            let temp = tempfile::tempdir().unwrap();
+            let root = game_dir(&temp);
+            let archive = temp.path().join("many.zip");
+            let mut zip = ZipWriter::new(File::create(&archive).unwrap());
+            let options = SimpleFileOptions::default();
+            for index in 0..count {
+                zip.start_file(format!("file{index}.txt"), options).unwrap();
+                zip.write_all(b"x").unwrap();
+            }
+            zip.finish().unwrap();
+            let mut file = File::open(&archive).unwrap();
+            let start = Instant::now();
+            crate::zip_metadata::preflight(&mut file).unwrap();
+            let metadata_time = start.elapsed();
+            let start = Instant::now();
+            let recipe = build_recipe(&archive, &root, &AtomicBool::new(false)).unwrap();
+            let recipe_time = start.elapsed();
+            assert_eq!(recipe.len(), count);
+            let json_bytes = serde_json::to_vec(&recipe).unwrap().len();
+            let cancelled = Arc::new(AtomicBool::new(false));
+            let trigger = Arc::clone(&cancelled);
+            let start = Instant::now();
+            let handle = std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_millis(5));
+                trigger.store(true, Ordering::Relaxed);
+            });
+            let error = build_recipe(&archive, &root, &cancelled).unwrap_err();
+            handle.join().unwrap();
+            assert_eq!(error.to_string(), "download_cancelled");
+            let cancel_time = start.elapsed();
+            eprintln!(
+                "zip files={} metadata_ms={} recipe_ms={} json_bytes={} cancel_ms={} archive_bytes={}",
+                count,
+                metadata_time.as_millis(),
+                recipe_time.as_millis(),
+                json_bytes,
+                cancel_time.as_millis(),
+                fs::metadata(&archive).unwrap().len()
+            );
+        }
+    }
     #[test]
     fn cancellation_is_observed() {
         let temp = tempfile::tempdir().unwrap();

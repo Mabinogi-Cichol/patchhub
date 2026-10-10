@@ -9,7 +9,6 @@ use std::{
 };
 
 pub const MAX_CATALOG_BYTES: u64 = 4 * 1024 * 1024;
-const MAX_FINGERPRINT_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -308,9 +307,7 @@ fn hash_file(root: &Path, library: &Path, relative: &str) -> io::Result<Option<S
     if !file.metadata()?.is_file() {
         return Err(invalid("fingerprint_not_a_file"));
     }
-    if file.metadata()?.len() > MAX_FINGERPRINT_BYTES {
-        return Err(invalid("fingerprint_too_large"));
-    }
+    let initial_size = file.metadata()?.len();
     let mut hasher = Sha256::new();
     let mut total = 0_u64;
     let mut buffer = [0_u8; 65536];
@@ -319,11 +316,13 @@ fn hash_file(root: &Path, library: &Path, relative: &str) -> io::Result<Option<S
         if count == 0 {
             break;
         }
-        total += count as u64;
-        if total > MAX_FINGERPRINT_BYTES {
-            return Err(invalid("fingerprint_too_large"));
-        }
+        total = total
+            .checked_add(count as u64)
+            .ok_or_else(|| invalid("fingerprint_size_overflow"))?;
         hasher.update(&buffer[..count]);
+    }
+    if total != initial_size || file.metadata()?.len() != initial_size {
+        return Err(invalid("fingerprint_changed"));
     }
     Ok(Some(format!("{:x}", hasher.finalize())))
 }

@@ -18,10 +18,7 @@ use std::{
 };
 use uuid::Uuid;
 
-pub const MAX_ARCHIVE_BYTES: u64 = 8 * 1024 * 1024 * 1024;
-pub const MAX_FILE_BYTES: u64 = 4 * 1024 * 1024 * 1024;
-pub const MAX_EXPANDED_BYTES: u64 = 16 * 1024 * 1024 * 1024;
-pub const MAX_ENTRIES: usize = 8192;
+pub const MAX_PLAN_METADATA_BYTES: usize = crate::zip_metadata::MAX_METADATA_BYTES as usize;
 pub const PLAN_TTL_SECONDS: u64 = 900;
 
 #[derive(
@@ -32,6 +29,7 @@ pub enum InstallOperation {
     #[default]
     Install,
     Reinstall,
+    Overwrite,
 }
 
 /// Content identity excludes pre-operation hashes, which are snapshots during reinstall.
@@ -87,6 +85,8 @@ pub struct InstallPlan {
     pub install: GameInstall,
     pub changes: Vec<PlannedChange>,
     pub disk_requirement: u64,
+    #[serde(default)]
+    pub space_budget: Option<crate::installer::space::ZipSpaceBudget>,
     pub blockers: Vec<String>,
     /// Legacy diagnostic field, empty for new automatic tasks. Cooperating
     /// locks do not detect or stop a running game or Steam updater.
@@ -133,6 +133,10 @@ struct Job {
     uninstall_requested: bool,
     #[serde(default)]
     transient_recovery: bool,
+    /// New jobs opt into durable file progress overlays. Old documents keep
+    /// their original recovery representation when this field is absent.
+    #[serde(default)]
+    progress_format: u32,
 }
 
 fn invalid(code: impl Into<String>) -> io::Error {
@@ -353,7 +357,14 @@ fn digest_measured(reader: &mut impl Read, limit: u64) -> io::Result<(String, u6
 
 fn hash_at(path: &Path) -> io::Result<Option<String>> {
     match regular_file(path) {
-        Ok(mut f) => Ok(Some(digest_reader(&mut f, MAX_FILE_BYTES)?.0)),
+        Ok(mut f) => {
+            let length = f.metadata()?.len();
+            let (hash, actual) = digest_reader(&mut f, length)?;
+            if actual != length {
+                return Err(invalid("file_size_changed"));
+            }
+            Ok(Some(hash))
+        }
         Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
         Err(e) => Err(e),
     }
@@ -364,13 +375,17 @@ fn hash_at(path: &Path) -> io::Result<Option<String>> {
 /// this permits only a *strict* prefix of the expected source image.
 fn is_verified_prefix(temp: &Path, source: &Path, expected: &str) -> io::Result<bool> {
     let mut input = regular_file(source)?;
-    let (actual, source_len) = digest_reader(&mut input, MAX_FILE_BYTES)?;
+    let expected_len = input.metadata()?.len();
+    let (actual, source_len) = digest_reader(&mut input, expected_len)?;
+    if source_len != expected_len {
+        return Err(invalid("temporary_source_changed"));
+    }
     if actual != expected {
         return Err(invalid("temporary_source_changed"));
     }
     let mut partial = regular_file(temp)?;
     let partial_len = partial.metadata()?.len();
-    if partial_len >= source_len || partial_len > MAX_FILE_BYTES {
+    if partial_len >= source_len {
         return Ok(false);
     }
     input.seek(SeekFrom::Start(0))?;
@@ -414,6 +429,7 @@ pub fn transaction_root(state_dir: &Path) -> PathBuf {
 pub struct Store {
     root: PathBuf,
     conn: Connection,
+    has_progress: bool,
     _lock: Option<File>,
 }
 impl Store {
@@ -461,11 +477,14 @@ impl Store {
             .map_err(|_| invalid("installer_busy"))?;
         // A single cooperating writer and DELETE journaling avoid unvalidated WAL files.
         let conn = sql(Connection::open(root.join("journal.sqlite")))?;
-        sql(conn.execute_batch("PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON; CREATE TABLE IF NOT EXISTS jobs(id TEXT PRIMARY KEY NOT NULL, document TEXT NOT NULL);"))?;
+        sql(conn.execute_batch("PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON; CREATE TABLE IF NOT EXISTS jobs(id TEXT PRIMARY KEY NOT NULL, document TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS job_progress(job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE, item INTEGER NOT NULL, state TEXT NOT NULL, updated_at INTEGER NOT NULL, PRIMARY KEY(job_id,item));
+            CREATE TABLE IF NOT EXISTS job_directories(job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE, item INTEGER NOT NULL, path TEXT NOT NULL, PRIMARY KEY(job_id,item));"))?;
         fs::create_dir_all(root.join("jobs"))?;
         Ok(Self {
             root,
             conn,
+            has_progress: true,
             _lock: Some(lock),
         })
     }
@@ -498,9 +517,14 @@ impl Store {
         if !has_jobs {
             return Err(invalid("installer_state_missing"));
         }
+        let has_progress: bool = sql(conn.query_row(
+            "SELECT count(*)=2 FROM sqlite_master WHERE type='table' AND name IN ('job_progress','job_directories')",
+            [], |row| row.get(0),
+        ))?;
         Ok(Self {
             root,
             conn,
+            has_progress,
             _lock: None,
         })
     }
@@ -518,17 +542,106 @@ impl Store {
     fn save(&self, job: &mut Job) -> io::Result<()> {
         job.transaction.updated_at = now();
         let document = serde_json::to_string(job).map_err(|e| invalid(e.to_string()))?;
-        sql(self.conn.execute("INSERT INTO jobs(id,document) VALUES(?1,?2) ON CONFLICT(id) DO UPDATE SET document=excluded.document", params![job.plan.plan_id, document]))?;
+        if document.len() > MAX_PLAN_METADATA_BYTES {
+            return Err(invalid("plan_metadata_limit"));
+        }
+        sql(self.conn.execute_batch("SAVEPOINT save_job"))?;
+        let result = (|| {
+            sql(self.conn.execute("INSERT INTO jobs(id,document) VALUES(?1,?2) ON CONFLICT(id) DO UPDATE SET document=excluded.document", params![job.plan.plan_id, document]))?;
+            sql(self.conn.execute(
+                "DELETE FROM job_progress WHERE job_id=?1",
+                [&job.plan.plan_id],
+            ))?;
+            sql(self.conn.execute(
+                "DELETE FROM job_directories WHERE job_id=?1",
+                [&job.plan.plan_id],
+            ))?;
+            sql(self.conn.execute_batch("RELEASE save_job"))
+        })();
+        if result.is_err() {
+            let _ = self
+                .conn
+                .execute_batch("ROLLBACK TO save_job; RELEASE save_job");
+        }
+        result
+    }
+    /// A writing/restoring intent must reach FULL-synchronous storage before
+    /// live mutation; only the changed item is serialized between phases.
+    fn save_progress(&self, job: &mut Job, index: usize) -> io::Result<()> {
+        if job.progress_format == 0 {
+            return self.save(job);
+        }
+        job.transaction.updated_at = now();
+        sql(self.conn.execute(
+            "INSERT INTO job_progress(job_id,item,state,updated_at) VALUES(?1,?2,?3,?4) ON CONFLICT(job_id,item) DO UPDATE SET state=excluded.state,updated_at=excluded.updated_at",
+            params![job.plan.plan_id, index as i64, job.progress[index], job.transaction.updated_at as i64],
+        ))?;
+        Ok(())
+    }
+    fn save_directory(&self, job: &mut Job) -> io::Result<()> {
+        if job.progress_format == 0 {
+            return self.save(job);
+        }
+        let index = job.created_dirs.len() - 1;
+        sql(self.conn.execute(
+            "INSERT INTO job_directories(job_id,item,path) VALUES(?1,?2,?3)",
+            params![job.plan.plan_id, index as i64, job.created_dirs[index]],
+        ))?;
         Ok(())
     }
     fn load(&self, id: &str) -> io::Result<Job> {
         valid_id(id)?;
-        let document: String = sql(self.conn.query_row(
-            "SELECT document FROM jobs WHERE id=?1 AND length(document)<8388608",
-            [id],
-            |row| row.get(0),
-        ))?;
-        let job: Job = serde_json::from_str(&document).map_err(|_| invalid("journal_invalid"))?;
+        // Base and overlay are read in one SQL snapshot. Old stores need no
+        // migration for read-only scans; their documents default to format 0.
+        let query = if self.has_progress {
+            "SELECT document,
+            CASE WHEN coalesce((SELECT sum(length(CAST(state AS BLOB))+32) FROM job_progress WHERE job_id=?1),0)<=?2
+            THEN (SELECT json_group_array(json_array(item,state)) FROM (SELECT item,state FROM job_progress WHERE job_id=?1 ORDER BY item)) ELSE NULL END,
+            (SELECT max(updated_at) FROM job_progress WHERE job_id=?1),
+            CASE WHEN coalesce((SELECT sum(length(CAST(path AS BLOB))+32) FROM job_directories WHERE job_id=?1),0)<=?2
+            THEN (SELECT json_group_array(json_array(item,path)) FROM (SELECT item,path FROM job_directories WHERE job_id=?1 ORDER BY item)) ELSE NULL END
+            FROM jobs WHERE id=?1 AND length(CAST(document AS BLOB))<=?2"
+        } else {
+            "SELECT document,'[]',NULL,'[]' FROM jobs WHERE id=?1 AND length(CAST(document AS BLOB))<=?2"
+        };
+        let (document, progress, updated, directories): (
+            String,
+            Option<String>,
+            Option<i64>,
+            Option<String>,
+        ) = sql(self
+            .conn
+            .query_row(query, params![id, MAX_PLAN_METADATA_BYTES as i64], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+            }))?;
+        let mut job: Job =
+            serde_json::from_str(&document).map_err(|_| invalid("journal_invalid"))?;
+        if job.progress_format == 1 {
+            if !self.has_progress {
+                return Err(invalid("journal_progress_missing"));
+            }
+            let progress = progress.ok_or_else(|| invalid("plan_metadata_limit"))?;
+            let deltas: Vec<(usize, String)> =
+                serde_json::from_str(&progress).map_err(|_| invalid("journal_invalid"))?;
+            for (index, state) in deltas {
+                *job.progress
+                    .get_mut(index)
+                    .ok_or_else(|| invalid("journal_invalid"))? = state;
+            }
+            let directories = directories.ok_or_else(|| invalid("plan_metadata_limit"))?;
+            let dirs: Vec<(usize, String)> = serde_json::from_str(&directories)
+                .map_err(|_| invalid("journal_invalid_directory"))?;
+            for (index, path) in dirs {
+                if index != job.created_dirs.len() {
+                    return Err(invalid("journal_invalid_directory"));
+                }
+                job.created_dirs.push(path);
+            }
+            if let Some(updated) = updated {
+                let updated = u64::try_from(updated).map_err(|_| invalid("journal_invalid"))?;
+                job.transaction.updated_at = job.transaction.updated_at.max(updated);
+            }
+        }
         validate_job(&job, id)?;
         Ok(job)
     }
@@ -539,6 +652,55 @@ impl Store {
     }
 }
 
+/// Reserve the largest normal progress/state strings, every possible created
+/// parent and bounded diagnostic slack before accepting a live write. Recovery
+/// must not be the first phase to discover the metadata budget is exhausted.
+fn validate_metadata_budget(job: &Job) -> io::Result<()> {
+    let mut bytes = serde_json::to_vec(job)
+        .map_err(|e| invalid(e.to_string()))?
+        .len();
+    // Account for each durable overlay row exactly as `load` does
+    // (`sum(length(CAST(state AS BLOB))+32)`): the serialized state bytes plus
+    // the 32-byte per-row SQLite overhead. A pre-check that undercounted these
+    // rows could accept a plan that only `plan_metadata_limit` rejects during
+    // recovery, making the write unrecoverable.
+    let mut overlay = 0_usize;
+    for state in &job.progress {
+        overlay = overlay
+            .checked_add(state.len())
+            .and_then(|v| v.checked_add(32))
+            .ok_or_else(|| invalid("plan_metadata_limit"))?;
+    }
+    bytes = bytes
+        .checked_add(overlay)
+        .and_then(|v| v.checked_add(256 * 1024))
+        .ok_or_else(|| invalid("plan_metadata_limit"))?;
+    let mut parents = HashSet::new();
+    for change in &job.plan.changes {
+        operation::check()?;
+        for (offset, _) in change.path.match_indices('/') {
+            let parent = &change.path[..offset];
+            if parents.insert(parent) {
+                bytes = bytes
+                    .checked_add(
+                        serde_json::to_vec(parent)
+                            .map_err(|e| invalid(e.to_string()))?
+                            .len()
+                            + 1,
+                    )
+                    .ok_or_else(|| invalid("plan_metadata_limit"))?;
+                if bytes > MAX_PLAN_METADATA_BYTES {
+                    return Err(invalid("plan_metadata_limit"));
+                }
+            }
+        }
+    }
+    if bytes > MAX_PLAN_METADATA_BYTES {
+        return Err(invalid("plan_metadata_limit"));
+    }
+    Ok(())
+}
+
 fn validate_job(job: &Job, id: &str) -> io::Result<()> {
     let p = &job.plan;
     if p.plan_id != id
@@ -547,8 +709,8 @@ fn validate_job(job: &Job, id: &str) -> io::Result<()> {
         || p.instance_id != p.install.instance_id
         || job.transaction.instance_id != p.instance_id
         || job.transaction.release_id != p.release_id
+        || job.progress_format > 1
         || p.changes.is_empty()
-        || p.changes.len() > MAX_ENTRIES
         || job.progress.len() != p.changes.len()
         || p.expires_at < p.created_at
         || p.expires_at - p.created_at > PLAN_TTL_SECONDS
@@ -607,18 +769,19 @@ fn validate_job(job: &Job, id: &str) -> io::Result<()> {
                 .original_sha256
                 .as_ref()
                 .is_some_and(|h| !valid_hash(h))
-            || change.size > MAX_FILE_BYTES
         {
             return Err(invalid("journal_invalid"));
         }
     }
+    let parents: HashSet<&str> = p
+        .changes
+        .iter()
+        .flat_map(|c| c.path.match_indices('/').map(|(at, _)| &c.path[..at]))
+        .collect();
+    let mut seen_dirs = HashSet::new();
     for dir in &job.created_dirs {
         relative(dir)?;
-        if !p
-            .changes
-            .iter()
-            .any(|c| c.path.starts_with(&format!("{dir}/")))
-        {
+        if !parents.contains(dir.as_str()) || !seen_dirs.insert(dir) {
             return Err(invalid("journal_invalid_directory"));
         }
     }
@@ -788,8 +951,26 @@ pub fn prepare_with_binding_at(
         .recipe
         .as_ref()
         .ok_or_else(|| invalid("recipe_missing"))?;
-    if recipe.files.len() > MAX_ENTRIES {
-        return Err(invalid("recipe_entry_limit"));
+    if serde_json::to_vec(recipe)
+        .map_err(|e| invalid(e.to_string()))?
+        .len()
+        > MAX_PLAN_METADATA_BYTES
+    {
+        return Err(invalid("plan_metadata_limit"));
+    }
+    let mut targets = HashSet::new();
+    for mapping in &recipe.files {
+        relative(&mapping.destination)?;
+        if !targets.insert(mapping.destination.to_lowercase()) {
+            return Err(invalid("recipe_duplicate_target"));
+        }
+    }
+    for path in &targets {
+        for (offset, _) in path.match_indices('/') {
+            if targets.contains(&path[..offset]) {
+                return Err(invalid("recipe_file_directory_collision"));
+            }
+        }
     }
     let requested_state = canonical_future(&std::path::absolute(root)?)?;
     let game_root = fs::canonicalize(&install.install_path)?;
@@ -802,7 +983,7 @@ pub fn prepare_with_binding_at(
         &store,
         &install.instance_id,
         None,
-        operation_kind == InstallOperation::Reinstall,
+        operation_kind != InstallOperation::Install,
     )?;
     let identity = recipe_identity(release)?;
     if operation_kind == InstallOperation::Reinstall {
@@ -851,26 +1032,22 @@ pub fn prepare_with_binding_at(
     }
     let archive_path = std::path::absolute(archive)?;
     let mut file = regular_file(&archive_path)?;
-    if file.metadata()?.len() > MAX_ARCHIVE_BYTES {
-        return Err(invalid("archive_too_large"));
-    }
     if release.artifact.as_ref().is_some_and(|artifact| {
         artifact.size != file.metadata().map(|m| m.len()).unwrap_or(u64::MAX)
     }) {
         return Err(invalid("artifact_size_mismatch"));
     }
-    operation::archive(file.metadata()?.len());
+    let file_len = file.metadata()?.len();
+    operation::archive(file_len);
     operation::stage("validating", Some(file.metadata()?.len()), Some(1));
     operation::file(0, &archive_path.to_string_lossy());
-    if digest_measured(&mut file, MAX_ARCHIVE_BYTES)?.0 != recipe.artifact_sha256 {
+    if digest_measured(&mut file, file_len)?.0 != recipe.artifact_sha256 {
         return Err(invalid("artifact_hash_mismatch"));
     }
     use std::io::{Seek, SeekFrom};
     file.seek(SeekFrom::Start(0))?;
+    crate::zip_metadata::preflight(&mut file)?;
     let mut zip = zip::ZipArchive::new(file).map_err(|e| invalid(format!("invalid_zip:{e}")))?;
-    if zip.len() > MAX_ENTRIES {
-        return Err(invalid("archive_entry_limit"));
-    }
     let mut names = HashMap::new();
     let mut prefixes = HashMap::new();
     let mut total = 0_u64;
@@ -927,18 +1104,9 @@ pub fn prepare_with_binding_at(
                 return Err(invalid("zip_invalid_extra_metadata"));
             }
         }
-        if member.size() > MAX_FILE_BYTES
-            || (member.size() > 1024 * 1024
-                && member.size() / member.compressed_size().max(1) > 200)
-        {
-            return Err(invalid("zip_expansion_limit"));
-        }
         total = total
             .checked_add(member.size())
-            .ok_or_else(|| invalid("zip_expansion_limit"))?;
-        if total > MAX_EXPANDED_BYTES {
-            return Err(invalid("zip_expansion_limit"));
-        }
+            .ok_or_else(|| invalid("zip_size_overflow"))?;
         if names
             .insert(name.to_lowercase(), (i, name.to_owned(), member.is_dir()))
             .is_some()
@@ -959,7 +1127,7 @@ pub fn prepare_with_binding_at(
     // output independently: multiple mappings of one member must not bypass the
     // aggregate expansion cap.
     let mut mapped_bytes = 0_u64;
-    let mut required_bytes = 0_u64;
+    let mut original_total = 0_u64;
     for mapping in &recipe.files {
         let (index, name, directory) = names
             .get(&mapping.source.to_lowercase())
@@ -970,28 +1138,20 @@ pub fn prepare_with_binding_at(
         let member = zip.by_index(*index).map_err(|e| invalid(e.to_string()))?;
         mapped_bytes = mapped_bytes
             .checked_add(member.size())
-            .ok_or_else(|| invalid("zip_expansion_limit"))?;
-        if mapped_bytes > MAX_EXPANDED_BYTES {
-            return Err(invalid("zip_expansion_limit"));
-        }
+            .ok_or_else(|| invalid("zip_size_overflow"))?;
         let destination = target(&install.install_path, &mapping.destination)?;
         let original_bytes = match regular_file(&destination) {
             Ok(file) => file.metadata()?.len(),
             Err(error) if error.kind() == io::ErrorKind::NotFound => 0,
             Err(error) => return Err(error),
         };
-        if original_bytes > MAX_FILE_BYTES {
-            return Err(invalid("size_limit"));
-        }
-        required_bytes = required_bytes
-            .checked_add(original_bytes + member.size() * 2)
+        original_total = original_total
+            .checked_add(original_bytes)
             .ok_or_else(|| invalid("space_overflow"))?;
     }
-    if fs2::available_space(&store.root)? < required_bytes
-        || fs2::available_space(&install.install_path)? < required_bytes
-    {
-        return Err(invalid("insufficient_space"));
-    }
+    let space_budget =
+        crate::installer::space::ZipSpaceBudget::for_stage(mapped_bytes, original_total)?;
+    space_budget.inspect(&store.root, &install.install_path)?;
     let id = Uuid::new_v4().to_string();
     let directory = store.directory(&id)?;
     fs::create_dir(&directory)?;
@@ -1004,15 +1164,6 @@ pub fn prepare_with_binding_at(
             operation::check()?;
             operation::file(index, &mapping.destination);
             relative(&mapping.destination)?;
-            for other in &recipe.files {
-                if mapping
-                    .destination
-                    .to_lowercase()
-                    .starts_with(&(other.destination.to_lowercase() + "/"))
-                {
-                    return Err(invalid("recipe_file_directory_collision"));
-                }
-            }
             let (member_index, name, is_dir) = names
                 .get(&mapping.source.to_lowercase())
                 .ok_or_else(|| invalid("recipe_source_missing"))?;
@@ -1037,17 +1188,28 @@ pub fn prepare_with_binding_at(
                 .write(true)
                 .create_new(true)
                 .open(&stage)?;
-            let copied = operation::copy(&mut member.by_ref().take(MAX_FILE_BYTES + 1), &mut out)?;
+            let declared_size = member.size();
+            let read_limit = declared_size
+                .checked_add(1)
+                .ok_or_else(|| invalid("size_overflow"))?;
+            let copied = operation::copy(&mut member.by_ref().take(read_limit), &mut out)?;
             out.sync_all()?;
             drop(out);
-            if copied > MAX_FILE_BYTES
-                || copied != member.size()
+            if copied != declared_size
                 || hash_at(&stage)?.as_deref() != Some(&mapping.installed_sha256)
             {
                 return Err(invalid("installed_hash_or_size_mismatch"));
             }
             disk = disk
-                .checked_add(old_size + copied * 2)
+                .checked_add(
+                    old_size
+                        .checked_add(
+                            copied
+                                .checked_mul(2)
+                                .ok_or_else(|| invalid("space_overflow"))?,
+                        )
+                        .ok_or_else(|| invalid("space_overflow"))?,
+                )
                 .ok_or_else(|| invalid("space_overflow"))?;
             operation::finish_file(index + 1);
             changes.push(PlannedChange {
@@ -1070,10 +1232,12 @@ pub fn prepare_with_binding_at(
         let _ = fs::remove_dir(&directory);
         return Err(error);
     }
-    if fs2::available_space(&store.root)? < disk
-        || fs2::available_space(&install.install_path)? < disk
+    if let Err(error) = space_budget
+        .after_staging()
+        .inspect(&store.root, &install.install_path)
     {
-        blockers.push("insufficient_space".into());
+        // A plan with a capacity blocker is discarded by the normal caller.
+        blockers.push(error.to_string());
     }
     sync_dir(&directory)?;
     let plan = InstallPlan {
@@ -1091,6 +1255,7 @@ pub fn prepare_with_binding_at(
         .map_err(|e| invalid(e.to_string()))?,
         changes,
         disk_requirement: disk,
+        space_budget: Some(space_budget),
         blockers,
         preconditions: Vec::new(),
     };
@@ -1114,9 +1279,13 @@ pub fn prepare_with_binding_at(
         created_dirs: Vec::new(),
         uninstall_requested: false,
         transient_recovery: true,
+        progress_format: 1,
     };
     operation::stage("planning", None, None);
-    if let Err(error) = operation::check().and_then(|()| store.save(&mut job)) {
+    if let Err(error) = operation::check()
+        .and_then(|()| validate_metadata_budget(&job))
+        .and_then(|()| store.save(&mut job))
+    {
         for index in 0..job.plan.changes.len() {
             let path = store.item(&job.plan.plan_id, index, "stage")?;
             let _ = fs::remove_file(path);
@@ -1180,10 +1349,11 @@ fn copy_checked(source: &Path, destination: &Path, expected: &str) -> io::Result
         .write(true)
         .create_new(true)
         .open(destination)?;
-    let copied = operation::copy(
-        &mut Read::by_ref(&mut input).take(MAX_FILE_BYTES + 1),
-        &mut output,
-    );
+    let expected_size = input.metadata()?.len();
+    let read_limit = expected_size
+        .checked_add(1)
+        .ok_or_else(|| invalid("size_overflow"))?;
+    let copied = operation::copy(&mut Read::by_ref(&mut input).take(read_limit), &mut output);
     let bytes = match copied {
         Ok(bytes) => bytes,
         Err(error) => {
@@ -1195,7 +1365,7 @@ fn copy_checked(source: &Path, destination: &Path, expected: &str) -> io::Result
     output.set_permissions(input.metadata()?.permissions())?;
     output.sync_all()?;
     drop(output);
-    if bytes > MAX_FILE_BYTES || hash_at(destination)?.as_deref() != Some(expected) {
+    if bytes != expected_size || hash_at(destination)?.as_deref() != Some(expected) {
         return Err(invalid("copy_hash_mismatch"));
     }
     sync_dir(
@@ -1218,7 +1388,7 @@ fn make_parents(store: &Store, job: &mut Job, index: usize) -> io::Result<()> {
         let path = target(&job.plan.install.install_path, &rel)?;
         if !path.exists() {
             job.created_dirs.push(rel.clone());
-            store.save(job)?;
+            store.save_directory(job)?;
             fs::create_dir(&path)?;
             sync_dir(path.parent().ok_or_else(|| invalid("missing_parent"))?)?;
         }
@@ -1316,14 +1486,19 @@ pub fn apply_at(root: &Path, plan_id: &str) -> io::Result<Transaction> {
         &store,
         &job.plan.instance_id,
         Some(plan_id),
-        job.plan.operation == InstallOperation::Reinstall,
+        job.plan.operation != InstallOperation::Install,
     )?;
     verify_all(&job, false)?;
-    if fs2::available_space(&store.root)? < job.plan.disk_requirement
+    if let Some(budget) = &job.plan.space_budget {
+        budget
+            .after_staging()
+            .inspect(&store.root, &job.plan.install.install_path)?;
+    } else if fs2::available_space(&store.root)? < job.plan.disk_requirement
         || fs2::available_space(&job.plan.install.install_path)? < job.plan.disk_requirement
     {
         return Err(invalid("insufficient_space"));
     }
+    validate_metadata_budget(&job)?;
     job.transaction.state = "backing_up".into();
     store.save(&mut job)?;
     let result = apply_files(&store, &mut job);
@@ -1345,12 +1520,16 @@ pub fn apply_at(root: &Path, plan_id: &str) -> io::Result<Transaction> {
 }
 
 fn apply_files(store: &Store, job: &mut Job) -> io::Result<()> {
-    let mut backup_bytes = 0;
+    let mut backup_bytes = 0u64;
     for change in &job.plan.changes {
         if change.original_sha256.is_some() {
-            backup_bytes += regular_file(&target(&job.plan.install.install_path, &change.path)?)?
-                .metadata()?
-                .len();
+            backup_bytes = backup_bytes
+                .checked_add(
+                    regular_file(&target(&job.plan.install.install_path, &change.path)?)?
+                        .metadata()?
+                        .len(),
+                )
+                .ok_or_else(|| invalid("space_overflow"))?;
         }
     }
     operation::stage(
@@ -1374,7 +1553,7 @@ fn apply_files(store: &Store, job: &mut Job) -> io::Result<()> {
             )?;
         }
         job.progress[i] = "backed_up".into();
-        store.save(job)?;
+        store.save_progress(job, i)?;
         operation::finish_file(i + 1);
     }
     operation::stage(
@@ -1391,7 +1570,7 @@ fn apply_files(store: &Store, job: &mut Job) -> io::Result<()> {
         validate_install(&job.plan.install, &store.root)?;
         make_parents(store, job, i)?;
         job.progress[i] = "writing".into();
-        store.save(job)?;
+        store.save_progress(job, i)?;
         let change = &job.plan.changes[i];
         let dest = target(&job.plan.install.install_path, &change.path)?;
         let temp = temporary(job, i)?;
@@ -1417,7 +1596,7 @@ fn apply_files(store: &Store, job: &mut Job) -> io::Result<()> {
             return Err(invalid("post_install_hash_mismatch"));
         }
         job.progress[i] = "installed".into();
-        store.save(job)?;
+        store.save_progress(job, i)?;
         operation::finish_file(i + 1);
     }
     operation::stage("committing", None, None);
@@ -1534,7 +1713,7 @@ fn restore(store: &Store, job: &mut Job, uninstalling: bool) -> io::Result<()> {
                 return Err(invalid("recovery_conflict"));
             }
             job.progress[i] = "restoring".into();
-            store.save(job)?;
+            store.save_progress(job, i)?;
             let change = &job.plan.changes[i];
             if let Some(hash) = &change.original_sha256 {
                 copy_checked(&store.item(&job.plan.plan_id, i, "backup")?, &temp, hash)?;
@@ -1552,7 +1731,7 @@ fn restore(store: &Store, job: &mut Job, uninstalling: bool) -> io::Result<()> {
             sync_dir(dest.parent().ok_or_else(|| invalid("missing_parent"))?)?;
         }
         job.progress[i] = "restored".into();
-        store.save(job)?;
+        store.save_progress(job, i)?;
     }
     for rel in job.created_dirs.iter().rev() {
         let path = target(&job.plan.install.install_path, rel)?;

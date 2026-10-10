@@ -26,6 +26,7 @@ use crate::operation;
 use crate::sources::{GameQuery, Sources};
 use crate::steam::GameInstall;
 use std::fmt;
+use std::fs;
 use std::io;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -106,6 +107,7 @@ fn operation_name(operation: InstallOperation) -> &'static str {
     match operation {
         InstallOperation::Install => "install",
         InstallOperation::Reinstall => "reinstall",
+        InstallOperation::Overwrite => "overwrite",
     }
 }
 
@@ -273,10 +275,14 @@ pub(crate) fn map_download_error(error: io::Error) -> ZipTaskError {
     if code == "task_cancelled" || code == "cancelled" {
         return ZipTaskError::code("download_cancelled");
     }
+    if code.starts_with("insufficient_space:") {
+        return ZipTaskError::new("insufficient_space", code);
+    }
     if [
         "download_cancelled",
         "download_hash_mismatch",
         "download_size_limit",
+        "download_size_overflow",
     ]
     .contains(&code.as_str())
     {
@@ -291,7 +297,13 @@ fn map_recipe_error(error: io::Error) -> ZipTaskError {
     if code == "download_cancelled" {
         return ZipTaskError::code("cancelled");
     }
-    if ["archive_entry_limit", "archive_too_large"].contains(&code.as_str()) {
+    if code == "zip_metadata_limit" {
+        return ZipTaskError::new("resource_limit", code);
+    }
+    if code == "zip_metadata_invalid" {
+        return ZipTaskError::code(code);
+    }
+    if ["zip_size_overflow"].contains(&code.as_str()) {
         ZipTaskError::code(code)
     } else {
         ZipTaskError::new("analysis_failed", code)
@@ -300,8 +312,15 @@ fn map_recipe_error(error: io::Error) -> ZipTaskError {
 
 pub(crate) fn map_plan_error(error: io::Error) -> ZipTaskError {
     let code = error.to_string();
+    if code.starts_with("insufficient_space:") {
+        return ZipTaskError::new("insufficient_space", code);
+    }
+    if code == "plan_metadata_limit" {
+        return ZipTaskError::new("resource_limit", code);
+    }
     if [
         "insufficient_space",
+        "zip_size_overflow",
         "installer_busy",
         "game_busy",
         "managed_install_exists_or_needs_recovery",
@@ -701,9 +720,10 @@ fn install_zip_inner(
             return Ok(transaction);
         }
         // The download must still hash to the authorized artifact before apply.
-        let artifact = facts::digest_file(&acquired.path, acquire::MAX_ARCHIVE_BYTES, deps.cancel)
-            .map_err(internal)?;
-        if artifact.sha256 != acquired.sha256 {
+        let current_size = fs::metadata(&acquired.path).map_err(internal)?.len();
+        let artifact =
+            facts::digest_file(&acquired.path, current_size, deps.cancel).map_err(internal)?;
+        if artifact.sha256 != acquired.sha256 || artifact.size != acquired.size {
             return Err(fail_after_plan(
                 deps.paths,
                 inputs.request_id,
@@ -1146,6 +1166,18 @@ pub(crate) mod tests {
             final_url: "https://kaguraserver.com/a.zip".to_string(),
             body: Box::new(std::io::Cursor::new(archive)),
         }])
+    }
+
+    #[test]
+    fn metadata_limits_and_invalid_zip_have_distinct_errors() {
+        let resource = map_recipe_error(io::Error::other("zip_metadata_limit"));
+        assert_eq!(resource.code, "resource_limit");
+        assert_eq!(resource.detail.as_deref(), Some("zip_metadata_limit"));
+        let invalid = map_recipe_error(io::Error::other("zip_metadata_invalid"));
+        assert_eq!(invalid.code, "zip_metadata_invalid");
+        let plan = map_plan_error(io::Error::other("plan_metadata_limit"));
+        assert_eq!(plan.code, "resource_limit");
+        assert_eq!(plan.detail.as_deref(), Some("plan_metadata_limit"));
     }
 
     #[test]

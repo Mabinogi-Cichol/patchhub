@@ -189,6 +189,7 @@ fn run(
     let reinstall = if inputs.operation == InstallOperation::Reinstall {
         reinstall_evidence(deps.paths, inputs.game, &content)?
     } else {
+        // Overwrite must evaluate the actual current files, even for owned content.
         None
     };
     if inputs.operation == InstallOperation::Reinstall && reinstall.is_none() {
@@ -820,6 +821,26 @@ mod tests {
             assert_eq!(t.state, "committed");
             assert_eq!(first.release_id, t.release_id);
         }
+        // The current payload is already patched, but a real script CRC
+        // condition no longer holds. Overwrite must not borrow old conditions.
+        fs::write(game.install_path.join("identity.dat"), b"changed").unwrap();
+        let overwrite_error = invoke(
+            &state,
+            &paths,
+            &game,
+            &selection,
+            &runtime,
+            "exe-overwrite-crc-mismatch",
+            InstallOperation::Overwrite,
+            &cancel,
+        )
+        .unwrap_err();
+        assert_eq!(overwrite_error.code, "exe_conditions_not_satisfied");
+        assert_eq!(
+            fs::read(game.install_path.join("payload.bin")).unwrap(),
+            b"generic-content"
+        );
+        fs::write(game.install_path.join("identity.dat"), [87, 164, 242, 220]).unwrap();
         fs::write(game.install_path.join("payload.bin"), b"externally edited").unwrap();
         assert!(invoke(
             &state,

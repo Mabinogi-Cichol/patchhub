@@ -23,7 +23,7 @@ export type TaskSnapshot = {
   selection_id?: string | null;
 };
 export type TaskApi = {
-  install(instance: string, release: string | null, selection: string | null, archive: string | null, operation: "install" | "reinstall", requestId: string): Promise<{ task_id: string }>;
+  install(instance: string, release: string | null, selection: string | null, archive: string | null, operation: "install" | "reinstall" | "overwrite", requestId: string): Promise<{ task_id: string }>;
   status(id: string): Promise<TaskSnapshot>;
   cancel(id: string): Promise<TaskSnapshot>;
   list(): Promise<TaskSnapshot[]>;
@@ -121,7 +121,7 @@ export function createTaskController(api: TaskApi, pollMs = 750, retryMs = 1500)
     getSnapshot: () => current,
     isBusy: () => starting || !!current && !taskIsTerminal(current.state),
     subscribe(listener: () => void) { listeners.add(listener); return () => { listeners.delete(listener); }; },
-    startInstall: (instance: string, release: string | null, selection: string | null, operation: "install" | "reinstall", requestId: string, archive = "") =>
+    startInstall: (instance: string, release: string | null, selection: string | null, operation: "install" | "reinstall" | "overwrite", requestId: string, archive = "") =>
       begin(instance, release, selection, () => api.install(instance, release, selection, archive || null, operation, requestId)),
     requestCancel, resume,
     claimTerminal(value: TaskSnapshot) {

@@ -354,7 +354,7 @@ function GameManager({ item, seg, panel }: { item: Install; seg: string; panel?:
   async function beginInstall(manualArchive = "") {
     if (!patch || busy || tasks.isBusy() || (manualArchive ? manualBlocked : !!blocked)) return;
     try {
-      const operation = installed ? "reinstall" : "install";
+      const operation = "overwrite";
       const key = `${item.game.instance_id}\0${identity}\0${operation}\0${manualArchive}`;
       const requestId = pendingRequestIds.get(key) ?? crypto.randomUUID();
       pendingRequestIds.set(key, requestId);
@@ -435,15 +435,15 @@ function GameManager({ item, seg, panel }: { item: Install; seg: string; panel?:
         {patch.blockers.map((b, i) => <Row key={i}><Status warning>{reason(b)}</Status></Row>)}
         <Row><Action onClick={() => openSource(patch.source_page)}>打开来源网页 ↗</Action></Row>
       </PanelSection>
-      <PanelSection title={installed ? "重新安装" : "安装补丁"}>
+      <PanelSection title={installed ? "覆盖安装" : "安装补丁"}>
         <Row><Status>安装时请关闭游戏并暂停 Steam 更新。</Status></Row>
         {blocked && <Row><Status warning>{blocked}</Status></Row>}
         <Row><Action disabled={!!busy || tasks.isBusy()} onClick={viewPreview}>查看文件变更（只读）</Action></Row>
         {preview && <Row><Status>{preview.changes.length ? preview.changes.map(change => `${change.action}：${change.path}`).join("；") : preview.blockers.length ? preview.blockers.map(reason).join("；") : "暂无文件变更。"}</Status></Row>}
-        <Row><Action disabled={!!busy || !!blocked || tasks.isBusy()} onClick={() => void beginInstall()}>{installed ? "重新安装补丁" : "安装补丁"}</Action></Row>
+        <Row><Action disabled={!!busy || !!blocked || tasks.isBusy()} onClick={() => void beginInstall()}>{installed ? "覆盖安装补丁" : "安装补丁"}</Action></Row>
         {patch.support_level === "managed_zip" && <Row><Action onClick={() => setManual(value => !value)}>使用本地 ZIP（高级）{manual ? " ▴" : " ▾"}</Action></Row>}
         {manual && patch.support_level === "managed_zip" && <><Row><TextField label="Downloads 内的 ZIP 路径" value={archive} onChange={e => setArchive(e.target.value)} /></Row>
-          <Row><Action disabled={!archive.trim() || manualBlocked || !!busy} onClick={() => void beginInstall(archive)}>使用本地 ZIP {installed ? "重新安装" : "安装"}</Action></Row></>}
+          <Row><Action disabled={!archive.trim() || manualBlocked || !!busy} onClick={() => void beginInstall(archive)}>使用本地 ZIP {installed ? "覆盖安装" : "安装"}</Action></Row></>}
       </PanelSection>
     </>}
   </div>;

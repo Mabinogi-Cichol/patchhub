@@ -244,7 +244,7 @@ class Plugin:
     async def start_patch_install_task(self, instance_id, release_id=None, selection_id=None,
                                        archive=None, operation="install", request_id=None):
         self.bridge.selection(instance_id, release_id, selection_id)
-        if operation not in ("install", "reinstall"):
+        if operation not in ("install", "reinstall", "overwrite"):
             raise ValueError("invalid_operation")
         if selection_id is not None and archive is not None:
             raise ValueError("archive_not_allowed_for_selection")

@@ -257,6 +257,19 @@ impl Fixture {
             InstallOperation::Reinstall,
         )
     }
+    fn overwrite(&self) -> std::io::Result<InstallPlan> {
+        let game = steam::scan(std::slice::from_ref(&self.library))
+            .installs
+            .remove(0);
+        prepare_with_operation(
+            &game,
+            &self.release,
+            &self.archive,
+            &self.state,
+            1,
+            InstallOperation::Overwrite,
+        )
+    }
     fn job_file(&self, id: &str, name: &str) -> PathBuf {
         self.state.join("jobs").join(id).join(name)
     }
@@ -665,34 +678,36 @@ fn zip_case_collisions_and_file_directory_collisions_are_rejected() {
 }
 
 #[test]
-fn zip_symlink_and_high_expansion_ratio_are_rejected() {
-    for symlink in [true, false] {
-        let mut f = Fixture::new();
-        let mut zip = ZipWriter::new(File::create(&f.archive).unwrap());
-        if symlink {
-            zip.add_symlink("link", "../outside", SimpleFileOptions::default())
-                .unwrap();
-        } else {
-            zip.start_file(
-                "bomb",
-                SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated),
-            )
-            .unwrap();
-            zip.write_all(&vec![0; 2 * 1024 * 1024]).unwrap();
-        }
-        zip.finish().unwrap();
-        f.rehash_archive();
-        let error = f.plan().unwrap_err().to_string();
-        assert!(
-            error.contains(if symlink {
-                "zip_link"
-            } else {
-                "zip_expansion_limit"
-            }),
-            "{error}"
-        );
-        f.assert_original();
+fn zip_symlink_is_rejected_and_high_ratio_can_stage_with_real_space() {
+    let mut f = Fixture::new();
+    let mut zip = ZipWriter::new(File::create(&f.archive).unwrap());
+    zip.add_symlink("link", "../outside", SimpleFileOptions::default())
+        .unwrap();
+    zip.finish().unwrap();
+    f.rehash_archive();
+    assert!(f.plan().unwrap_err().to_string().contains("zip_link"));
+    f.assert_original();
+
+    let payload = vec![0; 2 * 1024 * 1024];
+    let mut zip = ZipWriter::new(File::create(&f.archive).unwrap());
+    for (name, bytes) in [
+        ("replace.dat", payload.as_slice()),
+        ("add.dat", &b"new bytes"[..]),
+    ] {
+        zip.start_file(
+            name,
+            SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated),
+        )
+        .unwrap();
+        zip.write_all(bytes).unwrap();
     }
+    zip.finish().unwrap();
+    f.rehash_archive();
+    f.release.recipe.as_mut().unwrap().files[0].installed_sha256 = hash(&payload);
+    let plan = f.plan().unwrap();
+    assert!(plan.blockers.is_empty());
+    assert_eq!(apply(&plan.plan_id, &f.state).unwrap().state, "committed");
+    assert_eq!(fs::read(f.game.join("original.dat")).unwrap(), payload);
 }
 
 #[test]
@@ -1175,4 +1190,238 @@ fn planned_change_source_is_optional_for_older_journals() {
         .iter()
         .all(|change| change.source.is_none()));
     assert_eq!(reloaded.changes.len(), plan.changes.len());
+}
+
+#[test]
+fn overwrite_accepts_unowned_changed_targets_and_supersedes_old_receipt() {
+    let mut f = Fixture::new();
+    fs::write(f.game.join("original.dat"), b"external patch").unwrap();
+    fs::write(f.game.join("keep-save.dat"), b"save data").unwrap();
+    let first = f.overwrite().unwrap();
+    assert!(first.blockers.is_empty());
+    assert_eq!(
+        first.changes[0].original_sha256.as_deref(),
+        Some(hash(b"external patch").as_str())
+    );
+    assert_eq!(apply(&first.plan_id, &f.state).unwrap().state, "committed");
+    fs::write(f.game.join("original.dat"), b"user modified").unwrap();
+    f.release.release_id = "fixture-v2".into();
+    f.release.recipe.as_mut().unwrap().files[0].installed_sha256 = hash(b"updated patch");
+    f.archive_with(&[("replace.dat", b"updated patch"), ("add.dat", b"new bytes")]);
+    let second = f.overwrite().unwrap();
+    assert!(second.blockers.is_empty());
+    assert_eq!(apply(&second.plan_id, &f.state).unwrap().state, "committed");
+    assert_eq!(apply(&second.plan_id, &f.state).unwrap().state, "committed");
+    let receipts = list_transactions(&f.state).unwrap();
+    assert_eq!(
+        receipts
+            .iter()
+            .find(|t| t.plan_id == first.plan_id)
+            .unwrap()
+            .state,
+        "superseded"
+    );
+    assert_eq!(
+        fs::read(f.game.join("original.dat")).unwrap(),
+        b"updated patch"
+    );
+    assert_eq!(
+        fs::read(f.game.join("keep-save.dat")).unwrap(),
+        b"save data"
+    );
+}
+
+#[test]
+fn cancelled_overwrite_restores_current_bytes_and_keeps_old_receipt() {
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    };
+    let f = Fixture::new();
+    let first = f.plan().unwrap();
+    apply(&first.plan_id, &f.state).unwrap();
+    fs::write(f.game.join("original.dat"), b"changed since old install").unwrap();
+    fs::remove_file(f.game.join("content/new.dat")).unwrap();
+    let second = f.overwrite().unwrap();
+    let cancel = Arc::new(AtomicBool::new(false));
+    let signal = cancel.clone();
+    let result = steam_patch_core::operation::run(
+        cancel,
+        move |p| {
+            if p.stage == "writing" && p.files_done == 1 {
+                signal.store(true, Ordering::Relaxed);
+            }
+        },
+        || apply(&second.plan_id, &f.state),
+    )
+    .unwrap();
+    assert_eq!(result.state, "rolled_back");
+    assert_eq!(
+        fs::read(f.game.join("original.dat")).unwrap(),
+        b"changed since old install"
+    );
+    assert!(!f.game.join("content/new.dat").exists());
+    assert_eq!(
+        list_transactions(&f.state)
+            .unwrap()
+            .iter()
+            .find(|t| t.plan_id == first.plan_id)
+            .unwrap()
+            .state,
+        "committed"
+    );
+}
+
+#[test]
+fn overwrite_still_blocks_unfinished_transaction_and_pre_apply_changes() {
+    let f = Fixture::new();
+    let first = f.overwrite().unwrap();
+    f.edit_journal(&first.plan_id, |j| {
+        j["transaction"]["state"] = "backing_up".into();
+    });
+    assert!(f
+        .overwrite()
+        .unwrap_err()
+        .to_string()
+        .contains("managed_install_exists_or_needs_recovery"));
+    f.edit_journal(&first.plan_id, |j| {
+        j["transaction"]["state"] = "planned".into();
+    });
+    fs::write(f.game.join("original.dat"), b"changed after prepare").unwrap();
+    assert!(apply(&first.plan_id, &f.state)
+        .unwrap_err()
+        .to_string()
+        .contains("file_changed"));
+    assert_eq!(
+        fs::read(f.game.join("original.dat")).unwrap(),
+        b"changed after prepare"
+    );
+}
+
+#[test]
+fn delta_writing_and_restoring_intents_recover_crash_and_partial_copy() {
+    for state in ["writing", "restoring"] {
+        for renamed in [false, true] {
+            let f = Fixture::new();
+            let plan = f.overwrite().unwrap();
+            fs::write(f.job_file(&plan.plan_id, "0.backup"), b"original bytes").unwrap();
+            f.edit_journal(&plan.plan_id, |j| {
+                j["transaction"]["state"] = if state == "writing" {
+                    "applying"
+                } else {
+                    "rolling_back"
+                }
+                .into();
+                j["progress"] = serde_json::json!(["backed_up", "backed_up"]);
+            });
+            let db = rusqlite::Connection::open(f.state.join("journal.sqlite")).unwrap();
+            db.execute(
+                "INSERT INTO job_progress VALUES(?1,0,?2,1)",
+                rusqlite::params![plan.plan_id, state],
+            )
+            .unwrap();
+            db.execute(
+                "INSERT INTO job_directories VALUES(?1,0,'content')",
+                [&plan.plan_id],
+            )
+            .unwrap();
+            drop(db);
+            fs::create_dir(f.game.join("content")).unwrap();
+            if state == "restoring" || renamed {
+                fs::write(f.game.join("original.dat"), b"patched bytes").unwrap();
+            }
+            if !renamed {
+                fs::write(
+                    f.temp_file(&plan.plan_id, 0, "original.dat"),
+                    if state == "writing" {
+                        &b"patch"[..]
+                    } else {
+                        &b"origin"[..]
+                    },
+                )
+                .unwrap();
+            } else if state == "restoring" {
+                fs::write(f.game.join("original.dat"), b"original bytes").unwrap();
+            }
+            assert_eq!(
+                recover(&f.state).unwrap()[0].state,
+                "rolled_back",
+                "{state} renamed={renamed}"
+            );
+            f.assert_original();
+            assert!(!f.game.join("content").exists());
+            let db = rusqlite::Connection::open(f.state.join("journal.sqlite")).unwrap();
+            let count:i64=db.query_row("SELECT (SELECT count(*) FROM job_progress)+(SELECT count(*) FROM job_directories)",[],|r|r.get(0)).unwrap();
+            assert_eq!(count, 0);
+        }
+    }
+}
+
+#[test]
+fn corrupt_delta_is_rejected_and_old_documents_need_no_overlay_schema() {
+    let f = Fixture::new();
+    let plan = f.plan().unwrap();
+    let db = rusqlite::Connection::open(f.state.join("journal.sqlite")).unwrap();
+    db.execute(
+        "INSERT INTO job_progress VALUES(?1,900,'writing',1)",
+        [&plan.plan_id],
+    )
+    .unwrap();
+    assert!(get_plan_ro(&f.state, &plan.plan_id)
+        .unwrap_err()
+        .to_string()
+        .contains("journal_invalid"));
+    f.assert_original();
+    db.execute("DELETE FROM job_progress", []).unwrap();
+    db.execute(
+        "INSERT INTO job_directories VALUES(?1,9,'content')",
+        [&plan.plan_id],
+    )
+    .unwrap();
+    assert!(get_plan_ro(&f.state, &plan.plan_id)
+        .unwrap_err()
+        .to_string()
+        .contains("journal_invalid_directory"));
+    db.execute("DELETE FROM job_directories", []).unwrap();
+    drop(db);
+    f.edit_journal(&plan.plan_id, |j| {
+        j.as_object_mut().unwrap().remove("progress_format");
+        j["plan"].as_object_mut().unwrap().remove("space_budget");
+    });
+    let db = rusqlite::Connection::open(f.state.join("journal.sqlite")).unwrap();
+    db.execute_batch("DROP TABLE job_progress; DROP TABLE job_directories;")
+        .unwrap();
+    drop(db);
+    assert_eq!(
+        get_plan_ro(&f.state, &plan.plan_id).unwrap().changes.len(),
+        2
+    );
+    assert_eq!(apply(&plan.plan_id, &f.state).unwrap().state, "committed");
+}
+
+#[test]
+fn failed_commit_compaction_preserves_old_receipt_and_rollback_evidence() {
+    let f = Fixture::new();
+    let first = f.plan().unwrap();
+    apply(&first.plan_id, &f.state).unwrap();
+    fs::write(f.game.join("original.dat"), b"current external bytes").unwrap();
+    let second = f.overwrite().unwrap();
+    let db = rusqlite::Connection::open(f.state.join("journal.sqlite")).unwrap();
+    db.execute_batch(&format!("CREATE TRIGGER fail_commit BEFORE UPDATE ON jobs WHEN NEW.id='{}' AND json_extract(NEW.document,'$.transaction.state')='committed' BEGIN SELECT RAISE(FAIL,'simulated_disk_full'); END;",second.plan_id)).unwrap();
+    drop(db);
+    let result = apply(&second.plan_id, &f.state).unwrap();
+    assert_eq!(result.state, "rolled_back");
+    assert_eq!(
+        fs::read(f.game.join("original.dat")).unwrap(),
+        b"current external bytes"
+    );
+    assert_eq!(
+        list_transactions(&f.state)
+            .unwrap()
+            .iter()
+            .find(|t| t.plan_id == first.plan_id)
+            .unwrap()
+            .state,
+        "committed"
+    );
 }

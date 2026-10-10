@@ -44,20 +44,7 @@ class CutoverTests(unittest.TestCase):
             self.assertEqual(cutover.check_journals(root)[0]['states'], ['rolled_back'])
             self.assertEqual(path.read_bytes(), before)
 
-    def test_protection_is_idempotent_and_never_contains_legacy_identity(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            journals = [{'preserved_instances': ['42|library|game']}]
-            cutover.publish_protection(root, journals)
-            path = root / 'installer/rust-v1/preexisting-installations.json'
-            before = path.read_bytes()
-            cutover.publish_protection(root, journals)
-            self.assertEqual(before, path.read_bytes())
-            self.assertEqual(json.loads(before), {'schema_version': 1, 'instances': ['42|library|game'], 'appids': [42]})
-            self.assertFalse((path.parent / 'journal.sqlite').exists())
-            self.assertFalse((path.parent / 'receipts').exists())
-
-    def test_committed_journal_requires_publication_and_preserves_union(self):
+    def test_committed_journal_is_safe_without_marker_publication(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp); path = root / 'publisher/release/instance/journal.sqlite'
             path.parent.mkdir(parents=True)
@@ -70,15 +57,11 @@ class CutoverTests(unittest.TestCase):
             command = ['check', '--rpc-snapshot', str(snapshot), '--state-dir', str(root)]
             with patch.object(sys, 'argv', command), redirect_stdout(io.StringIO()) as output:
                 cutover.main()
-            self.assertFalse(json.loads(output.getvalue())['safe_to_replace'])
-            journals = cutover.check_journals(root)
-            cutover.publish_protection(root, [{'preserved_instances': ['7|library|game']}])
-            cutover.publish_protection(root, journals)
-            marker = json.loads((root / 'installer/rust-v1/preexisting-installations.json').read_text())
-            self.assertEqual(marker['appids'], [7, 42])
-            with patch.object(sys, 'argv', command), redirect_stdout(io.StringIO()) as output:
-                cutover.main()
             self.assertTrue(json.loads(output.getvalue())['safe_to_replace'])
+            self.assertFalse((root / 'installer/rust-v1/preexisting-installations.json').exists())
+            with patch.object(sys, 'argv', command + ['--write-protection']):
+                with self.assertRaises(SystemExit):
+                    cutover.main()
 
     def test_wrong_state_directory_cannot_override_committed_rpc_snapshot(self):
         with tempfile.TemporaryDirectory() as tmp:

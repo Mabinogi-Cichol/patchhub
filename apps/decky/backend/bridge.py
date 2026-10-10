@@ -97,7 +97,7 @@ class CoreBridge:
     async def install_patch(self, instance_id, release_id=None, selection_id=None,
                             archive=None, operation="install", request_id=None):
         params = self.selection(instance_id, release_id, selection_id)
-        if operation not in ("install", "reinstall"):
+        if operation not in ("install", "reinstall", "overwrite"):
             raise ValueError("invalid_operation")
         if archive is not None:
             if selection_id is not None:

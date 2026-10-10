@@ -6,7 +6,7 @@ import { type TaskSnapshot } from "./task-controller";
 import { taskProgressPercent } from "./task-progress";
 
 const stageNames: Record<string, string> = {
-  connecting: "正在连接", downloading: "下载补丁", validating: "校验文件",
+  connecting: "正在连接", downloading: "下载补丁", validating: "检查已下载补丁",
   analyzing_installer: "分析安装包", extracting: "提取文件", planning: "检查安装条件",
   applying: "写入文件", rolling_back: "恢复原文件", cleanup: "清理临时文件",
 };

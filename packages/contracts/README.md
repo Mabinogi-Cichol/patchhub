@@ -24,7 +24,7 @@
 - 安装器/任务面（8）：`get_capabilities`、`scan`、`preview`、`install_patch`、`list_transactions`、`recover`、`discard_plan`、`cleanup_cache`。
 - 来源面（8）：`list_sources`、`list_game_sources`、`set_source_enabled`、`set_game_source`、`add_source`、`refresh_sources`、`scan_sources`、`discover_game`。
 
-`get_capabilities` 是唯一能力协商入口，返回 `installer`、`sources` 子对象与合并 `methods`。`install_patch` 为唯一安装入口（仅 `serve-task`）：`{instance_id, selection_id? | release_id?, operation:"install"|"reinstall", request_id, archive?}`；`selection_id` 与 `release_id` 互斥（同给 `invalid_request`，皆缺 `selection_or_release_required`）。后端按 `release_id`（签名，优先）/ `zip-selection-*`（动态 ZIP）/ `exe-selection-*`（动态 EXE）路由。
+`get_capabilities` 是唯一能力协商入口，返回 `installer`、`sources` 子对象与合并 `methods`。`install_patch` 为唯一安装入口（仅 `serve-task`）：`{instance_id, selection_id? | release_id?, operation:"install"|"reinstall"|"overwrite", request_id, archive?}`；`selection_id` 与 `release_id` 互斥（同给 `invalid_request`，皆缺 `selection_or_release_required`）。后端按 `release_id`（签名，优先）/ `zip-selection-*`（动态 ZIP）/ `exe-selection-*`（动态 EXE）路由。
 
 `scan.result` 每行含 `game`、`match_status`、`patches`，`patches[].download_available` 为后端判定的"可进入安装"标记（签名目录声明或动态来源解析且无阻断，均由核心判定）；本机链路可用性另见 `installer.links.*.available`；`preview.result` 只读，`executable` 恒为 `false`。旧方法 `plan_install`/`start_install`/`fetch_artifact`/`migrate_state`/`get_source_state`/`get_source_settings`/`list_source_matches`/`get_source_policy`/`resolve_source_record` 已删除，调用返回 `unsupported_method`。
 

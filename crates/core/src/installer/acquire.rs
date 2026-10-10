@@ -30,8 +30,9 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-/// Maximum dynamic package size (p0-contracts §6.2).
-pub const MAX_ARCHIVE_BYTES: u64 = 8 * 1024 * 1024 * 1024;
+const MAX_EXE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+const DOWNLOAD_RESERVE_BYTES: u64 = 8 * 1024 * 1024;
+const SPACE_CHECK_INTERVAL_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_REDIRECTS: usize = 5;
 const COPY_BUFFER: usize = 65536;
 const ZIP_MAGIC_LOCAL: [u8; 4] = [0x50, 0x4b, 0x03, 0x04];
@@ -148,10 +149,10 @@ impl ArchiveKind {
             Self::Exe => "exe",
         }
     }
-    fn limit(self) -> u64 {
+    fn limit(self) -> Option<u64> {
         match self {
-            Self::Zip => MAX_ARCHIVE_BYTES,
-            Self::Exe => 2 * 1024 * 1024 * 1024,
+            Self::Zip => None,
+            Self::Exe => Some(MAX_EXE_BYTES),
         }
     }
     fn url(self, url: &str, hosts: &[String]) -> Result<String> {
@@ -295,10 +296,10 @@ fn download_and_persist(
     {
         return Err(invalid("download_not_zip"));
     }
-    if response
-        .content_length
-        .is_some_and(|length| length > kind.limit())
-    {
+    if kind.limit().is_some_and(|max| {
+        response.content_length.is_some_and(|length| length > max)
+            || request.expected_size.is_some_and(|size| size > max)
+    }) {
         return Err(invalid("download_size_limit"));
     }
     if let (Some(expected), Some(length)) = (request.expected_size, response.content_length) {
@@ -321,6 +322,7 @@ fn download_and_persist(
         None,
     );
 
+    check_download_space(dir, total_hint)?;
     let mut body = response.body;
     let mut file = OpenOptions::new()
         .write(true)
@@ -328,10 +330,11 @@ fn download_and_persist(
         .open(partial)?;
     let expected = Expected {
         sha256: request.expected_sha256,
-        size: request.expected_size,
+        size: request.expected_size.or(response.content_length),
         max: kind.limit(),
         kind,
         total_hint,
+        space_dir: dir,
     };
     let (digest, size) = copy_verified(&mut body, &mut file, &expected, cancel, progress)?;
     file.sync_all()?;
@@ -371,9 +374,10 @@ fn download_and_persist(
 struct Expected<'a> {
     sha256: Option<&'a str>,
     size: Option<u64>,
-    max: u64,
+    max: Option<u64>,
     kind: ArchiveKind,
     total_hint: u64,
+    space_dir: &'a Path,
 }
 
 fn copy_verified(
@@ -397,8 +401,16 @@ fn copy_verified(
         if count == 0 {
             break;
         }
-        total += count as u64;
-        if total > expected.max {
+        if expected.total_hint == 0
+            && total / SPACE_CHECK_INTERVAL_BYTES
+                != (total.saturating_add(count as u64)) / SPACE_CHECK_INTERVAL_BYTES
+        {
+            check_download_space(expected.space_dir, COPY_BUFFER as u64)?;
+        }
+        total = total
+            .checked_add(count as u64)
+            .ok_or_else(|| invalid("download_size_overflow"))?;
+        if expected.max.is_some_and(|max| total > max) {
             return Err(invalid("download_size_limit"));
         }
         if expected.size.is_some_and(|size| total > size) {
@@ -509,6 +521,7 @@ fn load_cached(
         if cancel.load(Ordering::Relaxed) {
             return Err(invalid("download_cancelled"));
         }
+        operation::stage("validating", None, None);
         let (digest, size) = hash_file(&archive, kind.limit(), cancel)?;
         if digest != meta.sha256 || size != meta.size {
             continue;
@@ -544,9 +557,26 @@ fn write_manifest(dir: &Path, meta: &CacheEntry) -> Result<()> {
     Ok(())
 }
 
-fn hash_file(path: &Path, limit: u64, cancel: &AtomicBool) -> Result<(String, u64)> {
-    let digest = super::facts::digest_file(path, limit, cancel)?;
+fn hash_file(path: &Path, limit: Option<u64>, cancel: &AtomicBool) -> Result<(String, u64)> {
+    let size = fs::metadata(path)?.len();
+    if limit.is_some_and(|max| size > max) {
+        return Err(invalid("download_size_limit"));
+    }
+    let digest = super::facts::digest_file(path, size, cancel)?;
     Ok((digest.sha256, digest.size))
+}
+
+fn check_download_space(dir: &Path, bytes: u64) -> Result<()> {
+    let available = fs2::available_space(dir)?;
+    let required = bytes
+        .checked_add(DOWNLOAD_RESERVE_BYTES)
+        .ok_or_else(|| invalid("download_size_overflow"))?;
+    if available < required {
+        return Err(invalid(format!(
+            "insufficient_space:state:required={required}:available={available}"
+        )));
+    }
+    Ok(())
 }
 
 fn valid_sha256(value: &str) -> bool {
@@ -824,6 +854,38 @@ mod tests {
             assert!(validate_download(bad, &hosts).is_err(), "{bad}");
         }
         assert!(validate_download("https://download.example.com/a.zip", &hosts).is_ok());
+    }
+
+    #[test]
+    fn zip_uses_real_download_space_and_exe_keeps_format_limit() {
+        let (_temp, paths) = setup();
+        let hosts = hosts();
+        let available = fs2::available_space(paths.downloads_dir()).unwrap();
+        let mut zip = request("https://download.example.com/a.zip", &hosts);
+        zip.expected_size = Some(available);
+        let transport = FakeTransport::new(vec![response(200, data(b"small"), Some(available))]);
+        let error =
+            acquire_with(&transport, &zip, &paths, &AtomicBool::new(false), |_, _| {}).unwrap_err();
+        assert!(error.to_string().starts_with("insufficient_space:state:"));
+        assert!(!paths.downloads_dir().read_dir().unwrap().any(|entry| {
+            entry
+                .unwrap()
+                .path()
+                .extension()
+                .is_some_and(|ext| ext == "partial")
+        }));
+
+        let mut exe = request("https://download.example.com/a.exe", &hosts);
+        exe.expected_size = Some(MAX_EXE_BYTES + 1);
+        let mut response = response(200, b"MZ".to_vec(), Some(MAX_EXE_BYTES + 1));
+        response.final_url = exe.url.into();
+        let transport = FakeTransport::new(vec![response]);
+        assert_eq!(
+            acquire_exe_with(&transport, &exe, &paths, &AtomicBool::new(false), |_, _| {})
+                .unwrap_err()
+                .to_string(),
+            "download_size_limit"
+        );
     }
 
     #[test]
