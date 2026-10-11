@@ -1,0 +1,268 @@
+"""Frozen P0 v3 projection benchmark; instruments a disposable source copy only.
+
+Timings use the plain debug binary. Counters use a separate binary whose response
+must equal the plain response. No user state, network or production source writes.
+P1 must update this frozen adapter explicitly when hash entry points move.
+"""
+import argparse
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import shutil
+import statistics
+import subprocess
+import tempfile
+import time
+
+REPO = Path(__file__).resolve().parents[1]
+CRATES = ('core', 'cli', 'installer-format', 'installer-worker')
+MARKER = 'P0_HASH_COUNTS:'
+
+def digest(data):
+    return hashlib.sha256(data).hexdigest()
+
+def once(text, old, new):
+    if text.count(old) != 1:
+        raise ValueError('Frozen v3 instrumentation anchor drifted: ' + old[:90])
+    return text.replace(old, new, 1)
+
+def instrument(path, start_anchor, end_anchor):
+    text = path.read_text(encoding='utf-8')
+    start = text.index(start_anchor)
+    end = text.index(end_anchor, start)
+    part = text[start:end]
+    brace = part.index('{') + 1
+    part = part[:brace] + '\n    P0_ATTEMPTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);' + part[brace:]
+    part = once(part, 'hasher.update(&buffer[..count]);', 'P0_BYTES.fetch_add(count as u64, std::sync::atomic::Ordering::Relaxed);\n        hasher.update(&buffer[..count]);')
+    anchor = 'format!("{:x}", hasher.finalize())'
+    part = once(part, anchor, '{ P0_COMPLETED.fetch_add(1, std::sync::atomic::Ordering::Relaxed); ' + anchor + ' }')
+    counters = '''
+static P0_ATTEMPTS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static P0_COMPLETED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static P0_BYTES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+pub fn p0_hash_counts() -> [u64; 3] {
+    let order = std::sync::atomic::Ordering::Relaxed;
+    [P0_ATTEMPTS.load(order), P0_COMPLETED.load(order), P0_BYTES.load(order)]
+}
+'''
+    path.write_text(text[:start] + part + text[end:] + counters, encoding='utf-8')
+
+def build_pair(scratch, cargo):
+    source = scratch / 'source'
+    source.mkdir()
+    manifest = (REPO / 'Cargo.toml').read_text(encoding='utf-8')
+    manifest, count = re.subn(r'members = \[[^\n]+\]', 'members = ' + json.dumps(['crates/' + c for c in CRATES]), manifest, count=1)
+    if count != 1:
+        raise ValueError('workspace members anchor drifted')
+    (source / 'Cargo.toml').write_text(manifest, encoding='utf-8')
+    shutil.copy2(REPO / 'Cargo.lock', source / 'Cargo.lock')
+    (source / 'catalog').mkdir()
+    shutil.copy2(REPO / 'catalog/trust-keys.json', source / 'catalog/trust-keys.json')
+    for c in CRATES:
+        dest = source / 'crates' / c
+        dest.mkdir(parents=True)
+        shutil.copy2(REPO / 'crates' / c / 'Cargo.toml', dest / 'Cargo.toml')
+        shutil.copytree(REPO / 'crates' / c / 'src', dest / 'src')
+        resources = REPO / 'crates' / c / 'resources'
+        if resources.is_dir():
+            shutil.copytree(resources, dest / 'resources')
+    env = os.environ.copy()
+    if cargo == REPO / '.tools/cargo/bin/cargo.exe':
+        env['CARGO_HOME'] = str(REPO / '.tools/cargo')
+        env['RUSTUP_HOME'] = str(REPO / '.tools/rustup')
+    env['PATH'] = str(cargo.parent) + os.pathsep + env.get('PATH', '')
+    target = REPO / '.local/p0-projection-target'
+    env['CARGO_TARGET_DIR'] = str(target)
+    suffix = '.exe' if os.name == 'nt' else ''
+    def build(label):
+        print('Building isolated ' + label + ' debug CLI', flush=True)
+        subprocess.run([str(cargo), 'build', '--offline', '-p', 'steam-patch-cli'], cwd=source, env=env, check=True, timeout=900)
+        binary = scratch / (label + suffix)
+        shutil.copy2(target / 'debug' / ('steam-patch' + suffix), binary)
+        return binary
+    plain = build('plain')
+    instrument(source / 'crates/core/src/catalog.rs', 'fn hash_file(', '\npub fn detect(')
+    instrument(source / 'crates/cli/src/runtime.rs', 'fn hash_target(', '\n/// `preview` dispatch')
+    main = source / 'crates/cli/src/main.rs'
+    text = once(main.read_text(encoding='utf-8'), 'fn main() -> ExitCode {', '''fn main() -> ExitCode {
+    struct P0Summary;
+    impl Drop for P0Summary {
+        fn drop(&mut self) {
+            eprintln!("P0_HASH_COUNTS:{}", serde_json::json!({
+                "catalog": steam_patch_core::catalog::p0_hash_counts(),
+                "dynamic": runtime::p0_hash_counts()
+            }));
+        }
+    }
+    let _p0_summary = P0Summary;''')
+    main.write_text(text, encoding='utf-8')
+    return plain, build('counted')
+
+def fixture(parent, name, manifests, files, mixed):
+    directory = parent / name
+    libraries = [directory / 'Steam 测试库', directory / '第二库']
+    for lib in libraries:
+        (lib / 'steamapps/common').mkdir(parents=True)
+    quote = lambda x: json.dumps(str(x), ensure_ascii=False)
+    index = '"libraryfolders" { ' + ' '.join(f'"{i}" {{ "path" {quote(lib)} }}' for i, lib in enumerate(libraries)) + ' }'
+    (libraries[0] / 'steamapps/libraryfolders.vdf').write_text(index, encoding='utf-8')
+    payload = bytes(range(256)) * 1024
+    sha = digest(payload)
+    releases = []
+    for i in range(manifests):
+        appid = 1000000 + i // 2  # Two instances per AppID, in distinct libraries.
+        lib = libraries[i % 2]
+        game = lib / 'steamapps/common' / f'Game {i // 2:04d}'
+        game.mkdir()
+        acf = f'"AppState" {{ "appid" "{appid}" "name" "Fixture {appid}" "installdir" "{game.name}" "buildid" "1" "StateFlags" "4" }}'
+        (lib / f'steamapps/appmanifest_{appid}.acf').write_text(acf, encoding='utf-8')
+        mappings = []
+        for f in range(files):
+            path = f'payload-{f}.bin'
+            target = game / path
+            if mixed and f == 2:
+                pass
+            elif mixed and f == 3:
+                target.mkdir()  # Unsafe/not-file evidence must be unknown.
+            else:
+                target.write_bytes(payload if not mixed or f != 1 else payload[::-1])
+            mappings.append({'source': path, 'destination': path, 'original_sha256': None, 'installed_sha256': sha})
+        if files and i % 2 == 0:
+            releases.append({'patch_id': f'patch-{appid}', 'release_id': f'release-{appid}', 'appid': appid,
+                             'name': f'Patch {appid}', 'version': '1', 'language': 'en', 'category': 'fixture',
+                             'source_page': 'https://example.invalid/fixture', 'support_level': 'managed_zip',
+                             'platforms': ['windows', 'steamos'], 'verified_buildids': ['1'],
+                             'detection': [{'path': 'payload-0.bin', 'sha256': sha}],
+                             'recipe': {'artifact_sha256': '0'*64, 'files': mappings}, 'artifact': None})
+    catalog = directory / 'catalog.json'
+    catalog.write_text(json.dumps({'schema_version': 1, 'revision': 1, 'releases': releases}), encoding='utf-8')
+    return {'roots': [str(libraries[0])], 'catalog': str(catalog), 'platform': 'windows'}
+
+def scan(binary, params, version):
+    if version == 4:
+        params = {'host': {'roots': params['roots'], 'catalog': params.get('catalog'),
+                           'signed_catalog': None, 'trust_keys': None, 'state_dir': None,
+                           'platform': params.get('platform', 'windows')}}
+    request = {'protocol_version': version, 'request_id': 'p0-projection', 'method': 'scan', 'params': params}
+    data = json.dumps(request).encode() + b'\n'
+    if len(data) > 64*1024:
+        raise ValueError('request exceeds protocol bound')
+    started = time.perf_counter()
+    process = subprocess.run([str(binary), 'serve'], input=data, capture_output=True, check=True, timeout=120)
+    elapsed = time.perf_counter() - started
+    if len(process.stdout) > 8*1024*1024:
+        raise ValueError('response exceeds protocol bound')
+    response = json.loads(process.stdout)
+    if not response.get('ok') or response.get('request_id') != 'p0-projection':
+        raise ValueError(response)
+    return response, elapsed, len(process.stdout), process.stderr.decode('utf-8')
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--runs', type=int, default=6)
+    parser.add_argument('--cargo', type=Path, default=REPO / '.tools/cargo/bin/cargo.exe')
+    parser.add_argument('--binary', type=Path, help='Future CLI for fixture timing only; hash counts remain unmeasured')
+    parser.add_argument('--protocol-version', type=int, choices=[3, 4], default=3)
+    parser.add_argument('--real-root', type=Path, action='append', default=[], help='Explicit Steam root; manifest-only, no state/catalog, read-only')
+    args = parser.parse_args()
+    if args.runs < 2:
+        parser.error('--runs must be >= 2')
+    parent = REPO / '.local'
+    parent.mkdir(exist_ok=True)
+    paths = [REPO / 'Cargo.toml', REPO / 'Cargo.lock', REPO / 'catalog/trust-keys.json'] + [p for c in CRATES for p in sorted((REPO / 'crates' / c).rglob('*')) if p.is_file() and (p.suffix == '.rs' or p.name == 'Cargo.toml' or 'resources' in p.parts)]
+    before = {str(p.relative_to(REPO)): digest(p.read_bytes()) for p in paths}
+    cases = []
+    snapshots = {}
+    with tempfile.TemporaryDirectory(prefix='projection-p0-', dir=parent) as temporary:
+        scratch = Path(temporary).resolve()
+        if scratch.parent != parent.resolve():
+            raise ValueError('scratch escapes fixture parent')
+        if args.binary:
+            plain, counted = args.binary.resolve(strict=True), None
+        else:
+            if args.protocol_version != 3:
+                parser.error('frozen instrumentation supports only v3')
+            plain, counted = build_pair(scratch, args.cargo.resolve(strict=True))
+        binary_hashes = {'plain': digest(plain.read_bytes()), 'counted': digest(counted.read_bytes()) if counted else None}
+        for name, manifests, files, mixed in [('manifest-only', 500, 0, False), ('recipe-all-match', 24, 4, False), ('recipe-mixed-evidence', 24, 4, True)]:
+            params = fixture(scratch, name, manifests, files, mixed)
+            durations, expected = [], None
+            for _ in range(args.runs):
+                response, elapsed, size, stderr = scan(plain, params, args.protocol_version)
+                if stderr or (expected is not None and response != expected):
+                    raise ValueError('unexpected stderr or unstable projection: ' + stderr)
+                expected = response
+                durations.append(elapsed)
+            rows = response['result']['installs']
+            assert len(rows) == manifests
+            assert len({r['game']['instance_id'] for r in rows}) == manifests
+            assert len({r['game']['library_path'] for r in rows}) == 2
+            assert not response['result']['diagnostics']
+            assert all(len(r['patches']) == (1 if files else 0) for r in rows)
+            if files:
+                assert all(r['patches'][0]['detection']['status'] == ('unknown' if mixed else 'installed_external') for r in rows)
+                statuses = ['match', 'mismatch', 'missing', 'unreadable_or_unsafe'] if mixed else ['match']*files
+                assert all([f['status'] for f in r['patches'][0]['detection']['files']] == statuses for r in rows)
+            def normalize(value):
+                if isinstance(value, str):
+                    return value.replace(str(scratch), '$FIXTURE')
+                if isinstance(value, list):
+                    return [normalize(x) for x in value]
+                if isinstance(value, dict):
+                    return {k: normalize(v) for k, v in value.items()}
+                return value
+            snapshots[name] = normalize(expected['result'])
+            counts = None
+            if counted:
+                result, _, _, stderr = scan(counted, params, args.protocol_version)
+                if result != expected:
+                    raise ValueError('instrumentation changed projection')
+                lines = stderr.splitlines()
+                if len(lines) != 1 or not lines[0].startswith(MARKER):
+                    raise ValueError('invalid counter output: ' + stderr)
+                counts = json.loads(lines[0][len(MARKER):])
+                complete = manifests * (2 if mixed else files)
+                assert counts == {'catalog': [manifests*files, complete, complete*262144], 'dynamic': [0, 0, 0]}, counts
+            cases.append({'fixture': name, 'manifests': manifests, 'libraries': 2, 'unique_appids': manifests//2,
+                          'files_per_patch': files, 'payload_bytes': 262144 if files else 0, 'response_bytes': size,
+                          'first_run_seconds': durations[0], 'warm_median_seconds': statistics.median(durations[1:]),
+                          'warm_max_seconds': max(durations[1:]), 'runs_seconds': durations,
+                          'hash_counts_attempts_completed_bytes': counts, 'counted_response_equal': True if counted else None})
+        if args.real_root:
+            params = {'roots': [str(p.resolve(strict=True)) for p in args.real_root]}
+            durations = []
+            for _ in range(args.runs):
+                response, elapsed, size, stderr = scan(plain, params, args.protocol_version)
+                if stderr:
+                    raise ValueError(stderr)
+                durations.append(elapsed)
+            result = response['result']
+            selected = [r['game'] for r in result['installs'] if r['game']['appid'] in (2743810, 2303800, 3137110)]
+            cases.append({'fixture': 'real-manifest-only', 'roots': params['roots'],
+                          'manifests': len(result['installs']), 'target_instances': selected,
+                          'diagnostics': result['diagnostics'], 'response_bytes': size,
+                          'runs_seconds': durations, 'first_run_seconds': durations[0],
+                          'warm_median_seconds': statistics.median(durations[1:]),
+                          'warm_max_seconds': max(durations[1:]), 'hash_counts_attempts_completed_bytes': None})
+    after = {str(p.relative_to(REPO)): digest(p.read_bytes()) for p in paths}
+    if before != after:
+        raise ValueError('production sources changed during baseline')
+    report = {'schema_version': 1, 'protocol_version': args.protocol_version, 'platform': os.name,
+              'profile': 'debug' if not args.binary else 'caller-supplied',
+              'clock': 'perf_counter: process startup + serve + full scan/serialization', 'cold_cache_measured': False,
+              'network_used': False, 'installer_state_used': False, 'steam_metadata_read': bool(args.real_root), 'game_files_written': False,
+              'hash_scope': 'catalog hash_file + CLI dynamic hash_target only; excludes manifest/identity hashing',
+              'production_sources_unchanged': True, 'source_sha256': before, 'binary_sha256': binary_hashes, 'cases': cases}
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    snapshot_path = args.output.with_name(args.output.stem + '-snapshots.json')
+    snapshot_path.write_text(json.dumps(snapshots, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+    report['fixture_snapshots'] = snapshot_path.name
+    report['fixture_snapshots_sha256'] = digest(snapshot_path.read_bytes())
+    args.output.write_text(json.dumps(report, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+    print(json.dumps({'output': str(args.output), 'cases': cases}, ensure_ascii=False, indent=2))
+
+if __name__ == '__main__':
+    main()
