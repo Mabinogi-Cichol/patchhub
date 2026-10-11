@@ -1,5 +1,10 @@
 # 开发进度
 
+## 2026-10-11：Rust 核心服务收敛重构 P0 冻结（P1–P6 待实现）
+
+- 建立独立 feature，按扫描投影、签名安装编排/信任存储、缓存清理、动作 DTO、公共契约顺序推进，P6 逐项关闭本次识别的技术债。
+- P0 契约/动作与终态/数据/债项已冻结，Windows隔离基准和只读36实例清单、拟v4体积核对、独立静态复核通过；生产API、P1–P6、双端产物和实机均待实施。详见 [设计](features/rust-core-consolidation/design.md)与[施工记录](features/rust-core-consolidation/progress.md)。
+
 ## 2026-10-11：跨平台安装器迁移 P6 收口
 
 - 删除已迁入 Rust 的 Decky Python 安装器/来源遗留 20 个文件（publisher、exe_generic/exe_profiles/exe_facts/exe_installation/exe_worker、acquisition、caches、source_primitives、exe_profiles.json 及 10 个测试），以及 Rust 死接口（EngineSwitch 双引擎模型、旧来源策略 API、旧 RPC `migrate_state`、无用途 `--record-id`、Windows 旧核心降级 UI）；§7.3 六项来源兼容遗留逐项核对完成。
