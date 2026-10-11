@@ -1,8 +1,8 @@
-"""Frozen P0 v3 projection benchmark; instruments a disposable source copy only.
+"""P0/P1 projection benchmark; instruments a disposable source copy only.
 
 Timings use the plain debug binary. Counters use a separate binary whose response
 must equal the plain response. No user state, network or production source writes.
-P1 must update this frozen adapter explicitly when hash entry points move.
+P0 legacy and P1 shared-evidence adapters are selected explicitly by source layout.
 """
 import argparse
 import hashlib
@@ -15,6 +15,8 @@ import statistics
 import subprocess
 import tempfile
 import time
+import zipfile
+import threading
 
 REPO = Path(__file__).resolve().parents[1]
 CRATES = ('core', 'cli', 'installer-format', 'installer-worker')
@@ -25,13 +27,13 @@ def digest(data):
 
 def once(text, old, new):
     if text.count(old) != 1:
-        raise ValueError('Frozen v3 instrumentation anchor drifted: ' + old[:90])
+        raise ValueError('Instrumentation anchor drifted: ' + old[:90])
     return text.replace(old, new, 1)
 
 def instrument(path, start_anchor, end_anchor):
     text = path.read_text(encoding='utf-8')
     start = text.index(start_anchor)
-    end = text.index(end_anchor, start)
+    end = text.index(end_anchor, start) if end_anchor else len(text)
     part = text[start:end]
     brace = part.index('{') + 1
     part = part[:brace] + '\n    P0_ATTEMPTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);' + part[brace:]
@@ -83,26 +85,29 @@ def build_pair(scratch, cargo):
         shutil.copy2(target / 'debug' / ('steam-patch' + suffix), binary)
         return binary
     plain = build('plain')
-    instrument(source / 'crates/core/src/catalog.rs', 'fn hash_file(', '\npub fn detect(')
-    instrument(source / 'crates/cli/src/runtime.rs', 'fn hash_target(', '\n/// `preview` dispatch')
+    shared_evidence = (source / 'crates/core/src/detection.rs').exists()
+    if shared_evidence:
+        instrument(source / 'crates/core/src/detection.rs', 'fn read_digest_with(', '\n#[cfg(test)]\nmod tests')
+        count_expression = 'serde_json::json!({"evidence": steam_patch_core::detection::p0_hash_counts()})'
+    else:
+        instrument(source / 'crates/core/src/catalog.rs', 'fn hash_file(', '\npub fn detect(')
+        instrument(source / 'crates/cli/src/runtime.rs', 'fn hash_target(', '\n/// `preview` dispatch')
+        count_expression = 'serde_json::json!({"catalog": steam_patch_core::catalog::p0_hash_counts(), "dynamic": runtime::p0_hash_counts()})'
     main = source / 'crates/cli/src/main.rs'
     text = once(main.read_text(encoding='utf-8'), 'fn main() -> ExitCode {', '''fn main() -> ExitCode {
     struct P0Summary;
     impl Drop for P0Summary {
         fn drop(&mut self) {
-            eprintln!("P0_HASH_COUNTS:{}", serde_json::json!({
-                "catalog": steam_patch_core::catalog::p0_hash_counts(),
-                "dynamic": runtime::p0_hash_counts()
-            }));
+            eprintln!("P0_HASH_COUNTS:{}", COUNT_EXPRESSION);
         }
     }
-    let _p0_summary = P0Summary;''')
+    let _p0_summary = P0Summary;'''.replace('COUNT_EXPRESSION', count_expression))
     main.write_text(text, encoding='utf-8')
-    return plain, build('counted')
+    return plain, build('counted'), shared_evidence
 
-def fixture(parent, name, manifests, files, mixed):
+def fixture(parent, name, manifests, files, mixed, library_names=('Steam 测试库', '第二库')):
     directory = parent / name
-    libraries = [directory / 'Steam 测试库', directory / '第二库']
+    libraries = [directory / name for name in library_names]
     for lib in libraries:
         (lib / 'steamapps/common').mkdir(parents=True)
     quote = lambda x: json.dumps(str(x), ensure_ascii=False)
@@ -140,24 +145,103 @@ def fixture(parent, name, manifests, files, mixed):
     catalog.write_text(json.dumps({'schema_version': 1, 'revision': 1, 'releases': releases}), encoding='utf-8')
     return {'roots': [str(libraries[0])], 'catalog': str(catalog), 'platform': 'windows'}
 
-def scan(binary, params, version):
+def rpc(binary, method, params, version):
     if version == 4:
         params = {'host': {'roots': params['roots'], 'catalog': params.get('catalog'),
                            'signed_catalog': None, 'trust_keys': None, 'state_dir': None,
                            'platform': params.get('platform', 'windows')}}
-    request = {'protocol_version': version, 'request_id': 'p0-projection', 'method': 'scan', 'params': params}
+    request_id = params.get('request_id', 'p0-projection')
+    request = {'protocol_version': version, 'request_id': request_id, 'method': method, 'params': params}
     data = json.dumps(request).encode() + b'\n'
     if len(data) > 64*1024:
         raise ValueError('request exceeds protocol bound')
     started = time.perf_counter()
-    process = subprocess.run([str(binary), 'serve'], input=data, capture_output=True, check=True, timeout=120)
+    if method == 'install_patch':
+        # Keep stdin open while the task runs: EOF is an intentional cancel.
+        task = subprocess.Popen([str(binary), 'serve-task'], stdin=subprocess.PIPE,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        deadline = threading.Timer(120, task.kill)
+        deadline.start()
+        try:
+            task.stdin.write(data)
+            task.stdin.flush()
+            stdout = task.stdout.read(8*1024*1024 + 1)
+            stderr = task.stderr.read()
+            code = task.wait(timeout=5)
+            task.stdin.close()
+            if code:
+                raise ValueError('fixture install task failed: ' + stderr.decode('utf-8'))
+            process = subprocess.CompletedProcess(task.args, code, stdout, stderr)
+        finally:
+            deadline.cancel()
+            if task.poll() is None:
+                task.kill()
+                task.wait()
+    else:
+        process = subprocess.run([str(binary), 'serve'], input=data, capture_output=True, check=True, timeout=120)
     elapsed = time.perf_counter() - started
     if len(process.stdout) > 8*1024*1024:
         raise ValueError('response exceeds protocol bound')
-    response = json.loads(process.stdout)
-    if not response.get('ok') or response.get('request_id') != 'p0-projection':
+    lines = [json.loads(line) for line in process.stdout.splitlines()]
+    terminals = [line for line in lines if 'ok' in line]
+    if len(terminals) != 1:
+        raise ValueError('expected one terminal RPC response')
+    response = terminals[0]
+    if not response.get('ok') or response.get('request_id') != request_id:
         raise ValueError(response)
     return response, elapsed, len(process.stdout), process.stderr.decode('utf-8')
+
+def scan(binary, params, version):
+    return rpc(binary, 'scan', params, version)
+
+def dynamic_fixture(parent, binary, version):
+    """Seed only disposable state/game fixtures, through the real signed installer.
+
+    The scan then removes catalog input, projecting the source-scoped receipt.
+    No download or executable worker is used; archives and signing keys are local.
+    """
+    if version != 3:
+        raise ValueError('dynamic fixture needs an explicit v4 installer adapter after P5')
+    params = fixture(parent, 'dynamic-managed', 8, 4, False, ('a', 'b'))
+    directory = Path(params['catalog']).parent
+    catalog = json.loads(Path(params['catalog']).read_text(encoding='utf-8'))
+    payload = bytes(range(256)) * 1024
+    archive = directory / 'fixture.zip'
+    with zipfile.ZipFile(archive, 'w', compression=zipfile.ZIP_STORED) as output:
+        for index in range(4):
+            output.writestr(f'payload-{index}.bin', payload)
+    for release in catalog['releases']:
+        release['release_id'] = f"patchmoe-{release['appid']}"
+        release['recipe']['artifact_sha256'] = digest(archive.read_bytes())
+    Path(params['catalog']).write_text(json.dumps(catalog), encoding='utf-8')
+    for manifest in directory.rglob('appmanifest_*.acf'):
+        text = manifest.read_text(encoding='utf-8')
+        text = text.rstrip().removesuffix('}') + ' "UserConfig" { "language" "english" } }'
+        manifest.write_text(text, encoding='utf-8')
+    private, keys, signed = (directory / name for name in ('fixture.key', 'keys.json', 'signed.json'))
+    subprocess.run([str(binary), 'keygen', str(private), str(keys), 'fixture-key'], check=True, capture_output=True)
+    subprocess.run([str(binary), 'sign-catalog', params['catalog'], str(private), 'fixture-key', str(signed), '3600'], check=True, capture_output=True)
+    state = directory / 'state'
+    rows = scan(binary, {'roots': params['roots']}, version)[0]['result']['installs']
+    for index, row in enumerate(rows):
+        installed = rpc(binary, 'install_patch', {
+            'roots': params['roots'], 'instance_id': row['game']['instance_id'],
+            'release_id': f"patchmoe-{row['game']['appid']}", 'signed_catalog': str(signed),
+            'trust_keys': str(keys), 'state_dir': str(state), 'archive': str(archive),
+            'operation': 'overwrite', 'request_id': f'fixture-install-{index}'}, version)[0]
+        if installed['result']['state'] != 'committed':
+            raise ValueError(installed)
+    rpc(binary, 'list_sources', {'roots': params['roots'], 'state_dir': str(state)}, version)
+    now = int(time.time())
+    entries = [{'title': f"Fixture {release['appid']}", 'aliases': [], 'appid': release['appid'],
+                'url': 'https://download.patch.moe/fixture.zip',
+                'source_page': 'https://www.patch.moe/fixture', 'language': 'en', 'date': None}
+               for release in catalog['releases']]
+    cache = state / 'sources/rust-v1/cache/patchmoe.json'
+    cache.parent.mkdir(exist_ok=True)
+    cache.write_text(json.dumps({'entries': entries, 'etag': None, 'modified': None,
+                                'cached_at': now, 'checked_at': now}), encoding='utf-8')
+    return {'roots': params['roots'], 'state_dir': str(state), 'platform': params['platform']}
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
@@ -181,11 +265,11 @@ def main():
         if scratch.parent != parent.resolve():
             raise ValueError('scratch escapes fixture parent')
         if args.binary:
-            plain, counted = args.binary.resolve(strict=True), None
+            plain, counted, shared_evidence = args.binary.resolve(strict=True), None, None
         else:
             if args.protocol_version != 3:
                 parser.error('frozen instrumentation supports only v3')
-            plain, counted = build_pair(scratch, args.cargo.resolve(strict=True))
+            plain, counted, shared_evidence = build_pair(scratch, args.cargo.resolve(strict=True))
         binary_hashes = {'plain': digest(plain.read_bytes()), 'counted': digest(counted.read_bytes()) if counted else None}
         for name, manifests, files, mixed in [('manifest-only', 500, 0, False), ('recipe-all-match', 24, 4, False), ('recipe-mixed-evidence', 24, 4, True)]:
             params = fixture(scratch, name, manifests, files, mixed)
@@ -200,7 +284,8 @@ def main():
             assert len(rows) == manifests
             assert len({r['game']['instance_id'] for r in rows}) == manifests
             assert len({r['game']['library_path'] for r in rows}) == 2
-            assert not response['result']['diagnostics']
+            if not mixed:
+                assert not response['result']['diagnostics']
             assert all(len(r['patches']) == (1 if files else 0) for r in rows)
             if files:
                 assert all(r['patches'][0]['detection']['status'] == ('unknown' if mixed else 'installed_external') for r in rows)
@@ -225,9 +310,39 @@ def main():
                     raise ValueError('invalid counter output: ' + stderr)
                 counts = json.loads(lines[0][len(MARKER):])
                 complete = manifests * (2 if mixed else files)
-                assert counts == {'catalog': [manifests*files, complete, complete*262144], 'dynamic': [0, 0, 0]}, counts
+                expected_counts = ({'evidence': [manifests*files, complete, complete*262144]} if shared_evidence else
+                                   {'catalog': [manifests*files, complete, complete*262144], 'dynamic': [0, 0, 0]})
+                assert counts == expected_counts, counts
             cases.append({'fixture': name, 'manifests': manifests, 'libraries': 2, 'unique_appids': manifests//2,
                           'files_per_patch': files, 'payload_bytes': 262144 if files else 0, 'response_bytes': size,
+                          'first_run_seconds': durations[0], 'warm_median_seconds': statistics.median(durations[1:]),
+                          'warm_max_seconds': max(durations[1:]), 'runs_seconds': durations,
+                          'hash_counts_attempts_completed_bytes': counts, 'counted_response_equal': True if counted else None})
+        if shared_evidence:
+            params = dynamic_fixture(scratch, plain, args.protocol_version)
+            durations, expected = [], None
+            for _ in range(args.runs):
+                response, elapsed, size, stderr = scan(plain, params, args.protocol_version)
+                if stderr or (expected is not None and response != expected):
+                    raise ValueError('unstable dynamic projection: ' + stderr)
+                expected = response
+                durations.append(elapsed)
+            rows = response['result']['installs']
+            assert len(rows) == 8 and all(len(r['patches']) == 1 for r in rows)
+            assert all(r['patches'][0]['detection']['status'] == 'installed_managed' for r in rows)
+            assert all(len(r['patches'][0]['detection']['files']) == 4 for r in rows)
+            counts = None
+            if counted:
+                result, _, _, stderr = scan(counted, params, args.protocol_version)
+                if result != expected:
+                    raise ValueError('instrumentation changed dynamic projection')
+                lines = stderr.splitlines()
+                assert len(lines) == 1 and lines[0].startswith(MARKER), stderr
+                counts = json.loads(lines[0][len(MARKER):])
+                assert counts == {'evidence': [32, 32, 32*262144]}, counts
+            snapshots['dynamic-managed'] = normalize(expected['result'])
+            cases.append({'fixture': 'dynamic-managed', 'manifests': 8, 'libraries': 2, 'unique_appids': 4,
+                          'files_per_patch': 4, 'payload_bytes': 262144, 'response_bytes': size,
                           'first_run_seconds': durations[0], 'warm_median_seconds': statistics.median(durations[1:]),
                           'warm_max_seconds': max(durations[1:]), 'runs_seconds': durations,
                           'hash_counts_attempts_completed_bytes': counts, 'counted_response_equal': True if counted else None})
@@ -253,8 +368,10 @@ def main():
     report = {'schema_version': 1, 'protocol_version': args.protocol_version, 'platform': os.name,
               'profile': 'debug' if not args.binary else 'caller-supplied',
               'clock': 'perf_counter: process startup + serve + full scan/serialization', 'cold_cache_measured': False,
-              'network_used': False, 'installer_state_used': False, 'steam_metadata_read': bool(args.real_root), 'game_files_written': False,
-              'hash_scope': 'catalog hash_file + CLI dynamic hash_target only; excludes manifest/identity hashing',
+              'network_used': False, 'installer_state_used': bool(shared_evidence), 'installer_state_scope': 'disposable fixture only',
+              'steam_metadata_read': bool(args.real_root), 'game_files_written': False, 'fixture_game_files_written': True,
+              'hash_scope': ('shared core detection read_digest; excludes manifest/identity hashing' if shared_evidence else
+                             'catalog hash_file + CLI dynamic hash_target only; excludes manifest/identity hashing'),
               'production_sources_unchanged': True, 'source_sha256': before, 'binary_sha256': binary_hashes, 'cases': cases}
     args.output.parent.mkdir(parents=True, exist_ok=True)
     snapshot_path = args.output.with_name(args.output.stem + '-snapshots.json')

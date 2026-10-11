@@ -1,4 +1,5 @@
 //! Signed exact-byte payloads, expiration, key/release revocation and rollback protection.
+pub mod revision;
 use crate::catalog::{Catalog, MAX_CATALOG_BYTES};
 use base64::{engine::general_purpose::STANDARD, Engine};
 use ed25519_dalek::{Signature, VerifyingKey};

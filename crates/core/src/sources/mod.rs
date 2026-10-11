@@ -14,6 +14,7 @@ pub mod identity;
 pub mod model;
 pub mod registry;
 pub mod session;
+pub mod snapshot;
 pub mod store;
 pub mod validate;
 

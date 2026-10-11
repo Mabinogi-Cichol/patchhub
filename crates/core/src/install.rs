@@ -426,7 +426,7 @@ pub fn transaction_root(state_dir: &Path) -> PathBuf {
     state_dir.to_path_buf()
 }
 
-pub struct Store {
+pub(crate) struct Store {
     root: PathBuf,
     conn: Connection,
     has_progress: bool,
@@ -436,7 +436,7 @@ impl Store {
     /// Opens the transactional store with an explicit root, letting callers
     /// point `journal.lock` / `journal.sqlite` / `jobs/` at the P1 installer
     /// directory (`<state_dir>/installer/rust-v1/`).
-    pub fn open_at(root: &Path) -> io::Result<Self> {
+    pub(crate) fn open_at(root: &Path) -> io::Result<Self> {
         let root = std::path::absolute(root)?;
         safe_path(&root)?;
         fs::create_dir_all(&root)?;
@@ -487,7 +487,7 @@ impl Store {
     /// Opens a **read-only** snapshot of the journal without taking the
     /// cross-process write lock (p0-contracts §4.1). Used by `scan` /
     /// `list_transactions` so a cooperating writer is not reported as busy.
-    pub fn open_ro(root: &Path) -> io::Result<Self> {
+    pub(crate) fn open_ro(root: &Path) -> io::Result<Self> {
         let root = std::path::absolute(root)?;
         safe_path(&root)?;
         let database = root.join("journal.sqlite");
@@ -852,7 +852,8 @@ fn ensure_no_active(
 
 /// Validate every ZIP member, including members not referenced by the recipe.
 /// Signature, expiry, revocation and platform policy remain the trusted caller's responsibility.
-pub fn prepare(
+#[cfg(test)]
+pub(crate) fn prepare(
     install: &GameInstall,
     release: &PatchRelease,
     archive: &Path,
@@ -869,7 +870,8 @@ pub fn prepare(
     )
 }
 
-pub fn prepare_with_operation(
+#[cfg(test)]
+pub(crate) fn prepare_with_operation(
     install: &GameInstall,
     release: &PatchRelease,
     archive: &Path,
@@ -892,7 +894,8 @@ pub fn prepare_with_operation(
 /// `journal.lock` / `journal.sqlite` / `jobs/` location. Signed and legacy
 /// callers do not bind a dynamic selection/content identity, so both
 /// [`Transaction`] fields stay `None`.
-pub fn prepare_with_operation_at(
+#[cfg(test)]
+pub(crate) fn prepare_with_operation_at(
     root: &Path,
     install: &GameInstall,
     release: &PatchRelease,
@@ -916,8 +919,9 @@ pub fn prepare_with_operation_at(
 /// `selection_id`/`content_id` binding on the journaled [`Transaction`]
 /// (p1-host-contract §1.1/§6.3). The binding is persisted with the plan in the
 /// same journal write, so a created transaction never exposes half a binding.
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
-pub fn prepare_with_binding_at(
+pub(crate) fn prepare_with_binding_at(
     root: &Path,
     install: &GameInstall,
     release: &PatchRelease,
@@ -926,6 +930,32 @@ pub fn prepare_with_binding_at(
     operation_kind: InstallOperation,
     selection_id: Option<&str>,
     content_id: Option<&str>,
+) -> io::Result<InstallPlan> {
+    prepare_for_request_at(
+        root,
+        install,
+        release,
+        archive,
+        catalog_revision,
+        operation_kind,
+        selection_id,
+        content_id,
+        None,
+    )
+}
+
+/// Unified tasks reserve a request-derived plan identity in the existing journal.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn prepare_for_request_at(
+    root: &Path,
+    install: &GameInstall,
+    release: &PatchRelease,
+    archive: &Path,
+    catalog_revision: u64,
+    operation_kind: InstallOperation,
+    selection_id: Option<&str>,
+    content_id: Option<&str>,
+    request_id: Option<&str>,
 ) -> io::Result<InstallPlan> {
     Catalog {
         schema_version: 1,
@@ -1147,7 +1177,9 @@ pub fn prepare_with_binding_at(
     let space_budget =
         crate::installer::space::ZipSpaceBudget::for_stage(mapped_bytes, original_total)?;
     space_budget.inspect(&store.root, &install.install_path)?;
-    let id = Uuid::new_v4().to_string();
+    let id = request_id
+        .map(crate::installer::requests::request_plan_id)
+        .unwrap_or_else(|| Uuid::new_v4().to_string());
     let directory = store.directory(&id)?;
     fs::create_dir(&directory)?;
     let mut changes = Vec::new();
@@ -1291,12 +1323,13 @@ pub fn prepare_with_binding_at(
     Ok(job.plan)
 }
 
-pub fn get_plan(plan_id: &str, state_dir: &Path) -> io::Result<InstallPlan> {
+#[cfg(test)]
+pub(crate) fn get_plan(plan_id: &str, state_dir: &Path) -> io::Result<InstallPlan> {
     get_plan_at(&transaction_root(state_dir), plan_id)
 }
 
 /// Explicit-root variant of [`get_plan`].
-pub fn get_plan_at(root: &Path, plan_id: &str) -> io::Result<InstallPlan> {
+pub(crate) fn get_plan_at(root: &Path, plan_id: &str) -> io::Result<InstallPlan> {
     Ok(Store::open_at(root)?.load(plan_id)?.plan)
 }
 
@@ -1309,14 +1342,24 @@ pub fn get_plan_ro(root: &Path, plan_id: &str) -> io::Result<InstallPlan> {
 }
 
 /// Invalidate unexecuted preparation, without ever touching game contents.
-pub fn discard_plan(plan_id: &str, state_dir: &Path) -> io::Result<Transaction> {
+#[cfg(test)]
+pub(crate) fn discard_plan(plan_id: &str, state_dir: &Path) -> io::Result<Transaction> {
     discard_plan_at(&transaction_root(state_dir), plan_id)
 }
 
 /// Explicit-root variant of [`discard_plan`].
-pub fn discard_plan_at(root: &Path, plan_id: &str) -> io::Result<Transaction> {
+pub(crate) fn discard_plan_at(root: &Path, plan_id: &str) -> io::Result<Transaction> {
+    discard_plan_checked_at(root, plan_id, |_| Ok(()))
+}
+
+pub(crate) fn discard_plan_checked_at(
+    root: &Path,
+    plan_id: &str,
+    validate: impl Fn(&InstallPlan) -> io::Result<()>,
+) -> io::Result<Transaction> {
     let store = Store::open_at(root)?;
     let mut job = store.load(plan_id)?;
+    validate(&job.plan)?;
     let _lock = game_lock(&job.plan.install)?;
     if job.transaction.state != "planned" {
         return Err(invalid("plan_already_consumed"));
@@ -1325,14 +1368,53 @@ pub fn discard_plan_at(root: &Path, plan_id: &str) -> io::Result<Transaction> {
     job.transaction.state = "rolled_back".into();
     job.transaction.error = Some("task_cancelled".into());
     store.save(&mut job)?;
-    for i in 0..job.plan.changes.len() {
-        let path = store.item(plan_id, i, "stage")?;
-        safe_path(&path)?;
-        match fs::remove_file(path) {
-            Ok(()) => (),
-            Err(e) if e.kind() == io::ErrorKind::NotFound => (),
-            Err(e) => return Err(e),
+    let cleanup = (|| {
+        for i in 0..job.plan.changes.len() {
+            let path = store.item(plan_id, i, "stage")?;
+            safe_path(&path)?;
+            match fs::remove_file(path) {
+                Ok(()) => (),
+                Err(e) if e.kind() == io::ErrorKind::NotFound => (),
+                Err(e) => return Err(e),
+            }
         }
+        Ok(())
+    })();
+    record_cleanup_result(&store, &mut job, cleanup);
+    Ok(job.transaction)
+}
+
+/// Persist the concrete cause after recovery has confirmed a terminal state.
+/// A committed transaction or outstanding recovery always wins over late failures.
+pub(crate) fn set_terminal_error_at(
+    root: &Path,
+    plan_id: &str,
+    error: &str,
+) -> io::Result<Transaction> {
+    let store = Store::open_at(root)?;
+    let mut job = store.load(plan_id)?;
+    match job.transaction.state.as_str() {
+        "committed" | "needs_recovery" => return Ok(job.transaction),
+        "rolled_back" | "superseded" | "uninstalled" => {}
+        _ => return Err(invalid("transaction_not_terminal")),
+    }
+    // Replacing the cause must not erase an independent cleanup diagnostic.
+    let error = if !error.contains("; cleanup_pending:") {
+        match job
+            .transaction
+            .error
+            .as_deref()
+            .and_then(|raw| raw.split_once("; cleanup_pending:"))
+        {
+            Some((_, detail)) => format!("{error}; cleanup_pending:{detail}"),
+            None => error.to_owned(),
+        }
+    } else {
+        error.to_owned()
+    };
+    if job.transaction.error.as_deref() != Some(error.as_str()) {
+        job.transaction.error = Some(error);
+        store.save(&mut job)?;
     }
     Ok(job.transaction)
 }
@@ -1422,12 +1504,13 @@ fn verify_all(job: &Job, installed: bool) -> io::Result<()> {
     Ok(())
 }
 
-pub fn apply(plan_id: &str, state_dir: &Path) -> io::Result<Transaction> {
+#[cfg(test)]
+pub(crate) fn apply(plan_id: &str, state_dir: &Path) -> io::Result<Transaction> {
     apply_at(&transaction_root(state_dir), plan_id)
 }
 
 /// Explicit-root variant of [`apply`].
-pub fn apply_at(root: &Path, plan_id: &str) -> io::Result<Transaction> {
+pub(crate) fn apply_at(root: &Path, plan_id: &str) -> io::Result<Transaction> {
     let store = Store::open_at(root)?;
     let mut job = store.load(plan_id)?;
     validate_install(&job.plan.install, &store.root)?;
@@ -1748,14 +1831,33 @@ fn restore(store: &Store, job: &mut Job, uninstalling: bool) -> io::Result<()> {
     store.save(job)
 }
 
-pub fn recover(state_dir: &Path) -> io::Result<Vec<Transaction>> {
+#[cfg(test)]
+pub(crate) fn recover(state_dir: &Path) -> io::Result<Vec<Transaction>> {
     recover_at(&transaction_root(state_dir))
 }
 
-/// Explicit-root variant of [`recover`]. The candidate list is read through a
-/// read-only snapshot (p0-contracts §4.1); only when work exists does it take
-/// the exclusive `journal.lock` for the restore writes.
-pub fn recover_at(root: &Path) -> io::Result<Vec<Transaction>> {
+/// Legacy unit-test entry; production recovery requires host validation or one target plan.
+#[cfg(test)]
+pub(crate) fn recover_at(root: &Path) -> io::Result<Vec<Transaction>> {
+    recover_checked_at(root, |_| Ok(()))
+}
+
+pub(crate) fn recover_checked_at(
+    root: &Path,
+    validate: impl Fn(&InstallPlan) -> io::Result<()>,
+) -> io::Result<Vec<Transaction>> {
+    recover_selected_at(root, None, validate)
+}
+
+pub(crate) fn recover_plan_at(root: &Path, plan_id: &str) -> io::Result<Vec<Transaction>> {
+    recover_selected_at(root, Some(plan_id), |_| Ok(()))
+}
+
+fn recover_selected_at(
+    root: &Path,
+    plan_id: Option<&str>,
+    validate: impl Fn(&InstallPlan) -> io::Result<()>,
+) -> io::Result<Vec<Transaction>> {
     let ids = match Store::open_ro(root) {
         Ok(store) => store.ids()?,
         Err(error) if error.to_string() == "installer_state_missing" => return Ok(Vec::new()),
@@ -1765,9 +1867,25 @@ pub fn recover_at(root: &Path) -> io::Result<Vec<Transaction>> {
         return Ok(Vec::new());
     }
     let store = Store::open_at(root)?;
+    // Select and validate the complete write set while the journal lock is held.
+    // A rejected host boundary must not partially recover earlier candidates.
+    let mut candidates = Vec::new();
+    for id in store.ids()? {
+        if plan_id.is_some_and(|selected| selected != id) {
+            continue;
+        }
+        let job = store.load(&id)?;
+        if ["planned", "rolled_back", "uninstalled", "superseded"]
+            .contains(&job.transaction.state.as_str())
+            || (job.transaction.state == "committed" && !job.uninstall_requested)
+        {
+            continue;
+        }
+        validate(&job.plan)?;
+        candidates.push(job);
+    }
     let mut result = Vec::new();
-    for id in ids {
-        let mut job = store.load(&id)?;
+    for mut job in candidates {
         job.transaction.has_replacements = job.plan.changes.iter().any(|c| c.action != "add");
         if ["planned", "rolled_back", "uninstalled", "superseded"]
             .contains(&job.transaction.state.as_str())
@@ -1794,6 +1912,190 @@ pub fn recover_at(root: &Path) -> io::Result<Vec<Transaction>> {
 
 pub fn list_transactions(state_dir: &Path) -> io::Result<Vec<Transaction>> {
     list_transactions_at(&transaction_root(state_dir))
+}
+
+/// Frozen read-only journal facts. Committed plans and transactions are read
+/// through the same connection and SQL snapshot; projection never reopens it.
+#[derive(Debug, Default)]
+pub struct TransactionSnapshot {
+    state_root: Option<PathBuf>,
+    transactions: Vec<Transaction>,
+    plans: HashMap<String, InstallPlan>,
+    diagnostics: Vec<SnapshotDiagnostic>,
+    incomplete_receipts: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SnapshotDiagnostic {
+    pub code: String,
+    pub path: PathBuf,
+    pub message: String,
+}
+
+impl TransactionSnapshot {
+    /// Uses the existing installer/rust-v1 store without initialization or writes.
+    pub fn load_ro(state_dir: &Path, steam: &steam::ScanReport) -> io::Result<Self> {
+        validate_projection_state(state_dir, &steam.installs)?;
+        let root = crate::installer::InstallerPaths::new(state_dir)
+            .root()
+            .to_owned();
+        let mut snapshot = Self {
+            state_root: Some(std::path::absolute(state_dir)?),
+            ..Self::default()
+        };
+        // Validate the actual database and journal paths as well as their root.
+        for name in [
+            "journal.sqlite",
+            "journal.sqlite-wal",
+            "journal.sqlite-shm",
+            "journal.sqlite-journal",
+        ] {
+            safe_path(&root.join(name))?;
+        }
+        let store = match Store::open_ro(&root) {
+            Ok(store) => store,
+            Err(error) if error.to_string() == "installer_state_missing" => return Ok(snapshot),
+            Err(error) => {
+                snapshot.incomplete_receipts = true;
+                snapshot.diagnostics.push(SnapshotDiagnostic {
+                    code: "transaction_snapshot_unreadable".into(),
+                    path: root,
+                    message: bounded_snapshot_message(error.to_string()),
+                });
+                return Ok(snapshot);
+            }
+        };
+        sql(store.conn.execute_batch("BEGIN DEFERRED TRANSACTION"))?;
+        let ids = match store.ids() {
+            Ok(ids) => ids,
+            Err(error) => {
+                snapshot.incomplete_receipts = true;
+                snapshot.diagnostics.push(SnapshotDiagnostic {
+                    code: "transaction_snapshot_unreadable".into(),
+                    path: root,
+                    message: bounded_snapshot_message(error.to_string()),
+                });
+                return Ok(snapshot);
+            }
+        };
+        for id in ids {
+            match store.load(&id) {
+                Ok(mut job) => {
+                    job.transaction.has_replacements =
+                        job.plan.changes.iter().any(|change| change.action != "add");
+                    if job.transaction.state == "committed" {
+                        snapshot.plans.insert(job.plan.plan_id.clone(), job.plan);
+                    }
+                    snapshot.transactions.push(job.transaction);
+                }
+                Err(error) => {
+                    // Preserve the current receipt identity if only its plan/overlay is
+                    // corrupt. An unreadable newest plan must never select an older one.
+                    #[derive(Deserialize)]
+                    struct ReceiptOnly {
+                        transaction: Transaction,
+                    }
+                    let document: rusqlite::Result<String> = store.conn.query_row(
+                        "SELECT document FROM jobs WHERE id=?1 AND length(CAST(document AS BLOB))<=?2",
+                        params![id, MAX_PLAN_METADATA_BYTES as i64], |row| row.get(0));
+                    let mut recovered_identity = false;
+                    if let Ok(document) = document {
+                        if let Ok(mut receipt) = serde_json::from_str::<ReceiptOnly>(&document) {
+                            if receipt.transaction.plan_id == id
+                                && receipt.transaction.transaction_id == id
+                            {
+                                // Failed overlay validation must not discard its newer
+                                // timestamp and make an older receipt win the selection.
+                                let updated: rusqlite::Result<Option<i64>> = if store.has_progress {
+                                    store.conn.query_row(
+                                        "SELECT max(updated_at) FROM job_progress WHERE job_id=?1",
+                                        [&id],
+                                        |row| row.get(0),
+                                    )
+                                } else {
+                                    Ok(None)
+                                };
+                                let updated = match updated {
+                                    Ok(Some(value)) => u64::try_from(value).ok(),
+                                    Ok(None) => Some(receipt.transaction.updated_at),
+                                    Err(_) => None,
+                                };
+                                if let Some(updated) = updated {
+                                    receipt.transaction.updated_at =
+                                        receipt.transaction.updated_at.max(updated);
+                                    snapshot.transactions.push(receipt.transaction);
+                                    recovered_identity = true;
+                                }
+                            }
+                        }
+                    }
+                    snapshot.incomplete_receipts |= !recovered_identity;
+                    snapshot.diagnostics.push(SnapshotDiagnostic {
+                        code: "transaction_plan_unreadable".into(),
+                        path: root.join("jobs").join(id),
+                        message: bounded_snapshot_message(error.to_string()),
+                    });
+                }
+            }
+        }
+        Ok(snapshot)
+    }
+
+    /// Builds owned fixed facts for callers which already hold a trusted snapshot.
+    /// Projection still validates each matched plan's instance and game paths.
+    pub fn from_records(transactions: Vec<Transaction>, plans: Vec<InstallPlan>) -> Self {
+        Self {
+            state_root: None,
+            transactions,
+            plans: plans
+                .into_iter()
+                .map(|plan| (plan.plan_id.clone(), plan))
+                .collect(),
+            diagnostics: Vec::new(),
+            incomplete_receipts: false,
+        }
+    }
+    pub fn receipts_complete(&self) -> bool {
+        !self.incomplete_receipts
+    }
+    pub fn transactions(&self) -> &[Transaction] {
+        &self.transactions
+    }
+    pub fn plan(&self, plan_id: &str) -> Option<&InstallPlan> {
+        self.plans.get(plan_id)
+    }
+    pub fn diagnostics(&self) -> &[SnapshotDiagnostic] {
+        &self.diagnostics
+    }
+    pub fn state_root(&self) -> Option<&Path> {
+        self.state_root.as_deref()
+    }
+}
+
+fn bounded_snapshot_message(mut message: String) -> String {
+    if message.len() > 2048 {
+        let mut end = 2048;
+        while !message.is_char_boundary(end) {
+            end -= 1;
+        }
+        message.truncate(end);
+    }
+    message
+}
+
+/// Shared direct-API state boundary for read-only snapshots and projection.
+pub(crate) fn validate_projection_state(
+    state_dir: &Path,
+    installs: &[GameInstall],
+) -> io::Result<()> {
+    let state = canonical_future(&std::path::absolute(state_dir)?)?;
+    for game in installs {
+        let game_path = canonical_future(&std::path::absolute(&game.install_path)?)?;
+        if state.starts_with(&game_path) || game_path.starts_with(&state) {
+            return Err(invalid("state_overlaps_game"));
+        }
+    }
+    Ok(())
 }
 
 /// Explicit-root variant of [`list_transactions`] using a read-only snapshot
@@ -1863,6 +2165,11 @@ fn cleanup_terminal(store: &Store, job: &mut Job) -> io::Result<()> {
         }
         sync_dir(&store.directory(&job.plan.plan_id)?)
     })();
+    record_cleanup_result(store, job, cleanup);
+    Ok(())
+}
+
+fn record_cleanup_result(store: &Store, job: &mut Job, cleanup: io::Result<()>) {
     let previous_error = job.transaction.error.as_deref().and_then(|error| {
         if error.starts_with("cleanup_pending:") {
             None
@@ -1890,7 +2197,6 @@ fn cleanup_terminal(store: &Store, job: &mut Job) -> io::Result<()> {
         // Cleanup diagnostics must never change an already durable terminal outcome.
         let _ = store.save(job);
     }
-    Ok(())
 }
 
 #[cfg(test)]

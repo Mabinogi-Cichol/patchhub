@@ -85,6 +85,7 @@ pub struct SourceRegistry {
     discovery: BTreeMap<(String, u32), DiscoveryRecord>,
     indexes: BTreeMap<String, DiscoveryIndexRecord>,
     clock: Box<dyn Clock>,
+    frozen_snapshot: bool,
 }
 
 impl SourceRegistry {
@@ -109,11 +110,52 @@ impl SourceRegistry {
             discovery: BTreeMap::new(),
             indexes: BTreeMap::new(),
             clock,
+            frozen_snapshot: false,
         };
         registry.reload()?;
         Ok(registry)
     }
 
+    /// Preloads only the requested games' discovery records for an immutable snapshot.
+    /// Every present record is parsed and validated here so later registry reads never
+    /// need to touch disk and corrupt state cannot silently become an empty discovery.
+    pub(crate) fn preload_snapshot_games(&mut self, games: &[GameQuery]) -> Result<()> {
+        let appids: HashSet<u32> = games.iter().map(|game| game.appid).collect();
+        for appid in appids {
+            for rule in self.effective_discovery_rules(appid) {
+                let record = self.store.load_discovery(&rule.id, appid)?;
+                if let Some(record) = &record {
+                    if record.schema_version != 1
+                        || record.appid != appid
+                        || record.source_id != rule.id
+                    {
+                        return Err(invalid("invalid_discovery_record"));
+                    }
+                    if record.success.as_ref().is_some_and(|success| {
+                        validate::validate_candidates(&rule, appid, &success.candidates).is_err()
+                    }) || record.attempt.as_ref().is_some_and(|attempt| {
+                        validate::validate_candidates(&rule, appid, &attempt.candidates).is_err()
+                    }) {
+                        return Err(invalid("invalid_discovery_record"));
+                    }
+                }
+                // Store explicit absence too, preventing the later cached-discovery
+                // path from probing this game on disk again.
+                self.discovery
+                    .insert((rule.id.clone(), appid), record.unwrap_or_default());
+            }
+        }
+        for rule in &self.rules {
+            if let Some(index) = self.store.load_discovery_index(&rule.id)? {
+                if index.schema_version != 1 {
+                    return Err(invalid("invalid_discovery_index"));
+                }
+                self.indexes.insert(rule.id.clone(), index);
+            }
+        }
+        self.frozen_snapshot = true;
+        Ok(())
+    }
     pub fn store(&self) -> &SourceStore {
         &self.store
     }
@@ -564,6 +606,9 @@ impl SourceRegistry {
         if let Some(record) = self.discovery.get(&(rule.id.clone(), appid)) {
             return record.clone();
         }
+        if self.frozen_snapshot {
+            return DiscoveryRecord::default();
+        }
         let Ok(Some(record)) = self.store.load_discovery(&rule.id, appid) else {
             return DiscoveryRecord::default();
         };
@@ -692,6 +737,7 @@ impl SourceRegistry {
     pub fn shared_index(&self, source_id: &str) -> Option<DiscoveryIndex> {
         let record = match self.indexes.get(source_id) {
             Some(record) => record.clone(),
+            None if self.frozen_snapshot => return None,
             None => self.store.load_discovery_index(source_id).ok().flatten()?,
         };
         if record.schema_version != 1 {

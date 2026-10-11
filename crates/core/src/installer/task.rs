@@ -1,4 +1,5 @@
 //! Foreground task ownership before acquisition; durable revocation precedes effective cancellation.
+use super::outcome::CancellationCause;
 use super::{invalid, store, InstallerPaths, Result};
 use fs2::FileExt;
 use std::{
@@ -11,6 +12,7 @@ use std::{
     },
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
+
 #[derive(Clone)]
 pub struct TaskControl {
     pub id: String,
@@ -19,6 +21,7 @@ pub struct TaskControl {
     deadline: Arc<AtomicU64>,
     plan: Arc<Mutex<Option<PathBuf>>>,
     failure: Arc<Mutex<Option<String>>>,
+    cause: Arc<Mutex<Option<CancellationCause>>>,
     /// Owned `tasks/<id>/owner.lock` handle. Held for the task lifetime and
     /// released before the terminal directory is removed (Windows refuses to
     /// delete a file that is still open).
@@ -148,6 +151,7 @@ impl TaskControl {
             deadline: Arc::new(AtomicU64::new(deadline)),
             plan: Arc::new(Mutex::new(None)),
             failure: Arc::new(Mutex::new(None)),
+            cause: Arc::new(Mutex::new(None)),
             owner_lock: Arc::new(Mutex::new(Some(owner_lock))),
         };
         control.renew(deadline)?;
@@ -178,7 +182,18 @@ impl TaskControl {
         }
         Ok(())
     }
+    pub fn cancellation_cause(&self) -> Option<CancellationCause> {
+        *self.cause.lock().unwrap()
+    }
     pub fn revoke(&self) -> Result<()> {
+        self.revoke_with_cause(CancellationCause::UserCancelled)
+    }
+    pub fn revoke_with_cause(&self, cause: CancellationCause) -> Result<()> {
+        self.cause.lock().unwrap().get_or_insert(cause);
+        self.revoke_for_failure()
+    }
+    /// Fail closed after an ordinary failure without inventing user cancellation.
+    pub fn revoke_for_failure(&self) -> Result<()> {
         let plan = self.plan.lock().unwrap();
         let result = marker(&self.job).and_then(|_| match plan.as_ref() {
             Some(p) => marker(p),
@@ -198,7 +213,11 @@ impl TaskControl {
             return Err(invalid(e));
         }
         if self.cancel.load(Ordering::SeqCst) {
-            return Err(invalid("cancelled"));
+            return Err(invalid(
+                self.cancellation_cause()
+                    .map(CancellationCause::code)
+                    .unwrap_or("cancelled"),
+            ));
         }
         Ok(())
     }
@@ -207,8 +226,20 @@ impl TaskControl {
         requested: &AtomicBool,
         deadline: &dyn Fn() -> u64,
     ) -> Result<()> {
-        if requested.load(Ordering::Acquire) || now_ms() >= deadline() {
+        self.check_requested_with_cause(requested, deadline, &|| None)
+    }
+    pub fn check_requested_with_cause(
+        &self,
+        requested: &AtomicBool,
+        deadline: &dyn Fn() -> u64,
+        cause: &dyn Fn() -> Option<CancellationCause>,
+    ) -> Result<()> {
+        if let Some(cause) = cause() {
+            self.revoke_with_cause(cause)?;
+        } else if requested.load(Ordering::Acquire) {
             self.revoke()?;
+        } else if now_ms() >= deadline() {
+            self.revoke_with_cause(CancellationCause::LeaseExpired)?;
         }
         self.check()
     }
@@ -216,6 +247,15 @@ impl TaskControl {
         &self,
         requested: &AtomicBool,
         deadline: &(dyn Fn() -> u64 + Sync),
+        work: impl FnOnce() -> T,
+    ) -> T {
+        self.run_with_cause(requested, deadline, &|| None, work)
+    }
+    pub fn run_with_cause<T>(
+        &self,
+        requested: &AtomicBool,
+        deadline: &(dyn Fn() -> u64 + Sync),
+        cause: &(dyn Fn() -> Option<CancellationCause> + Sync),
         work: impl FnOnce() -> T,
     ) -> T {
         let done = AtomicBool::new(false);
@@ -230,15 +270,22 @@ impl TaskControl {
                 let mut last = 0;
                 while !done.load(Ordering::Acquire) {
                     let d = deadline();
-                    if requested.load(Ordering::Acquire) || now_ms() >= d {
-                        let _ = self.revoke();
+                    if cause().is_some() || requested.load(Ordering::Acquire) || now_ms() >= d {
+                        let reason = cause().unwrap_or_else(|| {
+                            if requested.load(Ordering::Acquire) {
+                                CancellationCause::UserCancelled
+                            } else {
+                                CancellationCause::LeaseExpired
+                            }
+                        });
+                        let _ = self.revoke_with_cause(reason);
                         break;
                     }
                     if d != last {
                         if let Err(e) = self.renew(d) {
                             *self.failure.lock().unwrap() =
                                 Some(format!("lease_persist_failed: {e}"));
-                            let _ = self.revoke();
+                            let _ = self.revoke_for_failure();
                             break;
                         }
                         last = d;
@@ -247,8 +294,15 @@ impl TaskControl {
                 }
             });
             // Synchronous first gate closes the monitor scheduling race.
-            if requested.load(Ordering::Acquire) || now_ms() >= deadline() {
-                let _ = self.revoke();
+            if cause().is_some() || requested.load(Ordering::Acquire) || now_ms() >= deadline() {
+                let reason = cause().unwrap_or_else(|| {
+                    if requested.load(Ordering::Acquire) {
+                        CancellationCause::UserCancelled
+                    } else {
+                        CancellationCause::LeaseExpired
+                    }
+                });
+                let _ = self.revoke_with_cause(reason);
             }
             let finish = Finish(&done);
             let original = crate::operation::cancel_flag();
@@ -257,7 +311,13 @@ impl TaskControl {
                 crate::operation::with_gate(
                     move || {
                         if original.as_ref().is_some_and(|c| c.load(Ordering::Acquire)) {
-                            durable.revoke()?;
+                            if now_ms() >= durable.deadline.load(Ordering::Acquire) {
+                                durable.revoke_with_cause(CancellationCause::LeaseExpired)?;
+                            } else {
+                                // The borrowed host cause is read by the scoped monitor and
+                                // terminal route; this static gate must not invent a cause.
+                                durable.revoke_for_failure()?;
+                            }
                         }
                         durable.check()
                     },
@@ -348,6 +408,37 @@ mod tests {
             assert!(control.job.join("revoked").exists());
             assert!(control.check().is_err());
         });
+    }
+
+    #[test]
+    fn typed_user_and_lease_reasons_survive_task_teardown() {
+        for (requested, deadline, external, expected) in [
+            (true, u64::MAX, None, CancellationCause::UserCancelled),
+            (false, 1, None, CancellationCause::LeaseExpired),
+            (
+                true,
+                u64::MAX,
+                Some(CancellationCause::LeaseExpired),
+                CancellationCause::LeaseExpired,
+            ),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let paths = InstallerPaths::new(dir.path());
+            super::super::init_atomic(&paths).unwrap();
+            let control =
+                TaskControl::new(&paths, "typed", "instance", "selection", deadline).unwrap();
+            control.run_with_cause(
+                &AtomicBool::new(requested),
+                &|| deadline,
+                &|| external,
+                || {
+                    assert_eq!(control.check().unwrap_err().to_string(), expected.code());
+                    assert!(control.job.join("revoked").exists());
+                },
+            );
+            assert_eq!(control.cancellation_cause(), Some(expected));
+            assert!(!control.job.exists());
+        }
     }
 
     #[test]

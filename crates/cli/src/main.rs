@@ -81,7 +81,7 @@ fn respond(bytes: &[u8]) -> Value {
 /// `serve` and `serve-task` share this parser/executor; only `serve-task` may
 /// dispatch the task-channel methods (`install_patch` and the streaming source
 /// tasks), carrying the live lease closures.
-fn respond_with<L: Fn(u64) -> bool, D: Fn() -> u64 + Sync>(
+fn respond_with<L: Fn(u64) -> bool + Sync, D: Fn() -> u64 + Sync>(
     bytes: &[u8],
     cancel: &AtomicBool,
     lease_active: &L,
@@ -90,7 +90,7 @@ fn respond_with<L: Fn(u64) -> bool, D: Fn() -> u64 + Sync>(
     respond_with_channel(bytes, cancel, lease_active, lease_deadline_ms, true)
 }
 
-fn respond_with_channel<L: Fn(u64) -> bool, D: Fn() -> u64 + Sync>(
+fn respond_with_channel<L: Fn(u64) -> bool + Sync, D: Fn() -> u64 + Sync>(
     bytes: &[u8],
     cancel: &AtomicBool,
     lease_active: &L,
@@ -336,7 +336,7 @@ pub(crate) fn run_task(
 /// Runs one `serve-task` request: stream methods emit their events, everything
 /// else runs under `operation::run` and emits flat `install_progress` events.
 /// Returns the single final response line value.
-pub(crate) fn run_task_with_lease<L: Fn(u64) -> bool, D: Fn() -> u64 + Sync>(
+pub(crate) fn run_task_with_lease<L: Fn(u64) -> bool + Sync, D: Fn() -> u64 + Sync>(
     bytes: &[u8],
     oversized: bool,
     cancel: Arc<AtomicBool>,

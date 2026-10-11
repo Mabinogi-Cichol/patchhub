@@ -14,7 +14,7 @@ use fs2::FileExt;
 use serde::{de::DeserializeOwned, Serialize};
 use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
-use std::io::{Read, Write};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -132,6 +132,44 @@ impl SourceStore {
         Ok(store)
     }
 
+    /// Opens an existing source namespace without creating, repairing, or writing files.
+    /// A wholly absent namespace is handled by `SourceSnapshot::load` before this call.
+    pub(crate) fn open_readonly(state_dir: &Path) -> Result<Self> {
+        let paths = StorePaths::new(state_dir);
+        let metadata = fs::symlink_metadata(paths.root())?;
+        if linked(&metadata) || !metadata.is_dir() {
+            return Err(invalid("linked_source_state"));
+        }
+        let settings_bytes = read_bounded(&paths.settings(), MAX_SETTINGS_BYTES)?;
+        let schema_bytes = read_bounded(&paths.schema(), MAX_STATUS_BYTES)?;
+        if settings_bytes.is_none() && schema_bytes.is_none() {
+            return Err(invalid("invalid_source_state"));
+        }
+        if let Some(bytes) = schema_bytes {
+            let marker: serde_json::Value =
+                serde_json::from_slice(&bytes).map_err(|error| invalid(error.to_string()))?;
+            if marker
+                .get("schema_version")
+                .and_then(serde_json::Value::as_u64)
+                != Some(STORE_SCHEMA_VERSION as u64)
+            {
+                return Err(invalid("invalid_source_schema"));
+            }
+        }
+        let settings = if let Some(bytes) = settings_bytes {
+            serde_json::from_slice(&bytes).map_err(|error| invalid(error.to_string()))?
+        } else {
+            default_settings()
+        };
+        if settings.schema_version != STORE_SCHEMA_VERSION || settings.revision == 0 {
+            return Err(invalid("invalid_source_state"));
+        }
+        Ok(Self {
+            paths,
+            settings: Mutex::new(settings),
+            lock: Mutex::new(()),
+        })
+    }
     /// Writes the `schema.json` completion marker (idempotent; never touches
     /// `settings.json`).
     fn write_schema_marker(&self) -> Result<()> {
@@ -374,25 +412,12 @@ pub fn write_atomic(path: &Path, bytes: &[u8], max: u64) -> Result<()> {
 /// Reads at most `max` bytes; missing → `None`, linked/non-regular →
 /// `linked_source_state`, too large → `file_too_large`.
 pub fn read_bounded(path: &Path, max: u64) -> Result<Option<Vec<u8>>> {
-    match fs::symlink_metadata(path) {
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(error),
-        Ok(metadata) => {
-            if linked(&metadata) || !metadata.is_file() {
-                return Err(invalid("linked_source_state"));
-            }
-            if metadata.len() > max {
-                return Err(invalid("file_too_large"));
-            }
-        }
-    }
-    let file = File::open(path)?;
-    let mut bytes = Vec::new();
-    file.take(max + 1).read_to_end(&mut bytes)?;
-    if bytes.len() as u64 > max {
-        return Err(invalid("file_too_large"));
-    }
-    Ok(Some(bytes))
+    crate::detection::read_bounded(path, max).map_err(|error| match error.to_string().as_str() {
+        "evidence_linked_path" | "evidence_not_regular_file" => invalid("linked_source_state"),
+        "evidence_size_limit" => invalid("file_too_large"),
+        "evidence_changed" => invalid("source_state_changed"),
+        _ => error,
+    })
 }
 
 fn read_json<T: DeserializeOwned>(path: &Path, max: u64) -> Result<Option<T>> {

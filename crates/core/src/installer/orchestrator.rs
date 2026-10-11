@@ -15,6 +15,7 @@ use super::authorization::{
     self, authorize, AuthorizeInput, ContentBinding, CurrentState, PolicyVersions,
 };
 use super::facts::{self, FactsExpectation, GameFacts};
+use super::outcome::CancellationCause;
 use super::resolve::ResolvedZipCandidate;
 use super::store::InstallerPaths;
 use super::zip_recipe;
@@ -68,7 +69,7 @@ impl std::error::Error for ZipTaskError {}
 pub type ZipTaskResult<T> = std::result::Result<T, ZipTaskError>;
 
 /// Inputs for one dynamic ZIP task (p1-zip-orchestration §3.2).
-pub struct ZipInstallInputs<'a> {
+pub(crate) struct ZipInstallInputs<'a> {
     pub game: &'a GameInstall,
     pub selection: &'a ResolvedZipCandidate,
     pub operation: InstallOperation,
@@ -78,12 +79,13 @@ pub struct ZipInstallInputs<'a> {
 }
 
 /// Injected environment for one dynamic ZIP task.
-pub struct ZipInstallDeps<'a> {
+pub(crate) struct ZipInstallDeps<'a> {
     pub paths: &'a InstallerPaths,
     /// State directory used to reopen `Sources` for the apply-time re-check.
     pub state_dir: &'a Path,
     pub transport: &'a dyn Transport,
     pub cancel: &'a AtomicBool,
+    pub cancel_reason: &'a (dyn Fn() -> Option<CancellationCause> + Sync),
     /// `now -> whether the foreground lease is still active` (seconds). The
     /// orchestrator supplies a *current* timestamp at every check so an expired
     /// lease is observed even when the plan/authorization was created earlier
@@ -186,6 +188,40 @@ pub fn begin_request(
             if is_terminal(&transaction.state) {
                 return Ok(Some(transaction));
             }
+        }
+        return Err(ZipTaskError::code(
+            "install_request_in_progress_or_interrupted",
+        ));
+    }
+    // A failed ledger backfill must still replay its real journal transaction.
+    // Only new request-derived UUIDs use this fallback; legacy random plans use
+    // the original ledger plan_id above. The existing binding remains mandatory.
+    let reserved = super::requests::request_plan_id(request_id);
+    let transactions = install::list_transactions_at(paths.root()).map_err(internal)?;
+    if let Some(transaction) = transactions.iter().find(|t| t.plan_id == reserved) {
+        let plan = install::get_plan_ro(paths.root(), &reserved).map_err(internal)?;
+        if plan.instance_id != binding.instance_id
+            || plan.install.instance_id != binding.instance_id
+            || transaction.instance_id != binding.instance_id
+            || plan.release_id != transaction.release_id
+            || binding.content_id.as_ref().is_some_and(|content| {
+                transaction
+                    .content_id
+                    .as_ref()
+                    .or(plan.recipe_sha256.as_ref())
+                    != Some(content)
+            })
+            || operation_name(plan.operation) != binding.operation
+            || transaction.selection_id != binding.selection_id
+            || binding
+                .release_id
+                .as_ref()
+                .is_some_and(|id| id != &transaction.release_id)
+        {
+            return Err(ZipTaskError::code("request_id_binding_conflict"));
+        }
+        if is_terminal(&transaction.state) {
+            return Ok(Some(transaction.clone()));
         }
         return Err(ZipTaskError::code(
             "install_request_in_progress_or_interrupted",
@@ -396,33 +432,95 @@ pub(crate) fn plan_mappings(plan: &install::InstallPlan) -> Vec<FileMapping> {
         .collect()
 }
 
-/// Discards a plan after a post-plan failure, records the resulting terminal
-/// transaction and returns the mapped failure.
+/// Keep the original diagnostic; the single post-plan boundary below owns recovery.
 fn fail_after_plan(
+    _paths: &InstallerPaths,
+    _request_id: &str,
+    _binding: &super::requests::RequestBinding,
+    _content_id: &str,
+    _plan_id: &str,
+    code: &str,
+    detail: impl Into<String>,
+) -> ZipTaskError {
+    ZipTaskError::new(code, detail)
+}
+
+/// The journal is authoritative after a plan has been bound. A summary write
+/// failure must not erase a commit or rollback; replay consults that plan's journal.
+pub(crate) fn record_terminal_fact(
+    paths: &InstallerPaths,
+    request_id: &str,
+    binding: &super::requests::RequestBinding,
+    content_id: &str,
+    transaction: &Transaction,
+) {
+    let _ = record_terminal(paths, request_id, binding, content_id, transaction);
+}
+
+/// Record the recovered transaction rather than replacing its facts with an RPC error.
+/// A typed live cause is used only for concrete cancellation failures, never late cancellation.
+pub(crate) fn finalize_plan_failure(
     paths: &InstallerPaths,
     request_id: &str,
     binding: &super::requests::RequestBinding,
     content_id: &str,
     plan_id: &str,
-    code: &str,
-    detail: impl Into<String>,
-) -> ZipTaskError {
-    match finish_failed_plan(paths, plan_id) {
-        Ok(transaction) => {
-            if let Err(e) = record_terminal(paths, request_id, binding, content_id, &transaction) {
-                return e;
-            }
-            if transaction.state == "needs_recovery" {
-                return ZipTaskError::new("needs_recovery", transaction.error.unwrap_or_default());
-            }
-        }
-        Err(e) => return ZipTaskError::new("needs_recovery", e.to_string()),
+    failure: &ZipTaskError,
+    live_cause: Option<CancellationCause>,
+) -> ZipTaskResult<Transaction> {
+    operation::restoring();
+    let mut t = finish_failed_plan(paths, plan_id)
+        .map_err(|e| ZipTaskError::new("needs_recovery", e.to_string()))?;
+    if t.state == "rolled_back" {
+        let raw = t.error.as_deref();
+        let cancellation_failure = matches!(
+            failure.code.as_str(),
+            "cancelled"
+                | "task_cancelled"
+                | "download_cancelled"
+                | "lease_expired"
+                | "installer_lease_expired"
+                | "authorization_lease_inactive"
+        );
+        let cause = if cancellation_failure {
+            live_cause.or_else(|| CancellationCause::from_code(&failure.code))
+        } else {
+            None
+        };
+        let persisted = match cause {
+            Some(cause) => cause.code().to_owned(),
+            None => raw
+                .filter(|error| *error != "task_cancelled")
+                .map(str::to_owned)
+                .unwrap_or_else(|| failure.to_string()),
+        };
+        t = install::set_terminal_error_at(paths.root(), plan_id, &persisted).map_err(internal)?;
     }
-    ZipTaskError::new(code, detail)
+    record_terminal_fact(paths, request_id, binding, content_id, &t);
+    Ok(t)
+}
+
+/// Normalize cancellations returned by apply itself after successful rollback.
+pub(crate) fn normalize_rolled_back(
+    paths: &InstallerPaths,
+    t: Transaction,
+    cause: Option<CancellationCause>,
+) -> io::Result<Transaction> {
+    if t.state == "rolled_back"
+        && t.error
+            .as_deref()
+            .and_then(CancellationCause::from_transaction_error)
+            .is_some()
+    {
+        if let Some(cause) = cause {
+            return install::set_terminal_error_at(paths.root(), &t.plan_id, cause.code());
+        }
+    }
+    Ok(t)
 }
 
 /// Complete post-plan failure using the journal's actual state.
-pub fn finish_failed_plan(paths: &InstallerPaths, id: &str) -> io::Result<Transaction> {
+pub(crate) fn finish_failed_plan(paths: &InstallerPaths, id: &str) -> io::Result<Transaction> {
     let current = install::list_transactions_at(paths.root())?
         .into_iter()
         .find(|t| t.plan_id == id)
@@ -430,7 +528,7 @@ pub fn finish_failed_plan(paths: &InstallerPaths, id: &str) -> io::Result<Transa
     match current.state.as_str() {
         "planned" => install::discard_plan_at(paths.root(), id),
         "committed" | "rolled_back" | "needs_recovery" => Ok(current),
-        _ => install::recover_at(paths.root())?
+        _ => install::recover_plan_at(paths.root(), id)?
             .into_iter()
             .find(|t| t.plan_id == id)
             .ok_or_else(|| super::invalid("transaction_missing")),
@@ -440,6 +538,9 @@ pub fn finish_failed_plan(paths: &InstallerPaths, id: &str) -> io::Result<Transa
 /// Stage-boundary gate: local cancel flag, then the **live** foreground lease
 /// (re-read from the clock), then the in-process operation cancel flag.
 fn boundary(deps: &ZipInstallDeps<'_>) -> ZipTaskResult<()> {
+    if let Some(cause) = (deps.cancel_reason)() {
+        return Err(ZipTaskError::code(cause.code()));
+    }
     if deps.cancel.load(Ordering::Relaxed) {
         return Err(ZipTaskError::code("cancelled"));
     }
@@ -469,7 +570,7 @@ fn write_lease(deps: &ZipInstallDeps<'_>, plan_id: &str) -> ZipTaskResult<()> {
 }
 
 /// Orchestrates one dynamic publisher ZIP install (p1-zip-orchestration §3.3).
-pub fn install_zip(
+pub(crate) fn install_zip(
     inputs: ZipInstallInputs<'_>,
     deps: ZipInstallDeps<'_>,
 ) -> ZipTaskResult<Transaction> {
@@ -487,17 +588,24 @@ pub fn install_zip(
     )
     .map_err(internal)?;
     if !(deps.lease_active)(now_unix()) {
-        control.revoke().map_err(internal)?;
-        return Err(ZipTaskError::code("installer_lease_expired"));
+        control
+            .revoke_with_cause(CancellationCause::LeaseExpired)
+            .map_err(internal)?;
+        return Err(ZipTaskError::code("cancelled"));
     }
     let requested = deps.cancel;
-    control.run(requested, deps.lease_deadline_ms, || {
-        let deps = ZipInstallDeps {
-            cancel: &control.cancel,
-            ..deps
-        };
-        install_zip_inner(inputs, deps, &control, requested)
-    })
+    control.run_with_cause(
+        requested,
+        deps.lease_deadline_ms,
+        deps.cancel_reason,
+        || {
+            let deps = ZipInstallDeps {
+                cancel: &control.cancel,
+                ..deps
+            };
+            install_zip_inner(inputs, deps, &control, requested)
+        },
+    )
 }
 
 fn install_zip_inner(
@@ -518,7 +626,7 @@ fn install_zip_inner(
     }
 
     control
-        .check_requested(requested, deps.lease_deadline_ms)
+        .check_requested_with_cause(requested, deps.lease_deadline_ms, deps.cancel_reason)
         .map_err(|_| ZipTaskError::code("cancelled"))?;
     // Step 3: connecting + acquire (no journal lock held).
     operation::stage("connecting", None, None);
@@ -534,7 +642,7 @@ fn install_zip_inner(
             .map_err(map_download_error)?;
 
     control
-        .check_requested(requested, deps.lease_deadline_ms)
+        .check_requested_with_cause(requested, deps.lease_deadline_ms, deps.cancel_reason)
         .map_err(|_| ZipTaskError::code("download_cancelled"))?;
     // Step 4: recipe.
     let mappings = zip_recipe::build_recipe(&acquired.path, &inputs.game.install_path, deps.cancel)
@@ -565,11 +673,11 @@ fn install_zip_inner(
     }
 
     control
-        .check_requested(requested, deps.lease_deadline_ms)
+        .check_requested_with_cause(requested, deps.lease_deadline_ms, deps.cancel_reason)
         .map_err(|_| ZipTaskError::code("cancelled"))?;
     // Step 7: plan + authorize + re-check (journal.lock held only inside prepare).
     boundary(&deps)?;
-    let plan = install::prepare_with_binding_at(
+    let plan = install::prepare_for_request_at(
         deps.paths.root(),
         inputs.game,
         &release,
@@ -578,16 +686,14 @@ fn install_zip_inner(
         inputs.operation,
         Some(&inputs.selection.selection_id),
         None,
+        Some(inputs.request_id),
     )
     .map_err(map_plan_error)?;
     let outcome = (|| {
         if let Err(e) = control.attach_plan(deps.paths, &plan.plan_id) {
-            operation::restoring();
-            let _ = install::discard_plan_at(deps.paths.root(), &plan.plan_id);
             return Err(internal(e));
         }
         if !plan.blockers.is_empty() {
-            let _ = install::discard_plan_at(deps.paths.root(), &plan.plan_id);
             return Err(ZipTaskError::new(
                 "plan_has_blockers",
                 plan.blockers.join(","),
@@ -658,25 +764,12 @@ fn install_zip_inner(
 
         let current = recheck_authorization(&deps, &inputs, &plan, &acquired, &expectation)?;
         if let Err(invalidation) = authorization::validate(&auth, &current) {
-            // A lost/expired foreground lease or a persistent revoke after the plan
-            // is a durable cancellation, not an RPC failure: roll the plan back and
-            // return the `InstallOutcome` (p1-host-contract §2.3). Every other
-            // invalidation (candidate/rules/content/facts drift) stays
-            // `ok:false + error{code}` per §4.4.
-            if matches!(
-                invalidation.code.as_str(),
-                "authorization_lease_inactive" | "authorization_revoked"
-            ) {
-                let transaction =
-                    install::discard_plan_at(deps.paths.root(), &plan.plan_id).map_err(internal)?;
-                record_terminal(
-                    deps.paths,
-                    inputs.request_id,
-                    &binding,
-                    &identity,
-                    &transaction,
-                )?;
-                return Ok(transaction);
+            if invalidation.code == "authorization_lease_inactive"
+                && !(deps.lease_active)(now_unix())
+            {
+                control
+                    .revoke_with_cause(CancellationCause::LeaseExpired)
+                    .map_err(internal)?;
             }
             return Err(fail_after_plan(
                 deps.paths,
@@ -702,22 +795,27 @@ fn install_zip_inner(
                 error.to_string(),
             ));
         }
-        let _ = control.check_requested(requested, deps.lease_deadline_ms);
-        // Step 8: apply. A cancellation after the plan is a durable revoke + discard.
+        let _ = control.check_requested_with_cause(
+            requested,
+            deps.lease_deadline_ms,
+            deps.cancel_reason,
+        );
+        // The post-plan boundary recovers and persists the concrete cause.
         if deps.cancel.load(Ordering::Relaxed)
             || !(deps.lease_active)(now_unix())
             || operation::check().is_err()
         {
-            let transaction =
-                install::discard_plan_at(deps.paths.root(), &plan.plan_id).map_err(internal)?;
-            record_terminal(
-                deps.paths,
-                inputs.request_id,
-                &binding,
-                &identity,
-                &transaction,
-            )?;
-            return Ok(transaction);
+            let cause = (deps.cancel_reason)()
+                .or_else(|| control.cancellation_cause())
+                .or_else(|| {
+                    (!(deps.lease_active)(now_unix())).then_some(CancellationCause::LeaseExpired)
+                });
+            if let Some(cause) = cause {
+                control.revoke_with_cause(cause).map_err(internal)?;
+            }
+            return Err(ZipTaskError::code(
+                cause.map(CancellationCause::code).unwrap_or("cancelled"),
+            ));
         }
         // The download must still hash to the authorized artifact before apply.
         let current_size = fs::metadata(&acquired.path).map_err(internal)?.len();
@@ -734,68 +832,41 @@ fn install_zip_inner(
                 "download artifact changed after authorization",
             ));
         }
-        let transaction = match install::apply_at(deps.paths.root(), &plan.plan_id) {
-            Ok(transaction) => transaction,
-            Err(error) if error.to_string() == "plan_revoked" => {
-                install::discard_plan_at(deps.paths.root(), &plan.plan_id).map_err(internal)?
-            }
-            Err(error) => {
-                control.revoke().map_err(internal)?;
-                operation::restoring();
-                let transaction =
-                    finish_failed_plan(deps.paths, &plan.plan_id).map_err(internal)?;
-                record_terminal(
-                    deps.paths,
-                    inputs.request_id,
-                    &binding,
-                    &identity,
-                    &transaction,
-                )?;
-                if matches!(
-                    transaction.state.as_str(),
-                    "committed" | "rolled_back" | "needs_recovery"
-                ) {
-                    return Ok(transaction);
-                }
-                return Err(map_plan_error(error));
-            }
-        };
+        let transaction =
+            install::apply_at(deps.paths.root(), &plan.plan_id).map_err(map_plan_error)?;
+        let transaction = normalize_rolled_back(
+            deps.paths,
+            transaction,
+            (deps.cancel_reason)().or_else(|| control.cancellation_cause()),
+        )
+        .map_err(internal)?;
 
         operation::stage("cleanup", None, None);
-        record_terminal(
+        record_terminal_fact(
             deps.paths,
             inputs.request_id,
             &binding,
             &identity,
             &transaction,
-        )?;
+        );
         Ok(transaction)
     })();
     match outcome {
         Ok(t) => Ok(t),
         Err(error) => {
+            let cause = (deps.cancel_reason)().or_else(|| control.cancellation_cause());
             control
-                .revoke()
+                .revoke_for_failure()
                 .map_err(|e| ZipTaskError::new("needs_recovery", e.to_string()))?;
-            operation::restoring();
-            let transaction = finish_failed_plan(deps.paths, &plan.plan_id)
-                .map_err(|e| ZipTaskError::new("needs_recovery", e.to_string()))?;
-            record_terminal(
+            finalize_plan_failure(
                 deps.paths,
                 inputs.request_id,
                 &binding,
                 &identity,
-                &transaction,
-            )?;
-            if transaction.state == "committed"
-                || transaction.state == "needs_recovery"
-                || error.code.contains("cancel")
-                || error.code.contains("lease")
-            {
-                Ok(transaction)
-            } else {
-                Err(error)
-            }
+                &plan.plan_id,
+                &error,
+                cause,
+            )
         }
     }
 }
@@ -1105,6 +1176,7 @@ pub(crate) mod tests {
             state_dir: state,
             transport,
             cancel,
+            cancel_reason: &|| None,
             lease_active: &lease,
             lease_deadline_ms: &lease_deadline,
         };
@@ -1208,6 +1280,7 @@ pub(crate) mod tests {
             state_dir: &state,
             transport: &transport,
             cancel: &cancel,
+            cancel_reason: &|| None,
             lease_active: &lease,
             lease_deadline_ms: &lease_deadline,
         };
@@ -1301,6 +1374,7 @@ pub(crate) mod tests {
                 state_dir: &state,
                 transport,
                 cancel: &cancel,
+                cancel_reason: &|| None,
                 lease_active: &lease,
                 lease_deadline_ms: &lease_deadline,
             };
@@ -1331,6 +1405,7 @@ pub(crate) mod tests {
             state_dir: &state,
             transport: &empty,
             cancel: &cancel,
+            cancel_reason: &|| None,
             lease_active: &lease,
             lease_deadline_ms: &lease_deadline,
         };
@@ -1368,6 +1443,7 @@ pub(crate) mod tests {
             state_dir: &state,
             transport: &transport,
             cancel: &cancel,
+            cancel_reason: &|| None,
             lease_active: &lease,
             lease_deadline_ms: &lease_deadline,
         };
@@ -1795,6 +1871,7 @@ pub(crate) mod tests {
             state_dir: &state,
             transport: &transport,
             cancel: cancel.as_ref(),
+            cancel_reason: &|| None,
             lease_active: &lease,
             lease_deadline_ms: &lease_deadline,
         };
@@ -1853,6 +1930,289 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn post_plan_domain_failure_returns_transaction_and_replays_without_transport() {
+        let (temp, game, archive) = setup();
+        let (state, paths) = dynamic_paths(&temp);
+        let selection_id = zip_selection_id(&candidate()).unwrap();
+        let selection = seed_and_resolve(&state, &selection_id);
+        let transport = transport(archive);
+        let cancel = AtomicBool::new(false);
+        let destination = game.install_path.join("data.txt");
+        let changed = destination.clone();
+        let deps = ZipInstallDeps {
+            paths: &paths,
+            state_dir: &state,
+            transport: &transport,
+            cancel: &cancel,
+            cancel_reason: &|| None,
+            lease_active: &|_| true,
+            lease_deadline_ms: &|| u64::MAX,
+        };
+        let inputs = ZipInstallInputs {
+            game: &game,
+            selection: &selection,
+            operation: InstallOperation::Install,
+            request_id: "domain-replay",
+            now: 1000,
+            ttl_seconds: 900,
+        };
+        let t = operation::run(
+            Arc::new(AtomicBool::new(false)),
+            move |p| {
+                if p.stage == "planning" {
+                    fs::write(&changed, b"external bytes").unwrap();
+                }
+            },
+            || install_zip(inputs, deps),
+        )
+        .unwrap();
+        assert_eq!(t.state, "rolled_back");
+        assert_ne!(t.error.as_deref(), Some("task_cancelled"));
+        let out = super::super::outcome::InstallerOutcome::from_transaction(&t, None, None);
+        assert_eq!(out.disposition, super::super::outcome::Disposition::Failed);
+        assert_eq!(
+            out.cause.unwrap().kind,
+            super::super::outcome::FailureKind::DomainFailure
+        );
+        assert_eq!(fs::read(destination).unwrap(), b"external bytes");
+        let record = super::super::RequestLedger::open(&paths)
+            .unwrap()
+            .get("domain-replay")
+            .unwrap()
+            .unwrap();
+        assert_eq!(record.error, t.error);
+        let replay = run_install(
+            &game,
+            &selection,
+            &paths,
+            &state,
+            &FakeTransport::new(Vec::new()),
+            &cancel,
+            "domain-replay",
+            InstallOperation::Install,
+        )
+        .unwrap();
+        assert_eq!(
+            serde_json::to_value(&replay).unwrap(),
+            serde_json::to_value(&t).unwrap()
+        );
+    }
+
+    #[test]
+    fn typed_causes_and_cancel_named_domain_failure_are_durable() {
+        for (failure, live, expected, disposition) in [
+            (
+                ZipTaskError::code("cancelled"),
+                Some(CancellationCause::UserCancelled),
+                "cancelled",
+                super::super::outcome::Disposition::Cancelled,
+            ),
+            (
+                ZipTaskError::code("cancelled"),
+                Some(CancellationCause::LeaseExpired),
+                "lease_expired",
+                super::super::outcome::Disposition::Cancelled,
+            ),
+            (
+                ZipTaskError::new("cannot_cancel_write", "disk denied"),
+                Some(CancellationCause::UserCancelled),
+                "cannot_cancel_write: disk denied",
+                super::super::outcome::Disposition::Failed,
+            ),
+            (
+                ZipTaskError::new("plan_has_blockers", "baseline_conflict:data.txt"),
+                None,
+                "plan_has_blockers: baseline_conflict:data.txt",
+                super::super::outcome::Disposition::Failed,
+            ),
+            (
+                ZipTaskError::code("authorization_revoked"),
+                Some(CancellationCause::UserCancelled),
+                "authorization_revoked",
+                super::super::outcome::Disposition::Failed,
+            ),
+        ] {
+            let (temp, game, archive) = setup();
+            let (state, paths) = dynamic_paths(&temp);
+            let selection = manual_selection(None, None);
+            let transport = transport(archive);
+            let cancel = AtomicBool::new(false);
+            let request = DownloadRequest {
+                url: &selection.download_url,
+                download_hosts: &selection.rule.download_hosts,
+                expected_sha256: None,
+                expected_size: None,
+            };
+            let acquired =
+                acquire::acquire_with(&transport, &request, &paths, &cancel, |_, _| {}).unwrap();
+            let mappings =
+                zip_recipe::build_recipe(&acquired.path, &game.install_path, &cancel).unwrap();
+            let release = build_release(
+                &selection,
+                &acquired,
+                &mappings,
+                &selection.expectation(game.buildid.as_deref()),
+            );
+            let plan = install::prepare_with_binding_at(
+                paths.root(),
+                &game,
+                &release,
+                &acquired.path,
+                0,
+                InstallOperation::Install,
+                Some(&selection.selection_id),
+                None,
+            )
+            .unwrap();
+            assert_eq!(
+                install::set_terminal_error_at(paths.root(), &plan.plan_id, "cancelled")
+                    .unwrap_err()
+                    .to_string(),
+                "transaction_not_terminal"
+            );
+            let binding = request_binding(
+                &game.instance_id,
+                Some(&selection.selection_id),
+                None,
+                InstallOperation::Install,
+                None,
+            );
+            let content = install::recipe_identity(&release).unwrap();
+            begin_request(&paths, "typed-replay", &binding).unwrap();
+            record_plan(&paths, "typed-replay", &binding, &plan.plan_id, &content).unwrap();
+            let t = finalize_plan_failure(
+                &paths,
+                "typed-replay",
+                &binding,
+                &content,
+                &plan.plan_id,
+                &failure,
+                live,
+            )
+            .unwrap();
+            assert_eq!(t.state, "rolled_back");
+            assert_eq!(t.error.as_deref(), Some(expected));
+            let record = super::super::RequestLedger::open(&paths)
+                .unwrap()
+                .get("typed-replay")
+                .unwrap()
+                .unwrap();
+            assert_eq!(record.error, t.error);
+            let replay = begin_request(&paths, "typed-replay", &binding)
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                serde_json::to_value(&replay).unwrap(),
+                serde_json::to_value(&t).unwrap()
+            );
+            let out =
+                super::super::outcome::InstallerOutcome::from_transaction(&replay, None, None);
+            assert_eq!(out.disposition, disposition);
+            assert_eq!(out.cleanup, super::super::outcome::CleanupResult::default());
+            assert!(!game.install_path.join("data.txt").exists());
+            drop(state);
+        }
+    }
+
+    #[test]
+    fn terminal_summary_failure_keeps_zip_commit_or_rollback_and_replays_journal() {
+        for ordinary_failure in [false, true] {
+            let (temp, game, archive) = setup();
+            let (state, paths) = dynamic_paths(&temp);
+            let selection_id = zip_selection_id(&candidate()).unwrap();
+            let selection = seed_and_resolve(&state, &selection_id);
+            let transport = transport(archive);
+            let cancel = AtomicBool::new(false);
+            let requests = paths.requests();
+            let destination = game.install_path.join("data.txt");
+            let changed = destination.clone();
+            let inputs = ZipInstallInputs {
+                game: &game,
+                selection: &selection,
+                operation: InstallOperation::Install,
+                request_id: "summary-failure",
+                now: 1000,
+                ttl_seconds: 900,
+            };
+            let deps = ZipInstallDeps {
+                paths: &paths,
+                state_dir: &state,
+                transport: &transport,
+                cancel: &cancel,
+                cancel_reason: &|| None,
+                lease_active: &|_| true,
+                lease_deadline_ms: &|| u64::MAX,
+            };
+            let t = operation::run(
+                Arc::new(AtomicBool::new(false)),
+                move |p| {
+                    if p.stage == "planning" {
+                        let db = rusqlite::Connection::open(&requests).unwrap();
+                        db.execute_batch(
+                            "CREATE TRIGGER reject_terminal_summary BEFORE UPDATE ON requests
+                        WHEN NEW.state IN ('committed','rolled_back')
+                        BEGIN SELECT RAISE(FAIL,'fixture_terminal_summary_failed'); END;",
+                        )
+                        .unwrap();
+                        if ordinary_failure {
+                            fs::write(&changed, b"external bytes").unwrap();
+                        }
+                    }
+                },
+                || install_zip(inputs, deps),
+            )
+            .unwrap();
+            assert_eq!(
+                t.state,
+                if ordinary_failure {
+                    "rolled_back"
+                } else {
+                    "committed"
+                }
+            );
+            let out = super::super::outcome::InstallerOutcome::from_transaction(&t, None, None);
+            assert_eq!(
+                out.disposition,
+                if ordinary_failure {
+                    super::super::outcome::Disposition::Failed
+                } else {
+                    super::super::outcome::Disposition::Completed
+                }
+            );
+            let record = super::super::RequestLedger::open(&paths)
+                .unwrap()
+                .get("summary-failure")
+                .unwrap()
+                .unwrap();
+            assert_eq!(record.state.as_deref(), Some("planned"));
+            assert_eq!(record.plan_id.as_deref(), Some(t.plan_id.as_str()));
+            let replay = run_install(
+                &game,
+                &selection,
+                &paths,
+                &state,
+                &FakeTransport::new(Vec::new()),
+                &cancel,
+                "summary-failure",
+                InstallOperation::Install,
+            )
+            .unwrap();
+            assert_eq!(
+                serde_json::to_value(&replay).unwrap(),
+                serde_json::to_value(&t).unwrap()
+            );
+            assert_eq!(
+                fs::read(destination).unwrap(),
+                if ordinary_failure {
+                    b"external bytes".as_slice()
+                } else {
+                    b"patched".as_slice()
+                }
+            );
+        }
+    }
+
+    #[test]
     fn cancellation_during_apply_restores_and_rolls_back() {
         let (temp, game, archive) = setup();
         let (state, paths) = dynamic_paths(&temp);
@@ -1876,6 +2236,7 @@ pub(crate) mod tests {
             state_dir: &state,
             transport: &transport,
             cancel: cancel.as_ref(),
+            cancel_reason: &|| None,
             lease_active: &lease,
             lease_deadline_ms: &lease_deadline,
         };
@@ -1890,6 +2251,13 @@ pub(crate) mod tests {
         )
         .unwrap();
         assert_eq!(transaction.state, "rolled_back");
+        assert_eq!(transaction.error.as_deref(), Some("cancelled"));
+        let record = crate::installer::RequestLedger::open(&paths)
+            .unwrap()
+            .get("req-apply-cancel")
+            .unwrap()
+            .unwrap();
+        assert_eq!(record.error, transaction.error);
         assert!(!game.install_path.join("data.txt").exists());
     }
 
@@ -1956,6 +2324,7 @@ pub(crate) mod tests {
             state_dir: &state,
             transport: &transport,
             cancel: &cancel,
+            cancel_reason: &|| None,
             lease_active: &lease,
             lease_deadline_ms: &lease_deadline,
         };
@@ -2003,6 +2372,7 @@ pub(crate) mod tests {
             state_dir: &state,
             transport: &FakeTransport::new(Vec::new()),
             cancel: &cancel,
+            cancel_reason: &|| None,
             lease_active: &replay_lease,
             lease_deadline_ms: &replay_deadline,
         };
@@ -2014,6 +2384,14 @@ pub(crate) mod tests {
         .unwrap();
         assert_eq!(replayed.state, "rolled_back");
         assert_eq!(replayed.transaction_id, transaction.transaction_id);
+        assert_eq!(transaction.error.as_deref(), Some("lease_expired"));
+        assert_eq!(replayed.error, transaction.error);
+        let record = crate::installer::RequestLedger::open(&paths)
+            .unwrap()
+            .get("req-lease")
+            .unwrap()
+            .unwrap();
+        assert_eq!(record.error, transaction.error);
     }
 
     /// The foreground lease is re-read at every boundary from the injected clock
@@ -2044,6 +2422,7 @@ pub(crate) mod tests {
             state_dir: &state,
             transport: &transport,
             cancel: &cancel,
+            cancel_reason: &|| None,
             lease_active: &lease,
             lease_deadline_ms: &lease_deadline,
         };
@@ -2053,7 +2432,7 @@ pub(crate) mod tests {
             || install_zip(inputs, deps),
         )
         .unwrap_err();
-        assert_eq!(error.code, "installer_lease_expired");
+        assert_eq!(error.code, "cancelled");
         assert_no_transactions(&paths);
     }
 

@@ -181,12 +181,52 @@ impl ResolvedZipCandidate {
     }
 }
 
-fn source_release_id(rule: &SourceRule, appid: u32) -> String {
-    if rule.id == "patchmoe" {
+pub fn source_release_id(rule: &SourceRule, appid: u32) -> String {
+    source_release_id_from_source(&rule.id, appid)
+}
+
+pub fn source_release_id_from_source(source_id: &str, appid: u32) -> String {
+    if source_id == "patchmoe" {
         format!("patchmoe-{appid}")
     } else {
-        format!("source-{}-{appid}", rule.id)
+        format!("source-{source_id}-{appid}")
     }
+}
+
+/// Shared source readiness facts used by ZIP projection and resolution.
+pub fn source_admission_blockers(
+    registry: &SourceRegistry,
+    candidate: &SourceCandidate,
+    appid: u32,
+) -> Vec<String> {
+    let Some(rule) = registry
+        .rules()
+        .iter()
+        .find(|rule| rule.id == candidate.source_id)
+    else {
+        return vec!["source_not_enabled".to_string()];
+    };
+    let mut blockers = Vec::new();
+    if !rule.enabled {
+        blockers.push("source_not_enabled".to_string());
+    }
+    if !registry.game_subscribed(appid, &rule.id) {
+        blockers.push("source_not_subscribed".to_string());
+    }
+    if candidate.cache_status == crate::sources::model::CacheStatus::Stale {
+        blockers.push("selection_stale".to_string());
+    }
+    blockers
+}
+
+pub fn source_admission_blocker(
+    registry: &SourceRegistry,
+    candidate: &SourceCandidate,
+    appid: u32,
+) -> Option<String> {
+    source_admission_blockers(registry, candidate, appid)
+        .into_iter()
+        .next()
 }
 
 fn choose_language(candidate: &SourceCandidate, rule: &SourceRule) -> String {
@@ -414,14 +454,8 @@ pub fn resolve_zip(
     // Discovery rules are the publisher-ZIP candidate source and may carry
     // `download_hosts`; only the enabled flag gates them (see progress note on
     // the §2.1 step-5 `!discovery_only` inconsistency).
-    if !rule.enabled {
-        return Err(ResolveError::code("source_not_enabled"));
-    }
-    if !registry.game_subscribed(appid, &rule.id) {
-        return Err(ResolveError::code("source_not_subscribed"));
-    }
-    if candidate.cache_status == crate::sources::model::CacheStatus::Stale {
-        return Err(ResolveError::code("selection_stale"));
+    if let Some(code) = source_admission_blocker(registry, &candidate, appid) {
+        return Err(ResolveError::code(code));
     }
 
     let download_url = select_download_url(&candidate, &rule, MirrorKind::Zip)?;

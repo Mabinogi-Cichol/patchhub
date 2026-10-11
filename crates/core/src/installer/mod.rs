@@ -15,8 +15,11 @@ pub mod exe_report;
 pub mod exe_resolve;
 pub mod facts;
 pub mod orchestrator;
+pub mod outcome;
 pub mod requests;
 pub mod resolve;
+pub mod service;
+mod signed;
 pub mod space;
 pub mod store;
 pub mod task;
@@ -37,9 +40,9 @@ pub use facts::{
     ManifestFacts, MAX_BASELINE_BYTES, MAX_MANIFEST_BYTES,
 };
 pub use orchestrator::{
-    begin_request, content_conflict, install_zip, record_plan, record_terminal, request_binding,
-    ZipInstallDeps, ZipInstallInputs, ZipTaskError,
+    begin_request, content_conflict, record_plan, record_terminal, request_binding, ZipTaskError,
 };
+pub(crate) use orchestrator::{ZipInstallDeps, ZipInstallInputs};
 pub use requests::{RequestBinding, RequestLedger, RequestRecord};
 pub use resolve::{
     parse_zip_selection_id, resolve_zip, source_released, zip_selection_id, ResolveError,

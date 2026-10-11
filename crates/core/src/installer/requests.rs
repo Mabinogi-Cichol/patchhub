@@ -10,6 +10,20 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+/// Stable identity for new unified-route plans, without adding journal fields.
+pub(crate) fn request_plan_id(request: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hash = Sha256::new();
+    hash.update(b"steam-patch-request-plan-v1\0");
+    hash.update(request.as_bytes());
+    let digest = hash.finalize();
+    let mut bytes = [0u8; 16];
+    bytes.copy_from_slice(&digest[..16]);
+    bytes[6] = (bytes[6] & 0x0f) | 0x80;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    uuid::Uuid::from_bytes(bytes).to_string()
+}
+
 const MAX_ID_BYTES: usize = 256;
 const MAX_VALUE_BYTES: usize = 512;
 

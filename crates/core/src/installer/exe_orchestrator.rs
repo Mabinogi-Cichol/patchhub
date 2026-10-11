@@ -3,7 +3,9 @@ use super::{
     acquire,
     authorization::{self, AuthorizeInput, ContentBinding, CurrentState, PolicyVersions},
     exe_report::{self, ConditionSnapshot, PreparedReport, ReinstallEvidence},
-    exe_resolve, facts, orchestrator as common, space, store,
+    exe_resolve, facts, orchestrator as common,
+    outcome::CancellationCause,
+    space, store,
     task::TaskControl,
     InstallerPaths,
 };
@@ -51,23 +53,26 @@ fn now() -> u64 {
         .unwrap_or_default()
         .as_secs()
 }
-pub struct ExeInstallInputs<'a> {
+pub(crate) struct ExeInstallInputs<'a> {
     pub game: &'a GameInstall,
     pub selection: &'a exe_resolve::ResolvedExeCandidate,
     pub operation: InstallOperation,
     pub request_id: &'a str,
-    pub now: u64,
     pub ttl_seconds: u64,
 }
-pub struct ExeInstallDeps<'a> {
+pub(crate) struct ExeInstallDeps<'a> {
     pub paths: &'a InstallerPaths,
     pub state_dir: &'a Path,
     pub transport: &'a dyn acquire::Transport,
     pub runtime: &'a WorkerRuntime,
     pub cancel: &'a AtomicBool,
+    pub cancel_reason: &'a (dyn Fn() -> Option<CancellationCause> + Sync),
     pub lease_deadline_ms: &'a (dyn Fn() -> u64 + Sync),
 }
-pub fn install_exe(inputs: ExeInstallInputs<'_>, deps: ExeInstallDeps<'_>) -> Result<Transaction> {
+pub(crate) fn install_exe(
+    inputs: ExeInstallInputs<'_>,
+    deps: ExeInstallDeps<'_>,
+) -> Result<Transaction> {
     if let Some(code) = super::host_identity_blocker() {
         return Err(Error::code(code));
     }
@@ -91,19 +96,29 @@ pub fn install_exe(inputs: ExeInstallInputs<'_>, deps: ExeInstallDeps<'_>) -> Re
         (deps.lease_deadline_ms)(),
     )
     .map_err(error)?;
-    control.run(deps.cancel, deps.lease_deadline_ms, || {
-        run(&inputs, &deps, &control, &binding)
-    })
+    control.run_with_cause(
+        deps.cancel,
+        deps.lease_deadline_ms,
+        deps.cancel_reason,
+        || run(&inputs, &deps, &control, &binding),
+    )
 }
+fn boundary(deps: &ExeInstallDeps<'_>, control: &TaskControl) -> Result<()> {
+    if let Some(cause) = (deps.cancel_reason)() {
+        control.revoke_with_cause(cause).map_err(error)?;
+    }
+    control
+        .check_requested_with_cause(deps.cancel, deps.lease_deadline_ms, deps.cancel_reason)
+        .map_err(error)
+}
+
 fn run(
     inputs: &ExeInstallInputs<'_>,
     deps: &ExeInstallDeps<'_>,
     control: &TaskControl,
     binding: &super::requests::RequestBinding,
 ) -> Result<Transaction> {
-    control
-        .check_requested(deps.cancel, deps.lease_deadline_ms)
-        .map_err(error)?;
+    boundary(deps, control)?;
     let volume = space::inspect_volume(deps.paths.root()).map_err(error)?;
     if volume.available_bytes < 2 * 1024 * 1024 * 1024 + space::SPACE_MARGIN_BYTES {
         return Err(Error::code("insufficient_space"));
@@ -123,9 +138,7 @@ fn run(
         |_, _| {},
     )
     .map_err(common::map_download_error)?;
-    control
-        .check_requested(deps.cancel, deps.lease_deadline_ms)
-        .map_err(error)?;
+    boundary(deps, control)?;
     if space::inspect_volume(deps.paths.root())
         .map_err(error)?
         .available_bytes
@@ -285,13 +298,11 @@ fn run(
     let mut release =
         common::build_release(&selection, &normalized, &mappings, &managed_expectation);
     release.category = "publisher_exe".into();
-    control
-        .check_requested(deps.cancel, deps.lease_deadline_ms)
-        .map_err(error)?;
+    boundary(deps, control)?;
     budget
         .inspect(deps.paths.root(), &inputs.game.install_path)
         .map_err(error)?;
-    let plan = install::prepare_with_binding_at(
+    let plan = install::prepare_for_request_at(
         deps.paths.root(),
         inputs.game,
         &release,
@@ -300,6 +311,7 @@ fn run(
         inputs.operation,
         Some(&inputs.selection.selection_id),
         Some(&content),
+        Some(inputs.request_id),
     )
     .map_err(common::map_plan_error)?;
     // Any error from here discards/recoveries the plan before reporting a terminal result.
@@ -317,9 +329,7 @@ fn run(
         if !plan.blockers.is_empty() {
             return Err(Error::new("plan_has_blockers", plan.blockers.join(",")));
         }
-        control
-            .check_requested(deps.cancel, deps.lease_deadline_ms)
-            .map_err(error)?;
+        boundary(deps, control)?;
         let content_binding = ContentBinding::publisher_exe(
             &content,
             &b.exe_sha256,
@@ -415,12 +425,14 @@ fn run(
             Some("sf9-audit-v3"),
             &common::plan_mappings(&stored),
         );
+        boundary(deps, control)?;
         let current = CurrentState {
             now: now(),
             plan_id: plan.plan_id.clone(),
             instance_id: inputs.game.instance_id.clone(),
             revoked: authorization::is_revoked(deps.paths, &plan.plan_id).map_err(error)?,
-            lease_active: !control.cancel.load(std::sync::atomic::Ordering::Acquire),
+            lease_active: !control.cancel.load(std::sync::atomic::Ordering::Acquire)
+                && (deps.cancel_reason)().is_none(),
             facts: current_facts,
             settings_revision: fresh.settings_revision,
             policy: PolicyVersions::default(),
@@ -433,37 +445,41 @@ fn run(
         budget
             .inspect(deps.paths.root(), &inputs.game.install_path)
             .map_err(error)?;
-        control
-            .check_requested(deps.cancel, deps.lease_deadline_ms)
-            .map_err(error)?;
+        boundary(deps, control)?;
         install::apply_at(deps.paths.root(), &plan.plan_id).map_err(common::map_plan_error)
     })();
     let transaction = match outcome {
         Ok(t) => t,
         Err(e) => {
+            let cause = (deps.cancel_reason)().or_else(|| control.cancellation_cause());
             control
-                .revoke()
+                .revoke_for_failure()
                 .map_err(|r| Error::new("needs_recovery", format!("{e}; {r}")))?;
-            operation::restoring();
-            let t = common::finish_failed_plan(deps.paths, &plan.plan_id)
-                .map_err(|r| Error::new("needs_recovery", format!("{e}; {r}")))?;
-            common::record_terminal(deps.paths, inputs.request_id, binding, &content, &t)?;
-            if matches!(t.state.as_str(), "needs_recovery" | "committed")
-                || e.to_string().contains("cancel")
-            {
-                return Ok(t);
-            }
-            return Err(e);
+            return common::finalize_plan_failure(
+                deps.paths,
+                inputs.request_id,
+                binding,
+                &content,
+                &plan.plan_id,
+                &e,
+                cause,
+            );
         }
     };
+    let transaction = common::normalize_rolled_back(
+        deps.paths,
+        transaction,
+        (deps.cancel_reason)().or_else(|| control.cancellation_cause()),
+    )
+    .map_err(error)?;
     operation::stage("cleanup", None, None);
-    common::record_terminal(
+    common::record_terminal_fact(
         deps.paths,
         inputs.request_id,
         binding,
         &content,
         &transaction,
-    )?;
+    );
     Ok(transaction)
 }
 fn reinstall_evidence(
@@ -684,7 +700,6 @@ mod tests {
             selection,
             operation: op,
             request_id: request,
-            now: now(),
             ttl_seconds: 900,
         };
         let deps = ExeInstallDeps {
@@ -693,6 +708,7 @@ mod tests {
             transport: &transport,
             runtime,
             cancel,
+            cancel_reason: &|| None,
             lease_deadline_ms: &|| u64::MAX,
         };
         operation::run(
@@ -899,6 +915,37 @@ mod tests {
         assert_eq!(task_dir_entries(&paths), 0);
         assert_eq!(fs::read_dir(&stage).unwrap().count(), 0);
     }
+    #[test]
+    fn synchronous_boundary_rejects_inactive_live_lease_with_infinite_deadline() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = InstallerPaths::new(temp.path());
+        super::super::init_atomic(&paths).unwrap();
+        let runtime_dir = temp.path().join("runtime");
+        fs::create_dir(&runtime_dir).unwrap();
+        let runtime =
+            WorkerRuntime::new(std::env::current_exe().unwrap(), &runtime_dir, None).unwrap();
+        let cancel = AtomicBool::new(false);
+        let transport = FakeTransport::new(Vec::new());
+        let deps = ExeInstallDeps {
+            paths: &paths,
+            state_dir: temp.path(),
+            transport: &transport,
+            runtime: &runtime,
+            cancel: &cancel,
+            cancel_reason: &|| Some(CancellationCause::LeaseExpired),
+            lease_deadline_ms: &|| u64::MAX,
+        };
+        let control =
+            TaskControl::new(&paths, "expired", "instance", "selection", u64::MAX).unwrap();
+        let failure = boundary(&deps, &control).unwrap_err();
+        assert_eq!(failure.code, "lease_expired");
+        assert_eq!(
+            control.cancellation_cause(),
+            Some(CancellationCause::LeaseExpired)
+        );
+        assert!(control.job().join("revoked").is_file());
+    }
+
     #[test]
     fn normalized_response_rejects_unknown_output_and_artifact_tamper() {
         let c = golden()["cases"][0].clone();

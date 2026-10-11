@@ -1,0 +1,577 @@
+//! Signed managed-ZIP installation. The public service supplies validated host facts.
+use super::{
+    authorization, facts, orchestrator, outcome::CancellationCause, task::TaskControl,
+    InstallerPaths, Transport,
+};
+use crate::{
+    catalog::{Artifact, PatchRelease, Platform, SupportLevel},
+    install::{self, InstallOperation, Transaction},
+    operation,
+    projection::DomainError,
+    steam::GameInstall,
+    trust::{
+        revision::{self, TrustRevisionStore, TrustedCatalogProvider},
+        VerifiedCatalog,
+    },
+};
+use sha2::{Digest, Sha256};
+use std::{
+    fs::{self, File, OpenOptions},
+    io::{self, Read, Write},
+    path::{Path, PathBuf},
+    sync::atomic::{AtomicBool, Ordering},
+};
+
+pub(crate) struct SignedInstallInputs<'a> {
+    pub game: &'a GameInstall,
+    pub release_id: &'a str,
+    pub archive: Option<&'a Path>,
+    pub operation: InstallOperation,
+    pub request_id: &'a str,
+    pub now: u64,
+    pub ttl_seconds: u64,
+}
+
+pub(crate) struct SignedInstallDeps<'a> {
+    pub paths: &'a InstallerPaths,
+    pub provider: &'a dyn TrustedCatalogProvider,
+    pub revision_store: &'a dyn TrustRevisionStore,
+    pub platform: Platform,
+    pub transport: &'a dyn Transport,
+    pub cancel: &'a AtomicBool,
+    pub cancel_reason: &'a (dyn Fn() -> Option<CancellationCause> + Sync),
+    pub lease_active: &'a dyn Fn(u64) -> bool,
+    pub lease_deadline_ms: &'a (dyn Fn() -> u64 + Sync),
+    pub clock: &'a dyn Fn() -> Result<u64, DomainError>,
+}
+
+fn io_error(error: io::Error) -> DomainError {
+    let text = error.to_string();
+    if !text.is_empty()
+        && text.len() <= 128
+        && text
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
+    {
+        return DomainError::code(text);
+    }
+    // Only known historical machine-code prefixes are bridged.
+    for code in [
+        "journal_error",
+        "invalid_zip",
+        "zip_member",
+        "file_changed",
+        "recovery_conflict",
+        "baseline_conflict",
+        "insufficient_space",
+    ] {
+        if let Some(detail) = text.strip_prefix(&format!("{code}:")) {
+            return DomainError::new(code, detail);
+        }
+    }
+    DomainError::new("io_error", text)
+}
+
+fn task_error(error: orchestrator::ZipTaskError) -> DomainError {
+    match error.detail {
+        Some(detail) => DomainError::new(error.code, detail),
+        None => DomainError::code(error.code),
+    }
+}
+
+fn cancellation(deps: &SignedInstallDeps<'_>, control: &TaskControl) -> DomainError {
+    match (deps.cancel_reason)().or_else(|| control.cancellation_cause()) {
+        Some(CancellationCause::LeaseExpired) => DomainError::code("lease_expired"),
+        _ => DomainError::code("cancelled"),
+    }
+}
+
+fn normalize_cancel(
+    error: DomainError,
+    deps: &SignedInstallDeps<'_>,
+    control: &TaskControl,
+) -> DomainError {
+    if matches!(
+        error.code.as_str(),
+        "cancelled" | "task_cancelled" | "download_cancelled"
+    ) {
+        cancellation(deps, control)
+    } else {
+        error
+    }
+}
+
+fn boundary(deps: &SignedInstallDeps<'_>, control: &TaskControl) -> Result<(), DomainError> {
+    if (deps.cancel_reason)().is_some() || deps.cancel.load(Ordering::Acquire) {
+        return Err(cancellation(deps, control));
+    }
+    if !(deps.lease_active)((deps.clock)()?) {
+        return Err(DomainError::code("lease_expired"));
+    }
+    control
+        .check()
+        .map_err(io_error)
+        .map_err(|e| normalize_cancel(e, deps, control))?;
+    operation::check()
+        .map_err(io_error)
+        .map_err(|e| normalize_cancel(e, deps, control))
+}
+
+pub(crate) fn install_signed(
+    inputs: SignedInstallInputs<'_>,
+    deps: SignedInstallDeps<'_>,
+) -> Result<Transaction, DomainError> {
+    super::init_atomic(deps.paths).map_err(io_error)?;
+    let _claim =
+        super::requests::RequestClaim::acquire(deps.paths, inputs.request_id).map_err(io_error)?;
+    let control = TaskControl::new(
+        deps.paths,
+        inputs.request_id,
+        &inputs.game.instance_id,
+        inputs.release_id,
+        (deps.lease_deadline_ms)(),
+    )
+    .map_err(io_error)?;
+    control.run_with_cause(
+        deps.cancel,
+        deps.lease_deadline_ms,
+        deps.cancel_reason,
+        || install_signed_inner(&inputs, &deps, &control),
+    )
+}
+
+fn ready_release<'a>(
+    verified: &'a VerifiedCatalog,
+    inputs: &SignedInstallInputs<'_>,
+    platform: Platform,
+    now: u64,
+) -> Result<&'a PatchRelease, DomainError> {
+    verified
+        .ensure_active(inputs.release_id, now)
+        .map_err(io_error)?;
+    let release = verified
+        .catalog()
+        .releases
+        .iter()
+        .find(|r| r.release_id == inputs.release_id && r.appid == inputs.game.appid)
+        .ok_or_else(|| DomainError::code("release_not_matched"))?;
+    if !release.platforms.contains(&platform) {
+        return Err(DomainError::code("platform_not_verified"));
+    }
+    if inputs.game.availability != "installed" {
+        return Err(DomainError::code("game_not_ready"));
+    }
+    if !inputs
+        .game
+        .buildid
+        .as_ref()
+        .is_some_and(|b| release.verified_buildids.contains(b))
+    {
+        return Err(DomainError::code("build_not_verified"));
+    }
+    if release.support_level != SupportLevel::ManagedZip {
+        return Err(DomainError::code("source_requires_guidance"));
+    }
+    Ok(release)
+}
+
+fn expectation(
+    release: &PatchRelease,
+    game: &GameInstall,
+    cancel: &AtomicBool,
+) -> facts::FactsExpectation {
+    facts::FactsExpectation {
+        appid: release.appid,
+        language: facts::current_language(game, cancel).unwrap_or_else(|| release.language.clone()),
+        verified_buildids: release.verified_buildids.clone(),
+        require_language: true,
+        requires_dlc: Vec::new(),
+        excludes_dlc: Vec::new(),
+        baselines: Vec::new(),
+    }
+}
+
+fn require_facts(facts: &facts::GameFacts) -> Result<(), DomainError> {
+    if facts.is_valid() {
+        return Ok(());
+    }
+    Err(match facts.failures().first() {
+        Some(failure) => DomainError::new(failure.code.clone(), failure.detail.clone()),
+        None => DomainError::code("game_not_ready"),
+    })
+}
+
+fn install_signed_inner(
+    inputs: &SignedInstallInputs<'_>,
+    deps: &SignedInstallDeps<'_>,
+    control: &TaskControl,
+) -> Result<Transaction, DomainError> {
+    let binding = super::request_binding(
+        &inputs.game.instance_id,
+        None,
+        Some(inputs.release_id),
+        inputs.operation,
+        None,
+    );
+    if let Some(transaction) =
+        super::begin_request(deps.paths, inputs.request_id, &binding).map_err(task_error)?
+    {
+        return Ok(transaction);
+    }
+    boundary(deps, control)?;
+    let catalog = revision::verify_catalog(deps.provider, deps.revision_store, inputs.now)?;
+    deps.revision_store.remember_verified_revision(&catalog)?;
+    let release = ready_release(&catalog, inputs, deps.platform, inputs.now)?;
+    boundary(deps, control)?;
+    let archive = match inputs.archive {
+        Some(path) => path.to_path_buf(),
+        None => fetch_signed(
+            release
+                .artifact
+                .as_ref()
+                .ok_or_else(|| DomainError::code("artifact_requires_manual_download"))?,
+            deps,
+            control,
+        )?,
+    };
+    boundary(deps, control)?;
+    let identity = install::recipe_identity(release).map_err(io_error)?;
+    if super::content_conflict(deps.paths, inputs.request_id, &identity).map_err(task_error)? {
+        return Err(DomainError::code("request_id_binding_conflict"));
+    }
+    let plan = install::prepare_for_request_at(
+        deps.paths.root(),
+        inputs.game,
+        release,
+        &archive,
+        catalog.catalog().revision,
+        inputs.operation,
+        None,
+        None,
+        Some(inputs.request_id),
+    )
+    .map_err(io_error)
+    .map_err(|e| normalize_cancel(e, deps, control))?;
+
+    // Every error from this point has a real journal transaction. Finish it and
+    // return that fact, including ordinary rollback failures.
+    let result = (|| -> Result<Transaction, DomainError> {
+        control
+            .attach_plan(deps.paths, &plan.plan_id)
+            .map_err(io_error)?;
+        super::record_plan(
+            deps.paths,
+            inputs.request_id,
+            &binding,
+            &plan.plan_id,
+            &identity,
+        )
+        .map_err(task_error)?;
+        boundary(deps, control)?;
+        if !plan.blockers.is_empty() {
+            return Err(DomainError::new(
+                "plan_has_blockers",
+                plan.blockers.join(","),
+            ));
+        }
+        let expected = expectation(release, inputs.game, &control.cancel);
+        let artifact_sha = release
+            .recipe
+            .as_ref()
+            .ok_or_else(|| DomainError::code("recipe_missing"))?
+            .artifact_sha256
+            .clone();
+        let artifact_size = fs::metadata(&archive).map_err(io_error)?.len();
+        let facts = facts::game_facts(inputs.game, &expected, &control.cancel);
+        require_facts(&facts)?;
+        let content = authorization::ContentBinding::publisher_zip(
+            &artifact_sha,
+            artifact_size,
+            &orchestrator::plan_mappings(&plan),
+        );
+        let fingerprint = crate::sources::canonical::canonical_sha256(release);
+        let conditions = crate::sources::canonical::canonical_sha256(&expected);
+        let authorization = authorization::authorize(authorization::AuthorizeInput {
+            release_id: inputs.release_id,
+            selection_id: None,
+            source_id: "signed",
+            source_record_id: Some(&release.source_page),
+            candidate_sha256: &identity,
+            rule_fingerprint: &fingerprint,
+            settings_revision: catalog.catalog().revision,
+            conditions_sha256: &conditions,
+            content,
+            policy: authorization::PolicyVersions::default(),
+            plan_id: &plan.plan_id,
+            task_id: Some(&control.id),
+            request_id: Some(inputs.request_id),
+            facts,
+            now: (deps.clock)()?,
+            ttl_seconds: inputs.ttl_seconds,
+        })
+        .map_err(|e| DomainError::new(e.code.clone(), e.to_string()))?;
+        authorization::write(deps.paths, &authorization).map_err(io_error)?;
+
+        boundary(deps, control)?;
+        // Load keys/envelope again and read the current highest revision. An
+        // old VerifiedCatalog alone cannot observe revocation or rollback.
+        let now = (deps.clock)()?;
+        let current_catalog = revision::verify_catalog(deps.provider, deps.revision_store, now)?;
+        deps.revision_store
+            .remember_verified_revision(&current_catalog)?;
+        boundary(deps, control)?;
+        let current_release = ready_release(&current_catalog, inputs, deps.platform, now)?;
+        let current_expected = expectation(current_release, inputs.game, &control.cancel);
+        let stored_plan =
+            install::get_plan_at(deps.paths.root(), &plan.plan_id).map_err(io_error)?;
+        let current = authorization::CurrentState {
+            now,
+            plan_id: plan.plan_id.clone(),
+            instance_id: inputs.game.instance_id.clone(),
+            revoked: authorization::is_revoked(deps.paths, &plan.plan_id).map_err(io_error)?,
+            lease_active: (deps.lease_active)(now),
+            facts: facts::game_facts(inputs.game, &current_expected, &control.cancel),
+            settings_revision: current_catalog.catalog().revision,
+            policy: authorization::PolicyVersions::default(),
+            candidate_sha256: install::recipe_identity(current_release).map_err(io_error)?,
+            rule_fingerprint: crate::sources::canonical::canonical_sha256(current_release),
+            conditions_sha256: crate::sources::canonical::canonical_sha256(&current_expected),
+            content: authorization::ContentBinding::publisher_zip(
+                &current_release
+                    .recipe
+                    .as_ref()
+                    .ok_or_else(|| DomainError::code("recipe_missing"))?
+                    .artifact_sha256,
+                artifact_size,
+                &orchestrator::plan_mappings(&stored_plan),
+            ),
+        };
+        boundary(deps, control)?;
+        authorization::validate(&authorization, &current).map_err(|e| {
+            if e.code == "authorization_lease_inactive" {
+                DomainError::code("lease_expired")
+            } else {
+                DomainError::new(e.code.clone(), e.to_string())
+            }
+        })?;
+        boundary(deps, control)?;
+        // Refresh the durable lease immediately before the writer's own gate.
+        control
+            .renew((deps.lease_deadline_ms)())
+            .map_err(io_error)?;
+        let transaction = install::apply_at(deps.paths.root(), &plan.plan_id).map_err(io_error)?;
+        if transaction.state == "rolled_back"
+            && transaction
+                .error
+                .as_deref()
+                .is_some_and(|code| CancellationCause::from_transaction_error(code).is_some())
+        {
+            let cause = cancellation(deps, control);
+            return install::set_terminal_error_at(deps.paths.root(), &plan.plan_id, &cause.code)
+                .map_err(io_error);
+        }
+        Ok(transaction)
+    })();
+    let transaction = match result {
+        Ok(transaction) => transaction,
+        Err(error) => {
+            // Capture the original cause before revoke marks this task cancelled.
+            let error = normalize_cancel(error, deps, control);
+            // Revocation precedes rollback; restoring suppresses cancellation.
+            let _ = control.revoke_for_failure();
+            operation::restoring();
+            let transaction = orchestrator::finish_failed_plan(deps.paths, &plan.plan_id)
+                .map_err(|e| DomainError::new("needs_recovery", e.to_string()))?;
+            if matches!(transaction.state.as_str(), "committed" | "needs_recovery") {
+                transaction
+            } else {
+                install::set_terminal_error_at(deps.paths.root(), &plan.plan_id, &error.to_string())
+                    .map_err(|e| DomainError::new("needs_recovery", e.to_string()))?
+            }
+        }
+    };
+    // The journal is the durable authority. A late ledger write failure must
+    // not turn a committed/rolled-back transaction into a synthetic RPC failure.
+    // A recorded plan still lets begin_request replay the journal fact.
+    let _ = super::record_terminal(
+        deps.paths,
+        inputs.request_id,
+        &binding,
+        &identity,
+        &transaction,
+    );
+    Ok(transaction)
+}
+
+// This signed-only adapter preserves the mature download URL policy: unlike
+// dynamic ZIP discovery, a signed artifact need not have a .zip URL suffix.
+fn approved_url(value: &str, artifact: &Artifact) -> Result<reqwest::Url, DomainError> {
+    let mut candidate = artifact.clone();
+    candidate.url = value.to_string();
+    crate::download::validate_artifact(&candidate).map_err(io_error)?;
+    let url = reqwest::Url::parse(value).map_err(|_| DomainError::code("invalid_download_url"))?;
+    let original = reqwest::Url::parse(&artifact.url)
+        .map_err(|_| DomainError::code("invalid_download_url"))?;
+    if original.host_str() != url.host_str()
+        && !artifact
+            .allowed_redirect_hosts
+            .iter()
+            .any(|h| Some(h.as_str()) == url.host_str())
+    {
+        return Err(DomainError::code("redirect_host_not_approved"));
+    }
+    Ok(url)
+}
+
+fn no_link(path: &Path) -> Result<(), DomainError> {
+    for ancestor in path.ancestors().filter(|p| !p.as_os_str().is_empty()) {
+        let metadata = fs::symlink_metadata(ancestor).map_err(io_error)?;
+        #[cfg(windows)]
+        let linked = {
+            use std::os::windows::fs::MetadataExt;
+            metadata.file_attributes() & 0x400 != 0
+        };
+        #[cfg(not(windows))]
+        let linked = metadata.file_type().is_symlink();
+        if linked {
+            return Err(DomainError::code("linked_download_cache"));
+        }
+    }
+    Ok(())
+}
+
+fn copy_signed(
+    reader: &mut dyn Read,
+    writer: &mut dyn Write,
+    artifact: &Artifact,
+    deps: &SignedInstallDeps<'_>,
+    control: &TaskControl,
+) -> Result<(), DomainError> {
+    let mut total = 0u64;
+    let mut hash = Sha256::new();
+    let mut magic = Vec::with_capacity(4);
+    let mut buffer = [0u8; 65536];
+    loop {
+        boundary(deps, control)?;
+        let count = reader.read(&mut buffer).map_err(io_error)?;
+        if count == 0 {
+            break;
+        }
+        total = total
+            .checked_add(count as u64)
+            .ok_or_else(|| DomainError::code("download_size_overflow"))?;
+        if total > artifact.size {
+            return Err(DomainError::code("download_size_mismatch"));
+        }
+        let take = count.min(4 - magic.len());
+        magic.extend_from_slice(&buffer[..take]);
+        hash.update(&buffer[..count]);
+        writer.write_all(&buffer[..count]).map_err(io_error)?;
+        operation::advance(count as u64);
+    }
+    if total != artifact.size {
+        return Err(DomainError::code("download_size_mismatch"));
+    }
+    if magic.as_slice() != b"PK\x03\x04" && magic.as_slice() != b"PK\x05\x06" {
+        return Err(DomainError::code("download_not_zip"));
+    }
+    if format!("{:x}", hash.finalize()) != artifact.sha256 {
+        return Err(DomainError::code("download_hash_mismatch"));
+    }
+    Ok(())
+}
+
+fn fetch_signed(
+    artifact: &Artifact,
+    deps: &SignedInstallDeps<'_>,
+    control: &TaskControl,
+) -> Result<PathBuf, DomainError> {
+    crate::download::validate_artifact(artifact).map_err(io_error)?;
+    operation::archive(artifact.size);
+    operation::stage("connecting", None, None);
+    let cache = deps.paths.downloads_dir();
+    fs::create_dir_all(&cache).map_err(io_error)?;
+    no_link(&cache)?;
+    let cache = fs::canonicalize(cache).map_err(io_error)?;
+    let partial = cache.join(format!("{}.partial", uuid::Uuid::new_v4()));
+    let result =
+        (|| {
+            let mut url = approved_url(&artifact.url, artifact)?;
+            let mut response = None;
+            for _ in 0..=5 {
+                boundary(deps, control)?;
+                let mut attempt = deps.transport.get(url.as_str(), None, None);
+                if attempt.is_err() {
+                    boundary(deps, control)?;
+                    attempt = deps.transport.get(url.as_str(), None, None);
+                }
+                let current = attempt
+                    .map_err(|e| DomainError::new("download_network_error", e.to_string()))?;
+                if (300..400).contains(&current.status) {
+                    let next = url
+                        .join(
+                            current
+                                .location
+                                .as_deref()
+                                .ok_or_else(|| DomainError::code("redirect_location_missing"))?,
+                        )
+                        .map_err(|_| DomainError::code("invalid_redirect_url"))?;
+                    url = approved_url(next.as_str(), artifact)?;
+                    continue;
+                }
+                if !(200..300).contains(&current.status) {
+                    return Err(DomainError::code("download_http_error"));
+                }
+                if approved_url(&current.final_url, artifact)?.as_str() != url.as_str() {
+                    return Err(DomainError::code("download_response_url_changed"));
+                }
+                if current.content_length.is_some_and(|n| n != artifact.size) {
+                    return Err(DomainError::code("download_size_mismatch"));
+                }
+                if current.content_type.as_deref().is_some_and(|mime| {
+                    mime.contains("text/html") || mime.contains("application/json")
+                }) {
+                    return Err(DomainError::code("download_not_zip"));
+                }
+                response = Some(current);
+                break;
+            }
+            let mut response = response.ok_or_else(|| DomainError::code("too_many_redirects"))?;
+            let required = artifact
+                .size
+                .checked_add(8 * 1024 * 1024)
+                .ok_or_else(|| DomainError::code("download_size_overflow"))?;
+            let available = fs2::available_space(&cache).map_err(io_error)?;
+            if available < required {
+                return Err(DomainError::new(
+                    "insufficient_space",
+                    format!("state:required={required}:available={available}"),
+                ));
+            }
+            let mut file = OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&partial)
+                .map_err(io_error)?;
+            operation::stage("downloading", Some(artifact.size), None);
+            copy_signed(response.body.as_mut(), &mut file, artifact, deps, control)?;
+            file.sync_all().map_err(io_error)?;
+            drop(file);
+            let destination = cache.join(format!("{}.zip", artifact.sha256));
+            if destination.exists() {
+                no_link(&destination)?;
+                let mut existing = File::open(&destination).map_err(io_error)?;
+                copy_signed(&mut existing, &mut io::sink(), artifact, deps, control)?;
+                fs::remove_file(&partial).map_err(io_error)?;
+            } else {
+                // Atomic no-replace publication, matching dynamic acquisition.
+                fs::hard_link(&partial, &destination).map_err(io_error)?;
+                fs::remove_file(&partial).map_err(io_error)?;
+            }
+            Ok(destination)
+        })();
+    if result.is_err() {
+        let _ = fs::remove_file(&partial);
+    }
+    result
+}

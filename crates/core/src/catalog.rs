@@ -1,11 +1,11 @@
 use crate::steam::GameInstall;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use std::{
     collections::HashSet,
-    fs::{self, File},
+    fs::File,
     io::{self, Read},
     path::{Path, PathBuf},
+    sync::atomic::AtomicBool,
 };
 
 pub const MAX_CATALOG_BYTES: u64 = 4 * 1024 * 1024;
@@ -268,76 +268,33 @@ impl Catalog {
     }
 }
 
-fn linked(metadata: &fs::Metadata) -> bool {
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::MetadataExt;
-        metadata.file_attributes() & 0x400 != 0
-    }
-    #[cfg(not(windows))]
-    {
-        metadata.file_type().is_symlink()
-    }
-}
-
-fn hash_file(root: &Path, library: &Path, relative: &str) -> io::Result<Option<String>> {
-    let relative = relative_path(relative)?;
-    if linked(&fs::symlink_metadata(root)?) {
-        return Err(invalid("linked_install_root"));
-    }
-    let root = fs::canonicalize(root)?;
-    let library = fs::canonicalize(library)?;
-    if !root.starts_with(&library) {
-        return Err(invalid("install_outside_library"));
-    }
-    let mut target = root.clone();
-    for part in &relative {
-        target.push(part);
-        match fs::symlink_metadata(&target) {
-            Ok(metadata) if linked(&metadata) => return Err(invalid("linked_target")),
-            Ok(_) => (),
-            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
-            Err(e) => return Err(e),
-        }
-    }
-    if !fs::canonicalize(&target)?.starts_with(&root) {
-        return Err(invalid("target_outside_game"));
-    }
-    let mut file = File::open(target)?;
-    if !file.metadata()?.is_file() {
-        return Err(invalid("fingerprint_not_a_file"));
-    }
-    let initial_size = file.metadata()?.len();
-    let mut hasher = Sha256::new();
-    let mut total = 0_u64;
-    let mut buffer = [0_u8; 65536];
-    loop {
-        let count = file.read(&mut buffer)?;
-        if count == 0 {
-            break;
-        }
-        total = total
-            .checked_add(count as u64)
-            .ok_or_else(|| invalid("fingerprint_size_overflow"))?;
-        hasher.update(&buffer[..count]);
-    }
-    if total != initial_size || file.metadata()?.len() != initial_size {
-        return Err(invalid("fingerprint_changed"));
-    }
-    Ok(Some(format!("{:x}", hasher.finalize())))
-}
-
 pub fn detect(install: &GameInstall, release: &PatchRelease) -> Detection {
-    if (release.detection.is_empty() && release.recipe.is_none())
-        || install.availability != "installed"
-    {
-        return Detection {
-            status: "unknown".into(),
-            files: Vec::new(),
-        };
+    detect_with_cancel(install, release, &AtomicBool::new(false))
+}
+
+pub fn detect_with_cancel(
+    install: &GameInstall,
+    release: &PatchRelease,
+    cancel: &AtomicBool,
+) -> Detection {
+    detect_with_diagnostics(install, release, cancel).0
+}
+
+pub fn detect_with_diagnostics(
+    install: &GameInstall,
+    release: &PatchRelease,
+    cancel: &AtomicBool,
+) -> (Detection, Vec<crate::detection::FileEvidence>) {
+    if install.availability != "installed" {
+        return (
+            Detection {
+                status: "unknown".into(),
+                files: Vec::new(),
+            },
+            Vec::new(),
+        );
     }
-    // A managed patch is complete only when every audited destination matches;
-    // a detection hint may be a subset and cannot prove installation success.
+    // Audited destinations take precedence over subset detection hints.
     let mut rules: Vec<_> = release
         .recipe
         .as_ref()
@@ -354,34 +311,29 @@ pub fn detect(install: &GameInstall, release: &PatchRelease) -> Detection {
             rules.push((&hint.path, &hint.sha256));
         }
     }
+    let mut diagnostics = Vec::new();
     let files: Vec<_> = rules
         .into_iter()
         .map(|(path, expected)| {
-            match hash_file(&install.install_path, &install.library_path, path) {
-                Ok(Some(hash)) => FileEvidence {
-                    path: path.clone(),
-                    status: if hash == *expected {
-                        "match"
-                    } else {
-                        "mismatch"
-                    }
-                    .into(),
-                    actual_sha256: Some(hash),
-                },
-                Ok(None) => FileEvidence {
-                    path: path.clone(),
-                    status: "missing".into(),
-                    actual_sha256: None,
-                },
-                Err(_) => FileEvidence {
-                    path: path.clone(),
-                    status: "unreadable_or_unsafe".into(),
-                    actual_sha256: None,
-                },
+            let evidence = crate::detection::inspect_file(
+                install,
+                path,
+                expected,
+                crate::detection::DEFAULT_MAX_BYTES,
+                cancel,
+            );
+            let result = FileEvidence {
+                path: path.clone(),
+                status: evidence.status.as_str().into(),
+                actual_sha256: evidence.actual_sha256.clone(),
+            };
+            if evidence.diagnostic.is_some() {
+                diagnostics.push(evidence);
             }
+            result
         })
         .collect();
-    let status = if files.iter().any(|f| f.status == "unreadable_or_unsafe") {
+    let status = if files.is_empty() || files.iter().any(|f| f.status == "unreadable_or_unsafe") {
         "unknown"
     } else if files.iter().all(|f| f.status == "match") {
         "installed_external"
@@ -390,10 +342,13 @@ pub fn detect(install: &GameInstall, release: &PatchRelease) -> Detection {
     } else {
         "partial_or_conflict"
     };
-    Detection {
-        status: status.into(),
-        files,
-    }
+    (
+        Detection {
+            status: status.into(),
+            files,
+        },
+        diagnostics,
+    )
 }
 
 fn compatibility(install: &GameInstall, release: &PatchRelease, platform: Platform) -> Vec<String> {
@@ -418,12 +373,33 @@ fn compatibility(install: &GameInstall, release: &PatchRelease, platform: Platfo
 }
 
 pub fn matches(install: &GameInstall, catalog: &Catalog, platform: Platform) -> Vec<PatchMatch> {
-    catalog
+    matches_with_cancel(install, catalog, platform, &AtomicBool::new(false))
+}
+
+pub fn matches_with_cancel(
+    install: &GameInstall,
+    catalog: &Catalog,
+    platform: Platform,
+    cancel: &AtomicBool,
+) -> Vec<PatchMatch> {
+    matches_with_diagnostics(install, catalog, platform, cancel).0
+}
+
+pub fn matches_with_diagnostics(
+    install: &GameInstall,
+    catalog: &Catalog,
+    platform: Platform,
+    cancel: &AtomicBool,
+) -> (Vec<PatchMatch>, Vec<crate::detection::FileEvidence>) {
+    let mut diagnostics = Vec::new();
+    let patches = catalog
         .releases
         .iter()
         .filter(|r| r.appid == install.appid)
         .map(|r| {
             let blockers = compatibility(install, r, platform);
+            let (detection, evidence) = detect_with_diagnostics(install, r, cancel);
+            diagnostics.extend(evidence);
             PatchMatch {
                 source_id: None,
                 candidate_id: None,
@@ -440,10 +416,11 @@ pub fn matches(install: &GameInstall, catalog: &Catalog, platform: Platform) -> 
                 }
                 .into(),
                 blockers,
-                detection: detect(install, r),
+                detection,
             }
         })
-        .collect()
+        .collect();
+    (patches, diagnostics)
 }
 
 /// Read-only proposal. An unsigned development catalog never authorizes execution.
@@ -453,6 +430,32 @@ pub fn preview(
     release_id: &str,
     platform: Platform,
 ) -> io::Result<InstallPreview> {
+    preview_with_cancel(
+        install,
+        catalog,
+        release_id,
+        platform,
+        &AtomicBool::new(false),
+    )
+}
+
+pub fn preview_with_cancel(
+    install: &GameInstall,
+    catalog: &Catalog,
+    release_id: &str,
+    platform: Platform,
+    cancel: &AtomicBool,
+) -> io::Result<InstallPreview> {
+    Ok(preview_with_diagnostics(install, catalog, release_id, platform, cancel)?.0)
+}
+
+pub fn preview_with_diagnostics(
+    install: &GameInstall,
+    catalog: &Catalog,
+    release_id: &str,
+    platform: Platform,
+    cancel: &AtomicBool,
+) -> io::Result<(InstallPreview, Vec<crate::detection::FileEvidence>)> {
     let release = catalog
         .releases
         .iter()
@@ -462,15 +465,29 @@ pub fn preview(
     blockers.push("catalog_unsigned".into());
     blockers.push("installer_not_implemented".into());
     let mut changes = Vec::new();
+    let mut diagnostics = Vec::new();
     if let Some(recipe) = &release.recipe {
         for file in &recipe.files {
-            let actual = hash_file(
-                &install.install_path,
-                &install.library_path,
+            let evidence = crate::detection::inspect_file(
+                install,
                 &file.destination,
+                file.original_sha256
+                    .as_deref()
+                    .unwrap_or(&file.installed_sha256),
+                crate::detection::DEFAULT_MAX_BYTES,
+                cancel,
             );
-            let baseline_matches = matches!(&actual, Ok(hash) if hash == &file.original_sha256);
-            if !baseline_matches {
+            let baseline_matches = if file.original_sha256.is_some() {
+                evidence.status == crate::detection::EvidenceStatus::Match
+            } else {
+                evidence.status == crate::detection::EvidenceStatus::Missing
+            };
+            let actual = evidence.actual_sha256.clone();
+            let unreliable = evidence.diagnostic.is_some();
+            if unreliable {
+                diagnostics.push(evidence);
+                blockers.push(format!("baseline_unverified:{}", file.destination));
+            } else if !baseline_matches {
                 blockers.push(format!("baseline_conflict:{}", file.destination));
             }
             changes.push(ProposedChange {
@@ -482,18 +499,21 @@ pub fn preview(
                 }
                 .into(),
                 baseline_matches,
-                actual_sha256: actual.ok().flatten(),
+                actual_sha256: actual,
             });
         }
     } else {
         blockers.push("recipe_missing".into());
     }
-    Ok(InstallPreview {
-        instance_id: install.instance_id.clone(),
-        release_id: release_id.into(),
-        catalog_revision: catalog.revision,
-        executable: false,
-        blockers,
-        changes,
-    })
+    Ok((
+        InstallPreview {
+            instance_id: install.instance_id.clone(),
+            release_id: release_id.into(),
+            catalog_revision: catalog.revision,
+            executable: false,
+            blockers,
+            changes,
+        },
+        diagnostics,
+    ))
 }

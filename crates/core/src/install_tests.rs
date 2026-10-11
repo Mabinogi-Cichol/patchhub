@@ -1375,3 +1375,123 @@ fn failed_commit_compaction_preserves_old_receipt_and_rollback_evidence() {
         "committed"
     );
 }
+
+#[test]
+fn recovery_validates_entire_actual_write_set_under_journal_lock_before_restore() {
+    use fs2::FileExt;
+    use std::cell::Cell;
+    let first = Fixture::new();
+    let mut second = Fixture::new();
+    second.state = first.state.clone();
+    for fixture in [&first, &second] {
+        let plan = fixture.legacy_plan().unwrap();
+        assert_eq!(
+            apply(&plan.plan_id, &fixture.state).unwrap().state,
+            "committed"
+        );
+        fixture.edit_journal(&plan.plan_id, |job| {
+            job["uninstall_requested"] = true.into();
+        });
+    }
+    let visited = Cell::new(0);
+    let error = recover_checked_at(&first.state, |_| {
+        let lock = File::open(first.state.join("journal.lock"))?;
+        assert!(
+            lock.try_lock_exclusive().is_err(),
+            "validation must hold the writer lock"
+        );
+        visited.set(visited.get() + 1);
+        if visited.get() == 2 {
+            Err(std::io::Error::other("recovery_instance_not_found"))
+        } else {
+            Ok(())
+        }
+    })
+    .unwrap_err();
+    assert_eq!(error.to_string(), "recovery_instance_not_found");
+    assert_eq!(visited.get(), 2);
+    for fixture in [&first, &second] {
+        assert_eq!(
+            fs::read(fixture.game.join("original.dat")).unwrap(),
+            b"patched bytes"
+        );
+        assert_eq!(
+            fs::read(fixture.game.join("content/new.dat")).unwrap(),
+            b"new bytes"
+        );
+    }
+    assert!(list_transactions(&first.state)
+        .unwrap()
+        .iter()
+        .all(|t| t.state == "committed"));
+}
+
+#[test]
+fn discard_validates_locked_job_before_game_lock_or_terminal_mutation() {
+    use fs2::FileExt;
+    let fixture = Fixture::new();
+    let plan = fixture.plan().unwrap();
+    let game_lock = fixture.game.join(".steam-patch-manager.lock");
+    if game_lock.exists() {
+        fs::remove_file(&game_lock).unwrap();
+    }
+    let error = discard_plan_checked_at(&fixture.state, &plan.plan_id, |actual| {
+        assert_eq!(actual.plan_id, plan.plan_id);
+        let lock = File::open(fixture.state.join("journal.lock"))?;
+        assert!(
+            lock.try_lock_exclusive().is_err(),
+            "validation must hold the writer lock"
+        );
+        Err(std::io::Error::other("recovery_instance_not_found"))
+    })
+    .unwrap_err();
+    assert_eq!(error.to_string(), "recovery_instance_not_found");
+    assert!(!game_lock.exists());
+    assert_eq!(
+        list_transactions(&fixture.state).unwrap()[0].state,
+        "planned"
+    );
+    fixture.assert_original();
+}
+
+#[test]
+fn failed_install_recovery_is_confined_to_its_own_plan() {
+    let first = Fixture::new();
+    let mut second = Fixture::new();
+    second.state = first.state.clone();
+    let mut ids = Vec::new();
+    for fixture in [&first, &second] {
+        let plan = fixture.legacy_plan().unwrap();
+        assert_eq!(
+            apply(&plan.plan_id, &fixture.state).unwrap().state,
+            "committed"
+        );
+        fixture.edit_journal(&plan.plan_id, |job| {
+            job["transaction"]["state"] = "uninstalling".into();
+            job["uninstall_requested"] = true.into();
+        });
+        ids.push(plan.plan_id);
+    }
+    let result = recover_plan_at(&first.state, &ids[0]).unwrap();
+    assert_eq!(result.len(), 1);
+    assert_eq!(result[0].plan_id, ids[0]);
+    assert_eq!(result[0].state, "uninstalled");
+    first.assert_original();
+    assert_eq!(
+        fs::read(second.game.join("original.dat")).unwrap(),
+        b"patched bytes"
+    );
+    assert_eq!(
+        fs::read(second.game.join("content/new.dat")).unwrap(),
+        b"new bytes"
+    );
+    assert_eq!(
+        list_transactions(&first.state)
+            .unwrap()
+            .into_iter()
+            .find(|t| t.plan_id == ids[1])
+            .unwrap()
+            .state,
+        "uninstalling"
+    );
+}
