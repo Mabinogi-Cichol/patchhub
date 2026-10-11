@@ -636,3 +636,11 @@ P2主体已实现，双平台自动化与可得SF9.5/9.6/9.7三份真实样本�
 - 因 P6 删除 Python 实现/测试，部分历史功能文档（exe-patch-installation、generic-exe-installation、kagura-hgamer-fallback、simplified-install-flow）保留指向已删除文件的链接；本 feature 已加注，其余按已知限制登记，不改写历史。
 - 复核为静态核对，未独立复跑证据；P2 三条旧 profile 真实包、更早 Win11 版本矩阵、S6（TUN/fake-IP）、kagura 来源质量专项沿用既有登记。
 - 未创建 Git 提交（待用户明确要求）。
+
+## 2026-10-11 迁移完成后的 Rust 核心整合审阅
+
+- 用户说明跨平台安装器迁移已全部完成，要求审阅其它可整合到 Rust 核心的模块；本轮完成静态审阅，详见 [Rust 核心整合审阅](rust-core-consolidation-review.md)。
+- 重点后续候选：CLI 扫描投影/安装后检测、签名目录安装编排与 trust revision 存储；其次为缓存清理、动作可用性 DTO 与类型化请求契约。
+- Decky 剩余 Python 主要承担宿主生命周期、身份、进程和事件适配；共享 TS UI 继续负责展示、排序和进度格式。
+- 本轮仅修改审阅与文档关联；所有后续整合均待实现、未立项，不改变 P6 完成状态。
+- 验证：3 个只读 explorer（gpt-6-luna / low，无历史传递）与主 Agent 核对实际源码及调用链；检查文档链接与 diff。沿用用户说明的已有验证，未重跑构建/测试、未部署或提交。
