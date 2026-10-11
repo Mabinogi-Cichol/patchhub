@@ -109,3 +109,8 @@ Outcome 包含事务事实、identity、Completed/Cancelled/Failed、typed cause
 - core/CLI install tests 与 resolve/orchestrator/EXE fixtures：rollback、recovery、superseded、overwrite、stale、signed 优先、ZIP/EXE。
 
 本次只做文档与静态源码核对；未运行测试或协议冒烟，固定样本待契约 fixture/实现验证。
+
+
+## P2 终态补充（2026-10-12）
+
+事务 writer 的固定非空 `; cleanup_pending:<诊断>` 后缀不改变原终态。先分离固定语法，取消只依据完整 `cancelled` / `task_cancelled` / `lease_expired` 机器码；普通失败保留原机器码。cause.detail 保留有界清理诊断，Transaction.error 保留完整事实，任意其他自由详情不能证明取消。应用回滚或 planned 丢弃已经确认 rolled_back 后，清理失败仍返回实际事务，并用相同原因重放；commit 仍 completed，needs_recovery 仍 failed。此为 [契约 §4](p0-contract.md) 的 P2 受限修订，运行证据见 [P2 验证](p2-validation.md)。

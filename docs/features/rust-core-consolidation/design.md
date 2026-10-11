@@ -1,10 +1,10 @@
 # Rust 核心服务收敛重构
 
-日期：2026-10-11（Asia/Shanghai）。状态：**P0 契约/行为/数据基线冻结与静态复核通过，Windows 基准实测完成；P1–P6 待实现，双平台产物与实机验收待验证**。
+日期：2026-10-11（Asia/Shanghai）。状态：**P0 已冻结并提交；P1 扫描投影/取证/只读预览已实现，Windows/Linux 自动化、基准对照与独立复核通过；P2 签名/信任/终态与统一安装入口已实现，Windows/Linux 自动化和独立复核通过；P3–P6 待实现，双端最终产物与实机待验证**。
 
 施工记录：[progress.md](progress.md)。基线：[迁移后代码审阅](../cross-platform-installer-migration/rust-core-consolidation-review.md)、[跨平台安装器迁移](../cross-platform-installer-migration/design.md)及其[完成记录](../cross-platform-installer-migration/progress.md)。
 
-P0 交付：[契约与 v4 变化表](p0-contract.md)、[动作/终态真值表](p0-behavior.md)、[数据与债项映射](p0-data-debt.md)、[性能基线](p0-baseline.md)、[独立复核](p0-review.md)。这些冻结目标不代表生产 API 已实现。
+P0 交付：[契约与 v4 变化表](p0-contract.md)、[动作/终态真值表](p0-behavior.md)、[数据与债项映射](p0-data-debt.md)、[性能基线](p0-baseline.md)、[独立复核](p0-review.md)。P1 实现与阶段过渡详见 [P1 验证](p1-validation.md)；其余冻结目标仍待后续实现。
 
 ## 1. 目标与完成定义
 
@@ -78,6 +78,8 @@ generation、旧事件去重、扫描关闭、来源发现的异步时序继续�
 - 清理失败独立记录；失败处理仍优先保留真实事务结果和恢复信息，不依靠字符串包含 cancel 推导终态。
 - 核心直接调用者必须使用相同入口和准入保障。CLI 保留序列化和宿主事件适配，不保留私有签名业务流。
 
+P2 实施补充（2026-10-12）：正式写入使用 service::ValidatedHostContext 与受检查身份，裸 prepare/apply/recover/discard 只供 crate 内部；公开恢复/丢弃在 journal 写锁内校验实际计划，批量先全量校验，失败恢复只处理自身 plan。新请求使用域分隔的稳定 UUID，旧 plan_id 与 schema 保持；双回填失败可由原 journal 绑定验证重放。固定非空 `; cleanup_pending:<诊断>` 是唯一可伴随规范取消码的持久后缀，cause.code/detail 分离；planned 丢弃和应用回滚的非致命收尾不改变真实终态。AfterCommit 在 P3 前明确拒绝。具体实现与证据见 [P2 验证](p2-validation.md)。
+
 ### 5.3 缓存与安装后清理
 
 提取 CacheService、CleanupPolicy（Disabled/AfterCommit）和 CleanupResult。手动清理与提交后清理调用同一服务，自动策略在统一安装入口中处理；Decky main.py 不再追加第二次删除或改写业务结果。
@@ -114,7 +116,7 @@ P0 冻结 actions.automatic/local_archive/reinstall/overwrite/primary，替代�
 - 宿主任务终态消费 disposition；异常传输错误仍由宿主记录，任务 ID、历史、租约触发和异步取消生命周期不迁入 core。
 - 来源 URL guard、公共来源状态谓词和阶段/百分比格式统一到 packages/ui；保留平台交互差异。浏览器链接打开与下载网络许可分别验证，不能互相代替。
 
-P0 已冻结补充：逐方法 wire params 的受信配置统一为必需 host 六字段，operation 与宿主 cleanup_policy 必需，外层 request_id 为唯一幂等 ID；不保留旧配置字段双读。取证新增 16 GiB 流式上限；installer/rust-v1 新 cache.lock 统一 shared 安装/恢复与 exclusive 删除，自动清理不得锁升级。幂等重放从原 Transaction/ledger.error 的精确原因码重建 disposition，不增加持久 schema。具体接口/字段/生成器与 source 枚举以 [P0 契约](p0-contract.md) 为准；P1–P5 尚待实施。
+P0 已冻结补充：逐方法 wire params 的受信配置统一为必需 host 六字段，operation 与宿主 cleanup_policy 必需，外层 request_id 为唯一幂等 ID；不保留旧配置字段双读。取证新增 16 GiB 流式上限（P1 已实现）；installer/rust-v1 新 cache.lock 统一 shared 安装/恢复与 exclusive 删除，自动清理不得锁升级。幂等重放从原 Transaction/ledger.error 的精确原因码重建 disposition，不增加持久 schema。具体接口/字段/生成器与 source 枚举以 [P0 契约](p0-contract.md) 为准；P1 已实现扫描/检测/预览，P2 已实现签名/信任/终态与写入口，P3–P5 尚待实施。
 
 ## 6. 实施阶段与交付门槛
 
@@ -155,7 +157,7 @@ P0 记录现有目录/表/schema、设置、任务历史和未完成事务的读
 
 最终升级前完成或恢复活动事务、备份插件/宿主产物与状态、核对哈希并整体替换。启动先做 v4 握手和字段校验，失败时停留在可诊断状态，禁止旧新组合执行写入；恢复旧产物时使用匹配备份，避免回滚覆盖升级期间新事务。
 
-立项阶段仅编写文档；2026-10-11 用户随后授权开始 P0，新增冻结文档和隔离基准，并只读确认本机 Steam 清单。不连接 Steam Deck、不部署、不修改游戏或宿主持久化状态。实际部署按 [项目部署技能](../../../.agents/skills/decky-deploy-verify/SKILL.md) 和执行时的用户授权范围进行。
+立项阶段仅编写文档；2026-10-11 用户随后授权开始 P0，新增冻结文档和隔离基准，并只读确认本机 Steam 清单。用户随后授权提交 P0 并实施 P1，实际写入只限临时测试/基准目录，扫描/预览保持只读。不连接 Steam Deck、不部署、不修改用户游戏或宿主持久化状态。实际部署按 [项目部署技能](../../../.agents/skills/decky-deploy-verify/SKILL.md) 和执行时的用户授权范围进行。
 
 ## 9. 技术债关闭清单
 

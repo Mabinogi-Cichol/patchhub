@@ -242,7 +242,7 @@ P0 → P1 → P2 → P3 → **P4 Windows 真实验收** → P5 Decky 切换 → 
 
 ### 9.1 离线与自动化
 
-- 黄金对照语义覆盖/IR、ZIP 映射/载荷、条件/错误/终态；新 ID 验证 Rust 确定性和跨平台一致，不要求与 Python 旧 ID 相等。参考 [publisher 测试](../../../apps/decky/backend/test_publisher.py)、[通用 EXE 测试](../../../apps/decky/backend/test_exe_generic.py)、[安装测试](../../../apps/decky/backend/test_exe_installation.py)、[worker 测试](../../../apps/decky/backend/test_exe_worker.py)、[SF 行为测试](../../../scripts/test_sf9_behavior.py)、[Rust install 测试](../../../crates/core/tests/install.rs)（P6 注：publisher/通用 EXE/安装/worker 的 Python 测试已随实现删除；SF 行为与 Rust install 测试保留）。不比较设备路径/时钟，不执行安装器。
+- 黄金对照语义覆盖/IR、ZIP 映射/载荷、条件/错误/终态；新 ID 验证 Rust 确定性和跨平台一致，不要求与 Python 旧 ID 相等。参考 [publisher 测试](../../../apps/decky/backend/test_publisher.py)、[通用 EXE 测试](../../../apps/decky/backend/test_exe_generic.py)、[安装测试](../../../apps/decky/backend/test_exe_installation.py)、[worker 测试](../../../apps/decky/backend/test_exe_worker.py)、[SF 行为测试](../../../scripts/test_sf9_behavior.py)、[Rust install 测试](../../../crates/core/src/install_tests.rs)（P6 注：publisher/通用 EXE/安装/worker 的 Python 测试已随实现删除；SF 行为与 Rust install 测试保留）。不比较设备路径/时钟，不执行安装器。
 - AppID/语言/DLC/来源冲突与未知、过期/退订/规则变化、同 URL 或镜像不同字节；HGamer、UI 任意 URL/recipe/report 不取得写权限。
 - SF 未知版本/对象/include/动作、恶意 PE/framing、解压/AST/深度/时限、同清单不同事件、任意合法文件名/CRC 泛化；各版本布局分别验证。
 - ZIP 穿越、Windows 保留名/ADS/reparse、Linux symlink、大小写/Unicode/目录冲突、XP3 歧义、CRC/长度/摘要篡改、写入前目标变化、存档/非拥有目标保护。

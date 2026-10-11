@@ -1,14 +1,14 @@
 # Rust 核心服务收敛重构施工记录
 
-设计：[design.md](design.md)。基线审阅：[rust-core-consolidation-review.md](../cross-platform-installer-migration/rust-core-consolidation-review.md)。
+设计：[design.md](design.md)。P1 证据：[p1-validation.md](p1-validation.md)。P2 证据：[p2-validation.md](p2-validation.md)。基线审阅：[rust-core-consolidation-review.md](../cross-platform-installer-migration/rust-core-consolidation-review.md)。
 
-当前状态：**P0 冻结/静态复核通过：契约、行为真值表、数据/债项基线、Windows 实测与体积核对已完成，可进入 P1。P1–P6 待实现；生产 API、双平台产物、实机待验证。**
+当前状态：**P0 已冻结并提交；P1 扫描投影/受限取证/只读预览已实现，Windows/Linux 自动化、基准对照与独立复核通过；P2 签名/信任/终态及统一安装入口已实现，Windows/Linux 自动化与独立复核通过；P3–P6 待实现；双端最终产物、实机待验证。**
 
 ## 1. 用户目标与范围
 
-用户要求按审阅优先级建立独立重构 feature，并清除本次识别的技术债。立项阶段授权和实际工作为编写文档；用户随后授权开始 P0 施工，范围为契约/行为/数据冻结、性能基线及静态复核。覆盖扫描投影、签名编排/信任存储、缓存、动作 DTO、请求/协议，以及相关结果映射、共享 UI helper 和最终验收收口。
+用户要求按审阅优先级建立独立重构 feature，并清除本次识别的技术债。立项阶段授权和实际工作为编写文档；用户随后授权开始 P0 施工，范围为契约/行为/数据冻结、性能基线及静态复核；随后授权提交 P0 并开始 P1 实现，再授权继续 P2。覆盖扫描投影、签名编排/信任存储、缓存、动作 DTO、请求/协议，以及相关结果映射、共享 UI helper 和最终验收收口。
 
-保留已完成安装器迁移的验收结论和历史记录；新 feature 的验证以变更后的最终树为准。初始化记录仅含文档；本次 P0 增加隔离基准工具，不修改生产代码、不部署、不提交。
+保留已完成安装器迁移的验收结论和历史记录；新 feature 的验证以变更后的最终树为准。初始化记录仅含文档；P0 增加隔离基准工具并已提交；P1/P2 生产代码已在本次用户授权下提交为 `e77d0a8`；文档独立提交，未部署。
 
 ## 2. 阶段状态
 
@@ -16,8 +16,8 @@
 | --- | --- | --- | --- |
 | 文档初始化 | 已完成 | 2026-10-11 design/progress、索引与总体进度关联 | P0 静态复核与契约冻结 |
 | P0 契约/数据/性能基线 | 已冻结、静态复核通过 | [契约](p0-contract.md) / [真值表](p0-behavior.md) / [数据债项](p0-data-debt.md) / [基准](p0-baseline.md) / [复核](p0-review.md) | P1 扫描投影/取证核心化 |
-| P1 扫描投影/检测/预览 | 待实现 | 无新实现证据 | 核心服务与调用替换、阶段测试 |
-| P2 signed/trust/outcome | 待实现 | 无新实现证据 | 核心统一安装 API、防回滚与终态验证 |
+| P1 扫描投影/检测/预览 | 已实现、自动化与独立复核通过 | [P1 验证](p1-validation.md)：Windows417/Linux422、只读子进程、基准计数/事实对照 | P2 已完成；P1/P2 代码已提交 `e77d0a8` |
+| P2 signed/trust/outcome | 已实现、自动化与独立复核通过 | [P2 验证](p2-validation.md)：Windows465/Linux472、信任并发/硬链接、三路线、持久终态与恢复边界 | P3 缓存/清理策略；P1/P2 代码已提交 `e77d0a8` |
 | P3 cache/cleanup policy | 待实现 | 无新实现证据 | 核心清理与保护/互斥验证 |
 | P4 actions/双端消费 | 待实现 | 无新实现证据 | 必需动作 DTO、前端删除推导 |
 | P5 protocol v4/共享 helper | 待实现 | 无新实现证据 | 生成契约与混装拒绝、重复代码清理 |
@@ -60,16 +60,16 @@ P0交付索引：[字段/API/v4表](p0-contract.md)、[动作/终态样本](p0-b
 
 | ID | 状态 | 完成证据 |
 | --- | --- | --- |
-| D1 CLI 扫描/预览业务 | 待实现 | — |
-| D2 准入/身份/哈希重复规则 | 待实现 | — |
-| D3 signed/trust 核心化 | 待实现 | — |
+| D1 CLI 扫描/预览业务 | 已实现、阶段自动化通过；P6 最终关闭 | 核心公共 API、CLI 只读适配与子进程；[P1](p1-validation.md) |
+| D2 准入/身份/哈希重复规则 | P1/P2 规则与写入边界已实现；actions/正式请求契约待 P4/P5 | 共用取证、来源身份/ZIP准入/EXE resolver；[P1](p1-validation.md) |
+| D3 signed/trust 核心化 | 已实现、阶段自动化/复核通过；P6 最终关闭 | [P2](p2-validation.md)：统一入口、原始签名重核、SQLite 高水位并发 |
 | D4 cache 服务与追加删除 | 待实现 | — |
 | D5 前端动作推导/派生字段 | 待实现 | — |
 | D6 请求/错误/生成契约 | 待实现 | — |
-| D7 安装结果终态映射 | 待实现 | — |
+| D7 安装结果终态映射 | core 已权威化；双端消费/删除重复映射待 P4/P5 | [P2](p2-validation.md)：持久取消、恢复、清理诊断与账本失败重放 |
 | D8 共享展示 helper | 待实现 | — |
 | D9 过渡路径与废弃消费者 | 待实现 | — |
-| D10 v4 冒烟/CI/文档产物 | 待实现 | — |
+| D10 v4 冒烟/CI/文档产物 | v3 阶段冒烟已通过；v4/最终 CI/产物待实现 | [P1 子进程](../../../crates/cli/tests/projection_smoke.rs) |
 
 关闭标准以 design 第 9 节为准，不能只凭删除某个符号声明关闭。
 
@@ -77,21 +77,21 @@ P0交付索引：[字段/API/v4表](p0-contract.md)、[动作/终态样本](p0-b
 
 | 验证 | 当前状态 | 实施后应记录 |
 | --- | --- | --- |
-| 文档结构/链接/差异 | P0 已通过 | 本次链接/阶段/债项/空白验证；文档及隔离基准工具，无生产源码变化 |
-| 核心/CLI/protocol/worker 自动化 | 待验证 | Windows/Linux 的最终版本、命令与结果 |
+| 文档结构/链接/差异 | P0/P1/P2 已通过 | [P2 最终检查](../../../.artifacts/rust-core-consolidation/p2/final-checks.json) |
+| 核心/CLI/protocol/worker 自动化 | P2 core/CLI Windows465、Linux472 通过；新 protocol/最终 worker 待后续 | [P2 汇总](../../../.artifacts/rust-core-consolidation/p2/validation-summary.json) |
 | Tauri、Decky Python、TS | 待验证 | 两端协议消费与新增/迁移测试 |
 | v4 子进程冒烟/契约一致性 | 待验证 | 固定 fixture、失败场景、生成无漂移 |
-| 性能/哈希次数 | 当前 Windows debug 基线通过；新实现对照待验证 | 3固定fixture各6轮、3次计数等价、6次真实manifest；来源/动态计数与Linux待后续 |
+| 性能/哈希次数 | P0/P1 Windows debug 对照完成；哈希计数一致，取证耗时上升；Linux/发行包待后续 | [P1 对照](p1-validation.md#性能对照)，新增动态收据32次哈希 |
 | 双端包/SBOM/哈希 | 待验证 | 最终包、版本清单、allowlist、license 增量 |
 | Windows 实机 | 待验证 | 实例、操作/事务、前后文件、恢复/清理 |
 | Deck 正式部署/RPC/UI/控制器 | 待验证 | 备份、正式文件哈希、RPC、页面与用户确认 |
-| 独立复核 | P0 通过；P6待验证 | 三项P2修正后定向复核无遗留；[P0复核](p0-review.md) |
+| 独立复核 | P0/P1/P2 通过；P6待验证 | P2 安全与终态边界闭环，无遗留 finding；[P2](p2-validation.md#独立复核与修复) |
 
 证据保存在本 feature 附加文档或 .artifacts 的对应目录，progress 链接实际存在的结果。本轮未创建虚构验收或样本证据文件。
 
 ## 7. 遗留与阻断
 
-P0 冻结/静态复核完成，无已知 P1 实施阻断。所有 P1–P6 生产代码任务与运行验证未执行。新增 cache.lock、16 GiB 取证上限、params.host、生成器和 Rust/TS/Python fixture 仍为待实现目标。
+P1/P2 已完成阶段实现与自动化，无已知 P3 实施阻断。受限取证16 GiB上限已实现；带文件取证的 debug 扫描慢45%–61%，保留安全检查并登记最终平台性能验证。新增 cache.lock、params.host、生成器、v4 Rust/TS/Python fixture、actions 等仍待 P3–P6。过渡字段及协议边界见 [P1记录](p1-validation.md#阶段过渡与未执行项)。
 
 已有旧 profile 样本、旧 Windows 版本和 fake-IP 限制保留在原功能记录。本 feature 新发现的必要问题进入本记录并保持未关闭；范围外问题单独登记。最终清理清单和必要验收未闭环时，不声明 feature 完成。
 
@@ -120,3 +120,56 @@ P0 冻结/静态复核完成，无已知 P1 实施阻断。所有 P1–P6 生产
 ### 待实施/待验证
 
 P1先迁 projection/受限取证/preview，再按P2–P6推进。新增领域API、v4真实子进程fixture与生成、source/动态hash新旧对照、trust/cache竞态、Linux/release、双端包/SBOM/最终实机均未执行。D1–D10仍待实现，不因P0文档冻结关闭技术债。
+
+## 9. 2026-10-11 提交 P0 并完成 P1 阶段
+
+用户授权“提交，然后开始 P1 施工”。P0 已分成三个本地提交：`3e8bbd2`（归档整合审阅）、`5e2fb04`（隔离基准工具）、`07c5a5a`（P0 冻结文档）。提交前检查暂存差异与空白，通过；沿用已完成的 P0 验证，不重复运行。
+
+P1 使用 multi-agent 并行实现：Sol/high 负责共享受限文件取证与核心投影，Luna/medium 负责来源只读快照与 resolver 共享规则；主 Agent负责 CLI 适配与集成。生产协议仍为 v3，P4/P5 切换 actions/v4；这一阶段不部署混合产物。
+
+- [x] 核心投影、单实例/批量与预览 API。
+- [x] 来源/事务只读快照、统一时刻与显式宿主能力。
+- [x] 安全取证共用，区分缺失与无法读取。
+- [x] CLI 删除私有投影/检测/预览实现，扫描不更新 trust revision。
+- [x] 直接核心 API 与 CLI 子进程验证、P0 性能对照。
+- [x] 独立审查与文档同步。
+
+
+### P1 实际结果
+
+- 新 core projection/detection、来源和事务只读快照；CLI 删除私有投影/检测/预览并保持 v3 适配。损坏/链接/变化证据返回 unknown；预览不可靠基线为 null。具体文件、边界和过渡见 [P1 验证](p1-validation.md)。
+- Windows 417、Linux 422 项测试通过，均6项既有 ignored；fmt全workspace、Windows core/CLI Clippy -D warnings、真实CLI子进程2项通过。来源/事务不初始化或修复，扫描不更新信任revision。
+- 隔离基准4组各6轮：原3组除新增 diagnostics 外与P0事实一致，哈希次数/字节一致；动态收据32/32次、8 MiB。带取证的两组耗时增加45.5%/61.2%，不声明性能提升；冷缓存/Linux/release/实机待最终验收。
+- 独立审查4项P2已修复并回归：相对状态根、来源内部链接、损坏overlay最新时间、未知预览基线；祖先句柄复用定向安全复核通过，无遗留具体finding。
+- 本阶段共4个子Agent：取证和投影2路 Sol/high、来源1路 Luna/medium、独立复核1路 Sol/high；主Agent集成、修复、运行与文档。
+- P1尚未提交；没有连接设备、部署或改动用户游戏/状态。P2–P6不因P1阶段通过而宣告完成。
+
+## 10. 2026-10-11 至 2026-10-12 P2 阶段完成
+
+用户授权“继续P2”。复用P0冻结规格，保留P1未提交改动。三路Sol/high分别负责签名编排、SQLite信任revision、结构化终态/取消持久原因；主Agent统一宿主验证、安装入口及CLI适配，第四路 reviewer 只读安全复核。已完成 P2 运行验证与文档收口；不连接设备、不部署、不提交。
+
+- [x] 核心签名编排及apply前重新验签/revision/准入核验。
+- [x] 唯一trust.sqlite服务与只读验证、Immediate二次revision检查。
+- [x] 三类统一安装入口、安全宿主上下文与公开写入口收口。
+- [x] 结构化终态、持久typed取消/租约及幂等重放。
+- [x] CLI删除私有signed/trust流程，保持开发期v3适配。
+- [x] Windows/Linux回归、负向边界、独立审查与证据同步。
+
+
+### P2 实际结果
+
+- 三路线统一核心 API、受检查身份与宿主写入边界；CLI 删除私有 signed/trust/outcome 实现。trust.sqlite 与 installer/rust-v1 原路径/schema 保持，旧事务身份优先读取；新请求稳定 UUID 支持双回填失败 journal 重放。
+- 明确用户取消/租约原因、commit 与 needs_recovery 优先；普通失败、授权撤销、迟到取消及清理诊断不混淆。公开恢复/丢弃在写锁内校验实际计划，恢复全批先校验，内部失败仅恢复自身计划。
+- Windows 465、Linux 472 项通过，均6项既有 ignored；fmt、Windows all-targets Clippy -D warnings、独立只读复核通过。实际 Linux root 身份另运行2项拒绝写入验证通过。完整日志、负向样本及未执行范围见 [P2 验证](p2-validation.md)。
+- P0 冻结终态在 2026-10-12 作受限修订：允许 writer 固定非空 cleanup_pending 后缀，机器码仍精确匹配，诊断独立保留；非致命收尾不改变已确认回滚事实。复核发现的写边界、幂等、取消和清理问题均已修复回归，无已知遗留 finding。
+- 本阶段共4个 Sol/high 子 Agent（3路 specialist、1路 reviewer，fork none）；主 Agent 集成、修复、测试与文档。P1/P2 尚未提交；P3 cache/AfterCommit、P4/P5 双端 actions/v4、P6 最终产物和实机仍待实施。
+
+
+## 11. 2026-10-12 提交 P1/P2
+
+用户明确要求“提交”。使用项目 steam-patch-git-commit 技能检查暂存区与实际范围；P1/P2 同属本 feature，完整实现共用文件连续变更，功能代码与文档拆为两次本地提交。
+
+- `e77d0a8`：refactor(rust-core): 收敛 P1 投影与 P2 安装核心服务。33 个 Git 变更条目（测试移动识别为 rename），含必要自动化与隔离基准工具；不含文档、忽略的验收产物或用户库材料。
+- 文档另行提交：P1/P2 验证、设计/施工记录、P0 受限终态修订、索引和因测试移动更新的历史验收链接。
+- 沿用本 session 最终 Windows465/Linux472、fmt/Clippy、实际 root 拒绝与独立复核；提交前核对全部源码 SHA-256 无漂移、暂存内容与已验证工作树一致，diff --cached --check 通过，不重复运行测试。
+- 本次仅本地提交，不推送、不部署；P3–P6 与双端最终产物/实机仍待实施。第9、10节保留实现阶段尚未提交的历史事实。

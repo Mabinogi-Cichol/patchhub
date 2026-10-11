@@ -274,6 +274,8 @@ pub struct InstallerOutcome {
 
 幂等重放必须得到相同事务事实与终态：RequestLedger现有记录只有Transaction/error，不新增持久cause列。新取消在确认回滚后将typed cause的规范码写入已有Transaction.error与ledger.error（user_cancelled写cancelled；lease_expired写lease_expired）再record_terminal；正常失败保留原诊断事实。读历史/重放时仅error精确等于cancelled/task_cancelled/lease_expired转换取消原因，不能contains；committed先completed，needs_recovery先failed+required，其他rolled_back含null error保守failed。新任务当前TaskLease可提供实时cause，但不允许覆盖持久committed/needs_recovery或把缺证据的旧记录猜成cancelled。cleanup重放不再自动删除，返回NotRequested/removed_bytes=0；disposition与事务事实稳定，清理是本次调用独立副作用事实。
 
+P2 修订（2026-10-12）：上述精确三码规则允许事务 writer 已有的固定非空后缀 `; cleanup_pending:<诊断>`。仅先分离该固定语法再精确比对三码；`from_code` 本身仍严格，不接受其他自由详情或 contains。原 Transaction.error/ledger.error 完整保留，typed cause.code 是精确机器码，清理诊断进入有界 cause.detail；普通领域失败也保持其机器码与清理详情分离。此修订不增加 schema，不改变 commit / needs_recovery 优先级，目的为保证非致命收尾不改变取消/失败事实；实际验证见 [P2](p2-validation.md)。
+
 ## 5. 权威动作 DTO
 
 ```rust

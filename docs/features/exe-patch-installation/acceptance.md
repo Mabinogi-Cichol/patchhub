@@ -20,7 +20,7 @@
 | P3 build/语言/DLC/SHA/CRC 与确认 | [可信事实测试](../../../apps/decky/backend/test_exe_facts.py)、服务与 RPC 测试；VBF profile 基线 `VBFI.exe` | 自动化通过；安装 depot 不表述为已购买权益；基线由 profile 声明而非硬编码 |
 | P3 state/目标卷分别估算空间、TTL/取消/互斥 | 服务测试及真实 worker 取消报告 | 自动化/合成通过；VBF 在内置盘真实通过，外置库和满盘待验证 |
 | P3 唯一 Rust 写入、prepare→apply→uninstall/recover | Deck 实际 bwrap + Rust 合成库；2026-10-05 设备当前源码合成闭环（debug CLI `e69a1cd8…`）与 VBF 真实闭环（install SHA `e8304129…`、uninstall SHA `867b32ed…`） | 通过；prepare 不改载荷/存档，首次空协作锁单独记录；VBF 纯新增事务在无备份时安全卸载 |
-| P3 权限保留、崩溃恢复、备份损坏的完整检查 | [Rust 安装测试](../../../crates/core/tests/install.rs)；2026-10-05 设备 Linux `cargo test -p steam-patch-core -p steam-patch-cli` 通过 | 权限保留、崩溃恢复、备份损坏/用户修改阻断恢复均已在 Linux 实际运行通过 |
+| P3 权限保留、崩溃恢复、备份损坏的完整检查 | [Rust 安装测试](../../../crates/core/src/install_tests.rs)；2026-10-05 设备 Linux `cargo test -p steam-patch-core -p steam-patch-cli` 通过 | 权限保留、崩溃恢复、备份损坏/用户修改阻断恢复均已在 Linux 实际运行通过 |
 | P3 重启/设置变化/清理后保留备份、来源停用后恢复 | [保留测试](../../../apps/decky/backend/test_exe_retention.py)、RPC 测试与 Deck restart | 通过；用户修改冲突保持，损坏/未知策略 fail closed |
 | P4 条款、条件、备份确认、阶段、错误、取消、重入 | [安装 UI 测试](../../../apps/decky/tests/install.test.ts)、[任务测试](../../../apps/decky/tests/task-controller.test.ts)；真实未审核候选页面截图 | 前端测试、typecheck/build 通过；VBF 真实流程经 RPC 传入三项确认执行。真实屏幕上的三确认界面与实体手柄仍待验证 |
 | P4 来源失效/旧请求隔离/旧 ZIP 回归 | [会话测试](../../../apps/decky/tests/session.test.ts)、后端 Linux 回归 | 自动化通过；实际屏幕/实体手柄不能由此推定 |
