@@ -25,7 +25,7 @@ class ProjectionTests(unittest.IsolatedAsyncioTestCase):
     async def test_projection_uses_rust_selection_and_receipt_without_python_policy(self):
         patch_result = {"release_id": "source-official-1", "selection_id": "zip-selection-id-1",
             "support_level": "publisher_zip", "detection": {"status": "partial"},
-            "blockers": ["source_disabled"], "download_available": False}
+            "blockers": ["source_disabled"], "actions": {"automatic": {"available": False, "blockers": [{"code": "source_not_enabled"}]}, "local_archive": {"available": False, "blockers": [{"code": "local_archive_signed_only"}]}, "reinstall": {"available": False, "blockers": [{"code": "reinstall_unowned_or_incomplete"}]}, "overwrite": {"available": False, "blockers": [{"code": "source_not_enabled"}]}, "primary": {"operation": "overwrite", "label": "overwrite", "input": "unavailable"}}}
         core_row = {"game": game(), "patches": [patch_result], "discovery": {"status": "cache_complete"}}
         plugin = module.Plugin()
         plugin.bridge = types.SimpleNamespace(scan=AsyncMock(return_value={"installs": [core_row]}))

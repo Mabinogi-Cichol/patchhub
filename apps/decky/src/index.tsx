@@ -2,36 +2,24 @@ import { callable, definePlugin, routerHook } from "@decky/api";
 import { Button, ButtonItem, DropdownItem, Field, Focusable, Navigation, PanelSection, PanelSectionRow, SidebarNavigation, TextField, ToggleField, showModal, useParams } from "@decky/ui";
 import { FaGamepad, FaPuzzlePiece } from "react-icons/fa";
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ComponentProps, type ReactNode } from "react";
-import { candidateMatched, displayPatches, patchInstallable, filterInstalls, gameDisplayName, installSummary, patchState, reason, workflowState, type DiscoveryResult, type Filter, type Install, type InstallerLinks, type Patch, type Preview, type ScanResult, type SourceCandidate, type SourceSubscription, type Transaction } from "@steam-patch/ui";
+import { candidateMatched, displayPatches, filterInstalls, gameDisplayName, installSummary, patchState, reason, workflowState, type DiscoveryResult, type Filter, type Install, type Patch, type Preview, type ScanResult, type SourceCandidate, type SourceSubscription, type Transaction } from "@steam-patch/ui";
 import { getListPreferences, setListPreferences, subscribeListPreferences } from "./preferences";
 import { gamePresentation, matchesGameQuery, transactionGameName } from "./steam";
 import { transactionResult } from "./install";
+import { installInput, primaryActionBlockers, primaryInstallAction } from "./actions";
 import { createManagerSession, feedbackFor, needsRecovery } from "./session";
 import { decodeInstance, encodeInstance, settingsPage, settingsRoutes } from "./route";
-import { autoCleanupNote, cacheClearNote, cacheSummary, type CacheStatus, type Settings } from "./cache";
+import { autoCleanupNote, cacheClearNote, cacheSummary, type CacheStatus, type CleanupResult, type Settings } from "./cache";
 import { tasks, taskIsTerminal, type TaskSnapshot } from "./tasks";
 import { TaskProgressView, TaskResultView } from "./task-progress-view";
 import { candidateConditions, candidateLanguage, candidateSource, discoveryStatus, safeSourceUrl, unqueriedCount } from "./discovery";
 
 const scan = callable<[boolean], ScanResult>("scan");
 const scanStatusRpc = callable<[number], ScanResult>("scan_status");
-const capabilities = callable<[], { installer?: { links?: InstallerLinks } }>("get_capabilities");
 const previewRpc = callable<[string, string | null, string | null], Preview>("preview");
-let installerLinks: InstallerLinks | null = null;
-let catalogSigned = false;
-function projectPatch(patch: Patch): Patch {
-  return { ...patch, auto_installable: patchInstallable(patch, installerLinks, catalogSigned) };
-}
-function projectReport(report: ScanResult): ScanResult {
-  catalogSigned = report.catalog_trust === "signed";
-  return { ...report, installs: report.installs.map(row => ({ ...row, patches: row.patches.map(projectPatch) })) };
-}
-const scanStatus = async (generation: number) => projectReport(await scanStatusRpc(generation));
+const scanStatus = (generation: number) => scanStatusRpc(generation);
 const discoverGameRpc = callable<[string, string[], string | null, boolean], DiscoveryResult>("discover_game");
-const discoverGame = async (instance: string, names: string[], language: string | null, force: boolean): Promise<DiscoveryResult> => {
-  const result = await discoverGameRpc(instance, names, language, force);
-  return { ...result, patches: result.patches?.map(projectPatch) };
-};
+const discoverGame = (instance: string, names: string[], language: string | null, force: boolean): Promise<DiscoveryResult> => discoverGameRpc(instance, names, language, force);
 const listTransactions = callable<[], Transaction[] | { transactions: Transaction[] }>("list_transactions");
 const recover = callable<[], Transaction[]>("recover");
 const setSourceEnabled = callable<[string, boolean], SourceSubscription[]>("set_source_enabled");
@@ -42,9 +30,7 @@ const getSettings = callable<[], Settings>("get_settings");
 const setAutoCleanup = callable<[boolean], Settings>("set_auto_cleanup");
 
 async function readSnapshot(refreshSources = false) {
-  const [rawReport, caps] = await Promise.all([scan(refreshSources), capabilities()]);
-  installerLinks = caps.installer?.links ?? null;
-  const report = projectReport(rawReport);
+  const report = await scan(refreshSources);
   let transactions = session.getSnapshot().transactions;
   try { const result = await listTransactions(); transactions = Array.isArray(result) ? result : result.transactions ?? []; }
   catch { /* Keep the last transaction snapshot during a transient read failure. */ }
@@ -136,7 +122,7 @@ const css = `
 `;
 
 function matchSummary(item: Install): string {
-  return installSummary({ ...item, patches: item.patches.map(projectPatch) }, !!session.getSnapshot().report?.scan_progress?.running);
+  return installSummary(item, !!session.getSnapshot().report?.scan_progress?.running);
 }
 function CandidateDetails({ candidate }: { candidate: SourceCandidate }) {
   const format = candidate.format_observed && candidate.format_observed !== "unknown" ? candidate.format_observed : candidate.format_reported && candidate.format_reported !== "unknown" ? candidate.format_reported : "待确认";
@@ -280,12 +266,12 @@ function GameManager({ item, seg, panel }: { item: Install; seg: string; panel?:
   const patch = selected?.kind === "installable" ? selected.patch : undefined;
   const candidate = selected?.kind === "discovery" ? selected.candidate : undefined;
   const identity = patch?.selection_id ?? patch?.release_id ?? "";
-  const available = !!patch && patchInstallable(patch, installerLinks, report?.catalog_trust === "signed");
-  const link = patch?.support_level === "publisher_exe" ? installerLinks?.exe : installerLinks?.zip;
-  const blocked = patch && !available ? [...patch.blockers, ...(link?.blockers ?? []).map(value => value.code)].map(reason).join(" ") || "此来源目前不能自动安装。" : null;
-  const manualBlocked = !patch || patch.support_level !== "managed_zip" || patch.blockers.length > 0 || report?.catalog_trust !== "signed" || installerLinks?.zip?.available !== true;
+  const primaryAction = primaryInstallAction(patch, !!archive.trim());
+  const primaryInput = primaryAction.input;
+  const primaryAvailable = primaryAction.enabled;
+  const actionBlockers = primaryActionBlockers(patch);
   const owned = transactions.filter(t => t.instance_id === item.game.instance_id).reverse();
-  const installed = !!patch && (patch.reinstall_available === true || ["managed", "installed_managed", "installed_owned", "external", "installed_external"].includes(patch.detection.status));
+  const installed = primaryAction.label === "overwrite";
   const unfinished = transactions.filter(needsRecovery);
   useEffect(() => {
     if (!entries.some(entry => entry.key === selectedKey)) {
@@ -342,7 +328,10 @@ function GameManager({ item, seg, panel }: { item: Install; seg: string; panel?:
     } else if (task.state === "completed") {
       const tx = task.result as Transaction;
       if (tx?.transaction_id) record(tx);
-      refreshAfterMutation(tx ? transactionResult(tx) : "安装完成，正在核对文件状态。", undefined, instance);
+      const cleanup = (task.result as (Transaction & { cleanup?: CleanupResult }) | null)?.cleanup;
+      const message = [tx ? transactionResult(tx) : "安装完成，正在核对文件状态。",
+        cleanup ? cacheClearNote(cleanup) : ""].filter(Boolean).join(" ");
+      refreshAfterMutation(message, undefined, instance);
     } else if (task.state === "failed") {
       const error = `${reason(task.error ?? "任务失败，请检查操作记录。")}${task.error_detail ? ` · ${task.error_detail}` : ""}`;
       session.setFeedback({ error }, instance);
@@ -351,16 +340,16 @@ function GameManager({ item, seg, panel }: { item: Install; seg: string; panel?:
       refreshAfterMutation("任务已安全取消。", undefined, instance);
     }
   }
-  async function beginInstall(manualArchive = "") {
-    if (!patch || busy || tasks.isBusy() || (manualArchive ? manualBlocked : !!blocked)) return;
+  async function beginInstall(localArchive?: string) {
+    const input = installInput(patch, localArchive);
+    if (input === null || !patch || busy || tasks.isBusy()) return;
     try {
-      const operation = "overwrite";
-      const key = `${item.game.instance_id}\0${identity}\0${operation}\0${manualArchive}`;
+      const operation = primaryAction.operation;
+      const key = `${item.game.instance_id}\0${identity}\0${operation}\0${input}`;
       const requestId = pendingRequestIds.get(key) ?? crypto.randomUUID();
       pendingRequestIds.set(key, requestId);
       hideTask();
-      const pending = tasks.startInstall(item.game.instance_id, patch.selection_id ? null : patch.release_id, patch.selection_id ?? null, operation, requestId, manualArchive);
-      // Show the foreground UI before the start RPC returns, so B can cancel startup.
+      const pending = tasks.startInstall(item.game.instance_id, patch.selection_id ? null : patch.release_id, patch.selection_id ?? null, operation, requestId, input);
       showTask(game, patch.name, finishTask);
       await pending;
       pendingRequestIds.delete(key);
@@ -432,18 +421,17 @@ function GameManager({ item, seg, panel }: { item: Install; seg: string; panel?:
           <InfoRow label="补丁版本">{patchCandidate.version_raw || "请核对来源说明"}</InfoRow>
           <InfoRow label="适用条件" below>{candidateConditions(patchCandidate)}</InfoRow>
         </>}
-        {patch.blockers.map((b, i) => <Row key={i}><Status warning>{reason(b)}</Status></Row>)}
         <Row><Action onClick={() => openSource(patch.source_page)}>打开来源网页 ↗</Action></Row>
       </PanelSection>
       <PanelSection title={installed ? "覆盖安装" : "安装补丁"}>
         <Row><Status>安装时请关闭游戏并暂停 Steam 更新。</Status></Row>
-        {blocked && <Row><Status warning>{blocked}</Status></Row>}
+        {actionBlockers.map((blocker, i) => <Row key={`action-${blocker.code}-${i}`}><Status warning>{reason(blocker.code)}{blocker.detail ? ` · ${blocker.detail}` : ""}</Status></Row>)}
         <Row><Action disabled={!!busy || tasks.isBusy()} onClick={viewPreview}>查看文件变更（只读）</Action></Row>
         {preview && <Row><Status>{preview.changes.length ? preview.changes.map(change => `${change.action}：${change.path}`).join("；") : preview.blockers.length ? preview.blockers.map(reason).join("；") : "暂无文件变更。"}</Status></Row>}
-        <Row><Action disabled={!!busy || !!blocked || tasks.isBusy()} onClick={() => void beginInstall()}>{installed ? "覆盖安装补丁" : "安装补丁"}</Action></Row>
-        {patch.support_level === "managed_zip" && <Row><Action onClick={() => setManual(value => !value)}>使用本地 ZIP（高级）{manual ? " ▴" : " ▾"}</Action></Row>}
-        {manual && patch.support_level === "managed_zip" && <><Row><TextField label="Downloads 内的 ZIP 路径" value={archive} onChange={e => setArchive(e.target.value)} /></Row>
-          <Row><Action disabled={!archive.trim() || manualBlocked || !!busy} onClick={() => void beginInstall(archive)}>使用本地 ZIP {installed ? "覆盖安装" : "安装"}</Action></Row></>}
+        <Row><Action disabled={!primaryAvailable || !!busy || tasks.isBusy()} onClick={() => void beginInstall(primaryInput === "local_archive" ? archive : undefined)}>{primaryAction.label === "overwrite" ? "覆盖安装补丁" : "安装补丁"}</Action></Row>
+        {patch.actions.local_archive.available && primaryInput === "automatic" && <Row><Action onClick={() => setManual(value => !value)}>使用本地 ZIP（高级）{manual ? " ▴" : " ▾"}</Action></Row>}
+        {(manual || (primaryInput === "local_archive" && patch.actions.local_archive.available)) && <><Row><TextField label="Downloads 内的 ZIP 路径" value={archive} onChange={e => setArchive(e.target.value)} /></Row>
+          {primaryInput !== "local_archive" && <Row><Action disabled={!archive.trim() || !patch.actions.local_archive.available || !!busy || tasks.isBusy()} onClick={() => void beginInstall(archive)}>使用本地 ZIP {primaryAction.label === "overwrite" ? "覆盖安装" : "安装"}</Action></Row>}</>}
       </PanelSection>
     </>}
   </div>;
@@ -528,7 +516,7 @@ function GlobalCache() {
     value => { setSettings(value); session.update({ note: autoCleanupNote(value.auto_cleanup) }); });
   const clean = () => {
     void session.work("正在清理下载缓存…", clearCache, value => {
-        session.update({ note: cacheClearNote(value.removed_bytes, value.performed) });
+        session.update({ note: cacheClearNote(value) });
       });
   };
   return <div className="patch-page">

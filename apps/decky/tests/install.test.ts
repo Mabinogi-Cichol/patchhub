@@ -1,54 +1,75 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { installInput, primaryActionBlockers, primaryInstallAction } from "../src/actions.ts";
 import { transactionResult } from "../src/install.ts";
-import { canAutoInstall, installSummary, patchInstallable, type Patch, type Transaction } from "@steam-patch/ui";
+import { installSummary, type ActionBlockerCode, type Patch, type PatchActions, type Transaction } from "@steam-patch/ui";
 
-const patch = (support_level: string, blockers: string[] = []): Patch => ({
-  release_id: "r", name: "p", source_page: "https://example.test", support_level,
-  compatibility: "verified_metadata", blockers, detection: { status: "absent", files: [] },
+const availability = (available: boolean, blockers: { code: ActionBlockerCode; detail?: string }[] = []) => ({ available, blockers });
+const actions = (values: Partial<PatchActions> = {}): PatchActions => ({
+  automatic: availability(false), local_archive: availability(false), reinstall: availability(false), overwrite: availability(false),
+  primary: { operation: "overwrite", label: "install", input: "unavailable" }, ...values,
+});
+const patch = (fields: Partial<Patch> = {}): Patch => ({
+  release_id: "r", name: "p", source_page: "https://example.test", support_level: "publisher_zip", actions: actions(),
+  compatibility: "verified_metadata", blockers: [], detection: { status: "absent", files: [] }, ...fields,
 });
 
-test("auto install requires backend approval and no blockers", () => {
-  assert.equal(canAutoInstall(patch("managed_zip")), false);
-  assert.equal(canAutoInstall({ ...patch("managed_zip"), auto_installable: true }), true);
-  assert.equal(canAutoInstall({ ...patch("managed_zip", ["platform_not_verified"]), auto_installable: true }), false);
-  assert.equal(canAutoInstall({ ...patch("publisher_exe"), auto_installable: true, source_id: "hgamer" }), false);
-});
-
-test("summary prefers installed and available over source guidance", () => {
+test("install summary consumes required backend actions", () => {
   const row = (patches: Patch[]) => ({ game: { instance_id: "g", appid: 1, name: "g", library_path: "", install_path: "", buildid: "1", availability: "installed", kind: "steam" }, match_status: "matched", patches });
-  const guidance = patch("discover_only");
-  const available = { ...patch("publisher_exe"), auto_installable: true };
+  const guidance = patch({ support_level: "discover_only" });
+  const available = patch({ actions: actions({ automatic: availability(true), primary: { operation: "overwrite", label: "install", input: "automatic" } }) });
   assert.equal(installSummary(row([guidance])), "找到补丁来源");
   assert.equal(installSummary(row([guidance, available])), "有可用补丁");
-  assert.equal(installSummary(row([{ ...available, compatibility: "check_required" }])), "有可用补丁");
-  assert.equal(installSummary(row([{ ...available, compatibility: "check_required", source_id: "hgamer" }])), "找到补丁来源");
-  assert.equal(installSummary(row([{ ...available, compatibility: "check_required", blockers: ["build_not_verified"] }])), "找到补丁来源");
   assert.equal(installSummary(row([{ ...available, detection: { status: "managed", files: [] } }])), "已安装补丁");
-  assert.equal(installSummary(row([{ ...available, reinstall_available: true, detection: { status: "partial", files: [] } }])), "补丁文件不完整，可覆盖安装");
-  assert.equal(installSummary(row([]), true), "正在查找补丁");
-  assert.equal(installSummary({ ...row([]), discovery: { status: "source_refresh_failed", candidates: [], diagnostics: [] } }), "来源查询失败");
-  assert.equal(installSummary({ ...row([]), discovery: { status: "cache_partial", candidates: [], diagnostics: [] } }), "来源查询不完整");
+  assert.equal(installSummary(row([{ ...available, actions: actions({ overwrite: availability(true) }), detection: { status: "partial_or_conflict", files: [] } }])), "补丁文件不完整，可覆盖安装");
 });
 
+test("automatic primary input is enabled only by automatic action and wins over archive", () => {
+  const value = patch({ actions: actions({
+    automatic: availability(true), local_archive: availability(true),
+    primary: { operation: "overwrite", label: "install", input: "automatic" },
+  }) });
+  assert.deepEqual(primaryInstallAction(value, false), { operation: "overwrite", label: "install", input: "automatic", enabled: true });
+  assert.equal(installInput(value), "");
+  assert.equal(installInput(value, "C:/Downloads/patch.zip"), "C:/Downloads/patch.zip");
+});
+
+test("archive primary requires a selected path while automatic may be blocked", () => {
+  const value = patch({ actions: actions({
+    automatic: availability(false, [{ code: "artifact_requires_manual_download" }]), local_archive: availability(true),
+    primary: { operation: "overwrite", label: "install", input: "local_archive" },
+  }) });
+  assert.equal(primaryInstallAction(value, false).enabled, false);
+  assert.equal(primaryInstallAction(value, true).enabled, true);
+  assert.equal(installInput(value), null);
+  assert.equal(installInput(value, "C:/Downloads/local.zip"), "C:/Downloads/local.zip");
+  assert.equal(installInput(value, "  "), null);
+});
+
+test("unavailable external overwrite keeps its label but remains disabled", () => {
+  const value = patch({ detection: { status: "external", files: [] }, actions: actions({
+    overwrite: availability(true), primary: { operation: "overwrite", label: "overwrite", input: "unavailable" },
+  }) });
+  assert.deepEqual(primaryInstallAction(value, true), { operation: "overwrite", label: "overwrite", input: "unavailable", enabled: false });
+  assert.equal(installInput(value), null);
+  assert.equal(installInput(null), null);
+});
+
+test("blocker display follows the selected path and omits unrelated reinstall advice", () => {
+  const value = patch({ actions: actions({
+    automatic: availability(true), local_archive: availability(false, [{ code: "local_archive_signed_only" }]),
+    reinstall: availability(false, [{ code: "reinstall_unowned_or_incomplete" }]),
+    overwrite: availability(false, [{ code: "needs_recovery" }]),
+    primary: { operation: "overwrite", label: "install", input: "automatic" },
+  }) });
+  assert.deepEqual(primaryActionBlockers(value), []);
+  const unavailable = { ...value, actions: { ...value.actions, primary: { operation: "overwrite" as const, label: "overwrite" as const, input: "unavailable" as const } } };
+  assert.deepEqual(primaryActionBlockers(unavailable), [{ code: "needs_recovery" }]);
+});
 test("installation RPC result follows transaction state and error", () => {
   const tx = (state: string, error: string | null = null) => ({ state, error } as Transaction);
   assert.match(transactionResult(tx("committed")), /安装完成/);
   assert.match(transactionResult(tx("rolled_back", "file_changed")), /已回滚.*游戏文件已变化/);
   assert.match(transactionResult(tx("needs_recovery")), /需要运行修复/);
   assert.doesNotMatch(transactionResult(tx("applying")), /安装完成/);
-});
-
-
-test("Decky install buttons follow platform ZIP and EXE link probes", () => {
-  const links = { zip: { available: true }, exe: { available: false, blockers: [{ code: "exe_sandbox_unavailable" }] } };
-  const signed = { ...patch("managed_zip"), download_available: true };
-  const zip = { ...patch("publisher_zip"), selection_id: "zip-selection-1", download_available: true };
-  const exe = { ...patch("publisher_exe"), selection_id: "exe-selection-1", download_available: true };
-  assert.equal(patchInstallable(signed, links, true), true);
-  assert.equal(patchInstallable(signed, { ...links, zip: { available: false } }, true), false);
-  assert.equal(patchInstallable(zip, links), true);
-  assert.equal(patchInstallable(exe, links), false);
-  assert.equal(patchInstallable(exe, { ...links, exe: { available: true } }), true);
-  assert.equal(patchInstallable({ ...exe, selection_id: null }, { ...links, exe: { available: true } }), false);
 });

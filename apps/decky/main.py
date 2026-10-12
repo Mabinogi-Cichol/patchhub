@@ -250,6 +250,7 @@ class Plugin:
             raise ValueError("archive_not_allowed_for_selection")
         local = self._local_archive(archive) if archive is not None else None
         request_id = request_id or str(uuid.uuid4())
+        cleanup_policy = "after_commit" if self.settings.auto_cleanup else "disabled"
 
         async def work(task):
             session = getattr(self, "_scan_session", None)
@@ -257,15 +258,9 @@ class Plugin:
                 await session.close()
             task.check()
             result = await self.bridge.install_patch(instance_id, release_id, selection_id,
-                local, operation, request_id)
-            if result.get("state") == "committed" and self.settings.auto_cleanup:
-                try:
-                    cleanup = await self.bridge.cleanup_cache()
-                    self._cache_result = cleanup
-                    result["cleanup"] = cleanup
-                except Exception as error:
-                    result["cleanup"] = {"performed": False, "code": str(error),
-                                         "detail": getattr(error, "detail", None)}
+                local, operation, request_id, cleanup_policy)
+            if isinstance(result.get("cleanup"), dict):
+                self._cache_result = result["cleanup"]
             return result
 
         return self.tasks.start("install", work, instance_id=instance_id, release_id=release_id,

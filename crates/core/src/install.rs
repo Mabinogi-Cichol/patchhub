@@ -840,6 +840,12 @@ fn ensure_no_active(
         let job = store.load(&id)?;
         if Some(id.as_str()) != except
             && job.plan.instance_id == instance
+            && job.transaction.state == "needs_recovery"
+        {
+            return Err(invalid("needs_recovery"));
+        }
+        if Some(id.as_str()) != except
+            && job.plan.instance_id == instance
             && !["planned", "rolled_back", "uninstalled", "superseded"]
                 .contains(&job.transaction.state.as_str())
             && !(reinstall && job.transaction.state == "committed" && !job.uninstall_requested)
@@ -1034,6 +1040,7 @@ pub(crate) fn prepare_for_request_at(
                 || previous.plan.install.appid != install.appid
                 || previous.plan.install.buildid != install.buildid
                 || previous.plan.install.install_path != install.install_path
+                || previous.plan.install.library_path != install.library_path
                 || !same_targets
                 || previous
                     .plan
@@ -1046,12 +1053,13 @@ pub(crate) fn prepare_for_request_at(
             owned = true;
         }
         if !owned {
-            for mapping in &recipe.files {
-                if hash_at(&target(&install.install_path, &mapping.destination)?)?.as_deref()
-                    != Some(mapping.installed_sha256.as_str())
-                {
-                    return Err(invalid("reinstall_unowned_or_incomplete"));
-                }
+            return Err(invalid("reinstall_unowned_or_incomplete"));
+        }
+        for mapping in &recipe.files {
+            if hash_at(&target(&install.install_path, &mapping.destination)?)?.as_deref()
+                != Some(mapping.installed_sha256.as_str())
+            {
+                return Err(invalid("reinstall_unowned_or_incomplete"));
             }
         }
     }
@@ -1531,14 +1539,21 @@ pub(crate) fn apply_at(root: &Path, plan_id: &str) -> io::Result<Transaction> {
         return Err(invalid("plan_has_blockers"));
     }
     if job.plan.operation == InstallOperation::Reinstall {
+        let mut owned = false;
         for id in store.ids()? {
             let previous = store.load(&id)?;
-            if previous.plan.instance_id == job.plan.instance_id
-                && previous.transaction.state == "committed"
-                && (previous.plan.release_id != job.plan.release_id
+            if previous.plan.instance_id != job.plan.instance_id
+                || previous.transaction.state != "committed"
+            {
+                continue;
+            }
+            owned = true;
+            if previous.uninstall_requested
+                || (previous.plan.release_id != job.plan.release_id
                     || previous.plan.install.appid != job.plan.install.appid
                     || previous.plan.install.buildid != job.plan.install.buildid
                     || previous.plan.install.install_path != job.plan.install.install_path
+                    || previous.plan.install.library_path != job.plan.install.library_path
                     || previous.plan.changes.len() != job.plan.changes.len()
                     || previous
                         .plan
@@ -1555,6 +1570,16 @@ pub(crate) fn apply_at(root: &Path, plan_id: &str) -> io::Result<Transaction> {
                         .is_some_and(|identity| Some(identity) != job.plan.recipe_sha256.as_ref()))
             {
                 return Err(invalid("reinstall_content_identity_changed"));
+            }
+        }
+        if !owned {
+            return Err(invalid("reinstall_unowned_or_incomplete"));
+        }
+        for change in &job.plan.changes {
+            if hash_at(&target(&job.plan.install.install_path, &change.path)?)?.as_deref()
+                != Some(change.installed_sha256.as_str())
+            {
+                return Err(invalid("reinstall_unowned_or_incomplete"));
             }
         }
     }

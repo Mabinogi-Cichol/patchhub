@@ -107,7 +107,7 @@ pub struct PatchMatch {
     pub name: String,
     pub source_page: String,
     pub support_level: SupportLevel,
-    pub download_available: bool,
+    pub actions: crate::actions::PatchActions,
     pub compatibility: String,
     pub blockers: Vec<String>,
     pub detection: Detection,
@@ -408,7 +408,22 @@ pub fn matches_with_diagnostics(
                 name: r.name.clone(),
                 source_page: r.source_page.clone(),
                 support_level: r.support_level,
-                download_available: r.artifact.is_some(),
+                // A bare Catalog is unsigned. Full projection supplies trust,
+                // capabilities and receipt facts before exposing write actions.
+                actions: crate::actions::PatchActions::evaluate(
+                    vec![crate::actions::ActionBlocker::code(
+                        crate::actions::ActionBlockerCode::UnsignedCatalog,
+                    )],
+                    vec![crate::actions::ActionBlocker::code(
+                        crate::actions::ActionBlockerCode::UnsignedCatalog,
+                    )],
+                    Some(crate::actions::ActionBlockerCode::ReinstallUnownedOrIncomplete),
+                    matches!(
+                        detection.status.as_str(),
+                        "installed_external" | "partial_or_conflict"
+                    ),
+                    false,
+                ),
                 compatibility: if blockers.is_empty() {
                     "verified_metadata"
                 } else {

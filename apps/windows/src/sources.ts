@@ -1,14 +1,12 @@
 import {
   candidateMatched,
   installSummary,
-  canAutoInstall,
   isExternal,
   isManaged,
   reason,
   type GameDiscovery,
   type GameSourceSubscription,
   type Install,
-  type InstallerLinks,
   type SourceCandidate,
   type SourceSubscription,
 } from "@steam-patch/ui";
@@ -24,9 +22,36 @@ import {
 
 export type Tone = "ok" | "warn" | "fail" | "busy" | "idle";
 
+export function primaryInstallAction(patch: Install["patches"][number], archiveSelected: boolean, route: "primary" | "local_archive" = "primary") {
+  const primary = patch.actions.primary;
+  const input = route === "local_archive" ? "local_archive" : primary.input;
+  const available = input === "automatic"
+    ? patch.actions.automatic.available
+    : input === "local_archive"
+      ? patch.actions.local_archive.available && archiveSelected
+      : false;
+  return { operation: primary.operation, label: primary.label, input, available };
+}
+
+export function actionBlockers(patch: Install["patches"][number]) {
+  const input = patch.actions.primary.input;
+  const selected = input === "automatic"
+    ? [patch.actions.automatic]
+    : input === "local_archive"
+      ? [patch.actions.automatic, patch.actions.local_archive]
+      : [patch.actions.overwrite];
+  const seen = new Set<string>();
+  return selected.flatMap(action => action.blockers).filter(blocker => {
+    const key = `${blocker.code}\0${blocker.detail ?? ""}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 // ---- host command results -------------------------------------------------
 
-/** v3 `get_capabilities` shape (§3.1). Installability uses `installer.links`, never `formats`. */
+/** v3 `get_capabilities` shape used to check host source-scan support. */
 export type Capabilities = {
   protocol_version?: number;
   installer?: {
@@ -38,7 +63,6 @@ export type Capabilities = {
     report_schema_version?: number;
     formats?: Record<string, string>;
     strategies?: string[];
-    links?: InstallerLinks;
   };
   sources?: {
     discovery_schema_version?: number;
@@ -170,7 +194,7 @@ export function patchChip(row: Install, scanning: boolean): { tone: Tone; label:
   if (row.patches.some(patch => ["partial", "conflict", "partial_or_conflict", "needs_revalidation"].includes(patch.detection.status))) {
     return { tone: "warn", label: "补丁需检查" };
   }
-  if (row.patches.some(canAutoInstall)) return { tone: "ok", label: "有可用补丁" };
+  if (row.patches.some(patch => patch.actions.automatic.available)) return { tone: "ok", label: "有可用补丁" };
   if (row.patches.length || row.discovery?.candidates.some(candidateMatched)) {
     return { tone: "warn", label: "补丁待核对" };
   }

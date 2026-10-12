@@ -10,6 +10,8 @@
 
 pub mod acquire;
 pub mod authorization;
+pub mod cache;
+mod cache_lock;
 pub mod exe_orchestrator;
 pub mod exe_report;
 pub mod exe_resolve;
@@ -70,4 +72,24 @@ pub fn host_identity_blocker() -> Option<&'static str> {
         return Some("installer_host_requires_non_root");
     }
     None
+}
+
+/// Execution metadata is transient: a committed replay never repeats cache cleanup.
+pub(crate) struct InstallExecution {
+    pub transaction: crate::install::Transaction,
+    pub replayed: bool,
+}
+impl InstallExecution {
+    fn fresh(transaction: crate::install::Transaction) -> Self {
+        Self {
+            transaction,
+            replayed: false,
+        }
+    }
+    fn replay(transaction: crate::install::Transaction) -> Self {
+        Self {
+            transaction,
+            replayed: true,
+        }
+    }
 }

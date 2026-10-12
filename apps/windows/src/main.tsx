@@ -2,8 +2,10 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { canAutoInstall, candidateMatched, displayPatches, filterInstalls, gameDisplayName, isExternal, isManaged, patchInstallable, patchState, reason, splitError, workflowState, type DiscoveryResult, type Filter, type GameSourceSubscription, type Install, type InstallerLinks, type Preview, type ScanResult, type SourceCandidate, type Transaction } from "@steam-patch/ui";
+import { candidateMatched, displayPatches, filterInstalls, gameDisplayName, isExternal, isManaged, patchState, reason, splitError, workflowState, type DiscoveryResult, type Filter, type GameSourceSubscription, type Install, type Preview, type ScanResult, type SourceCandidate, type Transaction } from "@steam-patch/ui";
 import {
+  actionBlockers,
+  primaryInstallAction,
   candidateConditions,
   candidateFormat,
   candidateLanguage,
@@ -61,38 +63,6 @@ function describeError(value: unknown): string {
   const { code, detail } = splitError(String(value));
   const base = reason(code);
   return detail ? `${base}（${detail}）` : base;
-}
-
-const installedStatuses = ["managed", "installed_managed", "installed_owned", "external", "installed_external"];
-
-function projectScan(value: ScanResult, transactions: Transaction[], links: InstallerLinks | null): ScanResult {
-  const signed = value.catalog_trust === "signed";
-  // A committed transaction is keyed by release for signed/dynamic ZIP, by
-  // selection for dynamic EXE (whose release_id carries the content id).
-  const committedKeys = (instance: string) => new Set(
-    transactions
-      .filter(tx => tx.instance_id === instance && tx.state === "committed")
-      .flatMap(tx => [tx.release_id, tx.selection_id, tx.content_id])
-      .filter((key): key is string => !!key),
-  );
-  return {
-    ...value,
-    installs: value.installs.map(row => {
-      const committed = committedKeys(row.game.instance_id);
-      return {
-        ...row,
-        patches: row.patches.map(patch => {
-          const auto = patchInstallable(patch, links, signed);
-          const wasInstalled = committed.has(patch.release_id) || (!!patch.selection_id && committed.has(patch.selection_id));
-          return {
-            ...patch,
-            auto_installable: auto,
-            reinstall_available: auto && (wasInstalled || installedStatuses.includes(patch.detection.status)),
-          };
-        }),
-      };
-    }),
-  };
 }
 
 function transactionResult(tx: Transaction): string {
@@ -186,7 +156,6 @@ function App() {
   const settling = scanBusy || sourceScan.running;
   const unqueried = useMemo(() => unqueriedCount(scan?.installs ?? []), [scan]);
   const settingsRevision = sourceScan.settingsRevision ?? scan?.settings_revision ?? null;
-  const links = capabilities?.installer?.links ?? null;
 
   useEffect(() => { scanRef.current = scan; }, [scan]);
   useEffect(() => { selectedRef.current = selected; }, [selected]);
@@ -351,14 +320,13 @@ function App() {
 
   async function refresh() {
     const caps = await loadCapabilities();
-    const capLinks = caps?.installer?.links ?? null;
     let nextScan: ScanResult | null = null;
     await run("正在扫描 Steam 库…", async () => {
       // Both core calls open the same journal; finish one before starting the other.
       const value = await call<ScanResult>("scan");
       const rawTransactions = await call<Transaction[] | { transactions: Transaction[] }>("list_transactions");
       const nextTransactions = Array.isArray(rawTransactions) ? rawTransactions : rawTransactions.transactions ?? [];
-      return { nextScan: projectScan(value, nextTransactions, capLinks), nextTransactions };
+      return { nextScan: value, nextTransactions };
     }, ({ nextScan: value, nextTransactions }) => {
       nextScan = value;
       scanRef.current = value;
@@ -468,13 +436,35 @@ function App() {
     const args = patch.selection_id ? { instanceId: selected, selectionId: patch.selection_id } : { instanceId: selected, releaseId: patch.release_id };
     void run("正在检查文件变更…", () => call<Preview>("preview", args), setPreview);
   }
-  function chooseArchive() {
-    void run("正在选择 ZIP 文件…", () => invoke<string | null>("choose_archive"), value => setArchive(value));
+  function selectedInstallPatch() {
+    const row = scanRef.current?.installs.find(item => item.game.instance_id === selected);
+    const selectedEntry = row && displayPatches(row, preferredLanguage).find(item => item.key === selectedKey);
+    return selectedEntry?.kind === "installable" ? selectedEntry.patch : null;
   }
-  async function startInstall(operation: "install" | "reinstall" | "overwrite", wasInstalled: boolean) {
+  function chooseArchive() {
+    const latest = selectedInstallPatch();
+    if (!latest?.actions.local_archive.available) return;
+    const instanceId = selected;
+    const identity = latest.selection_id ?? latest.release_id;
+    void run("正在选择 ZIP 文件…", async () => {
+      const current = selectedInstallPatch();
+      if (selected !== instanceId || !current || (current.selection_id ?? current.release_id) !== identity || !current.actions.local_archive.available) return null;
+      return invoke<string | null>("choose_archive");
+    }, value => {
+      const current = selectedInstallPatch();
+      if (selected === instanceId && current && (current.selection_id ?? current.release_id) === identity && current.actions.local_archive.available) setArchive(value);
+    });
+  }
+  async function startInstall(route: "primary" | "local_archive" = "primary") {
     if (!selected || !patch || installing || busy) return;
-    const selectedArchive = archive ?? "";
-    const identity = patch.selection_id ?? patch.release_id;
+    const latest = selectedInstallPatch();
+    if (!latest || (latest.selection_id ?? latest.release_id) !== (patch.selection_id ?? patch.release_id)) return;
+    const action = primaryInstallAction(latest, !!archive, route);
+    if (!action.available) return;
+    const selectedArchive = action.input === "local_archive" ? archive ?? "" : "";
+    const operation = action.operation;
+    const wasInstalled = action.label === "overwrite";
+    const identity = latest.selection_id ?? latest.release_id;
     const key = `${selected}|${identity}|${operation}|${selectedArchive}`;
     const requestId = requestIds.current.get(key) ?? crypto.randomUUID();
     requestIds.current.set(key, requestId);
@@ -482,12 +472,10 @@ function App() {
     try {
       const tx = await invoke<Transaction>("start_install", {
         instanceId: selected,
-        // Dynamic routes install by selection; only signed releases use releaseId.
-        ...(patch.selection_id ? { selectionId: patch.selection_id } : { releaseId: patch.release_id }),
+        ...(latest.selection_id ? { selectionId: latest.selection_id } : { releaseId: latest.release_id }),
         operation,
         requestId,
-        // `archive` only applies to the signature release route.
-        archive: patch.support_level === "managed_zip" ? archive ?? undefined : undefined,
+        archive: action.input === "local_archive" ? archive ?? undefined : undefined,
       });
       const message = tx.state === "committed"
         ? (wasInstalled ? "覆盖安装完成" : "安装完成")
@@ -550,16 +538,11 @@ function App() {
         {entry?.kind === "installable" && (() => {
           const current = entry.patch;
           const dynamic = current.support_level === "publisher_zip" || current.support_level === "publisher_exe";
-          const installRoute = ["managed_zip", "publisher_zip", "publisher_exe"].includes(current.support_level);
-          const installed = current.reinstall_available === true || isManaged(current.detection.status) || isExternal(current.detection.status);
-          const operation = "overwrite";
-          const auto = canAutoInstall(current);
-          const allowed = auto || (!!archive && current.support_level === "managed_zip");
-          const link = current.support_level === "publisher_exe" ? links?.exe : current.support_level === "publisher_zip" ? links?.zip : null;
-          const linkBlockers = (link && link.available === false ? link.blockers ?? [] : []).filter(b => !current.blockers.includes(b.code));
+          const primaryAction = primaryInstallAction(current, !!archive);
+          const blockers = actionBlockers(current);
           return <>
-            <section className="card"><h3>{current.name}</h3><div className="facts"><div><label>检测状态</label><strong>{patchState(current.detection.status)}</strong></div><div><label>来源能力</label><strong>{workflowState(current.support_level)}</strong></div><div><label>兼容性</label><strong>{workflowState(current.compatibility)}</strong></div><div><label>游戏版本</label><strong>{game.game.buildid ?? "未知，需审核"}</strong></div></div><p>补丁标识：{current.selection_id ?? current.release_id}</p><button onClick={() => openUrl(current.source_page)}>在外部浏览器打开官方来源 ↗</button>{current.support_level === "publisher_exe" && <p className="hint">安装时自动检查条件；下载后会先分析安装包，条件不满足不会写入文件。</p>}{current.support_level === "publisher_zip" && !auto && current.blockers.length === 0 && <p className="hint">此动态 ZIP 补丁的下载链路当前不可用，安装前请先解决下方问题。</p>}{current.blockers.map((b, i) => <p className="warning" key={i}>{reason(b)}</p>)}{linkBlockers.map((b, i) => <p className="warning" key={`link-${i}`}>{reason(b.code)}{b.detail ? ` · ${b.detail}` : ""}</p>)}{isExternal(current.detection.status) && <p className="warning">检测到外部安装；没有本工具的原版备份，不能由此卸载。</p>}{dynamic && auto && <p className="hint">可自动安装；点击安装后会从来源下载并核对内容后写入。</p>}</section>
-            {installRoute && <section className="card"><h3>安装与预览</h3><p>{current.support_level === "managed_zip" ? "安装将直接提交审核 ZIP 的文件变更；查看文件变更仅供只读核对。" : "安装会从来源下载并检查补丁，核对通过后写入游戏文件；查看文件变更仅供只读核对。"}</p><div className="actions"><button onClick={viewPreview} disabled={!!busy}>查看文件变更（只读）</button>{!auto && current.support_level === "managed_zip" && <button onClick={chooseArchive} disabled={!!busy}>导入本地 ZIP</button>}{allowed && <button className="primary" onClick={() => void startInstall(operation, installed)} disabled={!!busy || installing}>{installed ? "覆盖安装补丁" : "安装补丁"}</button>}</div>{archive && <p className="path">已选择：{archive}</p>}{preview && <ChangeList title="只读文件变更" value={preview} />}</section>}
+            <section className="card"><h3>{current.name}</h3><div className="facts"><div><label>检测状态</label><strong>{patchState(current.detection.status)}</strong></div><div><label>来源能力</label><strong>{workflowState(current.support_level)}</strong></div><div><label>兼容性</label><strong>{workflowState(current.compatibility)}</strong></div><div><label>游戏版本</label><strong>{game.game.buildid ?? "未知，需审核"}</strong></div></div><p>补丁标识：{current.selection_id ?? current.release_id}</p><button onClick={() => openUrl(current.source_page)}>在外部浏览器打开官方来源 ↗</button>{current.support_level === "publisher_exe" && <p className="hint">安装时自动检查条件；下载后会先分析安装包，条件不满足不会写入文件。</p>}{blockers.map((b, i) => <p className="warning" key={i}>{reason(b.code)}{b.detail ? ` · ${b.detail}` : ""}</p>)}{isExternal(current.detection.status) && <p className="warning">检测到外部安装；没有本工具的原版备份，不能由此卸载。</p>}{dynamic && current.actions.automatic.available && <p className="hint">可自动安装；点击安装后会从来源下载并核对内容后写入。</p>}</section>
+            <section className="card"><h3>安装与预览</h3><p>{primaryAction.input === "local_archive" ? "此操作需要导入本地 ZIP；查看文件变更仅供只读核对。" : "安装会按核心提供的主要操作路线核对补丁后写入游戏文件；查看文件变更仅供只读核对。"}</p><div className="actions"><button onClick={viewPreview} disabled={!!busy}>查看文件变更（只读）</button>{current.actions.local_archive.available && <button onClick={chooseArchive} disabled={!!busy}>导入本地 ZIP</button>}{archive && current.actions.local_archive.available && <button onClick={() => void startInstall("local_archive")} disabled={!!busy || installing || !primaryInstallAction(current, true, "local_archive").available}>使用本地 ZIP 安装</button>}<button className="primary" onClick={() => void startInstall()} disabled={!!busy || installing || !primaryAction.available}>{primaryAction.label === "overwrite" ? "覆盖安装补丁" : "安装补丁"}</button></div>{archive && <p className="path">已选择：{archive}</p>}{preview && <ChangeList title="只读文件变更" value={preview} />}</section>
           </>;
         })()}
         {entry?.kind === "discovery" && <CandidateCard candidate={entry.candidate} onOpen={openUrl} />}

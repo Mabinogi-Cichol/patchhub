@@ -12,7 +12,7 @@ test("verified discovery enters matched filter while title clues do not; unknown
   assert.deepEqual(filterInstalls([verified, clue], "matched", ""), [verified]);
   assert.equal(candidateMatched(clue.discovery!.candidates[0]), false);
   assert.equal(needsAttention(verified), false);
-  verified.patches = [{ release_id: "old-guidance", name: "Old", source_page: "https://example.com", support_level: "discover_only", compatibility: "unknown", blockers: [], detection: { status: "unknown", files: [] } }];
+  verified.patches = [{ release_id: "old-guidance", name: "Old", source_page: "https://example.com", support_level: "discover_only", actions: { automatic: { available: false, blockers: [] }, local_archive: { available: false, blockers: [] }, reinstall: { available: false, blockers: [] }, overwrite: { available: false, blockers: [] }, primary: { operation: "overwrite", label: "install", input: "unavailable" } }, compatibility: "unknown", blockers: [], detection: { status: "unknown", files: [] } }];
   assert.equal(needsAttention(verified), false);
   verified.patches[0].detection.status = "conflict";
   assert.equal(needsAttention(verified), true);
@@ -20,7 +20,7 @@ test("verified discovery enters matched filter while title clues do not; unknown
 
 test("display union keeps candidate identities out of installation IDs and orders official candidates first", () => {
   const game = row([candidate({ candidate_id: "index", source_id: "hgamer" }), candidate({ candidate_id: "official" })]);
-  game.patches = [{ release_id: "source-patchmoe-1227890", name: "Installable", source_page: "https://example.com", support_level: "publisher_zip", compatibility: "unknown", blockers: [], detection: { status: "absent", files: [] } }];
+  game.patches = [{ release_id: "source-patchmoe-1227890", name: "Installable", source_page: "https://example.com", support_level: "publisher_zip", actions: { automatic: { available: false, blockers: [] }, local_archive: { available: false, blockers: [] }, reinstall: { available: false, blockers: [] }, overwrite: { available: false, blockers: [] }, primary: { operation: "overwrite", label: "install", input: "unavailable" } }, compatibility: "unknown", blockers: [], detection: { status: "absent", files: [] } }];
   const entries = displayPatches(game);
   assert.deepEqual(entries.map(entry => [entry.kind, entry.key]), [["installable", "source-patchmoe-1227890"], ["discovery", "official"], ["discovery", "index"]]);
   assert.equal("patch" in entries[1], false);
@@ -42,7 +42,7 @@ test("cold cache games remain countable and DLC conditions stay explicit", () =>
 test("an automatic EXE entry replaces its own duplicate source guidance", () => {
   const game = row([candidate({ candidate_id: "official" }), candidate({ candidate_id: "other", source_id: "hgamer" })]);
   game.patches = [{ release_id: "exe-selection-example", candidate_id: "official", name: "Installable", source_page: "https://example.com",
-    support_level: "publisher_exe", compatibility: "check_required", blockers: [], detection: { status: "unknown", files: [] } }];
+    support_level: "publisher_exe", actions: { automatic: { available: false, blockers: [] }, local_archive: { available: false, blockers: [] }, reinstall: { available: false, blockers: [] }, overwrite: { available: false, blockers: [] }, primary: { operation: "overwrite", label: "install", input: "unavailable" } }, compatibility: "check_required", blockers: [], detection: { status: "unknown", files: [] } }];
   assert.deepEqual(displayPatches(game).map(entry => [entry.kind, entry.key]), [["installable", "exe-selection-example"], ["discovery", "other"]]);
 });
 
@@ -67,7 +67,7 @@ test("dynamic variants with one display release retain distinct selections", () 
   const game = row();
   game.patches = ["zip-selection-a", "zip-selection-b"].map(selection_id => ({
     release_id: "publisher-7", selection_id, name: "ZIP", source_page: "https://example.test/",
-    support_level: "publisher_zip", compatibility: "unknown", blockers: [], detection: { status: "unknown", files: [] }
+    support_level: "publisher_zip", actions: { automatic: { available: false, blockers: [] }, local_archive: { available: false, blockers: [] }, reinstall: { available: false, blockers: [] }, overwrite: { available: false, blockers: [] }, primary: { operation: "overwrite", label: "install", input: "unavailable" } }, compatibility: "unknown", blockers: [], detection: { status: "unknown", files: [] }
   }));
   assert.deepEqual(displayPatches(game).filter(item => item.kind === "installable").map(item => item.key), ["zip-selection-a", "zip-selection-b"]);
 });

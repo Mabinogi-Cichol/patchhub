@@ -95,15 +95,19 @@ class CoreBridge:
         return await self._call("preview", self.selection(instance_id, release_id, selection_id))
 
     async def install_patch(self, instance_id, release_id=None, selection_id=None,
-                            archive=None, operation="install", request_id=None):
+                            archive=None, operation="install", request_id=None,
+                            cleanup_policy="disabled"):
         params = self.selection(instance_id, release_id, selection_id)
         if operation not in ("install", "reinstall", "overwrite"):
             raise ValueError("invalid_operation")
+        if cleanup_policy not in ("disabled", "after_commit"):
+            raise ValueError("invalid_cleanup_policy")
         if archive is not None:
             if selection_id is not None:
                 raise ValueError("archive_not_allowed_for_selection")
             params["archive"] = str(archive)
-        params.update(operation=operation, request_id=request_id or str(uuid.uuid4()))
+        params.update(operation=operation, request_id=request_id or str(uuid.uuid4()),
+                      cleanup_policy=cleanup_policy)
         return await self._call("install_patch", params)
 
     async def discard_plan(self, plan_id):
@@ -207,7 +211,14 @@ class CoreBridge:
                 process.stdin.close()
             response = None
             last_sequence = -1
-            while line := await process.stdout.readline():
+            while True:
+                try:
+                    line = await process.stdout.readline()
+                except (ValueError, asyncio.LimitOverrunError) as exc:
+                    # StreamReader rejects a long line before our byte check.
+                    raise RuntimeError("response_too_large") from exc
+                if not line:
+                    break
                 if len(line) > MAX_RESPONSE_BYTES:
                     raise RuntimeError("response_too_large")
                 row = json.loads(line)

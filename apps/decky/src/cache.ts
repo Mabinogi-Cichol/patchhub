@@ -1,4 +1,10 @@
-export type CacheStatus = { performed: boolean; removed_bytes: number };
+export type CleanupResult = {
+  status: "not_requested" | "completed" | "partial" | "failed" | "busy";
+  performed: boolean;
+  removed_bytes: number;
+  failures?: { code: string; detail?: string | null }[];
+};
+export type CacheStatus = CleanupResult;
 export type Settings = { schema_version: number; auto_cleanup: boolean; cache: CacheStatus | null };
 
 // One binary-unit formatter shared by progress and cache rows.
@@ -14,8 +20,17 @@ export function cacheSummary() {
   return "当前版本不提供占用统计";
 }
 
-export function cacheClearNote(removed: number, performed = true) {
-  return performed ? `已清理 ${formatSize(removed)} 下载缓存。` : "当前没有可清理的下载缓存。";
+export function cacheClearNote(result: CleanupResult) {
+  const removed = formatSize(result.removed_bytes);
+  const failures = result.failures?.map(failure => failure.detail || failure.code).filter(Boolean) ?? [];
+  const retry = failures.length ? `失败原因：${failures.join("；")}。可重试清理。` : "可重试清理。";
+  switch (result.status) {
+    case "completed": return result.performed ? `已清理 ${removed} 下载缓存。` : "当前没有可清理的下载缓存。";
+    case "partial": return `已清理 ${removed} 下载缓存，但部分清理失败。${retry}`;
+    case "failed": return `清理失败，已清理 ${removed}。${retry}`;
+    case "busy": return "缓存当前正被安装或恢复任务使用，请稍后重试。";
+    case "not_requested": return "本次未执行缓存清理。";
+  }
 }
 
 export function autoCleanupNote(enabled: boolean) {

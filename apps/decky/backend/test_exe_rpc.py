@@ -37,7 +37,7 @@ class ExeRpcTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["transaction_id"], "core-id")
         self.assertEqual(result["selection_id"], self.selection)
         self.assertEqual(result["content_id"], "exe-content-actual")
-        self.plugin.bridge.install_patch.assert_awaited_once_with("instance", None, self.selection, None, "reinstall", "request")
+        self.plugin.bridge.install_patch.assert_awaited_once_with("instance", None, self.selection, None, "reinstall", "request", "disabled")
 
     async def test_history_and_recovery_have_one_core_state_root(self):
         self.assertEqual((await self.plugin.list_transactions())[0]["state"], "needs_recovery")

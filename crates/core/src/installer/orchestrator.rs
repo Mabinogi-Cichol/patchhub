@@ -360,6 +360,7 @@ pub(crate) fn map_plan_error(error: io::Error) -> ZipTaskError {
         "installer_busy",
         "game_busy",
         "managed_install_exists_or_needs_recovery",
+        "needs_recovery",
         "reinstall_content_identity_changed",
         "reinstall_unowned_or_incomplete",
         "plan_expired",
@@ -547,7 +548,7 @@ fn boundary(deps: &ZipInstallDeps<'_>) -> ZipTaskResult<()> {
     if !(deps.lease_active)(now_unix()) {
         return Err(ZipTaskError::code("installer_lease_expired"));
     }
-    operation::check().map_err(|_| ZipTaskError::code("cancelled"))
+    operation::check().map_err(map_plan_error)
 }
 
 /// Persists the current foreground-lease deadline at
@@ -570,10 +571,18 @@ fn write_lease(deps: &ZipInstallDeps<'_>, plan_id: &str) -> ZipTaskResult<()> {
 }
 
 /// Orchestrates one dynamic publisher ZIP install (p1-zip-orchestration §3.3).
+#[cfg(test)]
 pub(crate) fn install_zip(
     inputs: ZipInstallInputs<'_>,
     deps: ZipInstallDeps<'_>,
 ) -> ZipTaskResult<Transaction> {
+    execute_zip(inputs, deps).map(|run| run.transaction)
+}
+
+pub(crate) fn execute_zip(
+    inputs: ZipInstallInputs<'_>,
+    deps: ZipInstallDeps<'_>,
+) -> ZipTaskResult<super::InstallExecution> {
     if let Some(code) = super::host_identity_blocker() {
         return Err(ZipTaskError::code(code));
     }
@@ -613,7 +622,7 @@ fn install_zip_inner(
     deps: ZipInstallDeps<'_>,
     control: &super::task::TaskControl,
     requested: &AtomicBool,
-) -> ZipTaskResult<Transaction> {
+) -> ZipTaskResult<super::InstallExecution> {
     let binding = request_binding(
         &inputs.game.instance_id,
         Some(&inputs.selection.selection_id),
@@ -622,7 +631,7 @@ fn install_zip_inner(
         None,
     );
     if let Some(transaction) = begin_request(deps.paths, inputs.request_id, &binding)? {
-        return Ok(transaction);
+        return Ok(super::InstallExecution::replay(transaction));
     }
 
     control
@@ -869,6 +878,7 @@ fn install_zip_inner(
             )
         }
     }
+    .map(super::InstallExecution::fresh)
 }
 
 fn recheck_authorization(

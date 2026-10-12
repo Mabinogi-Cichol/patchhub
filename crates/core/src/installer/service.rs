@@ -1,6 +1,9 @@
 //! Validated public installation boundary. Recipes and game paths are never caller inputs.
 use super::{
-    outcome::{CancellationCause, InstallerOutcome},
+    outcome::{
+        CancellationCause, CleanupErrorCode, CleanupFailure, CleanupResult, CleanupStatus,
+        InstallerOutcome,
+    },
     signed, InstallerPaths, Transport, WorkerRuntime,
 };
 use crate::{
@@ -108,8 +111,20 @@ pub enum InstallTarget {
         selection_id: ExeSelectionId,
     },
 }
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(
+    Debug,
+    Default,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    serde::Serialize,
+    serde::Deserialize,
+    schemars::JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
 pub enum CleanupPolicy {
+    #[default]
     Disabled,
     AfterCommit,
 }
@@ -174,8 +189,11 @@ impl ValidatedHostContext {
             Ok(())
         }
     }
-    fn refresh(&self) -> Result<steam::ScanReport, DomainError> {
+    pub(crate) fn refresh(&self) -> Result<steam::ScanReport, DomainError> {
         self.ensure_write_identity()?;
+        self.refresh_ro()
+    }
+    pub(crate) fn refresh_ro(&self) -> Result<steam::ScanReport, DomainError> {
         let report = steam::scan(&self.roots);
         install::validate_projection_state(&self.state, &report.installs)?;
         install::validate_projection_state(self.paths.root(), &report.installs)?;
@@ -234,9 +252,6 @@ pub fn install(
     deps: InstallerDeps<'_>,
 ) -> Result<InstallerOutcome, DomainError> {
     let report = deps.host.refresh()?;
-    if request.cleanup_policy != CleanupPolicy::Disabled {
-        return Err(DomainError::code("cleanup_policy_unavailable"));
-    }
     let game = report
         .installs
         .iter()
@@ -267,12 +282,13 @@ pub fn install(
     let cancel = Arc::new(AtomicBool::new(false));
     let done = AtomicBool::new(false);
     let paths = &deps.host.paths;
+    let cache_guard = Arc::new(super::cache_lock::CacheLock::shared(deps.host)?);
     super::init_atomic(paths)?;
     (deps.emit)(operation::Progress {
         stage: "planning".into(),
         ..Default::default()
     });
-    let transaction = std::thread::scope(|scope| {
+    let execution = std::thread::scope(|scope| {
         let control = deps.control;
         let clock = deps.clock;
         let flag = cancel.clone();
@@ -300,97 +316,107 @@ pub fn install(
         let _finish = Finish(done);
         let lease = |now| deps.control.lease_active(now);
         let deadline = || deps.control.deadline_ms();
-        operation::with_cancel(cancel.clone(), || match &request.target {
-            InstallTarget::SignedRelease {
-                release_id,
-                archive,
-            } => signed::install_signed(
-                signed::SignedInstallInputs {
-                    game,
-                    release_id: release_id.as_str(),
-                    archive: archive.as_ref().map(LocalArchive::path),
-                    operation: request.operation,
-                    request_id: request.request_id.as_str(),
-                    now,
-                    ttl_seconds: install::PLAN_TTL_SECONDS,
+        let safety_guard = cache_guard.clone();
+        operation::with_cancel(cancel.clone(), || {
+            operation::with_safety(
+                move || {
+                    safety_guard
+                        .validate()
+                        .map_err(|error| std::io::Error::other(error.code))
                 },
-                signed::SignedInstallDeps {
-                    paths,
-                    provider: deps.catalog,
-                    revision_store: deps.revision_store,
-                    transport: deps.transport,
-                    cancel: &cancel,
-                    lease_active: &lease,
-                    lease_deadline_ms: &deadline,
-                    clock: &|| deps.clock.now_seconds(),
-                    cancel_reason: &reason,
-                    platform: deps.host.platform,
+                || match &request.target {
+                    InstallTarget::SignedRelease {
+                        release_id,
+                        archive,
+                    } => signed::install_signed(
+                        signed::SignedInstallInputs {
+                            game,
+                            release_id: release_id.as_str(),
+                            archive: archive.as_ref().map(LocalArchive::path),
+                            operation: request.operation,
+                            request_id: request.request_id.as_str(),
+                            now,
+                            ttl_seconds: install::PLAN_TTL_SECONDS,
+                        },
+                        signed::SignedInstallDeps {
+                            paths,
+                            provider: deps.catalog,
+                            revision_store: deps.revision_store,
+                            transport: deps.transport,
+                            cancel: &cancel,
+                            lease_active: &lease,
+                            lease_deadline_ms: &deadline,
+                            clock: &|| deps.clock.now_seconds(),
+                            cancel_reason: &reason,
+                            platform: deps.host.platform,
+                        },
+                    ),
+                    InstallTarget::PublisherZipSelection { selection_id } => {
+                        let source = sources::Sources::open(deps.host.state_dir())?;
+                        let selection = super::resolve::resolve_zip(
+                            source.registry(),
+                            &query(game),
+                            selection_id.as_str(),
+                        )
+                        .map_err(|e| DomainError::code(e.code))?;
+                        super::orchestrator::execute_zip(
+                            super::ZipInstallInputs {
+                                game,
+                                selection: &selection,
+                                operation: request.operation,
+                                request_id: request.request_id.as_str(),
+                                now,
+                                ttl_seconds: install::PLAN_TTL_SECONDS,
+                            },
+                            super::ZipInstallDeps {
+                                paths,
+                                state_dir: deps.host.state_dir(),
+                                transport: deps.transport,
+                                cancel: &cancel,
+                                lease_active: &lease,
+                                lease_deadline_ms: &deadline,
+                                cancel_reason: &reason,
+                            },
+                        )
+                        .map_err(task_error)
+                    }
+                    InstallTarget::PublisherExeSelection { selection_id } => {
+                        let source = sources::Sources::open(deps.host.state_dir())?;
+                        let selection = super::exe_resolve::resolve_exe(
+                            source.registry(),
+                            &query(game),
+                            selection_id.as_str(),
+                        )
+                        .map_err(|e| DomainError::code(e.code))?;
+                        let runtime = deps
+                            .worker
+                            .ok_or_else(|| DomainError::code("exe_sandbox_unavailable"))?;
+                        let probe = runtime.probe();
+                        if !probe.available {
+                            return Err(DomainError::new("exe_sandbox_unavailable", probe.reason));
+                        }
+                        super::exe_orchestrator::execute_exe(
+                            super::exe_orchestrator::ExeInstallInputs {
+                                game,
+                                selection: &selection,
+                                operation: request.operation,
+                                request_id: request.request_id.as_str(),
+                                ttl_seconds: install::PLAN_TTL_SECONDS,
+                            },
+                            super::exe_orchestrator::ExeInstallDeps {
+                                paths,
+                                state_dir: deps.host.state_dir(),
+                                transport: deps.transport,
+                                runtime,
+                                cancel: &cancel,
+                                lease_deadline_ms: &deadline,
+                                cancel_reason: &reason,
+                            },
+                        )
+                        .map_err(task_error)
+                    }
                 },
-            ),
-            InstallTarget::PublisherZipSelection { selection_id } => {
-                let source = sources::Sources::open(deps.host.state_dir())?;
-                let selection = super::resolve::resolve_zip(
-                    source.registry(),
-                    &query(game),
-                    selection_id.as_str(),
-                )
-                .map_err(|e| DomainError::code(e.code))?;
-                super::orchestrator::install_zip(
-                    super::ZipInstallInputs {
-                        game,
-                        selection: &selection,
-                        operation: request.operation,
-                        request_id: request.request_id.as_str(),
-                        now,
-                        ttl_seconds: install::PLAN_TTL_SECONDS,
-                    },
-                    super::ZipInstallDeps {
-                        paths,
-                        state_dir: deps.host.state_dir(),
-                        transport: deps.transport,
-                        cancel: &cancel,
-                        lease_active: &lease,
-                        lease_deadline_ms: &deadline,
-                        cancel_reason: &reason,
-                    },
-                )
-                .map_err(task_error)
-            }
-            InstallTarget::PublisherExeSelection { selection_id } => {
-                let source = sources::Sources::open(deps.host.state_dir())?;
-                let selection = super::exe_resolve::resolve_exe(
-                    source.registry(),
-                    &query(game),
-                    selection_id.as_str(),
-                )
-                .map_err(|e| DomainError::code(e.code))?;
-                let runtime = deps
-                    .worker
-                    .ok_or_else(|| DomainError::code("exe_sandbox_unavailable"))?;
-                let probe = runtime.probe();
-                if !probe.available {
-                    return Err(DomainError::new("exe_sandbox_unavailable", probe.reason));
-                }
-                super::exe_orchestrator::install_exe(
-                    super::exe_orchestrator::ExeInstallInputs {
-                        game,
-                        selection: &selection,
-                        operation: request.operation,
-                        request_id: request.request_id.as_str(),
-                        ttl_seconds: install::PLAN_TTL_SECONDS,
-                    },
-                    super::exe_orchestrator::ExeInstallDeps {
-                        paths,
-                        state_dir: deps.host.state_dir(),
-                        transport: deps.transport,
-                        runtime,
-                        cancel: &cancel,
-                        lease_deadline_ms: &deadline,
-                        cancel_reason: &reason,
-                    },
-                )
-                .map_err(task_error)
-            }
+            )
         })
     })
     .map_err(|error| {
@@ -403,7 +429,41 @@ pub fn install(
             error
         }
     })?;
-    let outcome = InstallerOutcome::from_transaction(&transaction, None, None);
+    let mut outcome = InstallerOutcome::from_transaction(&execution.transaction, None, None);
+    // Never upgrade a shared lock. The route's task/request owners are gone here.
+    drop(cache_guard);
+    if request.cleanup_policy == CleanupPolicy::AfterCommit
+        && !execution.replayed
+        && execution.transaction.state == "committed"
+    {
+        operation::stage("cleanup", None, None);
+        (deps.emit)(operation::Progress {
+            stage: "cleanup".into(),
+            ..Default::default()
+        });
+        outcome.cleanup = super::cache::CacheService::new(deps.host)
+            .cleanup()
+            .unwrap_or_else(|error| {
+                let busy = error.code == "installer_busy";
+                CleanupResult {
+                    status: if busy {
+                        CleanupStatus::Busy
+                    } else {
+                        CleanupStatus::Failed
+                    },
+                    performed: false,
+                    removed_bytes: 0,
+                    failures: vec![CleanupFailure {
+                        code: if busy {
+                            CleanupErrorCode::InstallerBusy
+                        } else {
+                            CleanupErrorCode::CleanupFailed
+                        },
+                        detail: Some(error.code),
+                    }],
+                }
+            });
+    }
     (deps.emit)(operation::Progress {
         stage: "finalizing".into(),
         ..Default::default()
@@ -430,7 +490,15 @@ fn validate_saved_plan(
 }
 pub fn recover(host: &ValidatedHostContext) -> Result<Vec<install::Transaction>, DomainError> {
     host.refresh()?;
+    // A missing/empty journal stays read-only: there is no lifecycle write to guard.
+    if install::list_transactions_at(host.paths.root())?.is_empty() {
+        return Ok(Vec::new());
+    }
+    let cache_guard = super::cache_lock::CacheLock::shared(host)?;
     install::recover_checked_at(host.paths.root(), |plan| {
+        cache_guard
+            .validate()
+            .map_err(|error| std::io::Error::other(error.code))?;
         let report = host
             .refresh()
             .map_err(|error| std::io::Error::other(error.code))?;
@@ -443,7 +511,12 @@ pub fn discard_plan(
     id: &PlanId,
 ) -> Result<install::Transaction, DomainError> {
     host.refresh()?;
+    install::get_plan_ro(host.paths.root(), id.as_str())?;
+    let cache_guard = super::cache_lock::CacheLock::shared(host)?;
     install::discard_plan_checked_at(host.paths.root(), id.as_str(), |plan| {
+        cache_guard
+            .validate()
+            .map_err(|error| std::io::Error::other(error.code))?;
         let report = host
             .refresh()
             .map_err(|error| std::io::Error::other(error.code))?;

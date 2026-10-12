@@ -1015,6 +1015,7 @@ fn build_install_request(
         params["selection_id"] = json!(value);
     }
     params["operation"] = json!(operation);
+    params["cleanup_policy"] = json!("disabled");
     params["request_id"] = json!(request_id);
     if let Some(path) = archive {
         params["archive"] = json!(path);
@@ -1621,6 +1622,7 @@ mod tests {
         assert_eq!(signed["params"]["instance_id"], "inst-1");
         assert_eq!(signed["params"]["release_id"], "release-1");
         assert_eq!(signed["params"]["operation"], "install");
+        assert_eq!(signed["params"]["cleanup_policy"], "disabled");
         assert_eq!(signed["params"]["request_id"], "req-1");
         assert!(signed["params"].get("selection_id").is_none());
 
@@ -2190,5 +2192,19 @@ mod tests {
         assert_eq!(mirror.substage.as_deref(), Some("writing"));
         assert!(mirror.total_bytes.is_none());
         assert!(mirror.total_files.is_none());
+    }
+    #[test]
+    fn response_limit_accepts_exact_boundary_and_rejects_the_next_byte() {
+        assert_eq!(
+            read_all_bounded(std::io::Cursor::new(vec![b'x'; MAX_RESPONSE as usize]))
+                .unwrap()
+                .len(),
+            MAX_RESPONSE as usize
+        );
+        assert_eq!(
+            read_all_bounded(std::io::Cursor::new(vec![b'x'; MAX_RESPONSE as usize + 1]))
+                .unwrap_err(),
+            "response_too_large"
+        );
     }
 }

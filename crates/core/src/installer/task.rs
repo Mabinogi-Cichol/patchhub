@@ -26,6 +26,7 @@ pub struct TaskControl {
     /// released before the terminal directory is removed (Windows refuses to
     /// delete a file that is still open).
     owner_lock: Arc<Mutex<Option<File>>>,
+    owned_dir: Arc<Mutex<Option<super::cache::OwnedTaskDirectory>>>,
 }
 fn now_ms() -> u64 {
     SystemTime::now()
@@ -50,59 +51,6 @@ fn marker(job: &std::path::Path) -> Result<()> {
     Ok(())
 }
 
-/// Reclaims abandoned `tasks/<uuid>/` directories left by a crash.
-///
-/// A task directory with an `owner.lock` is deleted only when the lock can be
-/// acquired (no live owner); a directory without `owner.lock` is deleted only
-/// when it is older than one hour, closing the window between `create_dir` and
-/// the lock file in [`TaskControl::new`]. Per-entry failures are skipped so one
-/// bad directory cannot block the sweep. A missing `tasks/` is not an error.
-pub fn cleanup_stale_tasks(paths: &InstallerPaths) -> Result<()> {
-    let entries = match fs::read_dir(paths.tasks_dir()) {
-        Ok(entries) => entries,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(error) => return Err(error),
-    };
-    for entry in entries {
-        let entry = match entry {
-            Ok(entry) => entry,
-            Err(_) => continue,
-        };
-        let path = entry.path();
-        if !entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
-            continue;
-        }
-        let lock_path = path.join("owner.lock");
-        match OpenOptions::new().read(true).write(true).open(&lock_path) {
-            Ok(file) => {
-                let unlocked = file.try_lock_exclusive().is_ok();
-                drop(file);
-                if unlocked {
-                    let _ = fs::remove_dir_all(&path);
-                }
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                if directory_is_stale(&path) {
-                    let _ = fs::remove_dir_all(&path);
-                }
-            }
-            Err(_) => {}
-        }
-    }
-    Ok(())
-}
-
-/// Whether a directory's modification time is at least an hour in the past.
-fn directory_is_stale(path: &std::path::Path) -> bool {
-    let Ok(modified) = fs::metadata(path).and_then(|metadata| metadata.modified()) else {
-        return false;
-    };
-    SystemTime::now()
-        .duration_since(modified)
-        .map(|age| age.as_secs() > 3600)
-        .unwrap_or(false)
-}
-
 impl TaskControl {
     pub fn new(
         paths: &InstallerPaths,
@@ -111,8 +59,7 @@ impl TaskControl {
         selection: &str,
         deadline: u64,
     ) -> Result<Self> {
-        // Best-effort sweep of crash leftovers before allocating a new task.
-        let _ = cleanup_stale_tasks(paths);
+        // Abandoned tasks are reclaimed only by CacheService under cache exclusive.
         let id = uuid::Uuid::new_v4().to_string();
         let job = paths.task(&id)?;
         fs::create_dir_all(paths.tasks_dir())?;
@@ -128,7 +75,7 @@ impl TaskControl {
             fs::set_permissions(&job, fs::Permissions::from_mode(0o700))?;
         }
         // The exclusive lock proves sole ownership of this id and doubles as the
-        // liveness marker for `cleanup_stale_tasks`.
+        // liveness marker for the cache service reclaimer.
         let owner_lock = OpenOptions::new()
             .read(true)
             .write(true)
@@ -146,12 +93,15 @@ impl TaskControl {
         )?;
         let control = Self {
             id,
-            job,
+            job: job.clone(),
             cancel: Arc::new(AtomicBool::new(false)),
             deadline: Arc::new(AtomicU64::new(deadline)),
             plan: Arc::new(Mutex::new(None)),
             failure: Arc::new(Mutex::new(None)),
             cause: Arc::new(Mutex::new(None)),
+            owned_dir: Arc::new(Mutex::new(Some(super::cache::OwnedTaskDirectory::capture(
+                &job,
+            )?))),
             owner_lock: Arc::new(Mutex::new(Some(owner_lock))),
         };
         control.renew(deadline)?;
@@ -330,7 +280,9 @@ impl TaskControl {
             // Terminal state: release the id lock, then reclaim this task's
             // transient directory. Failures are non-fatal (a later sweep retries).
             self.owner_lock.lock().unwrap().take();
-            let _ = fs::remove_dir_all(&self.job);
+            if let Some(directory) = self.owned_dir.lock().unwrap().take() {
+                directory.cleanup();
+            }
             result
         })
     }
@@ -454,74 +406,6 @@ mod tests {
         assert!(
             !paths.task(&id).unwrap().exists(),
             "terminal task directory must be reclaimed"
-        );
-    }
-
-    #[test]
-    fn cleanup_stale_tasks_reclaims_unlocked_and_spares_locked() {
-        let dir = tempfile::tempdir().unwrap();
-        let paths = InstallerPaths::new(dir.path());
-        super::super::init_atomic(&paths).unwrap();
-        let tasks = paths.tasks_dir();
-        fs::create_dir_all(&tasks).unwrap();
-
-        let free = tasks.join("free-task");
-        fs::create_dir(&free).unwrap();
-        fs::write(free.join("owner.lock"), b"").unwrap();
-
-        let held = tasks.join("held-task");
-        fs::create_dir(&held).unwrap();
-        let lock = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create_new(true)
-            .open(held.join("owner.lock"))
-            .unwrap();
-        lock.try_lock_exclusive().unwrap();
-
-        cleanup_stale_tasks(&paths).unwrap();
-        assert!(!free.exists(), "unlocked task directory must be reclaimed");
-        assert!(held.exists(), "lock-held task directory must be spared");
-        drop(lock);
-    }
-
-    #[test]
-    fn cleanup_stale_tasks_spares_recent_unowned_and_tolerates_missing_dir() {
-        let dir = tempfile::tempdir().unwrap();
-        let paths = InstallerPaths::new(dir.path());
-        super::super::init_atomic(&paths).unwrap();
-
-        // Missing tasks/ is not an error and creates nothing.
-        cleanup_stale_tasks(&paths).unwrap();
-        assert!(!paths.tasks_dir().exists());
-
-        // A freshly created directory without owner.lock is inside the
-        // create_dir → lock window and must not be removed.
-        let recent = paths.tasks_dir().join("recent-task");
-        fs::create_dir_all(&recent).unwrap();
-        cleanup_stale_tasks(&paths).unwrap();
-        assert!(recent.exists(), "recent unowned directory must be spared");
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn cleanup_stale_tasks_reclaims_old_unowned_dir() {
-        let dir = tempfile::tempdir().unwrap();
-        let paths = InstallerPaths::new(dir.path());
-        super::super::init_atomic(&paths).unwrap();
-
-        let old = paths.tasks_dir().join("old-task");
-        fs::create_dir_all(&old).unwrap();
-        let handle = File::open(&old).unwrap();
-        handle
-            .set_modified(SystemTime::now() - Duration::from_secs(7200))
-            .unwrap();
-        drop(handle);
-
-        cleanup_stale_tasks(&paths).unwrap();
-        assert!(
-            !old.exists(),
-            "unowned directory older than one hour must be reclaimed"
         );
     }
 }

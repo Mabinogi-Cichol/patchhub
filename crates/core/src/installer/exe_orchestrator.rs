@@ -69,10 +69,18 @@ pub(crate) struct ExeInstallDeps<'a> {
     pub cancel_reason: &'a (dyn Fn() -> Option<CancellationCause> + Sync),
     pub lease_deadline_ms: &'a (dyn Fn() -> u64 + Sync),
 }
+#[cfg(test)]
 pub(crate) fn install_exe(
     inputs: ExeInstallInputs<'_>,
     deps: ExeInstallDeps<'_>,
 ) -> Result<Transaction> {
+    execute_exe(inputs, deps).map(|run| run.transaction)
+}
+
+pub(crate) fn execute_exe(
+    inputs: ExeInstallInputs<'_>,
+    deps: ExeInstallDeps<'_>,
+) -> Result<super::InstallExecution> {
     if let Some(code) = super::host_identity_blocker() {
         return Err(Error::code(code));
     }
@@ -86,7 +94,7 @@ pub(crate) fn install_exe(
         None,
     );
     if let Some(t) = common::begin_request(deps.paths, inputs.request_id, &binding)? {
-        return Ok(t);
+        return Ok(super::InstallExecution::replay(t));
     }
     let control = TaskControl::new(
         deps.paths,
@@ -100,7 +108,7 @@ pub(crate) fn install_exe(
         deps.cancel,
         deps.lease_deadline_ms,
         deps.cancel_reason,
-        || run(&inputs, &deps, &control, &binding),
+        || run(&inputs, &deps, &control, &binding).map(super::InstallExecution::fresh),
     )
 }
 fn boundary(deps: &ExeInstallDeps<'_>, control: &TaskControl) -> Result<()> {

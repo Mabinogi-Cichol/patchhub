@@ -16,9 +16,15 @@ test("cache summary does not invent usage statistics", () => {
 });
 
 test("cleanup and toggle notes describe the resulting state", () => {
-  assert.match(cacheClearNote(0), /已清理 0 B/);
-  assert.match(cacheClearNote(1536), /1\.5 KiB/);
-  assert.match(cacheClearNote(0, false), /没有可清理/);
+  const result = (status: "not_requested" | "completed" | "partial" | "failed" | "busy", removed_bytes = 0) =>
+    ({ status, performed: status === "completed" || status === "partial", removed_bytes, failures: [] });
+  assert.match(cacheClearNote(result("completed")), /已清理 0 B/);
+  assert.match(cacheClearNote(result("completed", 1536)), /1\.5 KiB/);
+  assert.match(cacheClearNote(result("completed")), /已清理/);
+  assert.match(cacheClearNote(result("not_requested")), /未执行/);
+  assert.match(cacheClearNote(result("busy")), /稍后重试/);
+  assert.match(cacheClearNote({ ...result("partial", 1536), failures: [{ code: "disk_unavailable", detail: "磁盘不可用" }] }), /1\.5 KiB.*磁盘不可用.*重试/);
+  assert.match(cacheClearNote(result("failed", 512)), /清理失败.*512 B.*重试/);
   assert.match(autoCleanupNote(true), /已开启/);
   assert.match(autoCleanupNote(false), /已关闭/);
 });

@@ -1,21 +1,49 @@
 import assert from "node:assert/strict";
 import { build } from "esbuild";
 import { fileURLToPath } from "node:url";
+
 const result = await build({ entryPoints: [fileURLToPath(new URL("../src/sources.ts", import.meta.url))], bundle: true, write: false, platform: "node", format: "esm" });
-const { patchChip } = await import(`data:text/javascript;base64,${Buffer.from(result.outputFiles[0].text).toString("base64")}`);
-const patch = (status = "unknown", available = false) => ({ blockers: [], detection: { status, files: [] }, auto_installable: available });
+const { patchChip, primaryInstallAction, actionBlockers } = await import(`data:text/javascript;base64,${Buffer.from(result.outputFiles[0].text).toString("base64")}`);
+const availability = (available, blockers = []) => ({ available, blockers });
+const patch = ({ status = "unknown", automatic = false, localArchive = false, reinstall = false, overwrite = false, label = "install", input = "automatic", blockers = [], localBlockers = [], overwriteBlockers = [], reinstallBlockers = [] } = {}) => ({
+  blockers: ["legacy"],
+  detection: { status, files: [] },
+  actions: {
+    automatic: availability(automatic, blockers),
+    local_archive: availability(localArchive, localBlockers),
+    reinstall: availability(reinstall, reinstallBlockers),
+    overwrite: availability(overwrite, overwriteBlockers),
+    primary: { operation: "overwrite", label, input },
+  },
+});
 const row = (patches = [], status = "empty", candidates = []) => ({ patches, discovery: { status, candidates } });
 const cases = [
-  ["managed beats ongoing lookup", row([patch("installed_managed", true)], "queued"), true, "已安装补丁"],
-  ["external installation", row([patch("installed_external")]), false, "已安装补丁"],
-  ["available dynamic patch beats source clue", row([patch("unknown", true)], "complete", [{match_basis:"appid"}]), false, "有可用补丁"],
+  ["managed is display-only installed status", row([patch({ status: "installed_managed", automatic: true })], "queued"), true, "已安装补丁"],
+  ["external installation remains visible", row([patch({ status: "installed_external" })]), false, "已安装补丁"],
+  ["available automatic action beats source clue", row([patch({ automatic: true })], "complete", [{ match_basis: "appid" }]), false, "有可用补丁"],
   ["completed empty lookup", row(), false, "未找到补丁"],
-  ["source clue alone is not installable", row([], "complete", [{match_basis:"appid"}]), false, "补丁待核对"],
-  ["blocked patch is not available", row([{...patch("unknown", true), blockers:["exe_sandbox_unavailable"]}]), false, "补丁待核对"],
-  ["changed installed file", row([patch("partial_or_conflict", true)]), false, "补丁需检查"],
+  ["source clue alone is not installable", row([], "complete", [{ match_basis: "appid" }]), false, "补丁待核对"],
+  ["unavailable actions stay unavailable despite installed detection", row([patch({ status: "installed_external", input: "unavailable", label: "overwrite" })]), false, "已安装补丁"],
+  ["changed installed file", row([patch({ status: "partial_or_conflict", overwrite: true })]), false, "补丁需检查"],
   ["unqueried is not empty", row([], "not_queried"), false, "补丁待查询"],
   ["running lookup", row([], "queued"), true, "正在查找补丁"],
   ["failed lookup is not empty", row([], "failed"), false, "补丁查询未完成"],
 ];
 for (const [name, value, running, expected] of cases) assert.equal(patchChip(value, running).label, expected, name);
-console.log(`${cases.length} game-status cases passed`);
+
+const manual = patch({ localArchive: true, input: "local_archive", label: "install", blockers: [{ code: "zip_download_unavailable" }], localBlockers: [{ code: "local_archive_signed_only" }], reinstallBlockers: [{ code: "reinstall_unowned_or_incomplete" }] });
+assert.deepEqual(primaryInstallAction(manual, false), { operation: "overwrite", label: "install", input: "local_archive", available: false }, "local ZIP action requires a selected archive");
+assert.equal(primaryInstallAction(manual, true).available, true, "local ZIP action works while automatic is unavailable");
+const automatic = patch({ automatic: true, localArchive: true, input: "automatic", label: "overwrite" });
+assert.equal(primaryInstallAction(automatic, true).input, "automatic", "selected local ZIP does not override the core primary route");
+assert.equal(primaryInstallAction(automatic, true, "local_archive").input, "local_archive", "explicit local ZIP action selects its own route");
+assert.equal(primaryInstallAction(automatic, true, "local_archive").available, true, "explicit local ZIP action consumes a selected archive");
+assert.equal(primaryInstallAction(automatic, false, "local_archive").available, false, "explicit local ZIP action requires an archive");
+assert.equal(primaryInstallAction(patch({ input: "unavailable", label: "overwrite" }), false).available, false, "external installed label does not enable an unavailable primary action");
+assert.equal(primaryInstallAction(automatic, false).label, "overwrite", "primary label is consumed directly from actions");
+assert.equal("auto_installable" in automatic, false, "legacy installability alias is absent");
+assert.equal("reinstall_available" in automatic, false, "legacy reinstall alias is absent");
+assert.deepEqual(actionBlockers(patch({ automatic: true, input: "automatic", blockers: [{ code: "game_not_ready", detail: "build is unknown" }] })), [{ code: "game_not_ready", detail: "build is unknown" }], "primary automatic blockers preserve detail without unrelated action blockers");
+assert.deepEqual(actionBlockers(manual), [{ code: "zip_download_unavailable" }, { code: "local_archive_signed_only" }], "local archive primary explains automatic and local blockers without reinstall-only blockers");
+assert.deepEqual(actionBlockers(patch({ input: "unavailable", blockers: [{ code: "game_not_ready" }], overwriteBlockers: [{ code: "needs_recovery" }] })), [{ code: "needs_recovery" }], "unavailable primary shows overwrite blockers only");
+console.log(`${cases.length} game-status cases and 13 Windows action assertions passed`);

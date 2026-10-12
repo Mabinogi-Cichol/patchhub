@@ -21,7 +21,8 @@ class InstallPipelineTests(unittest.IsolatedAsyncioTestCase):
             plugin.tasks = module.TaskManager(state_dir=temporary)
             plugin.settings = types.SimpleNamespace(auto_cleanup=True)
             plugin.bridge = types.SimpleNamespace(selection=module.CoreBridge.selection,
-                install_patch=AsyncMock(return_value={"state": "committed", "transaction_id": "tx-1"}),
+                install_patch=AsyncMock(return_value={"state": "committed", "transaction_id": "tx-1",
+                    "cleanup": {"status": "completed", "performed": True, "removed_bytes": 12, "failures": []}}),
                 cleanup_cache=AsyncMock(return_value={"performed": True, "removed_bytes": 12}))
             request_id = str(uuid.uuid4())
             args = ("local", None, "zip-selection-value-1", None, "install", request_id)
@@ -32,8 +33,8 @@ class InstallPipelineTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(first, retry)
             self.assertEqual(task.snapshot()["state"], "completed")
             self.assertEqual(task.snapshot()["result"]["transaction_id"], "tx-1")
-            plugin.bridge.install_patch.assert_awaited_once_with("local", None, "zip-selection-value-1", None, "install", request_id)
-            plugin.bridge.cleanup_cache.assert_awaited_once()
+            plugin.bridge.install_patch.assert_awaited_once_with("local", None, "zip-selection-value-1", None, "install", request_id, "after_commit")
+            plugin.bridge.cleanup_cache.assert_not_awaited()
             with self.assertRaisesRegex(ValueError, "request_identity_changed"):
                 await plugin.start_patch_install_task("local", None, "zip-selection-changed-1", None, "install", request_id)
 

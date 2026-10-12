@@ -28,6 +28,7 @@ struct Control {
     last: Instant,
     restoring: bool,
     gate: Option<Box<dyn Fn() -> io::Result<()>>>,
+    safety: Option<Box<dyn Fn() -> io::Result<()>>>,
 }
 thread_local! { static CONTROL: RefCell<Option<Control>> = const { RefCell::new(None) }; }
 
@@ -50,6 +51,7 @@ pub fn run<T>(
             last: Instant::now(),
             restoring: false,
             gate: None,
+            safety: None,
         })
     });
     let _reset = Reset;
@@ -104,9 +106,35 @@ pub fn with_gate<T>(gate: impl Fn() -> io::Result<()> + 'static, work: impl FnOn
     let _reset = Reset(old);
     work()
 }
+/// Installer safety checks are independent from the task lease gate, including rollback.
+pub(crate) fn with_safety<T>(
+    gate: impl Fn() -> io::Result<()> + 'static,
+    work: impl FnOnce() -> T,
+) -> T {
+    struct Reset(Option<Box<dyn Fn() -> io::Result<()>>>);
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            CONTROL.with(|c| {
+                if let Some(c) = c.borrow_mut().as_mut() {
+                    c.safety = self.0.take();
+                }
+            });
+        }
+    }
+    let old = CONTROL.with(|c| {
+        c.borrow_mut()
+            .as_mut()
+            .and_then(|c| c.safety.replace(Box::new(gate)))
+    });
+    let _reset = Reset(old);
+    work()
+}
 pub fn check() -> io::Result<()> {
     CONTROL.with(|c| {
         if let Some(c) = c.borrow().as_ref() {
+            if let Some(safety) = &c.safety {
+                safety()?;
+            }
             if !c.restoring {
                 if let Some(gate) = &c.gate {
                     gate()?;

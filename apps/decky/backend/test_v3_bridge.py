@@ -65,6 +65,7 @@ class V3BridgeTests(unittest.IsolatedAsyncioTestCase):
                 await asyncio.wait_for(peer.renewed.wait(), 1)
                 self.assertEqual(peer.request["request_id"], "same")
                 self.assertEqual(peer.request["params"]["request_id"], "same")
+                self.assertEqual(peer.request["params"]["cleanup_policy"], "disabled")
                 self.assertEqual(peer.request["method"], "install_patch")
                 task.request_cancel()
                 await asyncio.wait_for(peer.cancelled.wait(), 1)
@@ -76,6 +77,21 @@ class V3BridgeTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual((await pending)["state"], "rolled_back")
         finally:
             current_task.reset(token)
+
+    async def test_host_cleanup_policy_is_sent_and_invalid_values_rejected(self):
+        with patch("bridge.asyncio.create_subprocess_exec", new_callable=AsyncMock) as spawn:
+            with self.assertRaisesRegex(ValueError, "invalid_cleanup_policy"):
+                await self.bridge.install_patch("local", release_id="signed", cleanup_policy="enabled")
+            spawn.assert_not_called()
+        peer = Peer()
+        with patch("bridge.asyncio.create_subprocess_exec", return_value=peer):
+            pending = asyncio.create_task(self.bridge.install_patch(
+                "local", release_id="signed", cleanup_policy="after_commit"))
+            while peer.request is None:
+                await asyncio.sleep(0)
+            self.assertEqual(peer.request["params"]["cleanup_policy"], "after_commit")
+            peer.finish({"state": "committed"})
+            await pending
 
     async def test_ui_lease_expiry_controls_renewal_not_background_bridge(self):
         manager = TaskManager(lease_seconds=.03)
@@ -146,3 +162,35 @@ class V3BridgeTests(unittest.IsolatedAsyncioTestCase):
             bridge = CoreBridge(self.bridge.binary, self.bridge.catalog, run_uid=1000, run_gid=1000)
             self.assertEqual(bridge.process_identity, {"user": 1000, "group": 1000, "extra_groups": []})
             self.assertEqual(bridge.worker, bridge.binary.with_name("sf-worker"))
+
+    async def test_oversized_scan_is_explicit_and_a_later_call_still_succeeds(self):
+        from bridge import MAX_RESPONSE_BYTES
+        class Process(_FakeProcess):
+            def kill(self):
+                self.returncode = 0
+        def oversized(request_id, request):
+            return [], {"protocol_version": 3, "request_id": request_id, "ok": True,
+                        "result": {"installs": [], "detail": "x" * MAX_RESPONSE_BYTES}}
+        with patch("bridge.asyncio.create_subprocess_exec", return_value=Process(oversized)):
+            with self.assertRaisesRegex(RuntimeError, "response_too_large"):
+                await self.bridge.scan()
+        def normal(request_id, request):
+            return [], {"protocol_version": 3, "request_id": request_id, "ok": True,
+                        "result": {"installs": [], "catalog_trust": "unavailable"}}
+        with patch("bridge.asyncio.create_subprocess_exec", return_value=Process(normal)):
+            self.assertEqual((await self.bridge.scan())["installs"], [])
+
+    async def test_real_streamreader_limit_uses_response_too_large_code(self):
+        from bridge import MAX_RESPONSE_BYTES
+        class Process(_FakeProcess):
+            def kill(self):
+                self.returncode = 0
+            async def readline(self):
+                if not hasattr(self, "reader"):
+                    self.reader = asyncio.StreamReader(limit=MAX_RESPONSE_BYTES + 1)
+                    self.reader.feed_data(b"x" * (MAX_RESPONSE_BYTES + 2) + b"\n")
+                    self.reader.feed_eof()
+                return await self.reader.readline()
+        with patch("bridge.asyncio.create_subprocess_exec", return_value=Process(None)):
+            with self.assertRaisesRegex(RuntimeError, "response_too_large"):
+                await self.bridge.scan()

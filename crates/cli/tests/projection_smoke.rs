@@ -78,6 +78,26 @@ fn scan_and_preview_roundtrip_preserve_instance_identity_and_evidence() {
         .collect();
     assert!(statuses.contains(&"installed_external"));
     assert!(statuses.contains(&"not_detected"));
+    for row in rows {
+        let patch = &row["patches"][0];
+        assert!(patch.get("download_available").is_none());
+        assert!(patch.get("auto_installable").is_none());
+        assert!(patch.get("reinstall_available").is_none());
+        for action in ["automatic", "local_archive", "reinstall", "overwrite"] {
+            assert_eq!(patch["actions"][action]["available"], false);
+            assert!(patch["actions"][action]["blockers"].is_array());
+        }
+        assert_eq!(patch["actions"]["primary"]["operation"], "overwrite");
+        assert_eq!(patch["actions"]["primary"]["input"], "unavailable");
+        assert_eq!(
+            patch["actions"]["primary"]["label"],
+            if patch["detection"]["status"] == "installed_external" {
+                "overwrite"
+            } else {
+                "install"
+            }
+        );
+    }
     let mut preview = params;
     preview["instance_id"] = rows[0]["game"]["instance_id"].clone();
     preview["release_id"] = json!("test-v1");

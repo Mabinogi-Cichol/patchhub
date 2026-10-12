@@ -931,7 +931,7 @@ fn same_content_reinstall_failure_before_backups_rolls_back() {
 }
 
 #[test]
-fn owned_missing_and_damaged_files_reinstall_and_failed_retry_preserves_preop_and_receipt() {
+fn owned_missing_and_damaged_files_overwrite_and_failed_retry_preserves_preop_and_receipt() {
     use std::sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
@@ -942,7 +942,11 @@ fn owned_missing_and_damaged_files_reinstall_and_failed_retry_preserves_preop_an
     apply(&first.plan_id, &f.state).unwrap();
     fs::write(f.game.join("original.dat"), b"damaged current bytes").unwrap();
     fs::remove_file(f.game.join("content/new.dat")).unwrap();
-    let second = f.reinstall().unwrap();
+    assert_eq!(
+        f.reinstall().unwrap_err().to_string(),
+        "reinstall_unowned_or_incomplete"
+    );
+    let second = f.overwrite().unwrap();
     assert_eq!(
         second.changes[0].original_sha256,
         Some(hash(b"damaged current bytes"))
@@ -971,7 +975,7 @@ fn owned_missing_and_damaged_files_reinstall_and_failed_retry_preserves_preop_an
         .iter()
         .any(|t| t.plan_id == first.plan_id && t.state == "committed"));
     assert!(!f.job_file(&second.plan_id, "0.backup").exists());
-    let third = f.reinstall().unwrap();
+    let third = f.overwrite().unwrap();
     assert_eq!(apply(&third.plan_id, &f.state).unwrap().state, "committed");
 }
 
@@ -1059,7 +1063,7 @@ fn unfinished_legacy_transaction_blocks_reinstall_without_journal_discard() {
         .reinstall()
         .unwrap_err()
         .to_string()
-        .contains("managed_install_exists_or_needs_recovery"));
+        .contains("needs_recovery"));
     assert_eq!(
         fs::read(f.state.join("journal.sqlite")).unwrap(),
         original_journal

@@ -4,6 +4,7 @@
 //! ```text
 //! installer/rust-v1/
 //! ├── schema.json                 # completion marker (written last)
+//! ├── cache.lock                  # shared installer / exclusive cache lock
 //! ├── journal.lock                # cross-process instance lock
 //! ├── journal.sqlite              # transaction journal (schema owned by install::Store)
 //! ├── requests.sqlite             # request-idempotency ledger
@@ -75,6 +76,11 @@ impl InstallerPaths {
         self.root.join("journal.lock")
     }
 
+    /// Fixed shared installer / exclusive cleanup lock (p0-contract §3).
+    pub fn cache_lock(&self) -> PathBuf {
+        self.root.join("cache.lock")
+    }
+
     /// Transaction journal (sole transaction source of truth).
     pub fn journal(&self) -> PathBuf {
         self.root.join("journal.sqlite")
@@ -94,7 +100,7 @@ impl InstallerPaths {
 
     /// `<uuid>` **transient** task runtime directories (`task.json`,
     /// `lease.json`, `revoked`, `owner.lock`). Reclaimed on terminal state and
-    /// swept by [`super::task::cleanup_stale_tasks`] after a crash. Deliberately
+    /// swept by [`super::cache::CacheService`] after a crash. Deliberately
     /// **not** part of [`Self::cleanable_dirs`] (unlocked deletes are unsafe)
     /// and **not** protected by [`Self::is_protected`].
     pub fn tasks_dir(&self) -> PathBuf {
@@ -201,6 +207,7 @@ impl InstallerPaths {
         if matches!(
             first.as_str(),
             "schema.json"
+                | "cache.lock"
                 | "journal.lock"
                 | "journal.sqlite"
                 | "journal.sqlite-wal"
@@ -532,6 +539,8 @@ mod tests {
         assert!(paths.receipts("").is_err());
 
         // Protected regions.
+        assert!(paths.is_protected(&paths.cache_lock()));
+        assert!(paths.is_protected(Path::new("cache.lock")));
         assert!(paths.is_protected(&paths.journal_lock()));
         assert!(paths.is_protected(&paths.journal()));
         assert!(paths.is_protected(&paths.requests()));

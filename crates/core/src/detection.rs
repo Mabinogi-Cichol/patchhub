@@ -400,6 +400,32 @@ fn unchanged(before: &Snapshot, after: &Snapshot) -> bool {
         && before.size == after.size
         && before.modified == after.modified
 }
+// The same no-follow walks and handle identity checks serve file evidence and
+// snapshot action facts; action projection never hashes a synthetic file.
+fn hold_game_boundary(game: &GameInstall, held: &mut Vec<HeldPath>) -> io::Result<()> {
+    walk(&game.library_path, true, false, held)?;
+    walk(&game.install_path, true, false, held)?;
+    let library = fs::canonicalize(&game.library_path)?;
+    let install = fs::canonicalize(&game.install_path)?;
+    if !install.starts_with(&library) {
+        return Err(fail("evidence_boundary_violation"));
+    }
+    Ok(())
+}
+pub(crate) fn validate_game_boundary(game: &GameInstall, cancel: &AtomicBool) -> io::Result<()> {
+    cancelled(cancel)?;
+    let mut held = Vec::new();
+    hold_game_boundary(game, &mut held)?;
+    let common = game.library_path.join("steamapps/common");
+    walk(&common, true, false, &mut held)?;
+    let common = fs::canonicalize(common)?;
+    let install = fs::canonicalize(&game.install_path)?;
+    if install == common || !install.starts_with(&common) {
+        return Err(fail("evidence_boundary_violation"));
+    }
+    verify_paths(&held)?;
+    cancelled(cancel)
+}
 fn read_digest(request: &EvidenceRequest<'_>) -> io::Result<Option<String>> {
     read_digest_with(request, |_| {})
 }
@@ -409,13 +435,7 @@ fn read_digest_with(
 ) -> io::Result<Option<String>> {
     cancelled(request.cancel)?;
     let mut held = Vec::new();
-    walk(&request.game.library_path, true, false, &mut held)?;
-    walk(&request.game.install_path, true, false, &mut held)?;
-    let library = fs::canonicalize(&request.game.library_path)?;
-    let game = fs::canonicalize(&request.game.install_path)?;
-    if !game.starts_with(&library) {
-        return Err(fail("evidence_boundary_violation"));
-    }
+    hold_game_boundary(request.game, &mut held)?;
     let target = request
         .game
         .install_path

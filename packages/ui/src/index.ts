@@ -1,3 +1,22 @@
+export type ActionBlockerCode =
+  "unsigned_catalog" | "catalog_unavailable" | "catalog_expired" | "catalog_revision_rollback" |
+  "catalog_rollback" | "release_revoked" | "release_not_matched" | "platform_not_verified" |
+  "game_not_ready" | "build_not_verified" | "source_requires_guidance" | "artifact_requires_manual_download" |
+  "recipe_missing" | "source_not_enabled" | "source_not_subscribed" | "exe_source_disabled" |
+  "selection_not_found" | "invalid_selection_id" | "selection_stale" | "zip_download_unavailable" |
+  "zip_download_ambiguous" | "exe_download_ambiguous" | "invalid_download_url" | "exe_candidate_ambiguous" |
+  "exe_candidate_variant_unsupported" | "exe_sandbox_unavailable" | "installer_host_requires_non_root" | "unprivileged_user_required" |
+  "reinstall_unowned_or_incomplete" | "reinstall_content_identity_changed" | "needs_recovery" | "local_archive_signed_only";
+export type ActionBlocker = { code: ActionBlockerCode; detail?: string | null };
+export type ActionAvailability = { available: boolean; blockers: ActionBlocker[] };
+export type PatchActions = {
+  automatic: ActionAvailability;
+  local_archive: ActionAvailability;
+  reinstall: ActionAvailability;
+  overwrite: ActionAvailability;
+  primary: { operation: "overwrite"; label: "install" | "overwrite"; input: "automatic" | "local_archive" | "unavailable" };
+};
+
 export type Patch = {
   release_id: string;
   // Dynamic install handle (`zip-selection-*` / `exe-selection-*`). When set,
@@ -11,9 +30,7 @@ export type Patch = {
   source_status?: string;
   source_cached_at?: number | null;
   support_level: string;
-  download_available?: boolean;
-  auto_installable?: boolean;
-  reinstall_available?: boolean;
+  actions: PatchActions;
   exe?: { language?: string; version?: string; variant?: string; requires_dlc?: number[]; excludes_dlc?: number[]; profile_id: string };
   compatibility: string;
   blockers: string[];
@@ -113,43 +130,10 @@ export type ScanResult = {
   scan_progress?: { completed: number; total: number; running: boolean };
 };
 
-/**
- * Platform link state from `get_capabilities.installer.links`. `available` is
- * the probe result; `blockers` carries the reason codes (e.g.
- * `exe_sandbox_unavailable`).
- */
-export type InstallerLinkState = { available: boolean; blockers?: { code: string; detail?: string }[] };
-export type InstallerLinks = { zip?: InstallerLinkState; exe?: InstallerLinkState };
-
-/**
- * N1 installability, evaluated once per patch by the scan projection. Whether a
- * patch can be installed is decided from the platform link state
- * (`installer.links.*.available`), never from `formats`: a core can support a
- * format while this machine lacks a usable download/sandbox link.
- */
-export function patchInstallable(patch: Patch, links: InstallerLinks | null | undefined, signed = false): boolean {
-  if (patch.blockers.length > 0 || patch.source_id === "hgamer") return false;
-  if (patch.download_available !== true) return false;
-  switch (patch.support_level) {
-    case "managed_zip":
-      return signed && links?.zip?.available === true;
-    case "publisher_zip":
-      return !!patch.selection_id && links?.zip?.available === true;
-    case "publisher_exe":
-      return !!patch.selection_id && links?.exe?.available === true;
-    default:
-      return false;
-  }
-}
-
-export function canAutoInstall(patch: Patch): boolean {
-  return patch.auto_installable === true && patch.blockers.length === 0 && patch.source_id !== "hgamer";
-}
-
 export function installSummary(row: Install, scanning = false): string {
   if (row.patches.some(p => isManaged(p.detection.status) || isExternal(p.detection.status))) return "已安装补丁";
-  if (row.patches.some(p => p.reinstall_available && ["partial", "conflict", "partial_or_conflict", "needs_revalidation"].includes(p.detection.status))) return "补丁文件不完整，可覆盖安装";
-  if (row.patches.some(canAutoInstall)) return "有可用补丁";
+  if (row.patches.some(p => p.actions.overwrite.available && p.detection.status === "partial_or_conflict")) return "补丁文件不完整，可覆盖安装";
+  if (row.patches.some(p => p.actions.automatic.available)) return "有可用补丁";
   if (row.patches.length || row.discovery?.candidates.some(candidateMatched)) return "找到补丁来源";
   if (["failed", "source_refresh_failed", "source_offline_cached"].includes(row.discovery?.status ?? "")) return "来源查询失败";
   if (scanning && !["complete", "empty", "cache_complete"].includes(row.discovery?.status ?? "")) return "正在查找补丁";

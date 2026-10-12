@@ -275,12 +275,37 @@ impl Fixture {
         local: bool,
         operation: InstallOperation,
     ) -> Result<InstallerOutcome, DomainError> {
+        self.run_policy(
+            provider,
+            lease,
+            transport,
+            id,
+            local,
+            operation,
+            CleanupPolicy::Disabled,
+            &mut |_| {},
+        )
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn run_policy(
+        &self,
+        provider: &Provider,
+        lease: &Lease,
+        transport: &dyn Transport,
+        id: &str,
+        local: bool,
+        operation: InstallOperation,
+        policy: CleanupPolicy,
+        emit: &mut dyn FnMut(steam_patch_core::operation::Progress),
+    ) -> Result<InstallerOutcome, DomainError> {
         let host =
             ValidatedHostContext::new(&self.state, std::slice::from_ref(&self.library), platform())
                 .unwrap();
         let store = SqliteTrustRevisionStore::new(&self.state).unwrap();
+        let mut request = self.request(id, local, operation);
+        request.cleanup_policy = policy;
         service::install(
-            self.request(id, local, operation),
+            request,
             InstallerDeps {
                 host: &host,
                 catalog: provider,
@@ -289,9 +314,30 @@ impl Fixture {
                 worker: None,
                 control: lease,
                 clock: &FixedClock(self.now),
-                emit: &mut |_| {},
+                emit,
             },
         )
+    }
+    fn projected_actions(&self, provider: &Provider) -> serde_json::Value {
+        use steam_patch_core::projection::{self, CatalogView, HostCapabilities, ProjectionInputs};
+        let report = steam::scan(std::slice::from_ref(&self.library));
+        let transactions = install::TransactionSnapshot::load_ro(&self.state, &report).unwrap();
+        let verified =
+            trust::VerifiedCatalog::from_bytes(&provider.initial, &provider.keys, self.now, 0)
+                .unwrap();
+        let projected = projection::scan(ProjectionInputs {
+            steam: &report,
+            catalog: CatalogView::Verified(&verified),
+            sources: None,
+            transactions: &transactions,
+            roots: std::slice::from_ref(&self.library),
+            now: self.now,
+            platform: platform(),
+            capabilities: &HostCapabilities::default(),
+            cancel: &std::sync::atomic::AtomicBool::new(false),
+        })
+        .unwrap();
+        serde_json::to_value(&projected.installs[0].patches[0]).unwrap()["actions"].clone()
     }
     fn unchanged(&self) {
         assert_eq!(
@@ -1072,4 +1118,406 @@ fn planned_discard_cleanup_failure_returns_real_cancel_or_domain_terminal_and_re
         assert_eq!(replay.disposition, disposition);
         assert_eq!(replay.cause, result.cause);
     }
+}
+
+#[test]
+fn after_commit_cleans_once_and_replay_preserves_new_cache() {
+    if !can_install() {
+        return;
+    }
+    let f = Fixture::new();
+    let paths = steam_patch_core::installer::InstallerPaths::new(&f.state);
+    fs::create_dir_all(paths.downloads_dir()).unwrap();
+    let cache = paths.downloads_dir().join("disposable");
+    fs::write(&cache, b"cache").unwrap();
+    let p = f.provider();
+    let host =
+        ValidatedHostContext::new(&f.state, std::slice::from_ref(&f.library), platform()).unwrap();
+    p.on_second.replace(Some(Box::new(move || {
+        assert_eq!(
+            steam_patch_core::installer::cache::CacheService::new(&host)
+                .cleanup()
+                .unwrap_err()
+                .code,
+            "installer_busy"
+        );
+    })));
+    let result = f
+        .run_policy(
+            &p,
+            &Lease::default(),
+            &Offline,
+            "cleanup-once",
+            true,
+            InstallOperation::Overwrite,
+            CleanupPolicy::AfterCommit,
+            &mut |_| {},
+        )
+        .unwrap();
+    assert_eq!(result.state, "committed");
+    assert_eq!(result.cleanup.status, CleanupStatus::Completed);
+    assert_eq!(result.cleanup.removed_bytes, 5);
+    assert!(!cache.exists());
+    fs::write(&cache, b"new download").unwrap();
+    let replay = f
+        .run_policy(
+            &p,
+            &Lease::default(),
+            &Offline,
+            "cleanup-once",
+            true,
+            InstallOperation::Overwrite,
+            CleanupPolicy::AfterCommit,
+            &mut |_| {},
+        )
+        .unwrap();
+    assert_eq!(replay.transaction_id, result.transaction_id);
+    assert_eq!(replay.cleanup.status, CleanupStatus::NotRequested);
+    assert_eq!(replay.cleanup.removed_bytes, 0);
+    assert_eq!(fs::read(cache).unwrap(), b"new download");
+}
+
+#[test]
+fn after_commit_busy_preserves_commit_and_does_not_upgrade_own_lock() {
+    if !can_install() {
+        return;
+    }
+    let f = Fixture::new();
+    let paths = steam_patch_core::installer::InstallerPaths::new(&f.state);
+    fs::create_dir_all(paths.downloads_dir()).unwrap();
+    let cache = paths.downloads_dir().join("keep");
+    fs::write(&cache, b"keep").unwrap();
+    let mut other_writer = None;
+    let mut emit = |progress: steam_patch_core::operation::Progress| {
+        if progress.stage == "cleanup" {
+            let lock = fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(paths.cache_lock())
+                .unwrap();
+            fs2::FileExt::try_lock_shared(&lock).unwrap();
+            other_writer = Some(lock);
+        }
+    };
+    let result = f
+        .run_policy(
+            &f.provider(),
+            &Lease::default(),
+            &Offline,
+            "cleanup-busy",
+            true,
+            InstallOperation::Overwrite,
+            CleanupPolicy::AfterCommit,
+            &mut emit,
+        )
+        .unwrap();
+    assert_eq!(result.disposition, Disposition::Completed);
+    assert_eq!(result.cleanup.status, CleanupStatus::Busy);
+    assert!(!result.cleanup.performed);
+    assert_eq!(result.cleanup.removed_bytes, 0);
+    assert_eq!(fs::read(cache).unwrap(), b"keep");
+    assert_eq!(fs::read(f.game.join("original.dat")).unwrap(), b"patched");
+    drop(other_writer);
+}
+
+#[test]
+fn after_commit_partial_or_front_refusal_cannot_rewrite_committed_install() {
+    if !can_install() {
+        return;
+    }
+    for front_refusal in [false, true] {
+        let f = Fixture::new();
+        let paths = steam_patch_core::installer::InstallerPaths::new(&f.state);
+        fs::create_dir_all(paths.downloads_dir()).unwrap();
+        fs::write(paths.downloads_dir().join("safe"), b"safe").unwrap();
+        let outside = f._temp.path().join("outside");
+        fs::write(&outside, b"outside").unwrap();
+        if front_refusal {
+            // The refusal is injected after the install committed below.
+        } else {
+            fs::hard_link(&outside, paths.downloads_dir().join("linked")).unwrap();
+        }
+        let result = f
+            .run_policy(
+                &f.provider(),
+                &Lease::default(),
+                &Offline,
+                "cleanup-failure",
+                true,
+                InstallOperation::Overwrite,
+                CleanupPolicy::AfterCommit,
+                &mut |progress| {
+                    if front_refusal && progress.stage == "cleanup" {
+                        fs::remove_dir(paths.reports_dir()).unwrap();
+                        fs::write(paths.reports_dir(), b"not a directory").unwrap();
+                    }
+                },
+            )
+            .unwrap();
+        assert_eq!(result.state, "committed");
+        assert_eq!(result.disposition, Disposition::Completed);
+        assert_eq!(result.cause, None);
+        assert_eq!(
+            result.cleanup.status,
+            if front_refusal {
+                CleanupStatus::Failed
+            } else {
+                CleanupStatus::Partial
+            }
+        );
+        assert_eq!(
+            result.cleanup.removed_bytes,
+            if front_refusal { 0 } else { 4 }
+        );
+        assert!(!result.cleanup.failures.is_empty());
+        assert_eq!(fs::read(outside).unwrap(), b"outside");
+    }
+}
+
+#[test]
+fn after_commit_never_cleans_rollback_and_exclusive_blocks_install_recover_discard() {
+    if !can_install() {
+        return;
+    }
+    let f = Fixture::new();
+    let mut p = f.provider();
+    p.current = f.envelope(f.release.clone(), 5, f.now + 3600, true);
+    let paths = steam_patch_core::installer::InstallerPaths::new(&f.state);
+    fs::create_dir_all(paths.downloads_dir()).unwrap();
+    let cache = paths.downloads_dir().join("keep");
+    fs::write(&cache, b"keep").unwrap();
+    let result = f
+        .run_policy(
+            &p,
+            &Lease::default(),
+            &Offline,
+            "cleanup-rollback",
+            true,
+            InstallOperation::Overwrite,
+            CleanupPolicy::AfterCommit,
+            &mut |_| {},
+        )
+        .unwrap();
+    assert_eq!(result.state, "rolled_back");
+    assert_eq!(result.cleanup.status, CleanupStatus::NotRequested);
+    assert_eq!(fs::read(&cache).unwrap(), b"keep");
+    let lock = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(paths.cache_lock())
+        .unwrap();
+    fs2::FileExt::try_lock_exclusive(&lock).unwrap();
+    assert_eq!(
+        f.run(
+            &f.provider(),
+            &Lease::default(),
+            &Offline,
+            "blocked",
+            true,
+            InstallOperation::Overwrite
+        )
+        .unwrap_err()
+        .code,
+        "installer_busy"
+    );
+    let host =
+        ValidatedHostContext::new(&f.state, std::slice::from_ref(&f.library), platform()).unwrap();
+    assert_eq!(service::recover(&host).unwrap_err().code, "installer_busy");
+    assert_eq!(
+        service::discard_plan(&host, &service::PlanId::new(&result.plan_id).unwrap())
+            .unwrap_err()
+            .code,
+        "installer_busy"
+    );
+    f.unchanged();
+}
+
+#[test]
+fn stale_local_actions_cannot_bypass_a_revoked_release_or_changed_build() {
+    if !can_install() {
+        return;
+    }
+    for changed_build in [false, true] {
+        let f = Fixture::new();
+        let mut provider = f.provider();
+        let snapshot = f.projected_actions(&provider);
+        assert_eq!(snapshot["local_archive"]["available"], true);
+        assert_eq!(snapshot["primary"]["input"], "local_archive");
+        if changed_build {
+            f.manifest("101");
+        } else {
+            provider.initial = f.envelope(f.release.clone(), 5, f.now + 3600, true);
+            provider.current = provider.initial.clone();
+        }
+        let error = f
+            .run(
+                &provider,
+                &Lease::default(),
+                &Offline,
+                "stale-local-actions",
+                true,
+                InstallOperation::Overwrite,
+            )
+            .unwrap_err();
+        assert_eq!(
+            error.code,
+            if changed_build {
+                "build_not_verified"
+            } else {
+                "release_revoked"
+            }
+        );
+        f.unchanged();
+        assert!(install::list_transactions_at(
+            steam_patch_core::installer::InstallerPaths::new(&f.state).root()
+        )
+        .unwrap()
+        .is_empty());
+    }
+}
+
+#[test]
+fn stale_reinstall_actions_do_not_take_over_external_or_damaged_files() {
+    if !can_install() {
+        return;
+    }
+    let f = Fixture::new();
+    let provider = f.provider();
+    f.run(
+        &provider,
+        &Lease::default(),
+        &Offline,
+        "owned-for-actions",
+        true,
+        InstallOperation::Overwrite,
+    )
+    .unwrap();
+    let snapshot = f.projected_actions(&provider);
+    assert_eq!(snapshot["reinstall"]["available"], true);
+    fs::write(f.game.join("original.dat"), b"external edit after scan").unwrap();
+    let error = f
+        .run(
+            &provider,
+            &Lease::default(),
+            &Offline,
+            "stale-reinstall",
+            true,
+            InstallOperation::Reinstall,
+        )
+        .unwrap_err();
+    assert_eq!(error.code, "reinstall_unowned_or_incomplete");
+    assert_eq!(
+        fs::read(f.game.join("original.dat")).unwrap(),
+        b"external edit after scan"
+    );
+    let fresh = f.projected_actions(&provider);
+    assert_eq!(fresh["reinstall"]["available"], false);
+    assert_eq!(fresh["local_archive"]["available"], true);
+    assert_eq!(fresh["primary"]["label"], "overwrite");
+    assert_eq!(
+        f.run(
+            &provider,
+            &Lease::default(),
+            &Offline,
+            "explicit-overwrite",
+            true,
+            InstallOperation::Overwrite
+        )
+        .unwrap()
+        .state,
+        "committed"
+    );
+}
+
+#[test]
+fn recovery_created_after_scan_blocks_a_different_patch_and_preserves_journal() {
+    if !can_install() {
+        return;
+    }
+    let mut f = Fixture::new();
+    let provider = f.provider();
+    let first = f
+        .run(
+            &provider,
+            &Lease::default(),
+            &Offline,
+            "first-before-recovery",
+            true,
+            InstallOperation::Overwrite,
+        )
+        .unwrap();
+    f.release.release_id = "other-signed-release".into();
+    f.release.patch_id = "other-signed-patch".into();
+    let provider = f.provider();
+    assert_eq!(
+        f.projected_actions(&provider)["local_archive"]["available"],
+        true
+    );
+    let paths = steam_patch_core::installer::InstallerPaths::new(&f.state);
+    let db = rusqlite::Connection::open(paths.journal()).unwrap();
+    let document: String = db
+        .query_row(
+            "SELECT document FROM jobs WHERE id=?1",
+            [&first.plan_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let mut document: serde_json::Value = serde_json::from_str(&document).unwrap();
+    document["transaction"]["state"] = serde_json::json!("needs_recovery");
+    db.execute(
+        "UPDATE jobs SET document=?1 WHERE id=?2",
+        rusqlite::params![document.to_string(), &first.plan_id],
+    )
+    .unwrap();
+    drop(db);
+    let before = fs::read(paths.journal()).unwrap();
+    let error = f
+        .run(
+            &provider,
+            &Lease::default(),
+            &Offline,
+            "other-after-recovery",
+            true,
+            InstallOperation::Overwrite,
+        )
+        .unwrap_err();
+    assert_eq!(error.code, "needs_recovery");
+    assert_eq!(fs::read(paths.journal()).unwrap(), before);
+    assert_eq!(fs::read(f.game.join("original.dat")).unwrap(), b"patched");
+    let fresh = f.projected_actions(&provider);
+    for action in ["automatic", "local_archive", "reinstall", "overwrite"] {
+        assert_eq!(fresh[action]["available"], false);
+        assert!(fresh[action]["blockers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|b| b["code"] == "needs_recovery"));
+    }
+}
+
+#[test]
+fn complete_external_signed_files_still_cannot_reinstall_without_owned_receipt() {
+    if !can_install() {
+        return;
+    }
+    let f = Fixture::new();
+    let provider = f.provider();
+    fs::write(f.game.join("original.dat"), b"patched").unwrap();
+    let actions = f.projected_actions(&provider);
+    assert_eq!(actions["reinstall"]["available"], false);
+    assert_eq!(actions["primary"]["label"], "overwrite");
+    assert_eq!(
+        f.run(
+            &provider,
+            &Lease::default(),
+            &Offline,
+            "external-reinstall",
+            true,
+            InstallOperation::Reinstall
+        )
+        .unwrap_err()
+        .code,
+        "reinstall_unowned_or_incomplete"
+    );
+    assert_eq!(fs::read(f.game.join("original.dat")).unwrap(), b"patched");
 }

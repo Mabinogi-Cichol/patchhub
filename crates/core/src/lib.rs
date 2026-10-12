@@ -1,5 +1,6 @@
 //! Read-only foundation for Steam patch management.
 //! No download or game-file mutation is exposed in this milestone.
+pub mod actions;
 mod appinfo;
 pub mod catalog;
 pub mod detection;

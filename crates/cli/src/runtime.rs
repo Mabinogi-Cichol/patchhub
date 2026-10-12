@@ -37,6 +37,8 @@ pub struct Params {
     #[serde(default)]
     pub operation: install::InstallOperation,
     pub request_id: Option<String>,
+    #[serde(default)]
+    pub cleanup_policy: installer::service::CleanupPolicy,
     pub source_id: Option<String>,
     pub enabled: Option<bool>,
     pub subscribed: Option<bool>,
@@ -642,46 +644,24 @@ pub fn execute_controlled<L: Fn(u64) -> bool + Sync, D: Fn() -> u64 + Sync>(
     Ok(result)
 }
 
-/// P1 `cleanup_cache`: sweeps only the cleanable installer roots (`content/`,
-/// `downloads/`, `reports/`), never an active lease/receipt/journal,
-/// `.stage`/`.backup` material or a `revoked` marker
-/// (p0-contracts §3.2; p1-host-contract §1.1 A / §7.3).
+/// Thin adapter to the validated core cache service.
 fn cleanup_cache(params: &Params) -> Result<Value, String> {
     let state = state(params)?;
-    state_safe(&state)?;
-    let paths = installer::InstallerPaths::new(&state);
-    installer::init_atomic(&paths).map_err(err)?;
-    installer::task::cleanup_stale_tasks(&paths).map_err(|_| "cleanup_failed".to_string())?;
-    let mut removed_bytes = 0_u64;
-    for entry in paths.list_cache_entries().map_err(err)? {
-        let metadata = fs::symlink_metadata(&entry).map_err(|_| "cleanup_failed".to_string())?;
-        if metadata.is_dir() {
-            removed_bytes += directory_size(&entry);
-            fs::remove_dir_all(&entry).map_err(|_| "cleanup_failed".to_string())?;
-        } else if metadata.file_type().is_file() {
-            removed_bytes += metadata.len();
-            fs::remove_file(&entry).map_err(|_| "cleanup_failed".to_string())?;
-        }
-    }
-    Ok(json!({ "performed": true, "removed_bytes": removed_bytes }))
-}
-
-fn directory_size(path: &Path) -> u64 {
-    let Ok(entries) = fs::read_dir(path) else {
-        return 0;
-    };
-    let mut total = 0_u64;
-    for entry in entries.flatten() {
-        let Ok(metadata) = fs::symlink_metadata(entry.path()) else {
-            continue;
-        };
-        if metadata.is_dir() {
-            total = total.saturating_add(directory_size(&entry.path()));
-        } else if metadata.file_type().is_file() {
-            total = total.saturating_add(metadata.len());
-        }
-    }
-    total
+    let host = installer::service::ValidatedHostContext::new(
+        &state,
+        &params.roots,
+        params.platform.unwrap_or(if cfg!(windows) {
+            Platform::Windows
+        } else {
+            Platform::Steamos
+        }),
+    )
+    .map_err(projection_error)?;
+    value(
+        installer::cache::CacheService::new(&host)
+            .cleanup()
+            .map_err(projection_error)?,
+    )
 }
 
 fn game_query(install: &steam::GameInstall) -> sources::GameQuery {
@@ -1080,7 +1060,7 @@ fn install_patch<L: Fn(u64) -> bool + Sync, D: Fn() -> u64 + Sync>(
             instance_id: instance,
             operation: params.operation,
             target,
-            cleanup_policy: CleanupPolicy::Disabled,
+            cleanup_policy: params.cleanup_policy,
         },
         InstallerDeps {
             host: &host,
@@ -1687,12 +1667,27 @@ mod install_flow_tests {
             execute("install_patch", conflict).unwrap_err(),
             "request_id_binding_conflict"
         );
-        fs::write(game.join("patch.dat"), b"damaged").unwrap();
         let mut reinstall = copy_params(&params);
         reinstall.request_id = Some("request-2".into());
         reinstall.operation = install::InstallOperation::Reinstall;
         assert_eq!(
             execute("install_patch", reinstall).unwrap()["state"],
+            "committed"
+        );
+        fs::write(game.join("patch.dat"), b"damaged").unwrap();
+        let mut damaged = copy_params(&params);
+        damaged.request_id = Some("request-damaged".into());
+        damaged.operation = install::InstallOperation::Reinstall;
+        assert_eq!(
+            execute("install_patch", damaged).unwrap_err(),
+            "reinstall_unowned_or_incomplete"
+        );
+        assert_eq!(fs::read(game.join("patch.dat")).unwrap(), b"damaged");
+        let mut overwrite = copy_params(&params);
+        overwrite.request_id = Some("request-overwrite".into());
+        overwrite.operation = install::InstallOperation::Overwrite;
+        assert_eq!(
+            execute("install_patch", overwrite).unwrap()["state"],
             "committed"
         );
         assert_eq!(fs::read(game.join("patch.dat")).unwrap(), b"patch content");
@@ -2072,6 +2067,50 @@ mod dynamic_projection_tests {
     }
 
     #[test]
+    fn stale_actions_cannot_bypass_source_or_subscription_changes() {
+        for source_disabled in [true, false] {
+            let (_temp, mut params, game, _archive, selection_id) = fixture();
+            params.platform = Some(host_platform());
+            let mut scan = clone_params(&params);
+            scan.instance_id = None;
+            let snapshot = execute("scan", clone_params(&scan)).unwrap();
+            assert_eq!(
+                snapshot["installs"][0]["patches"][0]["actions"]["automatic"]["available"],
+                true
+            );
+            let mut setting = clone_params(&params);
+            setting.source_id = Some("kagura-cn".into());
+            if source_disabled {
+                setting.enabled = Some(false);
+                execute("set_source_enabled", setting).unwrap();
+            } else {
+                setting.subscribed = Some(false);
+                execute("set_game_source", setting).unwrap();
+            }
+            params.selection_id = Some(selection_id);
+            params.request_id = Some("stale-actions-source".into());
+            params.operation = install::InstallOperation::Overwrite;
+            assert_eq!(
+                execute("install_patch", clone_params(&params)).unwrap_err(),
+                // Disabled/unsubscribed discoveries are removed from the live
+                // candidate set, so the old selection is no longer resolvable.
+                "selection_not_found"
+            );
+            assert!(!game.install_path.join("data.txt").exists());
+            let paths = installer::InstallerPaths::new(params.state_dir.as_ref().unwrap());
+            assert!(install::list_transactions_at(paths.root())
+                .unwrap()
+                .is_empty());
+            let fresh = execute("scan", scan).unwrap();
+            assert!(!fresh["installs"][0]["patches"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|patch| patch["actions"]["automatic"]["available"] == true));
+        }
+    }
+
+    #[test]
     fn scan_projects_the_dynamic_selection_with_full_fields() {
         let (_temp, params, _game, _archive, selection_id) = fixture();
         let mut scan = clone_params(&params);
@@ -2084,7 +2123,7 @@ mod dynamic_projection_tests {
             .expect("dynamic selection projected");
         assert_eq!(dynamic["release_id"], "source-kagura-cn-42");
         assert_eq!(dynamic["support_level"], "publisher_zip");
-        assert_eq!(dynamic["download_available"], true);
+        assert_eq!(dynamic["actions"]["automatic"]["available"], true);
         assert!(dynamic["blockers"].as_array().unwrap().is_empty());
         assert!(dynamic["detection"]["status"].is_string());
         assert!(dynamic["compatibility"].is_string());
@@ -2168,7 +2207,10 @@ mod dynamic_projection_tests {
         let sandbox_blocked = blockers
             .iter()
             .any(|blocker| blocker == "exe_sandbox_unavailable");
-        assert_eq!(dynamic["download_available"], !sandbox_blocked);
+        assert_eq!(
+            dynamic["actions"]["automatic"]["available"],
+            !sandbox_blocked
+        );
     }
 
     #[test]
@@ -2232,7 +2274,7 @@ mod dynamic_projection_tests {
             .find(|patch| patch["selection_id"] == selection_id.as_str())
             .expect("exe demo selection projected");
         assert_eq!(dynamic["release_id"], "source-kagura-cn-42");
-        assert_eq!(dynamic["download_available"], false);
+        assert_eq!(dynamic["actions"]["automatic"]["available"], false);
         assert!(dynamic["blockers"]
             .as_array()
             .unwrap()

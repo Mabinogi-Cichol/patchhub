@@ -120,7 +120,7 @@ fn boundary(deps: &SignedInstallDeps<'_>, control: &TaskControl) -> Result<(), D
 pub(crate) fn install_signed(
     inputs: SignedInstallInputs<'_>,
     deps: SignedInstallDeps<'_>,
-) -> Result<Transaction, DomainError> {
+) -> Result<super::InstallExecution, DomainError> {
     super::init_atomic(deps.paths).map_err(io_error)?;
     let _claim =
         super::requests::RequestClaim::acquire(deps.paths, inputs.request_id).map_err(io_error)?;
@@ -205,7 +205,7 @@ fn install_signed_inner(
     inputs: &SignedInstallInputs<'_>,
     deps: &SignedInstallDeps<'_>,
     control: &TaskControl,
-) -> Result<Transaction, DomainError> {
+) -> Result<super::InstallExecution, DomainError> {
     let binding = super::request_binding(
         &inputs.game.instance_id,
         None,
@@ -216,7 +216,7 @@ fn install_signed_inner(
     if let Some(transaction) =
         super::begin_request(deps.paths, inputs.request_id, &binding).map_err(task_error)?
     {
-        return Ok(transaction);
+        return Ok(super::InstallExecution::replay(transaction));
     }
     boundary(deps, control)?;
     let catalog = revision::verify_catalog(deps.provider, deps.revision_store, inputs.now)?;
@@ -400,7 +400,7 @@ fn install_signed_inner(
         &identity,
         &transaction,
     );
-    Ok(transaction)
+    Ok(super::InstallExecution::fresh(transaction))
 }
 
 // This signed-only adapter preserves the mature download URL policy: unlike
