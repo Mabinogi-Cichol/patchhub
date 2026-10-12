@@ -1,9 +1,9 @@
 # 开发进度
 
-## 2026-10-11：Rust 核心服务收敛重构 P0 已提交、P1/P2 阶段通过（P3–P6 待实现）
+## 2026-10-12：Rust 核心服务收敛重构 P1–P4 已本地提交、P3/P4 阶段自动化通过（P5–P6 待实现）
 
 - 建立独立 feature，按扫描投影、签名安装编排/信任存储、缓存清理、动作 DTO、公共契约顺序推进，P6 逐项关闭本次识别的技术债。
-- P0 契约/动作与终态/数据/债项已冻结，Windows隔离基准和只读36实例清单、拟v4体积核对、独立静态复核通过；P1核心扫描/取证/预览已实现并接入CLI，Windows417/Linux422、只读子进程、Clippy与独立复核通过；哈希次数一致，取证耗时增加约45%–61%，详见 [P1 验证](features/rust-core-consolidation/p1-validation.md)。P2签名/信任/统一安装与终态已核心化，Windows465/Linux472、Clippy、实际root拒绝与独立复核通过；清理诊断/恢复边界/账本失败重放闭环，详见 [P2 验证](features/rust-core-consolidation/p2-validation.md)。P1/P2 代码已本地提交 `e77d0a8`，文档独立提交，未推送/部署；P3–P6、双端最终产物和实机均待实施。详见 [设计](features/rust-core-consolidation/design.md)与[施工记录](features/rust-core-consolidation/progress.md)。
+- P0 契约/动作与终态/数据/债项已冻结，Windows隔离基准和只读36实例清单、拟v4体积核对、独立静态复核通过；P1核心扫描/取证/预览已实现并接入CLI，Windows417/Linux422、只读子进程、Clippy与独立复核通过；哈希次数一致，取证耗时增加约45%–61%，详见 [P1 验证](features/rust-core-consolidation/p1-validation.md)。P2签名/信任/统一安装与终态已核心化，Windows465/Linux472、Clippy、实际root拒绝与独立复核通过；清理诊断/恢复边界/账本失败重放闭环，详见 [P2 验证](features/rust-core-consolidation/p2-validation.md)。P1/P2 代码已本地提交 `e77d0a8`，文档独立提交，未推送/部署；P3核心CacheService/shared-exclusive锁、AfterCommit与双端偏好适配已实现，Windows487/Linux494、Windows宿主23、Decky后端69/TS63与fmt/Clippy、独立复核通过，详见 [P3 验证](features/rust-core-consolidation/p3-validation.md)。P4必需actions/双端消费、strict Reinstall与过期快照重核已实现，Windows502/Linux509、Tauri24、Decky71/TS65、双端类型与fmt/Clippy通过；两项独立审阅意见已修复，最终全范围独立gate待P6，详见 [P4验证](features/rust-core-consolidation/p4-validation.md)。P3/P4 代码已本地提交 `19ffc8a`，文档独立提交，未推送/部署；P5–P6、双端最终产物和实机均待实施。详见 [设计](features/rust-core-consolidation/design.md)与[施工记录](features/rust-core-consolidation/progress.md)。
 
 ## 2026-10-11：跨平台安装器迁移 P6 收口
 
