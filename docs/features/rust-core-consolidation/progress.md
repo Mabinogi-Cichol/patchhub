@@ -1,8 +1,8 @@
 # Rust 核心服务收敛重构施工记录
 
-设计：[design.md](design.md)。P1 证据：[p1-validation.md](p1-validation.md)。P2 证据：[p2-validation.md](p2-validation.md)。P3 证据：[p3-validation.md](p3-validation.md)。P4 证据：[p4-validation.md](p4-validation.md)。P5 证据：[p5-validation.md](p5-validation.md)、[审阅](p5-review.md)。基线审阅：[rust-core-consolidation-review.md](../cross-platform-installer-migration/rust-core-consolidation-review.md)。
+设计：[design.md](design.md)。P1 证据：[p1-validation.md](p1-validation.md)。P2 证据：[p2-validation.md](p2-validation.md)。P3 证据：[p3-validation.md](p3-validation.md)。P4 证据：[p4-validation.md](p4-validation.md)。P5 证据：[p5-validation.md](p5-validation.md)、[审阅](p5-review.md)。P6 证据：[p6-validation.md](p6-validation.md)、[审阅](p6-review.md)。基线审阅：[rust-core-consolidation-review.md](../cross-platform-installer-migration/rust-core-consolidation-review.md)。
 
-当前状态：**P0 已冻结并提交；P1 扫描投影/受限取证/只读预览已实现，Windows/Linux 自动化、基准对照与独立复核通过；P2 签名/信任/终态及统一安装入口已实现，Windows/Linux 自动化与独立复核通过；P1/P2已本地提交；P3核心缓存/策略已实现，Windows/Linux自动化与独立复核通过；P4 actions/双端消费已实现、最终自动化通过、两项复核意见已修复；P3/P4 代码已本地提交 `19ffc8a`；P5 v4/生成契约/共享 helper 已实现、阶段自动化及专项独立复核通过，代码已本地提交 `9b5c4f8`；P6 待实现；双端最终产物、实机待验证。**
+当前状态：**P0–P5 已实现并按既有记录提交；P6 双端最终自动化与产物核验、Deck 正式部署及 ZIP/EXE 覆盖与写入取消回滚通过；Windows 夜勤游戏生效、Deck 两款游戏生效和实体手柄操作均由用户确认。Windows 真实界面与直链 EXE 按用户决定跳过；远端验收暂存已清理；最终独立 gate findings=[]，D1–D10 已关闭，P6 按调整后范围完成。**
 
 ## 1. 用户目标与范围
 
@@ -21,7 +21,7 @@
 | P3 cache/cleanup policy | 已实现、自动化与独立复核通过 | [P3 验证](p3-validation.md)：Windows487/Linux494、双端与清理互斥 | P4 已完成；P3/P4 代码已提交 `19ffc8a` |
 | P4 actions/双端消费 | 已实现、最终自动化通过、两项复核修复完成 | [P4 验证](p4-validation.md)：Windows502/Linux509、Tauri24、Decky71/TS65、过期快照与真实体积 | 代码已提交 `19ffc8a`；P5 正式 v4/生成契约；P6 最终独立 gate |
 | P5 protocol v4/共享 helper | 已实现、自动化及专项独立复核通过 | [验证](p5-validation.md) / [审阅](p5-review.md)：生成无漂移、严格 v4、双端终态、同包隔离冒烟 | P6 最终包/实机/gate；代码已本地提交 `9b5c4f8` |
-| P6 最终清理/验收 | 待实现 | 无新验证证据 | D1–D10 关闭、双端矩阵/产物/实机/独立复核 |
+| P6 最终清理/验收 | 已完成，最终独立gate通过，D1–D10已关闭 | [阶段验证](p6-validation.md) / [复核](p6-review.md)：本机WSL构建/计数基准、NSIS内容、Windows取消/用户生效确认、Deck正式文件/RPC/真实页 | Deck ZIP/EXE写入取消、恢复/清理、用户游戏与手柄确认完成；Windows真实UI/直链EXE跳过；本轮未提交、推送或发布 |
 
 阶段通过后记录具体文件、命令、结果与证据；保留历史事实，不以设计中的目标覆盖实际完成情况。
 
@@ -60,16 +60,16 @@ P0交付索引：[字段/API/v4表](p0-contract.md)、[动作/终态样本](p0-b
 
 | ID | 状态 | 完成证据 |
 | --- | --- | --- |
-| D1 CLI 扫描/预览业务 | 已实现、阶段自动化通过；P6 最终关闭 | 核心公共 API、CLI 只读适配与子进程；[P1](p1-validation.md) |
-| D2 准入/身份/哈希重复规则 | P1/P2 规则与写入边界、P4 actions、P5 正式请求契约已实现；P6 最终关闭 | 共用取证、来源身份/ZIP准入/EXE resolver；[P1](p1-validation.md) |
-| D3 signed/trust 核心化 | 已实现、阶段自动化/复核通过；P6 最终关闭 | [P2](p2-validation.md)：统一入口、原始签名重核、SQLite 高水位并发 |
-| D4 cache 服务与追加删除 | 已实现、阶段自动化/复核通过；P6最终关闭 | [P3](p3-validation.md)：核心安全回收/互斥/策略，旧遍历和追加删除移除 |
-| D5 前端动作推导/派生字段 | 已实现、阶段自动化通过；P6 最终关闭 | [P4](p4-validation.md)：必需 actions，旧权限字段/helper 删除，双端直接消费 |
-| D6 请求/错误/生成契约 | 已实现、阶段自动化/复核通过；P6 最终关闭 | [P5](p5-validation.md)：strict v4、生成/固定 fixture、结构化错误 |
-| D7 安装结果终态映射 | core 与双端终态消费已统一；P6 最终关闭 | [P2](p2-validation.md)：持久取消、恢复、清理诊断与账本失败重放 |
-| D8 共享展示 helper | 已实现、阶段自动化通过；P6 最终关闭 | [P5](p5-validation.md)：生成 DTO、动作/结果/进度/来源/URL helper |
-| D9 过渡路径与废弃消费者 | P5 v3/旧权限与重复终态/helper 已移除；P6 全范围清理 gate 待执行 | [P5](p5-validation.md) |
-| D10 v4 冒烟/CI/文档产物 | v4 冒烟/CI/隔离插件产物已通过；P6 双端最终产物/实机待执行 | [P1 子进程](../../../crates/cli/tests/projection_smoke.rs) |
+| D1 CLI 扫描/预览业务 | 已关闭；最终源码、自动化、产物及实机独立复核通过 | 核心公共 API、CLI 只读适配与子进程；[P1](p1-validation.md) |
+| D2 准入/身份/哈希重复规则 | 已关闭；最终源码、自动化、产物及实机独立复核通过 | 共用取证、来源身份/ZIP准入/EXE resolver；[P1](p1-validation.md) |
+| D3 signed/trust 核心化 | 已关闭；最终源码、自动化、产物及实机独立复核通过 | [P2](p2-validation.md)：统一入口、原始签名重核、SQLite 高水位并发 |
+| D4 cache 服务与追加删除 | 已关闭；最终源码、自动化、产物及实机独立复核通过 | [P3](p3-validation.md)：核心安全回收/互斥/策略，旧遍历和追加删除移除 |
+| D5 前端动作推导/派生字段 | 已关闭；最终源码、自动化、产物及实机独立复核通过 | [P4](p4-validation.md)：必需 actions，旧权限字段/helper 删除，双端直接消费 |
+| D6 请求/错误/生成契约 | 已关闭；最终源码、自动化、产物及实机独立复核通过 | [P5](p5-validation.md)：strict v4、生成/固定 fixture、结构化错误 |
+| D7 安装结果终态映射 | 已关闭；最终源码、自动化、产物及实机独立复核通过 | [P2](p2-validation.md)：持久取消、恢复、清理诊断与账本失败重放 |
+| D8 共享展示 helper | 已关闭；最终源码、自动化、产物及实机独立复核通过 | [P5](p5-validation.md)：生成 DTO、动作/结果/进度/来源/URL helper |
+| D9 过渡路径与废弃消费者 | 已关闭；最终源码、自动化、产物及实机独立复核通过 | [P5](p5-validation.md)、[P6](p6-review.md) |
+| D10 v4 冒烟/CI/文档产物 | 已关闭；v4/CI/双端最终包/同包冒烟、完整实机、文档与清理归档最终复核通过 | [P6 验证](p6-validation.md) |
 
 关闭标准以 design 第 9 节为准，不能只凭删除某个符号声明关闭。
 
@@ -77,21 +77,21 @@ P0交付索引：[字段/API/v4表](p0-contract.md)、[动作/终态样本](p0-b
 
 | 验证 | 当前状态 | 实施后应记录 |
 | --- | --- | --- |
-| 文档结构/链接/差异 | P0–P5 已通过 | [P5 最终检查](../../../.artifacts/rust-core-consolidation/p5/final-checks.json) |
-| 核心/CLI/protocol/worker 自动化 | P5 core/CLI/protocol Windows509、Linux516通过；最终 worker 全套及双端 release gate 待 P6 | [P5 汇总](../../../.artifacts/rust-core-consolidation/p5/validation-summary.json) |
-| Tauri、Decky Python、TS | P5 Windows35、Decky76通过/2skipped、TS65及双端类型/build通过 | [P5](p5-validation.md)；双端实机待P6 |
+| 文档结构/链接/差异 | P0–P5已通过；P6当前链接/diff通过 | P5历史证据`.artifacts/rust-core-consolidation/p5/final-checks.json`（本轮环境未保留）；P6见验证记录 |
+| 核心/CLI/protocol/worker 自动化 | P6 Windows workspace604通过/6ignored；Linux576通过/6ignored，fmt/Clippy通过 | [P6 验证](p6-validation.md) |
+| Tauri、Decky Python、TS | P5 Windows35、Decky76通过/2skipped、TS65及双端类型/build通过 | [P5](p5-validation.md)；最终Deck Python78/0skip与双端实机见[P6](p6-validation.md) |
 | v4 子进程冒烟/契约一致性 | P5 同源夹具/check、CLI/bridge隔离冒烟通过 | 固定 fixture、失败场景、生成无漂移 |
-| 性能/哈希次数 | P0/P1 Windows debug 对照完成；哈希计数一致，取证耗时上升；Linux/发行包待后续 | [P1 对照](p1-validation.md#性能对照)，新增动态收据32次哈希 |
-| 双端包/SBOM/哈希 | P5 Decky隔离包/SBOM/哈希通过，Windows最终包待P6 | 最终包、版本清单、allowlist、license 增量 |
-| Windows 实机 | 待验证 | 实例、操作/事务、前后文件、恢复/清理 |
-| Deck 正式部署/RPC/UI/控制器 | 待验证 | 备份、正式文件哈希、RPC、页面与用户确认 |
-| 独立复核 | P0/P1/P2/P3及P5专项通过；P6全范围待验证 | P5 指定协议与宿主边界闭环，无遗留具体 finding；[P5审阅](p5-review.md) |
+| 性能/哈希次数 | P6 Windows/Linux release四场景计数/响应事实通过 | [P6 验证](p6-validation.md)；不跨机器/构建配置直接比较 |
+| 双端包/SBOM/哈希 | Windows便携11文件、NSIS内部8文件；Deck24文件、ELF/许可证/SBOM通过 | [P6 验证](p6-validation.md) |
+| Windows 实机 | 夜勤安装/覆盖/写入取消回滚与71文件一致、用户确认游戏生效；真实UI/直链EXE跳过 | [P6 验证](p6-validation.md) |
+| Deck 正式部署/RPC/UI/控制器 | 正式v4文件/HTTP/RPC/QAM与全屏检查、ZIP/EXE覆盖与写入取消回滚、恢复与清理通过；用户确认两款游戏生效与实体手柄正常 | [P6 验证](p6-validation.md) |
+| 独立复核 | 最终源码/自动化/产物/完整实机/文档及清理归档findings=[]，D1–D10已关闭 | [P6 审阅](p6-review.md) |
 
 证据保存在本 feature 附加文档或 .artifacts 的对应目录，progress 链接实际存在的结果。本轮未创建虚构验收或样本证据文件。
 
 ## 7. 遗留与阻断
 
-P1–P4 已完成阶段实现与自动化，无已知 P5 实施阻断。受限取证16 GiB上限已实现；带文件取证的 debug 扫描慢45%–61%，保留安全检查并登记最终平台性能验证。cache.lock 与 actions 已完成；params.host、生成器、v4 Rust/TS/Python fixture 仍待 P5，最终产物/实机及全范围独立 gate 待 P6。过渡字段及协议边界见 [P1记录](p1-validation.md#阶段过渡与未执行项)。
+P1–P5 已完成，P6 双端最终自动化/产物、本机WSL构建、Deck正式部署和完整实机矩阵已补齐；用户确认两款Deck游戏效果与实体手柄操作。最终独立文档/清理归档gate通过，D1–D10已关闭，P6完成。Windows真实UI及fake-IP直链/EXE按用户决定跳过，NSIS未运行安装器；这些边界继续保留。历史debug取证耗时增量及既有ignored用例保留，不跨机器宣称性能改善。详细范围见 [P6 验证](p6-validation.md)。
 
 已有旧 profile 样本、旧 Windows 版本和 fake-IP 限制保留在原功能记录。本 feature 新发现的必要问题进入本记录并保持未关闭；范围外问题单独登记。最终清理清单和必要验收未闭环时，不声明 feature 完成。
 
@@ -115,7 +115,7 @@ P1–P4 已完成阶段实现与自动化，无已知 P5 实施阻断。受限�
 - 新请求adapter定向结构检查通过：v3参数保留、v4六字段host、请求超限进程前拒绝、完整8MiB行接受/8MiB+1拒绝。使用subprocess double，不是v4 runtime通过。
 - v4静态 UTF-8 JSON+LF体积：请求384B，三outcome509/572/633B；24实例report45,155/42,880B。500×4patch满detail约19.2MB会超限，冻结明确response_too_large；不增限额。独立reviewer另核对请求/outcome体积一致。
 - 独立reviewer初审3项P2（unknown、recovery/partial cleanup、v4请求adapter）均修正，定向复核通过，无遗留具体finding，可放行P1。详细 [复核记录](p0-review.md)。
-- `python -m py_compile scripts/benchmark-projection.py`、JSON解析、Markdown本地链接、阶段/债项编号、EOF/空白与 `git diff --check` 完成检查；[检查结果](../../../.artifacts/rust-core-consolidation/p0-doc-check.json)。证据在本 feature 附加文档和 .artifacts/rust-core-consolidation/。
+- `python -m py_compile scripts/benchmark-projection.py`、JSON解析、Markdown本地链接、阶段/债项编号、EOF/空白与 `git diff --check` 完成检查；历史检查结果`.artifacts/rust-core-consolidation/p0-doc-check.json`（本轮环境未保留）。证据在本 feature 附加文档和 .artifacts/rust-core-consolidation/。
 
 ### 待实施/待验证
 
@@ -238,3 +238,52 @@ P1 使用 multi-agent 并行实现：Sol/high 负责共享受限文件取证与�
 - 沿用 P5 已完成验证，提交前 223 个源码 SHA-256 全部匹配。暂存检查发现新生成 TS 的行尾空格；生成器统一 trim_end，生成文件与原内容只差行尾空白。补跑 generate/check、双端 typecheck、共享契约检查和生成器 Clippy 全部通过，不重复领域测试。
 - 文档独立提交：设计/P0受限修订、P5验证与审阅、施工记录/索引/总体摘要、v4契约及客户端说明。完整暂存差异/文件清单、diff --cached --check通过；提交源指纹另存 `.artifacts/rust-core-consolidation/p5/commit-source-sha256.json`。
 - 原SSH远端认证失败（publickey）；同一GitHub仓库HTTPS读取成功，远端main与本地基线一致。使用HTTPS向main正常推送，不强推、不修改远端配置。执行结果以本次交付回执为准；P6实机/最终验收仍待执行。本次没有部署或改动真实游戏/设备，第17节保留实施时尚未提交的历史事实。
+
+
+## 19. 2026-10-13 P6 部分完成、清理后暂停
+
+用户授权继续 P6，指定 Windows/Deck 均使用《夜勤病栋》和《妃神会秘史》，Deck 地址改为 `192.168.1.32`；授权一个只读子 Agent 独立复核。用户随后要求在本机构建 Linux 产物、清理 Deck 构建残留，并明确“完成清理后暂停并记录当前进度，我先去安装wsl”。现已按此暂停。
+
+- 基准与体积工具切换正式 v4、清除 legacy 适配；修复尾点 URL 边界和过时模块说明；Windows 打包补齐项目/sfextract 许可证及必需 SBOM。具体修改、日志和验证范围见 [P6 验证](p6-validation.md)。
+- Windows workspace 全套、双端类型/共享契约、生成 check、Windows UI 用例、Decky TS65/Python76通过与2skip、打包7/SBOM1通过；Windows release CLI/worker、NSIS/便携包及11文件allowlist、AMD64/许可证/SBOM核验通过；release隔离投影四场景/计数事实一致、manifest和v4体积记录完成。P6 Linux/fmt/Clippy尚未执行，不沿用旧记录冒充本轮检查。
+- 两端真实游戏/正式插件状态已备份，Deck备份已回传并核验。官方夜勤ZIP已按签名目录核验。Windows直链被fake-IP保护拒绝，用户允许跳过，不关闭TUN或放宽安全规则；本地官方ZIP真实安装已安全结束，`completed/committed`，事务 `b7566033-0a6f-81d4-a9bf-72cdf46a4337`。Windows EXE、第二次覆盖/写入取消回滚、UI和游戏内确认仍待验证。
+- Deck只完成正式Loader/CEF/RPC/scan读取和备份，未部署或修改游戏，正式插件仍v3。Deck Rust尝试缺少C编译器、Podman拉取失败，均不算Linux验证；已停止相关进程并清理本轮source/target/cargo-home/rustup-home/rustup-init/source.tar和构建脚本，Podman无镜像/容器。备份、官方ZIP和验证日志保留；两个临时SSH隧道关闭，暂停前复核Loader active。
+- 独立复核为1个GPT-6 Sol/high只读子Agent，初轮发现与修复记录见 [P6 复核](p6-review.md)。最终包/实机全范围独立gate尚未完成，D1–D10最终关闭均保留待办。
+- 源码指纹和当前证据索引保存到 `.artifacts/rust-core-consolidation/p6/pause-state.json`。下一步等待用户装好WSL，在本机构建兼容SteamOS的最终Linux产物后再部署。没有新增P6提交、推送或发布；暂停后不继续构建、部署或验收写入。
+
+
+## 20. 2026-10-13 安装 WSL 后恢复 P6
+
+用户确认 WSL 已安装，恢复原 P6 授权范围。核对暂停源码234项全部未变；Windows fmt/Clippy补齐通过。WSL 3.0.3 可用但没有发行版，已在本机安装 Ubuntu 22.04，安装构建依赖、Rust1.94.0/rustfmt/Clippy，并以非root codex-p6 用户在本机 Linux 文件系统隔离快照构建；Deck不安装编译工具。
+
+扩大Linux门禁至format/worker时发现Linux内存限制探针的slow_vector_initialization警告；精确限定lint例外到scenario_alloc，保留try_reserve的失败返回语义。worker运行回归需要bubblewrap，已补齐本机依赖；正式策略不放宽。Linux完整回归/release正在执行，未到终态不计通过。
+
+Deck通过已配对密钥和严格主机校验连接；Loader3.2.10 active，13个任务全终态，只有一个插件实例，旧构建目录保持已清理。新增部署前正式插件/完整状态/Loader设置备份并回传核验，保留首次备份和原游戏备份；准备旧v3回滚ZIP。Windows官方ZIP第二次覆盖及写入取消回滚正在执行。NSIS内部8个应用文件完成解包核验，主程序差异仅Tauri的NSS/UNK类型标记，其余文件逐字节一致；尚未执行NSIS实际安装。
+
+复用用户独立复核授权，新一轮只读reviewer为GPT-6.1 Sol/high、fork none；源码与已有Windows产物findings=[]，Linux/Deck最终产物和新增实机证据后续复核。验收结果仍待最终记录，不关闭D1–D10。
+
+## 21. 2026-10-13 双端最终产物、Deck正式部署与实机续验
+
+Linux本机WSL完整Rust575passed/6ignored、Decky Python3.12共78passed/0skip，fmt/Clippy/生成check及打包7/SBOM1通过；release CLI/worker和四场景plain/count六次基准完成，指纹无漂移。最终Deck ZIP24文件/ELF/生成契约/mode/许可证/SBOM核验通过；WSL非root最终同包CoreBridge preflight/scan、v3拒绝及后续合法v4请求通过。Windows fmt/Clippy补齐、NSIS内部8应用文件核验通过，未执行安装器；Windows夜勤第二次覆盖和写入取消回滚71文件一致，用户确认游戏生效。用户允许Windows直链/EXE跳过，随后明确Windows真实界面验收先跳过。
+
+Deck完整部署前备份及v3回滚包回传核验，Loader本地ZIP+SHA正式安装，24文件与实际HTTP bundle一致、服务active、插件实例1、真实scan27游戏/目录rev4 signed，Loader设置未变。真实全屏夜勤管理页顶部/底部截图及滚动无横溢出通过，实体手柄与游戏内仍待用户。夜勤已有托管实例，本轮首轮/再次overwrite均committed、AfterCommit清理completed；第一次取消脚本误认主stage导致正常提交，保留证据不计通过。修正观察applying/writing子stage后重跑，在64KiB已写入后正常cancel_task，核心cancelled/rolled_back、无提交后清理；夜勤71文件及妃神12文件前后SHA/size完全一致。没有kill writer。
+
+设备中途IP改为用户确认192.168.1.112，严格主机校验成功，重建临时隧道；没有重复部署或覆盖原备份。《妃神会秘史》当前中文官方EXE候选刷新成功，实际自动下载/安装继续中。最终游戏/控制器、远端临时材料清理与最终gate尚未结束；不宣布P6完成。源码/双端最终包/NSIS与新增Windows实机证据已由GPT-6.1 Sol/high只读reviewer核对，findings=[]。详细SHA/事务和证据见[P6验证](p6-validation.md)、[复核](p6-review.md)。未新增Git提交、推送或发布。
+
+## 22. P6 最终包与实机收口（2026-10-13）
+
+发现并修复 publisher 下载取消错误码未标准化：core 将 download_cancelled 统一为 cancelled，补充公共安装入口回归；Linux 旧实现 RED、新实现 GREEN。最终 Windows604/Linux576 passed、各6既有ignored，Decky Python78 passed/0skip，fmt/Clippy/release、同源计数基准、双端最终包与NSIS内部内容核验通过。生产变更重新构建、打包并通过 Loader 正常更新 Deck，未放宽网络保护。
+
+Deck 夜勤 ZIP 和妃神官方中文 EXE 各两次 committed 覆盖；两者均在实际写入后取消并 rolled_back。妃神新版下载阶段取消也返回标准 cancelled。取消前后夜勤71/妃神12个文件完全一致；recover=[]，手动缓存清理回收1228413609bytes、0失败，事务及游戏文件不变。最终插件实例1/扫描27实例、正式24文件与HTTP一致、Loader active；真实QAM/全屏/只读预览检查通过，EXE只读预览按设计安全返回exe_check_required。
+
+用户确认“两款游戏补丁生效，手柄操作正常”，保存 deck-user-confirmation.json。本地首次游戏/插件备份、后续部署前备份、v3回滚包和最终远端证据归档重新核验；仅清理本轮三个验证目录及Downloads官方ZIP副本，正式插件/state/游戏保留。详细事务、最终产物SHA、复核和范围例外见 [P6验证](p6-validation.md) 与 [独立复核](p6-review.md)。本轮未提交、推送或发布。
+
+## 23. P6 最终关闭
+
+GPT-6.1 Sol/high只读终轮复核findings=[]，最终源码、双端产物、完整实机、用户确认、远端清理与本地归档及文档核验一致；D1–D10全部关闭，P6按用户调整范围完成。当前最终产物见[P6验证](p6-validation.md)，复核边界见[P6审阅](p6-review.md)。Windows真实UI/直链EXE跳过、NSIS未实际执行安装；本轮未提交/推送/发布。临时QAM状态已恢复，CEF SSH隧道已关闭。
+
+## 24. P6 按模块本地提交（2026-10-13）
+
+用户在验收完成后明确要求“提交GIT”，使用项目 steam-patch-git-commit 技能，仅提交本仓库 main 分支已有P6改动。代码按模块拆分：`ab45557` 安装核心发布商下载取消状态、`f808e3b` 共享来源URL尾点拒绝、`84acd23` 双端许可证与必需SBOM、`824bad2` 正式v4基准与验收工具；P6设计/施工/复核与指南另行文档提交。上文“未提交”均为对应施工阶段的历史事实。
+
+沿用已完成且源码未变的自动化、产物与实机验证，不重复测试；工作区及逐批暂存差异检查通过。未纳入忽略目录的备份、游戏材料、构建产物、密钥或token；没有推送、打tag或发布。

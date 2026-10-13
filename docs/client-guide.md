@@ -53,7 +53,7 @@ Tag 名含 `-` 时标记为预发行版，其余标记为正式发行版。Relea
 
 ### 手动构建
 
-Windows：先构建 `cargo build --release -p steam-patch-cli`，将工具链 bin 加入 PATH，再运行 `npm run bundle -w apps/windows`。prepare-sidecar 会复制固定二进制以及三个目录资源，Tauri 生成 NSIS 安装包。开发构建也需准备 sidecar 与资源。不要把私钥放入资源或提交到 Git。
+Windows：先构建 `cargo build --release --locked -p steam-patch-cli -p steam-patch-installer-worker --bin steam-patch --bin sf-worker`，将工具链 bin 加入 PATH，再运行 `npm run bundle -w apps/windows -- -- --locked`。prepare-sidecar 会复制同版 CLI、固定 worker 以及三个目录资源，Tauri 生成 NSIS 安装包。开发构建也需准备 sidecar 与资源。不要把私钥放入资源或提交到 Git。
 
 Linux：`sh scripts/build-linux.sh` 使用仓库内隔离工具链，测试核心与 CLI，并输出 `target/linux/release/steam-patch`。然后 `npm run package:plugin -w apps/decky` 生成 plugin-output 目录。安装到 Decky 前应检查二进制可执行权限、文件所属用户、宿主版本和日志；root 宿主启动核心时按游戏用户降权并同步 HOME / XDG，状态存于用户 ~/.local/share/steam-patch-manager；商店审核另设门槛。
 
@@ -67,7 +67,9 @@ Linux：`sh scripts/build-linux.sh` 使用仓库内隔离工具链，测试核�
 
 ## 验证边界
 
-`scripts/smoke-transaction.py` 是 v3 之前协议（`protocol_version=1` 的 `plan_install` / `start_install` / `uninstall`）的开发冒烟工具；当前 v4 CLI 会以 `unsupported_protocol` / `unsupported_method` 拒绝这些调用，无法对现役 CLI 运行，已在 P6 收口后（2026-10-11）删除，当前不存在等价的历史协议冒烟工具。它历史上在临时 Steam 库运行完整签名 → 计划 → 安装 → 托管检测 → 卸载，并确认恢复队列为空、保留存档；带 `--interrupt` 时在逐文件复制中途杀死子进程，验证认证恢复为 `rolled_back`。这些冒烟覆盖不能替代真实游戏、Proton 或控制器验证；当前真实样本的生产检查在平台检查脚本（如 `scripts/run-windows-check.ps1` 及其 WSL 对照 `run-linux-check.sh`）与自动化测试套件中。
+旧 `scripts/smoke-transaction.py` 已在跨平台安装器迁移收口（2026-10-11）删除；其协议 v1 安装/卸载与强杀恢复结果仅为历史基线。现役 v4 子进程检查位于 [projection_smoke.rs](../crates/cli/tests/projection_smoke.rs)、[cache_smoke.rs](../crates/cli/tests/cache_smoke.rs) 与 [CLI 协议测试](../crates/cli/src/main.rs)及宿主测试，覆盖真实 JSONL、版本写前拒绝、签名 ZIP、长实例身份和首终态消费。
+
+`python scripts/benchmark-projection.py --binary target/release/steam-patch.exe --output .artifacts/projection.json` 使用 v4 release CLI 测量四组隔离夹具，包含真实签名 ZIP 安装后动态收据投影；省略 `--binary` 则在临时源码副本构建 plain/counted，并核对哈希次数与响应等价，`--profile release` 可测发行构建。Linux 应显式提供本机 `--cargo` 或 `--binary`。`benchmark-scan.py CORE_BINARY FIXTURE_PARENT` 使用 v4 测量两库 500 清单，空目录 catalog 避免读取内嵌补丁。基准均不写用户游戏，不代表冷缓存或实机验收；真实样本检查继续使用 `scripts/run-windows-check.ps1` 和自动化套件。两端游戏内生效与 Deck 实体手柄须单独确认。
 
 默认不上传游戏库，不设置遥测。诊断与状态保存在本机；分享日志前应删除用户名、库路径与下载 URL 参数。安全安装拒绝链接、路径越界、危险 ZIP 成员、哈希错误和未知 build；同账户篡改完整 journal 与父目录 TOCTOU 的剩余风险见 install-design.md。
 

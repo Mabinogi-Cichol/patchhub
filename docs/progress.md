@@ -1,5 +1,19 @@
 # 开发进度
 
+## 2026-10-13：Rust 核心收敛 P6 完成，最终 gate 通过
+
+最终取消标准化修复完成，Windows604/Linux576、Decky Python78与fmt/Clippy/release、计数基准、双端最终包和同包冒烟通过。Deck本机WSL构建的新包已正式部署，ZIP/EXE覆盖、实际写入取消回滚、恢复/清理、真实界面和用户两款游戏/手柄确认均完成；远端暂存清理，本地备份核验保留。Windows真实UI/直链EXE按用户决定跳过；最终只读gate findings=[]，D1–D10已关闭、P6完成；本轮未提交/推送/发布。详见 [P6验证](features/rust-core-consolidation/p6-validation.md)、[复核](features/rust-core-consolidation/p6-review.md)与[施工记录](features/rust-core-consolidation/progress.md)。
+
+## 2026-10-13：Rust核心收敛P6恢复，双端最终包与Deck v4正式部署通过
+
+本机WSL Ubuntu22.04非root构建Linux CLI/worker，Linux575项Rust及78项Python通过，双端fmt/Clippy、release计数基准、最终包/许可证/SBOM及NSIS内容核验通过。Deck正式v4包24文件/实际HTTP字节一致，Loader active、插件实例1、真实scan27游戏，夜勤ZIP安装/覆盖和写入取消终态已通过；剩余EXE、前后哈希/游戏/控制器及最终gate继续执行。Windows夜勤覆盖/取消回滚71文件一致与用户确认生效通过；真实UI/直链EXE按用户决定跳过。没有P6提交/推送/发布。详细证据见[P6验证](features/rust-core-consolidation/p6-validation.md)与[施工记录](features/rust-core-consolidation/progress.md)。
+
+
+
+## 2026-10-13：Rust 核心收敛 P6 清理完成后暂停，等待本机 WSL
+
+P6 v4 基准/URL边界/许可证与SBOM清理、Windows自动化及最终便携包/NSIS核验已完成；Windows《夜勤病栋》使用已核验官方ZIP真实安装达 `completed/committed`。Deck正式状态/游戏备份已回传核验，构建残留和相关进程已清理，临时SSH隧道关闭；正式插件仍v3，未部署或修改Deck游戏。按用户要求暂停等待本机WSL，后续从本机构建Linux产物；Linux完整矩阵、Deck v4部署、剩余双端实机和最终独立gate待完成。Windows直链fake-IP环节沿用用户允许跳过的决定，P6未提交/推送/发布。详见 [P6验证](features/rust-core-consolidation/p6-validation.md)、[复核](features/rust-core-consolidation/p6-review.md)与[施工记录](features/rust-core-consolidation/progress.md)。
+
 ## 2026-10-13：Rust 核心收敛 P5 阶段完成，P6 待验收
 
 正式 v4/生成契约/共享 UI helper 与双端终态消费已实现，Windows/Linux及宿主自动化、生成无漂移、同包CLI/worker隔离冒烟与专项独立复核通过。P5代码已本地提交 `9b5c4f8`，文档独立提交；未部署；P6最终双端安装包、真实UI/游戏/设备与全范围清理gate待执行。完整记录见 [P5验证](features/rust-core-consolidation/p5-validation.md)与[施工记录](features/rust-core-consolidation/progress.md)。

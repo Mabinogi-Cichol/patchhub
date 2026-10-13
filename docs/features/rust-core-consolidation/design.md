@@ -1,10 +1,10 @@
 # Rust 核心服务收敛重构
 
-日期：2026-10-13（Asia/Shanghai）。状态：**P0 已冻结并提交；P1 扫描投影/取证/只读预览已实现，Windows/Linux 自动化、基准对照与独立复核通过；P2 签名/信任/终态与统一安装入口已实现，Windows/Linux 自动化和独立复核通过；P3 核心缓存与策略已实现，Windows/Linux 自动化和独立复核通过；P4 actions/双端消费已实现、最终自动化通过、两项审阅修复完成；P3/P4 代码已本地提交 `19ffc8a`；P5 v4/生成契约/共享 helper 已实现、自动化和专项独立复核通过；P6 待实现，双端最终产物与实机待验证**。
+日期：2026-10-13（Asia/Shanghai）。状态：**P0–P5 已实现并按既有记录提交；P6 双端最终自动化与产物核验、Deck 正式部署及 ZIP/EXE 覆盖与写入取消回滚通过；Windows 夜勤游戏生效、Deck 两款游戏生效和实体手柄操作均由用户确认。Windows 真实界面与直链 EXE 按用户决定跳过；远端验收暂存已清理；最终独立 gate findings=[]，D1–D10 已关闭，P6 按调整后范围完成。**
 
 施工记录：[progress.md](progress.md)。基线：[迁移后代码审阅](../cross-platform-installer-migration/rust-core-consolidation-review.md)、[跨平台安装器迁移](../cross-platform-installer-migration/design.md)及其[完成记录](../cross-platform-installer-migration/progress.md)。
 
-P0 交付：[契约与 v4 变化表](p0-contract.md)、[动作/终态真值表](p0-behavior.md)、[数据与债项映射](p0-data-debt.md)、[性能基线](p0-baseline.md)、[独立复核](p0-review.md)。P1 实现与阶段过渡详见 [P1 验证](p1-validation.md)；其余冻结目标仍待后续实现。
+P0 交付：[契约与 v4 变化表](p0-contract.md)、[动作/终态真值表](p0-behavior.md)、[数据与债项映射](p0-data-debt.md)、[性能基线](p0-baseline.md)、[独立复核](p0-review.md)。P1 实现与阶段过渡详见 [P1 验证](p1-validation.md)；全部冻结目标已在P1–P6完成，最终范围与证据见[P6验证](p6-validation.md)及[审阅](p6-review.md)。
 
 ## 1. 目标与完成定义
 
@@ -151,7 +151,9 @@ P0 采用文档与静态样本冻结目标类型，暂不新增未消费的生�
 
 增加当前协议的 fixture-backed CLI 子进程冒烟，使用临时状态与受控游戏 fixture 验证完整调用链；替代历史已删除 smoke 工具留下的 v3 空缺，最终工具只覆盖 v4。安装/回滚测试的写入只发生在明确隔离 fixture 或授权实机实例。
 
-实机样本优先沿用已完成迁移的 2743810 ZIP、2303800 EXE 和 3137110 大包，以及写入取消样本；实际可得情况与基线证据在 P0 冻结。worker 格式解析未改时沿用既有 golden/真实样本，不为核心服务提取重做所有旧 profile 实测。
+P6 实机样本按用户 2026-10-13 指定，Windows 与 Steam Deck 均使用《夜勤病栋》（3239270，ZIP）和《妃神会秘史》（2303800，EXE）验证安装、覆盖及写入取消回滚。本轮已切换本地执行环境，设备与游戏事实重新核对，不能沿用旧本机路径/产物；历史 2743810 ZIP、3137110 大包作为迁移基线保留。worker 格式解析未改时沿用既有 golden/真实样本，不为核心服务提取重做所有旧 profile 实测。
+
+2026-10-13用户调整验收范围：Windows TUN保持开启，允许跳过被fake-IP保护拒绝的直链下载/EXE；Windows真实界面验收明确“先跳过”。这些项按用户范围记为跳过，不能写作已验证，不放宽核心地址保护。Windows官方签名本地ZIP安装/覆盖/取消和用户游戏确认继续纳入证据。Linux包在本机WSL构建后部署，不在Deck保留编译环境；Deck两款实例已有历史补丁，首轮/再次操作使用overwrite并保留旧收据，不人为删除已有游戏来伪造初次安装。
 
 既有验证可作为迁移基线；发生代码移动、契约变更或删除后的最终树需要相应新证据。避免仅镜像实现的测试，优先保留跨边界行为、竞态、负向输入与真实协议验证。所有未执行项在 progress 标待验证。
 
