@@ -11,9 +11,8 @@ use super::model::*;
 use super::store::SourceStore;
 use super::validate;
 use super::{
-    invalid, Clock, Result, SystemClock, BUILTIN_ADAPTERS, DISCOVERY_FALLBACK_TTL,
-    DISCOVERY_INDEX_TTL, DISCOVERY_SUCCESS_TTL, MAX_DISCOVERY_OUTPUT, MAX_SOURCES, PARSER_VERSION,
-    QUERY_VERSION, SOURCES_ENCODING_VERSION, SOURCE_CACHE_TTL,
+    invalid, Clock, Result, SystemClock, BUILTIN_ADAPTERS, MAX_DISCOVERY_OUTPUT, MAX_SOURCES,
+    PARSER_VERSION, QUERY_VERSION, SOURCES_ENCODING_VERSION,
 };
 use std::collections::{BTreeMap, HashSet};
 use std::sync::atomic::AtomicBool;
@@ -505,7 +504,7 @@ impl SourceRegistry {
     /// ([`Self::index_candidates`], P4 B2), deduplicated by `candidate_id`.
     ///
     /// Discovery candidates win a collision: they carry live freshness (their
-    /// `cache_status` is recomputed against the 6h TTL) and richer evidence,
+    /// `cache_status` reflects schema compatibility) and richer evidence,
     /// while the index projection is a derived view of the same entries.
     pub fn dynamic_zip_candidates(&self, game: &GameQuery) -> Vec<SourceCandidate> {
         let mut candidates = self.cached_candidates(game);
@@ -633,11 +632,10 @@ impl SourceRegistry {
         record
     }
 
-    fn discovery_fresh(&self, success: &DiscoverySuccess, ttl: u64) -> bool {
+    fn discovery_compatible(&self, success: &DiscoverySuccess) -> bool {
         success.parser_version == PARSER_VERSION
             && success.query_version == QUERY_VERSION
             && success.encoding_version == SOURCES_ENCODING_VERSION
-            && is_fresh(Some(success.checked_at), ttl, self.now())
     }
 
     /// Port of `cached_candidates`: a partial attempt exposes new leads but never
@@ -656,15 +654,30 @@ impl SourceRegistry {
             }
             if let Some(success) = &record.success {
                 for candidate in &success.candidates {
+                    // A current partial attempt must not be shadowed by an incompatible success.
+                    if !self.discovery_compatible(success)
+                        && found.contains_key(&candidate.candidate_id)
+                    {
+                        continue;
+                    }
                     found.insert(candidate.candidate_id.clone(), candidate.clone());
                 }
             }
             let fresh = record
                 .success
                 .as_ref()
-                .is_some_and(|success| self.discovery_fresh(success, DISCOVERY_SUCCESS_TTL));
+                .is_some_and(|success| self.discovery_compatible(success));
             for (_, mut candidate) in found {
-                candidate.cache_status = if fresh {
+                let compatible_attempt = record.attempt.as_ref().is_some_and(|attempt| {
+                    attempt.parser_version == PARSER_VERSION
+                        && attempt.query_version == QUERY_VERSION
+                        && attempt.encoding_version == SOURCES_ENCODING_VERSION
+                        && attempt
+                            .candidates
+                            .iter()
+                            .any(|c| c.candidate_id == candidate.candidate_id)
+                });
+                candidate.cache_status = if fresh || compatible_attempt {
                     CacheStatus::Cached
                 } else {
                     CacheStatus::Stale
@@ -723,16 +736,12 @@ impl SourceRegistry {
     pub fn needs_refresh(&self, rule: &SourceRule, appid: u32, key: &str, force: bool) -> bool {
         let record = self.discovery_record(rule, appid);
         let old = record.success.unwrap_or_else(empty_success);
-        let ttl = if rule.role == SourceRole::FallbackIndexer && !old.candidates.is_empty() {
-            DISCOVERY_FALLBACK_TTL
-        } else {
-            DISCOVERY_SUCCESS_TTL
-        };
-        let confirmed = old.candidates.iter().any(|c| matched_basis(c.match_basis));
-        force || !self.discovery_fresh(&old, ttl) || (!confirmed && old.query_key != key)
+        // A title-only candidate is still a useful positive cache for manual selection.
+        let confirmed = !old.candidates.is_empty();
+        force || !self.discovery_compatible(&old) || (!confirmed && old.query_key != key)
     }
 
-    /// Shared index reused only when fresh and produced by the current parser
+    /// Shared indexes persist until explicitly refreshed or incompatible with the parser
     /// (design §4.3/§5.3).
     pub fn shared_index(&self, source_id: &str) -> Option<DiscoveryIndex> {
         let record = match self.indexes.get(source_id) {
@@ -741,9 +750,6 @@ impl SourceRegistry {
             None => self.store.load_discovery_index(source_id).ok().flatten()?,
         };
         if record.schema_version != 1 {
-            return None;
-        }
-        if !is_fresh(Some(record.checked_at), DISCOVERY_INDEX_TTL, self.now()) {
             return None;
         }
         if record.index.parser_version != PARSER_VERSION
@@ -908,7 +914,7 @@ impl SourceRegistry {
     }
 
     /// Python `_discovery_sync` `all_candidates`: publisher `success` candidates
-    /// with the display `cache_status` recomputed from the 6h freshness TTL.
+    /// with display status reflecting record compatibility, not elapsed time.
     pub fn previous_success_candidates(&self, appid: u32) -> Vec<SourceCandidate> {
         let mut out = Vec::new();
         for rule in self.effective_discovery_rules(appid) {
@@ -918,7 +924,7 @@ impl SourceRegistry {
             let Some(success) = self.discovery_record(&rule, appid).success else {
                 continue;
             };
-            let fresh = self.discovery_fresh(&success, DISCOVERY_SUCCESS_TTL);
+            let fresh = self.discovery_compatible(&success);
             for mut candidate in success.candidates {
                 candidate.cache_status = if fresh {
                     CacheStatus::Cached
@@ -955,7 +961,7 @@ impl SourceRegistry {
     }
 
     /// Refreshes one ZIP-index source (design §5.3; Python `_refresh_one`).
-    /// Fresh cache (24h) short-circuits unless `force`; a failure preserves the
+    /// Existing cache short-circuits unless `force`; a failure preserves the
     /// existing cache bytes and returns an offline/failed status (never raises).
     pub fn refresh_source(
         &mut self,
@@ -965,7 +971,7 @@ impl SourceRegistry {
         _cancel: &AtomicBool,
     ) -> Result<SourceStatus> {
         let old = self.cache.get(&rule.id).cloned().unwrap_or_default();
-        if !force && is_fresh(old.checked_at, SOURCE_CACHE_TTL, self.now()) {
+        if !force && old.checked_at.is_some() {
             return Ok(SourceStatus {
                 checked_at: old.checked_at.unwrap_or(0),
                 cached_at: old.cached_at,
@@ -1693,6 +1699,62 @@ mod tests {
     }
 
     #[test]
+    fn current_partial_candidate_is_not_shadowed_by_incompatible_success() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut registry = registry_at(temp.path(), 1000);
+        let rule = rule(&registry, "hgamer");
+        let old = candidate('a', 42, MatchBasis::Appid);
+        let mut record = registry
+            .commit(
+                &rule,
+                42,
+                complete(vec![old.clone()]),
+                &DiscoveryRecord::default(),
+                "key",
+            )
+            .unwrap();
+        record.success.as_mut().unwrap().parser_version = PARSER_VERSION - 1;
+        let mut current = old;
+        current.patch_title = "Current candidate".into();
+        registry
+            .commit(
+                &rule,
+                42,
+                DiscoveryOutcome {
+                    status: "partial".into(),
+                    candidates: vec![current],
+                    ..Default::default()
+                },
+                &record,
+                "key",
+            )
+            .unwrap();
+        let candidates = registry.cached_candidates(&game(42));
+        assert_eq!(candidates[0].patch_title, "Current candidate");
+        assert_eq!(candidates[0].cache_status, CacheStatus::Cached);
+    }
+
+    #[test]
+    fn title_only_positive_cache_survives_name_hint_changes_without_network_refresh() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut registry = registry_at(temp.path(), 1000);
+        let rule = rule(&registry, "hgamer");
+        let mut clue = candidate('a', 42, MatchBasis::Title);
+        clue.game_appid = None;
+        registry
+            .commit(
+                &rule,
+                42,
+                complete(vec![clue]),
+                &DiscoveryRecord::default(),
+                "chinese-hints",
+            )
+            .unwrap();
+        assert!(!registry.needs_refresh(&rule, 42, "english-only-scan", false));
+        assert!(registry.needs_refresh(&rule, 42, "english-only-scan", true));
+    }
+
+    #[test]
     fn negative_cache_invalidated_by_query_key_change() {
         let temp = tempfile::tempdir().unwrap();
         let mut registry = registry_at(temp.path(), 1000);
@@ -1754,7 +1816,7 @@ mod tests {
     }
 
     #[test]
-    fn shared_index_reused_and_expires_24h() {
+    fn shared_index_remains_usable_after_30_days() {
         let temp = tempfile::tempdir().unwrap();
         let mut registry = registry_at(temp.path(), 1000);
         let rule = rule(&registry, "hgamer");
@@ -1765,10 +1827,10 @@ mod tests {
             .unwrap();
         assert!(registry.shared_index("hgamer").is_some());
 
-        let fresh = registry_at(temp.path(), 1000 + DISCOVERY_INDEX_TTL - 1);
+        let fresh = registry_at(temp.path(), 1000 + 24 * 3600 - 1);
         assert!(fresh.shared_index("hgamer").is_some());
-        let expired = registry_at(temp.path(), 1000 + DISCOVERY_INDEX_TTL);
-        assert!(expired.shared_index("hgamer").is_none());
+        let expired = registry_at(temp.path(), 1000 + 30 * 24 * 3600);
+        assert!(expired.shared_index("hgamer").is_some());
     }
 
     #[test]
@@ -1780,24 +1842,24 @@ mod tests {
         success.query_version = QUERY_VERSION;
         success.encoding_version = SOURCES_ENCODING_VERSION;
         success.checked_at = 1000;
-        assert!(registry.discovery_fresh(&success, DISCOVERY_SUCCESS_TTL));
+        assert!(registry.discovery_compatible(&success));
 
         let mut old_parser = success.clone();
         old_parser.parser_version = PARSER_VERSION - 1;
-        assert!(!registry.discovery_fresh(&old_parser, DISCOVERY_SUCCESS_TTL));
+        assert!(!registry.discovery_compatible(&old_parser));
 
         let mut old_query = success.clone();
         old_query.query_version = QUERY_VERSION + 1;
-        assert!(!registry.discovery_fresh(&old_query, DISCOVERY_SUCCESS_TTL));
+        assert!(!registry.discovery_compatible(&old_query));
 
         // An encoding-version mismatch invalidates confirmed discovery even when
         // parser/query versions and freshness match (contract §1.3).
         let mut old_encoding = success.clone();
         old_encoding.encoding_version = SOURCES_ENCODING_VERSION - 1;
-        assert!(!registry.discovery_fresh(&old_encoding, DISCOVERY_SUCCESS_TTL));
+        assert!(!registry.discovery_compatible(&old_encoding));
         let mut missing_encoding = success;
         missing_encoding.encoding_version = 0;
-        assert!(!registry.discovery_fresh(&missing_encoding, DISCOVERY_SUCCESS_TTL));
+        assert!(!registry.discovery_compatible(&missing_encoding));
     }
 
     #[test]
@@ -1878,7 +1940,7 @@ mod tests {
     }
 
     #[test]
-    fn ttl_24h_and_force_bypasses_freshness() {
+    fn persistent_success_requires_only_explicit_refresh() {
         let temp = tempfile::tempdir().unwrap();
         let mut registry = registry_at(temp.path(), 1000);
         let rule = rule(&registry, "hgamer");

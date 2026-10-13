@@ -32,6 +32,7 @@ export function createManagerSession(readSnapshot: () => Promise<Snapshot>, disc
   let scanEpoch = 0;
   const pending = new Map<string, Promise<void>>();
   const attempted = new Set<string>();
+  const discoveryRequests = new Map<string, object>();
   const listeners = new Set<() => void>();
   const update = (value: Partial<SessionState>) => {
     // Unscoped feedback remains global. Scoped async completions carry their
@@ -84,12 +85,14 @@ export function createManagerSession(readSnapshot: () => Promise<Snapshot>, disc
     const row = report?.installs.find(item => item.game.instance_id === instance);
     if (!discoverGame || !report || !row || report.generation == null || report.settings_revision == null) return Promise.resolve();
     const epoch = discoveryEpoch;
-    const key = `${report.generation}:${report.settings_revision}:${epoch}:${instance}`;
+    const key = `${report.generation}:${report.settings_revision}:${epoch}:${instance}:${language ?? ""}:${force}`;
     const existing = pending.get(key);
     if (existing) return existing;
     if (!force && attempted.has(key)) return Promise.resolve();
     attempted.add(key);
-    const identityCurrent = () => state.report?.generation === report.generation && state.report?.settings_revision === report.settings_revision && epoch === discoveryEpoch;
+    const owner = {};
+    discoveryRequests.set(instance, owner);
+    const identityCurrent = () => state.report?.generation === report.generation && state.report?.settings_revision === report.settings_revision && epoch === discoveryEpoch && discoveryRequests.get(instance) === owner;
     const clearDynamicProjection = () => {
       if (!identityCurrent() || !state.report) return;
       update({ report: { ...state.report, installs: state.report.installs.map(item => item.game.instance_id === instance
@@ -111,7 +114,7 @@ export function createManagerSession(readSnapshot: () => Promise<Snapshot>, disc
           discovery: { status: result.status, candidates: result.candidates, diagnostics: result.diagnostics } } : item) } });
       } catch (error) {
         if (identityCurrent()) {
-          clearDynamicProjection();
+          attempted.delete(key);
           update({ discoveries: { ...state.discoveries, [instance]: { busy: false, error: reason(String(error)) } } });
         }
       } finally {

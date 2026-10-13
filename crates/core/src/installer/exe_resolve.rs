@@ -34,7 +34,7 @@ pub fn expectation(selection: &ResolvedExeCandidate) -> FactsExpectation {
         language: selection.language.clone(),
         verified_buildids: Vec::new(),
         // EXE publisher sources keep the language gate (legacy behaviour).
-        require_language: true,
+        require_language: !selection.language.is_empty(),
         requires_dlc: selection.candidate.requires_dlc.clone().unwrap_or_default(),
         excludes_dlc: selection.candidate.excludes_dlc.clone().unwrap_or_default(),
         baselines: Vec::new(),
@@ -49,6 +49,9 @@ pub fn resolve_exe(
         parse_exe_selection_id(id).ok_or_else(|| ResolveError::code("invalid_selection_id"))?;
     if appid != game.appid {
         return Err(ResolveError::code("selection_not_found"));
+    }
+    if let Ok(manual) = super::manual_selection::resolve(registry, game, id, "exe") {
+        return Ok(manual);
     }
     let candidate = registry
         .cached_discovery(game)

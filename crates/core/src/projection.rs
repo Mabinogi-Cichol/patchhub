@@ -454,29 +454,68 @@ fn project_instance_impl(
     let (source_summaries, matches, discovery) = if let Some(snapshot) = inputs.sources {
         let registry = snapshot.registry();
         let query = query(game);
+        let mut choices = Vec::new();
         for candidate in registry.dynamic_zip_candidates(&query) {
-            check_cancel(inputs)?;
-            let release_id =
-                installer::resolve::source_release_id_from_source(&candidate.source_id, game.appid);
-            if signed_ids.contains(&release_id)
-                || patches.iter().any(|p| p.release_id == release_id)
-            {
-                continue;
-            }
-            let has_zip = candidate.mirrors.iter().any(|m| m.format == "zip");
-            let selection_id = if has_zip {
+            let automatic = if candidate.mirrors.iter().any(|m| m.format == "zip") {
                 installer::zip_selection_id(&candidate)
             } else {
                 installer::exe_resolve::exe_selection_id(&candidate)
             };
-            let Some(selection_id) = selection_id else {
+            if let Some(id) = &automatic {
+                choices.push((candidate.clone(), id.clone(), false));
+            }
+            let usable = automatic.as_ref().is_some_and(|id| {
+                if id.starts_with("zip-") {
+                    installer::resolve_zip(registry, &query, id).is_ok()
+                } else {
+                    installer::exe_resolve::resolve_exe(registry, &query, id).is_ok()
+                }
+            });
+            let artifacts: HashSet<_> = candidate
+                .mirrors
+                .iter()
+                .filter(|m| matches!(m.format.as_str(), "zip" | "exe"))
+                .map(|m| {
+                    (
+                        m.format.as_str(),
+                        m.url.rsplit('/').next().unwrap_or(&m.url),
+                    )
+                })
+                .collect();
+            if !usable || artifacts.len() > 1 {
+                for mirror in &candidate.mirrors {
+                    if let Some(id) =
+                        installer::manual_selection::selection_id(&candidate, &query, mirror)
+                    {
+                        choices.push((candidate.clone(), id, true));
+                    }
+                }
+            }
+        }
+        for (candidate, selection_id, manual) in choices {
+            check_cancel(inputs)?;
+            let release_id =
+                installer::resolve::source_release_id_from_source(&candidate.source_id, game.appid);
+            if signed_ids.contains(&release_id)
+                || patches
+                    .iter()
+                    .any(|p| p.selection_id.as_deref() == Some(&selection_id))
+            {
                 continue;
-            };
+            }
+            let has_zip = selection_id.starts_with("zip-");
             let mut blockers =
                 installer::resolve::source_admission_blockers(registry, &candidate, game.appid);
             // Resolve the exact selection, including URL and mirror ambiguity.
             // Admission alone does not prove a usable automatic input.
-            let resolved = if has_zip {
+            let resolved = if manual {
+                installer::manual_selection::resolve(
+                    registry,
+                    &query,
+                    &selection_id,
+                    if has_zip { "zip" } else { "exe" },
+                )
+            } else if has_zip {
                 installer::resolve_zip(registry, &query, &selection_id)
             } else {
                 installer::exe_resolve::resolve_exe(registry, &query, &selection_id)
@@ -487,6 +526,11 @@ fn project_instance_impl(
                     .iter()
                     .map(|code| ActionBlocker::from_domain(&DomainError::code(code))),
             );
+            let download_url = resolved.as_ref().ok().map(|r| r.download_url.clone());
+            let download_label = download_url
+                .as_ref()
+                .and_then(|url| candidate.mirrors.iter().find(|m| &m.url == url))
+                .and_then(|m| m.label.clone());
             if let Err(error) = resolved {
                 blockers.push(error.code.clone());
                 automatic.push(ActionBlocker::from_domain(&DomainError {
@@ -540,11 +584,24 @@ fn project_instance_impl(
                 needs_recovery,
             );
             patches.push(PatchMatch {
-                source_id: Some(candidate.source_id),
-                candidate_id: Some(candidate.candidate_id),
+                download_url,
+                download_label,
+                source_id: Some(candidate.source_id.clone()),
+                candidate_id: Some(candidate.candidate_id.clone()),
                 release_id,
-                selection_id: Some(selection_id),
-                name: candidate.patch_title,
+                selection_id: Some(selection_id.clone()),
+                name: if manual {
+                    let mirror = candidate.mirrors.iter().find(|m| {
+                        installer::manual_selection::selection_id(&candidate, &query, m).as_deref()
+                            == Some(&selection_id)
+                    });
+                    let file = mirror
+                        .map(|m| m.url.rsplit('/').next().unwrap_or(&m.url))
+                        .unwrap_or("");
+                    format!("{} · 手动选择 · {}", candidate.patch_title, file)
+                } else {
+                    candidate.patch_title
+                },
                 source_page: candidate.source_page,
                 support_level: if has_zip {
                     SupportLevel::PublisherZip
@@ -552,7 +609,9 @@ fn project_instance_impl(
                     SupportLevel::PublisherExe
                 },
                 actions,
-                compatibility: if has_zip {
+                compatibility: if manual {
+                    "manual_selection_required"
+                } else if has_zip {
                     if blockers.is_empty() {
                         "verified_metadata"
                     } else {

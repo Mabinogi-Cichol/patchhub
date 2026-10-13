@@ -14,6 +14,7 @@ pub mod exe_orchestrator;
 pub mod exe_report;
 pub mod exe_resolve;
 pub mod facts;
+pub mod manual_selection;
 pub mod orchestrator;
 pub mod outcome;
 pub mod requests;

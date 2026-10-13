@@ -78,11 +78,7 @@ fn official(
         }
     }
 
-    let previous_index = if query.force {
-        None
-    } else {
-        previous.index.as_ref()
-    };
+    let previous_index = previous.index.as_ref();
     let mut records: Vec<IndexItem> = previous_index
         .map(|index| {
             index
@@ -99,6 +95,11 @@ fn official(
     let mut pages: Vec<String> = previous_index
         .map(|index| index.pending.clone())
         .unwrap_or_default();
+    // Explicit refresh also revisits the entry page, after saved pending work.
+    // Never throw away progress just because this game has no known detail yet.
+    if query.force && direct.is_empty() && !pages.contains(&entry_url) {
+        pages.push(entry_url.clone());
+    }
     let mut checked_at = previous_index.map(|index| index.checked_at).unwrap_or(0);
 
     if direct.is_empty() {
@@ -588,6 +589,80 @@ mod tests {
         assert_eq!(index.parser_version, PARSER_VERSION);
         assert!(index.records.iter().any(|record| record.kind == "category"));
         assert!(index.records.iter().any(|record| record.kind == "article"));
+    }
+
+    #[test]
+    fn repeated_force_queries_continue_pending_pages_before_revisiting_entry() {
+        let mut previous = DiscoverPrevious {
+            index: Some(DiscoveryIndex {
+                parser_version: PARSER_VERSION,
+                encoding_version: SOURCES_ENCODING_VERSION,
+                records: vec![IndexRecord {
+                    title: "Other".into(),
+                    page: "https://kagurafan.com/other/".into(),
+                    kind: "article".into(),
+                }],
+                pending: vec!["https://kagurafan.com/page/3/".into()],
+                checked_at: 123,
+            }),
+            upstream_pages: vec![],
+        };
+        let mut q = query(42, "Missing");
+        q.force = true;
+        for page in [3, 4] {
+            let fake = Arc::new(FakeFetcher::new());
+            let html = format!("<html><body><article><h2 class='entry-title'><a href='/other/'>Other</a></h2></article><a rel='next' href='/page/{}/'>Next</a></body></html>", page+1);
+            fake.push(response(
+                &html,
+                &format!("https://kagurafan.com/page/{page}/"),
+            ));
+            fake.push(response(INDEX, "https://kagurafan.com/"));
+            let mut ctx = context(&fake);
+            let outcome = KaguraAdapter
+                .discover(&rule("kagura_wordpress"), &q, &mut ctx, &previous)
+                .unwrap();
+            assert_eq!(
+                fake.calls()[0].url,
+                format!("https://kagurafan.com/page/{page}/")
+            );
+            let index = outcome.index.unwrap();
+            assert!(index
+                .pending
+                .contains(&format!("https://kagurafan.com/page/{}/", page + 1)));
+            assert!(index.records.iter().any(|r| r.title == "Other"));
+            previous.index = Some(index);
+        }
+    }
+
+    #[test]
+    fn force_direct_revalidation_preserves_shared_index_and_checkpoint() {
+        let fake = Arc::new(FakeFetcher::new());
+        fake.push(response(ARTICLE, "https://kagurafan.com/game/"));
+        let mut ctx = context(&fake);
+        let previous = DiscoverPrevious {
+            index: Some(DiscoveryIndex {
+                parser_version: PARSER_VERSION,
+                encoding_version: SOURCES_ENCODING_VERSION,
+                records: vec![IndexRecord {
+                    title: "Other".into(),
+                    page: "https://kagurafan.com/other/".into(),
+                    kind: "article".into(),
+                }],
+                pending: vec!["https://kagurafan.com/page/3/".into()],
+                checked_at: 123,
+            }),
+            upstream_pages: vec!["https://kagurafan.com/game/".into()],
+        };
+        let mut q = query(42, "Game");
+        q.force = true;
+        let outcome = KaguraAdapter
+            .discover(&rule("kagura_wordpress"), &q, &mut ctx, &previous)
+            .unwrap();
+        assert_eq!(fake.call_count(), 1);
+        let index = outcome.index.unwrap();
+        assert_eq!(index.records, previous.index.as_ref().unwrap().records);
+        assert_eq!(index.pending, previous.index.as_ref().unwrap().pending);
+        assert_eq!(outcome.candidates.len(), 1);
     }
 
     #[test]

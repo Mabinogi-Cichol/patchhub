@@ -195,8 +195,7 @@ impl PreparedReport {
             appid > 0
                 && !source_id.is_empty()
                 && !source_record_id.is_empty()
-                && !language.is_empty()
-                && ["base", "dlc"].contains(&variant),
+                && ["base", "dlc", "unknown", "demo"].contains(&variant),
             "exe_content_identity_invalid",
         )?;
         let identity = json!({"appid":appid,"source_id":source_id,"source_record_id":source_record_id,"language":language,"variant":variant,

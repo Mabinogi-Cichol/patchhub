@@ -17,7 +17,13 @@ export function displayPatches(row: Install, preferredLanguage: string | null = 
     .sort((a, b) => Number(a.source_id === "hgamer") - Number(b.source_id === "hgamer")
       || Number(!!preferredLanguage && !a.languages?.includes(preferredLanguage)) - Number(!!preferredLanguage && !b.languages?.includes(preferredLanguage)))
     .map(candidate => ({ kind: "discovery", key: candidate.candidate_id, candidate }));
-  return [...row.patches.map(patch => ({ kind: "installable" as const, key: patch.selection_id ?? patch.release_id, patch })), ...discovery];
+  const patches = row.patches.filter(patch => patch.compatibility === "manual_selection_required" || patch.actions.overwrite.available
+    || !row.patches.some(other => other.candidate_id === patch.candidate_id && other.compatibility === "manual_selection_required" && other.actions.overwrite.available)).sort((a, b) => {
+    const variant = (p: Patch) => row.discovery?.candidates.find(c => c.candidate_id === p.candidate_id)?.variant;
+    const rank = (p: Patch) => variant(p) === "base" ? 0 : variant(p) === "unknown" ? 1 : 2;
+    return rank(a) - rank(b);
+  });
+  return [...patches.map(patch => ({ kind: "installable" as const, key: patch.selection_id ?? patch.release_id, patch })), ...discovery];
 }
 export function hasMatchedPatch(row: Install): boolean {
   return row.patches.length > 0 || !!row.discovery?.candidates.some(candidateMatched);
@@ -26,7 +32,8 @@ export function hasMatchedPatch(row: Install): boolean {
 export function installSummary(row: Install, scanning = false): string {
   if (row.patches.some(p => isManaged(p.detection.status) || isExternal(p.detection.status))) return "已安装补丁";
   if (row.patches.some(p => p.actions.overwrite.available && p.detection.status === "partial_or_conflict")) return "补丁文件不完整，可覆盖安装";
-  if (row.patches.some(p => p.actions.automatic.available)) return "有可用补丁";
+  if (row.patches.some(p => p.actions.automatic.available && p.compatibility !== "manual_selection_required")) return "有可用补丁";
+  if (row.patches.some(p => p.actions.automatic.available && p.compatibility === "manual_selection_required")) return "可手动选择补丁";
   if (row.patches.length || row.discovery?.candidates.some(candidateMatched)) return "找到补丁来源";
   if (["failed", "source_refresh_failed", "source_offline_cached"].includes(row.discovery?.status ?? "")) return "来源查询失败";
   if (scanning && !["complete", "empty", "cache_complete"].includes(row.discovery?.status ?? "")) return "正在查找补丁";
@@ -257,7 +264,8 @@ export function reason(code: string): string {
      ,task_required: "此操作必须通过安装任务执行，请从安装按钮重新发起。"
      ,invalid_selection_id: "补丁选择标识无效，请重新查找来源。"
      ,selection_not_found: "补丁选择已不在来源结果中，请重新查找。"
-     ,selection_stale: "补丁选择信息已过期，请重新查找来源。"
+     ,selection_stale: "补丁来源记录与当前解析版本不兼容，请重新查找来源。"
+     ,local_archive_signed_only: "此来源不支持导入本地 ZIP，请使用来源自动安装。"
      ,selection_or_release_required: "缺少补丁选择或发行版本，请重新选择。"
      ,archive_not_allowed_for_selection: "动态来源补丁不能导入本地 ZIP，请从来源直接安装。"
      ,archive_too_large: "所选 ZIP 超过大小限制，无法安装。"
@@ -282,6 +290,7 @@ export function reason(code: string): string {
 
 export function workflowState(value: string): string {
   const labels: Record<string, string> = {
+    manual_selection_required: "人工选择，适用性尚未自动确认",
     discover_only: "查看补丁来源", manual_download: "手动下载导入", managed_zip: "审核 ZIP 安装", unsupported: "暂不支持",
     publisher_zip: "ZIP · 默认解压至游戏根目录", publisher_exe: "自动提取并安装", publisher_default: "按根目录生成计划，效果待验证",
     check_required: "安装时自动检查条件", conditions_checked: "安装条件已核验", verified_metadata: "目录条件已核对", needs_review: "尚待审核", signed: "已验证签名", unsigned_development: "未签名开发目录",
@@ -358,4 +367,12 @@ export function installationResult(outcome: InstallerOutcome, overwrite = false)
 
 export function sourceRefreshSucceeded(status: string | null | undefined): boolean {
   return ["fresh", "source_refreshed", "source_not_modified"].includes(status ?? "");
+}
+
+/** Display an untrusted URL filename without letting malformed escapes break rendering. */
+export function downloadFileName(value: string): string {
+  try {
+    const raw = new URL(value).pathname.split("/").pop() || value;
+    try { return decodeURIComponent(raw); } catch { return raw; }
+  } catch { return value; }
 }

@@ -144,7 +144,13 @@ pub fn discover_game(
         if cancel.load(Ordering::Relaxed) || crate::operation::check().is_err() {
             return Err(invalid("task_cancelled"));
         }
-        let input = discover_previous(registry, rule, Vec::new());
+        let pages = registry
+            .previous_success_candidates(game.appid)
+            .iter()
+            .filter(|candidate| candidate.source_id == rule.id)
+            .map(|c| c.source_page.clone())
+            .collect();
+        let input = discover_previous(registry, rule, pages);
         // Keep most of the single-game deadline/budget for the fallback pass
         // (design §0 `OFFICIAL_SUBDEADLINE` / `OFFICIAL_SUBBUDGET`).
         let deadline = ctx.deadline;
@@ -284,6 +290,41 @@ pub fn discover_game(
         }
     }
 
+    // Preserve verified identity only for the same unchanged candidate conditions.
+    for (rule, outcome) in &mut results {
+        let prior = registry.previous_record(rule, game.appid).success;
+        for candidate in &mut outcome.candidates {
+            if candidate.game_appid.is_some() {
+                continue;
+            }
+            if let Some(old) = prior.as_ref().and_then(|record| {
+                record.candidates.iter().find(|old| {
+                    old.candidate_id == candidate.candidate_id
+                        && old.game_appid == Some(game.appid)
+                        && old.source_page == candidate.source_page
+                        && old.variant == candidate.variant
+                        && old.languages == candidate.languages
+                        && old.version_identity == candidate.version_identity
+                        && old.requires_dlc == candidate.requires_dlc
+                        && old.excludes_dlc == candidate.excludes_dlc
+                        && matches!(
+                            old.match_basis,
+                            super::model::MatchBasis::Appid
+                                | super::model::MatchBasis::VerifiedAlias
+                                | super::model::MatchBasis::OfficialTitle
+                        )
+                })
+            }) {
+                candidate.game_appid = old.game_appid;
+                candidate.parent_appid = old.parent_appid;
+                candidate.match_basis = old.match_basis;
+                candidate.identity_evidence = old.identity_evidence.clone();
+                if let Ok(value) = serde_json::to_value(&*candidate) {
+                    candidate.fingerprint = super::canonical::fingerprint(&value);
+                }
+            }
+        }
+    }
     // Confirmed shared upstream pages carry index provenance back onto the
     // publisher candidate (Python `_discovery_sync` §L750-781).
     link_index_provenance(&mut results, &official_rules, &fallback_rules, query.appid);

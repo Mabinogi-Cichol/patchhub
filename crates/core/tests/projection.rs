@@ -317,7 +317,8 @@ fn frozen_subscriptions_and_shared_stale_codes() {
         &steam.installs[0].instance_id,
     )
     .unwrap();
-    assert!(row.patches[0]
+    assert!(row.patches[0].actions.automatic.available);
+    assert!(!row.patches[0]
         .blockers
         .iter()
         .any(|b| b == "selection_stale"));
@@ -1229,4 +1230,100 @@ fn action_instance_boundary_is_checked_even_without_dynamic_file_receipts() {
         GameNotReady
     ));
     assert!(!row.patches[0].actions.overwrite.available);
+}
+
+#[test]
+fn manual_unknown_candidate_binds_download_and_instance_without_faking_metadata() {
+    use sources::model::{ArtifactFormat, MatchBasis, Mirror, Variant};
+    use steam_patch_core::installer::{exe_resolve, manual_selection, resolve_zip};
+    for format in ["zip", "exe"] {
+        let (temp, steam) = fixture();
+        let state = temp.path().join("state");
+        let mut candidate = candidate();
+        candidate.game_appid = None;
+        candidate.match_basis = MatchBasis::Title;
+        candidate.variant = Variant::Unknown;
+        candidate.version_raw = None;
+        candidate.version_identity = String::new();
+        candidate.languages.clear();
+        candidate.format_observed = if format == "zip" {
+            ArtifactFormat::Zip
+        } else {
+            ArtifactFormat::Exe
+        };
+        candidate.format_reported = candidate.format_observed;
+        candidate.mirrors = vec![
+            Mirror {
+                url: format!("https://kaguraserver.com/first.{format}"),
+                label: None,
+                format: format.into(),
+            },
+            Mirror {
+                url: format!("https://kaguraserver.com/second.{format}"),
+                label: None,
+                format: format.into(),
+            },
+        ];
+        let now = seed(&state, candidate.clone());
+        let query = sources::GameQuery {
+            appid: 42,
+            name: "Test".into(),
+            localized_name: None,
+            instance_id: Some(steam.installs[0].instance_id.clone()),
+        };
+        let snapshot = load(&state, &steam, now + 30 * 24 * 3600);
+        let source_read = sources::Sources::open(&state).unwrap();
+        let id = manual_selection::selection_id(&candidate, &query, &candidate.mirrors[1]).unwrap();
+        let resolved = if format == "zip" {
+            resolve_zip(source_read.registry(), &query, &id)
+        } else {
+            exe_resolve::resolve_exe(source_read.registry(), &query, &id)
+        }
+        .unwrap();
+        assert_eq!(resolved.download_url, candidate.mirrors[1].url);
+        assert_eq!(resolved.appid, 42);
+        assert_eq!(resolved.candidate.game_appid, None);
+        assert_eq!(resolved.candidate.variant, Variant::Unknown);
+        assert!(resolved.language.is_empty());
+        let mut other = query.clone();
+        other.instance_id = Some("other-instance".into());
+        assert!(manual_selection::resolve(source_read.registry(), &other, &id, format).is_err());
+        let mut changed = candidate.clone();
+        changed.version_identity = "changed".into();
+        assert_ne!(
+            manual_selection::selection_id(&changed, &query, &changed.mirrors[1]).unwrap(),
+            id
+        );
+        let caps = HostCapabilities {
+            zip: LinkCapability {
+                available: true,
+                blockers: vec![],
+            },
+            exe: LinkCapability {
+                available: true,
+                blockers: vec![],
+            },
+        };
+        let c = catalog();
+        let tx = TransactionSnapshot::default();
+        let cancel = AtomicBool::new(false);
+        let row = project_instance(
+            &inputs(&steam, &c, Some(&snapshot), &tx, &caps, &cancel),
+            &steam.installs[0].instance_id,
+        )
+        .unwrap();
+        let manual: Vec<_> = row
+            .patches
+            .iter()
+            .filter(|p| p.compatibility == "manual_selection_required")
+            .collect();
+        assert_eq!(manual.len(), 2);
+        assert!(manual.iter().all(|p| p.actions.automatic.available));
+        let mut source = sources::Sources::open(&state).unwrap();
+        source
+            .registry_mut()
+            .set_game_source(42, "kagura-cn", false)
+            .unwrap();
+        assert!(manual_selection::resolve(source.registry(), &query, &id, format).is_err());
+    }
 }

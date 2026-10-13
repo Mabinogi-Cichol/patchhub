@@ -1263,6 +1263,81 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn manual_unclassified_candidate_installs_and_records_the_target_binding() {
+        let (temp, game, archive) = setup();
+        let (state, paths) = dynamic_paths(&temp);
+        let mut candidate = candidate();
+        candidate.game_appid = None;
+        candidate.match_basis = crate::sources::model::MatchBasis::Title;
+        candidate.variant = crate::sources::model::Variant::Unknown;
+        candidate.version_raw = None;
+        candidate.version_identity.clear();
+        candidate.languages.clear();
+        let mut query = query();
+        query.instance_id = Some(game.instance_id.clone());
+        let id =
+            super::super::manual_selection::selection_id(&candidate, &query, &candidate.mirrors[0])
+                .unwrap();
+        let mut handle = Sources::open(&state).unwrap();
+        let rule = handle
+            .registry()
+            .rules()
+            .iter()
+            .find(|r| r.id == "kagura-cn")
+            .unwrap()
+            .clone();
+        handle
+            .registry_mut()
+            .commit(
+                &rule,
+                APPID,
+                DiscoveryOutcome {
+                    status: "complete".into(),
+                    candidates: vec![candidate],
+                    ..Default::default()
+                },
+                &DiscoveryRecord::default(),
+                "manual-test",
+            )
+            .unwrap();
+        let selection = crate::installer::resolve_zip(handle.registry(), &query, &id).unwrap();
+        let transport = transport(archive);
+        let cancel = AtomicBool::new(false);
+        let result = operation::run(
+            Arc::new(AtomicBool::new(false)),
+            |_| {},
+            || {
+                install_zip(
+                    ZipInstallInputs {
+                        game: &game,
+                        selection: &selection,
+                        operation: InstallOperation::Install,
+                        request_id: "manual-test",
+                        now: 1000,
+                        ttl_seconds: 900,
+                    },
+                    ZipInstallDeps {
+                        paths: &paths,
+                        state_dir: &state,
+                        transport: &transport,
+                        cancel: &cancel,
+                        cancel_reason: &|| None,
+                        lease_active: &|_| true,
+                        lease_deadline_ms: &|| u64::MAX,
+                    },
+                )
+            },
+        )
+        .unwrap();
+        assert_eq!(result.state, "committed");
+        assert_eq!(result.selection_id.as_deref(), Some(id.as_str()));
+        assert_eq!(
+            fs::read(game.install_path.join("data.txt")).unwrap(),
+            b"patched"
+        );
+    }
+
+    #[test]
     fn install_zip_commits_with_the_frozen_stage_sequence() {
         let (temp, game, archive) = setup();
         let state = temp.path().join("state");

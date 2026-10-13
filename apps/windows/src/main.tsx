@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { candidateMatched, displayPatches, filterInstalls, gameDisplayName, isExternal, isManaged, patchState, reason, installationResult, progressStageLabel, progressPercent, workflowState, type DiscoveryResult, type Filter, type GameSourceSubscription, type Install, type Preview, type ScanResult, type SourceCandidate, type Transaction, type InstallerOutcome } from "@steam-patch/ui";
+import { downloadFileName, candidateMatched, displayPatches, filterInstalls, gameDisplayName, isExternal, isManaged, patchState, reason, installationResult, progressStageLabel, progressPercent, workflowState, type DiscoveryResult, type Filter, type GameSourceSubscription, type Install, type Preview, type ScanResult, type SourceCandidate, type Transaction, type InstallerOutcome } from "@steam-patch/ui";
 import {
   actionBlockers,
   primaryInstallAction,
@@ -102,6 +102,7 @@ function App() {
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [preferredLanguage, setPreferredLanguage] = useState<string | null>(null);
   const [preview, setPreview] = useState<Preview | null>(null);
+  const [manualConfirmation, setManualConfirmation] = useState<string | null>(null);
   const [archive, setArchive] = useState<string | null>(null);
   const [filter, setFilter] = useState<Filter>("all");
   const [query, setQuery] = useState("");
@@ -443,7 +444,7 @@ function App() {
     const latest = selectedInstallPatch();
     if (!latest || (latest.selection_id ?? latest.release_id) !== (patch.selection_id ?? patch.release_id)) return;
     const action = primaryInstallAction(latest, !!archive, route);
-    if (!action.available) return;
+    if (!action.available || (latest.compatibility === "manual_selection_required" && manualConfirmation !== latest.selection_id)) return;
     const selectedArchive = action.input === "local_archive" ? archive ?? "" : "";
     const operation = action.operation;
     const wasInstalled = action.label === "overwrite";
@@ -516,8 +517,8 @@ function App() {
           const primaryAction = primaryInstallAction(current, !!archive);
           const blockers = actionBlockers(current);
           return <>
-            <section className="card"><h3>{current.name}</h3><div className="facts"><div><label>检测状态</label><strong>{patchState(current.detection.status)}</strong></div><div><label>来源能力</label><strong>{workflowState(current.support_level)}</strong></div><div><label>兼容性</label><strong>{workflowState(current.compatibility)}</strong></div><div><label>游戏版本</label><strong>{game.game.buildid ?? "未知，需审核"}</strong></div></div><p>补丁标识：{current.selection_id ?? current.release_id}</p><button onClick={() => openUrl(current.source_page)}>在外部浏览器打开官方来源 ↗</button>{current.support_level === "publisher_exe" && <p className="hint">安装时自动检查条件；下载后会先分析安装包，条件不满足不会写入文件。</p>}{blockers.map((b, i) => <p className="warning" key={i}>{reason(b.code)}{b.detail ? ` · ${b.detail}` : ""}</p>)}{isExternal(current.detection.status) && <p className="warning">检测到外部安装；没有本工具的原版备份，不能由此卸载。</p>}{dynamic && current.actions.automatic.available && <p className="hint">可自动安装；点击安装后会从来源下载并核对内容后写入。</p>}</section>
-            <section className="card"><h3>安装与预览</h3><p>{primaryAction.input === "local_archive" ? "此操作需要导入本地 ZIP；查看文件变更仅供只读核对。" : "安装会按核心提供的主要操作路线核对补丁后写入游戏文件；查看文件变更仅供只读核对。"}</p><div className="actions"><button onClick={viewPreview} disabled={!!busy}>查看文件变更（只读）</button>{current.actions.local_archive.available && <button onClick={chooseArchive} disabled={!!busy}>导入本地 ZIP</button>}{archive && current.actions.local_archive.available && <button onClick={() => void startInstall("local_archive")} disabled={!!busy || installing || !primaryInstallAction(current, true, "local_archive").available}>使用本地 ZIP 安装</button>}<button className="primary" onClick={() => void startInstall()} disabled={!!busy || installing || !primaryAction.available}>{primaryAction.label === "overwrite" ? "覆盖安装补丁" : "安装补丁"}</button></div>{archive && <p className="path">已选择：{archive}</p>}{preview && <ChangeList title="只读文件变更" value={preview} />}</section>
+            <section className="card"><h3>{current.name}</h3><div className="facts"><div><label>检测状态</label><strong>{patchState(current.detection.status)}</strong></div><div><label>来源能力</label><strong>{workflowState(current.support_level)}</strong></div><div><label>兼容性</label><strong>{workflowState(current.compatibility)}</strong></div><div><label>游戏版本</label><strong>{game.game.buildid ?? "未知，需审核"}</strong></div></div><p>补丁标识：{current.selection_id ?? current.release_id}</p><button onClick={() => openUrl(current.source_page)}>在外部浏览器打开官方来源 ↗</button>{current.support_level === "publisher_exe" && <p className="hint">安装时自动检查条件；下载后会先分析安装包，条件不满足不会写入文件。</p>}{blockers.map((b, i) => <p className="warning" key={i}>{reason(b.code)}{b.detail ? ` · ${b.detail}` : ""}</p>)}{isExternal(current.detection.status) && <p className="warning">检测到外部安装；没有本工具的原版备份，不能由此卸载。</p>}{dynamic && current.compatibility !== "manual_selection_required" && current.actions.automatic.available && <p className="hint">可自动安装；点击安装后会从来源下载并核对内容后写入。</p>}</section>
+            <section className="card"><h3>安装与预览</h3>{current.download_url && <><p><b>下载项：</b>{current.download_label || downloadFileName(current.download_url)}</p><p className="path">{current.download_url}</p></>}{current.compatibility === "manual_selection_required" && game.discovery?.candidates.filter(c => c.candidate_id === current.candidate_id).map(c => <div key={c.candidate_id}><p>版本：{c.version_raw || "未标明"} · 类型：{c.variant} · 语言：{c.languages.join("、") || "未标明"}</p><p>需要 DLC：{c.requires_dlc?.join("、") || "未标明"} · 排除 DLC：{c.excludes_dlc?.join("、") || "未标明"}</p></div>)}{current.compatibility === "manual_selection_required" && <label><input type="checkbox" checked={manualConfirmation === current.selection_id} onChange={e => setManualConfirmation(e.target.checked ? current.selection_id ?? null : null)} />我选择将此候选安装到当前游戏（请核对来源、语言和 DLC；未标明的条件由你选择）</label>}<p>{primaryAction.input === "local_archive" ? "此操作需要导入本地 ZIP；查看文件变更仅供只读核对。" : "安装会按核心提供的主要操作路线核对补丁后写入游戏文件；查看文件变更仅供只读核对。"}</p><div className="actions"><button onClick={viewPreview} disabled={!!busy}>查看文件变更（只读）</button>{current.actions.local_archive.available && <button onClick={chooseArchive} disabled={!!busy}>导入本地 ZIP</button>}{archive && current.actions.local_archive.available && <button onClick={() => void startInstall("local_archive")} disabled={!!busy || installing || !primaryInstallAction(current, true, "local_archive").available}>使用本地 ZIP 安装</button>}<button className="primary" onClick={() => void startInstall()} disabled={!!busy || installing || !primaryAction.available || (current.compatibility === "manual_selection_required" && manualConfirmation !== current.selection_id)}>{primaryAction.label === "overwrite" ? "覆盖安装补丁" : "安装补丁"}</button></div>{archive && <p className="path">已选择：{archive}</p>}{preview && <ChangeList title="只读文件变更" value={preview} />}</section>
           </>;
         })()}
         {entry?.kind === "discovery" && <CandidateCard candidate={entry.candidate} onOpen={openUrl} />}

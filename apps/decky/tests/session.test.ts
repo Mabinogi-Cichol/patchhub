@@ -173,7 +173,7 @@ test("a stale discovery response clears a previous EXE selection", async () => {
   assert.deepEqual(session.getSnapshot().report!.installs[0].patches, []);
 });
 
-test("failed refresh revokes a previous EXE selection without losing ZIP releases", async () => {
+test("failed refresh preserves previous EXE and ZIP selections", async () => {
   let calls = 0;
   const base = discoveryReport();
   base.installs[0].patches = [release("zip", "managed_zip")];
@@ -184,7 +184,7 @@ test("failed refresh revokes a previous EXE selection without losing ZIP release
   await session.refresh(); await session.discover("a", []);
   assert.deepEqual(session.getSnapshot().report!.installs[0].patches.map(patch => patch.release_id), ["zip", "exe-reviewed"]);
   await session.discover("a", [], null, true);
-  assert.deepEqual(session.getSnapshot().report!.installs[0].patches.map(patch => patch.release_id), ["zip"]);
+  assert.deepEqual(session.getSnapshot().report!.installs[0].patches.map(patch => patch.release_id), ["zip", "exe-reviewed"]);
   assert.match(session.getSnapshot().discoveries.a.error!, /查询失败/);
 });
 
@@ -331,4 +331,21 @@ test("game operation failures are scoped while scan and settings feedback remain
   assert.equal(feedbackFor(session.getSnapshot(), "night").note, "已开启自动清理。");
   assert.equal(feedbackFor(session.getSnapshot(), "cult").note, "已开启自动清理。");
   assert.equal(feedbackFor(session.getSnapshot()).note, "已开启自动清理。");
+});
+
+test("explicit force query is not swallowed by pending cached query and fences its late reply", async () => {
+  let finishOld!: (value: DiscoveryResult) => void;
+  const calls: boolean[] = [];
+  const session = createManagerSession(async () => ({ report: discoveryReport(), transactions: [] }), async (_instance, _names, _language, force) => {
+    calls.push(force);
+    if (!force) return new Promise(resolve => { finishOld = resolve; });
+    return discovery({ patches: [release("fresh", "publisher_exe")] });
+  });
+  await session.refresh();
+  const old = session.discover("a", []);
+  await session.discover("a", [], "zh-CN", true);
+  finishOld(discovery({ patches: [release("old", "publisher_exe")] }));
+  await old;
+  assert.deepEqual(calls, [false, true]);
+  assert.deepEqual(session.getSnapshot().report!.installs[0].patches.map(p => p.release_id), ["fresh"]);
 });

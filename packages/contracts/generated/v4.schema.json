@@ -1807,6 +1807,19 @@
         "detection": {
           "$ref": "#/$defs/Detection"
         },
+        "download_label": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "download_url": {
+          "description": "Chosen trusted download; especially important for explicit manual selection.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "name": {
           "type": "string"
         },

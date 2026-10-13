@@ -160,7 +160,7 @@ impl ResolvedZipCandidate {
             verified_buildids: buildid.map(str::to_string).into_iter().collect(),
             // Language gates publisher discoveries only; index sources record it
             // as evidence so the selected patch language is not a blocker.
-            require_language: self.rule.discovery_only,
+            require_language: self.rule.discovery_only && !self.language.is_empty(),
             requires_dlc: self.candidate.requires_dlc.clone().unwrap_or_default(),
             excludes_dlc: self.candidate.excludes_dlc.clone().unwrap_or_default(),
             baselines: Vec::new(),
@@ -439,6 +439,9 @@ pub fn resolve_zip(
     if appid != game.appid {
         return Err(ResolveError::code("selection_not_found"));
     }
+    if let Ok(manual) = super::manual_selection::resolve(registry, game, selection_id, "zip") {
+        return Ok(manual);
+    }
     let candidate = registry
         .dynamic_zip_candidates(game)
         .into_iter()
@@ -451,6 +454,17 @@ pub fn resolve_zip(
         .find(|rule| rule.id == candidate.source_id)
         .cloned()
         .ok_or_else(|| ResolveError::code("source_not_enabled"))?;
+    // Downloadability is not an automatic identity or variant confirmation.
+    if rule.discovery_only
+        && (!matches!(
+            candidate.match_basis,
+            crate::sources::model::MatchBasis::Appid
+                | crate::sources::model::MatchBasis::VerifiedAlias
+                | crate::sources::model::MatchBasis::OfficialTitle
+        ) || matches!(candidate.variant, Variant::Unknown | Variant::Demo))
+    {
+        return Err(ResolveError::code("source_requires_guidance"));
+    }
     // Discovery rules are the publisher-ZIP candidate source and may carry
     // `download_hosts`; only the enabled flag gates them (see progress note on
     // the §2.1 step-5 `!discovery_only` inconsistency).
@@ -873,7 +887,7 @@ mod tests {
     }
 
     #[test]
-    fn stale_discovery_yields_selection_stale() {
+    fn discovery_remains_installable_after_30_days() {
         use crate::sources::model::{DiscoveryRecord, RulesConfig};
         use crate::sources::registry::{DiscoveryOutcome, SourceRegistry};
         use crate::sources::store::SourceStore;
@@ -925,12 +939,7 @@ mod tests {
             )
             .unwrap();
         // Advance past `DISCOVERY_SUCCESS_TTL` (6h) without re-publishing.
-        now.store(1_000 + 7 * 3_600, Ordering::SeqCst);
-        assert_eq!(
-            resolve_zip(&registry, &game(), &selection_id)
-                .unwrap_err()
-                .code,
-            "selection_stale"
-        );
+        now.store(1_000 + 30 * 24 * 3_600, Ordering::SeqCst);
+        assert!(resolve_zip(&registry, &game(), &selection_id).is_ok());
     }
 }

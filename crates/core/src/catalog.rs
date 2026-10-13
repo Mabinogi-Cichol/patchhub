@@ -99,6 +99,13 @@ pub struct FileMapping {
 #[derive(Debug, Clone, Serialize, schemars::JsonSchema, ts_rs::TS, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PatchMatch {
+    /// Chosen trusted download; especially important for explicit manual selection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional = nullable)]
+    pub download_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional = nullable)]
+    pub download_label: Option<String>,
     pub release_id: String,
     /// Display attribution from the current trusted source candidate.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -413,6 +420,8 @@ pub fn matches_with_diagnostics(
             let (detection, evidence) = detect_with_diagnostics(install, r, cancel);
             diagnostics.extend(evidence);
             PatchMatch {
+                download_url: None,
+                download_label: None,
                 source_id: None,
                 candidate_id: None,
                 release_id: r.release_id.clone(),
