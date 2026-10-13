@@ -24,3 +24,8 @@ for (const name of ["catalog.json", "signed-catalog.json", "trust-keys.json"]) {
   if (!existsSync(source)) throw new Error(`Missing catalog resource: ${name}`);
   copyFileSync(source, join(here, "..", "src-tauri", "resources", name));
 }
+
+const resources = join(here, "..", "src-tauri", "resources");
+mkdirSync(join(resources, "licenses"), { recursive: true });
+copyFileSync(join(root, "LICENSE"), join(resources, "LICENSE"));
+copyFileSync(join(root, "scripts", "licenses", "sfextract-MIT.txt"), join(resources, "licenses", "sfextract-MIT.txt"));

@@ -12,6 +12,8 @@ dist/
 apps/windows/src-tauri/binaries/
 apps/windows/src-tauri/gen/
 apps/windows/src-tauri/resources/*.json
+apps/windows/src-tauri/resources/LICENSE
+apps/windows/src-tauri/resources/licenses/
 apps/decky/plugin-output/
 
 .slim/deepwork/

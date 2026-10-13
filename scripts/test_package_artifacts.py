@@ -75,6 +75,9 @@ class PackagingTests(unittest.TestCase):
             self.assertFalse((root / '.artifacts/steam-patch-manager-decky.zip').exists())
             with zipfile.ZipFile(root / '.artifacts/steam-patch-manager-windows-portable.zip') as archive:
                 self.assertIn('sf-worker.exe', archive.namelist())
+                self.assertEqual(archive.read('LICENSE'), (root / 'LICENSE').read_bytes())
+                self.assertEqual(archive.read('licenses/sfextract-MIT.txt'), (root / 'scripts/licenses/sfextract-MIT.txt').read_bytes())
+                self.assertIn('dependencies.cdx.json', archive.namelist())
 
     def test_rejects_second_production_engine(self):
         for name in ('publisher.py', 'source_engine.py', 'exe_worker'):
@@ -106,10 +109,12 @@ class PackagingTests(unittest.TestCase):
                 self.assertFalse(list((root / '.artifacts').glob('*.zip')))
 
     def test_missing_sbom_refuses(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp); self.fixture(root); (root / '.artifacts/dependencies.cdx.json').unlink()
-            with self.assertRaisesRegex(FileNotFoundError, 'SBOM'):
-                self.run_package(root, 'decky')
+        for platform in ('windows', 'decky'):
+            with self.subTest(platform=platform), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp); self.fixture(root, windows=True); (root / '.artifacts/dependencies.cdx.json').unlink()
+                with self.assertRaisesRegex(FileNotFoundError, 'SBOM'):
+                    self.run_package(root, platform)
+                self.assertFalse(list((root / '.artifacts').glob('*.zip')))
 
     def test_changed_sources_or_bundled_license_refuse(self):
         for source, dest, _ in packager.INSTALLER_FILES:

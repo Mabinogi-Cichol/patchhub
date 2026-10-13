@@ -94,6 +94,9 @@ def main():
         windows.append((ROOT / 'catalog' / name, 'resources/' + name, False))
     windows.append((ROOT / 'docs/client-guide.md', 'client-guide.md', False))
     windows.append((ROOT / 'docs/privacy.md', 'privacy.md', False))
+    for source, packaged, _ in INSTALLER_FILES:
+        if packaged:
+            windows.append((ROOT / source, packaged, False))
     plugin = ROOT / 'apps/decky/plugin-output'
     if platform in ('all', 'decky'):
         if not plugin.is_dir():
@@ -103,8 +106,8 @@ def main():
               path.relative_to(plugin).as_posix() in ('bin/steam-patch', 'bin/sf-worker'))
              for path in sorted(plugin.rglob('*')) if path.is_file()]
     sbom = OUTPUT / 'dependencies.cdx.json'
-    if platform in ('all', 'decky') and not sbom.is_file():
-        raise FileNotFoundError('Generate the current SBOM before Decky packaging')
+    if not sbom.is_file():
+        raise FileNotFoundError('Generate the current SBOM before packaging')
     if sbom.is_file():
         validate_sbom(sbom, plugin, platform in ('all', 'decky'))
         windows.append((sbom, sbom.name, False))
