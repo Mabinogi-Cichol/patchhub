@@ -425,7 +425,7 @@ pub fn install(
     .map_err(|error| {
         if matches!(
             error.code.as_str(),
-            "cancelled" | "task_cancelled" | "lease_expired"
+            "cancelled" | "task_cancelled" | "download_cancelled" | "lease_expired"
         ) {
             DomainError::new("cancelled", error.code)
         } else {

@@ -157,6 +157,105 @@ fn recovery_empty_state_is_readonly() {
     assert!(recover(&host).unwrap().is_empty());
     assert!(!state.exists());
 }
+
+#[test]
+fn publisher_download_cancel_is_standard_cancel_before_any_transaction() {
+    use steam_patch_core::{
+        install,
+        sources::{
+            model::{GameQuery, SourceCache, SourceEntry},
+            Sources,
+        },
+        trust::revision::SqliteTrustRevisionStore,
+    };
+    struct DownloadFailure(&'static str);
+    impl Transport for DownloadFailure {
+        fn get(&self, _: &str, _: Option<&str>, _: Option<&str>) -> io::Result<HttpResponse> {
+            Err(io::Error::other(self.0))
+        }
+    }
+    for (transport_code, expected) in [
+        ("task_cancelled", "cancelled"),
+        ("download_cancelled", "cancelled"),
+        ("network_unavailable", "download_failed"),
+    ] {
+        let t = tempfile::tempdir().unwrap();
+        let root = t.path().join("Steam");
+        manifest(&root, "Game");
+        let game = root.join("steamapps/common/Game");
+        fs::write(game.join("original.txt"), b"original").unwrap();
+        let id = steam_patch_core::steam::scan(std::slice::from_ref(&root))
+            .installs
+            .remove(0)
+            .instance_id;
+        let state = t.path().join("state");
+        let host = ValidatedHostContext::new(&state, &[root], platform()).unwrap();
+        let now = SystemClock.now_seconds().unwrap();
+        let sources = Sources::open(&state).unwrap();
+        sources
+            .store()
+            .save_cache(
+                "patchmoe",
+                &SourceCache {
+                    entries: vec![SourceEntry {
+                        title: "Fixture".into(),
+                        aliases: vec![],
+                        url: "https://download.patch.moe/fixture.zip".into(),
+                        source_page: "https://www.patch.moe/".into(),
+                        language: "zh-CN".into(),
+                        date: None,
+                        appid: Some(42),
+                    }],
+                    etag: None,
+                    modified: None,
+                    cached_at: Some(now),
+                    checked_at: Some(now),
+                },
+            )
+            .unwrap();
+        drop(sources);
+        let sources = Sources::open(&state).unwrap();
+        let query = GameQuery {
+            appid: 42,
+            name: "Fixture".into(),
+            localized_name: None,
+            instance_id: Some(id.clone()),
+        };
+        let candidate = sources.registry().index_candidates(&query).remove(0);
+        let selection = steam_patch_core::installer::zip_selection_id(&candidate).unwrap();
+        drop(sources);
+        let revisions = SqliteTrustRevisionStore::new(&state).unwrap();
+        let mut emit = |_| {};
+        let error = install(
+            InstallRequest {
+                request_id: RequestId::new("publisher-download-cancel").unwrap(),
+                instance_id: InstanceId::new(&id).unwrap(),
+                operation: InstallOperation::Overwrite,
+                target: InstallTarget::PublisherZipSelection {
+                    selection_id: ZipSelectionId::new(&selection).unwrap(),
+                },
+                cleanup_policy: CleanupPolicy::AfterCommit,
+            },
+            InstallerDeps {
+                host: &host,
+                catalog: &Provider,
+                revision_store: &revisions,
+                transport: &DownloadFailure(transport_code),
+                worker: None,
+                control: &Lease,
+                clock: &SystemClock,
+                emit: &mut emit,
+            },
+        )
+        .unwrap_err();
+        assert_eq!(error.code, expected, "{transport_code}");
+        assert!(install::list_transactions_at(host.installer_paths().root())
+            .unwrap()
+            .is_empty());
+        assert_eq!(fs::read(game.join("original.txt")).unwrap(), b"original");
+        assert_eq!(fs::read_dir(&game).unwrap().count(), 1);
+    }
+}
 #[cfg(target_os = "linux")]
 #[test]
 fn actual_root_identity_cannot_be_declared_away() {
