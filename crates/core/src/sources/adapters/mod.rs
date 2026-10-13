@@ -51,6 +51,9 @@ pub struct DiscoverOutcome {
 pub struct DiscoverPrevious {
     pub index: Option<DiscoveryIndex>,
     pub upstream_pages: Vec<String>,
+    pub known_candidates: Vec<SourceCandidate>,
+    pub checkpoint: Option<serde_json::Value>,
+    pub related_pages: Vec<String>,
 }
 
 /// A maintained source adapter. `previous` is required for conditional requests

@@ -150,7 +150,7 @@ pub fn discover_game(
             .filter(|candidate| candidate.source_id == rule.id)
             .map(|c| c.source_page.clone())
             .collect();
-        let input = discover_previous(registry, rule, pages);
+        let input = discover_previous(registry, rule, game.appid, pages);
         // Keep most of the single-game deadline/budget for the fallback pass
         // (design §0 `OFFICIAL_SUBDEADLINE` / `OFFICIAL_SUBBUDGET`).
         let deadline = ctx.deadline;
@@ -195,7 +195,7 @@ pub fn discover_game(
             if cancel.load(Ordering::Relaxed) || crate::operation::check().is_err() {
                 return Err(invalid("task_cancelled"));
             }
-            let input = discover_previous(registry, rule, Vec::new());
+            let input = discover_previous(registry, rule, game.appid, Vec::new());
             let outcome = match adapters::discover(rule, &query, ctx, &input) {
                 Ok(outcome) => outcome,
                 Err(error) => {
@@ -246,7 +246,7 @@ pub fn discover_game(
                     }
                 }
                 supplemented.name_hints = hints;
-                let input = discover_previous(registry, official, pages);
+                let input = discover_previous(registry, official, game.appid, pages);
                 match adapters::discover(official, &supplemented, ctx, &input) {
                     Ok(enhanced) => {
                         let prior_candidates: Vec<SourceCandidate> = match results
@@ -377,11 +377,25 @@ pub fn discover_game(
 fn discover_previous(
     registry: &SourceRegistry,
     rule: &SourceRule,
+    appid: u32,
     upstream_pages: Vec<String>,
 ) -> DiscoverPrevious {
     DiscoverPrevious {
         index: registry.shared_index(&rule.id),
         upstream_pages,
+        related_pages: Vec::new(),
+        known_candidates: registry
+            .previous_success_candidates(appid)
+            .into_iter()
+            .filter(|c| c.source_id == rule.id)
+            .collect(),
+        checkpoint: registry.previous_record(rule, appid).attempt.and_then(|a| {
+            (a.parser_version == PARSER_VERSION
+                && a.query_version == QUERY_VERSION
+                && a.encoding_version == SOURCES_ENCODING_VERSION)
+                .then_some(a.checkpoint)
+                .flatten()
+        }),
     }
 }
 

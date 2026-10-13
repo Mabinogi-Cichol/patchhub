@@ -254,6 +254,7 @@ function GameManager({ item, seg, panel }: { item: Install; seg: string; panel?:
   const navigate = useRef<((route: string) => void) | null>(null);
   const [preferredLanguage, setPreferredLanguage] = useState<string | null>(null);
   const entries = displayPatches(item, preferredLanguage);
+  const [selectedDownload, setSelectedDownload] = useState("");
   const [selectedKey, setSelectedKey] = useState(entries[0]?.key ?? "");
   const [archive, setArchive] = useState("");
   const [preview, setPreview] = useState<Preview | null>(null);
@@ -264,9 +265,10 @@ function GameManager({ item, seg, panel }: { item: Install; seg: string; panel?:
   const mounted = useRef(true);
   const game = gamePresentation(item.game.appid, gameDisplayName(item.game)).name;
   const selected = entries.find(entry => entry.key === selectedKey);
-  const patch = selected?.kind === "installable" ? selected.patch : undefined;
+  const patch = selected?.kind === "installable" ? selected.choices.find(p => (p.selection_id ?? p.release_id) === selectedDownload) ?? selected.patch : undefined;
   const candidate = selected?.kind === "discovery" ? selected.candidate : undefined;
   const identity = patch?.selection_id ?? patch?.release_id ?? "";
+  useEffect(() => { setPreview(null); setArchive(""); setManualConfirmation(""); }, [item.game.instance_id, identity]);
   const primaryAction = primaryInstallAction(patch, !!archive.trim());
   const primaryInput = primaryAction.input;
   const primaryAvailable = primaryAction.available;
@@ -312,7 +314,7 @@ function GameManager({ item, seg, panel }: { item: Install; seg: string; panel?:
     // registers on the first render.
     if (navigate.current) navigate.current(target); else Navigation.Navigate(target);
   }
-  function chooseRelease(next: string) { setSelectedKey(next); setArchive(""); setPreview(null); }
+  function chooseRelease(next: string) { setSelectedKey(next); setSelectedDownload(""); setManualConfirmation(""); setArchive(""); setPreview(null); }
   function changeGameSource(sourceId: string, subscribed: boolean) {
     void session.work("正在更新此游戏的订阅源…", async () => {
       await setGameSource(item.game.appid, sourceId, subscribed); session.invalidateDiscovery(sourceId, item.game.appid); return readSnapshot();
@@ -383,13 +385,13 @@ function GameManager({ item, seg, panel }: { item: Install; seg: string; panel?:
       <Row><Action disabled={!!busy || !!finding?.busy} onClick={() => void session.discover(item.game.instance_id, [item.game.name, game], preferredLanguage, true)}>重新查找补丁</Action></Row>
       {item.discovery?.diagnostics.map((diagnostic, index) => <Row key={index}><Status warning>{diagnostic.detail || reason(diagnostic.code)}{diagnostic.detail && diagnostic.detail !== diagnostic.code ? ` · ${reason(diagnostic.detail)}` : ""}</Status></Row>)}
     </PanelSection>
-    {(!!item.patches.length || !item.discovery?.candidates.length) && <PanelSection title="匹配到的补丁">{item.patches.length ? item.patches.map(p => <PanelSectionRow key={p.selection_id ?? p.release_id}>
+    {(!!item.patches.length || !item.discovery?.candidates.length) && <PanelSection title="匹配到的补丁">{item.patches.length ? entries.filter(e => e.kind === "installable").map(entry => entry.kind === "installable" && <PanelSectionRow key={entry.key}>
       <div className="patch-patch">
-        <div className="patch-patch-name">{p.name}</div>
-        <div className="patch-patch-source">匹配源：{sourceInfo(p, report?.sources)}</div>
+        <div className="patch-patch-name">{entry.patch.name}</div>
+        <div className="patch-patch-source">匹配源：{sourceInfo(entry.patch, report?.sources)}</div>
         <div className="patch-actions">
-          <Button onClick={() => { chooseRelease(p.selection_id ?? p.release_id); navigatePanel("patches"); }}>查看补丁</Button>
-          <Button onClick={() => openSource(p.source_page)}>打开来源网页 ↗</Button>
+          <Button onClick={() => { chooseRelease(entry.key); navigatePanel("patches"); }}>查看补丁</Button>
+          <Button onClick={() => openSource(entry.patch.source_page)}>打开来源网页 ↗</Button>
         </div>
       </div>
     </PanelSectionRow>) : <Row><Status>{discoveryStatus(item.discovery?.status)}</Status><Action onClick={() => navigatePanel("sources")}>管理订阅源</Action></Row>}</PanelSection>}
@@ -410,6 +412,7 @@ function GameManager({ item, seg, panel }: { item: Install; seg: string; panel?:
     {common}
     {selection}
     {candidate ? <CandidateDetails candidate={candidate} /> : !patch ? <PanelSection><Row><Status>{discoveryStatus(item.discovery?.status)}</Status></Row></PanelSection> : <>
+      {selected?.kind === "installable" && selected.choices.length > 1 && <PanelSection title="下载文件与镜像"><Row><DropdownItem label="选择下载项" layout="below" selectedOption={patch.selection_id ?? patch.release_id} rgOptions={selected.choices.map(p => ({ data: p.selection_id ?? p.release_id, label: `${p.download_label || "来源下载"} · ${p.download_url ? downloadFileName(p.download_url) : p.name}` }))} onChange={option => { setSelectedDownload(option.data); setManualConfirmation(""); setPreview(null); setArchive(""); }} /></Row></PanelSection>}
       <PanelSection title="选择补丁"><InfoRow label="补丁">{patch.name}</InfoRow>
         <InfoRow label="匹配源">{sourceInfo(patch, report?.sources)}</InfoRow>
       </PanelSection>

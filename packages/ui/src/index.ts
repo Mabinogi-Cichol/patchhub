@@ -6,7 +6,7 @@ type Patch = PatchMatch;
 type Install = InstanceProjection;
 // Only host scan lifecycle metadata is added to the generated projection.
 export type ScanResult = ScanReport & { generation?: number; scan_progress?: { completed: number; total: number; running: boolean } };
-export type DisplayPatch = { kind: "installable"; key: string; patch: Patch } | { kind: "discovery"; key: string; candidate: SourceCandidate };
+export type DisplayPatch = { kind: "installable"; key: string; patch: Patch; choices: Patch[] } | { kind: "discovery"; key: string; candidate: SourceCandidate };
 
 export function candidateMatched(candidate: SourceCandidate): boolean {
   return ["appid", "verified_alias", "official_title"].includes(candidate.match_basis ?? "");
@@ -23,7 +23,18 @@ export function displayPatches(row: Install, preferredLanguage: string | null = 
     const rank = (p: Patch) => variant(p) === "base" ? 0 : variant(p) === "unknown" ? 1 : 2;
     return rank(a) - rank(b);
   });
-  return [...patches.map(patch => ({ kind: "installable" as const, key: patch.selection_id ?? patch.release_id, patch })), ...discovery];
+  const groups = new Map<string, Patch[]>();
+  const choicesForDisplay = patches.filter(p => p.compatibility !== "manual_selection_required" || !p.download_url
+    || !patches.some(other => other.candidate_id === p.candidate_id && other.compatibility !== "manual_selection_required" && other.actions.overwrite.available && other.download_url === p.download_url));
+  for (const patch of choicesForDisplay) {
+    const key = patch.candidate_id ? `candidate:${patch.source_id ?? ""}:${patch.candidate_id}` : patch.selection_id ?? patch.release_id;
+    const choices = groups.get(key) ?? []; choices.push(patch); groups.set(key, choices);
+  }
+  return [...Array.from(groups, ([key, choices]) => {
+    const patch = choices[0];
+    const title = row.discovery?.candidates.find(c => c.candidate_id === patch.candidate_id)?.patch_title;
+    return { kind: "installable" as const, key, patch: title ? { ...patch, name: title } : patch, choices };
+  }), ...discovery];
 }
 export function hasMatchedPatch(row: Install): boolean {
   return row.patches.length > 0 || !!row.discovery?.candidates.some(candidateMatched);
@@ -264,6 +275,7 @@ export function reason(code: string): string {
      ,task_required: "此操作必须通过安装任务执行，请从安装按钮重新发起。"
      ,invalid_selection_id: "补丁选择标识无效，请重新查找来源。"
      ,selection_not_found: "补丁选择已不在来源结果中，请重新查找。"
+     ,discovery_candidate_revalidation_incomplete: "部分已知补丁尚未完成核验，保留上次候选，请继续查找。"
      ,selection_stale: "补丁来源记录与当前解析版本不兼容，请重新查找来源。"
      ,local_archive_signed_only: "此来源不支持导入本地 ZIP，请使用来源自动安装。"
      ,selection_or_release_required: "缺少补丁选择或发行版本，请重新选择。"

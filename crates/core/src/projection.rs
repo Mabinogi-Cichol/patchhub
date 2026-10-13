@@ -482,7 +482,15 @@ fn project_instance_impl(
                     )
                 })
                 .collect();
-            if !usable || artifacts.len() > 1 {
+            if !usable
+                || artifacts.len() > 1
+                || candidate
+                    .mirrors
+                    .iter()
+                    .filter(|m| matches!(m.format.as_str(), "zip" | "exe"))
+                    .count()
+                    > 1
+            {
                 for mirror in &candidate.mirrors {
                     if let Some(id) =
                         installer::manual_selection::selection_id(&candidate, &query, mirror)

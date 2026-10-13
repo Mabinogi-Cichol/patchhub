@@ -27,7 +27,8 @@ impl Adapter for KaguraAdapter {
             "kagura_woocommerce" => "kagura_en_html",
             other => other,
         };
-        let (candidates, index, diagnostics) = official(rule, adapter, query, ctx, previous);
+        let (candidates, index, diagnostics, checkpoint) =
+            official(rule, adapter, query, ctx, previous);
         Ok(DiscoverOutcome {
             status: String::new(),
             candidates,
@@ -40,7 +41,7 @@ impl Adapter for KaguraAdapter {
                 })
                 .collect(),
             index: Some(index),
-            checkpoint: None,
+            checkpoint,
             identities: Vec::new(),
         })
     }
@@ -59,7 +60,12 @@ fn official(
     query: &QueryContext,
     ctx: &mut RequestContext,
     previous: &DiscoverPrevious,
-) -> (Vec<SourceCandidate>, DiscoveryIndex, Vec<String>) {
+) -> (
+    Vec<SourceCandidate>,
+    DiscoveryIndex,
+    Vec<String>,
+    Option<serde_json::Value>,
+) {
     let mut diagnostics: Vec<String> = Vec::new();
     let entry_url = rule
         .url
@@ -105,7 +111,7 @@ fn official(
     if direct.is_empty() {
         let target_category_known = adapter == "kagura_cn_html"
             && records.iter().any(|record| {
-                record.kind == "category" && identity::title_relevant(&record.title, query)
+                record.kind == "category" && lead_relevant(&record.title, query, previous)
             });
 
         if records.is_empty() || (!pages.is_empty() && !target_category_known) {
@@ -250,7 +256,7 @@ fn official(
                 // A target's category is enough; avoid crawling the full archive.
                 if adapter == "kagura_cn_html"
                     && records.iter().any(|record| {
-                        record.kind == "category" && identity::title_relevant(&record.title, query)
+                        record.kind == "category" && lead_relevant(&record.title, query, previous)
                     })
                 {
                     break;
@@ -261,7 +267,7 @@ fn official(
             }
             if !pages.is_empty()
                 && !records.iter().any(|record| {
-                    record.kind == "category" && identity::title_relevant(&record.title, query)
+                    record.kind == "category" && lead_relevant(&record.title, query, previous)
                 })
             {
                 diagnostics.push("discovery_index_incomplete".to_string());
@@ -271,38 +277,235 @@ fn official(
         direct = records
             .iter()
             .filter(|record| {
-                record.kind != "category" && identity::title_relevant(&record.title, query)
+                record.kind != "category" && lead_relevant(&record.title, query, previous)
             })
             .map(|record| (Some(record.title.clone()), record.page.clone()))
             .collect();
+    }
 
-        let categories: Vec<(String, String)> = records
+    // Detail priority must never turn into detail-only discovery. Work is local
+    // to this game and resumes before repeating already completed requests.
+    let binding = serde_json::json!({"appid":query.appid,"name":query.name,"hints":query.name_hints,
+        "language":query.preferred_language,"settings":query.settings_revision,"rule":rule});
+    let resumed = previous
+        .checkpoint
+        .as_ref()
+        .filter(|c| c.get("binding") == Some(&binding));
+    let mut work: std::collections::VecDeque<Work> = resumed
+        .and_then(|c| serde_json::from_value(c.get("work")?.clone()).ok())
+        .unwrap_or_default();
+    let mut candidates: Vec<SourceCandidate> = if !work.is_empty() {
+        resumed
+            .and_then(|c| serde_json::from_value(c.get("candidates")?.clone()).ok())
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    if work.is_empty() {
+        for (page, title) in dedup_by_page(direct) {
+            work.push_back(Work {
+                kind: "detail".into(),
+                page,
+                title,
+            });
+        }
+        let mut categories: Vec<_> = records
             .iter()
-            .filter(|record| {
-                record.kind == "category" && identity::title_relevant(&record.title, query)
-            })
-            .map(|record| (record.title.clone(), record.page.clone()))
+            .filter(|r| r.kind == "category" && lead_relevant(&r.title, query, previous))
             .collect();
-        for (_, category) in categories {
-            match crawl_category(rule, query, ctx, &category) {
-                Ok(mut articles) => direct.append(&mut articles),
-                Err(error) => diagnostics.push(error.to_string()),
+        // Expand missing variants before spending the bounded pass on the known base category.
+        categories.sort_by_key(|r| {
+            (
+                previous
+                    .known_candidates
+                    .iter()
+                    .any(|c| c.patch_title == r.title),
+                identity::variant(&r.title) == super::super::model::Variant::Dlc,
+            )
+        });
+        for r in categories {
+            work.push_back(Work {
+                kind: "category".into(),
+                page: r.page.clone(),
+                title: Some(r.title.clone()),
+            });
+        }
+        for r in records
+            .iter()
+            .filter(|r| r.kind != "category" && lead_relevant(&r.title, query, previous))
+        {
+            if !work.iter().any(|w| w.page == r.page) {
+                work.push_back(Work {
+                    kind: "detail".into(),
+                    page: r.page.clone(),
+                    title: Some(r.title.clone()),
+                });
             }
         }
     }
-
-    let mut candidates = Vec::new();
-    for (page, title) in dedup_by_page(direct) {
-        match detail_candidate(rule, adapter, query, ctx, &page, title.as_deref()) {
-            Ok(found) => candidates.extend(found),
-            Err(error) => {
-                diagnostics.push(error.to_string());
-                if let Some(title) = title {
-                    if !title.is_empty() {
+    let mut related_previous = previous.clone();
+    related_previous.known_candidates.extend(candidates.clone());
+    related_previous.related_pages.extend(
+        resumed
+            .and_then(|c| {
+                serde_json::from_value::<Vec<String>>(c.get("related_pages")?.clone()).ok()
+            })
+            .unwrap_or_default(),
+    );
+    let mut visited = HashSet::new();
+    let mut retry = Vec::new();
+    let mut deferred = Vec::new();
+    let mut resolving_deferred = false;
+    while let Some(task) = work.pop_front() {
+        let needs_base = task.kind == "detail"
+            && task.title.as_ref().is_some_and(|title| {
+                identity::variant(title) == super::super::model::Variant::Dlc
+                    && !identity::title_relevant(title, query)
+            })
+            && !related_previous
+                .known_candidates
+                .iter()
+                .any(|c| c.variant == super::super::model::Variant::Base);
+        if needs_base && !resolving_deferred {
+            deferred.push(task);
+            if work.is_empty() {
+                work.extend(deferred.drain(..));
+                resolving_deferred = true;
+            }
+            continue;
+        }
+        if !visited.insert(task.page.clone()) {
+            continue;
+        }
+        let fetched = fetch_page(ctx, &task.page, &rule.page_hosts);
+        let (html, final_url) = match fetched {
+            Ok(v) => v,
+            Err(e) => {
+                diagnostics.push(e.to_string());
+                retry.push(task);
+                if ctx.requests >= ctx.budget || std::time::Instant::now() >= ctx.deadline {
+                    break;
+                } else {
+                    continue;
+                }
+            }
+        };
+        if task.kind == "category" {
+            let document = dom::document(&html);
+            let root = dom::root(&document);
+            let mut articles = 0;
+            let mut detail_tasks = Vec::new();
+            let mut article_nodes: Vec<_> = dom::walk(&root)
+                .into_iter()
+                .filter(|n| dom::tag(n) == "article")
+                .collect();
+            article_nodes.sort_by_key(|n| {
+                dom::first(n, |h| dom::has_class(h, "entry-title")).is_some_and(|h| {
+                    identity::variant(&dom::text(&h)) == super::super::model::Variant::Dlc
+                })
+            });
+            for article in article_nodes {
+                articles += 1;
+                let Some(heading) = dom::first(&article, |n| dom::has_class(n, "entry-title"))
+                else {
+                    continue;
+                };
+                let title = dom::text(&heading);
+                if !lead_relevant(&title, query, previous) {
+                    continue;
+                }
+                let links = dom::links(&heading, &final_url, |_, url| {
+                    hostname_in(url, &rule.page_hosts)
+                });
+                let Some((_, page)) = links.first() else {
+                    continue;
+                };
+                // WordPress category pages often contain the whole article. Parse
+                // each article separately, retaining its canonical detail URL.
+                if dom::first(&article, |n| dom::has_class(n, "entry-content")).is_some() {
+                    match candidate_from_root(
+                        rule,
+                        adapter,
+                        query,
+                        &article,
+                        page,
+                        Some(&title),
+                        &related_previous,
+                    ) {
+                        Ok(found) => {
+                            if found.is_empty()
+                                && identity::variant(&title) == super::super::model::Variant::Dlc
+                                && !visited.contains(page)
+                            {
+                                deferred.push(Work {
+                                    kind: "detail".into(),
+                                    page: page.clone(),
+                                    title: Some(title.clone()),
+                                });
+                            }
+                            related_previous.known_candidates.extend(found.clone());
+                            candidates.extend(found);
+                        }
+                        Err(e) => diagnostics.push(e.to_string()),
+                    }
+                } else if !visited.contains(page) && !work.iter().any(|w| &w.page == page) {
+                    detail_tasks.push(Work {
+                        kind: "detail".into(),
+                        page: page.clone(),
+                        title: Some(title),
+                    });
+                }
+            }
+            detail_tasks.sort_by_key(|w| {
+                w.title.as_ref().is_some_and(|title| {
+                    identity::variant(title) == super::super::model::Variant::Dlc
+                })
+            });
+            for detail in detail_tasks.into_iter().rev() {
+                work.push_front(detail);
+            }
+            if articles == 0 && dom::first(&root, |n| dom::has_class(n, "no-results")).is_none() {
+                diagnostics.push("discovery_structure_changed".into());
+                retry.push(task.clone());
+            }
+            if let Some(next) = next_page(&root, &final_url) {
+                if visited.contains(&next) {
+                    diagnostics.push("discovery_pagination_cycle".into());
+                } else {
+                    work.push_back(Work { page: next, ..task });
+                }
+            }
+        } else {
+            let document = dom::document(&html);
+            let root = dom::root(&document);
+            match candidate_from_root(
+                rule,
+                adapter,
+                query,
+                &root,
+                &final_url,
+                task.title.as_deref(),
+                &related_previous,
+            ) {
+                Ok(found) => {
+                    if found.is_empty()
+                        && previous
+                            .known_candidates
+                            .iter()
+                            .any(|c| c.source_page == task.page)
+                    {
+                        diagnostics.push("discovery_candidate_revalidation_incomplete".into());
+                    }
+                    candidates.extend(found);
+                }
+                Err(e) => {
+                    diagnostics.push(e.to_string());
+                    retry.push(task.clone());
+                    if let Some(title) = task.title {
                         let mut fallback = identity::build_candidates(
                             rule,
                             &title,
-                            &page,
+                            &task.page,
                             "",
                             &[],
                             &[],
@@ -310,16 +513,66 @@ fn official(
                             &[],
                             query,
                         );
-                        for candidate in &mut fallback {
-                            candidate.warnings.push("detail_unavailable".to_string());
+                        for c in &mut fallback {
+                            c.warnings.push("detail_unavailable".into());
                         }
                         candidates.extend(fallback);
                     }
                 }
             }
         }
+        // Only body links labelled as related DLC leads, on the publisher's
+        // allowed page hosts, become work. Sidebars/download mirrors do not.
+        let document = dom::document(&html);
+        let root = dom::root(&document);
+        if let Some(body) = dom::first(&root, |n| dom::has_class(n, "entry-content")) {
+            for (label, page) in dom::links(&body, &final_url, |_, url| {
+                hostname_in(url, &rule.page_hosts)
+            }) {
+                if identity::variant(&label) == super::super::model::Variant::Dlc
+                    && lead_relevant(&label, query, &related_previous)
+                    && !visited.contains(&page)
+                    && !work.iter().any(|w| w.page == page)
+                {
+                    related_previous.related_pages.push(page.clone());
+                    work.push_back(Work {
+                        kind: "detail".into(),
+                        page,
+                        title: Some(label),
+                    });
+                }
+            }
+        }
+        related_previous.known_candidates.extend(
+            candidates
+                .iter()
+                .filter(|c| {
+                    !related_previous
+                        .known_candidates
+                        .iter()
+                        .any(|old| old.candidate_id == c.candidate_id)
+                })
+                .cloned()
+                .collect::<Vec<_>>(),
+        );
+        if work.is_empty() && !deferred.is_empty() {
+            work.extend(deferred.drain(..));
+            resolving_deferred = true;
+        }
     }
-
+    // Append failures behind unvisited work so a repeated force makes progress.
+    work.extend(retry);
+    work.extend(deferred);
+    for old in &previous.known_candidates {
+        if !candidates.iter().any(|c| c.source_page == old.source_page) {
+            diagnostics.push("discovery_candidate_revalidation_incomplete".into());
+        }
+    }
+    if !work.is_empty() {
+        diagnostics.push("discovery_index_incomplete".into());
+    }
+    let checkpoint = (!work.is_empty())
+        .then(|| serde_json::json!({"binding":binding,"work":work,"candidates":candidates,"related_pages":related_previous.related_pages}));
     let index = DiscoveryIndex {
         parser_version: PARSER_VERSION,
         encoding_version: SOURCES_ENCODING_VERSION,
@@ -334,22 +587,51 @@ fn official(
         pending: pages,
         checked_at,
     };
-    (candidates, index, diagnostics)
+    (candidates, index, diagnostics, checkpoint)
 }
 
-fn detail_candidate(
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+struct Work {
+    kind: String,
+    page: String,
+    title: Option<String>,
+}
+
+// This is only a discovery lead. A new DLC still needs an explicit body link
+// to the known base page before its short title can enter candidate building.
+fn lead_relevant(title: &str, query: &QueryContext, previous: &DiscoverPrevious) -> bool {
+    if identity::title_relevant(title, query)
+        || previous
+            .known_candidates
+            .iter()
+            .any(|c| c.patch_title == title)
+    {
+        return true;
+    }
+    if identity::variant(title) != super::super::model::Variant::Dlc {
+        return false;
+    }
+    let stem = super::super::validate::discovery_normal(&identity::base_title(title));
+    std::iter::once(&query.name)
+        .chain(query.name_hints.iter())
+        .chain(previous.known_candidates.iter().map(|c| &c.game_title))
+        .any(|name| {
+            let base = name.split(['：', ':']).next().unwrap_or(name);
+            stem == super::super::validate::discovery_normal(&identity::base_title(base))
+        })
+}
+
+fn candidate_from_root(
     rule: &SourceRule,
     adapter: &str,
     query: &QueryContext,
-    ctx: &mut RequestContext,
-    page: &str,
+    root: &ElementRef<'_>,
+    final_url: &str,
     fallback_title: Option<&str>,
+    previous: &DiscoverPrevious,
 ) -> Result<Vec<SourceCandidate>> {
-    let (html, final_url) = fetch_page(ctx, page, &rule.page_hosts)?;
-    let document = dom::document(&html);
-    let root = dom::root(&document);
     let heading = dom::first(&root, |node| {
-        dom::tag(node) == "h1"
+        matches!(dom::tag(node), "h1" | "h2")
             && (dom::has_class(node, "entry-title") || adapter == "kagura_en_html")
     });
     let title = heading
@@ -376,6 +658,27 @@ fn detail_candidate(
     let ids = identity::steam_ids(&dom::link_urls(&body));
     let mirrors = dom::mirrors(&body, &final_url);
     let body_text = dom::text(&body);
+    let mut related_query = query.clone();
+    let known = previous.known_candidates.iter().any(|c| {
+        c.source_page == final_url
+            && c.patch_title == title
+            && c.game_appid.is_none_or(|id| id == query.appid)
+    });
+    let base_link = dom::link_urls(&body)
+        .iter()
+        .filter_map(|url| super::join_relative(final_url, url))
+        .any(|url| {
+            previous
+                .known_candidates
+                .iter()
+                .any(|c| c.variant == super::super::model::Variant::Base && c.source_page == url)
+        });
+    if known
+        || (lead_relevant(&title, query, previous)
+            && (base_link || previous.related_pages.iter().any(|p| p == final_url)))
+    {
+        related_query.name_hints.push(title.clone());
+    }
     let mut found = identity::build_candidates(
         rule,
         &title,
@@ -385,7 +688,7 @@ fn detail_candidate(
         &[],
         "unknown",
         &mirrors,
-        query,
+        &related_query,
     );
     let article = dom::ancestors(&body)
         .into_iter()
@@ -403,55 +706,6 @@ fn detail_candidate(
         }
     }
     Ok(found)
-}
-
-fn crawl_category(
-    rule: &SourceRule,
-    query: &QueryContext,
-    ctx: &mut RequestContext,
-    category: &str,
-) -> Result<Vec<(Option<String>, String)>> {
-    let mut articles = Vec::new();
-    let mut url = Some(category.to_string());
-    let mut visited: HashSet<String> = HashSet::new();
-    while let Some(current) = url.clone() {
-        if visited.len() >= 100 {
-            break;
-        }
-        if visited.contains(&current) {
-            return Err(invalid("discovery_pagination_cycle"));
-        }
-        visited.insert(current.clone());
-        let (html, final_url) = fetch_page(ctx, &current, &rule.page_hosts)?;
-        let document = dom::document(&html);
-        let root = dom::root(&document);
-        let mut article_count = 0;
-        for article in dom::walk(&root) {
-            if dom::tag(&article) != "article" {
-                continue;
-            }
-            article_count += 1;
-            if let Some(title) = dom::first(&article, |node| dom::has_class(node, "entry-title")) {
-                let text = dom::text(&title);
-                let links = dom::links(&title, &final_url, |_, link| {
-                    hostname_in(link, &rule.page_hosts)
-                });
-                if !links.is_empty() && identity::title_relevant(&text, query) {
-                    articles.push((Some(text), links[0].1.clone()));
-                }
-            }
-        }
-        if article_count == 0
-            && dom::first(&root, |node| dom::has_class(node, "no-results")).is_none()
-        {
-            return Err(invalid("discovery_structure_changed"));
-        }
-        url = next_page(&root, &final_url);
-    }
-    if url.is_some() {
-        return Err(invalid("discovery_index_incomplete"));
-    }
-    Ok(articles)
 }
 
 fn dedup_by_page(direct: Vec<(Option<String>, String)>) -> Vec<(String, Option<String>)> {
@@ -568,6 +822,381 @@ mod tests {
 </div>
 </article></body></html>"#;
 
+    const SUMMER_BASE: &str = r#"<html><body><article><h1 class="entry-title">夏日狂想曲：乡间的难忘回忆</h1><div class="entry-content"><p>中文 v1.03 Steam 补丁</p><a href="https://kaguraserver.com/Summer-Memories-CN-Patch-v1.03.exe">下载</a></div></article></body></html>"#;
+    const SUMMER_DLC: &str = r#"<html><body><article><h1 class="entry-title">夏日狂想曲+</h1><div class="entry-content"><p>中文 v2.02.1 只有购买过DLC扩展包才能使用 Steam</p><a href="/base/">夏日狂想曲本体补丁</a><a href="https://kaguraserver.com/Summer-Memories-Plus-DLC-CN-Patch-v2.02.1.exe">下载</a></div></article></body></html>"#;
+    fn summer_previous(include_dlc: bool) -> DiscoverPrevious {
+        let r = rule("kagura_wordpress");
+        let q = query(1227890, "夏日狂想曲：乡间的难忘回忆");
+        let f = Arc::new(FakeFetcher::new());
+        let mut ctx = context(&f);
+        let doc = dom::document(SUMMER_BASE);
+        let base = candidate_from_root(
+            &r,
+            "kagura_cn_html",
+            &q,
+            &dom::root(&doc),
+            "https://kagurafan.com/base/",
+            None,
+            &DiscoverPrevious::default(),
+        )
+        .unwrap()
+        .remove(0);
+        let mut previous = DiscoverPrevious {
+            index: Some(DiscoveryIndex {
+                parser_version: PARSER_VERSION,
+                encoding_version: SOURCES_ENCODING_VERSION,
+                records: vec![IndexRecord {
+                    title: "夏日狂想曲+".into(),
+                    page: "https://kagurafan.com/category/dlc/".into(),
+                    kind: "category".into(),
+                }],
+                ..Default::default()
+            }),
+            upstream_pages: vec![base.source_page.clone()],
+            known_candidates: vec![base],
+            ..Default::default()
+        };
+        if include_dlc {
+            let doc = dom::document(SUMMER_DLC);
+            let dlc = candidate_from_root(
+                &r,
+                "kagura_cn_html",
+                &q,
+                &dom::root(&doc),
+                "https://kagurafan.com/dlc/",
+                None,
+                &previous,
+            )
+            .unwrap()
+            .remove(0);
+            previous.upstream_pages.push(dlc.source_page.clone());
+            previous.known_candidates.push(dlc);
+        }
+        // avoid unused fetch context: construction is DOM-only
+        let _ = &mut ctx;
+        previous
+    }
+    #[test]
+    fn old_base_and_dlc_survive_force_with_long_base_name() {
+        let fake = Arc::new(FakeFetcher::new());
+        fake.push(response(SUMMER_BASE, "https://kagurafan.com/base/"));
+        fake.push(response(SUMMER_DLC, "https://kagurafan.com/dlc/"));
+        fake.push(response(
+            "<html><body><div class='no-results'></div></body></html>",
+            "https://kagurafan.com/category/dlc/",
+        ));
+        let mut ctx = context(&fake);
+        let mut q = query(1227890, "夏日狂想曲：乡间的难忘回忆");
+        q.force = true;
+        let out = super::super::discover(
+            &rule("kagura_wordpress"),
+            &q,
+            &mut ctx,
+            &summer_previous(true),
+        )
+        .unwrap();
+        assert_eq!(out.status, "complete");
+        assert_eq!(out.candidates.len(), 2);
+        assert!(out.candidates.iter().any(|c| c.variant == Variant::Dlc));
+        assert_eq!(fake.call_count(), 3);
+    }
+    #[test]
+    fn base_only_cache_expands_dlc_category_body_without_duplicate_detail_fetch() {
+        let fake = Arc::new(FakeFetcher::new());
+        fake.push(response(SUMMER_BASE, "https://kagurafan.com/base/"));
+        let category = SUMMER_DLC.replace(
+            "<h1 class=\"entry-title\">夏日狂想曲+</h1>",
+            "<h2 class=\"entry-title\"><a href='/dlc/'>夏日狂想曲+</a></h2>",
+        );
+        fake.push(response(&category, "https://kagurafan.com/category/dlc/"));
+        let mut ctx = context(&fake);
+        let q = query(1227890, "夏日狂想曲：乡间的难忘回忆");
+        let out = super::super::discover(
+            &rule("kagura_wordpress"),
+            &q,
+            &mut ctx,
+            &summer_previous(false),
+        )
+        .unwrap();
+        assert_eq!(out.status, "complete");
+        assert_eq!(out.candidates.len(), 2);
+        assert_eq!(fake.call_count(), 2);
+        let dlc = out
+            .candidates
+            .iter()
+            .find(|c| c.variant == Variant::Dlc)
+            .unwrap();
+        assert_eq!(dlc.game_appid, None);
+        assert_eq!(dlc.match_basis, crate::sources::model::MatchBasis::Title);
+    }
+    #[test]
+    fn cold_category_base_and_short_dlc_share_relationship_context() {
+        let fake = Arc::new(FakeFetcher::new());
+        let base = SUMMER_BASE.replace(
+            "<h1 class=\"entry-title\">夏日狂想曲：乡间的难忘回忆</h1>",
+            "<h2 class=\"entry-title\"><a href='/base/'>夏日狂想曲：乡间的难忘回忆</a></h2>",
+        );
+        let dlc = SUMMER_DLC.replace(
+            "<h1 class=\"entry-title\">夏日狂想曲+</h1>",
+            "<h2 class=\"entry-title\"><a href='/dlc/'>夏日狂想曲+</a></h2>",
+        );
+        fake.push(response(
+            &format!("{dlc}{base}"),
+            "https://kagurafan.com/category/game/",
+        ));
+        let previous = DiscoverPrevious {
+            index: Some(DiscoveryIndex {
+                parser_version: PARSER_VERSION,
+                encoding_version: SOURCES_ENCODING_VERSION,
+                records: vec![IndexRecord {
+                    title: "夏日狂想曲：乡间的难忘回忆".into(),
+                    page: "https://kagurafan.com/category/game/".into(),
+                    kind: "category".into(),
+                }],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let mut ctx = context(&fake);
+        let out = super::super::discover(
+            &rule("kagura_wordpress"),
+            &query(1227890, "夏日狂想曲：乡间的难忘回忆"),
+            &mut ctx,
+            &previous,
+        )
+        .unwrap();
+        assert_eq!(out.status, "complete");
+        assert_eq!(out.candidates.len(), 2);
+    }
+
+    #[test]
+    fn known_base_body_link_expands_missing_dlc_without_index_entry() {
+        let fake = Arc::new(FakeFetcher::new());
+        let base = SUMMER_BASE.replace("</div>", "<a href='/dlc/'>夏日狂想曲+</a></div>");
+        fake.push(response(&base, "https://kagurafan.com/base/"));
+        fake.push(response(SUMMER_DLC, "https://kagurafan.com/dlc/"));
+        let mut previous = summer_previous(false);
+        previous.index.as_mut().unwrap().records.clear();
+        let mut ctx = context(&fake);
+        let out = super::super::discover(
+            &rule("kagura_wordpress"),
+            &query(1227890, "夏日狂想曲：乡间的难忘回忆"),
+            &mut ctx,
+            &previous,
+        )
+        .unwrap();
+        assert_eq!(out.status, "complete");
+        assert_eq!(out.candidates.len(), 2);
+        assert_eq!(fake.call_count(), 2);
+    }
+
+    #[test]
+    fn cold_summary_category_fetches_base_before_short_dlc() {
+        let fake = Arc::new(FakeFetcher::new());
+        fake.push(response("<html><body><article><h2 class='entry-title'><a href='/dlc/'>夏日狂想曲+</a></h2></article><article><h2 class='entry-title'><a href='/base/'>夏日狂想曲：乡间的难忘回忆</a></h2></article></body></html>","https://kagurafan.com/category/game/"));
+        fake.push(response(SUMMER_BASE, "https://kagurafan.com/base/"));
+        fake.push(response(SUMMER_DLC, "https://kagurafan.com/dlc/"));
+        let previous = DiscoverPrevious {
+            index: Some(DiscoveryIndex {
+                parser_version: PARSER_VERSION,
+                encoding_version: SOURCES_ENCODING_VERSION,
+                records: vec![IndexRecord {
+                    title: "夏日狂想曲：乡间的难忘回忆".into(),
+                    page: "https://kagurafan.com/category/game/".into(),
+                    kind: "category".into(),
+                }],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let mut ctx = context(&fake);
+        let out = super::super::discover(
+            &rule("kagura_wordpress"),
+            &query(1227890, "夏日狂想曲：乡间的难忘回忆"),
+            &mut ctx,
+            &previous,
+        )
+        .unwrap();
+        assert_eq!(out.status, "complete");
+        assert_eq!(out.candidates.len(), 2);
+        assert_eq!(fake.calls()[1].url, "https://kagurafan.com/base/");
+    }
+
+    #[test]
+    fn cold_base_summary_establishes_context_before_next_dlc_category() {
+        let fake = Arc::new(FakeFetcher::new());
+        fake.push(response("<html><body><article><h2 class='entry-title'><a href='/base/'>夏日狂想曲：乡间的难忘回忆</a></h2></article></body></html>","https://kagurafan.com/category/base/"));
+        fake.push(response(SUMMER_BASE, "https://kagurafan.com/base/"));
+        let category = SUMMER_DLC.replace(
+            "<h1 class=\"entry-title\">夏日狂想曲+</h1>",
+            "<h2 class=\"entry-title\"><a href='/dlc/'>夏日狂想曲+</a></h2>",
+        );
+        fake.push(response(&category, "https://kagurafan.com/category/dlc/"));
+        let previous = DiscoverPrevious {
+            index: Some(DiscoveryIndex {
+                parser_version: PARSER_VERSION,
+                encoding_version: SOURCES_ENCODING_VERSION,
+                records: vec![
+                    IndexRecord {
+                        title: "夏日狂想曲：乡间的难忘回忆".into(),
+                        page: "https://kagurafan.com/category/base/".into(),
+                        kind: "category".into(),
+                    },
+                    IndexRecord {
+                        title: "夏日狂想曲+".into(),
+                        page: "https://kagurafan.com/category/dlc/".into(),
+                        kind: "category".into(),
+                    },
+                ],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let mut ctx = context(&fake);
+        let out = super::super::discover(
+            &rule("kagura_wordpress"),
+            &query(1227890, "夏日狂想曲：乡间的难忘回忆"),
+            &mut ctx,
+            &previous,
+        )
+        .unwrap();
+        assert_eq!(out.status, "complete");
+        assert_eq!(out.candidates.len(), 2);
+        assert_eq!(fake.calls()[1].url, "https://kagurafan.com/base/");
+    }
+
+    #[test]
+    fn category_pagination_never_overtakes_current_base_detail() {
+        let fake = Arc::new(FakeFetcher::new());
+        fake.push(response("<html><body><article><h2 class='entry-title'><a href='/base/'>夏日狂想曲：乡间的难忘回忆</a></h2></article><a rel='next' href='/category/game/page/2/'>Next</a></body></html>","https://kagurafan.com/category/game/"));
+        fake.push(response(SUMMER_BASE, "https://kagurafan.com/base/"));
+        let category = SUMMER_DLC.replace(
+            "<h1 class=\"entry-title\">夏日狂想曲+</h1>",
+            "<h2 class=\"entry-title\"><a href='/dlc/'>夏日狂想曲+</a></h2>",
+        );
+        fake.push(response(
+            &category,
+            "https://kagurafan.com/category/game/page/2/",
+        ));
+        let previous = DiscoverPrevious {
+            index: Some(DiscoveryIndex {
+                parser_version: PARSER_VERSION,
+                encoding_version: SOURCES_ENCODING_VERSION,
+                records: vec![IndexRecord {
+                    title: "夏日狂想曲：乡间的难忘回忆".into(),
+                    page: "https://kagurafan.com/category/game/".into(),
+                    kind: "category".into(),
+                }],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let mut ctx = context(&fake);
+        let out = super::super::discover(
+            &rule("kagura_wordpress"),
+            &query(1227890, "夏日狂想曲：乡间的难忘回忆"),
+            &mut ctx,
+            &previous,
+        )
+        .unwrap();
+        assert_eq!(out.status, "complete");
+        assert_eq!(out.candidates.len(), 2);
+        assert_eq!(fake.calls()[1].url, "https://kagurafan.com/base/");
+    }
+
+    #[test]
+    fn dlc_first_page_is_reconsidered_after_base_on_later_page() {
+        let fake = Arc::new(FakeFetcher::new());
+        let dlc = SUMMER_DLC
+            .replace(
+                "<h1 class=\"entry-title\">夏日狂想曲+</h1>",
+                "<h2 class=\"entry-title\"><a href='/dlc/'>夏日狂想曲+</a></h2>",
+            )
+            .replace(
+                "</body>",
+                "<a rel='next' href='/category/game/page/2/'>Next</a></body>",
+            );
+        let base = SUMMER_BASE.replace(
+            "<h1 class=\"entry-title\">夏日狂想曲：乡间的难忘回忆</h1>",
+            "<h2 class=\"entry-title\"><a href='/base/'>夏日狂想曲：乡间的难忘回忆</a></h2>",
+        );
+        fake.push(response(&dlc, "https://kagurafan.com/category/game/"));
+        fake.push(response(
+            &base,
+            "https://kagurafan.com/category/game/page/2/",
+        ));
+        fake.push(response(SUMMER_DLC, "https://kagurafan.com/dlc/"));
+        let previous = DiscoverPrevious {
+            index: Some(DiscoveryIndex {
+                parser_version: PARSER_VERSION,
+                encoding_version: SOURCES_ENCODING_VERSION,
+                records: vec![IndexRecord {
+                    title: "夏日狂想曲：乡间的难忘回忆".into(),
+                    page: "https://kagurafan.com/category/game/".into(),
+                    kind: "category".into(),
+                }],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let mut ctx = context(&fake);
+        let out = super::super::discover(
+            &rule("kagura_wordpress"),
+            &query(1227890, "夏日狂想曲：乡间的难忘回忆"),
+            &mut ctx,
+            &previous,
+        )
+        .unwrap();
+        assert_eq!(out.status, "complete");
+        assert_eq!(out.candidates.len(), 2);
+        assert_eq!(
+            fake.calls()[1].url,
+            "https://kagurafan.com/category/game/page/2/"
+        );
+    }
+
+    #[test]
+    fn missing_body_relationship_does_not_admit_unrelated_plus_title() {
+        let previous = summer_previous(false);
+        let q = query(1227890, "夏日狂想曲：乡间的难忘回忆");
+        let html = SUMMER_DLC.replace("/base/", "/other-game/");
+        let doc = dom::document(&html);
+        assert!(candidate_from_root(
+            &rule("kagura_wordpress"),
+            "kagura_cn_html",
+            &q,
+            &dom::root(&doc),
+            "https://kagurafan.com/unrelated/",
+            None,
+            &previous
+        )
+        .unwrap()
+        .is_empty());
+    }
+    #[test]
+    fn budget_checkpoint_resumes_missing_dlc_before_repeating_base() {
+        let fake = Arc::new(FakeFetcher::new());
+        fake.push(response(SUMMER_BASE, "https://kagurafan.com/base/"));
+        let mut ctx = context(&fake);
+        ctx.budget = 1;
+        let q = query(1227890, "夏日狂想曲：乡间的难忘回忆");
+        let mut previous = summer_previous(true);
+        previous.index.as_mut().unwrap().records.clear();
+        let first =
+            super::super::discover(&rule("kagura_wordpress"), &q, &mut ctx, &previous).unwrap();
+        assert_eq!(first.status, "partial");
+        assert!(first.checkpoint.is_some());
+        let fake = Arc::new(FakeFetcher::new());
+        fake.push(response(SUMMER_DLC, "https://kagurafan.com/dlc/"));
+        let mut ctx = context(&fake);
+        previous.checkpoint = first.checkpoint;
+        let second =
+            super::super::discover(&rule("kagura_wordpress"), &q, &mut ctx, &previous).unwrap();
+        assert_eq!(second.status, "complete");
+        assert_eq!(second.candidates.len(), 2);
+        assert_eq!(fake.calls()[0].url, "https://kagurafan.com/dlc/");
+    }
+
     #[test]
     fn index_build_and_detail_candidate() {
         let fake = Arc::new(FakeFetcher::new());
@@ -606,6 +1235,7 @@ mod tests {
                 checked_at: 123,
             }),
             upstream_pages: vec![],
+            ..Default::default()
         };
         let mut q = query(42, "Missing");
         q.force = true;
@@ -652,6 +1282,7 @@ mod tests {
                 checked_at: 123,
             }),
             upstream_pages: vec!["https://kagurafan.com/game/".into()],
+            ..Default::default()
         };
         let mut q = query(42, "Game");
         q.force = true;
@@ -683,6 +1314,7 @@ mod tests {
                 checked_at: 123,
             }),
             upstream_pages: Vec::new(),
+            ..Default::default()
         };
         let outcome = KaguraAdapter
             .discover(

@@ -794,6 +794,14 @@ impl SourceRegistry {
                     .and_then(|attempt| attempt.index.clone())
             }),
             checkpoint: result.checkpoint.clone().or_else(|| {
+                if result.status == "complete"
+                    && matches!(
+                        rule.adapter.as_str(),
+                        "kagura_wordpress" | "kagura_woocommerce"
+                    )
+                {
+                    return None;
+                }
                 previous
                     .attempt
                     .as_ref()
@@ -1732,6 +1740,25 @@ mod tests {
         let candidates = registry.cached_candidates(&game(42));
         assert_eq!(candidates[0].patch_title, "Current candidate");
         assert_eq!(candidates[0].cache_status, CacheStatus::Cached);
+    }
+
+    #[test]
+    fn complete_kagura_pass_clears_finished_work_checkpoint() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut registry = registry_at(temp.path(), 1000);
+        let rule = rule(&registry, "kagura-cn");
+        let partial = DiscoveryOutcome {
+            status: "partial".into(),
+            checkpoint: Some(serde_json::json!({"work":[{"page":"https://kagurafan.com/game/"}]})),
+            ..Default::default()
+        };
+        let old = registry
+            .commit(&rule, 42, partial, &DiscoveryRecord::default(), "key")
+            .unwrap();
+        let complete = registry
+            .commit(&rule, 42, complete(Vec::new()), &old, "key")
+            .unwrap();
+        assert!(complete.attempt.unwrap().checkpoint.is_none());
     }
 
     #[test]

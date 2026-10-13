@@ -43,7 +43,7 @@ test("an automatic EXE entry replaces its own duplicate source guidance", () => 
   const game = row([candidate({ candidate_id: "official" }), candidate({ candidate_id: "other", source_id: "hgamer" })]);
   game.patches = [{ release_id: "exe-selection-example", candidate_id: "official", name: "Installable", source_page: "https://example.com",
     support_level: "publisher_exe", actions: { automatic: { available: false, blockers: [] }, local_archive: { available: false, blockers: [] }, reinstall: { available: false, blockers: [] }, overwrite: { available: false, blockers: [] }, primary: { operation: "overwrite", label: "install", input: "unavailable" } }, compatibility: "check_required", blockers: [], detection: { status: "unknown", files: [] } }];
-  assert.deepEqual(displayPatches(game).map(entry => [entry.kind, entry.key]), [["installable", "exe-selection-example"], ["discovery", "other"]]);
+  assert.deepEqual(displayPatches(game).map(entry => [entry.kind, entry.key]), [["installable", "candidate::official"], ["discovery", "other"]]);
 });
 
 test("external navigation accepts public HTTPS pages and rejects local addresses and arbitrary schemes", () => {
@@ -70,4 +70,22 @@ test("dynamic variants with one display release retain distinct selections", () 
     support_level: "publisher_zip", actions: { automatic: { available: false, blockers: [] }, local_archive: { available: false, blockers: [] }, reinstall: { available: false, blockers: [] }, overwrite: { available: false, blockers: [] }, primary: { operation: "overwrite", label: "install", input: "unavailable" } }, compatibility: "unknown", blockers: [], detection: { status: "unknown", files: [] }
   }));
   assert.deepEqual(displayPatches(game).filter(item => item.kind === "installable").map(item => item.key), ["zip-selection-a", "zip-selection-b"]);
+});
+
+
+test("one candidate row retains both exact mirror choices while DLC remains distinct", () => {
+  const game = row([candidate({candidate_id:"base",variant:"base"}),candidate({candidate_id:"dlc",variant:"dlc"})]);
+  const available = {available:true,blockers:[]};
+  const patch = (id:string,candidate_id:string,url:string) => ({release_id:"source-kagura-cn-1227890",selection_id:id,candidate_id,source_id:"kagura-cn",name:"Mirror",source_page:"https://kagurafan.com/patch/",support_level:"publisher_exe",compatibility:"manual_selection_required",download_url:url,actions:{automatic:available,overwrite:available,local_archive:{available:false,blockers:[]},reinstall:{available:false,blockers:[]},primary:{operation:"overwrite",label:"install",input:"automatic"}},blockers:[],detection:{status:"unknown",files:[]}});
+  game.patches = [patch("exe-first","base","https://kaguraserver.com/same.exe"),patch("exe-second","base","https://kaguragamespatch.com/same.exe"),patch("exe-dlc","dlc","https://kaguraserver.com/dlc.exe")] as Install["patches"];
+  const entries=displayPatches(game);
+  assert.equal(entries.length,2);
+  const base=entries[0];assert.equal(base.kind,"installable");
+  if(base.kind!=="installable")throw Error("expected installation group");
+  assert.equal(base.key,"candidate:kagura-cn:base");
+  assert.deepEqual(base.choices.map(p=>p.selection_id),["exe-first","exe-second"]);
+  assert.deepEqual(base.choices.map(p=>p.download_url),["https://kaguraserver.com/same.exe","https://kaguragamespatch.com/same.exe"]);
+  const dlc=entries[1];assert.equal(dlc.kind,"installable");if(dlc.kind==="installable")assert.equal(dlc.choices[0].selection_id,"exe-dlc");
+  game.patches.push({...game.patches[0],candidate_id:"different-version",selection_id:"exe-different"});
+  assert.equal(displayPatches(game).length,3);
 });
