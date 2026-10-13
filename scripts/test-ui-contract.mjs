@@ -30,7 +30,7 @@ for (const c of cases.events.filter(c => !c.error && c.event.event === "install_
   assert.equal(typeof ui.progressStageLabel(c.event.stage, c.event.substage), "string");
   if (c.event.total_bytes === null) assert.equal(ui.progressPercent(c.event.bytes_done, c.event.total_bytes), null);
 }
-for (const url of ["http://example.com", "https://user@example.com", "https://127.0.0.1", "https://foo.local", "https://example.com:444"]) assert.equal(ui.safeSourceUrl(url), false);
+for (const url of ["http://example.com", "https://user@example.com", "https://127.0.0.1", "https://foo.local", "https://example.com:444", "https://localhost./", "https://foo.localhost./", "https://foo.local./", "https://example.com./"]) assert.equal(ui.safeSourceUrl(url), false);
 assert.equal(ui.safeSourceUrl("https://example.com/source"), true);
 for (const code of ["fresh", "source_refreshed", "source_not_modified"]) assert.equal(ui.sourceRefreshSucceeded(code), true);
 console.log("Shared v4 generated DTO, UTF-8 bounds, action refusal, terminal, progress and URL fixtures passed");

@@ -336,6 +336,7 @@ export function safeSourceUrl(value: string): boolean {
   try { const url = new URL(value);
     if (url.protocol !== "https:" || url.username || url.password || (url.port && url.port !== "443")) return false;
     const host = url.hostname.toLowerCase();
+    if (host.endsWith(".")) return false;
     return host.includes(".") && host !== "localhost" && !host.endsWith(".localhost") && !host.endsWith(".local") && !host.includes(":") && !/^\d+\.\d+\.\d+\.\d+$/.test(host);
   } catch { return false; }
 }

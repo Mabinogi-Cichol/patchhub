@@ -48,7 +48,7 @@ test("an automatic EXE entry replaces its own duplicate source guidance", () => 
 
 test("external navigation accepts public HTTPS pages and rejects local addresses and arbitrary schemes", () => {
   for (const url of ["https://kagurafan.com/patch/", "https://hgamer.tw/zh-CN/patches/game"]) assert.equal(safeSourceUrl(url), true);
-  for (const url of ["http://example.com", "https://localhost/", "https://127.0.0.1/", "https://10.0.0.1/", "https://[::1]/", "https://example.local/", "https://name:secret@example.com/", "javascript:alert(1)", "https://example.com:8443/"]) assert.equal(safeSourceUrl(url), false, url);
+  for (const url of ["http://example.com", "https://localhost/", "https://localhost./", "https://foo.localhost./", "https://example.local./", "https://127.0.0.1/", "https://10.0.0.1/", "https://[::1]/", "https://example.local/", "https://name:secret@example.com/", "javascript:alert(1)", "https://example.com:8443/"]) assert.equal(safeSourceUrl(url), false, url);
 });
 
 test("only a complete empty query says no patch was found", () => {
