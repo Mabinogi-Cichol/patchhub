@@ -28,6 +28,21 @@ $steamPatchGit = @('-c', 'safe.directory=D:/Project Files/git/steam-hentai-patch
 
 每次 Git 调用检查退出码；失败后不继续暂存或提交。
 
+## 提交说明语言
+
+- 保留 Conventional Commits 标签，例如 `feat`、`fix`、`test`、`docs`、`refactor`、`build`、`chore`；可选 scope 沿用项目模块名。
+- 标签及可选 scope 后，冒号后的提交描述必须使用中文；多行正文也以中文说明改动和验证。技术名称、标识符、文件名和路径可以保留原文。
+- 本轮及后续提交均遵守此规则。用户提供提交说明时保留其意图，按此规则组织；不为统一语言而改写已有提交历史。
+
+示例：
+
+```text
+feat(sources): 支持手动选择候选补丁
+fix(kagura): 修复DLC候选漏查和镜像重复显示
+test(sources): 补充候选保留与分页查询回归测试
+docs(skills): 规定提交描述使用中文
+```
+
 ## 暂存、复核与提交
 
 1. 只暂存明确的文件；同一文件跨任务时按改动块暂存。若已有他人或其他任务的暂存内容，先判断是否属于用户授权范围，不擅自 reset 或包含进本次提交。
