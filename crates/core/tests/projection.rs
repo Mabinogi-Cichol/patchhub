@@ -1049,14 +1049,14 @@ fn serialized_action_stress_records_actual_jsonl_bytes_without_raising_cap() {
         let mut i = inputs(&steam, &c, None, &tx, &caps, &cancel);
         i.catalog = CatalogView::Verified(&signed);
         let report = scan(i).unwrap();
-        let envelope = serde_json::json!({"protocol_version":3,"request_id":"stress","ok":true,"result":report});
+        let envelope = serde_json::json!({"protocol_version":4,"request_id":"stress","ok":true,"result":report});
         let bytes = serde_json::to_vec(&envelope).unwrap().len() + 1;
         measurements.push(serde_json::json!({"instances":500,"patches_per_instance":patches,"bytes_including_lf":bytes,"limit_bytes":8*1024*1024,"within_limit":bytes <= 8*1024*1024}));
     }
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../.artifacts/rust-core-consolidation/p4/wire-size.json");
+        .join("../../.artifacts/rust-core-consolidation/p6/wire-size.json");
     fs::create_dir_all(path.parent().unwrap()).unwrap();
-    fs::write(path, serde_json::to_vec_pretty(&serde_json::json!({"producer":"actual_core_projection","detail_bytes":2048,"protocol_version":3,"measurements":measurements})).unwrap()).unwrap();
+    fs::write(path, serde_json::to_vec_pretty(&serde_json::json!({"producer":"actual_core_projection","detail_bytes":2048,"protocol_version":4,"measurements":measurements})).unwrap()).unwrap();
     assert!(measurements[0]["within_limit"].as_bool().unwrap());
     assert!(!measurements[1]["within_limit"].as_bool().unwrap());
 }

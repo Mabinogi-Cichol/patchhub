@@ -687,6 +687,8 @@ mod linux_impl {
         }
     }
 
+    // Keep allocation fallible so the RLIMIT_AS probe reports exhaustion instead of aborting.
+    #[allow(clippy::slow_vector_initialization)]
     fn scenario_alloc(request: &WorkerRequest) -> WorkerResponse {
         let mb = request.mb.unwrap_or(256);
         let size = (mb as usize).saturating_mul(1024 * 1024);

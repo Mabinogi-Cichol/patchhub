@@ -1,12 +1,10 @@
-//! P1 installer state schema `installer/rust-v1/` (p0-contracts §3).
+//! Shared installer services and persistent `installer/rust-v1/` state schema.
 //!
-//! This module freezes the on-disk layout and provides the atomic, idempotent
-//! bootstrap ([`store::init_atomic`]), the request-idempotency ledger
-//! ([`requests`]), the single-task orchestrator ([`orchestrator`]) and the
-//! internal authorization ([`authorization`]). It **is** wired into the protocol
-//! layer: `crates/cli` dispatches `install_patch` through
-//! [`orchestrator::install_zip`] / the signed route and persists all state under
-//! `installer/rust-v1/` (p1-zip-orchestration §3/§4).
+//! The CLI calls [`service::install`] for signed ZIP, publisher ZIP and publisher
+//! EXE requests. The service validates the host and delegates to the shared
+//! authorization, request ledger and transaction orchestrators. Recovery and
+//! discard also enter through [`service`]; [`cache::CacheService`] owns cache
+//! deletion and coordinates with writers. All routes retain the same state root.
 
 pub mod acquire;
 pub mod authorization;

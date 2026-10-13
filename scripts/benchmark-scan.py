@@ -4,6 +4,7 @@ Usage: python benchmark-scan.py CORE_BINARY [FIXTURE_PARENT]
 The first run is not a cold-cache measurement: fixture creation warms filesystem caches.
 """
 import json
+import os
 from pathlib import Path
 import statistics
 import subprocess
@@ -38,8 +39,12 @@ def main():
             (library / 'steamapps/common' / name).mkdir()
             manifest = f'"AppState" {{ "appid" "{appid}" "name" {quoted(name)} "installdir" {quoted(name)} "buildid" "1" "StateFlags" "4" }}'
             (library / f'steamapps/appmanifest_{appid}.acf').write_text(manifest, encoding='utf-8')
-        request = {'protocol_version': 1, 'request_id': 'benchmark', 'method': 'scan',
-                   'params': {'roots': [str(libraries[0])]}}
+        catalog = fixture / 'catalog.json'
+        catalog.write_text(json.dumps({'schema_version': 1, 'revision': 1, 'releases': []}), encoding='utf-8')
+        request = {'protocol_version': 4, 'request_id': 'benchmark', 'method': 'scan',
+                   'params': {'host': {'roots': [str(libraries[0])], 'catalog': str(catalog),
+                                       'signed_catalog': None, 'trust_keys': None, 'state_dir': None,
+                                       'platform': 'windows' if os.name == 'nt' else 'steamos'}}}
         durations = []
         for _ in range(6):
             started = time.perf_counter()
@@ -47,12 +52,13 @@ def main():
                                      capture_output=True, check=True, timeout=120)
             durations.append(time.perf_counter() - started)
             response = json.loads(process.stdout)
+            assert response['protocol_version'] == 4 and response['request_id'] == 'benchmark', response
             assert response['ok'], response
             result = response['result']
             assert not result['diagnostics'], result['diagnostics']
             assert sorted(row['game']['appid'] for row in result['installs']) == list(range(1000000, 1000000+count))
             assert len({row['game']['library_path'] for row in result['installs']}) == 2
-        print(json.dumps({'manifests': count, 'libraries': 2, 'matched_patches': 0,
+        print(json.dumps({'protocol_version': 4, 'manifests': count, 'libraries': 2, 'matched_patches': 0,
                           'platform': sys.platform, 'first_run_seconds': durations[0],
                           'warm_median_seconds': statistics.median(durations[1:]),
                           'warm_max_seconds': max(durations[1:]),

@@ -1,5 +1,6 @@
-//! Read-only foundation for Steam patch management.
-//! No download or game-file mutation is exposed in this milestone.
+//! Shared Steam patch domain services: projection, actions, trusted installation,
+//! transaction recovery, cache policy and source discovery. Writing entry points
+//! validate host identity, paths and authorization before mutating game files.
 pub mod actions;
 mod appinfo;
 pub mod catalog;

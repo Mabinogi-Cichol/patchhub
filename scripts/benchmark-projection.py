@@ -1,8 +1,9 @@
-"""P0/P1 projection benchmark; instruments a disposable source copy only.
+"""Protocol v4 projection benchmark; instruments a disposable source copy only.
 
 Timings use the plain debug binary. Counters use a separate binary whose response
 must equal the plain response. No user state, network or production source writes.
-P0 legacy and P1 shared-evidence adapters are selected explicitly by source layout.
+Hash counters cover the shared core evidence reader. Historical P0/P1 runs remain
+in their original evidence files and Git revisions.
 """
 import argparse
 import hashlib
@@ -19,7 +20,7 @@ import zipfile
 import threading
 
 REPO = Path(__file__).resolve().parents[1]
-CRATES = ('core', 'cli', 'installer-format', 'installer-worker')
+CRATES = ('core', 'cli', 'protocol', 'installer-format', 'installer-worker')
 MARKER = 'P0_HASH_COUNTS:'
 
 def digest(data):
@@ -51,7 +52,7 @@ pub fn p0_hash_counts() -> [u64; 3] {
 '''
     path.write_text(text[:start] + part + text[end:] + counters, encoding='utf-8')
 
-def build_pair(scratch, cargo):
+def build_pair(scratch, cargo, profile):
     source = scratch / 'source'
     source.mkdir()
     manifest = (REPO / 'Cargo.toml').read_text(encoding='utf-8')
@@ -79,20 +80,17 @@ def build_pair(scratch, cargo):
     env['CARGO_TARGET_DIR'] = str(target)
     suffix = '.exe' if os.name == 'nt' else ''
     def build(label):
-        print('Building isolated ' + label + ' debug CLI', flush=True)
-        subprocess.run([str(cargo), 'build', '--offline', '-p', 'steam-patch-cli'], cwd=source, env=env, check=True, timeout=900)
+        print('Building isolated ' + label + ' ' + profile + ' CLI', flush=True)
+        command = [str(cargo), 'build', '--offline', '-p', 'steam-patch-cli']
+        if profile == 'release':
+            command.append('--release')
+        subprocess.run(command, cwd=source, env=env, check=True, timeout=900)
         binary = scratch / (label + suffix)
-        shutil.copy2(target / 'debug' / ('steam-patch' + suffix), binary)
+        shutil.copy2(target / profile / ('steam-patch' + suffix), binary)
         return binary
     plain = build('plain')
-    shared_evidence = (source / 'crates/core/src/detection.rs').exists()
-    if shared_evidence:
-        instrument(source / 'crates/core/src/detection.rs', 'fn read_digest_with(', '\n#[cfg(test)]\nmod tests')
-        count_expression = 'serde_json::json!({"evidence": steam_patch_core::detection::p0_hash_counts()})'
-    else:
-        instrument(source / 'crates/core/src/catalog.rs', 'fn hash_file(', '\npub fn detect(')
-        instrument(source / 'crates/cli/src/runtime.rs', 'fn hash_target(', '\n/// `preview` dispatch')
-        count_expression = 'serde_json::json!({"catalog": steam_patch_core::catalog::p0_hash_counts(), "dynamic": runtime::p0_hash_counts()})'
+    instrument(source / 'crates/core/src/detection.rs', 'fn read_digest_with(', '\n#[cfg(test)]\nmod tests')
+    count_expression = 'serde_json::json!({"evidence": steam_patch_core::detection::p0_hash_counts()})'
     main = source / 'crates/cli/src/main.rs'
     text = once(main.read_text(encoding='utf-8'), 'fn main() -> ExitCode {', '''fn main() -> ExitCode {
     struct P0Summary;
@@ -103,7 +101,7 @@ def build_pair(scratch, cargo):
     }
     let _p0_summary = P0Summary;'''.replace('COUNT_EXPRESSION', count_expression))
     main.write_text(text, encoding='utf-8')
-    return plain, build('counted'), shared_evidence
+    return plain, build('counted'), True
 
 def fixture(parent, name, manifests, files, mixed, library_names=('Steam 测试库', '第二库')):
     directory = parent / name
@@ -143,18 +141,19 @@ def fixture(parent, name, manifests, files, mixed, library_names=('Steam 测试�
                              'recipe': {'artifact_sha256': '0'*64, 'files': mappings}, 'artifact': None})
     catalog = directory / 'catalog.json'
     catalog.write_text(json.dumps({'schema_version': 1, 'revision': 1, 'releases': releases}), encoding='utf-8')
-    return {'roots': [str(libraries[0])], 'catalog': str(catalog), 'platform': 'windows'}
+    return {'roots': [str(libraries[0])], 'catalog': str(catalog),
+            'platform': 'windows' if os.name == 'nt' else 'steamos'}
 
 def rpc(binary, method, params, version):
     request_id = params.get('request_id', 'p0-projection')
-    if version == 4:
-        params = dict(params)
-        params.pop('request_id', None)
-        host = {key: params.pop(key, [] if key == 'roots' else 'windows' if key == 'platform' else None)
-                for key in ('roots', 'catalog', 'signed_catalog', 'trust_keys', 'state_dir', 'platform')}
-        if method == 'install_patch':
-            params['cleanup_policy'] = 'disabled'
-        params['host'] = host
+    params = dict(params)
+    params.pop('request_id', None)
+    platform = 'windows' if os.name == 'nt' else 'steamos'
+    host = {key: params.pop(key, [] if key == 'roots' else platform if key == 'platform' else None)
+            for key in ('roots', 'catalog', 'signed_catalog', 'trust_keys', 'state_dir', 'platform')}
+    if method == 'install_patch':
+        params['cleanup_policy'] = 'disabled'
+    params['host'] = host
     request = {'protocol_version': version, 'request_id': request_id, 'method': method, 'params': params}
     data = json.dumps(request).encode() + b'\n'
     if len(data) > 64*1024:
@@ -191,7 +190,8 @@ def rpc(binary, method, params, version):
     if len(terminals) != 1:
         raise ValueError('expected one terminal RPC response')
     response = terminals[0]
-    if not response.get('ok') or response.get('request_id') != request_id:
+    if (response.get('protocol_version') != version or not response.get('ok')
+            or response.get('request_id') != request_id):
         raise ValueError(response)
     return response, elapsed, len(process.stdout), process.stderr.decode('utf-8')
 
@@ -204,8 +204,6 @@ def dynamic_fixture(parent, binary, version):
     The scan then removes catalog input, projecting the source-scoped receipt.
     No download or executable worker is used; archives and signing keys are local.
     """
-    if version != 3:
-        raise ValueError('dynamic fixture needs an explicit v4 installer adapter after P5')
     params = fixture(parent, 'dynamic-managed', 8, 4, False, ('a', 'b'))
     directory = Path(params['catalog']).parent
     catalog = json.loads(Path(params['catalog']).read_text(encoding='utf-8'))
@@ -233,7 +231,8 @@ def dynamic_fixture(parent, binary, version):
             'release_id': f"patchmoe-{row['game']['appid']}", 'signed_catalog': str(signed),
             'trust_keys': str(keys), 'state_dir': str(state), 'archive': str(archive),
             'operation': 'overwrite', 'request_id': f'fixture-install-{index}'}, version)[0]
-        if installed['result']['state'] != 'committed':
+        if (installed['result']['disposition'] != 'completed'
+                or installed['result']['state'] != 'committed'):
             raise ValueError(installed)
     rpc(binary, 'list_sources', {'roots': params['roots'], 'state_dir': str(state)}, version)
     now = int(time.time())
@@ -252,8 +251,9 @@ def main():
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--runs', type=int, default=6)
     parser.add_argument('--cargo', type=Path, default=REPO / '.tools/cargo/bin/cargo.exe')
-    parser.add_argument('--binary', type=Path, help='Future CLI for fixture timing only; hash counts remain unmeasured')
-    parser.add_argument('--protocol-version', type=int, choices=[3, 4], default=3)
+    parser.add_argument('--binary', type=Path, help='Current CLI for fixture timing only; hash counts remain unmeasured')
+    parser.add_argument('--protocol-version', type=int, choices=[4], default=4)
+    parser.add_argument('--profile', choices=['debug', 'release'], default='debug')
     parser.add_argument('--real-root', type=Path, action='append', default=[], help='Explicit Steam root; manifest-only, no state/catalog, read-only')
     args = parser.parse_args()
     if args.runs < 2:
@@ -269,11 +269,14 @@ def main():
         if scratch.parent != parent.resolve():
             raise ValueError('scratch escapes fixture parent')
         if args.binary:
-            plain, counted, shared_evidence = args.binary.resolve(strict=True), None, None
+            plain, counted, shared_evidence = args.binary.resolve(strict=True), None, True
         else:
-            if args.protocol_version != 3:
-                parser.error('frozen instrumentation supports only v3')
-            plain, counted, shared_evidence = build_pair(scratch, args.cargo.resolve(strict=True))
+            # Rustup dispatches by argv[0]; resolving cargo's Unix symlink to rustup
+            # would turn `cargo build` into the unrelated `rustup build` command.
+            cargo = args.cargo.absolute()
+            if not cargo.is_file():
+                raise FileNotFoundError(cargo)
+            plain, counted, shared_evidence = build_pair(scratch, cargo, args.profile)
         binary_hashes = {'plain': digest(plain.read_bytes()), 'counted': digest(counted.read_bytes()) if counted else None}
         for name, manifests, files, mixed in [('manifest-only', 500, 0, False), ('recipe-all-match', 24, 4, False), ('recipe-mixed-evidence', 24, 4, True)]:
             params = fixture(scratch, name, manifests, files, mixed)
@@ -314,8 +317,7 @@ def main():
                     raise ValueError('invalid counter output: ' + stderr)
                 counts = json.loads(lines[0][len(MARKER):])
                 complete = manifests * (2 if mixed else files)
-                expected_counts = ({'evidence': [manifests*files, complete, complete*262144]} if shared_evidence else
-                                   {'catalog': [manifests*files, complete, complete*262144], 'dynamic': [0, 0, 0]})
+                expected_counts = {'evidence': [manifests*files, complete, complete*262144]}
                 assert counts == expected_counts, counts
             cases.append({'fixture': name, 'manifests': manifests, 'libraries': 2, 'unique_appids': manifests//2,
                           'files_per_patch': files, 'payload_bytes': 262144 if files else 0, 'response_bytes': size,
@@ -370,12 +372,11 @@ def main():
     if before != after:
         raise ValueError('production sources changed during baseline')
     report = {'schema_version': 1, 'protocol_version': args.protocol_version, 'platform': os.name,
-              'profile': 'debug' if not args.binary else 'caller-supplied',
+              'profile': args.profile if not args.binary else 'caller-supplied',
               'clock': 'perf_counter: process startup + serve + full scan/serialization', 'cold_cache_measured': False,
               'network_used': False, 'installer_state_used': bool(shared_evidence), 'installer_state_scope': 'disposable fixture only',
               'steam_metadata_read': bool(args.real_root), 'game_files_written': False, 'fixture_game_files_written': True,
-              'hash_scope': ('shared core detection read_digest; excludes manifest/identity hashing' if shared_evidence else
-                             'catalog hash_file + CLI dynamic hash_target only; excludes manifest/identity hashing'),
+              'hash_scope': 'shared core detection read_digest; excludes manifest/identity hashing',
               'production_sources_unchanged': True, 'source_sha256': before, 'binary_sha256': binary_hashes, 'cases': cases}
     args.output.parent.mkdir(parents=True, exist_ok=True)
     snapshot_path = args.output.with_name(args.output.stem + '-snapshots.json')
