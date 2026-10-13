@@ -1,5 +1,9 @@
 # 开发进度
 
+## 2026-10-13：Rust 核心收敛 P5 阶段完成，P6 待验收
+
+正式 v4/生成契约/共享 UI helper 与双端终态消费已实现，Windows/Linux及宿主自动化、生成无漂移、同包CLI/worker隔离冒烟与专项独立复核通过。P5代码已本地提交 `9b5c4f8`，文档独立提交；未部署；P6最终双端安装包、真实UI/游戏/设备与全范围清理gate待执行。完整记录见 [P5验证](features/rust-core-consolidation/p5-validation.md)与[施工记录](features/rust-core-consolidation/progress.md)。
+
 ## 2026-10-12：Rust 核心服务收敛重构 P1–P4 已本地提交、P3/P4 阶段自动化通过（P5–P6 待实现）
 
 - 建立独立 feature，按扫描投影、签名安装编排/信任存储、缓存清理、动作 DTO、公共契约顺序推进，P6 逐项关闭本次识别的技术债。

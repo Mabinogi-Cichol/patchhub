@@ -303,7 +303,7 @@ ActionBlockerCode 固定集合：unsigned_catalog、catalog_unavailable、catalo
 
 ## 6. v3 → v4 正式 wire
 
-唯一 protocol_version=4；v1/v2/v3/未来未知版本拒绝 unsupported_protocol，不双读/不降级。信封仍 {protocol_version,request_id,method,params} 与 {protocol_version,request_id,ok,result|error}；逐方法 Params/结构 DTO deny_unknown_fields。诊断 code 可未知但不驱动授权。
+唯一 protocol_version=4；v1/v2/v3/未来未知版本拒绝 unsupported_protocol，不双读/不降级。信封仍 {protocol_version,request_id,method,params} 与 {protocol_version,request_id,ok,result|error}；逐方法 Params/结构 DTO deny_unknown_fields。诊断 code 可未知但不驱动授权。 错误信封的 request_id 字段必需，但无法从坏 JSON/重复键/非法 ID 得到可靠身份时为 null；成功信封必需合法字符串。版本早拒绝只从信封纯读取并回传合法 request_id，不解析 params 或初始化状态；普通宿主仍要求响应 ID 与当前请求严格一致。
 
 v4每个 params 必需 host:HostInputs，HostInputs={roots:PathBuf[],catalog:PathBuf|null,signed_catalog:PathBuf|null,trust_keys:PathBuf|null,state_dir:PathBuf|null,platform:Platform}，六字段均必需（不可用为null），与表中业务字段并列；这些由宿主固定注入、UI 不得传。v3 params 顶层六配置移入 host，旧顶层字段拒绝，不设双读。CLI 不接受 worker/env/recipe/URL；roots<=32 保留。wire target 保留 release_id XOR selection_id，经转换得到 InstallTarget，**不再并存第二 target 对象**。删除 params.request_id，外层 ID 是唯一幂等 ID；operation 改必需，避免缺省 Install；cleanup_policy 是宿主注入必需 disabled/after_commit，UI 不写偏好。
 
@@ -394,9 +394,9 @@ DomainError.code 继续string以保留现有解析/安全/worker诊断，**不�
 | baseline_conflict:<目标路径>（当前plan blocker，不一定外层error） | 外层以plan_has_blockers/plan_failed及detail保留计划诊断；预览blockers保留诊断字符串；如转DomainError则code=baseline_conflict、detail=路径 |
 | 任意无法识别的IO自由文本 | code=io_error、detail=原文本；原已分类plan_failed/exe_analysis_failed等继续用原分类，不再把任意文本塞code |
 
-优先在产生失败的core位置构建DomainError，P5删除String分隔符；开发过渡桥仅允许上表精确前缀解析并登记删除，不做任意“冒号前就是code”的推断。历史Transaction.error仍原串保留，不强制ASCII、不重写数据库；新cause/recovery/cleanup/error信封使用结构化code/detail。io_error是新增通用IO控制码，不能遮掉已有稳定细分错误。
+优先在产生失败的core位置构建DomainError，P5删除String分隔符；开发过渡桥仅允许上表精确前缀解析并登记删除，不做任意“冒号前就是code”的推断。P5 2026-10-13 修订：新 InstallerOutcome.error 仅复制最多 2048 UTF-8 bytes 的显示诊断（字符边界，不追加省略号），disposition/cause 仍由原事务判定，防止合法超大历史错误在重放时吞掉真实提交终态；历史Transaction.error和ledger.error仍原串保留，不强制ASCII、不重写数据库；新cause/recovery/cleanup/error信封使用结构化code/detail。io_error是新增通用IO控制码，不能遮掉已有稳定细分错误。
 
-请求64KiB、响应/事件8MiB、detail2048 UTF-8 bytes；v4统一按完整行bytes计数（包含一个末尾LF delimiter），限额数值不增；CLI main.rs L165–168和Decky bridge.py L211已计LF。Windows普通call-core有payload/行边界差异，P5统一严格整行限制，不增加一字节接受范围。request_id=1..128bytes，其他业务ID=1..256bytes，无Unicode控制字符（Rust char::is_control/Python category Cc）。Python拒bool冒充整数；sequence/u64非负范围内。detail在字符边界截断不追加省略号，cause/recovery/cleanup/blocker detail同限额。JSON Schema maxLength不能替代bytes校验。TS number使用安全整数范围，超过Number.MAX_SAFE_INTEGER报invalid_core_response不舍入；合法真实体积限额远低于此值。
+请求64KiB、响应/事件8MiB、detail2048 UTF-8 bytes；v4统一按完整行bytes计数（包含一个末尾LF delimiter），限额数值不增；CLI main.rs L165–168和Decky bridge.py L211已计LF。Windows普通call-core有payload/行边界差异，P5统一严格整行限制，不增加一字节接受范围。request_id=1..128bytes，其他业务ID=1..256bytes，Steam instance_id 例外=1..16KiB（P5 2026-10-13 修订：保留完整历史路径身份，避免合法长路径破坏整次扫描；核心/逐方法 wire/生成契约/宿主同限额，不哈希或截断，不改持久身份），无Unicode控制字符（Rust char::is_control/Python category Cc）。Python拒bool冒充整数；sequence/u64非负范围内。detail在字符边界截断不追加省略号，cause/recovery/cleanup/blocker detail同限额。JSON Schema maxLength不能替代bytes校验。TS number使用安全整数范围，超过Number.MAX_SAFE_INTEGER报invalid_core_response不舍入；合法真实体积限额远低于此值。
 
 新增actions增大响应：本文**未测真实序列化体积**；P1/P4/P5用最大fixture检查8MiB，超限明确报错；本轮不声称载荷/性能通过。
 

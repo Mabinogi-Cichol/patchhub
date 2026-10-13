@@ -1,4 +1,4 @@
-# Decky 协议 v3 客户端
+# Decky 协议 v4 客户端
 
 游戏模式提供游戏列表、补丁详情、来源管理与任务进度。Python 宿主只配置可信平台身份和固定运行时、桥接 RPC 与事件；Rust 核心负责来源、能力、预览、下载、配方、转换、安装、卸载和恢复。动态候选使用 selection_id，签名目录使用 release_id；前端不能指定可执行文件或执行 shell。
 
@@ -10,4 +10,6 @@ root Loader 启动时按可信用户目录降权运行整个 CLI。当前来源�
 
 仓库根目录执行 npm ci、npm run typecheck、npm run test -w apps/decky；在 Linux/WSL 执行 sh scripts/build-linux.sh，再执行 npm run package:plugin -w apps/decky。生成当前依赖元数据后运行 python scripts/build-sbom.py .artifacts/cargo-metadata.json 与 python scripts/package-artifacts.py --platform decky。完整包通过 Loader 正式 ZIP 安装，不能裸替换后手工结束后端进程。
 
-当前实施与分项验收见 [迁移设计](../../docs/features/cross-platform-installer-migration/design.md)、[P5 记录](../../docs/features/cross-platform-installer-migration/p5-decky.md) 和 [施工进度](../../docs/features/cross-platform-installer-migration/progress.md)。历史游戏补丁验收不能作为本轮协议 v3 的安装或实体手柄验收结果。
+当前实施与分项验收见 [迁移设计](../../docs/features/cross-platform-installer-migration/design.md)、[P5 记录](../../docs/features/cross-platform-installer-migration/p5-decky.md) 和 [施工进度](../../docs/features/cross-platform-installer-migration/progress.md)。历史游戏补丁验收不能作为本轮协议 v4 的安装或实体手柄验收结果。
+
+当前 v4 收口见 [Rust 核心归一化设计](../../docs/features/rust-core-consolidation/design.md) 与 [施工记录](../../docs/features/rust-core-consolidation/progress.md)。启动与所有写调用先核对生成契约、方法表和持久/worker schema；缺字段或混合版本拒绝执行。host-v3 是既有任务历史目录，升级保留其内容与读取语义。

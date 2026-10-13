@@ -1,6 +1,6 @@
 # Rust 核心服务收敛重构
 
-日期：2026-10-12（Asia/Shanghai）。状态：**P0 已冻结并提交；P1 扫描投影/取证/只读预览已实现，Windows/Linux 自动化、基准对照与独立复核通过；P2 签名/信任/终态与统一安装入口已实现，Windows/Linux 自动化和独立复核通过；P3 核心缓存与策略已实现，Windows/Linux 自动化和独立复核通过；P4 actions/双端消费已实现、最终自动化通过、两项审阅修复完成；P3/P4 代码已本地提交 `19ffc8a`；P5–P6 待实现，双端最终产物与实机待验证**。
+日期：2026-10-13（Asia/Shanghai）。状态：**P0 已冻结并提交；P1 扫描投影/取证/只读预览已实现，Windows/Linux 自动化、基准对照与独立复核通过；P2 签名/信任/终态与统一安装入口已实现，Windows/Linux 自动化和独立复核通过；P3 核心缓存与策略已实现，Windows/Linux 自动化和独立复核通过；P4 actions/双端消费已实现、最终自动化通过、两项审阅修复完成；P3/P4 代码已本地提交 `19ffc8a`；P5 v4/生成契约/共享 helper 已实现、自动化和专项独立复核通过；P6 待实现，双端最终产物与实机待验证**。
 
 施工记录：[progress.md](progress.md)。基线：[迁移后代码审阅](../cross-platform-installer-migration/rust-core-consolidation-review.md)、[跨平台安装器迁移](../cross-platform-installer-migration/design.md)及其[完成记录](../cross-platform-installer-migration/progress.md)。
 
@@ -106,7 +106,7 @@ P3实施补充（2026-10-12）：CacheService为唯一公共删除边界；cache
 
 P0 冻结 actions.automatic/local_archive/reinstall/overwrite/primary，替代旧 download_available 及 UI 派生权限字段；源候选原始 artifact/download 事实仍保留。详见 [目标字段](p0-contract.md#5-权威动作-dto)。
 
-P4 实际实现（2026-10-12）：必需动作已进入核心投影，双端仅消费动作事实；strict Reinstall 的 prepare/apply owned/intact 条件已补齐。路径检查复用受限取证；当前 committed 收据 plan 不可读仍保留覆盖标签，不能授予重装。Windows 写入禁用时仍保留只读预览。本轮自动化与两项审阅修复见 [P4 验证](p4-validation.md)/[审阅](p4-review.md)。正式 v4、生成器及生产者响应大小保证仍属 P5；最终独立 gate 与产物/实机属 P6。
+P4 实际实现（2026-10-12）：必需动作已进入核心投影，双端仅消费动作事实；strict Reinstall 的 prepare/apply owned/intact 条件已补齐。路径检查复用受限取证；当前 committed 收据 plan 不可读仍保留覆盖标签，不能授予重装。Windows 写入禁用时仍保留只读预览。本轮自动化与两项审阅修复见 [P4 验证](p4-validation.md)/[审阅](p4-review.md)。正式 v4、生成器及生产者有界输出已在 P5 实现，见 [P5 验证](p5-validation.md)；最终独立 gate 与产物/实机属 P6。
 
 ### 5.5 公共请求、结果与展示 helper
 
@@ -120,7 +120,7 @@ P4 实际实现（2026-10-12）：必需动作已进入核心投影，双端仅�
 - 宿主任务终态消费 disposition；异常传输错误仍由宿主记录，任务 ID、历史、租约触发和异步取消生命周期不迁入 core。
 - 来源 URL guard、公共来源状态谓词和阶段/百分比格式统一到 packages/ui；保留平台交互差异。浏览器链接打开与下载网络许可分别验证，不能互相代替。
 
-P0 已冻结补充：逐方法 wire params 的受信配置统一为必需 host 六字段，operation 与宿主 cleanup_policy 必需，外层 request_id 为唯一幂等 ID；不保留旧配置字段双读。取证新增 16 GiB 流式上限（P1 已实现）；installer/rust-v1 新 cache.lock 统一 shared 安装/恢复与 exclusive 删除，自动清理不得锁升级。幂等重放从原 Transaction/ledger.error 的精确原因码重建 disposition，不增加持久 schema。具体接口/字段/生成器与 source 枚举以 [P0 契约](p0-contract.md) 为准；P1 已实现扫描/检测/预览，P2 已实现签名/信任/终态与写入口，P3已实现缓存/策略，P4已实现actions/双端消费；P5 尚待实施。
+P0 已冻结补充：逐方法 wire params 的受信配置统一为必需 host 六字段，operation 与宿主 cleanup_policy 必需，外层 request_id 为唯一幂等 ID；不保留旧配置字段双读。取证新增 16 GiB 流式上限（P1 已实现）；installer/rust-v1 新 cache.lock 统一 shared 安装/恢复与 exclusive 删除，自动清理不得锁升级。幂等重放从原 Transaction/ledger.error 的精确原因码重建 disposition，不增加持久 schema。具体接口/字段/生成器与 source 枚举以 [P0 契约](p0-contract.md) 为准；P1 已实现扫描/检测/预览，P2 已实现签名/信任/终态与写入口，P3已实现缓存/策略，P4已实现actions/双端消费；P5 已实现正式 v4、生成契约及共享 helper，阶段验证见 [P5 验证](p5-validation.md)。
 
 ## 6. 实施阶段与交付门槛
 
@@ -190,3 +190,12 @@ D1–D10 在 progress 分别记录“待实现/已实现/自动化通过/待实�
 - wire 版本与状态 schema 混淆：v4 同步产物切换，持久化结构沿用；如实施发现必须修改 schema，先修订设计与数据保全方案。
 - 将动作快照当授权或 cleanup 改变事务结果：执行时重核；独立结果字段与竞态/失败测试。
 - 最终只完成新实现却保留旧消费者：P6 对 D1–D10 做源码、调用链、打包内容和独立复核，未闭环不放行。
+
+
+## P5 实施修订（2026-10-13）
+
+正式 wire 固定为 v4，由独立 protocol crate 定义逐方法请求、响应、事件、capabilities 和运行校验；core 不依赖 protocol。非打包生成器使用 schemars/ts-rs 输出 Rust 同源 JSON Schema、TS 类型、Python 数据和共享固定夹具，CI check 逐字节拒绝漂移。双端先匹配 capabilities 再开始写操作，旧版/未来版写前拒绝，删除 v3 双读分支。共享 UI 只消费生成 DTO 和核心 actions/disposition。
+
+为保留既有 `appid|library_path|install_path` 身份，instance_id 单独使用 16 KiB UTF-8 上限，其他业务 ID 保持 256 bytes、request_id 128 bytes；不截断、哈希替代或迁移旧身份。core、ledger、protocol、Windows、Decky 与生成夹具采用同一上限。新 InstallerOutcome.error 作为展示副本按 2048 UTF-8 bytes 截断，disposition/cause 判断基于原事务事实，历史 Transaction.error、journal、ledger 原文不变。这两项受限修订同步于 [P0 契约](p0-contract.md)，有长实例及 9 MiB 历史诊断真实重放回归。
+
+首个有效终态封闭后续协议解析；进程异常和尾部数据进入宿主独立诊断。安装中传输错误请求 cancel/EOF 并等待核心安全终态，不杀 writer，不伪造取消或回滚。Windows 超过有限排空时间仍保留安装互斥直到进程实际退出；Decky 已确认终态后的排空使用时间和累计字节上限，超过后返回既有事实，后台观察退出。具体测试与边界见 [P5 验证](p5-validation.md)和[审阅](p5-review.md)。P6 仍负责最终 Windows 安装包、双端 UI/实机、全范围独立 gate 与 D1–D10 关闭。

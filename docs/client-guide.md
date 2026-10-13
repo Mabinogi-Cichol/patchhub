@@ -63,11 +63,11 @@ Linux：`sh scripts/build-linux.sh` 使用仓库内隔离工具链，测试核�
 
 `steam-patch sign-catalog CATALOG PRIVATE KEY_ID OUTPUT LIFETIME_SECONDS [REVOCATIONS_JSON]` 对严格校验的目录生成签名，最长有效期 90 天。签名覆盖原始 payload 字节。可选的撤销文件是 release_id 字符串数组，例如 `["withdrawn-release"]`，写入签名 payload 的 revoked_release_ids；拒绝重复或空 ID。撤销密钥通过升级受信公钥文件实施。生产维护需离线密钥、密钥轮换和审核流程。revision 4 使用维护密钥 alpha-local-2026-10，公钥目录同时保留 alpha-local-2026；私钥不提交或打包。
 
-`steam-patch schema OUTPUT` 导出 payload JSON Schema。IPC 与模型详见 packages/contracts 和核心源码。修改配方必须递增 revision；同一 state 拒绝目录版本回退。客户端签名到期后禁用安装，仍可显示开发目录中的官方来源引导。
+`steam-patch schema OUTPUT` 导出 payload JSON Schema。现役 IPC 仅支持 v4，必需 host 六字段和显式 operation/cleanup_policy；旧版本混装在写入前拒绝。跨语言类型、校验和夹具详见 [共享契约](../packages/contracts/README.md)。修改配方必须递增 revision；同一 state 拒绝目录版本回退。客户端签名到期后禁用安装，仍可显示开发目录中的官方来源引导。
 
 ## 验证边界
 
-`scripts/smoke-transaction.py` 是 v3 之前协议（`protocol_version=1` 的 `plan_install` / `start_install` / `uninstall`）的开发冒烟工具；当前 v3 CLI 会以 `unsupported_protocol` / `unsupported_method` 拒绝这些调用，无法对现役 CLI 运行，已在 P6 收口后（2026-10-11）删除，当前不存在等价的 v3 冒烟工具。它历史上在临时 Steam 库运行完整签名 → 计划 → 安装 → 托管检测 → 卸载，并确认恢复队列为空、保留存档；带 `--interrupt` 时在逐文件复制中途杀死子进程，验证认证恢复为 `rolled_back`。这些冒烟覆盖不能替代真实游戏、Proton 或控制器验证；当前真实样本的生产检查在平台检查脚本（如 `scripts/run-windows-check.ps1` 及其 WSL 对照 `run-linux-check.sh`）与自动化测试套件中。
+`scripts/smoke-transaction.py` 是 v3 之前协议（`protocol_version=1` 的 `plan_install` / `start_install` / `uninstall`）的开发冒烟工具；当前 v4 CLI 会以 `unsupported_protocol` / `unsupported_method` 拒绝这些调用，无法对现役 CLI 运行，已在 P6 收口后（2026-10-11）删除，当前不存在等价的历史协议冒烟工具。它历史上在临时 Steam 库运行完整签名 → 计划 → 安装 → 托管检测 → 卸载，并确认恢复队列为空、保留存档；带 `--interrupt` 时在逐文件复制中途杀死子进程，验证认证恢复为 `rolled_back`。这些冒烟覆盖不能替代真实游戏、Proton 或控制器验证；当前真实样本的生产检查在平台检查脚本（如 `scripts/run-windows-check.ps1` 及其 WSL 对照 `run-linux-check.sh`）与自动化测试套件中。
 
 默认不上传游戏库，不设置遥测。诊断与状态保存在本机；分享日志前应删除用户名、库路径与下载 URL 参数。安全安装拒绝链接、路径越界、危险 ZIP 成员、哈希错误和未知 build；同账户篡改完整 journal 与父目录 TOCTOU 的剩余风险见 install-design.md。
 
