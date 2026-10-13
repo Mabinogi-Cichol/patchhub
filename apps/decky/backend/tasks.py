@@ -3,11 +3,13 @@ import asyncio
 from collections import deque
 from contextvars import ContextVar
 import json
+import re
 from pathlib import Path
 from threading import Event, RLock
 import time
 import uuid
 from plugin_settings import _write_json, _no_links
+from protocol_validation import truncate_detail
 
 current_task = ContextVar("patch_task", default=None)
 TERMINAL = {"completed", "cancelled", "failed"}
@@ -142,21 +144,26 @@ class TaskManager:
             task.check()
             result = await work(task)
             if task.value["kind"] == "install":
-                state = result.get("state")
-                if state == "committed":
-                    # Commit wins a late cancellation race.
-                    task.update(state="completed", result=result)
-                elif state == "rolled_back" and result.get("error") in ("cancelled", "task_cancelled", "lease_expired"):
-                    task.update(state="cancelled", result=result)
-                else:
-                    task.update(state="failed", result=result, error=result.get("error") or state or "install_failed")
+                disposition = result.get("disposition")
+                if disposition not in TERMINAL:
+                    raise RuntimeError("contract_mismatch")
+                cause = result.get("cause") or {}
+                task.update(state=disposition, result=result,
+                            error=cause.get("code") if disposition != "completed" else None,
+                            error_detail=cause.get("detail"))
             else:
                 task.check()
                 task.update(state="completed", result=result)
         except Exception as error:
-            code = str(error)
+            domain = getattr(error, "code", None)
+            raw = domain or str(error)
+            code = raw if re.fullmatch(r"[a-z0-9_]{1,128}", raw) else "host_transport_failed"
+            detail = getattr(error, "detail", None) or (str(error) if code != raw else None)
+            if detail is not None:
+                detail = truncate_detail(str(detail))
             task.update(state="cancelled" if code in ("cancelled", "task_cancelled") else "failed",
-                        error=code, error_detail=getattr(error, "detail", None))
+                        error=code, error_detail=detail,
+                        error_origin="domain" if domain else "host")
         finally:
             guard.cancel()
             await asyncio.gather(guard, return_exceptions=True)

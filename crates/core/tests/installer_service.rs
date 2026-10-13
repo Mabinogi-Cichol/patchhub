@@ -87,8 +87,8 @@ fn invoke(host: &ValidatedHostContext, id: &str) -> DomainError {
 fn checked_ids_enforce_utf8_bytes_controls_and_selection_shapes() {
     assert!(RequestId::new(&"中".repeat(42)).is_ok());
     assert!(RequestId::new(&"中".repeat(43)).is_err());
-    assert!(InstanceId::new(&"中".repeat(85)).is_ok());
-    assert!(InstanceId::new(&"中".repeat(86)).is_err());
+    assert!(InstanceId::new(&"中".repeat(5461)).is_ok());
+    assert!(InstanceId::new(&"中".repeat(5462)).is_err());
     assert!(RequestId::new("\u{85}").is_err());
     assert!(ZipSelectionId::new("zip-selection-foo-42").is_err());
     assert!(ExeSelectionId::new("exe-selection-foo-42").is_err());

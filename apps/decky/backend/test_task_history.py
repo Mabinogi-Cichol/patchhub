@@ -16,7 +16,7 @@ class TaskHistoryTests(unittest.IsolatedAsyncioTestCase):
             async def install(_task):
                 nonlocal calls
                 calls += 1
-                return {"state": "committed"}
+                return {"disposition": "completed", "state": "committed"}
 
             details = dict(instance_id="game", release_id="release", operation="install",
                            archive_path="", request_id=request_id)
@@ -36,7 +36,7 @@ class TaskHistoryTests(unittest.IsolatedAsyncioTestCase):
             request_id = str(uuid.uuid4())
 
             async def install(_task):
-                return {"state": "committed"}
+                return {"disposition": "completed", "state": "committed"}
 
             details = dict(instance_id="game", release_id="release", operation="install",
                            archive_path="first.zip", request_id=request_id)

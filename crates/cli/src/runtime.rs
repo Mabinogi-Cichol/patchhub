@@ -1,4 +1,4 @@
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use serde_json::{json, Value};
 use std::{
     collections::HashSet,
@@ -8,16 +8,15 @@ use std::{
 };
 #[cfg(test)]
 use steam_patch_core::catalog::SupportLevel;
+use steam_patch_core::projection::DomainError;
 use steam_patch_core::{
     catalog::{self, Catalog, Platform},
     install, installer, projection, sources, steam,
     trust::{self, VerifiedCatalog},
 };
 
-#[derive(Debug, Default, Deserialize, Serialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Default, Clone, Serialize)]
 pub struct Params {
-    #[serde(default)]
     pub roots: Vec<PathBuf>,
     pub catalog: Option<PathBuf>,
     pub platform: Option<Platform>,
@@ -34,77 +33,77 @@ pub struct Params {
     /// Dynamic content-route selection (`exe-selection-*`), mutually exclusive
     /// with `release_id` (p1-host-contract §1.1 A).
     pub selection_id: Option<String>,
-    #[serde(default)]
     pub operation: install::InstallOperation,
     pub request_id: Option<String>,
-    #[serde(default)]
     pub cleanup_policy: installer::service::CleanupPolicy,
     pub source_id: Option<String>,
     pub enabled: Option<bool>,
     pub subscribed: Option<bool>,
     /// Declarative rule for `add_source` (validated against `RawSourceRule`).
     pub rule: Option<Value>,
-    #[serde(default)]
     pub name_hints: Vec<String>,
     pub preferred_language: Option<String>,
-    #[serde(default)]
     pub force: bool,
     pub generation: Option<u64>,
 }
 
-/// v3 method whitelist (p1-host-contract §1.1): the 8 installer/task methods
-/// plus the 8 source methods. Deleted v2 methods are intentionally absent.
-pub const METHODS: &[&str] = &[
-    // Installer/task face.
-    "get_capabilities",
-    "scan",
-    "preview",
-    "install_patch",
-    "list_transactions",
-    "recover",
-    "discard_plan",
-    "cleanup_cache",
-    // Source face.
-    "list_sources",
-    "list_game_sources",
-    "set_source_enabled",
-    "set_game_source",
-    "add_source",
-    "refresh_sources",
-    "scan_sources",
-    "discover_game",
-];
+impl Params {
+    pub fn from_wire(request: &steam_patch_protocol::ValidatedRequest) -> Self {
+        let h = request.params.host();
+        let v = request.params.params_value();
+        let text = |key: &str| v.get(key).and_then(Value::as_str).map(str::to_owned);
+        Self {
+            roots: h.roots.clone(),
+            catalog: h.catalog.clone(),
+            signed_catalog: h.signed_catalog.clone(),
+            trust_keys: h.trust_keys.clone(),
+            state_dir: h.state_dir.clone(),
+            platform: Some(h.platform),
+            request_id: Some(request.request_id.clone()),
+            instance_id: text("instance_id"),
+            appid: v.get("appid").and_then(Value::as_u64).map(|n| n as u32),
+            release_id: text("release_id"),
+            selection_id: text("selection_id"),
+            plan_id: text("plan_id"),
+            archive: text("archive").map(PathBuf::from),
+            source_id: text("source_id"),
+            operation: match text("operation").as_deref() {
+                Some("reinstall") => install::InstallOperation::Reinstall,
+                Some("overwrite") => install::InstallOperation::Overwrite,
+                _ => install::InstallOperation::Install,
+            },
+            cleanup_policy: match text("cleanup_policy").as_deref() {
+                Some("after_commit") => installer::service::CleanupPolicy::AfterCommit,
+                _ => installer::service::CleanupPolicy::Disabled,
+            },
+            enabled: v.get("enabled").and_then(Value::as_bool),
+            subscribed: v.get("subscribed").and_then(Value::as_bool),
+            rule: v.get("rule").cloned(),
+            name_hints: v
+                .get("name_hints")
+                .and_then(Value::as_array)
+                .map(|a| {
+                    a.iter()
+                        .filter_map(Value::as_str)
+                        .map(str::to_owned)
+                        .collect()
+                })
+                .unwrap_or_default(),
+            preferred_language: text("preferred_language"),
+            force: v.get("force").and_then(Value::as_bool).unwrap_or(false),
+            generation: v.get("generation").and_then(Value::as_u64),
+        }
+    }
+}
 
-/// Installer/task methods advertised by `get_capabilities.installer`-adjacent
-/// `methods` (p1-host-contract §1.1 A).
-pub const INSTALLER_METHODS: &[&str] = &[
-    "get_capabilities",
-    "scan",
-    "preview",
-    "install_patch",
-    "list_transactions",
-    "recover",
-    "discard_plan",
-    "cleanup_cache",
-];
-
-/// Source methods advertised by `get_capabilities.sources.methods`
-/// (p1-host-contract §1.1 B).
-pub const SOURCE_METHODS: &[&str] = &[
-    "list_sources",
-    "list_game_sources",
-    "set_source_enabled",
-    "set_game_source",
-    "add_source",
-    "refresh_sources",
-    "scan_sources",
-    "discover_game",
-];
+/// Formal methods are owned by the protocol crate.
+pub const METHODS: &[&str] = &steam_patch_protocol::METHODS;
+pub const SOURCE_METHODS: &[&str] = &steam_patch_protocol::SOURCE_METHODS;
 
 /// Streaming source-task methods that emit `source_progress`/`source_update`.
 pub const SOURCE_STREAM_METHODS: &[&str] = &["scan_sources", "refresh_sources"];
 
-/// Per-task cursor that renders `operation::Progress` into the flat v3
+/// Per-task cursor that renders `operation::Progress` into the flat v4
 /// `install_progress` event (p1-host-contract §2.2). The cursor owns the
 /// per-task `sequence`, which starts at 0 and increments strictly per event.
 pub struct ProgressCursor {
@@ -137,7 +136,7 @@ impl ProgressCursor {
     pub fn event(&mut self, progress: &steam_patch_core::operation::Progress) -> Value {
         let (stage, substage) = match progress.stage.as_str() {
             // Archive telemetry can precede an explicit stage in signed/local ZIP
-            // routes. Protocol v3 never exposes the internal empty default.
+            // routes. Protocol v4 never exposes the internal empty default.
             "" => ("connecting", None),
             "backing_up" | "writing" | "committing" => ("applying", Some(progress.stage.as_str())),
             other => (other, None),
@@ -163,15 +162,14 @@ impl ProgressCursor {
     }
 }
 
-/// `get_capabilities` v3 payload (p1-host-contract §3.1): installer and source
+/// `get_capabilities` v4 payload (p1-host-contract §3.1): installer and source
 /// sub-objects merged with the full 16-method whitelist.
 fn capabilities(_params: &Params) -> Value {
     let availability = exe_sandbox_availability();
     let mut methods: Vec<&str> = Vec::with_capacity(METHODS.len());
-    methods.extend(INSTALLER_METHODS.iter().copied());
-    methods.extend(SOURCE_METHODS.iter().copied());
+    methods.extend(METHODS.iter().copied());
     json!({
-        "protocol_version": 3,
+        "protocol_version": steam_patch_protocol::PROTOCOL_VERSION,
         "installer": {
             "schema_version": 1,
             "selection_version": 1,
@@ -196,6 +194,7 @@ fn capabilities(_params: &Params) -> Value {
             "methods": SOURCE_METHODS,
         },
         "methods": methods,
+        "contracts": {"projection_version":1,"actions_version":1,"outcome_version":1,"request_validation_version":1},
     })
 }
 
@@ -210,11 +209,11 @@ fn bundled_worker() -> Option<PathBuf> {
     }))
 }
 
-fn worker_runtime(stage: &Path) -> Result<steam_patch_core::installer::WorkerRuntime, String> {
+fn worker_runtime(stage: &Path) -> Result<steam_patch_core::installer::WorkerRuntime, DomainError> {
     state_safe(stage)?;
     fs::create_dir_all(stage).map_err(err)?;
     state_safe(stage)?;
-    let worker = bundled_worker().ok_or("bundled_worker_missing")?;
+    let worker = bundled_worker().ok_or_else(|| DomainError::code("bundled_worker_missing"))?;
     installer::WorkerRuntime::new(worker, stage, None)
         .map_err(|e| failed("exe_sandbox_unavailable", e.to_string()))
 }
@@ -282,21 +281,44 @@ fn probe_in_temp_staging(worker: &Path) -> installer::SandboxAvailability {
         Ok(runtime) => runtime.probe(),
         Err(reason) => installer::SandboxAvailability {
             available: false,
-            reason,
+            reason: reason.to_string(),
         },
     };
     let _ = fs::remove_dir_all(&root);
     availability
 }
 
-fn err(error: impl std::fmt::Display) -> String {
-    error.to_string()
+/// Preserve exact machine codes. Only established diagnostic prefixes are split;
+/// free-form OS/database text remains detail and can never become a wire code.
+fn err(error: impl std::fmt::Display) -> DomainError {
+    let text = error.to_string();
+    if !text.is_empty()
+        && text.len() <= 128
+        && text
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
+    {
+        return DomainError::code(text);
+    }
+    for prefix in [
+        "journal_error",
+        "invalid_zip",
+        "zip_member",
+        "file_changed",
+        "recovery_conflict",
+        "baseline_conflict",
+    ] {
+        if let Some(detail) = text.strip_prefix(prefix).and_then(|s| s.strip_prefix(':')) {
+            return DomainError::new(prefix, detail);
+        }
+    }
+    DomainError::new("io_error", text)
 }
-fn value(data: impl Serialize) -> Result<Value, String> {
+fn value(data: impl Serialize) -> Result<Value, DomainError> {
     serde_json::to_value(data).map_err(err)
 }
-fn projection_error(error: projection::DomainError) -> String {
-    failed(error.code, error.detail.unwrap_or_default())
+fn projection_error(error: DomainError) -> DomainError {
+    error
 }
 
 fn host_platform() -> Platform {
@@ -306,15 +328,15 @@ fn host_platform() -> Platform {
         Platform::Steamos
     }
 }
-fn state(params: &Params) -> Result<PathBuf, String> {
+fn state(params: &Params) -> Result<PathBuf, DomainError> {
     params
         .state_dir
         .as_ref()
         .map(|p| std::path::absolute(p).map_err(err))
-        .unwrap_or_else(|| Err("state_dir_required".into()))
+        .unwrap_or_else(|| Err(DomainError::code("state_dir_required")))
 }
 
-fn state_safe(path: &Path) -> Result<(), String> {
+fn state_safe(path: &Path) -> Result<(), DomainError> {
     for component in path.ancestors() {
         if component.as_os_str().is_empty() {
             continue;
@@ -329,7 +351,7 @@ fn state_safe(path: &Path) -> Result<(), String> {
                 #[cfg(not(windows))]
                 let linked = meta.file_type().is_symlink();
                 if linked {
-                    return Err("linked_state_path".into());
+                    return Err(DomainError::code("linked_state_path"));
                 }
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => (),
@@ -370,7 +392,7 @@ impl trust::revision::TrustRevisionStore for ReadOnlyRevisionFloor {
         Err(projection::DomainError::code("state_dir_required"))
     }
 }
-fn verify_signed(params: &Params, now: u64) -> Result<VerifiedCatalog, String> {
+fn verify_signed(params: &Params, now: u64) -> Result<VerifiedCatalog, DomainError> {
     let provider = CatalogFiles(params);
     match &params.state_dir {
         Some(state) => {
@@ -385,13 +407,19 @@ fn verify_signed(params: &Params, now: u64) -> Result<VerifiedCatalog, String> {
     }
 }
 
-fn canonical_future(path: &Path) -> Result<PathBuf, String> {
+fn canonical_future(path: &Path) -> Result<PathBuf, DomainError> {
     let absolute = std::path::absolute(path).map_err(err)?;
     let mut base = absolute.as_path();
     let mut suffix = Vec::new();
     while !base.exists() {
-        suffix.push(base.file_name().ok_or("invalid_state_path")?.to_owned());
-        base = base.parent().ok_or("invalid_state_path")?;
+        suffix.push(
+            base.file_name()
+                .ok_or_else(|| DomainError::code("invalid_state_path"))?
+                .to_owned(),
+        );
+        base = base
+            .parent()
+            .ok_or_else(|| DomainError::code("invalid_state_path"))?;
     }
     let mut result = fs::canonicalize(base).map_err(err)?;
     for part in suffix.into_iter().rev() {
@@ -400,19 +428,22 @@ fn canonical_future(path: &Path) -> Result<PathBuf, String> {
     Ok(result)
 }
 
-fn validate_state_boundary(state: &Path, installs: &[steam::GameInstall]) -> Result<(), String> {
+fn validate_state_boundary(
+    state: &Path,
+    installs: &[steam::GameInstall],
+) -> Result<(), DomainError> {
     state_safe(state)?;
     let state = canonical_future(state)?;
     for game in installs {
         let game = canonical_future(&game.install_path)?;
         if state.starts_with(&game) || game.starts_with(&state) {
-            return Err("state_overlaps_game".into());
+            return Err(DomainError::code("state_overlaps_game"));
         }
     }
     Ok(())
 }
 
-pub fn execute(method: &str, params: Params) -> Result<Value, String> {
+pub fn execute(method: &str, params: Params) -> Result<Value, DomainError> {
     let cancel = AtomicBool::new(false);
     execute_controlled(method, params, &cancel, &always_active, &no_lease_deadline)
 }
@@ -426,17 +457,12 @@ fn no_lease_deadline() -> u64 {
     u64::MAX
 }
 
-/// Encode a stable `code` plus optional `detail` for the protocol envelope.
-/// `main.rs::respond` splits on the separator and fills `error.detail`.
-const DETAIL_SEPARATOR: char = '\u{1}';
-
-pub fn failed(code: impl Into<String>, detail: impl Into<String>) -> String {
-    let code = code.into();
+pub fn failed(code: impl Into<String>, detail: impl Into<String>) -> DomainError {
     let detail = detail.into();
     if detail.is_empty() {
-        code
+        DomainError::code(code)
     } else {
-        format!("{code}{DETAIL_SEPARATOR}{detail}")
+        DomainError::new(code, detail)
     }
 }
 
@@ -448,15 +474,15 @@ pub fn execute_controlled<L: Fn(u64) -> bool + Sync, D: Fn() -> u64 + Sync>(
     cancel: &AtomicBool,
     lease_active: &L,
     lease_deadline_ms: &D,
-) -> Result<Value, String> {
+) -> Result<Value, DomainError> {
     if !METHODS.contains(&method) {
-        return Err("unsupported_method".into());
+        return Err(DomainError::code("unsupported_method"));
     }
     if params.roots.len() > 32 {
-        return Err("too_many_roots".into());
+        return Err(DomainError::code("too_many_roots"));
     }
     if method == "scan" && (params.instance_id.is_some() || params.release_id.is_some()) {
-        return Err("unexpected_preview_arguments".into());
+        return Err(DomainError::code("unexpected_preview_arguments"));
     }
     if let Some(code) = installer::host_identity_blocker() {
         if [
@@ -468,7 +494,7 @@ pub fn execute_controlled<L: Fn(u64) -> bool + Sync, D: Fn() -> u64 + Sync>(
         ]
         .contains(&method)
         {
-            return Err(code.into());
+            return Err(DomainError::code(code));
         }
     }
     if method == "get_capabilities" {
@@ -504,7 +530,10 @@ pub fn execute_controlled<L: Fn(u64) -> bool + Sync, D: Fn() -> u64 + Sync>(
                 .map_err(projection_error)?;
                 if method == "discard_plan" {
                     let id = installer::service::PlanId::new(
-                        params.plan_id.as_deref().ok_or("plan_required")?,
+                        params
+                            .plan_id
+                            .as_deref()
+                            .ok_or_else(|| DomainError::code("plan_required"))?,
                     )
                     .map_err(projection_error)?;
                     value(installer::service::discard_plan(&host, &id).map_err(projection_error)?)
@@ -611,12 +640,12 @@ pub fn execute_controlled<L: Fn(u64) -> bool + Sync, D: Fn() -> u64 + Sync>(
     };
     if method == "preview" {
         if params.selection_id.is_some() && params.state_dir.is_none() {
-            return Err("state_dir_required".into());
+            return Err(DomainError::code("state_dir_required"));
         }
-        // v3 wire exclusivity remains here until the shared protocol lands in P5.
+        // Internal direct-call checks mirror the public protocol target boundary.
         let target = match (params.release_id, params.selection_id) {
-            (Some(_), Some(_)) => return Err("invalid_request".into()),
-            (None, None) => return Err("selection_or_release_required".into()),
+            (Some(_), Some(_)) => return Err(DomainError::code("invalid_request")),
+            (None, None) => return Err(DomainError::code("selection_or_release_required")),
             (Some(id), None) => projection::PreviewTarget::SignedRelease(id),
             (None, Some(id)) if id.starts_with("exe-selection-") => {
                 projection::PreviewTarget::PublisherExeSelection(id)
@@ -624,13 +653,15 @@ pub fn execute_controlled<L: Fn(u64) -> bool + Sync, D: Fn() -> u64 + Sync>(
             (None, Some(id)) if id.starts_with("zip-selection-") => {
                 projection::PreviewTarget::PublisherZipSelection(id)
             }
-            _ => return Err("invalid_selection_id".into()),
+            _ => return Err(DomainError::code("invalid_selection_id")),
         };
         return value(
             projection::preview(
                 &inputs,
                 projection::PreviewRequest {
-                    instance_id: params.instance_id.ok_or("instance_not_found")?,
+                    instance_id: params
+                        .instance_id
+                        .ok_or_else(|| DomainError::code("instance_not_found"))?,
                     target,
                 },
             )
@@ -638,14 +669,13 @@ pub fn execute_controlled<L: Fn(u64) -> bool + Sync, D: Fn() -> u64 + Sync>(
         );
     }
     let mut result = value(projection::scan(inputs).map_err(projection_error)?)?;
-    // Transitional v3 wire error is a string; core reports typed errors. P5
-    // replaces this serialization adapter with the generated v4 contract.
+    // Catalog failures remain structured read-only diagnostics.
     result["catalog_error"] = json!(catalog_error);
     Ok(result)
 }
 
 /// Thin adapter to the validated core cache service.
-fn cleanup_cache(params: &Params) -> Result<Value, String> {
+fn cleanup_cache(params: &Params) -> Result<Value, DomainError> {
     let state = state(params)?;
     let host = installer::service::ValidatedHostContext::new(
         &state,
@@ -676,12 +706,12 @@ fn game_query(install: &steam::GameInstall) -> sources::GameQuery {
 fn install_for<'a>(
     report: &'a steam::ScanReport,
     instance_id: &str,
-) -> Result<&'a steam::GameInstall, String> {
+) -> Result<&'a steam::GameInstall, DomainError> {
     report
         .installs
         .iter()
         .find(|game| game.instance_id == instance_id)
-        .ok_or_else(|| "instance_not_found".to_string())
+        .ok_or_else(|| DomainError::code("instance_not_found"))
 }
 
 /// Builds a [`sources::GameQuery`] from `instance_id` (preferred) or `appid`.
@@ -692,7 +722,7 @@ fn install_for<'a>(
 fn game_from_params(
     params: &Params,
     report: &steam::ScanReport,
-) -> Result<sources::GameQuery, String> {
+) -> Result<sources::GameQuery, DomainError> {
     if let Some(instance_id) = params.instance_id.as_deref() {
         return Ok(game_query(install_for(report, instance_id)?));
     }
@@ -707,18 +737,20 @@ fn game_from_params(
             instance_id: None,
         });
     }
-    Err("instance_required".into())
+    Err(DomainError::code("instance_required"))
 }
 
 /// Resolves the AppID from `instance_id` (preferred) or the numeric `appid`.
-fn resolve_appid(params: &Params, report: &steam::ScanReport) -> Result<u32, String> {
+fn resolve_appid(params: &Params, report: &steam::ScanReport) -> Result<u32, DomainError> {
     if let Some(instance_id) = params.instance_id.as_deref() {
         return Ok(install_for(report, instance_id)?.appid);
     }
-    params.appid.ok_or_else(|| "instance_required".into())
+    params
+        .appid
+        .ok_or_else(|| DomainError::code("instance_required"))
 }
 
-fn open_sources(params: &Params) -> Result<sources::Sources, String> {
+fn open_sources(params: &Params) -> Result<sources::Sources, DomainError> {
     let state = state(params)?;
     state_safe(&state)?;
     sources::Sources::open(&state).map_err(err)
@@ -745,7 +777,7 @@ fn execute_source_method(
     method: &str,
     params: &Params,
     report: &steam::ScanReport,
-) -> Result<Value, String> {
+) -> Result<Value, DomainError> {
     match method {
         "list_sources" => value(open_sources(params)?.registry().list_sources()),
         "list_game_sources" => {
@@ -753,8 +785,13 @@ fn execute_source_method(
             value(open_sources(params)?.registry().list_game_sources(&game))
         }
         "set_source_enabled" => {
-            let source_id = params.source_id.as_deref().ok_or("source_id_required")?;
-            let enabled = params.enabled.ok_or("enabled_required")?;
+            let source_id = params
+                .source_id
+                .as_deref()
+                .ok_or_else(|| DomainError::code("source_id_required"))?;
+            let enabled = params
+                .enabled
+                .ok_or_else(|| DomainError::code("enabled_required"))?;
             let mut handle = open_sources(params)?;
             handle
                 .registry_mut()
@@ -768,8 +805,13 @@ fn execute_source_method(
         }
         "set_game_source" => {
             let appid = resolve_appid(params, report)?;
-            let source_id = params.source_id.as_deref().ok_or("source_id_required")?;
-            let subscribed = params.subscribed.ok_or("subscribed_required")?;
+            let source_id = params
+                .source_id
+                .as_deref()
+                .ok_or_else(|| DomainError::code("source_id_required"))?;
+            let subscribed = params
+                .subscribed
+                .ok_or_else(|| DomainError::code("subscribed_required"))?;
             let mut handle = open_sources(params)?;
             handle
                 .registry_mut()
@@ -782,7 +824,10 @@ fn execute_source_method(
             }))
         }
         "add_source" => {
-            let rule_value = params.rule.clone().ok_or("rule_required")?;
+            let rule_value = params
+                .rule
+                .clone()
+                .ok_or_else(|| DomainError::code("rule_required"))?;
             let raw: sources::RawSourceRule = serde_json::from_value(rule_value).map_err(err)?;
             let mut handle = open_sources(params)?;
             let rule = handle.registry_mut().add_source(&raw).map_err(err)?;
@@ -795,7 +840,10 @@ fn execute_source_method(
         "discover_game" => {
             let install = install_for(
                 report,
-                params.instance_id.as_deref().ok_or("instance_required")?,
+                params
+                    .instance_id
+                    .as_deref()
+                    .ok_or_else(|| DomainError::code("instance_required"))?,
             )?;
             let mut handle = open_sources(params)?;
             let cancel = AtomicBool::new(false);
@@ -816,7 +864,7 @@ fn execute_source_method(
             ))
         }
         "scan_sources" => scan_sources_impl(params, &AtomicBool::new(false), &mut |_| ()),
-        _ => Err("unsupported_method".into()),
+        _ => Err(DomainError::code("unsupported_method")),
     }
 }
 
@@ -827,7 +875,7 @@ pub fn execute_streaming(
     params: Params,
     cancel: &AtomicBool,
     emit: &mut dyn FnMut(Value),
-) -> Result<Value, String> {
+) -> Result<Value, DomainError> {
     match method {
         "scan_sources" => scan_sources_impl(&params, cancel, emit),
         "refresh_sources" => refresh_sources_impl(&params, cancel, emit),
@@ -839,7 +887,7 @@ fn scan_sources_impl(
     params: &Params,
     cancel: &AtomicBool,
     emit: &mut dyn FnMut(Value),
-) -> Result<Value, String> {
+) -> Result<Value, DomainError> {
     let state = state(params)?;
     state_safe(&state)?;
     let roots = if params.roots.is_empty() {
@@ -917,7 +965,7 @@ fn refresh_sources_impl(
     params: &Params,
     cancel: &AtomicBool,
     emit: &mut dyn FnMut(Value),
-) -> Result<Value, String> {
+) -> Result<Value, DomainError> {
     let state = state(params)?;
     state_safe(&state)?;
     let mut handle = sources::Sources::open(&state).map_err(err)?;
@@ -960,7 +1008,7 @@ mod tests {
                     ..Default::default()
                 },
             );
-            assert_eq!(result.unwrap_err(), "state_overlaps_game");
+            assert_eq!(result.unwrap_err().code, "state_overlaps_game");
             assert_eq!(fs::read_dir(&game).unwrap().count(), 0);
         }
     }
@@ -1001,15 +1049,25 @@ fn install_patch<L: Fn(u64) -> bool + Sync, D: Fn() -> u64 + Sync>(
     cancel: &AtomicBool,
     lease_active: &L,
     deadline: &D,
-) -> Result<Value, String> {
+) -> Result<Value, DomainError> {
     use installer::service::*;
-    let request = RequestId::new(params.request_id.as_deref().ok_or("request_id_required")?)
-        .map_err(projection_error)?;
-    let instance = InstanceId::new(params.instance_id.as_deref().ok_or("instance_required")?)
-        .map_err(projection_error)?;
+    let request = RequestId::new(
+        params
+            .request_id
+            .as_deref()
+            .ok_or_else(|| DomainError::code("request_id_required"))?,
+    )
+    .map_err(projection_error)?;
+    let instance = InstanceId::new(
+        params
+            .instance_id
+            .as_deref()
+            .ok_or_else(|| DomainError::code("instance_required"))?,
+    )
+    .map_err(projection_error)?;
     let target = match (params.release_id.as_deref(), params.selection_id.as_deref()) {
-        (Some(_), Some(_)) => return Err("invalid_request".into()),
-        (None, None) => return Err("selection_or_release_required".into()),
+        (Some(_), Some(_)) => return Err(DomainError::code("invalid_request")),
+        (None, None) => return Err(DomainError::code("selection_or_release_required")),
         (Some(release), None) => InstallTarget::SignedRelease {
             release_id: ReleaseId::new(release).map_err(projection_error)?,
             archive: params
@@ -1021,7 +1079,7 @@ fn install_patch<L: Fn(u64) -> bool + Sync, D: Fn() -> u64 + Sync>(
         },
         (None, Some(selection)) => {
             if params.archive.is_some() {
-                return Err("archive_not_allowed_for_selection".into());
+                return Err(DomainError::code("archive_not_allowed_for_selection"));
             }
             if selection.starts_with("zip-selection-") {
                 InstallTarget::PublisherZipSelection {
@@ -1164,7 +1222,7 @@ mod sources_tests {
         assert_eq!(capabilities["sources"]["query_version"], 1);
         assert_eq!(capabilities["installer"]["schema_version"], 1);
         assert_eq!(
-            execute("bogus", Params::default()).unwrap_err(),
+            execute("bogus", Params::default()).unwrap_err().code,
             "unsupported_method"
         );
     }
@@ -1320,7 +1378,7 @@ mod sources_tests {
                         operation: install::InstallOperation::Overwrite,
                         ..Default::default()
                     },
-                ).unwrap_err();
+                ).unwrap_err().code;
                 assert_ne!(error, "preexisting_installation_requires_review");
                 assert_ne!(error, "preexisting_protection_invalid");
             }
@@ -1384,7 +1442,7 @@ mod sources_tests {
             "resolve_source_record",
         ] {
             assert_eq!(
-                execute(method, Params::default()).unwrap_err(),
+                execute(method, Params::default()).unwrap_err().code,
                 "unsupported_method",
                 "deleted source method {method} must be rejected"
             );
@@ -1586,7 +1644,7 @@ mod install_flow_tests {
     }
 
     fn copy_params(params: &Params) -> Params {
-        serde_json::from_value(serde_json::to_value(params).unwrap()).unwrap()
+        params.clone()
     }
 
     #[test]
@@ -1664,7 +1722,7 @@ mod install_flow_tests {
         let mut conflict = copy_params(&params);
         conflict.operation = install::InstallOperation::Reinstall;
         assert_eq!(
-            execute("install_patch", conflict).unwrap_err(),
+            execute("install_patch", conflict).unwrap_err().code,
             "request_id_binding_conflict"
         );
         let mut reinstall = copy_params(&params);
@@ -1679,7 +1737,7 @@ mod install_flow_tests {
         damaged.request_id = Some("request-damaged".into());
         damaged.operation = install::InstallOperation::Reinstall;
         assert_eq!(
-            execute("install_patch", damaged).unwrap_err(),
+            execute("install_patch", damaged).unwrap_err().code,
             "reinstall_unowned_or_incomplete"
         );
         assert_eq!(fs::read(game.join("patch.dat")).unwrap(), b"damaged");
@@ -1701,10 +1759,10 @@ mod install_flow_tests {
         use std::sync::{Arc, Mutex};
         let (_temp, params, _game) = fixture();
         let request = json!({
-            "protocol_version": 3,
+            "protocol_version": 4,
             "request_id": "request-1",
             "method": "install_patch",
-            "params": serde_json::to_value(&params).unwrap(),
+            "params": crate::tests::wire_params("install_patch", serde_json::to_value(&params).unwrap()),
         })
         .to_string();
         let events = Arc::new(Mutex::new(Vec::new()));
@@ -1734,7 +1792,7 @@ mod install_flow_tests {
         assert_eq!(sequences, (0..sequences.len() as u64).collect::<Vec<_>>());
         // Terminal-once: the task returns a single final response after events.
         assert_eq!(response["ok"], true);
-        assert_eq!(response["protocol_version"], 3);
+        assert_eq!(response["protocol_version"], 4);
         assert_eq!(response["result"]["state"], "committed");
     }
 
@@ -1745,14 +1803,14 @@ mod install_flow_tests {
         let mut conflict = copy_params(&params);
         conflict.selection_id = Some("zip-selection-000000000000000000000000-42".into());
         assert_eq!(
-            execute("install_patch", conflict).unwrap_err(),
+            execute("install_patch", conflict).unwrap_err().code,
             "invalid_request"
         );
 
         let mut neither = copy_params(&params);
         neither.release_id = None;
         assert_eq!(
-            execute("install_patch", neither).unwrap_err(),
+            execute("install_patch", neither).unwrap_err().code,
             "selection_or_release_required"
         );
 
@@ -1761,7 +1819,7 @@ mod install_flow_tests {
         invalid.archive = None;
         invalid.selection_id = Some("candidate-000000000000000000000000".into());
         assert_eq!(
-            execute("install_patch", invalid).unwrap_err(),
+            execute("install_patch", invalid).unwrap_err().code,
             "invalid_selection_id"
         );
 
@@ -1770,7 +1828,7 @@ mod install_flow_tests {
         exe.archive = None;
         exe.selection_id = Some("exe-selection-000000000000000000000000-42".into());
         assert_eq!(
-            execute("install_patch", exe).unwrap_err(),
+            execute("install_patch", exe).unwrap_err().code,
             "selection_not_found"
         );
 
@@ -1779,7 +1837,7 @@ mod install_flow_tests {
         archive.selection_id = Some("zip-selection-000000000000000000000000-42".into());
         archive.archive = Some(PathBuf::from("unused.zip"));
         assert_eq!(
-            execute("install_patch", archive).unwrap_err(),
+            execute("install_patch", archive).unwrap_err().code,
             "archive_not_allowed_for_selection"
         );
     }
@@ -1815,14 +1873,17 @@ mod install_flow_tests {
         preview.release_id = None;
         preview.selection_id = Some("candidate-000000000000000000000000".into());
         assert_eq!(
-            execute("preview", preview).unwrap_err(),
+            execute("preview", preview).unwrap_err().code,
             "invalid_selection_id"
         );
 
         let mut exe = copy_params(&params);
         exe.release_id = None;
         exe.selection_id = Some("exe-selection-000000000000000000000000-42".into());
-        assert_eq!(execute("preview", exe).unwrap_err(), "selection_not_found");
+        assert_eq!(
+            execute("preview", exe).unwrap_err().code,
+            "selection_not_found"
+        );
 
         let mut zip = copy_params(&params);
         zip.release_id = None;
@@ -1963,7 +2024,7 @@ mod dynamic_projection_tests {
     }
 
     fn clone_params(params: &Params) -> Params {
-        serde_json::from_value(serde_json::to_value(params).unwrap()).unwrap()
+        params.clone()
     }
 
     fn dynamic_release(
@@ -2091,7 +2152,9 @@ mod dynamic_projection_tests {
             params.request_id = Some("stale-actions-source".into());
             params.operation = install::InstallOperation::Overwrite;
             assert_eq!(
-                execute("install_patch", clone_params(&params)).unwrap_err(),
+                execute("install_patch", clone_params(&params))
+                    .unwrap_err()
+                    .code,
                 // Disabled/unsubscribed discoveries are removed from the live
                 // candidate set, so the old selection is no longer resolvable.
                 "selection_not_found"

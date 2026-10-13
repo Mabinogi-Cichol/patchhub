@@ -2,12 +2,12 @@ import { callable, definePlugin, routerHook } from "@decky/api";
 import { Button, ButtonItem, DropdownItem, Field, Focusable, Navigation, PanelSection, PanelSectionRow, SidebarNavigation, TextField, ToggleField, showModal, useParams } from "@decky/ui";
 import { FaGamepad, FaPuzzlePiece } from "react-icons/fa";
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ComponentProps, type ReactNode } from "react";
-import { candidateMatched, displayPatches, filterInstalls, gameDisplayName, installSummary, patchState, reason, workflowState, type DiscoveryResult, type Filter, type Install, type Patch, type Preview, type ScanResult, type SourceCandidate, type SourceSubscription, type Transaction } from "@steam-patch/ui";
+import { candidateMatched, displayPatches, filterInstalls, gameDisplayName, installSummary, patchState, reason, workflowState, type Filter, type Install, type Patch, type Preview, type ScanResult, type SourceCandidate, type SourceSubscription, type Transaction } from "@steam-patch/ui";
 import { getListPreferences, setListPreferences, subscribeListPreferences } from "./preferences";
 import { gamePresentation, matchesGameQuery, transactionGameName } from "./steam";
-import { transactionResult } from "./install";
+import { installationResult } from "@steam-patch/ui";
 import { installInput, primaryActionBlockers, primaryInstallAction } from "./actions";
-import { createManagerSession, feedbackFor, needsRecovery } from "./session";
+import { createManagerSession, feedbackFor, needsRecovery, type DiscoveryResult } from "./session";
 import { decodeInstance, encodeInstance, settingsPage, settingsRoutes } from "./route";
 import { autoCleanupNote, cacheClearNote, cacheSummary, type CacheStatus, type CleanupResult, type Settings } from "./cache";
 import { tasks, taskIsTerminal, type TaskSnapshot } from "./tasks";
@@ -20,7 +20,7 @@ const previewRpc = callable<[string, string | null, string | null], Preview>("pr
 const scanStatus = (generation: number) => scanStatusRpc(generation);
 const discoverGameRpc = callable<[string, string[], string | null, boolean], DiscoveryResult>("discover_game");
 const discoverGame = (instance: string, names: string[], language: string | null, force: boolean): Promise<DiscoveryResult> => discoverGameRpc(instance, names, language, force);
-const listTransactions = callable<[], Transaction[] | { transactions: Transaction[] }>("list_transactions");
+const listTransactions = callable<[], Transaction[]>("list_transactions");
 const recover = callable<[], Transaction[]>("recover");
 const setSourceEnabled = callable<[string, boolean], SourceSubscription[]>("set_source_enabled");
 const setGameSource = callable<[number, string, boolean], { appid: number }>("set_game_source");
@@ -32,7 +32,7 @@ const setAutoCleanup = callable<[boolean], Settings>("set_auto_cleanup");
 async function readSnapshot(refreshSources = false) {
   const report = await scan(refreshSources);
   let transactions = session.getSnapshot().transactions;
-  try { const result = await listTransactions(); transactions = Array.isArray(result) ? result : result.transactions ?? []; }
+  try { transactions = await listTransactions(); }
   catch { /* Keep the last transaction snapshot during a transient read failure. */ }
   return { report, transactions };
 }
@@ -68,11 +68,11 @@ function Row({ children }: { children: ReactNode }) { return <PanelSectionRow>{c
 function InfoRow({ label, children, below = false }: { label: ReactNode; children: ReactNode; below?: boolean }) {
   return <PanelSectionRow><Field label={label} childrenLayout={below ? "below" : "inline"} spacingBetweenLabelAndChild="none"><span className="patch-kv-value">{children}</span></Field></PanelSectionRow>;
 }
-function sourceInfo(patch: Patch, sources: SourceSubscription[] = []) {
-  const subscription = sources.find(source => source.id === patch.source_id);
-  const name = patch.source_name || subscription?.name || "匹配源未知";
-  const state = patch.source_status || subscription?.status;
-  const cached = patch.source_cached_at ?? subscription?.cached_at;
+function sourceInfo(patch: Patch, sources: SourceSubscription[] | null = []) {
+  const subscription = sources?.find(source => source.id === patch.source_id);
+  const name = subscription?.name || "匹配源未知";
+  const state = subscription?.status;
+  const cached = subscription?.cached_at;
   return `${name} · ${state ? reason(state) : "查询状态未知"}${cached && ["cached", "source_offline_cached"].includes(state ?? "") ? ` · 缓存于 ${new Date(cached * 1000).toLocaleString()}` : ""}`;
 }
 function openSource(url: string) {
@@ -268,7 +268,7 @@ function GameManager({ item, seg, panel }: { item: Install; seg: string; panel?:
   const identity = patch?.selection_id ?? patch?.release_id ?? "";
   const primaryAction = primaryInstallAction(patch, !!archive.trim());
   const primaryInput = primaryAction.input;
-  const primaryAvailable = primaryAction.enabled;
+  const primaryAvailable = primaryAction.available;
   const actionBlockers = primaryActionBlockers(patch);
   const owned = transactions.filter(t => t.instance_id === item.game.instance_id).reverse();
   const installed = primaryAction.label === "overwrite";
@@ -326,10 +326,10 @@ function GameManager({ item, seg, panel }: { item: Install; seg: string; panel?:
       const diagnostic = task.result?.recovery?.code ?? task.result?.error ?? task.error ?? "needs_recovery";
       refreshAfterMutation(undefined, `安装仍需恢复：${reason(diagnostic)}${task.result?.recovery?.detail ? ` · ${task.result.recovery.detail}` : ""}`, instance);
     } else if (task.state === "completed") {
-      const tx = task.result as Transaction;
+      const tx = task.result;
       if (tx?.transaction_id) record(tx);
-      const cleanup = (task.result as (Transaction & { cleanup?: CleanupResult }) | null)?.cleanup;
-      const message = [tx ? transactionResult(tx) : "安装完成，正在核对文件状态。",
+      const cleanup = task.result?.cleanup;
+      const message = [tx ? installationResult(tx) : "安装完成，正在核对文件状态。",
         cleanup ? cacheClearNote(cleanup) : ""].filter(Boolean).join(" ");
       refreshAfterMutation(message, undefined, instance);
     } else if (task.state === "failed") {
@@ -371,7 +371,7 @@ function GameManager({ item, seg, panel }: { item: Install; seg: string; panel?:
     {common}
     <PanelSection>
       <InfoRow label="补丁状态">{matchSummary(item)}</InfoRow>
-      <InfoRow label="匹配来源">{entries.length ? [...new Set(entries.map(entry => entry.kind === "installable" ? entry.patch.source_name || report?.sources?.find(s => s.id === entry.patch.source_id)?.name || "匹配源未知" : candidateSource(entry.candidate)))].join("、") : "—"}</InfoRow>
+      <InfoRow label="匹配来源">{entries.length ? [...new Set(entries.map(entry => entry.kind === "installable" ? report?.sources?.find(s => s.id === entry.patch.source_id)?.name || "匹配源未知" : candidateSource(entry.candidate)))].join("、") : "—"}</InfoRow>
       {owned.some(needsRecovery) && <Row><Status warning>有未完成的操作需要处理。</Status><Action onClick={() => navigatePanel("records")}>查看操作记录</Action></Row>}
     </PanelSection>
     <PanelSection title="查找来源">
@@ -380,7 +380,7 @@ function GameManager({ item, seg, panel }: { item: Install; seg: string; panel?:
         selectedOption={preferredLanguage ?? ""} onChange={option => setPreferredLanguage(option.data || null)} /></Row>
       <Row><Status>语言偏好用于查找来源，游戏实际语言与 DLC 状态仍需确认。</Status></Row>
       <Row><Action disabled={!!busy} onClick={() => void session.refresh()}>重新查找补丁</Action></Row>
-      {item.discovery?.diagnostics.map((diagnostic, index) => <Row key={index}><Status warning>{diagnostic.message || reason(diagnostic.code)}{diagnostic.detail && diagnostic.detail !== diagnostic.code ? ` · ${reason(diagnostic.detail)}` : ""}</Status></Row>)}
+      {item.discovery?.diagnostics.map((diagnostic, index) => <Row key={index}><Status warning>{diagnostic.detail || reason(diagnostic.code)}{diagnostic.detail && diagnostic.detail !== diagnostic.code ? ` · ${reason(diagnostic.detail)}` : ""}</Status></Row>)}
     </PanelSection>
     {(!!item.patches.length || !item.discovery?.candidates.length) && <PanelSection title="匹配到的补丁">{item.patches.length ? item.patches.map(p => <PanelSectionRow key={p.selection_id ?? p.release_id}>
       <div className="patch-patch">

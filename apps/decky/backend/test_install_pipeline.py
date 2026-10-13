@@ -21,7 +21,7 @@ class InstallPipelineTests(unittest.IsolatedAsyncioTestCase):
             plugin.tasks = module.TaskManager(state_dir=temporary)
             plugin.settings = types.SimpleNamespace(auto_cleanup=True)
             plugin.bridge = types.SimpleNamespace(selection=module.CoreBridge.selection,
-                install_patch=AsyncMock(return_value={"state": "committed", "transaction_id": "tx-1",
+                install_patch=AsyncMock(return_value={"disposition": "completed", "state": "committed", "transaction_id": "tx-1",
                     "cleanup": {"status": "completed", "performed": True, "removed_bytes": 12, "failures": []}}),
                 cleanup_cache=AsyncMock(return_value={"performed": True, "removed_bytes": 12}))
             request_id = str(uuid.uuid4())
@@ -43,7 +43,7 @@ class InstallPipelineTests(unittest.IsolatedAsyncioTestCase):
         plugin.tasks = module.TaskManager()
         plugin.bridge = types.SimpleNamespace(selection=module.CoreBridge.selection)
         with self.assertRaisesRegex(ValueError, "archive_not_allowed_for_selection"):
-            await plugin.start_patch_install_task("local", None, "exe-selection-a-1", "a.zip")
+            await plugin.start_patch_install_task("local", None, "exe-selection-a-1", "a.zip", "install")
         with self.assertRaisesRegex(ValueError, "invalid_request"):
             await plugin.start_patch_install_task("local", "release", "exe-selection-a-1")
         self.assertFalse(plugin.tasks.busy())
@@ -71,7 +71,7 @@ class InstallPipelineTests(unittest.IsolatedAsyncioTestCase):
         async def work(task):
             await finish.wait()
             task.check()
-            return {"state": "committed"}
+            return {"disposition": "completed", "state": "committed"}
         task = plugin.tasks.get(plugin.tasks.start("install", work)["task_id"])
         try:
             task.lease -= 5

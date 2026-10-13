@@ -260,7 +260,9 @@ fn validate_record(record: &RequestRecord) -> Result<()> {
         return Err(invalid("invalid_request_binding"));
     }
     let binding = &record.binding;
-    if binding.instance_id.is_empty() || binding.instance_id.len() > MAX_ID_BYTES {
+    if binding.instance_id.is_empty()
+        || binding.instance_id.len() > super::service::MAX_INSTANCE_ID_BYTES
+    {
         return Err(invalid("invalid_request_binding"));
     }
     if binding.operation.is_empty() || binding.operation.len() > MAX_VALUE_BYTES {

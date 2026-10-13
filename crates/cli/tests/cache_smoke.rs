@@ -1,4 +1,4 @@
-//! Actual v3 subprocess policy and cache-result integration, only temporary state.
+//! Actual v4 subprocess policy and cache-result integration, only temporary state.
 use base64::{engine::general_purpose::STANDARD, Engine};
 use ed25519_dalek::{Signer, SigningKey};
 use serde_json::{json, Value};
@@ -11,6 +11,52 @@ use std::{
 fn hash(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
+
+fn wire_params(method: &str, mut legacy: Value) -> Value {
+    let object = legacy.as_object_mut().unwrap();
+    let mut host = serde_json::Map::new();
+    for key in [
+        "roots",
+        "catalog",
+        "signed_catalog",
+        "trust_keys",
+        "state_dir",
+        "platform",
+    ] {
+        let default = match key {
+            "roots" => json!([]),
+            "platform" => json!(if cfg!(windows) { "windows" } else { "steamos" }),
+            _ => Value::Null,
+        };
+        host.insert(
+            key.into(),
+            object
+                .remove(key)
+                .filter(|v| !v.is_null())
+                .unwrap_or(default),
+        );
+    }
+    let keys: &[&str] = match method {
+        "preview" => &["instance_id", "release_id", "selection_id"],
+        "install_patch" => &[
+            "instance_id",
+            "release_id",
+            "selection_id",
+            "archive",
+            "operation",
+            "cleanup_policy",
+        ],
+        _ => &[],
+    };
+    object.retain(|key, value| keys.contains(&key.as_str()) && !value.is_null());
+    if method == "install_patch" {
+        object.entry("operation").or_insert(json!("overwrite"));
+        object.entry("cleanup_policy").or_insert(json!("disabled"));
+    }
+    object.insert("host".into(), Value::Object(host));
+    legacy
+}
+
 fn call(method: &str, id: &str, params: Value) -> Value {
     let mut child = Command::new(env!("CARGO_BIN_EXE_steam-patch"))
         .arg(if method == "install_patch" {
@@ -27,7 +73,7 @@ fn call(method: &str, id: &str, params: Value) -> Value {
     writeln!(
         input,
         "{}",
-        json!({"protocol_version":3,"request_id":id,"method":method,"params":params})
+        json!({"protocol_version":4,"request_id":id,"method":method,"params":wire_params(method, params)})
     )
     .unwrap();
     let mut stdout = BufReader::new(child.stdout.take().unwrap());
@@ -59,6 +105,12 @@ fn call(method: &str, id: &str, params: Value) -> Value {
     );
     let response = response.unwrap();
     assert_eq!(response["request_id"], id);
+    steam_patch_protocol::validate_response(
+        &response,
+        response["request_id"].as_str().unwrap(),
+        Some(serde_json::from_value(json!(method)).unwrap()),
+    )
+    .unwrap();
     response
 }
 #[test]

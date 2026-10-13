@@ -4,11 +4,12 @@ import {
   isExternal,
   isManaged,
   reason,
-  type GameDiscovery,
+  sourceRefreshFailed,
+  sourceRefreshSucceeded,
+  sourceQueryComplete,
   type GameSourceSubscription,
   type Install,
   type SourceCandidate,
-  type SourceSubscription,
 } from "@steam-patch/ui";
 
 /**
@@ -22,74 +23,14 @@ import {
 
 export type Tone = "ok" | "warn" | "fail" | "busy" | "idle";
 
-export function primaryInstallAction(patch: Install["patches"][number], archiveSelected: boolean, route: "primary" | "local_archive" = "primary") {
-  const primary = patch.actions.primary;
-  const input = route === "local_archive" ? "local_archive" : primary.input;
-  const available = input === "automatic"
-    ? patch.actions.automatic.available
-    : input === "local_archive"
-      ? patch.actions.local_archive.available && archiveSelected
-      : false;
-  return { operation: primary.operation, label: primary.label, input, available };
-}
-
-export function actionBlockers(patch: Install["patches"][number]) {
-  const input = patch.actions.primary.input;
-  const selected = input === "automatic"
-    ? [patch.actions.automatic]
-    : input === "local_archive"
-      ? [patch.actions.automatic, patch.actions.local_archive]
-      : [patch.actions.overwrite];
-  const seen = new Set<string>();
-  return selected.flatMap(action => action.blockers).filter(blocker => {
-    const key = `${blocker.code}\0${blocker.detail ?? ""}`;
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
-}
+export { primaryInstallAction, actionBlockers, safeSourceUrl } from "@steam-patch/ui";
 
 // ---- host command results -------------------------------------------------
 
-/** v3 `get_capabilities` shape used to check host source-scan support. */
-export type Capabilities = {
-  protocol_version?: number;
-  installer?: {
-    schema_version?: number;
-    selection_version?: number;
-    content_version?: number;
-    adapter_version?: number;
-    policy_schema_version?: number;
-    report_schema_version?: number;
-    formats?: Record<string, string>;
-    strategies?: string[];
-  };
-  sources?: {
-    discovery_schema_version?: number;
-    adapter_version?: number;
-    parser_version?: number;
-    query_version?: number;
-    methods?: string[];
-  };
-  methods?: string[];
-};
-
-export type SourceSummary = SourceSubscription & { discovery_only?: boolean };
-
-export type SettingsResult = { settings_revision: number };
-
-export type SourceScanItem = {
-  instance_id?: string | null;
-  appid?: number | null;
-  status: string;
-  candidates?: SourceCandidate[];
-  diagnostics?: { code: string; message?: string; detail?: string; source_id?: string }[];
-};
-
-export type SourceScanResult = {
-  settings_revision?: number;
-  results?: SourceScanItem[];
-};
+export type { Capabilities, SourceSummary } from "../../../packages/contracts/generated/protocol";
+import type { SourceSummary, ScanSourcesResult, SourceProgressEvent, GameSourceUpdateEvent, RefreshSourceUpdateEvent } from "../../../packages/contracts/generated/protocol";
+export type SourceScanResult = ScanSourcesResult;
+export type SourceScanItem = ScanSourcesResult["results"][number];
 
 export type SourceScanStatus = {
   running: boolean;
@@ -98,35 +39,18 @@ export type SourceScanStatus = {
   results: SourceScanResult | null;
 };
 
-/** A single `source_progress` / `source_update` line, with host framing. */
-export type SourceEvent = {
-  event?: string;
-  request_id?: string;
-  sequence?: number;
-  settings_revision?: number;
-  completed?: number;
-  total?: number;
-  running?: boolean;
-  appid?: number;
-  index?: number;
-  instance_id?: string | null;
-  discovery?: GameDiscovery;
-  source_id?: string;
-  status?: unknown;
-};
+export type SourceEvent = SourceProgressEvent | GameSourceUpdateEvent | RefreshSourceUpdateEvent;
 
 // ---- status -> tone / label ----------------------------------------------
 
-const FAIL_CODES = new Set(["failed", "source_refresh_failed"]);
-const OK_CODES = new Set(["complete", "cache_complete", "source_refreshed", "fresh"]);
 const IDLE_CODES = new Set(["empty", "not_queried", "not_refreshed", "queued", "source_not_enabled"]);
 
 /** Tonal category used for the status chips. */
 export function statusTone(code?: string | null): Tone {
   const value = code ?? "not_refreshed";
   if (/^discovery_http_\d{3}$/.test(value)) return "fail";
-  if (FAIL_CODES.has(value)) return "fail";
-  if (OK_CODES.has(value)) return "ok";
+  if (sourceRefreshFailed(value)) return "fail";
+  if (sourceQueryComplete(value) || sourceRefreshSucceeded(value)) return "ok";
   if (IDLE_CODES.has(value)) return "idle";
   return "warn";
 }
@@ -251,7 +175,7 @@ const SOURCE_NAMES: Record<string, string> = {
 };
 
 export function candidateSourceLabel(candidate: SourceCandidate): string {
-  const name = candidate.source_name || SOURCE_NAMES[candidate.source_id] || candidate.source_id;
+  const name = SOURCE_NAMES[candidate.source_id] || candidate.source_id;
   return `${name} · ${candidate.source_id === "hgamer" ? "补丁索引" : "发行商补丁源"}`;
 }
 
@@ -301,20 +225,6 @@ export function versionEvidence(candidate: SourceCandidate): string[] {
 export function formatTime(value?: number | null): string {
   if (!value) return "—";
   return new Date(value * 1000).toLocaleString();
-}
-
-/** The host only accepts public HTTPS pages; mirror the Decky guard locally. */
-export function safeSourceUrl(value: string): boolean {
-  try {
-    const url = new URL(value);
-    if (url.protocol !== "https:" || url.username || url.password || (url.port && url.port !== "443")) return false;
-    const host = url.hostname.toLowerCase();
-    if (!host.includes(".") || host === "localhost" || host.endsWith(".localhost") || host.endsWith(".local") || host.includes(":")) return false;
-    if (/^\d+\.\d+\.\d+\.\d+$/.test(host)) return false;
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 export function sourceRoleOf(source: SourceSummary): "publisher" | "fallback_indexer" {

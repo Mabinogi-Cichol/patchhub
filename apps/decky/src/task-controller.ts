@@ -1,10 +1,10 @@
-import type { Transaction } from "@steam-patch/ui";
+import type { InstallerOutcome, InstallStage } from "@steam-patch/ui";
 
 export type TaskSnapshot = {
   task_id: string;
   kind: "install";
   state: "running" | "cancelling" | "rolling_back" | "cancelled" | "completed" | "failed";
-  stage: string;
+  stage: InstallStage | "starting";
   substage?: "backing_up" | "writing" | "committing" | null;
   bytes_done: number;
   total_bytes: number | null;
@@ -15,7 +15,7 @@ export type TaskSnapshot = {
   elapsed_seconds: number;
   speed_bps: number;
   eta_seconds: number | null;
-  result: (Transaction & { recovery?: { required: boolean; code?: string; detail?: string } | null }) | null;
+  result: InstallerOutcome | null;
   error: string | null;
   error_detail?: string | null;
   instance_id?: string;

@@ -146,11 +146,15 @@ def fixture(parent, name, manifests, files, mixed, library_names=('Steam 测试�
     return {'roots': [str(libraries[0])], 'catalog': str(catalog), 'platform': 'windows'}
 
 def rpc(binary, method, params, version):
-    if version == 4:
-        params = {'host': {'roots': params['roots'], 'catalog': params.get('catalog'),
-                           'signed_catalog': None, 'trust_keys': None, 'state_dir': None,
-                           'platform': params.get('platform', 'windows')}}
     request_id = params.get('request_id', 'p0-projection')
+    if version == 4:
+        params = dict(params)
+        params.pop('request_id', None)
+        host = {key: params.pop(key, [] if key == 'roots' else 'windows' if key == 'platform' else None)
+                for key in ('roots', 'catalog', 'signed_catalog', 'trust_keys', 'state_dir', 'platform')}
+        if method == 'install_patch':
+            params['cleanup_policy'] = 'disabled'
+        params['host'] = host
     request = {'protocol_version': version, 'request_id': request_id, 'method': method, 'params': params}
     data = json.dumps(request).encode() + b'\n'
     if len(data) > 64*1024:

@@ -1,13 +1,15 @@
+"""Generated v4 fixtures exercised through the actual Decky JSONL reader."""
 import asyncio
+import copy
+import json
 import os
 from pathlib import Path
-import unittest
 import tempfile
-import json
+import unittest
 from unittest.mock import AsyncMock, patch
-
-from bridge import (CoreBridge, CONTROLLED_METHODS, METHODS, SOURCE_EVENTS, SOURCE_METHODS)
-
+from bridge import CoreBridge, CoreError, METHODS, MAX_RESPONSE_BYTES, _unique_object
+from protocol_validation import validate_response, validate_event, validate_request, validate_id, truncate_detail
+from protocol_test_support import CASES, response, event, outcome
 
 class _FakeProcess:
     """Minimal subprocess stand-in: builds stdout from the captured request."""
@@ -29,11 +31,19 @@ class _FakeProcess:
     def close(self):
         pass
 
+    def kill(self):
+        self.returncode = 0
+
     async def wait(self):
         self.returncode = 0
 
     async def read(self, size=65536):
-        return b""
+        if not self._lines:
+            self.returncode = 0
+            return b""
+        remaining = b"".join(self._lines)
+        self._lines = [remaining[size:]] if len(remaining) > size else []
+        return remaining[:size]
 
     async def readline(self):
         if self._lines is None:
@@ -48,122 +58,270 @@ class _FakeProcess:
         return b""
 
 
-class BridgeContractTests(unittest.TestCase):
-    def test_source_methods_and_events_are_registered(self):
-        self.assertTrue(SOURCE_METHODS.issubset(METHODS))
-        self.assertTrue(CONTROLLED_METHODS.issubset(METHODS))
-        self.assertEqual(SOURCE_EVENTS, {"source_progress", "source_update"})
-        for method in ("list_source_matches", "get_source_state", "get_source_settings"):
-            self.assertNotIn(method, SOURCE_METHODS)
+class GeneratedContractTests(unittest.TestCase):
+    def test_all_generated_request_response_and_event_cases(self):
+        for case in CASES["requests"]:
+            with self.subTest(name=case["name"]):
+                if case.get("error"):
+                    with self.assertRaises((ValueError, RuntimeError)):
+                        validate_request(case["request"], case.get("task_channel"))
+                else:
+                    validate_request(case["request"], case.get("task_channel"))
+        for case in CASES["responses"]:
+            with self.subTest(name=case["name"]):
+                if case.get("error"):
+                    with self.assertRaises((ValueError, RuntimeError)):
+                        validate_response(case["response"], case["method"], "fixture")
+                else:
+                    validate_response(case["response"], case["method"], "fixture")
+        for case in CASES["events"]:
+            with self.subTest(name=case["name"]):
+                if case.get("error"):
+                    with self.assertRaises((ValueError, RuntimeError)):
+                        validate_event(case["event"], "fixture")
+                else:
+                    validate_event(case["event"], "fixture")
 
-    def test_source_event_requires_binding_and_monotonic_sequence(self):
-        self.assertEqual(CoreBridge._source_event({"protocol_version": 3, "request_id": "r", "sequence": 0}, "r", -1), 0)
-        with self.assertRaisesRegex(RuntimeError, "invalid_core_response"):
-            CoreBridge._source_event({"protocol_version": 3, "request_id": "other", "sequence": 0}, "r", -1)
-        with self.assertRaisesRegex(RuntimeError, "invalid_core_response"):
-            CoreBridge._source_event({"protocol_version": 3, "request_id": "r", "sequence": 1}, "r", 1)
-        with self.assertRaisesRegex(RuntimeError, "invalid_core_response"):
-            CoreBridge._source_event({"protocol_version": 3, "request_id": "r", "sequence": "1"}, "r", -1)
+    def test_shared_sequence_raw_json_and_detail_cases(self):
+        for case in CASES["sequences"]:
+            last = -1
+            decisions = []
+            for index, row in enumerate(case["events"]):
+                if "terminal_after" in case and index >= case["terminal_after"]:
+                    decisions.append("drop")
+                    continue
+                try:
+                    validate_event(row, "fixture")
+                    sequence = CoreBridge._source_event(row, "fixture", last)
+                    decisions.append("drop" if sequence <= last else "accept")
+                    last = max(last, sequence)
+                except RuntimeError:
+                    decisions.append("error")
+            self.assertEqual(decisions, case["expected"], case["name"])
+        for case in CASES.get("raw_requests", []):
+            payload = case["json"].encode("utf-8") if "json" in case else bytes.fromhex(case["hex"])
+            with self.assertRaises((ValueError, UnicodeDecodeError), msg=case["name"]):
+                json.loads(payload, object_pairs_hook=_unique_object)
+        for case in CASES.get("details", []):
+            self.assertEqual(truncate_detail(case["input"]), case["expected"])
 
-    def test_call_sync_is_async(self):
-        self.assertTrue(asyncio.iscoroutinefunction(CoreBridge.call_sync))
+    def test_utf8_id_controls_and_detail_boundaries(self):
+        self.assertEqual(validate_id("界" * 42, 128), "界" * 42)
+        for value in ("界" * 43, "a\u0085", "a\x7f", "a\x00", "\ud800"):
+            with self.assertRaises(ValueError):
+                validate_id(value, 128)
+        bounded = truncate_detail("界" * 1000)
+        self.assertEqual(len(bounded.encode("utf-8")), 2046)
+        self.assertFalse(bounded.endswith("…"))
 
 
 class BridgeStreamTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
-        root = Path(self.temp.name)
-        binary = root / "steam-patch"
-        binary.write_bytes(b"stub")
-        catalog = root / "catalog.json"
-        catalog.write_text(json.dumps({"schema_version": 1, "revision": 0, "releases": []}))
-        self.bridge = CoreBridge(binary, catalog, state_dir=root / "state")
+        path = Path(self.temp.name) / "binary"
+        path.touch()
+        self.bridge = CoreBridge(path, path, state_dir=Path(self.temp.name) / "state")
 
-    async def test_source_events_are_forwarded_before_final_response(self):
+    async def test_preflight_refuses_old_versions_missing_contracts_and_schemas_before_write(self):
+        variants = [("version", version, "unsupported_protocol") for version in (1, 2, 3)] + [
+            ("contracts", None, "capability_mismatch"), ("methods", [], "capability_mismatch"),
+            ("schema", 99, "installer_schema_unsupported")]
+        for key, value, expected in variants:
+            captured = []
+            def factory(request_id, request):
+                captured.append(request)
+                row = response("get_capabilities", request_id)
+                if key == "version":
+                    row["protocol_version"] = value
+                elif key == "schema":
+                    row["result"]["installer"]["schema_version"] = value
+                else:
+                    row["result"][key] = value
+                return [], row
+            with patch("bridge.asyncio.create_subprocess_exec", side_effect=lambda *a, **kw: _FakeProcess(factory)):
+                with self.assertRaisesRegex((RuntimeError, ValueError), expected):
+                    await self.bridge.install_patch("instance", "release", operation="overwrite")
+            self.assertEqual([row["method"] for row in captured], ["get_capabilities"])
+            self.assertFalse(self.bridge.state_dir.exists())
+
+    async def test_host_null_fields_outer_id_and_required_operation(self):
+        captured = []
+        def factory(request_id, request):
+            captured.append(request)
+            return [], response(request["method"], request_id)
+        with patch("bridge.asyncio.create_subprocess_exec", side_effect=lambda *a, **kw: _FakeProcess(factory)):
+            with self.assertRaisesRegex(ValueError, "invalid_operation"):
+                await self.bridge.install_patch("instance", "release")
+            await self.bridge.install_patch("instance", "release", operation="overwrite", request_id="same")
+        request = captured[-1]
+        self.assertEqual(request["request_id"], "same")
+        self.assertNotIn("request_id", request["params"])
+        self.assertEqual(set(request["params"]["host"]), {"roots", "catalog", "signed_catalog", "trust_keys", "state_dir", "platform"})
+        self.assertIsNone(request["params"]["host"]["signed_catalog"])
+        self.assertIsNone(request["params"]["host"]["trust_keys"])
+
+    async def test_event_sequence_duplicate_backward_and_terminal_wins(self):
+        self.bridge._preflight_done = True
         seen = []
-
         def factory(request_id, request):
-            events = [
-                {"event": "source_progress", "protocol_version": 3, "request_id": request_id, "sequence": 0,
-                 "completed": 0, "total": 1, "running": True},
-                {"event": "source_update", "protocol_version": 3, "request_id": request_id, "sequence": 1, "appid": 7,
-                 "discovery": {"status": "complete", "candidates": [], "diagnostics": []}},
-            ]
-            response = {"protocol_version": 3, "request_id": request_id, "ok": True,
-                        "result": {"settings_revision": 3, "results": []}}
-            return events, response
+            first = event("source_progress", request_id, sequence=0)
+            second = event("source_progress", request_id, sequence=1)
+            return [first, first, second, first, response("scan_sources", request_id)], {"event": "source_progress"}
+        with patch("bridge.asyncio.create_subprocess_exec", return_value=_FakeProcess(factory)):
+            await self.bridge._call("scan_sources", {}, on_event=seen.append)
+        self.assertEqual([row["sequence"] for row in seen], [0, 1])
 
-        process = _FakeProcess(factory)
-        spawned = AsyncMock(return_value=process)
-        with patch("bridge.asyncio.create_subprocess_exec", spawned):
-            result = await self.bridge._call("scan_sources", {}, on_event=seen.append)
-        self.assertEqual(result["settings_revision"], 3)
-        self.assertEqual([event["event"] for event in seen], ["source_progress", "source_update"])
-        self.assertEqual(spawned.await_args.args[1], "serve-task")
+    async def test_terminal_receipt_seals_before_malformed_or_oversized_raw_tail(self):
+        self.bridge._preflight_done = True
+        class Process:
+            def __init__(self, tail):
+                self.tail = tail
+                self.returncode = None
+                self.stdout = self
+                self.stdin = self
+                self.reader = asyncio.StreamReader(limit=MAX_RESPONSE_BYTES + 1)
+                self.read_sizes = []
+                self.readline_calls = 0
+                self.messages = []
+                self.closed = False
+                self.drained = 0
+            def write(self, data):
+                self.messages.append(data)
+                request = json.loads(data)
+                receipt = response("install_patch", request["request_id"])
+                trailing = self.tail(request["request_id"]) if callable(self.tail) else self.tail
+                self.reader.feed_data(json.dumps(receipt).encode("utf-8") + b"\n" + trailing)
+                self.reader.feed_eof()
+            async def drain(self): pass
+            def close(self): self.closed = True
+            async def readline(self):
+                self.readline_calls += 1
+                return await self.reader.readline()
+            async def read(self, size):
+                self.read_sizes.append(size)
+                if not self.closed:
+                    raise AssertionError("terminal did not close stdin")
+                chunk = await self.reader.read(size)
+                self.drained += len(chunk)
+                return chunk
+            async def wait(self): self.returncode = 0
+        tails = [b"{malformed JSON\n", b"\xff\n", b"x" * (MAX_RESPONSE_BYTES + 17) + b"\n",
+                 lambda rid: json.dumps(response("install_patch", rid, outcome("rolled_back", "task_cancelled"))).encode("utf-8") + b"\n"]
+        for tail in tails:
+            peer = Process(tail)
+            with patch("bridge.asyncio.create_subprocess_exec", return_value=peer):
+                with self.assertLogs("bridge", level="WARNING") as captured:
+                    result = await self.bridge.install_patch("instance", "release", operation="overwrite")
+            self.assertEqual(result["state"], "committed")
+            self.assertEqual(result["disposition"], "completed")
+            self.assertEqual(peer.readline_calls, 1)
+            self.assertTrue(peer.closed)
+            self.assertTrue(peer.read_sizes and all(size == 65536 for size in peer.read_sizes))
+            self.assertGreater(peer.drained, 0)
+            self.assertEqual(len(peer.messages), 1)
+            self.assertIn("core_output_after_terminal:", captured.output[0])
 
-    async def test_foreign_source_event_is_rejected(self):
+    async def test_valid_terminal_disposition_survives_later_nonzero_exit(self):
+        self.bridge._preflight_done = True
+        class Process(_FakeProcess):
+            async def wait(self):
+                self.returncode = 17
+        for state, error, disposition in (("committed", None, "completed"), ("rolled_back", "task_cancelled", "cancelled")):
+            def factory(request_id, request):
+                return [], response("install_patch", request_id, outcome(state, error))
+            with patch("bridge.asyncio.create_subprocess_exec", return_value=Process(factory)):
+                with self.assertLogs("bridge", level="WARNING") as captured:
+                    result = await self.bridge.install_patch("instance", "release", operation="overwrite")
+            self.assertEqual(result["disposition"], disposition)
+            self.assertIn("core_exit_after_terminal: 17", captured.output[0])
+
+    async def test_unknown_missing_bool_counter_wrong_id_gap_and_v3_events_rejected(self):
+        self.bridge._preflight_done = True
+        mutations = [lambda row: row.update(extra=True), lambda row: row.pop("total"),
+                     lambda row: row.update(completed=True), lambda row: row.update(request_id="wrong"),
+                     lambda row: row.update(sequence=1), lambda row: row.update(protocol_version=3),
+                     lambda row: row.update(sequence=9007199254740992)]
+        for mutate in mutations:
+            def factory(request_id, request):
+                row = event("source_progress", request_id)
+                mutate(row)
+                return [row], response("scan_sources", request_id)
+            with patch("bridge.asyncio.create_subprocess_exec", return_value=_FakeProcess(factory)):
+                with self.assertRaisesRegex(RuntimeError, "contract_mismatch|unsupported_protocol"):
+                    await self.bridge._call("scan_sources", {})
+
+    async def test_actions_missing_unknown_response_or_invalid_error_are_refused(self):
+        for mutate in (lambda row: row.update(extra=True), lambda row: row["result"].pop("installs"),
+                       lambda row: row["result"]["installs"][0]["patches"][0].pop("actions")):
+            def factory(request_id, request):
+                row = response("scan", request_id)
+                mutate(row)
+                return [], row
+            with patch("bridge.asyncio.create_subprocess_exec", return_value=_FakeProcess(factory)):
+                with self.assertRaisesRegex(RuntimeError, "contract_mismatch"):
+                    await self.bridge.scan()
         def factory(request_id, request):
-            events = [{"event": "source_progress", "protocol_version": 3, "request_id": "foreign", "sequence": 0}]
-            return events, {"ok": True}
+            return [], {"protocol_version": 4, "request_id": request_id, "ok": False,
+                        "error": {"code": "bad; human text", "detail": None}}
+        with patch("bridge.asyncio.create_subprocess_exec", return_value=_FakeProcess(factory)):
+            with self.assertRaisesRegex(RuntimeError, "contract_mismatch"):
+                await self.bridge.scan()
 
-        process = _FakeProcess(factory)
-        with patch("bridge.asyncio.create_subprocess_exec", AsyncMock(return_value=process)):
-            with self.assertRaisesRegex(RuntimeError, "invalid_core_response"):
-                await self.bridge._call("scan_sources", {}, on_event=lambda event: None)
+    async def test_request_boundary_counts_lf_and_refuses_plus_one_before_spawn(self):
+        from bridge import MAX_REQUEST_BYTES
+        self.bridge._preflight_done = True
+        rule = copy.deepcopy(next(case["request"]["params"]["rule"] for case in CASES["requests"] if case["name"] == "add_source-request"))
+        host = {"roots": [], "catalog": str(self.bridge.catalog), "signed_catalog": None,
+                "trust_keys": None, "state_dir": str(self.bridge.state_dir), "platform": "steamos"}
+        request = {"protocol_version": 4, "request_id": "boundary", "method": "add_source", "params": {"host": host, "rule": rule}}
+        size = len(json.dumps(request, ensure_ascii=False).encode("utf-8")) + 1
+        rule["name"] += "x" * (MAX_REQUEST_BYTES - size)
+        peer = _FakeProcess(lambda rid, req: ([], response("add_source", rid)))
+        with patch("bridge.asyncio.create_subprocess_exec", return_value=peer):
+            await self.bridge._call("add_source", {"rule": rule}, request_id="boundary")
+        self.assertEqual(len(peer.payload), MAX_REQUEST_BYTES)
+        rule["name"] += "x"
+        with patch("bridge.asyncio.create_subprocess_exec", new_callable=AsyncMock) as spawn:
+            with self.assertRaisesRegex(ValueError, "request_too_large"):
+                await self.bridge._call("add_source", {"rule": rule}, request_id="boundary")
+            spawn.assert_not_called()
 
-    async def test_call_sync_uses_one_shot_serve(self):
-        def factory(request_id, request):
-            return [], {"protocol_version": 3, "request_id": request_id, "ok": True,
-                        "result": {"settings_revision": 4}}
-
-        process = _FakeProcess(factory)
-        spawned = AsyncMock(return_value=process)
-        with patch("bridge.asyncio.create_subprocess_exec", spawned):
-            result = await self.bridge.call_sync("set_source_enabled", {"source_id": "s", "enabled": False})
-        self.assertEqual(result["settings_revision"], 4)
-        self.assertEqual(spawned.await_args.args[1], "serve")
-
-    async def test_missing_capability_surfaces_core_error(self):
-        def factory(request_id, request):
-            return [], {"protocol_version": 3, "request_id": request_id, "ok": False,
-                        "error": {"code": "unsupported_method"}}
-
-        process = _FakeProcess(factory)
-        with patch("bridge.asyncio.create_subprocess_exec", AsyncMock(return_value=process)):
-            with self.assertRaisesRegex(RuntimeError, "unsupported_method"):
-                await self.bridge.call_sync("discover_game", {})
+    async def test_real_streamreader_boundaries_include_lf_and_recover_next_call(self):
+        class Process(_FakeProcess):
+            def kill(self): self.returncode = 0
+            async def readline(self):
+                if not hasattr(self, "reader"):
+                    self.reader = asyncio.StreamReader(limit=MAX_RESPONSE_BYTES + 1)
+                    request = json.loads(self.payload.split(b"\n", 1)[0])
+                    row = {"protocol_version": 4, "request_id": request["request_id"], "ok": False,
+                           "error": {"code": "test_error", "detail": None}}
+                    encoded = json.dumps(row).encode()
+                    self.reader.feed_data(encoded + b" " * (self.line_size - len(encoded) - 1) + b"\n")
+                    self.reader.feed_eof()
+                return await self.reader.readline()
+        for length, expected in ((MAX_RESPONSE_BYTES, "test_error"), (MAX_RESPONSE_BYTES + 1, "response_too_large"), (MAX_RESPONSE_BYTES + 2, "response_too_large")):
+            peer = Process(None); peer.line_size = length
+            with patch("bridge.asyncio.create_subprocess_exec", return_value=peer):
+                with self.assertRaisesRegex(RuntimeError, expected):
+                    await self.bridge.scan()
+        with patch("bridge.asyncio.create_subprocess_exec", return_value=_FakeProcess(lambda rid, req: ([], response("scan", rid)))):
+            self.assertIsInstance((await self.bridge.scan())["installs"], list)
 
 
 class BridgeIntegrationTests(unittest.IsolatedAsyncioTestCase):
-    def setUp(self):
+    async def test_real_core_v4_scan_and_error(self):
         root = Path(__file__).resolve().parents[3]
-        executable = "steam-patch.exe" if os.name == "nt" else "steam-patch"
-        self.binary = root / "target/debug" / executable
-        self.temp = tempfile.TemporaryDirectory()
-        self.addCleanup(self.temp.cleanup)
-        catalog = Path(self.temp.name) / "catalog.json"
-        catalog.write_text(json.dumps({"schema_version": 1, "revision": 0, "releases": []}))
-        self.bridge = CoreBridge(self.binary, catalog)
-
-    async def test_scan_real_core_returns_platform_and_empty_catalog(self):
-        if not self.binary.exists():
-            self.skipTest("core binary not built")
-        result = await self.bridge.scan()
-        self.assertEqual(result["platform"], "steamos")
-        self.assertEqual(result["catalog_revision"], 0)
-        self.assertEqual(result["catalog_trust"], "unsigned_development")
-        self.assertIsInstance(result["installs"], list)
-
-    async def test_preview_core_error_preserves_code(self):
-        if not self.binary.exists():
-            self.skipTest("core binary not built")
-        with self.assertRaisesRegex(RuntimeError, "instance_not_found"):
-            await self.bridge.preview("nonexistent-p0-instance", "nonexistent-release")
-
-    async def test_rejects_unbounded_request_before_spawning(self):
-        with self.assertRaisesRegex(ValueError, "invalid_id"):
-            await self.bridge.preview("x" * 65536, "r")
+        binary = root / "target/debug" / ("steam-patch.exe" if os.name == "nt" else "steam-patch")
+        if not binary.exists(): self.skipTest("core binary not built")
+        with tempfile.TemporaryDirectory() as temporary:
+            catalog = Path(temporary) / "catalog.json"
+            catalog.write_text(json.dumps({"schema_version": 1, "revision": 0, "releases": []}))
+            bridge = CoreBridge(binary, catalog)
+            await bridge.preflight()
+            self.assertEqual((await bridge.scan())["catalog_trust"], "unsigned_development")
+            with self.assertRaisesRegex(CoreError, "instance_not_found"):
+                await bridge.preview("nonexistent-p5-instance", "nonexistent-release")
 
 
 class BridgeJournalReadTests(unittest.IsolatedAsyncioTestCase):
@@ -224,7 +382,3 @@ class BridgeJournalReadTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaisesRegex(RuntimeError, "installer_busy"):
                 await bridge.scan()
             self.assertEqual(await bridge.list_transactions(), [])
-
-
-if __name__ == "__main__":
-    unittest.main()

@@ -12,12 +12,13 @@ use std::{
     thread,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
+use steam_patch_protocol::{self as protocol, EventSequence, Method, PROTOCOL_VERSION};
 use tauri::{AppHandle, Emitter, Manager, State, WindowEvent};
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_opener::OpenerExt;
 
-const MAX_RESPONSE: u64 = 8 * 1024 * 1024;
-const MAX_REQUEST: usize = 64 * 1024;
+const MAX_RESPONSE: u64 = protocol::MAX_RESPONSE_BYTES as u64;
+const MAX_REQUEST: usize = protocol::MAX_REQUEST_BYTES;
 
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -56,11 +57,11 @@ impl Operation {
 }
 
 fn valid_id(value: &str) -> bool {
-    !value.is_empty() && value.len() <= 256 && !value.chars().any(char::is_control)
+    protocol::validate_id(value, protocol::MAX_ID_BYTES)
 }
 
 fn valid_request_id(value: &str) -> bool {
-    !value.is_empty() && value.len() <= 128 && !value.chars().any(char::is_control)
+    protocol::validate_id(value, protocol::MAX_REQUEST_ID_BYTES)
 }
 
 fn request_id() -> String {
@@ -70,7 +71,7 @@ fn request_id() -> String {
     format!("host-{}-{}", std::process::id(), nanos)
 }
 
-fn binary(app: &AppHandle) -> Result<PathBuf, String> {
+fn binary(app: &AppHandle) -> Result<PathBuf, HostError> {
     let exe = std::env::current_exe().map_err(|_| "app_path_unavailable")?;
     let bundled = exe.with_file_name("steam-patch.exe");
     if bundled.is_file() {
@@ -140,21 +141,25 @@ struct CallArguments {
     preferred_language: Option<String>,
 }
 
-#[derive(Clone, Default, serde::Serialize, serde::Deserialize)]
-struct Progress {
-    stage: String,
-    #[serde(default)]
-    substage: Option<String>,
-    bytes_done: u64,
-    total_bytes: Option<u64>,
-    files_done: usize,
-    total_files: Option<usize>,
-    current_file: Option<String>,
-    archive_bytes: Option<u64>,
-}
+type Progress = Option<protocol::InstallProgressEvent>;
 
 type ChildHandle = Arc<Mutex<Child>>;
-type StdinHandle = Arc<Mutex<ChildStdin>>;
+struct ClosableWriter<W>(Option<W>);
+impl<W: Write> Write for ClosableWriter<W> {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0
+            .as_mut()
+            .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::BrokenPipe, "control_closed"))?
+            .write(bytes)
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.0
+            .as_mut()
+            .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::BrokenPipe, "control_closed"))?
+            .flush()
+    }
+}
+type StdinHandle = Arc<Mutex<ClosableWriter<ChildStdin>>>;
 
 #[derive(Clone)]
 struct ActiveJob {
@@ -167,18 +172,8 @@ struct ActiveJob {
 #[derive(Clone, Default)]
 struct Jobs(Arc<Mutex<Option<ActiveJob>>>);
 
-/// Latest `source_progress` payload, mirrored for `source_scan_status`.
-#[derive(Clone, Default, serde::Serialize, serde::Deserialize)]
-struct SourceProgress {
-    #[serde(default)]
-    completed: usize,
-    #[serde(default)]
-    total: usize,
-    #[serde(default)]
-    running: bool,
-    #[serde(default)]
-    settings_revision: u64,
-}
+/// Latest validated event, retained for host progress snapshots.
+type SourceProgress = Option<protocol::SourceProgressEvent>;
 
 #[derive(Clone)]
 struct SourceScanJob {
@@ -202,60 +197,62 @@ struct SourceScans(Arc<Mutex<SourceScan>>);
 #[derive(Clone, Default)]
 struct Closing(Arc<AtomicBool>);
 
-fn common_params(app: &AppHandle) -> Result<Value, String> {
+fn common_params(app: &AppHandle) -> Result<Value, HostError> {
     let state_dir = app
         .path()
         .app_data_dir()
         .map_err(|_| "state_path_unavailable")?;
-    std::fs::create_dir_all(&state_dir).map_err(|_| "state_path_unavailable")?;
-    let mut params = json!({"platform":"windows", "state_dir":state_dir});
-    if let Some(path) = config_file(app, "catalog.json") {
-        params["catalog"] = json!(path);
-    }
-    if let Some(path) = config_file(app, "signed-catalog.json") {
-        params["signed_catalog"] = json!(path);
-    }
-    if let Some(path) = config_file(app, "trust-keys.json") {
-        params["trust_keys"] = json!(path);
-    }
-    Ok(params)
+    Ok(json!({"host": {
+        "roots": [], "platform":"windows", "state_dir":state_dir,
+        "catalog": null,
+        "signed_catalog": config_file(app, "signed-catalog.json"),
+        "trust_keys": config_file(app, "trust-keys.json"),
+    }}))
 }
 
 /// Maximum length of a forwarded `error.detail` before it is truncated
 /// (p1-host-contract §3.3: optional, ≤2 KiB).
-const MAX_DETAIL: usize = 2 * 1024;
+#[cfg(test)]
+const MAX_DETAIL: usize = protocol::MAX_DETAIL_BYTES;
 
 fn truncate_detail(detail: &str) -> String {
-    if detail.len() <= MAX_DETAIL {
-        return detail.to_string();
-    }
-    // Reserve room for the ellipsis so the rendered value (including `…`)
-    // still satisfies the `≤2 KiB` bound (p1-host-contract §3.3).
-    let mut end = MAX_DETAIL - "…".len();
-    while !detail.is_char_boundary(end) {
-        end -= 1;
-    }
-    format!("{}…", &detail[..end])
+    protocol::truncate_detail(detail)
 }
 
-/// Renders the core error object into the frozen host-facing string: `"{code}"`
-/// or `"{code}: {detail}"` when a non-empty detail is present
-/// (p1-host-contract §3.3).
-fn response_error(response: &Value) -> String {
-    let code = response["error"]["code"].as_str().unwrap_or("core_error");
-    match response["error"]["detail"].as_str() {
-        Some(detail) if !detail.is_empty() => format!("{code}: {}", truncate_detail(detail)),
-        _ => code.to_string(),
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(transparent)]
+struct HostError(protocol::DomainError);
+impl std::ops::Deref for HostError {
+    type Target = protocol::DomainError;
+    fn deref(&self) -> &Self::Target {
+        &self.0
     }
 }
-
-fn validate_response(response: Value, id: &str) -> Result<Value, String> {
-    if response["protocol_version"] != 3
-        || response["request_id"] != id
-        || !response["ok"].is_boolean()
-    {
-        return Err("invalid_core_response".into());
+impl From<&str> for HostError {
+    fn from(code: &str) -> Self {
+        Self(protocol::DomainError::code(code))
     }
+}
+impl From<String> for HostError {
+    fn from(code: String) -> Self {
+        Self(protocol::DomainError::code(code))
+    }
+}
+#[cfg(test)]
+impl PartialEq<&str> for HostError {
+    fn eq(&self, value: &&str) -> bool {
+        &self.code == value
+    }
+}
+fn response_error(response: &Value) -> HostError {
+    HostError(
+        serde_json::from_value(response["error"].clone())
+            .unwrap_or_else(|_| protocol::DomainError::code("invalid_core_response")),
+    )
+}
+
+fn validate_response(response: Value, id: &str) -> Result<Value, HostError> {
+    protocol::validate_response(&response, id, None).map_err(protocol_error)?;
     if response["ok"] == true {
         Ok(response["result"].clone())
     } else {
@@ -263,7 +260,28 @@ fn validate_response(response: Value, id: &str) -> Result<Value, String> {
     }
 }
 
-fn read_all_bounded(mut reader: impl Read) -> Result<Vec<u8>, String> {
+fn protocol_error(error: protocol::ProtocolError) -> HostError {
+    HostError(protocol::DomainError {
+        code: error.code,
+        detail: error
+            .detail
+            .filter(|detail| !detail.is_empty())
+            .map(|detail| truncate_detail(&detail)),
+    })
+}
+
+/// Probe the fixed binary for every newly spawned core lifecycle. No write
+/// request, lease renewal, or state-directory creation precedes this gate.
+fn require_capabilities(app: &AppHandle) -> Result<(), HostError> {
+    let id = request_id();
+    let request = json!({"protocol_version":PROTOCOL_VERSION,"request_id":id,
+        "method":"get_capabilities","params":common_params(app)?});
+    let capabilities = run_one_shot(app, request, &id)?;
+    protocol::validate_capabilities(&capabilities).map_err(protocol_error)?;
+    Ok(())
+}
+
+fn read_all_bounded(mut reader: impl Read) -> Result<Vec<u8>, HostError> {
     let mut bytes = Vec::new();
     let mut buffer = [0u8; 8192];
     let mut oversized = false;
@@ -290,7 +308,7 @@ fn read_all_bounded(mut reader: impl Read) -> Result<Vec<u8>, String> {
 /// Validates the (camelCase, `deny_unknown_fields`) host arguments for a given
 /// method and merges them into the fixed host-injected `common` params. Kept
 /// pure so the request shape can be asserted without spawning the core.
-fn build_params(method: &str, args: CallArguments, common: Value) -> Result<Value, String> {
+fn build_params(method: &str, args: CallArguments, common: Value) -> Result<Value, HostError> {
     let CallArguments {
         instance_id,
         release_id,
@@ -303,7 +321,13 @@ fn build_params(method: &str, args: CallArguments, common: Value) -> Result<Valu
         name_hints,
         preferred_language,
     } = args;
-    for id in [&instance_id, &release_id, &selection_id, &source_id]
+    if instance_id
+        .as_ref()
+        .is_some_and(|id| !protocol::validate_id(id, protocol::MAX_INSTANCE_ID_BYTES))
+    {
+        return Err("invalid_id".into());
+    }
+    for id in [&release_id, &selection_id, &source_id]
         .into_iter()
         .flatten()
     {
@@ -372,6 +396,10 @@ fn build_params(method: &str, args: CallArguments, common: Value) -> Result<Valu
     if let Some(value) = preferred_language {
         params["preferred_language"] = json!(value);
     }
+    let probe = json!({"protocol_version":PROTOCOL_VERSION,"request_id":"host-validation","method":method,"params":params});
+    let mut bytes = serde_json::to_vec(&probe).map_err(|_| "request_encoding_failed")?;
+    bytes.push(b'\n');
+    protocol::decode_request(&bytes, false).map_err(protocol_error)?;
     Ok(params)
 }
 
@@ -379,12 +407,27 @@ fn execute_core_call(
     app: AppHandle,
     operation: Operation,
     args: CallArguments,
-) -> Result<Value, String> {
+) -> Result<Value, HostError> {
     let method = operation.method();
+    // A timed-out writer retains its slot until actual exit. Recovery also
+    // mutates game files and must not bypass that pending shutdown guard.
+    if method == "recover"
+        && app
+            .state::<Jobs>()
+            .0
+            .lock()
+            .map_err(|_| "job_state_unavailable")?
+            .is_some()
+    {
+        return Err("install_in_progress".into());
+    }
+    if method != "get_capabilities" {
+        require_capabilities(&app)?;
+    }
     let params = build_params(method, args, common_params(&app)?)?;
     let id = request_id();
     let request = json!({
-        "protocol_version": 3,
+        "protocol_version": PROTOCOL_VERSION,
         "request_id": id,
         "method": method,
         "params": params,
@@ -392,8 +435,17 @@ fn execute_core_call(
     run_one_shot(&app, request, &id)
 }
 
-fn run_one_shot(app: &AppHandle, request: Value, id: &str) -> Result<Value, String> {
+fn run_one_shot(app: &AppHandle, request: Value, id: &str) -> Result<Value, HostError> {
     let payload = serde_json::to_vec(&request).map_err(|_| "request_encoding_failed")?;
+    let mut request_line = payload.clone();
+    request_line.push(b'\n');
+    protocol::decode_request(
+        &request_line,
+        request["method"]
+            .as_str()
+            .is_some_and(|m| matches!(m, "install_patch" | "scan_sources" | "refresh_sources")),
+    )
+    .map_err(protocol_error)?;
     if payload.len().saturating_add(1) > MAX_REQUEST {
         return Err("request_too_large".into());
     }
@@ -415,8 +467,18 @@ fn run_one_shot(app: &AppHandle, request: Value, id: &str) -> Result<Value, Stri
     if !child.wait().map_err(|_| "core_process_failed")?.success() {
         return Err("core_process_failed".into());
     }
+    if bytes.last() != Some(&b'\n') || bytes[..bytes.len() - 1].contains(&b'\n') {
+        return Err("invalid_core_response".into());
+    }
     let response: Value = serde_json::from_slice(&bytes).map_err(|_| "invalid_core_response")?;
-    validate_response(response, id)
+    let method: Method =
+        serde_json::from_value(request["method"].clone()).map_err(|_| "invalid_request")?;
+    protocol::validate_response(&response, id, Some(method)).map_err(protocol_error)?;
+    let result = validate_response(response, id)?;
+    if method.as_str() == "get_capabilities" {
+        protocol::validate_capabilities(&result).map_err(protocol_error)?;
+    }
+    Ok(result)
 }
 
 #[tauri::command]
@@ -424,7 +486,7 @@ async fn core_call(
     app: AppHandle,
     operation: Operation,
     args: CallArguments,
-) -> Result<Value, String> {
+) -> Result<Value, HostError> {
     one_shot_operation(app, operation, args).await
 }
 
@@ -432,24 +494,24 @@ async fn one_shot_operation(
     app: AppHandle,
     operation: Operation,
     args: CallArguments,
-) -> Result<Value, String> {
+) -> Result<Value, HostError> {
     tauri::async_runtime::spawn_blocking(move || execute_core_call(app, operation, args))
         .await
-        .map_err(|_| "core_task_failed".to_string())?
+        .map_err(|_| HostError::from("core_task_failed"))?
 }
 
 #[tauri::command]
-async fn get_capabilities(app: AppHandle) -> Result<Value, String> {
+async fn get_capabilities(app: AppHandle) -> Result<Value, HostError> {
     one_shot_operation(app, Operation::GetCapabilities, CallArguments::default()).await
 }
 
 #[tauri::command]
-async fn list_sources(app: AppHandle) -> Result<Value, String> {
+async fn list_sources(app: AppHandle) -> Result<Value, HostError> {
     one_shot_operation(app, Operation::ListSources, CallArguments::default()).await
 }
 
 #[tauri::command]
-async fn list_game_sources(app: AppHandle, instance_id: String) -> Result<Value, String> {
+async fn list_game_sources(app: AppHandle, instance_id: String) -> Result<Value, HostError> {
     let args = CallArguments {
         instance_id: Some(instance_id),
         ..Default::default()
@@ -462,7 +524,7 @@ async fn set_source_enabled(
     app: AppHandle,
     source_id: String,
     enabled: bool,
-) -> Result<Value, String> {
+) -> Result<Value, HostError> {
     let args = CallArguments {
         source_id: Some(source_id),
         enabled: Some(enabled),
@@ -477,7 +539,7 @@ async fn set_game_source(
     instance_id: String,
     source_id: String,
     subscribed: bool,
-) -> Result<Value, String> {
+) -> Result<Value, HostError> {
     let args = CallArguments {
         instance_id: Some(instance_id),
         source_id: Some(source_id),
@@ -494,7 +556,7 @@ async fn discover_game(
     force: Option<bool>,
     name_hints: Option<Vec<String>>,
     preferred_language: Option<String>,
-) -> Result<Value, String> {
+) -> Result<Value, HostError> {
     let args = CallArguments {
         instance_id: Some(instance_id),
         force: Some(force.unwrap_or(false)),
@@ -510,14 +572,24 @@ async fn refresh_sources(
     app: AppHandle,
     scans: State<'_, SourceScans>,
     force: Option<bool>,
-) -> Result<Value, String> {
+) -> Result<Value, HostError> {
     // `refresh_sources` is a task-channel method (p1-host-contract §1.1 B): it
     // must run on the `serve-task` control channel (renew/cancel/EOF) exactly
     // like `scan_sources`. The one-shot `serve` face is rejected by the core
     // with `task_required`, which is the failure this command previously hit.
+    require_capabilities(&app)?;
     let id = request_id();
     let request = source_refresh_request(&id, common_params(&app)?, force.unwrap_or(false))?;
     let payload = serde_json::to_vec(&request).map_err(|_| "request_encoding_failed")?;
+    let mut request_line = payload.clone();
+    request_line.push(b'\n');
+    protocol::decode_request(
+        &request_line,
+        request["method"]
+            .as_str()
+            .is_some_and(|m| matches!(m, "install_patch" | "scan_sources" | "refresh_sources")),
+    )
+    .map_err(protocol_error)?;
 
     let scans = scans.inner().clone();
     let closing = app.state::<Closing>().inner().clone();
@@ -547,7 +619,7 @@ async fn refresh_sources(
             .map_err(|_| "core_process_failed")?;
         stdin.flush().map_err(|_| "core_process_failed")?;
 
-        let stdin_handle = Arc::new(Mutex::new(stdin));
+        let stdin_handle = Arc::new(Mutex::new(ClosableWriter(Some(stdin))));
         let cancelled = Arc::new(AtomicBool::new(false));
         let renew_stop = Arc::new(AtomicBool::new(false));
         // Refreshes hold the same 15s foreground lease as installs/scans, so the
@@ -571,22 +643,28 @@ async fn refresh_sources(
     let scans_for_task = scans.clone();
     let response_id = id.clone();
     let task = tauri::async_runtime::spawn_blocking(move || {
+        let rejection_child = child_handle.clone();
+        let rejection_stop = renew_stop.clone();
         let reader = thread::spawn(move || {
-            read_refresh_task_output(stdout, response_id, app_for_reader, progress)
+            let result = read_refresh_task_output(stdout, response_id, app_for_reader, progress);
+            if result.is_err() {
+                rejection_stop.store(true, Ordering::SeqCst);
+                // This source lookup child owns no installer game writes or
+                // rollback. Installer rejection uses cancel/EOF instead.
+                if let Ok(mut child) = rejection_child.lock() {
+                    let _ = child.kill();
+                }
+            }
+            result
         });
-        let status = match child_handle.lock() {
-            Ok(mut child) => child.wait().map_err(|_| "core_process_failed".to_string()),
-            Err(_) => Err("core_process_failed".to_string()),
-        };
+        let status = wait_core_child(&child_handle);
         let response = match reader.join() {
             Ok(response) => response,
-            Err(_) => Err("core_process_failed".to_string()),
+            Err(_) => Err(HostError::from("core_process_failed")),
         };
-        let result = match status {
-            Ok(status) if status.success() => response,
-            Ok(_) => Err("core_process_failed".into()),
-            Err(error) => Err(error),
-        };
+        // A validated terminal is authoritative even if the process fails
+        // during teardown. Incomplete or corrupt streams already return Err.
+        let result = task_terminal_result(response, status);
         // Stop lease forwarding, then drop the job so its stdin is closed
         // (EOF is equivalent to `cancel`, p1-host-contract §1.1 C/§5.3).
         renew_stop.store(true, Ordering::SeqCst);
@@ -607,11 +685,12 @@ async fn refresh_sources(
         }
         result
     });
-    task.await.map_err(|_| "core_task_failed".to_string())?
+    task.await
+        .map_err(|_| HostError::from("core_task_failed"))?
 }
 
 #[tauri::command]
-async fn add_source(app: AppHandle, rule: Value) -> Result<Value, String> {
+async fn add_source(app: AppHandle, rule: Value) -> Result<Value, HostError> {
     let args = CallArguments {
         rule: Some(rule),
         ..Default::default()
@@ -619,7 +698,7 @@ async fn add_source(app: AppHandle, rule: Value) -> Result<Value, String> {
     one_shot_operation(app, Operation::AddSource, args).await
 }
 
-fn valid_archive(value: String) -> Result<PathBuf, String> {
+fn valid_archive(value: String) -> Result<PathBuf, HostError> {
     let path = PathBuf::from(value);
     if !path.is_file()
         || path
@@ -635,11 +714,35 @@ fn valid_archive(value: String) -> Result<PathBuf, String> {
 /// Writes one newline-terminated control line to the `serve-task` stdin channel
 /// (`renew`/`cancel`, p1-host-contract §1.1 C). Generic over the writer so the
 /// wire shape can be asserted without spawning the core.
-fn write_control_line(writer: &mut impl Write, line: &[u8]) -> Result<(), String> {
+fn task_terminal_result(
+    response: Result<Value, HostError>,
+    exit: Result<std::process::ExitStatus, HostError>,
+) -> Result<Value, HostError> {
+    if response.is_ok() && !exit.as_ref().is_ok_and(|status| status.success()) {
+        eprintln!("core_process_failed_after_terminal");
+    }
+    response
+}
+
+fn wait_core_child(child: &ChildHandle) -> Result<std::process::ExitStatus, HostError> {
+    loop {
+        if let Some(status) = child
+            .lock()
+            .map_err(|_| "core_process_failed")?
+            .try_wait()
+            .map_err(|_| "core_process_failed")?
+        {
+            return Ok(status);
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+}
+
+fn write_control_line(writer: &mut impl Write, line: &[u8]) -> Result<(), HostError> {
     writer
         .write_all(line)
         .and_then(|_| writer.flush())
-        .map_err(|_| "control_write_failed".to_string())
+        .map_err(|_| HostError::from("control_write_failed"))
 }
 
 /// Interval between forwarded `renew` control lines. Kept well below the 15s
@@ -690,22 +793,136 @@ where
     })
 }
 
-fn cancel_job(stdin: &StdinHandle, cancelled: &AtomicBool) -> Result<(), String> {
+fn cancel_job(stdin: &StdinHandle, cancelled: &AtomicBool) -> Result<(), HostError> {
     cancelled.store(true, Ordering::SeqCst);
     let mut stdin = stdin.lock().map_err(|_| "job_state_unavailable")?;
     write_control_line(&mut *stdin, b"cancel\n")
 }
 
-fn request_cancel(job: &ActiveJob) -> Result<(), String> {
+/// Wire rejection revokes the lease and closes the control pipe; it never
+/// terminates the writer process while it may be applying or rolling back.
+fn cancel_and_close<W: Write>(
+    stdin: &Arc<Mutex<ClosableWriter<W>>>,
+    stop: &AtomicBool,
+    cancelled: &AtomicBool,
+) {
+    stop.store(true, Ordering::SeqCst);
+    cancelled.store(true, Ordering::SeqCst);
+    if let Ok(mut control) = stdin.lock() {
+        let _ = write_control_line(&mut *control, b"cancel\n");
+        control.0.take();
+    }
+}
+
+const INSTALL_DRAIN_TIMEOUT: Duration = Duration::from_secs(30);
+const INSTALL_DRAIN_BYTES: usize = 64 * 1024 * 1024;
+enum InstallReaderMessage {
+    Rejected(HostError),
+    Terminal(Value),
+    Finished(Result<Value, HostError>),
+}
+
+fn wait_core_until(
+    child: &ChildHandle,
+    deadline: std::time::Instant,
+) -> Result<std::process::ExitStatus, HostError> {
+    loop {
+        if let Some(status) = child
+            .lock()
+            .map_err(|_| "core_process_failed")?
+            .try_wait()
+            .map_err(|_| "core_process_failed")?
+        {
+            return Ok(status);
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err("core_process_shutdown_pending".into());
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+}
+
+fn drain_install_terminal(reader: &mut impl BufRead, request_id: &str) {
+    let mut consumed = 0usize;
+    while let Ok(Some((line, oversized))) = read_bounded_line(reader) {
+        consumed = consumed.saturating_add(line.len());
+        if oversized || consumed > INSTALL_DRAIN_BYTES {
+            return;
+        }
+        if let Ok(value) = serde_json::from_slice::<Value>(&line) {
+            if value.get("event").is_none()
+                && protocol::validate_response(&value, request_id, Some(Method::InstallPatch))
+                    .is_ok()
+            {
+                return;
+            }
+        }
+    }
+}
+
+/// Late telemetry is untrusted teardown noise. Extra terminal frames are
+/// rejected diagnostically, while the first receipt remains authoritative.
+fn drain_terminal_tail(reader: &mut impl BufRead) -> usize {
+    let mut consumed = 0usize;
+    let mut rejected = 0usize;
+    while let Ok(Some((line, oversized))) = read_bounded_line(reader) {
+        consumed = consumed.saturating_add(line.len());
+        if oversized || consumed > INSTALL_DRAIN_BYTES {
+            eprintln!("response_too_large_after_terminal");
+            return rejected;
+        }
+        match serde_json::from_slice::<Value>(&line) {
+            Ok(value) if value.get("event").is_some() => {}
+            _ => {
+                rejected += 1;
+                eprintln!("invalid_core_response_after_terminal");
+            }
+        }
+    }
+    rejected
+}
+
+fn close_control<W: Write>(stdin: &Arc<Mutex<ClosableWriter<W>>>) {
+    if let Ok(mut control) = stdin.lock() {
+        control.0.take();
+    }
+}
+
+fn read_install_task_output(
+    stdout: impl Read,
+    request_id: &str,
+    progress: Arc<Mutex<Progress>>,
+    mut reject: impl FnMut(&HostError),
+    mut terminal: impl FnMut(&Value),
+) -> Result<Value, HostError> {
+    let mut reader = BufReader::new(stdout);
+    let result = read_core_stream(&mut reader, request_id, Method::InstallPatch, |_, value| {
+        let parsed =
+            serde_json::from_value::<Progress>(value).map_err(|_| "invalid_core_response")?;
+        *progress.lock().map_err(|_| "job_state_unavailable")? = parsed;
+        Ok(())
+    });
+    if let Err(ref error) = result {
+        reject(error);
+        drain_install_terminal(&mut reader, request_id);
+    } else if let Ok(ref value) = result {
+        terminal(value);
+        drain_terminal_tail(&mut reader);
+    }
+    result
+}
+
+fn request_cancel(job: &ActiveJob) -> Result<(), HostError> {
     cancel_job(&job.stdin, &job.cancelled)
 }
 
-fn request_source_cancel(job: &SourceScanJob) -> Result<(), String> {
+fn request_source_cancel(job: &SourceScanJob) -> Result<(), HostError> {
     cancel_job(&job.stdin, &job.cancelled)
 }
 
 /// Recognizes the streaming source events the CLI sends before the single final
 /// response; anything else is treated as the terminal response.
+#[cfg(test)]
 fn source_event_name(value: &Value) -> Option<&'static str> {
     match value.get("event").and_then(Value::as_str) {
         Some("source_progress") => Some("source_progress"),
@@ -740,211 +957,115 @@ fn read_bounded_line(reader: &mut impl BufRead) -> std::io::Result<Option<(Vec<u
     }
 }
 
+/// One bounded parser for all task channels. Shared protocol validators own
+/// event fields and ordering; callbacks only apply accepted host projections.
+fn read_core_stream(
+    reader: &mut impl BufRead,
+    request_id: &str,
+    method: Method,
+    mut event_handler: impl FnMut(&str, Value) -> Result<(), HostError>,
+) -> Result<Value, HostError> {
+    let mut sequence = EventSequence::new(request_id.to_string());
+    while let Some((line, oversized)) =
+        read_bounded_line(reader).map_err(|_| "core_process_failed")?
+    {
+        if oversized {
+            return Err("response_too_large".into());
+        }
+        if line.last() != Some(&b'\n') {
+            return Err("invalid_core_response".into());
+        }
+        let value: Value = serde_json::from_slice(&line).map_err(|_| "invalid_core_response")?;
+        if value.get("event").is_some() {
+            // Only telemetry preceding the first validated terminal is
+            // authoritative. The terminal ends this parser lifecycle.
+            protocol::validate_event(&value, request_id).map_err(protocol_error)?;
+            if !sequence.accept(&value).map_err(protocol_error)? {
+                continue;
+            }
+            let event = value["event"]
+                .as_str()
+                .ok_or("invalid_core_response")?
+                .to_owned();
+            let allowed = match method.as_str() {
+                "install_patch" => event == "install_progress",
+                "scan_sources" => {
+                    event == "source_progress"
+                        || (event == "source_update" && value.get("discovery").is_some())
+                }
+                "refresh_sources" => event == "source_update" && value.get("source_id").is_some(),
+                _ => false,
+            };
+            if !allowed {
+                return Err("invalid_core_response".into());
+            }
+            event_handler(&event, value)?;
+        } else {
+            protocol::validate_response(&value, request_id, Some(method))
+                .map_err(protocol_error)?;
+            sequence.finish();
+            return validate_response(value, request_id);
+        }
+    }
+    Err("core_process_failed".into())
+}
+
+#[cfg(test)]
 fn read_task_output(
     stdout: impl Read,
     request_id: String,
     progress: Arc<Mutex<Progress>>,
-) -> Result<Value, String> {
-    let mut reader = BufReader::new(stdout);
-    let mut final_response = None;
-    let mut stream_error = None;
-    let mut max_sequence: Option<u64> = None;
-    loop {
-        let Some((line, oversized)) =
-            read_bounded_line(&mut reader).map_err(|_| "core_process_failed")?
-        else {
-            break;
-        };
-        if oversized {
-            stream_error.get_or_insert("response_too_large".to_string());
-            continue;
-        }
-        let value: Value = match serde_json::from_slice(&line) {
-            Ok(value) => value,
-            Err(_) => {
-                stream_error.get_or_insert("invalid_core_response".to_string());
-                continue;
-            }
-        };
-        if value["event"] == "install_progress" {
-            // Events after the terminal line are stray late events and ignored.
-            if final_response.is_some() {
-                continue;
-            }
-            // Deduplicate by `(request_id, sequence)`: anything bound to another
-            // task or not newer than the last seen event is dropped
-            // (p1-host-contract §2.4).
-            let event_request = value["request_id"].as_str().unwrap_or_default();
-            if event_request != request_id {
-                continue;
-            }
-            let Some(sequence) = value["sequence"].as_u64() else {
-                stream_error.get_or_insert("invalid_core_response".to_string());
-                continue;
-            };
-            if max_sequence.is_some_and(|max| sequence <= max) {
-                continue;
-            }
-            max_sequence = Some(sequence);
-            match serde_json::from_value::<Progress>(value) {
-                Ok(value) => match progress.lock() {
-                    Ok(mut current) => *current = value,
-                    Err(_) => {
-                        stream_error.get_or_insert("job_state_unavailable".to_string());
-                    }
-                },
-                Err(_) => {
-                    stream_error.get_or_insert("invalid_core_response".to_string());
-                }
-            }
-        } else if final_response.is_some() {
-            stream_error.get_or_insert("invalid_core_response".to_string());
-        } else {
-            final_response = Some(value);
-        }
-    }
-    if let Some(error) = stream_error {
-        return Err(error);
-    }
-    final_response
-        .ok_or_else(|| "core_process_failed".into())
-        .and_then(|response| validate_response(response, &request_id))
+) -> Result<Value, HostError> {
+    read_core_stream(
+        &mut BufReader::new(stdout),
+        &request_id,
+        Method::InstallPatch,
+        |_, value| {
+            let parsed =
+                serde_json::from_value::<Progress>(value).map_err(|_| "invalid_core_response")?;
+            *progress.lock().map_err(|_| "job_state_unavailable")? = parsed;
+            Ok(())
+        },
+    )
 }
 
-/// Reads a `serve-task` `scan_sources` stream: forwards `source_progress` /
-/// `source_update` to the frontend, mirrors progress for `source_scan_status`,
-/// and returns the single final aggregated response.
 fn read_source_task_output(
     stdout: impl Read,
     request_id: String,
     app: AppHandle,
     progress: Arc<Mutex<SourceProgress>>,
-) -> Result<Value, String> {
-    let mut reader = BufReader::new(stdout);
-    let mut final_response = None;
-    let mut stream_error = None;
-    loop {
-        let Some((line, oversized)) =
-            read_bounded_line(&mut reader).map_err(|_| "core_process_failed")?
-        else {
-            break;
-        };
-        if oversized {
-            stream_error.get_or_insert("response_too_large".to_string());
-            continue;
-        }
-        let value: Value = match serde_json::from_slice(&line) {
-            Ok(value) => value,
-            Err(_) => {
-                stream_error.get_or_insert("invalid_core_response".to_string());
-                continue;
+) -> Result<Value, HostError> {
+    read_core_stream(
+        &mut BufReader::new(stdout),
+        &request_id,
+        Method::ScanSources,
+        |name, value| {
+            if name == "source_progress" {
+                let parsed = serde_json::from_value::<SourceProgress>(value.clone())
+                    .map_err(|_| "invalid_core_response")?;
+                *progress.lock().map_err(|_| "job_state_unavailable")? = parsed;
             }
-        };
-        match source_event_name(&value) {
-            Some("source_progress") => {
-                if let Ok(parsed) = serde_json::from_value::<SourceProgress>(value.clone()) {
-                    if let Ok(mut current) = progress.lock() {
-                        *current = parsed;
-                    }
-                }
-                // A closed event pipe must not abort the task reader.
-                let _ = app.emit("source_progress", value);
-            }
-            Some("source_update") => {
-                let _ = app.emit("source_update", value);
-            }
-            _ => {
-                if final_response.is_some() {
-                    stream_error.get_or_insert("invalid_core_response".to_string());
-                } else {
-                    final_response = Some(value);
-                }
-            }
-        }
-    }
-    if let Some(error) = stream_error {
-        return Err(error);
-    }
-    final_response
-        .ok_or_else(|| "core_process_failed".into())
-        .and_then(|response| validate_response(response, &request_id))
+            let _ = app.emit(name, value);
+            Ok(())
+        },
+    )
 }
 
-/// Shared reader for the `serve-task` `refresh_sources` stream. Splits the
-/// `source_update` events (`refresh_sources` streams `source_id`/`status` rather
-/// than the `scan_sources` `discovery` payload and emits no `source_progress`)
-/// from the single terminal response. Events are deduplicated by
-/// `(request_id, sequence)` (p1-host-contract §2.4) and forwarded through
-/// `emit`; the terminal `result` is validated and returned. Pure over `emit` so
-/// the event/terminal split can be asserted without an `AppHandle`.
 fn read_refresh_stream(
     stdout: impl Read,
     request_id: &str,
     mut emit: impl FnMut(&'static str, Value),
-    progress: &Arc<Mutex<SourceProgress>>,
-) -> Result<Value, String> {
-    let mut reader = BufReader::new(stdout);
-    let mut final_response = None;
-    let mut stream_error = None;
-    let mut max_sequence: Option<u64> = None;
-    loop {
-        let Some((line, oversized)) =
-            read_bounded_line(&mut reader).map_err(|_| "core_process_failed")?
-        else {
-            break;
-        };
-        if oversized {
-            stream_error.get_or_insert("response_too_large".to_string());
-            continue;
-        }
-        let value: Value = match serde_json::from_slice(&line) {
-            Ok(value) => value,
-            Err(_) => {
-                stream_error.get_or_insert("invalid_core_response".to_string());
-                continue;
-            }
-        };
-        let Some(event) = source_event_name(&value) else {
-            if final_response.is_some() {
-                stream_error.get_or_insert("invalid_core_response".to_string());
-            } else {
-                final_response = Some(value);
-            }
-            continue;
-        };
-        // Events after the terminal line are stray late events and ignored.
-        if final_response.is_some() {
-            continue;
-        }
-        // Deduplicate by `(request_id, sequence)`: an event bound to another
-        // task or not newer than the last accepted one is dropped
-        // (p1-host-contract §2.4).
-        if value["request_id"].as_str() != Some(request_id) {
-            continue;
-        }
-        let Some(sequence) = value["sequence"].as_u64() else {
-            stream_error.get_or_insert("invalid_core_response".to_string());
-            continue;
-        };
-        if max_sequence.is_some_and(|max| sequence <= max) {
-            continue;
-        }
-        max_sequence = Some(sequence);
-        if event == "source_progress" {
-            if let Ok(parsed) = serde_json::from_value::<SourceProgress>(value.clone()) {
-                if let Ok(mut current) = progress.lock() {
-                    *current = parsed;
-                }
-            }
-        }
-        emit(event, value);
-    }
-    if let Some(error) = stream_error {
-        return Err(error);
-    }
-    final_response
-        .ok_or_else(|| "core_process_failed".into())
-        .and_then(|response| validate_response(response, request_id))
+    _progress: &Arc<Mutex<SourceProgress>>,
+) -> Result<Value, HostError> {
+    read_core_stream(
+        &mut BufReader::new(stdout),
+        request_id,
+        Method::RefreshSources,
+        |_, value| {
+            emit("source_update", value);
+            Ok(())
+        },
+    )
 }
 
 /// Reads a `serve-task` `refresh_sources` stream and forwards each accepted
@@ -955,7 +1076,7 @@ fn read_refresh_task_output(
     request_id: String,
     app: AppHandle,
     progress: Arc<Mutex<SourceProgress>>,
-) -> Result<Value, String> {
+) -> Result<Value, HostError> {
     read_refresh_stream(
         stdout,
         &request_id,
@@ -979,8 +1100,8 @@ fn build_install_request(
     request_id: &str,
     archive: Option<PathBuf>,
     common: Value,
-) -> Result<Value, String> {
-    if !valid_id(instance_id) {
+) -> Result<Value, HostError> {
+    if !protocol::validate_id(instance_id, protocol::MAX_INSTANCE_ID_BYTES) {
         return Err("invalid_id".into());
     }
     for id in [release_id, selection_id].into_iter().flatten() {
@@ -1016,17 +1137,25 @@ fn build_install_request(
     }
     params["operation"] = json!(operation);
     params["cleanup_policy"] = json!("disabled");
-    params["request_id"] = json!(request_id);
     if let Some(path) = archive {
         params["archive"] = json!(path);
     }
     let request = json!({
-        "protocol_version": 3,
+        "protocol_version": PROTOCOL_VERSION,
         "request_id": request_id,
         "method": "install_patch",
         "params": params,
     });
     let payload = serde_json::to_vec(&request).map_err(|_| "request_encoding_failed")?;
+    let mut request_line = payload.clone();
+    request_line.push(b'\n');
+    protocol::decode_request(
+        &request_line,
+        request["method"]
+            .as_str()
+            .is_some_and(|m| matches!(m, "install_patch" | "scan_sources" | "refresh_sources")),
+    )
+    .map_err(protocol_error)?;
     if payload.len().saturating_add(1) > MAX_REQUEST {
         return Err("request_too_large".into());
     }
@@ -1044,8 +1173,9 @@ async fn start_install(
     operation: String,
     request_id: String,
     archive: Option<String>,
-) -> Result<Value, String> {
+) -> Result<Value, HostError> {
     let archive = archive.map(valid_archive).transpose()?;
+    require_capabilities(&app)?;
     let request = build_install_request(
         &instance_id,
         release_id.as_deref(),
@@ -1056,11 +1186,20 @@ async fn start_install(
         common_params(&app)?,
     )?;
     let payload = serde_json::to_vec(&request).map_err(|_| "request_encoding_failed")?;
+    let mut request_line = payload.clone();
+    request_line.push(b'\n');
+    protocol::decode_request(
+        &request_line,
+        request["method"]
+            .as_str()
+            .is_some_and(|m| matches!(m, "install_patch" | "scan_sources" | "refresh_sources")),
+    )
+    .map_err(protocol_error)?;
 
     let jobs = jobs.inner().clone();
     let closing = app.state::<Closing>().inner().clone();
     // Keep the mutex guard inside this block so no non-Send guard is held across the `.await` below.
-    let (child_handle, progress, stdout, renew_handle, renew_stop) = {
+    let (child_handle, control_stdin, cancelled, progress, stdout, renew_handle, renew_stop) = {
         let mut slot = jobs.0.lock().map_err(|_| "job_state_unavailable")?;
         if slot.is_some() {
             return Err("install_in_progress".into());
@@ -1080,7 +1219,7 @@ async fn start_install(
             .map_err(|_| "core_process_failed")?;
         stdin.flush().map_err(|_| "core_process_failed")?;
 
-        let stdin_handle = Arc::new(Mutex::new(stdin));
+        let stdin_handle = Arc::new(Mutex::new(ClosableWriter(Some(stdin))));
         let cancelled = Arc::new(AtomicBool::new(false));
         let renew_stop = Arc::new(AtomicBool::new(false));
         let renew_handle =
@@ -1093,45 +1232,129 @@ async fn start_install(
         };
         let child_handle = active.child.clone();
         let progress = active.progress.clone();
+        let control_stdin = active.stdin.clone();
+        let cancelled = active.cancelled.clone();
         *slot = Some(active);
-        (child_handle, progress, stdout, renew_handle, renew_stop)
+        (
+            child_handle,
+            control_stdin,
+            cancelled,
+            progress,
+            stdout,
+            renew_handle,
+            renew_stop,
+        )
     };
 
     let app_for_task = app.clone();
     let response_id = request_id.clone();
     let task = tauri::async_runtime::spawn_blocking(move || {
-        let reader = thread::spawn(move || read_task_output(stdout, response_id, progress));
-        let status = match child_handle.lock() {
-            Ok(mut child) => child.wait().map_err(|_| "core_process_failed".to_string()),
-            Err(_) => Err("core_process_failed".to_string()),
+        let (sender, messages) = std::sync::mpsc::channel();
+        let rejection_stop = renew_stop.clone();
+        let rejection_stdin = control_stdin.clone();
+        let rejection_cancelled = cancelled.clone();
+        let terminal_sender = sender.clone();
+        let terminal_stdin = control_stdin.clone();
+        let terminal_stop = renew_stop.clone();
+        let reader = thread::spawn(move || {
+            let result = read_install_task_output(
+                stdout,
+                &response_id,
+                progress,
+                |error| {
+                    cancel_and_close(&rejection_stdin, &rejection_stop, &rejection_cancelled);
+                    let _ = sender.send(InstallReaderMessage::Rejected(error.clone()));
+                },
+                |value| {
+                    terminal_stop.store(true, Ordering::SeqCst);
+                    close_control(&terminal_stdin);
+                    let _ = terminal_sender.send(InstallReaderMessage::Terminal(value.clone()));
+                },
+            );
+            let _ = sender.send(InstallReaderMessage::Finished(result));
+        });
+        let mut rejection = None;
+        let mut accepted_terminal = None;
+        let mut deadline = None;
+        let response = loop {
+            match messages.recv_timeout(Duration::from_millis(20)) {
+                Ok(InstallReaderMessage::Rejected(error)) => {
+                    rejection = Some(error);
+                    deadline = Some(std::time::Instant::now() + INSTALL_DRAIN_TIMEOUT);
+                }
+                Ok(InstallReaderMessage::Terminal(value)) => {
+                    accepted_terminal = Some(value);
+                    deadline = Some(std::time::Instant::now() + INSTALL_DRAIN_TIMEOUT);
+                }
+                Ok(InstallReaderMessage::Finished(result)) => break result,
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                    break accepted_terminal.clone().ok_or_else(|| {
+                        rejection
+                            .clone()
+                            .unwrap_or_else(|| "core_process_failed".into())
+                    });
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                    if deadline.is_some_and(|until| std::time::Instant::now() >= until) {
+                        break accepted_terminal.clone().ok_or_else(|| {
+                            rejection
+                                .clone()
+                                .unwrap_or_else(|| "core_process_failed".into())
+                        });
+                    }
+                }
+            }
         };
-        let response = match reader.join() {
-            Ok(response) => response,
-            Err(_) => Err("core_process_failed".to_string()),
-        };
-        let result = match status {
-            Ok(status) if status.success() => response,
-            Ok(_) => Err("core_process_failed".into()),
-            Err(error) => Err(error),
-        };
+        if response.is_err() {
+            cancel_and_close(&control_stdin, &renew_stop, &cancelled);
+        }
+        let status = wait_core_until(
+            &child_handle,
+            deadline.unwrap_or_else(|| std::time::Instant::now() + INSTALL_DRAIN_TIMEOUT),
+        );
+        let exited = status.is_ok();
+        if reader.is_finished() {
+            let _ = reader.join();
+        }
+        // A validated terminal is authoritative even if the process fails
+        // during teardown. Incomplete or corrupt streams already return Err.
+        let result = task_terminal_result(response, status);
         // Stop lease forwarding, then drop the job so its stdin is closed
         // (EOF is equivalent to `cancel`, p1-host-contract §1.1 C/§5.3).
         renew_stop.store(true, Ordering::SeqCst);
         renew_handle.thread().unpark();
         let _ = renew_handle.join();
-        if let Ok(mut current) = jobs.0.lock() {
-            current.take();
-        }
-        if closing.0.load(Ordering::SeqCst) {
-            app_for_task.exit(0);
+        if exited {
+            if let Ok(mut current) = jobs.0.lock() {
+                current.take();
+            }
+            if closing.0.load(Ordering::SeqCst) {
+                app_for_task.exit(0);
+            }
+        } else {
+            // Keep the active slot occupied until the writer really exits. A
+            // timeout is diagnostic, never permission to start a second write.
+            thread::spawn(move || {
+                if wait_core_child(&child_handle).is_ok() {
+                    if let Ok(mut current) = jobs.0.lock() {
+                        current.take();
+                    }
+                    if closing.0.load(Ordering::SeqCst) {
+                        app_for_task.exit(0);
+                    }
+                } else {
+                    eprintln!("core_process_shutdown_pending");
+                }
+            });
         }
         result
     });
-    task.await.map_err(|_| "core_task_failed".to_string())?
+    task.await
+        .map_err(|_| HostError::from("core_task_failed"))?
 }
 
 #[tauri::command]
-fn install_status(jobs: State<'_, Jobs>) -> Result<Value, String> {
+fn install_status(jobs: State<'_, Jobs>) -> Result<Value, HostError> {
     let active = jobs.0.lock().map_err(|_| "job_state_unavailable")?;
     let Some(job) = active.as_ref() else {
         return Ok(json!({"running":false,"cancelled":false,"progress":null}));
@@ -1149,7 +1372,7 @@ fn install_status(jobs: State<'_, Jobs>) -> Result<Value, String> {
 }
 
 #[tauri::command]
-fn cancel_install(jobs: State<'_, Jobs>) -> Result<bool, String> {
+fn cancel_install(jobs: State<'_, Jobs>) -> Result<bool, HostError> {
     let active = jobs.0.lock().map_err(|_| "job_state_unavailable")?;
     if let Some(job) = active.as_ref() {
         request_cancel(job)?;
@@ -1161,16 +1384,25 @@ fn cancel_install(jobs: State<'_, Jobs>) -> Result<bool, String> {
 
 /// Builds the `serve-task` `scan_sources` request and enforces the request-size
 /// bound. Pure so tests can assert the wire shape without spawning the core.
-fn source_scan_request(id: &str, common: Value, force: bool) -> Result<Value, String> {
+fn source_scan_request(id: &str, common: Value, force: bool) -> Result<Value, HostError> {
     let mut params = common;
     params["force"] = json!(force);
     let request = json!({
-        "protocol_version": 3,
+        "protocol_version": PROTOCOL_VERSION,
         "request_id": id,
         "method": "scan_sources",
         "params": params,
     });
     let payload = serde_json::to_vec(&request).map_err(|_| "request_encoding_failed")?;
+    let mut request_line = payload.clone();
+    request_line.push(b'\n');
+    protocol::decode_request(
+        &request_line,
+        request["method"]
+            .as_str()
+            .is_some_and(|m| matches!(m, "install_patch" | "scan_sources" | "refresh_sources")),
+    )
+    .map_err(protocol_error)?;
     if payload.len().saturating_add(1) > MAX_REQUEST {
         return Err("request_too_large".into());
     }
@@ -1183,16 +1415,25 @@ fn source_scan_request(id: &str, common: Value, force: bool) -> Result<Value, St
 /// exactly like [`source_scan_request`]; routing it through one-shot `serve` is
 /// rejected by the core with `task_required`. Pure so tests can assert the wire
 /// shape without spawning the core.
-fn source_refresh_request(id: &str, common: Value, force: bool) -> Result<Value, String> {
+fn source_refresh_request(id: &str, common: Value, force: bool) -> Result<Value, HostError> {
     let mut params = common;
     params["force"] = json!(force);
     let request = json!({
-        "protocol_version": 3,
+        "protocol_version": PROTOCOL_VERSION,
         "request_id": id,
         "method": "refresh_sources",
         "params": params,
     });
     let payload = serde_json::to_vec(&request).map_err(|_| "request_encoding_failed")?;
+    let mut request_line = payload.clone();
+    request_line.push(b'\n');
+    protocol::decode_request(
+        &request_line,
+        request["method"]
+            .as_str()
+            .is_some_and(|m| matches!(m, "install_patch" | "scan_sources" | "refresh_sources")),
+    )
+    .map_err(protocol_error)?;
     if payload.len().saturating_add(1) > MAX_REQUEST {
         return Err("request_too_large".into());
     }
@@ -1204,10 +1445,20 @@ async fn start_source_scan(
     app: AppHandle,
     scans: State<'_, SourceScans>,
     force: Option<bool>,
-) -> Result<Value, String> {
+) -> Result<Value, HostError> {
+    require_capabilities(&app)?;
     let id = request_id();
     let request = source_scan_request(&id, common_params(&app)?, force.unwrap_or(false))?;
     let payload = serde_json::to_vec(&request).map_err(|_| "request_encoding_failed")?;
+    let mut request_line = payload.clone();
+    request_line.push(b'\n');
+    protocol::decode_request(
+        &request_line,
+        request["method"]
+            .as_str()
+            .is_some_and(|m| matches!(m, "install_patch" | "scan_sources" | "refresh_sources")),
+    )
+    .map_err(protocol_error)?;
 
     let scans = scans.inner().clone();
     let closing = app.state::<Closing>().inner().clone();
@@ -1234,7 +1485,7 @@ async fn start_source_scan(
             .map_err(|_| "core_process_failed")?;
         stdin.flush().map_err(|_| "core_process_failed")?;
 
-        let stdin_handle = Arc::new(Mutex::new(stdin));
+        let stdin_handle = Arc::new(Mutex::new(ClosableWriter(Some(stdin))));
         let cancelled = Arc::new(AtomicBool::new(false));
         let renew_stop = Arc::new(AtomicBool::new(false));
         // Source scans run on the same 15s foreground lease as installs, so the
@@ -1258,22 +1509,28 @@ async fn start_source_scan(
     let scans_for_task = scans.clone();
     let response_id = id.clone();
     let task = tauri::async_runtime::spawn_blocking(move || {
+        let rejection_child = child_handle.clone();
+        let rejection_stop = renew_stop.clone();
         let reader = thread::spawn(move || {
-            read_source_task_output(stdout, response_id, app_for_reader, progress)
+            let result = read_source_task_output(stdout, response_id, app_for_reader, progress);
+            if result.is_err() {
+                rejection_stop.store(true, Ordering::SeqCst);
+                // This source lookup child owns no installer game writes or
+                // rollback. Installer rejection uses cancel/EOF instead.
+                if let Ok(mut child) = rejection_child.lock() {
+                    let _ = child.kill();
+                }
+            }
+            result
         });
-        let status = match child_handle.lock() {
-            Ok(mut child) => child.wait().map_err(|_| "core_process_failed".to_string()),
-            Err(_) => Err("core_process_failed".to_string()),
-        };
+        let status = wait_core_child(&child_handle);
         let response = match reader.join() {
             Ok(response) => response,
-            Err(_) => Err("core_process_failed".to_string()),
+            Err(_) => Err(HostError::from("core_process_failed")),
         };
-        let result = match status {
-            Ok(status) if status.success() => response,
-            Ok(_) => Err("core_process_failed".into()),
-            Err(error) => Err(error),
-        };
+        // A validated terminal is authoritative even if the process fails
+        // during teardown. Incomplete or corrupt streams already return Err.
+        let result = task_terminal_result(response, status);
         // Stop lease forwarding, then drop the job so its stdin is closed
         // (EOF is equivalent to `cancel`, p1-host-contract §1.1 C/§5.3).
         renew_stop.store(true, Ordering::SeqCst);
@@ -1294,11 +1551,12 @@ async fn start_source_scan(
         }
         result
     });
-    task.await.map_err(|_| "core_task_failed".to_string())?
+    task.await
+        .map_err(|_| HostError::from("core_task_failed"))?
 }
 
 #[tauri::command]
-fn source_scan_status(scans: State<'_, SourceScans>) -> Result<Value, String> {
+fn source_scan_status(scans: State<'_, SourceScans>) -> Result<Value, HostError> {
     let slot = scans.0.lock().map_err(|_| "job_state_unavailable")?;
     let results = slot.results.clone();
     if let Some(job) = slot.active.as_ref() {
@@ -1324,7 +1582,7 @@ fn source_scan_status(scans: State<'_, SourceScans>) -> Result<Value, String> {
 }
 
 #[tauri::command]
-fn cancel_source_scan(scans: State<'_, SourceScans>) -> Result<bool, String> {
+fn cancel_source_scan(scans: State<'_, SourceScans>) -> Result<bool, HostError> {
     let slot = scans.0.lock().map_err(|_| "job_state_unavailable")?;
     if let Some(job) = slot.active.as_ref() {
         request_source_cancel(job)?;
@@ -1335,7 +1593,7 @@ fn cancel_source_scan(scans: State<'_, SourceScans>) -> Result<bool, String> {
 }
 
 #[tauri::command]
-fn choose_archive(app: AppHandle) -> Result<Option<String>, String> {
+fn choose_archive(app: AppHandle) -> Result<Option<String>, HostError> {
     let file = app
         .dialog()
         .file()
@@ -1359,7 +1617,7 @@ fn choose_archive(app: AppHandle) -> Result<Option<String>, String> {
 }
 
 #[tauri::command]
-fn open_source(app: AppHandle, url: String) -> Result<(), String> {
+fn open_source(app: AppHandle, url: String) -> Result<(), HostError> {
     if !url.starts_with("https://") || url.chars().any(char::is_control) {
         return Err("invalid_source_url".into());
     }
@@ -1427,7 +1685,7 @@ mod tests {
     use super::*;
 
     fn common() -> Value {
-        json!({"platform": "windows", "state_dir": "C:/state"})
+        json!({"host":{"roots":[],"catalog":null,"signed_catalog":null,"trust_keys":null,"platform":"windows","state_dir":"C:/state"}})
     }
 
     #[test]
@@ -1486,8 +1744,8 @@ mod tests {
             common(),
         )
         .unwrap();
-        assert_eq!(params["state_dir"], "C:/state");
-        assert_eq!(params["platform"], "windows");
+        assert_eq!(params["host"]["state_dir"], "C:/state");
+        assert_eq!(params["host"]["platform"], "windows");
         assert_eq!(params["instance_id"], "inst-1");
         assert_eq!(params["source_id"], "kagura-cn");
         assert_eq!(params["subscribed"], true);
@@ -1500,7 +1758,7 @@ mod tests {
 
     #[test]
     fn add_source_passes_rule_value_through() {
-        let rule = json!({"id": "custom", "adapter_id": "table"});
+        let rule = json!({"id":"custom","name":"Custom","adapter":"table","enabled":true,"pages":[],"page_hosts":[]});
         let params = build_params(
             "add_source",
             CallArguments {
@@ -1552,13 +1810,16 @@ mod tests {
             "preview",
             CallArguments {
                 instance_id: Some("inst-1".into()),
-                selection_id: Some("zip-selection-abc".into()),
+                selection_id: Some("zip-selection-0123456789abcdef01234567-10".into()),
                 ..Default::default()
             },
             common(),
         )
         .unwrap();
-        assert_eq!(by_selection["selection_id"], "zip-selection-abc");
+        assert_eq!(
+            by_selection["selection_id"],
+            "zip-selection-0123456789abcdef01234567-10"
+        );
         assert!(by_selection.get("release_id").is_none());
 
         // Both provided -> invalid_request.
@@ -1568,7 +1829,7 @@ mod tests {
                 CallArguments {
                     instance_id: Some("inst-1".into()),
                     release_id: Some("release-1".into()),
-                    selection_id: Some("zip-selection-abc".into()),
+                    selection_id: Some("zip-selection-0123456789abcdef01234567-10".into()),
                     ..Default::default()
                 },
                 common(),
@@ -1616,34 +1877,37 @@ mod tests {
             common(),
         )
         .unwrap();
-        assert_eq!(signed["protocol_version"], 3);
+        assert_eq!(signed["protocol_version"], PROTOCOL_VERSION);
         assert_eq!(signed["method"], "install_patch");
         assert_eq!(signed["request_id"], "req-1");
         assert_eq!(signed["params"]["instance_id"], "inst-1");
         assert_eq!(signed["params"]["release_id"], "release-1");
         assert_eq!(signed["params"]["operation"], "install");
         assert_eq!(signed["params"]["cleanup_policy"], "disabled");
-        assert_eq!(signed["params"]["request_id"], "req-1");
+        assert!(signed["params"].get("request_id").is_none());
         assert!(signed["params"].get("selection_id").is_none());
 
         let dynamic = build_install_request(
             "inst-1",
             None,
-            Some("zip-selection-abc"),
+            Some("zip-selection-0123456789abcdef01234567-10"),
             "reinstall",
             "req-2",
             None,
             common(),
         )
         .unwrap();
-        assert_eq!(dynamic["params"]["selection_id"], "zip-selection-abc");
+        assert_eq!(
+            dynamic["params"]["selection_id"],
+            "zip-selection-0123456789abcdef01234567-10"
+        );
         assert_eq!(dynamic["params"]["operation"], "reinstall");
         assert!(dynamic["params"].get("release_id").is_none());
 
         let overwrite = build_install_request(
             "inst-1",
             None,
-            Some("exe-selection-abc"),
+            Some("exe-selection-0123456789abcdef01234567-10"),
             "overwrite",
             "req-3",
             None,
@@ -1651,7 +1915,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(overwrite["params"]["operation"], "overwrite");
-        assert_eq!(overwrite["params"]["request_id"], "req-3");
+        assert!(overwrite["params"].get("request_id").is_none());
     }
 
     #[test]
@@ -1660,7 +1924,7 @@ mod tests {
             build_install_request(
                 "inst-1",
                 Some("release-1"),
-                Some("zip-selection-abc"),
+                Some("zip-selection-0123456789abcdef01234567-10"),
                 "install",
                 "req-1",
                 None,
@@ -1678,7 +1942,7 @@ mod tests {
             build_install_request(
                 "inst-1",
                 None,
-                Some("zip-selection-abc"),
+                Some("zip-selection-0123456789abcdef01234567-10"),
                 "install",
                 "req-1",
                 Some(PathBuf::from("C:/patches/patch.zip")),
@@ -1757,12 +2021,15 @@ mod tests {
         assert!(unknown.is_err());
 
         let camel = serde_json::from_str::<CallArguments>(
-            r#"{"instanceId":"i","sourceId":"s","selectionId":"zip-selection-abc","preferredLanguage":"zh-CN"}"#,
+            r#"{"instanceId":"i","sourceId":"s","selectionId":"zip-selection-0123456789abcdef01234567-10","preferredLanguage":"zh-CN"}"#,
         )
         .unwrap();
         assert_eq!(camel.instance_id.as_deref(), Some("i"));
         assert_eq!(camel.source_id.as_deref(), Some("s"));
-        assert_eq!(camel.selection_id.as_deref(), Some("zip-selection-abc"));
+        assert_eq!(
+            camel.selection_id.as_deref(),
+            Some("zip-selection-0123456789abcdef01234567-10")
+        );
         assert_eq!(camel.preferred_language.as_deref(), Some("zh-CN"));
 
         // `recordId` belonged to the deleted `resolve_source_record` command.
@@ -1781,23 +2048,23 @@ mod tests {
     #[test]
     fn source_scan_request_shape_and_force() {
         let request = source_scan_request("host-1-2", common(), false).unwrap();
-        assert_eq!(request["protocol_version"], 3);
+        assert_eq!(request["protocol_version"], PROTOCOL_VERSION);
         assert_eq!(request["request_id"], "host-1-2");
         assert_eq!(request["method"], "scan_sources");
-        assert_eq!(request["params"]["state_dir"], "C:/state");
+        assert_eq!(request["params"]["host"]["state_dir"], "C:/state");
         assert_eq!(request["params"]["force"], false);
     }
 
     #[test]
     fn source_refresh_request_shape_is_serve_task_and_carries_force() {
         let request = source_refresh_request("host-9-1", common(), true).unwrap();
-        // Mirrors `source_scan_request`: same v3 envelope, same host-injected
+        // Mirrors `source_scan_request`: same v4 envelope, same host-injected
         // params, task-channel method name, and the `force` flag.
-        assert_eq!(request["protocol_version"], 3);
+        assert_eq!(request["protocol_version"], PROTOCOL_VERSION);
         assert_eq!(request["request_id"], "host-9-1");
         assert_eq!(request["method"], "refresh_sources");
-        assert_eq!(request["params"]["state_dir"], "C:/state");
-        assert_eq!(request["params"]["platform"], "windows");
+        assert_eq!(request["params"]["host"]["state_dir"], "C:/state");
+        assert_eq!(request["params"]["host"]["platform"], "windows");
         assert_eq!(request["params"]["force"], true);
         // The command must not be assembled as a one-shot `serve` method; that
         // route is what the core rejected with `task_required`.
@@ -1808,27 +2075,28 @@ mod tests {
     fn refresh_stream_deduplicates_and_returns_statuses() {
         fn update(request_id: &str, sequence: u64, source_id: &str) -> Value {
             json!({
-                "protocol_version": 3,
+                "protocol_version": PROTOCOL_VERSION,
                 "request_id": request_id,
                 "sequence": sequence,
                 "event": "source_update",
                 "source_id": source_id,
-                "status": {"status": "source_refreshed"},
+                "status": {"code":"source_refreshed","checked_at":0,"cached_at":null,"entry_count":0},
                 "settings_revision": 7,
             })
         }
         let terminal = json!({
-            "protocol_version": 3,
+            "protocol_version": PROTOCOL_VERSION,
             "request_id": "r",
             "ok": true,
-            "result": {"settings_revision": 7, "statuses": [{"status": "source_refreshed"}]},
+            "result": {"settings_revision": 7, "statuses": [{"code":"source_refreshed","checked_at":0,"cached_at":null,"entry_count":0}]},
         });
+        protocol::validate_event(&update("r", 0, "kagura"), "r").unwrap();
+        protocol::validate_response(&terminal, "r", Some(Method::RefreshSources)).unwrap();
+        protocol::validate_response(&terminal, "r", None).unwrap();
         let input = task_stream(&[
             update("r", 0, "kagura"),
             // Duplicate sequence for the same task: dropped.
             update("r", 0, "kagura"),
-            // Event bound to a previous/other task: dropped.
-            update("other", 1, "ghost"),
             update("r", 1, "moe"),
             terminal,
             // Events after the terminal line are ignored.
@@ -1844,7 +2112,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(result["settings_revision"], 7);
-        assert_eq!(result["statuses"][0]["status"], "source_refreshed");
+        assert_eq!(result["statuses"][0]["code"], "source_refreshed");
         assert_eq!(forwarded.len(), 2);
         assert_eq!(forwarded[0]["source_id"], "kagura");
         assert_eq!(forwarded[1]["source_id"], "moe");
@@ -1854,19 +2122,19 @@ mod tests {
     fn refresh_stream_rejects_malformed_sequence() {
         fn update(request_id: &str, sequence: u64) -> Value {
             json!({
-                "protocol_version": 3,
+                "protocol_version": PROTOCOL_VERSION,
                 "request_id": request_id,
                 "sequence": sequence,
                 "event": "source_update",
                 "source_id": "kagura",
-                "status": {"status": "source_refreshed"},
+                "status": {"code":"source_refreshed","checked_at":0,"cached_at":null,"entry_count":0},
                 "settings_revision": 7,
             })
         }
         let mut malformed = update("r", 0);
         malformed.as_object_mut().unwrap().remove("sequence");
         let terminal = json!({
-            "protocol_version": 3,
+            "protocol_version": PROTOCOL_VERSION,
             "request_id": "r",
             "ok": true,
             "result": {"settings_revision": 7, "statuses": []},
@@ -1883,7 +2151,7 @@ mod tests {
     #[test]
     fn source_stream_separates_events_from_final_response() {
         let progress = json!({
-            "protocol_version": 3,
+            "protocol_version": PROTOCOL_VERSION,
             "request_id": "r",
             "sequence": 0,
             "event": "source_progress",
@@ -1893,7 +2161,7 @@ mod tests {
             "settings_revision": 5,
         });
         let update = json!({
-            "protocol_version": 3,
+            "protocol_version": PROTOCOL_VERSION,
             "request_id": "r",
             "sequence": 1,
             "event": "source_update",
@@ -1903,7 +2171,7 @@ mod tests {
             "discovery": {},
         });
         let terminal = json!({
-            "protocol_version": 3,
+            "protocol_version": PROTOCOL_VERSION,
             "request_id": "r",
             "ok": true,
             "result": {"settings_revision": 5, "results": []},
@@ -1912,7 +2180,9 @@ mod tests {
         assert_eq!(source_event_name(&update), Some("source_update"));
         assert_eq!(source_event_name(&terminal), None);
 
-        let parsed: SourceProgress = serde_json::from_value(progress).unwrap();
+        let parsed = serde_json::from_value::<SourceProgress>(progress)
+            .unwrap()
+            .unwrap();
         assert_eq!(parsed.completed, 1);
         assert_eq!(parsed.total, 2);
         assert!(parsed.running);
@@ -1920,14 +2190,14 @@ mod tests {
     }
 
     #[test]
-    fn validate_response_requires_v3_and_preserves_error_detail() {
+    fn validate_response_requires_v4_and_preserves_error_detail() {
         let ok = json!({
-            "protocol_version": 3,
+            "protocol_version": PROTOCOL_VERSION,
             "request_id": "r",
             "ok": true,
-            "result": {"state": "committed"},
+            "result": [],
         });
-        assert_eq!(validate_response(ok, "r").unwrap()["state"], "committed");
+        assert_eq!(validate_response(ok, "r").unwrap(), json!([]));
 
         let v2 = json!({
             "protocol_version": 2,
@@ -1937,11 +2207,11 @@ mod tests {
         });
         assert_eq!(
             validate_response(v2, "r").unwrap_err(),
-            "invalid_core_response"
+            "unsupported_protocol"
         );
 
         let mismatched_id = json!({
-            "protocol_version": 3,
+            "protocol_version": PROTOCOL_VERSION,
             "request_id": "other",
             "ok": true,
             "result": {},
@@ -1952,7 +2222,7 @@ mod tests {
         );
 
         let coded = json!({
-            "protocol_version": 3,
+            "protocol_version": PROTOCOL_VERSION,
             "request_id": "r",
             "ok": false,
             "error": {"code": "needs_recovery"},
@@ -1960,18 +2230,17 @@ mod tests {
         assert_eq!(validate_response(coded, "r").unwrap_err(), "needs_recovery");
 
         let detailed = json!({
-            "protocol_version": 3,
+            "protocol_version": PROTOCOL_VERSION,
             "request_id": "r",
             "ok": false,
             "error": {"code": "download_failed", "detail": "HTTP 404"},
         });
-        assert_eq!(
-            validate_response(detailed, "r").unwrap_err(),
-            "download_failed: HTTP 404"
-        );
+        let error = validate_response(detailed, "r").unwrap_err();
+        assert_eq!(error.code, "download_failed");
+        assert_eq!(error.detail.as_deref(), Some("HTTP 404"));
 
         let empty_detail = json!({
-            "protocol_version": 3,
+            "protocol_version": PROTOCOL_VERSION,
             "request_id": "r",
             "ok": false,
             "error": {"code": "cancelled", "detail": ""},
@@ -1986,9 +2255,9 @@ mod tests {
     fn error_detail_is_truncated_to_the_frozen_bound() {
         let long = "x".repeat(MAX_DETAIL + 500);
         let rendered = truncate_detail(&long);
-        // The rendered value *including* the ellipsis must honour ≤2 KiB.
+        // The bounded wire detail has no presentation ellipsis.
         assert!(rendered.len() <= MAX_DETAIL);
-        assert!(rendered.ends_with('…'));
+        assert!(!rendered.ends_with('…'));
         assert_eq!(rendered.len(), MAX_DETAIL);
         assert_eq!(truncate_detail("short"), "short");
 
@@ -1997,8 +2266,8 @@ mod tests {
         let multibyte = "补".repeat(MAX_DETAIL); // 3 bytes per code point
         let rendered = truncate_detail(&multibyte);
         assert!(rendered.len() <= MAX_DETAIL);
-        assert!(rendered.ends_with('…'));
-        assert!(rendered.is_char_boundary(rendered.len() - '…'.len_utf8()));
+        assert!(!rendered.ends_with('…'));
+        assert!(rendered.is_char_boundary(rendered.len()));
     }
 
     #[test]
@@ -2104,11 +2373,11 @@ mod tests {
     fn install_progress_event(request_id: &str, sequence: u64, stage: &str) -> Value {
         json!({
             "event": "install_progress",
-            "protocol_version": 3,
+            "protocol_version": PROTOCOL_VERSION,
             "request_id": request_id,
             "sequence": sequence,
             "instance_id": "inst-1",
-            "selection_id": "zip-selection-abc",
+            "selection_id": "zip-selection-0123456789abcdef01234567-10",
             "stage": stage,
             "substage": null,
             "bytes_done": sequence * 10,
@@ -2116,17 +2385,168 @@ mod tests {
             "files_done": sequence as usize,
             "total_files": null,
             "current_file": null,
-            "archive_bytes": null,
+            "archive_bytes": 0,
         })
     }
 
+    fn shared_fixtures() -> Value {
+        serde_json::from_str(
+            &std::fs::read_to_string(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../../packages/contracts/fixtures/v4/cases.json"
+            ))
+            .unwrap(),
+        )
+        .unwrap()
+    }
     fn terminal_response(request_id: &str) -> Value {
-        json!({
-            "protocol_version": 3,
-            "request_id": request_id,
-            "ok": true,
-            "result": {"state": "committed"},
-        })
+        let cases = shared_fixtures();
+        let mut response = cases["responses"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|case| case["name"] == "install_patch-success")
+            .unwrap()["response"]
+            .clone();
+        response["request_id"] = json!(request_id);
+        response
+    }
+
+    #[test]
+    fn shared_generated_responses_events_and_capability_gates() {
+        let cases = shared_fixtures();
+        for case in cases["requests"].as_array().unwrap() {
+            let mut bytes = serde_json::to_vec(&case["request"]).unwrap();
+            bytes.push(b'\n');
+            let actual = protocol::decode_request(&bytes, case["task_channel"].as_bool().unwrap());
+            if let Some(error) = case["error"].as_str() {
+                assert_eq!(actual.unwrap_err().code, error, "{}", case["name"]);
+            } else {
+                actual.unwrap_or_else(|error| panic!("{}: {error}", case["name"]));
+            }
+        }
+        for case in cases["sequences"].as_array().unwrap() {
+            let mut sequence = EventSequence::new("fixture".into());
+            for (index, (event, expected)) in case["events"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .zip(case["expected"].as_array().unwrap())
+                .enumerate()
+            {
+                if case["terminal_after"].as_u64() == Some(index as u64) {
+                    sequence.finish();
+                }
+                let actual = sequence.accept(event);
+                match expected.as_str().unwrap() {
+                    "accept" => assert!(actual.unwrap()),
+                    "drop" => assert!(!actual.unwrap()),
+                    "error" => assert_eq!(actual.unwrap_err().code, "invalid_core_response"),
+                    _ => panic!("unknown fixture expectation"),
+                }
+            }
+        }
+        for case in cases["responses"].as_array().unwrap() {
+            let method: Method = serde_json::from_value(case["method"].clone()).unwrap();
+            let response = &case["response"];
+            let actual = protocol::validate_response(response, "fixture", Some(method));
+            if let Some(error) = case["error"].as_str() {
+                assert_eq!(actual.unwrap_err().code, error, "{}", case["name"]);
+            } else {
+                actual.unwrap_or_else(|error| panic!("{}: {error}", case["name"]));
+            }
+        }
+        for case in cases["events"].as_array().unwrap() {
+            let event = &case["event"];
+            let actual = protocol::validate_event(event, "fixture");
+            if let Some(error) = case["error"].as_str() {
+                assert_eq!(actual.unwrap_err().code, error, "{}", case["name"]);
+            } else {
+                actual.unwrap_or_else(|error| panic!("{}: {error}", case["name"]));
+            }
+        }
+        let mut caps = cases["responses"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|case| case["name"] == "get_capabilities-success")
+            .unwrap()["response"]["result"]
+            .clone();
+        protocol::validate_capabilities(&caps).unwrap();
+        let original = caps.clone();
+        caps.as_object_mut().unwrap().remove("contracts");
+        assert_eq!(
+            protocol::validate_capabilities(&caps).unwrap_err().code,
+            "capability_mismatch"
+        );
+        caps = original.clone();
+        caps["methods"] = json!([]);
+        assert_eq!(
+            protocol::validate_capabilities(&caps).unwrap_err().code,
+            "capability_mismatch"
+        );
+        caps = original;
+        caps["installer"]["schema_version"] = json!(2);
+        assert_eq!(
+            protocol::validate_capabilities(&caps).unwrap_err().code,
+            "installer_schema_unsupported"
+        );
+    }
+
+    #[test]
+    fn source_scan_stream_shares_event_sequence_and_ignores_late_events() {
+        let cases = shared_fixtures();
+        let event = |name: &str| {
+            cases["events"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|item| item["name"] == name)
+                .unwrap()["event"]
+                .clone()
+        };
+        let first = event("source_progress");
+        let mut second = event("source_update-game");
+        second["sequence"] = json!(1);
+        let mut late = event("source_progress");
+        late["sequence"] = json!(2);
+        let terminal = cases["responses"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["name"] == "scan_sources-success")
+            .unwrap()["response"]
+            .clone();
+        let mut forwarded = Vec::new();
+        read_core_stream(
+            &mut std::io::Cursor::new(task_stream(&[
+                first.clone(),
+                second.clone(),
+                first,
+                terminal,
+                late,
+            ])),
+            "fixture",
+            Method::ScanSources,
+            |name, _| {
+                forwarded.push(name.to_string());
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert_eq!(forwarded, ["source_progress", "source_update"]);
+        second["sequence"] = json!(0);
+        second["request_id"] = json!("other");
+        assert_eq!(
+            read_core_stream(
+                &mut std::io::Cursor::new(task_stream(&[second])),
+                "fixture",
+                Method::ScanSources,
+                |_, _| Ok(())
+            )
+            .unwrap_err(),
+            "invalid_core_response"
+        );
     }
 
     #[test]
@@ -2137,10 +2557,8 @@ mod tests {
             // Out-of-order stale event: must be dropped.
             install_progress_event("req-1", 1, "validating"),
             install_progress_event("req-1", 1, "applying"),
-            // Later event from a previous task: must be dropped.
-            install_progress_event("req-old", 5, "cleanup"),
             // Newest event wins.
-            install_progress_event("req-1", 3, "cleanup"),
+            install_progress_event("req-1", 2, "cleanup"),
             terminal_response("req-1"),
             // Events after the terminal line are ignored.
             install_progress_event("req-1", 4, "rolling_back"),
@@ -2152,10 +2570,10 @@ mod tests {
         )
         .unwrap();
         assert_eq!(result["state"], "committed");
-        let mirror = progress.lock().unwrap().clone();
-        assert_eq!(mirror.stage, "cleanup");
-        assert_eq!(mirror.bytes_done, 30);
-        assert_eq!(mirror.files_done, 3);
+        let mirror = progress.lock().unwrap().clone().unwrap();
+        assert_eq!(mirror.stage, protocol::InstallStage::Cleanup);
+        assert_eq!(mirror.bytes_done, 20);
+        assert_eq!(mirror.files_done, 2);
     }
 
     #[test]
@@ -2187,12 +2605,294 @@ mod tests {
             progress.clone(),
         )
         .unwrap();
-        let mirror = progress.lock().unwrap().clone();
-        assert_eq!(mirror.stage, "applying");
-        assert_eq!(mirror.substage.as_deref(), Some("writing"));
+        let mirror = progress.lock().unwrap().clone().unwrap();
+        assert_eq!(mirror.stage, protocol::InstallStage::Applying);
+        assert_eq!(mirror.substage, Some(protocol::InstallSubstage::Writing));
         assert!(mirror.total_bytes.is_none());
         assert!(mirror.total_files.is_none());
     }
+    #[test]
+    fn mixed_version_and_mismatched_id_never_change_progress() {
+        for (mut event, expected) in [
+            (
+                install_progress_event("req-1", 0, "applying"),
+                "unsupported_protocol",
+            ),
+            (
+                install_progress_event("other", 0, "applying"),
+                "invalid_core_response",
+            ),
+        ] {
+            if expected == "unsupported_protocol" {
+                event["protocol_version"] = json!(3);
+            }
+            let progress = Arc::new(Mutex::new(Progress::default()));
+            assert_eq!(
+                read_task_output(
+                    std::io::Cursor::new(task_stream(&[event])),
+                    "req-1".into(),
+                    progress.clone()
+                )
+                .unwrap_err(),
+                expected
+            );
+            assert!(progress.lock().unwrap().is_none());
+        }
+    }
+
+    #[test]
+    fn first_event_must_start_at_zero_and_transport_ends_with_lf() {
+        let progress = Arc::new(Mutex::new(Progress::default()));
+        let event = install_progress_event("req-1", 1, "applying");
+        assert_eq!(
+            read_task_output(
+                std::io::Cursor::new(task_stream(&[event])),
+                "req-1".into(),
+                progress.clone()
+            )
+            .unwrap_err(),
+            "invalid_core_response"
+        );
+        let mut input = task_stream(&[terminal_response("req-1")]);
+        input.pop();
+        assert_eq!(
+            read_task_output(std::io::Cursor::new(input), "req-1".into(), progress).unwrap_err(),
+            "invalid_core_response"
+        );
+    }
+
+    #[test]
+    fn line_limit_includes_lf_and_rejects_one_extra_byte() {
+        let exact = vec![b' '; MAX_RESPONSE as usize - 1];
+        let mut input = exact.clone();
+        input.push(b'\n');
+        let (line, oversized) = read_bounded_line(&mut std::io::Cursor::new(input))
+            .unwrap()
+            .unwrap();
+        assert!(!oversized);
+        assert_eq!(line.len(), MAX_RESPONSE as usize);
+        let mut oversized_line = exact;
+        oversized_line.extend_from_slice(b" \n");
+        assert!(
+            read_bounded_line(&mut std::io::Cursor::new(oversized_line))
+                .unwrap()
+                .unwrap()
+                .1
+        );
+    }
+
+    #[test]
+    fn host_builder_rejects_method_extraneous_fields() {
+        assert_eq!(
+            build_params(
+                "scan",
+                CallArguments {
+                    force: Some(true),
+                    ..Default::default()
+                },
+                common()
+            )
+            .unwrap_err(),
+            "invalid_request"
+        );
+        let mut old_host = common();
+        old_host["state_dir"] = json!("C:/other");
+        assert_eq!(
+            build_params("scan", CallArguments::default(), old_host).unwrap_err(),
+            "invalid_request"
+        );
+    }
+
+    #[test]
+    fn validated_commit_survives_process_teardown_error() {
+        let progress = Arc::new(Mutex::new(Progress::default()));
+        let validated = read_task_output(
+            std::io::Cursor::new(task_stream(&[terminal_response("req-1")])),
+            "req-1".into(),
+            progress,
+        )
+        .unwrap();
+        let result =
+            task_terminal_result(Ok(validated), Err("core_process_failed".into())).unwrap();
+        assert_eq!(result["state"], "committed");
+        assert_eq!(result["disposition"], "completed");
+        assert_eq!(
+            task_terminal_result(
+                Err("invalid_core_response".into()),
+                Err("core_process_failed".into())
+            )
+            .unwrap_err(),
+            "invalid_core_response"
+        );
+    }
+
+    #[test]
+    fn long_instance_identity_has_a_dedicated_bound() {
+        let instance = format!("10@C:/{}", "SteamLibrary/".repeat(40));
+        assert!(instance.len() > protocol::MAX_ID_BYTES);
+        let params = build_params(
+            "list_game_sources",
+            CallArguments {
+                instance_id: Some(instance.clone()),
+                ..Default::default()
+            },
+            common(),
+        )
+        .unwrap();
+        assert_eq!(params["instance_id"], instance);
+        build_install_request(
+            &instance,
+            Some("release-1"),
+            None,
+            "overwrite",
+            "long-instance",
+            None,
+            common(),
+        )
+        .unwrap();
+        assert_eq!(
+            build_install_request(
+                &instance,
+                Some(&"r".repeat(protocol::MAX_ID_BYTES + 1)),
+                None,
+                "overwrite",
+                "long-instance",
+                None,
+                common()
+            )
+            .unwrap_err(),
+            "invalid_id"
+        );
+    }
+
+    #[test]
+    fn malformed_late_telemetry_and_duplicate_terminal_do_not_replace_receipt() {
+        let first = terminal_response("req-1");
+        let malformed_late = json!({"event":"install_progress"});
+        let mut old_late = install_progress_event("other", 8, "cleanup");
+        old_late["protocol_version"] = json!(3);
+        let mut duplicate = first.clone();
+        duplicate["result"]["state"] = json!("needs_recovery");
+        let mut input =
+            std::io::Cursor::new(task_stream(&[first, malformed_late, old_late, duplicate]));
+        let result = read_core_stream(&mut input, "req-1", Method::InstallPatch, |_, _| {
+            panic!("late telemetry cannot apply")
+        })
+        .unwrap();
+        assert_eq!(
+            drain_terminal_tail(&mut input),
+            1,
+            "duplicate terminal is rejected independently"
+        );
+        assert_eq!(result["state"], "committed");
+        assert_eq!(result["disposition"], "completed");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn rejected_install_stream_cancels_closes_stdin_and_allows_safe_core_terminal() {
+        let cases = shared_fixtures();
+        for name in ["install_patch-success", "outcome-rolled_back-cancelled"] {
+            let mut receipt = cases["responses"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|item| item["name"] == name)
+                .unwrap()["response"]
+                .clone();
+            receipt["request_id"] = json!("req-1");
+            let marker = std::env::temp_dir().join(format!(
+                "steam-patch-host-control-{}-{}.json",
+                std::process::id(),
+                request_id()
+            ));
+            let literal = |text: String| format!("'{}'", text.replace('\'', "''"));
+            let script = format!("[Console]::WriteLine({}); [Console]::WriteLine('{}'); $control=[Console]::ReadLine(); if($control -ne 'cancel') {{ exit 3 }}; $eof=[Console]::ReadLine(); if($null -ne $eof) {{ exit 4 }}; [System.IO.File]::WriteAllText({},{}); [Console]::WriteLine({}); exit 0",
+                literal(install_progress_event("req-1",0,"applying").to_string()),
+                r#"{"protocol_version":4,"request_id":"req-1","ok":true,"result":{}}"#,
+                literal(marker.display().to_string()),literal(receipt.to_string()),literal(receipt.to_string()));
+            let mut child = core_command(Path::new("powershell.exe"))
+                .args([
+                    "-NoLogo",
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-Command",
+                    &script,
+                ])
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null())
+                .spawn()
+                .unwrap();
+            let stdin = Arc::new(Mutex::new(ClosableWriter(Some(
+                child.stdin.take().unwrap(),
+            ))));
+            let stdout = child.stdout.take().unwrap();
+            let stop = Arc::new(AtomicBool::new(false));
+            let cancelled = Arc::new(AtomicBool::new(false));
+            let progress = Arc::new(Mutex::new(Progress::default()));
+            let error = read_install_task_output(
+                stdout,
+                "req-1",
+                progress.clone(),
+                |_| cancel_and_close(&stdin, &stop, &cancelled),
+                |_| panic!("invalid envelope must retain transport error"),
+            )
+            .unwrap_err();
+            assert_eq!(error, "invalid_core_response");
+            assert!(stop.load(Ordering::SeqCst));
+            assert!(stdin.lock().unwrap().0.is_none());
+            assert_eq!(
+                progress.lock().unwrap().as_ref().unwrap().stage,
+                protocol::InstallStage::Applying
+            );
+            assert!(
+                child.wait().unwrap().success(),
+                "mock writer must be allowed to finish after cancel/EOF"
+            );
+            let stored: Value =
+                serde_json::from_str(&std::fs::read_to_string(&marker).unwrap()).unwrap();
+            assert_eq!(
+                stored, receipt,
+                "host must not rewrite the core's true receipt disposition"
+            );
+            std::fs::remove_file(marker).unwrap();
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn bounded_shutdown_wait_does_not_terminate_a_writer() {
+        let marker = std::env::temp_dir().join(format!(
+            "steam-patch-host-timeout-{}-{}.txt",
+            std::process::id(),
+            request_id()
+        ));
+        let script = format!("Start-Sleep -Milliseconds 150; [System.IO.File]::WriteAllText('{}','safe_terminal'); exit 0",marker.display().to_string().replace('\'',"''"));
+        let child = core_command(Path::new("powershell.exe"))
+            .args([
+                "-NoLogo",
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                &script,
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let child = Arc::new(Mutex::new(child));
+        assert_eq!(
+            wait_core_until(&child, std::time::Instant::now()).unwrap_err(),
+            "core_process_shutdown_pending"
+        );
+        assert!(child.lock().unwrap().try_wait().unwrap().is_none());
+        assert!(wait_core_child(&child).unwrap().success());
+        assert_eq!(std::fs::read_to_string(&marker).unwrap(), "safe_terminal");
+        std::fs::remove_file(marker).unwrap();
+    }
+
     #[test]
     fn response_limit_accepts_exact_boundary_and_rejects_the_next_byte() {
         assert_eq!(

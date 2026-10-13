@@ -21,8 +21,10 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - run: cargo run --locked -p steam-patch-contract-gen -- check
+      - run: cargo test --locked -p steam-patch-protocol
       - run: cargo fmt --all -- --check
-      - run: cargo clippy -p steam-patch-core -p steam-patch-cli --all-targets --locked -- -D warnings
+      - run: cargo clippy -p steam-patch-core -p steam-patch-cli -p steam-patch-protocol -p steam-patch-contract-gen --all-targets --locked -- -D warnings
       - run: cargo test -p steam-patch-core -p steam-patch-cli --locked
       - run: cargo build -p steam-patch-core -p steam-patch-cli --locked
       - run: python -m unittest discover -s apps/decky/backend -p 'test_*.py' -v
@@ -43,14 +45,16 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - run: cargo run --locked -p steam-patch-contract-gen -- check
       - run: npm ci
-      - run: cargo build --release --locked -p steam-patch-cli
+      - run: npm run test:contracts
+      - run: cargo build --release --locked -p steam-patch-cli -p steam-patch-installer-worker --bin steam-patch --bin sf-worker
       - run: npm run bundle -w apps/windows -- -- --locked
       - run: New-Item -ItemType Directory -Path .artifacts -Force
       - run: cargo metadata --locked --format-version 1 > .artifacts/cargo-metadata.json
       - run: python scripts/build-sbom.py .artifacts/cargo-metadata.json
       - run: python scripts/package-artifacts.py --platform windows
-      - run: git diff --exit-code -- Cargo.lock package-lock.json
+      - run: git diff --exit-code -- Cargo.lock package-lock.json packages/contracts/generated packages/contracts/fixtures
       - uses: actions/upload-artifact@v4
         with:
           name: windows-portable
@@ -129,16 +133,18 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - run: cargo run --locked -p steam-patch-contract-gen -- check
       - run: npm ci
+      - run: npm run test:contracts
       - run: npm run typecheck
       - run: npm run test -w apps/decky
-      - run: cargo build --release --locked -p steam-patch-cli
+      - run: cargo build --release --locked -p steam-patch-cli -p steam-patch-installer-worker --bin steam-patch --bin sf-worker
       - run: npm run package:plugin -w apps/decky
       - run: mkdir -p .artifacts
       - run: cargo metadata --locked --format-version 1 > .artifacts/cargo-metadata.json
       - run: python scripts/build-sbom.py .artifacts/cargo-metadata.json
       - run: python scripts/package-artifacts.py --platform decky
-      - run: git diff --exit-code -- Cargo.lock package-lock.json
+      - run: git diff --exit-code -- Cargo.lock package-lock.json packages/contracts/generated packages/contracts/fixtures
       - uses: actions/upload-artifact@v4
         with:
           name: decky-plugin

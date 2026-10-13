@@ -20,8 +20,10 @@ for (const file of ["main.py", "plugin.json", "package.json", "README.md"]) copy
 copyFileSync(join(root, "LICENSE"), join(output, "LICENSE"));
 // An explicit production allowlist prevents developer Python oracles from
 // becoming a second installation engine in the deployed plugin.
-for (const file of ["bridge.py", "source_service.py", "tasks.py", "scan_session.py", "plugin_settings.py", "state_host.py"])
+for (const file of ["bridge.py", "source_service.py", "tasks.py", "scan_session.py", "plugin_settings.py", "state_host.py", "protocol_validation.py"])
   copyFileSync(join(app, "backend", file), join(output, "backend", file));
+copyFileSync(join(root, "packages/contracts/generated/protocol.py"), join(output, "backend/protocol.py"));
+copyFileSync(join(root, "packages/contracts/generated/v4.schema.json"), join(output, "backend/v4.schema.json"));
 cpSync(join(app, "dist"), join(output, "dist"), { recursive: true });
 mkdirSync(join(output, "licenses"), { recursive: true });
 copyFileSync(join(root, "scripts/licenses/sfextract-MIT.txt"), join(output, "licenses/sfextract-MIT.txt"));
@@ -32,7 +34,7 @@ for (const name of binaries) {
   copyFileSync(binary, join(output, "bin", name));
   runtime.push({ path: `bin/${name}`, size: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex") });
 }
-writeFileSync(join(output, "bin/runtime.json"), JSON.stringify({ protocol_version: 3, worker_protocol: 1, files: runtime }, null, 2) + "\n");
+writeFileSync(join(output, "bin/runtime.json"), JSON.stringify({ protocol_version: 4, worker_protocol: 1, files: runtime }, null, 2) + "\n");
 copyFileSync(join(root, "catalog/catalog.json"), join(output, "bin/catalog.json"));
 for (const file of ["signed-catalog.json", "trust-keys.json"]) {
   const source = join(root, "catalog", file);

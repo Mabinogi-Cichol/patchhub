@@ -11,6 +11,7 @@ path = "src/main.rs"
 
 [dependencies]
 steam-patch-core = { path = "../core" }
+steam-patch-protocol = { path = "../protocol" }
 serde.workspace = true
 serde_json.workspace = true
 schemars.workspace = true

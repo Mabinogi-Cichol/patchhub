@@ -2,10 +2,9 @@
 from pathlib import Path
 from bridge import METHODS, PROTOCOL_VERSION
 
-REQUIRED_METHODS = frozenset({
-    "get_capabilities", "list_sources", "list_game_sources", "set_source_enabled",
-    "add_source", "set_game_source", "refresh_sources", "scan_sources", "discover_game",
-})
+from protocol_validation import SOURCE_METHODS, validate_capabilities
+
+REQUIRED_METHODS = frozenset(SOURCE_METHODS)
 
 
 class SourceService:
@@ -24,10 +23,7 @@ class SourceService:
     # -- lifecycle ---------------------------------------------------------
     async def initialize(self):
         caps = await self.bridge.call_sync("get_capabilities", {})
-        methods = caps.get("methods") if isinstance(caps, dict) else None
-        if (not isinstance(methods, list) or set(methods) != METHODS
-                or caps.get("protocol_version") != PROTOCOL_VERSION):
-            raise ValueError("source_capability_unavailable")
+        validate_capabilities(caps)
         self._apply_summaries(await self.bridge.call_sync("list_sources", {}))
         return self
 

@@ -17,14 +17,18 @@ fn d_priority() -> u16 {
 
 // ---- §2.1 rules ----------------------------------------------------------
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema, ts_rs::TS,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum SourceRole {
     Publisher,
     FallbackIndexer,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema, ts_rs::TS,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum RootLayout {
     GameRoot,
@@ -32,37 +36,46 @@ pub enum RootLayout {
 
 /// Deserialization intermediate: loose field types so `validate_rule` can return
 /// the exact Python error codes.
-#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema, ts_rs::TS, serde::Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct RawSourceRule {
     pub id: String,
     pub name: String,
     pub adapter: String,
     #[serde(default)]
+    #[ts(optional = nullable)]
     pub role: Option<String>,
     #[serde(default)]
+    #[ts(optional = nullable)]
     pub discovery_only: Option<bool>,
     #[serde(default)]
+    #[ts(optional = nullable)]
     pub priority: Option<i64>,
     pub enabled: bool,
     pub pages: Vec<String>,
     pub page_hosts: Vec<String>,
     #[serde(default)]
+    #[ts(optional = nullable)]
     pub download_hosts: Option<Vec<String>>,
     #[serde(default)]
+    #[ts(optional = nullable)]
     pub root_layout: Option<String>,
     #[serde(default)]
+    #[ts(optional = nullable)]
     pub columns: Option<Columns>,
     #[serde(default)]
+    #[ts(optional = nullable)]
     pub table_id: Option<String>,
     #[serde(default)]
+    #[ts(optional = nullable)]
     pub language: Option<String>,
     #[serde(default)]
+    #[ts(optional = nullable)]
     pub url: Option<String>,
 }
 
 /// Validated canonical rule; field names match the Python rule dict.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema, ts_rs::TS)]
 #[serde(deny_unknown_fields)]
 pub struct SourceRule {
     pub id: String,
@@ -82,16 +95,20 @@ pub struct SourceRule {
     #[serde(default)]
     pub root_layout: Option<RootLayout>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional = nullable)]
     pub columns: Option<Columns>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional = nullable)]
     pub table_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional = nullable)]
     pub language: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional = nullable)]
     pub url: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema, ts_rs::TS)]
 #[serde(deny_unknown_fields)]
 pub struct Columns {
     pub title: u8,
@@ -136,7 +153,7 @@ pub struct SettingsFile {
 }
 
 /// Output-only summary; injected with a flattened [`SourceRule`].
-#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema, ts_rs::TS, serde::Deserialize)]
 pub struct SourceSummary {
     #[serde(flatten)]
     pub rule: SourceRule,
@@ -149,7 +166,7 @@ pub struct SourceSummary {
     pub checked_at: Option<u64>,
 }
 
-#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema, ts_rs::TS, serde::Deserialize)]
 pub struct GameSourceSummary {
     #[serde(flatten)]
     pub source: SourceSummary,
@@ -158,7 +175,7 @@ pub struct GameSourceSummary {
 }
 
 /// Aggregated discovery state for one game (matches TS `GameDiscovery`).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema, ts_rs::TS)]
 #[serde(deny_unknown_fields)]
 pub struct GameDiscovery {
     pub status: String,
@@ -169,7 +186,8 @@ pub struct GameDiscovery {
 /// Output of `matches()`: the matched source entry plus its rule/ release ids
 /// (field names mirror the Python `{**selected, source_id, release_id,
 /// root_layout}` dict and the TS `SourceSubscription` shape).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema, ts_rs::TS)]
+#[serde(deny_unknown_fields)]
 pub struct SourceMatch {
     pub title: String,
     #[serde(default)]
@@ -218,7 +236,7 @@ pub struct SourceCache {
     pub checked_at: Option<u64>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema, ts_rs::TS)]
 #[serde(deny_unknown_fields)]
 pub struct SourceStatus {
     pub checked_at: u64,
@@ -231,7 +249,9 @@ pub struct SourceStatus {
 
 // ---- §2.4 candidates / records (aligned with the TS DTO) -----------------
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema, ts_rs::TS,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum Variant {
     Base,
@@ -240,7 +260,9 @@ pub enum Variant {
     Unknown,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema, ts_rs::TS,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum MatchBasis {
     Appid,
@@ -250,13 +272,17 @@ pub enum MatchBasis {
     None,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema, ts_rs::TS,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum Capability {
     DiscoverOnly,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema, ts_rs::TS,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum ArtifactFormat {
     Zip,
@@ -266,7 +292,9 @@ pub enum ArtifactFormat {
     Mixed,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema, ts_rs::TS,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum CacheStatus {
     Fresh,
@@ -274,7 +302,7 @@ pub enum CacheStatus {
     Stale,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema, ts_rs::TS)]
 #[serde(deny_unknown_fields)]
 pub struct Mirror {
     pub url: String,
@@ -284,7 +312,7 @@ pub struct Mirror {
     pub format: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema, ts_rs::TS)]
 #[serde(deny_unknown_fields)]
 pub struct IdentityEvidence {
     pub kind: String,
@@ -294,14 +322,14 @@ pub struct IdentityEvidence {
     pub page: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema, ts_rs::TS)]
 #[serde(deny_unknown_fields)]
 pub struct Provenance {
     pub source_id: String,
     pub page: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema, ts_rs::TS)]
 #[serde(deny_unknown_fields)]
 pub struct SourceCandidate {
     /// `candidate-[0-9a-f]{24}`.
@@ -357,13 +385,15 @@ pub struct SourceCandidate {
     pub related_index_pages: Vec<Provenance>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema, ts_rs::TS)]
 #[serde(deny_unknown_fields)]
+#[ts(rename = "DiscoveryDiagnostic")]
 pub struct Diagnostic {
     #[serde(default)]
     pub source_id: Option<String>,
     pub code: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional = nullable)]
     pub detail: Option<String>,
 }
 

@@ -5,7 +5,7 @@ import { createManagerSession, feedbackFor, needsRecovery } from "../src/session
 import { setListPreferences } from "../src/preferences.ts";
 
 const report: ScanResult = {
-  roots: [], catalog_revision: 1, catalog_trust: "signed", platform: "linux",
+  roots: [], catalog_revision: 1, catalog_trust: "signed", platform: "steamos",
   installs: [], diagnostics: [],
 };
 
@@ -113,12 +113,12 @@ test("recovery is offered for interrupted writes, but not prepared or completed 
   }
 });
 
-const game = (instance: string): Install => ({ game: { instance_id: instance, appid: 1227890, name: "Summer Memories", library_path: instance, install_path: `${instance}/game`, buildid: null, availability: "installed", kind: "game" }, patches: [], match_status: "unmatched" });
+const game = (instance: string): Install => ({ game: { instance_id: instance, appid: 1227890, name: "Summer Memories", library_path: instance, install_path: `${instance}/game`, buildid: null, availability: "installed", kind: "game" }, patches: [], match_status: "no_catalog_match" });
 const discoveryReport = (): ScanResult => ({ ...report, generation: 3, settings_revision: 4, installs: [game("a"), game("b")] });
 const discovery = (fields: Partial<DiscoveryResult> = {}): DiscoveryResult => ({ instance_id: "a", appid: 1227890, generation: 3, settings_revision: 4, status: "complete", candidates: [{ candidate_id: "candidate", source_id: "kagura-cn", game_title: "Summer Memories", patch_title: "补丁", capability: "discover_only", source_page: "https://kagurafan.com", match_basis: "appid" }], diagnostics: [], ...fields });
 const release = (id: string, support_level: string, source_id = "kagura-cn"): Patch => ({
   release_id: id, name: id, source_id, source_page: "https://kagurafan.com", support_level, actions: { automatic: { available: false, blockers: [] }, local_archive: { available: false, blockers: [] }, reinstall: { available: false, blockers: [] }, overwrite: { available: false, blockers: [] }, primary: { operation: "overwrite", label: "install", input: "unavailable" } },
-  compatibility: "verified", blockers: [], detection: { status: "absent", files: [] },
+  compatibility: "verified", blockers: [], detection: { status: "not_detected", files: [] },
   ...(support_level === "publisher_exe" ? { selection_id: `exe-selection-${id}` } : {}),
 });
 

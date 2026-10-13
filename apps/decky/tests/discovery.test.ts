@@ -4,7 +4,7 @@ import { candidateMatched, displayPatches, filterInstalls, needsAttention, type 
 import { candidateConditions, candidateSource, discoveryStatus, discoverySummary, safeSourceUrl, unqueriedCount } from "../src/discovery.ts";
 
 const candidate = (fields: Partial<SourceCandidate> = {}): SourceCandidate => ({ candidate_id: "candidate-1", source_id: "kagura-cn", game_appid: 1227890, game_title: "Summer Memories", patch_title: "夏日狂想曲补丁", source_page: "https://kagurafan.com/patch/", capability: "discover_only", match_basis: "appid", ...fields });
-const row = (candidates: SourceCandidate[] = []): Install => ({ game: { instance_id: "library-a", appid: 1227890, name: "Summer Memories", library_path: "/a", install_path: "/a/game", buildid: null, availability: "installed", kind: "game" }, match_status: "unmatched", patches: [], discovery: { status: "complete", candidates, diagnostics: [] } });
+const row = (candidates: SourceCandidate[] = []): Install => ({ game: { instance_id: "library-a", appid: 1227890, name: "Summer Memories", library_path: "/a", install_path: "/a/game", buildid: null, availability: "installed", kind: "game" }, match_status: "no_catalog_match", patches: [], discovery: { status: "complete", candidates, diagnostics: [] } });
 
 test("verified discovery enters matched filter while title clues do not; unknown guidance needs no attention", () => {
   const verified = row([candidate()]);
@@ -14,13 +14,13 @@ test("verified discovery enters matched filter while title clues do not; unknown
   assert.equal(needsAttention(verified), false);
   verified.patches = [{ release_id: "old-guidance", name: "Old", source_page: "https://example.com", support_level: "discover_only", actions: { automatic: { available: false, blockers: [] }, local_archive: { available: false, blockers: [] }, reinstall: { available: false, blockers: [] }, overwrite: { available: false, blockers: [] }, primary: { operation: "overwrite", label: "install", input: "unavailable" } }, compatibility: "unknown", blockers: [], detection: { status: "unknown", files: [] } }];
   assert.equal(needsAttention(verified), false);
-  verified.patches[0].detection.status = "conflict";
+  verified.patches[0].detection.status = "partial_or_conflict";
   assert.equal(needsAttention(verified), true);
 });
 
 test("display union keeps candidate identities out of installation IDs and orders official candidates first", () => {
   const game = row([candidate({ candidate_id: "index", source_id: "hgamer" }), candidate({ candidate_id: "official" })]);
-  game.patches = [{ release_id: "source-patchmoe-1227890", name: "Installable", source_page: "https://example.com", support_level: "publisher_zip", actions: { automatic: { available: false, blockers: [] }, local_archive: { available: false, blockers: [] }, reinstall: { available: false, blockers: [] }, overwrite: { available: false, blockers: [] }, primary: { operation: "overwrite", label: "install", input: "unavailable" } }, compatibility: "unknown", blockers: [], detection: { status: "absent", files: [] } }];
+  game.patches = [{ release_id: "source-patchmoe-1227890", name: "Installable", source_page: "https://example.com", support_level: "publisher_zip", actions: { automatic: { available: false, blockers: [] }, local_archive: { available: false, blockers: [] }, reinstall: { available: false, blockers: [] }, overwrite: { available: false, blockers: [] }, primary: { operation: "overwrite", label: "install", input: "unavailable" } }, compatibility: "unknown", blockers: [], detection: { status: "not_detected", files: [] } }];
   const entries = displayPatches(game);
   assert.deepEqual(entries.map(entry => [entry.kind, entry.key]), [["installable", "source-patchmoe-1227890"], ["discovery", "official"], ["discovery", "index"]]);
   assert.equal("patch" in entries[1], false);

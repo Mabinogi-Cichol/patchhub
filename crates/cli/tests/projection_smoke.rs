@@ -1,4 +1,4 @@
-//! Actual JSONL subprocess coverage for the projection adapter (current v3).
+//! Actual JSONL subprocess coverage for the projection adapter (current v4).
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{
@@ -8,6 +8,51 @@ use std::{
     process::{Command, Stdio},
 };
 
+fn wire_params(method: &str, mut legacy: Value) -> Value {
+    let object = legacy.as_object_mut().unwrap();
+    let mut host = serde_json::Map::new();
+    for key in [
+        "roots",
+        "catalog",
+        "signed_catalog",
+        "trust_keys",
+        "state_dir",
+        "platform",
+    ] {
+        let default = match key {
+            "roots" => json!([]),
+            "platform" => json!(if cfg!(windows) { "windows" } else { "steamos" }),
+            _ => Value::Null,
+        };
+        host.insert(
+            key.into(),
+            object
+                .remove(key)
+                .filter(|v| !v.is_null())
+                .unwrap_or(default),
+        );
+    }
+    let keys: &[&str] = match method {
+        "preview" => &["instance_id", "release_id", "selection_id"],
+        "install_patch" => &[
+            "instance_id",
+            "release_id",
+            "selection_id",
+            "archive",
+            "operation",
+            "cleanup_policy",
+        ],
+        _ => &[],
+    };
+    object.retain(|key, value| keys.contains(&key.as_str()) && !value.is_null());
+    if method == "install_patch" {
+        object.entry("operation").or_insert(json!("overwrite"));
+        object.entry("cleanup_policy").or_insert(json!("disabled"));
+    }
+    object.insert("host".into(), Value::Object(host));
+    legacy
+}
+
 fn call(method: &str, params: Value) -> Value {
     let mut process = Command::new(env!("CARGO_BIN_EXE_steam-patch"))
         .arg("serve")
@@ -16,7 +61,7 @@ fn call(method: &str, params: Value) -> Value {
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
-    let request = json!({"protocol_version":3,"request_id":"projection-smoke","method":method,"params":params});
+    let request = json!({"protocol_version":4,"request_id":"projection-smoke","method":method,"params":wire_params(method, params)});
     writeln!(process.stdin.take().unwrap(), "{request}").unwrap();
     let output = process.wait_with_output().unwrap();
     assert!(
@@ -32,6 +77,12 @@ fn call(method: &str, params: Value) -> Value {
     assert!(output.stdout.len() <= 8 * 1024 * 1024);
     let response: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(response["request_id"], "projection-smoke");
+    steam_patch_protocol::validate_response(
+        &response,
+        response["request_id"].as_str().unwrap(),
+        Some(serde_json::from_value(json!(method)).unwrap()),
+    )
+    .unwrap();
     response
 }
 
@@ -46,7 +97,7 @@ fn library(base: &Path, name: &str) -> std::path::PathBuf {
 #[test]
 fn scan_and_preview_roundtrip_preserve_instance_identity_and_evidence() {
     let temp = tempfile::tempdir().unwrap();
-    let left = library(temp.path(), "Steam 中文");
+    let left = library(temp.path(), &format!("Steam {}", "库".repeat(40)));
     let right = library(temp.path(), "第二库");
     fs::write(
         left.join("steamapps/common/测试游戏/patch.dat"),
@@ -68,6 +119,11 @@ fn scan_and_preview_roundtrip_preserve_instance_identity_and_evidence() {
     assert_eq!(response["ok"], true, "{response}");
     let rows = response["result"]["installs"].as_array().unwrap();
     assert_eq!(rows.len(), 2);
+    assert!(
+        rows.iter()
+            .any(|row| row["game"]["instance_id"].as_str().unwrap().len() > 256),
+        "complete Steam path identity must survive v4"
+    );
     assert_ne!(
         rows[0]["game"]["instance_id"],
         rows[1]["game"]["instance_id"]

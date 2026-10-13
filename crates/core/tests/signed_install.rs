@@ -143,8 +143,11 @@ struct Fixture {
 }
 impl Fixture {
     fn new() -> Self {
+        Self::with_library_name("Steam")
+    }
+    fn with_library_name(name: &str) -> Self {
         let temp = tempfile::tempdir().unwrap();
-        let library = temp.path().join("Steam");
+        let library = temp.path().join(name);
         let game = library.join("steamapps/common/Signed Test");
         fs::create_dir_all(&game).unwrap();
         fs::write(game.join("original.dat"), b"original").unwrap();
@@ -1520,4 +1523,83 @@ fn complete_external_signed_files_still_cannot_reinstall_without_owned_receipt()
         "reinstall_unowned_or_incomplete"
     );
     assert_eq!(fs::read(f.game.join("original.dat")).unwrap(), b"patched");
+}
+
+#[test]
+fn long_instance_and_large_durable_error_replay_preserve_committed_truth() {
+    if !can_install() {
+        return;
+    }
+    let f = Fixture::with_library_name(&"库".repeat(40));
+    let p = f.provider();
+    let lease = Lease::default();
+    let first = f
+        .run(
+            &p,
+            &lease,
+            &Offline,
+            "long-replay",
+            true,
+            InstallOperation::Overwrite,
+        )
+        .unwrap();
+    assert!(first.instance_id.len() > 256);
+    let paths = steam_patch_core::installer::InstallerPaths::new(&f.state);
+    let db = rusqlite::Connection::open(paths.journal()).unwrap();
+    let raw: String = db
+        .query_row(
+            "SELECT document FROM jobs WHERE id=?1",
+            [&first.plan_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let mut document: serde_json::Value = serde_json::from_str(&raw).unwrap();
+    let legacy_error = "界".repeat(3 * 1024 * 1024);
+    document["transaction"]["error"] = serde_json::json!(legacy_error);
+    db.execute(
+        "UPDATE jobs SET document=?1 WHERE id=?2",
+        rusqlite::params![document.to_string(), first.plan_id],
+    )
+    .unwrap();
+    drop(db);
+    let ledger = steam_patch_core::installer::requests::RequestLedger::open(&paths).unwrap();
+    let mut record = ledger.get("long-replay").unwrap().unwrap();
+    record.error = Some(legacy_error.clone());
+    ledger.record(&record).unwrap();
+    for _ in 0..2 {
+        let replay = f
+            .run(
+                &p,
+                &lease,
+                &Offline,
+                "long-replay",
+                true,
+                InstallOperation::Overwrite,
+            )
+            .unwrap();
+        assert_eq!(replay.instance_id, first.instance_id);
+        assert_eq!(replay.transaction_id, first.transaction_id);
+        assert_eq!(replay.disposition, Disposition::Completed);
+        assert_eq!(replay.state, "committed");
+        assert_eq!(replay.error.as_ref().unwrap().len(), 2046);
+        assert!(serde_json::to_vec(&replay).unwrap().len() < 64 * 1024);
+    }
+    let db = rusqlite::Connection::open(paths.journal()).unwrap();
+    let raw: String = db
+        .query_row(
+            "SELECT document FROM jobs WHERE id=?1",
+            [&first.plan_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(
+        serde_json::from_str::<serde_json::Value>(&raw).unwrap()["transaction"]["error"]
+            == legacy_error,
+        "durable journal diagnostic must remain unchanged"
+    );
+    let ledger = steam_patch_core::installer::requests::RequestLedger::open(&paths).unwrap();
+    assert!(
+        ledger.get("long-replay").unwrap().unwrap().error.as_deref() == Some(legacy_error.as_str()),
+        "durable ledger diagnostic must remain unchanged"
+    );
 }

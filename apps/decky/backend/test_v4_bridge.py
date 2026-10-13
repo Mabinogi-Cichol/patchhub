@@ -1,4 +1,4 @@
-"""Protocol-v3 lease, transport, identity and terminal-outcome regression tests."""
+"""Protocol-v4 lease, transport, identity and terminal-outcome regression tests."""
 import asyncio
 import json
 from pathlib import Path
@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, patch
 from bridge import CoreBridge, CoreError, METHODS
 from tasks import Task, TaskManager, current_task
 from test_bridge import _FakeProcess
+from protocol_test_support import response, outcome
 
 
 class Peer:
@@ -40,20 +41,21 @@ class Peer:
         await self.finished.wait()
 
     def finish(self, result):
-        row = {"protocol_version": 3, "request_id": self.request["request_id"], "ok": True, "result": result}
+        row = response("install_patch", self.request["request_id"], outcome(**result))
         self.stdout.feed_data(json.dumps(row).encode() + b"\n")
         self.stdout.feed_eof()
         self.returncode = 0
         self.finished.set()
 
 
-class V3BridgeTests(unittest.IsolatedAsyncioTestCase):
+class V4BridgeTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         binary = Path(self.temp.name) / "steam-patch"
         binary.touch()
         self.bridge = CoreBridge(binary, binary)
+        self.bridge._preflight_done = True
 
     async def test_renew_control_continues_until_cancel_and_receipt_drains(self):
         peer = Peer()
@@ -61,10 +63,10 @@ class V3BridgeTests(unittest.IsolatedAsyncioTestCase):
         token = current_task.set(task)
         try:
             with patch("bridge.asyncio.create_subprocess_exec", return_value=peer), patch("bridge.RENEW_SECONDS", .01):
-                pending = asyncio.create_task(self.bridge.install_patch("local", selection_id="exe-selection-a-1", request_id="same"))
+                pending = asyncio.create_task(self.bridge.install_patch("local", selection_id="exe-selection-aaaaaaaaaaaaaaaaaaaaaaaa-1", request_id="same", operation="overwrite"))
                 await asyncio.wait_for(peer.renewed.wait(), 1)
                 self.assertEqual(peer.request["request_id"], "same")
-                self.assertEqual(peer.request["params"]["request_id"], "same")
+                self.assertNotIn("request_id", peer.request["params"])
                 self.assertEqual(peer.request["params"]["cleanup_policy"], "disabled")
                 self.assertEqual(peer.request["method"], "install_patch")
                 task.request_cancel()
@@ -81,12 +83,12 @@ class V3BridgeTests(unittest.IsolatedAsyncioTestCase):
     async def test_host_cleanup_policy_is_sent_and_invalid_values_rejected(self):
         with patch("bridge.asyncio.create_subprocess_exec", new_callable=AsyncMock) as spawn:
             with self.assertRaisesRegex(ValueError, "invalid_cleanup_policy"):
-                await self.bridge.install_patch("local", release_id="signed", cleanup_policy="enabled")
+                await self.bridge.install_patch("local", release_id="signed", operation="overwrite", cleanup_policy="enabled")
             spawn.assert_not_called()
         peer = Peer()
         with patch("bridge.asyncio.create_subprocess_exec", return_value=peer):
             pending = asyncio.create_task(self.bridge.install_patch(
-                "local", release_id="signed", cleanup_policy="after_commit"))
+                "local", release_id="signed", cleanup_policy="after_commit", operation="overwrite"))
             while peer.request is None:
                 await asyncio.sleep(0)
             self.assertEqual(peer.request["params"]["cleanup_policy"], "after_commit")
@@ -97,28 +99,96 @@ class V3BridgeTests(unittest.IsolatedAsyncioTestCase):
         manager = TaskManager(lease_seconds=.03)
         peer = Peer()
         async def work(task):
-            return await self.bridge.install_patch("local", release_id="signed")
+            return await self.bridge.install_patch("local", release_id="signed", operation="overwrite")
         with patch("bridge.asyncio.create_subprocess_exec", return_value=peer), patch("bridge.RENEW_SECONDS", .01):
             task = manager.get(manager.start("install", work)["task_id"])
             await asyncio.wait_for(peer.cancelled.wait(), 1)
             self.assertTrue(task.cancel.is_set())
             self.assertFalse(task.worker.done())
-            peer.finish({"state": "needs_recovery", "error": "restore_conflict", "recovery": {"required": True}})
+            peer.finish({"state": "needs_recovery", "error": "restore_conflict"})
             await task.worker
         self.assertEqual(task.snapshot()["state"], "failed")
         self.assertTrue(task.snapshot()["result"]["recovery"]["required"])
 
-    async def test_duplicate_terminal_rejected_and_late_progress_ignored(self):
+    async def test_second_terminal_and_late_progress_are_only_diagnostics(self):
         for extra in ({"event": "install_progress"}, {"ok": True, "result": {}}):
             def factory(request_id, request):
-                response = {"protocol_version": 3, "request_id": request_id, "ok": True, "result": {"state": "committed"}}
-                return [response], extra
+                receipt = response("install_patch", request_id)
+                return [receipt], extra
             with patch("bridge.asyncio.create_subprocess_exec", return_value=_FakeProcess(factory)):
-                if "event" in extra:
-                    self.assertEqual((await self.bridge.install_patch("local", "signed"))["state"], "committed")
-                else:
-                    with self.assertRaisesRegex(RuntimeError, "invalid_core_response"):
-                        await self.bridge.install_patch("local", "signed")
+                with self.assertLogs("bridge", level="WARNING") as captured:
+                    self.assertEqual((await self.bridge.install_patch("local", "signed", operation="overwrite"))["state"], "committed")
+            self.assertIn("core_output_after_terminal:", captured.output[0])
+
+    async def test_terminal_result_returns_before_unbounded_tail_or_exit_observation(self):
+        class TailReader(asyncio.StreamReader):
+            def __init__(self, mode):
+                super().__init__()
+                self.mode = mode
+                self.producing = True
+                self.read_sizes = []
+            async def read(self, size):
+                self.read_sizes.append(size)
+                if self.mode == "continuous_tail" and self.producing:
+                    await asyncio.sleep(0)
+                    return b"x" * size
+                return await super().read(size)
+
+        class TailPeer(Peer):
+            def __init__(self, mode):
+                super().__init__()
+                self.stdout = TailReader(mode)
+                self.mode = mode
+                self.kill_calls = 0
+                self.closed = False
+            def write(self, data):
+                first = self.request is None
+                super().write(data)
+                if first:
+                    row = response("install_patch", self.request["request_id"])
+                    self.stdout.feed_data(json.dumps(row).encode("utf-8") + b"\n")
+                    if self.mode == "exit_wait":
+                        self.stdout.feed_eof()
+            def close(self): self.closed = True
+            def kill(self):
+                self.kill_calls += 1
+                raise AssertionError("valid terminal receipt cannot kill a writer")
+            def release_observer(self):
+                self.stdout.producing = False
+                if not self.stdout.at_eof():
+                    self.stdout.feed_eof()
+                self.returncode = 0
+                self.finished.set()
+
+        for mode, diagnostic in (("never_eof", "timeout"), ("continuous_tail", "byte_limit"), ("exit_wait", "timeout")):
+            with self.subTest(mode=mode):
+                peer = TailPeer(mode)
+                pending_call = None
+                try:
+                    with patch("bridge.asyncio.create_subprocess_exec", return_value=peer), patch("bridge.TERMINAL_DRAIN_SECONDS", .02), patch("bridge.TERMINAL_DRAIN_BYTES", 1024), patch("bridge.RENEW_SECONDS", .001):
+                        with self.assertLogs("bridge", level="WARNING") as captured:
+                            pending_call = asyncio.create_task(self.bridge.install_patch("local", "signed", operation="overwrite"))
+                            completed, _ = await asyncio.wait({pending_call}, timeout=.5)
+                            self.assertIn(pending_call, completed, "valid receipt remained blocked on terminal transport")
+                            result = pending_call.result()
+                        self.assertEqual(result["disposition"], "completed")
+                        self.assertIn("core_observation_after_terminal_deferred: " + diagnostic, "\n".join(captured.output))
+                        self.assertTrue(peer.closed)
+                        self.assertEqual(peer.kill_calls, 0)
+                        self.assertEqual(len(peer.lines), 1)
+                        self.assertFalse(peer.cancelled.is_set())
+                        self.assertFalse(peer.renewed.is_set())
+                        self.assertTrue(self.bridge._terminal_observers)
+                        self.assertTrue(all(0 < size <= 65536 for size in peer.stdout.read_sizes))
+                finally:
+                    peer.release_observer()
+                    if pending_call is not None:
+                        await asyncio.gather(pending_call, return_exceptions=True)
+                    # Explicitly await the independent observer: no leaked task,
+                    # cancellation warning, or orphan subprocess in this fixture.
+                    await asyncio.gather(*self.bridge._terminal_observers)
+                    await asyncio.sleep(0)
+                self.assertFalse(self.bridge._terminal_observers)
 
     async def test_removed_methods_and_host_path_injection_are_rejected_before_spawn(self):
         with patch("bridge.asyncio.create_subprocess_exec", new_callable=AsyncMock) as spawn:
@@ -132,12 +202,12 @@ class V3BridgeTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_core_error_detail_survives_task_failure(self):
         def factory(request_id, request):
-            return [], {"protocol_version": 3, "request_id": request_id, "ok": False,
+            return [], {"protocol_version": 4, "request_id": request_id, "ok": False,
                         "error": {"code": "analysis_failed", "detail": "bounded diagnostic"}}
         manager = TaskManager()
         with patch("bridge.asyncio.create_subprocess_exec", return_value=_FakeProcess(factory)):
             async def work(task):
-                return await self.bridge.install_patch("local", "signed")
+                return await self.bridge.install_patch("local", "signed", operation="overwrite")
             task = manager.get(manager.start("install", work)["task_id"])
             await task.worker
         self.assertEqual(task.snapshot()["error"], "analysis_failed")
@@ -147,7 +217,7 @@ class V3BridgeTests(unittest.IsolatedAsyncioTestCase):
         manager = TaskManager()
         async def work(task):
             task.request_cancel()
-            return {"state": "committed"}
+            return outcome()
         task = manager.get(manager.start("install", work)["task_id"])
         await task.worker
         task.update(state="failed", stage="applying")
@@ -169,16 +239,16 @@ class V3BridgeTests(unittest.IsolatedAsyncioTestCase):
             def kill(self):
                 self.returncode = 0
         def oversized(request_id, request):
-            return [], {"protocol_version": 3, "request_id": request_id, "ok": True,
+            return [], {"protocol_version": 4, "request_id": request_id, "ok": True,
                         "result": {"installs": [], "detail": "x" * MAX_RESPONSE_BYTES}}
         with patch("bridge.asyncio.create_subprocess_exec", return_value=Process(oversized)):
             with self.assertRaisesRegex(RuntimeError, "response_too_large"):
                 await self.bridge.scan()
         def normal(request_id, request):
-            return [], {"protocol_version": 3, "request_id": request_id, "ok": True,
-                        "result": {"installs": [], "catalog_trust": "unavailable"}}
+            return [], {"protocol_version": 4, "request_id": request_id, "ok": True,
+                        "result": response("scan")["result"]}
         with patch("bridge.asyncio.create_subprocess_exec", return_value=Process(normal)):
-            self.assertEqual((await self.bridge.scan())["installs"], [])
+            self.assertEqual((await self.bridge.scan())["installs"], response("scan")["result"]["installs"])
 
     async def test_real_streamreader_limit_uses_response_too_large_code(self):
         from bridge import MAX_RESPONSE_BYTES

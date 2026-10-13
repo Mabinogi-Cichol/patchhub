@@ -5,6 +5,7 @@
   "scripts": {
     "build:windows": "npm run build -w apps/windows",
     "build:decky": "npm run build -w apps/decky",
+    "test:contracts": "node scripts/test-ui-contract.mjs",
     "typecheck": "npm run typecheck -w apps/windows && npm run typecheck -w apps/decky"
   }
 }

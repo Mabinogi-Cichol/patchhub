@@ -18,6 +18,7 @@ fs2.workspace = true
 uuid.workspace = true
 reqwest.workspace = true
 schemars.workspace = true
+ts-rs.workspace = true
 url.workspace = true
 encoding_rs.workspace = true
 scraper.workspace = true

@@ -18,9 +18,13 @@ use std::{
     sync::atomic::{AtomicBool, Ordering},
 };
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, Serialize, ts_rs::TS, schemars::JsonSchema, serde::Deserialize,
+)]
+#[serde(deny_unknown_fields)]
 pub struct DomainError {
     pub code: String,
+    #[ts(optional = nullable)]
     pub detail: Option<String>,
 }
 impl DomainError {
@@ -73,13 +77,16 @@ fn bounded_message(message: impl Into<String>) -> String {
         .detail
         .unwrap_or_default()
 }
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ts_rs::TS, schemars::JsonSchema, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ProjectionDiagnostic {
     pub code: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional = nullable)]
     pub path: Option<PathBuf>,
     pub message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional = nullable)]
     pub instance_id: Option<String>,
 }
 #[derive(Debug, Clone)]
@@ -123,20 +130,21 @@ pub struct ProjectionInputs<'a> {
     pub capabilities: &'a HostCapabilities,
     pub cancel: &'a AtomicBool,
 }
-#[derive(Debug, Clone, Copy, Serialize)]
+#[derive(Debug, Clone, Copy, Serialize, ts_rs::TS, schemars::JsonSchema, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CatalogTrust {
     Signed,
     UnsignedDevelopment,
     Unavailable,
 }
-#[derive(Debug, Clone, Copy, Serialize)]
+#[derive(Debug, Clone, Copy, Serialize, ts_rs::TS, schemars::JsonSchema, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MatchStatus {
     Matched,
     NoCatalogMatch,
 }
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ts_rs::TS, schemars::JsonSchema, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ScanReport {
     pub catalog_revision: u64,
     pub catalog_trust: CatalogTrust,
@@ -144,22 +152,28 @@ pub struct ScanReport {
     pub platform: Platform,
     pub roots: Vec<PathBuf>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional = nullable)]
     pub settings_revision: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional = nullable)]
     pub sources: Option<Vec<sources::SourceSummary>>,
     pub installs: Vec<InstanceProjection>,
     pub diagnostics: Vec<ProjectionDiagnostic>,
 }
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ts_rs::TS, schemars::JsonSchema, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct InstanceProjection {
     pub game: steam::GameInstall,
     pub match_status: MatchStatus,
     pub patches: Vec<PatchMatch>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional = nullable)]
     pub sources: Option<Vec<sources::GameSourceSummary>>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional = nullable)]
     pub matches: Option<Vec<sources::SourceMatch>>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional = nullable)]
     pub discovery: Option<sources::GameDiscovery>,
     pub diagnostics: Vec<ProjectionDiagnostic>,
 }
@@ -174,19 +188,22 @@ pub struct PreviewRequest {
     pub instance_id: String,
     pub target: PreviewTarget,
 }
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ts_rs::TS, schemars::JsonSchema, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ProposedChange {
     pub path: String,
     pub action: String,
     pub baseline_matches: Option<bool>,
     pub actual_sha256: Option<String>,
 }
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ts_rs::TS, schemars::JsonSchema, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PreviewReport {
     pub instance_id: String,
     pub release_id: Option<String>,
     pub selection_id: Option<String>,
     pub catalog_revision: u64,
+    #[ts(type = "false")]
     pub executable: bool,
     pub blockers: Vec<String>,
     pub changes: Vec<ProposedChange>,

@@ -1,105 +1,11 @@
-export type ActionBlockerCode =
-  "unsigned_catalog" | "catalog_unavailable" | "catalog_expired" | "catalog_revision_rollback" |
-  "catalog_rollback" | "release_revoked" | "release_not_matched" | "platform_not_verified" |
-  "game_not_ready" | "build_not_verified" | "source_requires_guidance" | "artifact_requires_manual_download" |
-  "recipe_missing" | "source_not_enabled" | "source_not_subscribed" | "exe_source_disabled" |
-  "selection_not_found" | "invalid_selection_id" | "selection_stale" | "zip_download_unavailable" |
-  "zip_download_ambiguous" | "exe_download_ambiguous" | "invalid_download_url" | "exe_candidate_ambiguous" |
-  "exe_candidate_variant_unsupported" | "exe_sandbox_unavailable" | "installer_host_requires_non_root" | "unprivileged_user_required" |
-  "reinstall_unowned_or_incomplete" | "reinstall_content_identity_changed" | "needs_recovery" | "local_archive_signed_only";
-export type ActionBlocker = { code: ActionBlockerCode; detail?: string | null };
-export type ActionAvailability = { available: boolean; blockers: ActionBlocker[] };
-export type PatchActions = {
-  automatic: ActionAvailability;
-  local_archive: ActionAvailability;
-  reinstall: ActionAvailability;
-  overwrite: ActionAvailability;
-  primary: { operation: "overwrite"; label: "install" | "overwrite"; input: "automatic" | "local_archive" | "unavailable" };
-};
-
-export type Patch = {
-  release_id: string;
-  // Dynamic install handle (`zip-selection-*` / `exe-selection-*`). When set,
-  // installation routes by selection instead of the projected `release_id`.
-  selection_id?: string | null;
-  candidate_id?: string;
-  name: string;
-  source_page: string;
-  source_id?: string;
-  source_name?: string;
-  source_status?: string;
-  source_cached_at?: number | null;
-  support_level: string;
-  actions: PatchActions;
-  exe?: { language?: string; version?: string; variant?: string; requires_dlc?: number[]; excludes_dlc?: number[]; profile_id: string };
-  compatibility: string;
-  blockers: string[];
-  detection: { status: string; files: { path: string; status: string }[] };
-};
-
-export type Install = {
-  game: {
-    instance_id: string;
-    appid: number;
-    name: string;
-    localized_name?: string | null;
-    name_language?: string | null;
-    library_path: string;
-    install_path: string;
-    buildid: string | null;
-    availability: string;
-    kind: string;
-  };
-  match_status: string;
-  patches: Patch[];
-  sources?: GameSourceSubscription[];
-  discovery?: GameDiscovery;
-  exe_reviews?: ExeReview[];
-};
-
-// Discovery identities are owned by the shared Rust core (Windows + Decky);
-// hosts only project them. A candidate never becomes an installation
-// release_id nor authorizes a prepare request.
-export type SourceCandidate = {
-  candidate_id: string;
-  source_id: string;
-  source_name?: string;
-  source_record_id?: string;
-  game_appid?: number | null;
-  parent_appid?: number | null;
-  game_title: string;
-  aliases?: string[];
-  patch_title: string;
-  variant?: string;
-  languages?: string[] | null;
-  version_raw?: string | null;
-  version_evidence?: unknown[];
-  requires_dlc?: number[] | null;
-  excludes_dlc?: number[] | null;
-  platforms?: string[] | null;
-  patch_kind?: string;
-  source_page: string;
-  upstream_page?: string | null;
-  mirrors?: { url: string; label?: string | null; format?: string }[];
-  format_reported?: string | null;
-  format_observed?: string | null;
-  capability: string;
-  match_basis?: string;
-  identity_evidence?: unknown[];
-  provenance?: unknown[];
-  observed_at?: number | string | null;
-  cache_status?: string;
-  warnings?: string[];
-  version_identity?: string;
-  published_at?: string | null;
-  patch_updated_at?: string | null;
-  fingerprint?: string;
-  related_index_pages?: unknown[];
-};
-export type DiscoveryDiagnostic = { code: string; message?: string; detail?: string; source_id?: string };
-export type GameDiscovery = { status: string; candidates: SourceCandidate[]; diagnostics: DiscoveryDiagnostic[] };
-export type ExeReview = { candidate_id: string; release_id: string | null; profile_id: string | null; status: "guidance" | "installable" | "check_required"; blockers: string[] };
-export type DiscoveryResult = GameDiscovery & { instance_id: string; appid: number; generation: number; settings_revision: number; exe_reviews?: ExeReview[]; exe_patches?: Patch[]; patches?: Patch[] };
+// Wire DTOs are generated from the Rust protocol/core types.
+import type { ActionBlocker, InstallerOutcome, PatchMatch, InstanceProjection, ScanReport, SourceCandidate } from "../../contracts/generated/protocol";
+export type { ActionBlockerCode, ActionBlocker, ActionAvailability, PatchActions, SourceCandidate, DiscoveryDiagnostic, GameDiscovery, DiscoveryResult, Transaction, InstallerOutcome, CleanupResult, InstallStage, DomainError } from "../../contracts/generated/protocol";
+export type { PatchMatch as Patch, InstanceProjection as Install, SourceSummary as SourceSubscription, GameSourceSummary as GameSourceSubscription, PreviewReport as Preview, ProposedChange as Change } from "../../contracts/generated/protocol";
+type Patch = PatchMatch;
+type Install = InstanceProjection;
+// Only host scan lifecycle metadata is added to the generated projection.
+export type ScanResult = ScanReport & { generation?: number; scan_progress?: { completed: number; total: number; running: boolean } };
 export type DisplayPatch = { kind: "installable"; key: string; patch: Patch } | { kind: "discovery"; key: string; candidate: SourceCandidate };
 
 export function candidateMatched(candidate: SourceCandidate): boolean {
@@ -117,19 +23,6 @@ export function hasMatchedPatch(row: Install): boolean {
   return row.patches.length > 0 || !!row.discovery?.candidates.some(candidateMatched);
 }
 
-export type ScanResult = {
-  roots: string[];
-  catalog_revision: number;
-  catalog_trust: string;
-  platform: string;
-  installs: Install[];
-  diagnostics: { code: string; path: string; message: string }[];
-  sources?: SourceSubscription[];
-  generation?: number;
-  settings_revision?: number;
-  scan_progress?: { completed: number; total: number; running: boolean };
-};
-
 export function installSummary(row: Install, scanning = false): string {
   if (row.patches.some(p => isManaged(p.detection.status) || isExternal(p.detection.status))) return "已安装补丁";
   if (row.patches.some(p => p.actions.overwrite.available && p.detection.status === "partial_or_conflict")) return "补丁文件不完整，可覆盖安装";
@@ -142,46 +35,6 @@ export function installSummary(row: Install, scanning = false): string {
   return "暂未找到补丁";
 }
 
-export type SourceSubscription = {
-  id: string;
-  name: string;
-  adapter: string;
-  enabled: boolean;
-  pages: string[];
-  status?: string;
-  cached_at?: number;
-  checked_at?: number;
-  entry_count?: number;
-  role?: string;
-};
-
-export type GameSourceSubscription = SourceSubscription & {
-  subscribed: boolean;
-  matched: boolean;
-};
-
-export type Change = { path: string; action: string; baseline_matches?: boolean };
-export type Preview = {
-  instance_id: string;
-  release_id: string;
-  selection_id?: string | null;
-  catalog_revision: number;
-  executable: boolean;
-  blockers: string[];
-  changes: Change[];
-};
-export type Plan = Omit<Preview, "executable"> & { plan_id?: string; expires_at?: number; preconditions?: string[]; disk_requirement?: number };
-export type Transaction = {
-  transaction_id: string;
-  instance_id: string;
-  release_id: string;
-  selection_id?: string | null;
-  content_id?: string | null;
-  state: string;
-  error?: string | null;
-  has_replacements?: boolean;
-};
-
 export type Filter = "all" | "matched" | "installed" | "attention";
 
 export function gameDisplayName(game: Install["game"]): string {
@@ -189,16 +42,16 @@ export function gameDisplayName(game: Install["game"]): string {
 }
 
 export function isManaged(status: string): boolean {
-  return ["managed", "installed_managed", "installed_owned"].includes(status);
+  return status === "installed_managed";
 }
 
 export function isExternal(status: string): boolean {
-  return ["external", "installed_external"].includes(status);
+  return status === "installed_external";
 }
 
 export function needsAttention(row: Install): boolean {
   return row.game.availability !== "installed" || row.patches.some(p =>
-    p.blockers.length > 0 || ["partial", "conflict", "partial_or_conflict", "needs_revalidation"].includes(p.detection.status)
+    p.blockers.length > 0 || p.detection.status === "partial_or_conflict"
     || (p.detection.status === "unknown" && p.support_level !== "discover_only")
   );
 }
@@ -215,7 +68,8 @@ export function filterInstalls(rows: Install[], filter: Filter, query: string): 
 }
 
 export function reason(code: string): string {
-  const normalized = code.trim().replace(/^(Error|RuntimeError|ValueError):\s*/, "");
+  // Display-only normalization of host exception labels; never used as protocol authority.
+  const normalized = code.replace(/^(Error|RuntimeError|ValueError):\s*/, "");
   if (normalized.startsWith("exe_lua_call_unsupported:")) return "安装器包含暂未支持的执行动作，无法自动安装。";
   if (normalized.startsWith("exe_lua_control_flow_unsupported:")) return "安装器包含暂未支持的动态流程，无法自动安装。";
   if (/^discovery_http_\d{3}$/.test(normalized)) return `来源网页返回 HTTP ${normalized.slice(-3)}，请稍后重试。`;
@@ -423,22 +277,7 @@ export function reason(code: string): string {
      ,reinstall_unowned_or_incomplete: "无法确认上次安装记录，暂不能直接重装。"
      ,source_not_subscribed: "尚未订阅此来源，请在来源管理中订阅后重试。"
   };
-  return labels[normalized] ?? (normalized.startsWith("exe_") ? "此 EXE 补丁暂不能安全安装，请查看来源说明或稍后重试。" : normalized.replaceAll("_", " "));
-}
-
-/**
- * Split a host error string (`code` or `code: detail`, both optionally prefixed
- * with a Python exception name) into display parts. The detail is the host's
- * truncated underlying diagnostic. This does not change `reason` semantics.
- */
-export function splitError(message: string): { code: string; detail: string | null } {
-  const normalized = (message ?? "").trim().replace(/^(Error|RuntimeError|ValueError):\s*/, "");
-  const index = normalized.indexOf(": ");
-  if (index <= 0) return { code: normalized, detail: null };
-  const code = normalized.slice(0, index).trim();
-  const detail = normalized.slice(index + 2).trim();
-  if (!/^[A-Za-z][A-Za-z0-9_.-]*$/.test(code)) return { code: normalized, detail: null };
-  return { code, detail: detail || null };
+  return labels[normalized] ?? normalized;
 }
 
 export function workflowState(value: string): string {
@@ -455,11 +294,67 @@ export function workflowState(value: string): string {
 
 export function patchState(status: string): string {
   const labels: Record<string, string> = {
-    absent: "未检测到", missing: "未检测到", not_detected: "未检测到", managed: "已安装 / 托管",
-    installed_managed: "已安装 / 托管", installed_owned: "已安装 / 托管",
-    external: "已安装 / 外部", installed_external: "已安装 / 外部",
-    partial: "部分安装", conflict: "冲突", partial_or_conflict: "部分安装或文件冲突", unknown: "状态未知",
-    needs_revalidation: "需重新验证"
+    not_detected: "未检测到", installed_managed: "已安装 / 托管", installed_external: "已安装 / 外部",
+    partial_or_conflict: "部分安装或文件冲突", unknown: "状态未知"
   };
   return labels[status] ?? status;
+}
+
+
+/** Input choice uses authoritative snapshot facts; archive selection remains local UI state. */
+export function primaryInstallAction(patch: Patch | null | undefined, archiveSelected: boolean, route: "primary" | "local_archive" = "primary") {
+  const primary = patch?.actions.primary;
+  const input = route === "local_archive" ? "local_archive" : primary?.input ?? "unavailable";
+  const available = !!patch && (input === "automatic" ? patch.actions.automatic.available
+    : input === "local_archive" ? patch.actions.local_archive.available && archiveSelected : false);
+  return { operation: primary?.operation ?? "overwrite", label: primary?.label ?? "install", input, available };
+}
+export function installInput(patch: Patch | null | undefined, localArchive?: string): string | null {
+  if (!patch) return null;
+  if (localArchive !== undefined) return localArchive.trim() && patch.actions.local_archive.available ? localArchive : null;
+  return patch.actions.primary.input === "automatic" && patch.actions.automatic.available ? "" : null;
+}
+export function actionBlockers(patch: Patch | null | undefined): ActionBlocker[] {
+  if (!patch) return [];
+  const input = patch.actions.primary.input;
+  const selected = input === "automatic" ? patch.actions.automatic.blockers
+    : input === "local_archive" ? [...patch.actions.automatic.blockers, ...patch.actions.local_archive.blockers]
+      : patch.actions.overwrite.blockers;
+  const seen = new Set<string>();
+  return selected.filter(blocker => { const key = `${blocker.code}\0${blocker.detail ?? ""}`;
+    if (seen.has(key)) return false; seen.add(key); return true; });
+}
+export function progressPercent(done: number, total: number | null | undefined): number | null {
+  if (total == null || !Number.isFinite(total) || total <= 0 || !Number.isFinite(done)) return null;
+  return Math.min(100, Math.max(0, done / total * 100));
+}
+export function progressStageLabel(stage: string, substage?: string | null): string {
+  const labels: Record<string, string> = { connecting:"正在连接", downloading:"正在下载", validating:"正在核对", analyzing_installer:"正在分析安装包", extracting:"正在提取", planning:"正在准备", applying:"正在写入", rolling_back:"正在回滚", cleanup:"正在清理", backing_up:"正在备份", writing:"正在写入", committing:"正在提交" };
+  return labels[substage ?? stage] ?? stage;
+}
+export function safeSourceUrl(value: string): boolean {
+  try { const url = new URL(value);
+    if (url.protocol !== "https:" || url.username || url.password || (url.port && url.port !== "443")) return false;
+    const host = url.hostname.toLowerCase();
+    return host.includes(".") && host !== "localhost" && !host.endsWith(".localhost") && !host.endsWith(".local") && !host.includes(":") && !/^\d+\.\d+\.\d+\.\d+$/.test(host);
+  } catch { return false; }
+}
+export function sourceRefreshFailed(status: string | null | undefined): boolean {
+  return ["failed", "source_refresh_failed", "source_offline_cached"].includes(status ?? "") || /^discovery_http_\d{3}$/.test(status ?? "");
+}
+export function sourceQueryComplete(status: string | null | undefined): boolean {
+  return ["complete", "empty", "cache_complete"].includes(status ?? "");
+}
+/** New invocation outcomes use core disposition; historical transaction display is separate. */
+export function installationResult(outcome: InstallerOutcome, overwrite = false): string {
+  if (outcome.disposition === "completed") return overwrite ? "覆盖安装完成" : "安装完成";
+  if (outcome.recovery?.required) return "操作需要修复，请运行修复后重试。";
+  if (outcome.disposition === "cancelled") return "任务已安全取消。";
+  const failure = outcome.cause?.code ?? outcome.recovery?.code ?? "installation_failed";
+  const detail = outcome.cause?.detail ?? outcome.recovery?.detail;
+  return `安装未完成：${reason(failure)}${detail ? ` · ${detail}` : ""}`;
+}
+
+export function sourceRefreshSucceeded(status: string | null | undefined): boolean {
+  return ["fresh", "source_refreshed", "source_not_modified"].includes(status ?? "");
 }

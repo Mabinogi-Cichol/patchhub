@@ -8,6 +8,7 @@ from unittest.mock import Mock, patch
 
 from tasks import Task, TaskManager, current_task
 from bridge import CoreBridge
+from protocol_test_support import outcome, event, response
 
 
 class ControlledProcess:
@@ -29,23 +30,24 @@ class ControlledProcess:
         self.messages.append(payload)
         if self.request is None:
             self.request = json.loads(payload)
-            self.emit({"event": "install_progress", "protocol_version": 3, "request_id": self.request["request_id"],
-                "instance_id": "instance", "selection_id": None, "sequence": 0, "stage": "applying", "bytes_done": 12,
-                "total_bytes": 24, "files_done": 0, "total_files": 1, "archive_bytes": 48})
+            self.emit(event("install_progress", self.request["request_id"],
+                instance_id="instance", selection_id=None, sequence=0, stage="applying", substage=None,
+                bytes_done=12, total_bytes=24, files_done=0, total_files=1, archive_bytes=48, current_file=None))
             if not self.restoring:
                 self.finish("committed")
         else:
             self.cancel_received.set()
-            self.emit({"event": "install_progress", "protocol_version": 3, "request_id": self.request["request_id"],
-                "instance_id": "instance", "selection_id": None, "sequence": 1, "stage": "rolling_back", "bytes_done": 0,
-                "total_bytes": None, "files_done": 0, "total_files": None})
+            self.emit(event("install_progress", self.request["request_id"],
+                instance_id="instance", selection_id=None, sequence=1, stage="rolling_back", substage=None,
+                bytes_done=0, total_bytes=None, files_done=0, total_files=None, current_file=None, archive_bytes=48))
+
 
     def emit(self, value):
         self.stdout.feed_data(json.dumps(value).encode() + b"\n")
 
     def finish(self, state):
-        self.emit({"protocol_version": 3, "request_id": self.request["request_id"], "ok": True,
-            "result": {"state": state, "error": "task_cancelled" if state == "rolled_back" else None}})
+        self.emit(response("install_patch", self.request["request_id"],
+            outcome(state, "task_cancelled" if state == "rolled_back" else None)))
         self.returncode = 0
         self.stdout.feed_eof()
         self.finished.set()
@@ -62,6 +64,7 @@ class ControlledBridgeTests(unittest.IsolatedAsyncioTestCase):
         path = Path(self.temp.name) / "binary"
         path.touch()
         self.bridge = CoreBridge(path, path)
+        self.bridge._preflight_done = True
         self.task = Task("install", {})
         self.task.update(archive_bytes=48)
         token = current_task.set(self.task)
@@ -70,7 +73,7 @@ class ControlledBridgeTests(unittest.IsolatedAsyncioTestCase):
     async def test_progress_preserves_known_archive_size_and_uses_controlled_process(self):
         process = ControlledProcess()
         with patch("bridge.asyncio.create_subprocess_exec", return_value=process) as spawn:
-            result = await self.bridge.install_patch("instance", "release")
+            result = await self.bridge.install_patch("instance", "release", operation="overwrite")
         self.assertEqual(spawn.call_args.args[1], "serve-task")
         self.assertEqual(result["state"], "committed")
         self.assertEqual(self.task.snapshot()["bytes_done"], 12)
@@ -80,7 +83,7 @@ class ControlledBridgeTests(unittest.IsolatedAsyncioTestCase):
         process = ControlledProcess(restoring=True)
         self.task.request_cancel()
         with patch("bridge.asyncio.create_subprocess_exec", return_value=process):
-            call = asyncio.create_task(self.bridge.install_patch("instance", "release"))
+            call = asyncio.create_task(self.bridge.install_patch("instance", "release", operation="overwrite"))
             await asyncio.wait_for(process.cancel_received.wait(), 1)
             self.assertEqual(json.loads(process.messages[0])["method"], "install_patch")
             self.assertEqual(process.messages[1], b"cancel\n")
@@ -93,7 +96,7 @@ class ControlledBridgeTests(unittest.IsolatedAsyncioTestCase):
     async def test_cancelling_rpc_waits_for_durable_rollback_receipt(self):
         process = ControlledProcess(restoring=True)
         with patch("bridge.asyncio.create_subprocess_exec", return_value=process):
-            call = asyncio.create_task(self.bridge.install_patch("instance", "release"))
+            call = asyncio.create_task(self.bridge.install_patch("instance", "release", operation="overwrite"))
             while process.request is None:
                 await asyncio.sleep(0)
             call.cancel()
@@ -110,7 +113,7 @@ class TaskTests(unittest.IsolatedAsyncioTestCase):
         async def work(task):
             await finish.wait()
             task.check()
-            return {"state": "committed"}
+            return {"disposition": "completed", "state": "committed"}
         task = manager.get(manager.start("install", work)["task_id"])
         await asyncio.sleep(.04)
         self.assertTrue(task.cancel.is_set())
@@ -120,7 +123,7 @@ class TaskTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(task.snapshot()["state"], "cancelled")
 
     async def test_renewal_keeps_work_alive_and_cancellation_waits_for_rollback(self):
-        manager = TaskManager(lease_seconds=.04)
+        manager = TaskManager(lease_seconds=.2)
         restoring = asyncio.Event()
         finish = asyncio.Event()
         async def work(task):
@@ -129,7 +132,7 @@ class TaskTests(unittest.IsolatedAsyncioTestCase):
             task.stage("rolling_back")
             restoring.set()
             await finish.wait()
-            return {"state": "rolled_back", "error": "task_cancelled"}
+            return {"disposition": "cancelled", "state": "rolled_back", "error": "task_cancelled"}
         task = manager.get(manager.start("install", work)["task_id"])
         for _ in range(8):
             await asyncio.sleep(.01)
@@ -151,7 +154,7 @@ class TaskTests(unittest.IsolatedAsyncioTestCase):
         async def work(task):
             await finish.wait()
             task.check()
-            return {"state": "committed"}
+            return {"disposition": "completed", "state": "committed"}
         task = manager.get(manager.start("install", work)["task_id"])
         task.lease -= 2
         expired = task.lease
@@ -167,7 +170,7 @@ class TaskTests(unittest.IsolatedAsyncioTestCase):
         async def work(task):
             await finish.wait()
             task.check()
-            return {"state": "committed"}
+            return {"disposition": "completed", "state": "committed"}
         task = manager.get(manager.start("install", work)["task_id"])
         for _ in range(4):
             await asyncio.sleep(.01)
@@ -186,7 +189,7 @@ class TaskTests(unittest.IsolatedAsyncioTestCase):
             task.stage("rolling_back")
             restoring.set()
             await finish.wait()
-            return {"state": "rolled_back", "error": "task_cancelled"}
+            return {"disposition": "cancelled", "state": "rolled_back", "error": "task_cancelled"}
         task = manager.get(manager.start("install", work)["task_id"])
         await asyncio.wait_for(restoring.wait(), 1)
         self.assertEqual(task.snapshot()["state"], "rolling_back")
@@ -197,8 +200,8 @@ class TaskTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(task.snapshot()["state"], "cancelled")
 
     async def test_commit_wins_cancel_race_but_recovery_failure_is_not_cancelled(self):
-        for receipt, expected in (({"state": "committed"}, "completed"),
-                                  ({"state": "needs_recovery", "error": "task_cancelled; recovery_conflict"}, "failed")):
+        for receipt, expected in (({"disposition": "completed", "state": "committed"}, "completed"),
+                                  ({"disposition": "failed", "state": "needs_recovery", "error": "task_cancelled; recovery_conflict"}, "failed")):
             manager = TaskManager()
             async def work(task):
                 task.request_cancel()

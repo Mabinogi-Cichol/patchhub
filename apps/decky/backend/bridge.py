@@ -3,28 +3,31 @@ import asyncio
 import inspect
 import os
 import json
+import logging
 from pathlib import Path
 import uuid
 from threading import Event
 from weakref import WeakValueDictionary
 from tasks import current_task
 
-MAX_RESPONSE_BYTES = 8 * 1024 * 1024
-MAX_REQUEST_BYTES = 64 * 1024
-PROTOCOL_VERSION = 3
+from protocol_validation import (PROTOCOL_VERSION, METHODS, SOURCE_METHODS, CONTROLLED_METHODS,
+    SOURCE_EVENTS, INSTALL_STAGES, MAX_RESPONSE_BYTES, MAX_INSTANCE_ID_BYTES, MAX_REQUEST_BYTES,
+    validate_id, validate_request, validate_response, validate_event, validate_capabilities, JS_MAX_INTEGER)
 RENEW_SECONDS = 3
-SOURCE_METHODS = {
-    "list_sources", "list_game_sources", "set_source_enabled", "set_game_source",
-    "add_source", "refresh_sources", "discover_game", "scan_sources",
-}
-METHODS = {"get_capabilities", "discard_plan", "scan", "preview", "install_patch",
-           "list_transactions", "recover", "cleanup_cache"} | SOURCE_METHODS
-CONTROLLED_METHODS = {"install_patch", "refresh_sources", "scan_sources"}
-SOURCE_EVENTS = {"source_progress", "source_update"}
-INSTALL_STAGES = {"connecting", "downloading", "validating", "analyzing_installer",
-                  "extracting", "planning", "applying", "rolling_back", "cleanup"}
+TERMINAL_DRAIN_SECONDS = 1.0
+TERMINAL_DRAIN_BYTES = MAX_RESPONSE_BYTES
+TERMINAL_DRAIN_CHUNK_BYTES = 64 * 1024
 PROGRESS_FIELDS = {"stage", "substage", "bytes_done", "total_bytes", "files_done",
                    "total_files", "current_file", "archive_bytes"}
+
+
+def _unique_object(pairs):
+    value = {}
+    for key, item in pairs:
+        if key in value:
+            raise ValueError("duplicate_field")
+        value[key] = item
+    return value
 
 
 class CoreError(RuntimeError):
@@ -51,6 +54,9 @@ class CoreBridge:
         self.timeout = timeout
         self.process_identity = {"user": run_uid, "group": run_gid, "extra_groups": []} if run_uid is not None else {}
         self.active_calls = set()
+        self._terminal_observers = set()
+        self._preflight_done = False
+        self._preflight_lock = asyncio.Lock()
         self.process_env = os.environ.copy()
         if (run_uid == 0 or (run_uid is not None and (type(run_uid) is not int or run_uid < 1
                 or type(run_gid) is not int or run_gid < 1))
@@ -73,9 +79,15 @@ class CoreBridge:
 
     @staticmethod
     def _id(value: str) -> str:
-        if not isinstance(value, str) or not value or len(value) > 256 or any(ord(c) < 32 for c in value):
-            raise ValueError("invalid_id")
-        return value
+        return validate_id(value)
+
+    async def preflight(self):
+        async with self._preflight_lock:
+            if not self._preflight_done:
+                caps = await self._call("get_capabilities", {})
+                validate_capabilities(caps)
+                self._preflight_done = True
+        return True
 
     async def scan(self):
         return await self._call("scan", {})
@@ -86,7 +98,7 @@ class CoreBridge:
             raise ValueError("invalid_request")
         if release_id is None and selection_id is None:
             raise ValueError("selection_or_release_required")
-        params = {"instance_id": cls._id(instance_id)}
+        params = {"instance_id": validate_id(instance_id, MAX_INSTANCE_ID_BYTES)}
         key, value = ("selection_id", selection_id) if selection_id is not None else ("release_id", release_id)
         params[key] = cls._id(value)
         return params
@@ -95,7 +107,7 @@ class CoreBridge:
         return await self._call("preview", self.selection(instance_id, release_id, selection_id))
 
     async def install_patch(self, instance_id, release_id=None, selection_id=None,
-                            archive=None, operation="install", request_id=None,
+                            archive=None, operation=None, request_id=None,
                             cleanup_policy="disabled"):
         params = self.selection(instance_id, release_id, selection_id)
         if operation not in ("install", "reinstall", "overwrite"):
@@ -106,9 +118,8 @@ class CoreBridge:
             if selection_id is not None:
                 raise ValueError("archive_not_allowed_for_selection")
             params["archive"] = str(archive)
-        params.update(operation=operation, request_id=request_id or str(uuid.uuid4()),
-                      cleanup_policy=cleanup_policy)
-        return await self._call("install_patch", params)
+        params.update(operation=operation, cleanup_policy=cleanup_policy)
+        return await self._call("install_patch", params, request_id=request_id)
 
     async def discard_plan(self, plan_id):
         return await self._call("discard_plan", {"plan_id": self._id(plan_id)})
@@ -125,15 +136,19 @@ class CoreBridge:
     @staticmethod
     def _source_event(row, request_id, last_sequence):
         """Validate one interleaved source event; returns its (new) sequence."""
-        if (not isinstance(row, dict) or row.get("request_id") != request_id
-                or row.get("protocol_version") != PROTOCOL_VERSION
-                or type(row.get("sequence")) is not int or row["sequence"] <= last_sequence
-                or (last_sequence == -1 and row["sequence"] != 0)):
-            raise RuntimeError("invalid_core_response")
-        return row["sequence"]
+        if row.get("protocol_version") != PROTOCOL_VERSION:
+            raise RuntimeError("unsupported_protocol")
+        if row.get("request_id") != request_id or type(row.get("sequence")) is not int:
+            raise RuntimeError("contract_mismatch")
+        sequence = row["sequence"]
+        if (sequence < 0 or sequence > JS_MAX_INTEGER
+                or (last_sequence == -1 and sequence != 0)
+                or sequence > last_sequence + 1):
+            raise RuntimeError("contract_mismatch")
+        return sequence
 
     async def _call(self, method: str, params: dict, on_event=None, cancel=None,
-                    timeout=None, controlled: bool | None = None):
+                    timeout=None, controlled: bool | None = None, request_id=None):
         # Both reads briefly take the core journal's exclusive lock. Source
         # event projection and UI requests must not race each other for it.
         # Writers still use the core lock and report genuine installer_busy.
@@ -144,29 +159,27 @@ class CoreBridge:
                 lock = asyncio.Lock()
                 _journal_read_locks[key] = lock
             async with lock:
-                return await self._exchange_call(method, params, on_event, cancel, timeout, controlled)
-        return await self._exchange_call(method, params, on_event, cancel, timeout, controlled)
+                return await self._exchange_call(method, params, on_event, cancel, timeout, controlled, request_id)
+        return await self._exchange_call(method, params, on_event, cancel, timeout, controlled, request_id)
 
-    async def _exchange_call(self, method, params, on_event, cancel, timeout, controlled):
+    async def _exchange_call(self, method, params, on_event, cancel, timeout, controlled, request_id):
         if method not in METHODS:
             raise ValueError("unsupported_method")
-        request_id = params.get("request_id") or str(uuid.uuid4())
-        if not isinstance(request_id, str) or not 1 <= len(request_id.encode("utf-8")) <= 128 or any(ord(c) < 32 or ord(c) == 127 for c in request_id):
-            raise ValueError("invalid_request_id")
-        if set(params) & {"roots", "catalog", "signed_catalog", "trust_keys", "state_dir", "platform"}:
+        request_id = str(uuid.uuid4()) if request_id is None else validate_id(request_id, 128, "invalid_request_id")
+        if set(params) & {"host", "roots", "catalog", "signed_catalog", "trust_keys", "state_dir", "platform", "request_id"}:
             raise ValueError("host_parameter_forbidden")
-        host_params = {"roots": [], "catalog": str(self.catalog), "platform": "steamos"}
-        if self.signed_catalog:
-            host_params["signed_catalog"] = str(self.signed_catalog)
-        if self.trust_keys:
-            host_params["trust_keys"] = str(self.trust_keys)
-        if self.state_dir:
-            host_params["state_dir"] = str(self.state_dir)
+        host = {"roots": [], "catalog": str(self.catalog), "platform": "steamos",
+                "signed_catalog": str(self.signed_catalog) if self.signed_catalog else None,
+                "trust_keys": str(self.trust_keys) if self.trust_keys else None,
+                "state_dir": str(self.state_dir) if self.state_dir else None}
         request = {"protocol_version": PROTOCOL_VERSION, "request_id": request_id, "method": method,
-                   "params": {**host_params, **params}}
+                   "params": {"host": host, **params}}
+        validate_request(request, method in CONTROLLED_METHODS if controlled is None else controlled)
         payload = json.dumps(request, ensure_ascii=False).encode("utf-8") + b"\n"
         if len(payload) > MAX_REQUEST_BYTES:
             raise ValueError("request_too_large")
+        if method not in {"get_capabilities", "scan", "preview", "list_transactions", "list_sources", "list_game_sources", "discover_game"}:
+            await self.preflight()
         task = current_task.get()
         if controlled is None:
             controlled = method in CONTROLLED_METHODS
@@ -180,13 +193,14 @@ class CoreBridge:
         if controlled:
             self.active_calls.add(cancel)
         request_sent = asyncio.Event()
+        terminal_received = asyncio.Event()
 
         async def signal_cancel():
             # The control message must follow the request, including when a
             # lease expires while the subprocess is starting.
             await request_sent.wait()
             next_renew = asyncio.get_running_loop().time() + RENEW_SECONDS
-            while process.returncode is None:
+            while process.returncode is None and not terminal_received.is_set():
                 if cancel.is_set():
                     try:
                         process.stdin.write(b"cancel\n")
@@ -221,45 +235,110 @@ class CoreBridge:
                     break
                 if len(line) > MAX_RESPONSE_BYTES:
                     raise RuntimeError("response_too_large")
-                row = json.loads(line)
+                if not line.endswith(b"\n"):
+                    raise RuntimeError("contract_mismatch")
+                try:
+                    row = json.loads(line, object_pairs_hook=_unique_object, parse_constant=lambda value: (_ for _ in ()).throw(ValueError(value)))
+                except (UnicodeDecodeError, ValueError) as exc:
+                    raise RuntimeError("contract_mismatch") from exc
                 if not isinstance(row, dict):
-                    raise RuntimeError("invalid_core_response")
-                if response is not None:
-                    if row.get("event") in SOURCE_EVENTS | {"install_progress"}:
-                        # The terminal receipt wins; stale telemetry cannot turn
-                        # a real commit into a transport failure.
-                        continue
-                    raise RuntimeError("invalid_core_response")
+                    raise RuntimeError("contract_mismatch")
                 if "event" in row:
                     if not controlled or row.get("event") not in SOURCE_EVENTS | {"install_progress"}:
-                        raise RuntimeError("invalid_core_response")
-                    last_sequence = self._source_event(row, request_id, last_sequence)
+                        raise RuntimeError("contract_mismatch")
+                    validate_event(row, request_id)
+                    sequence = self._source_event(row, request_id, last_sequence)
+                    if sequence <= last_sequence:
+                        continue
+                    last_sequence = sequence
                     if row["event"] == "install_progress":
                         if (method != "install_patch" or row.get("instance_id") != params.get("instance_id")
                                 or row.get("selection_id") != params.get("selection_id")
                                 or row.get("stage") not in INSTALL_STAGES):
-                            raise RuntimeError("invalid_core_response")
+                            raise RuntimeError("contract_mismatch")
                         if task:
                             task.update(**{key: value for key, value in row.items() if key in PROGRESS_FIELDS})
                     elif method not in {"scan_sources", "refresh_sources"}:
-                        raise RuntimeError("invalid_core_response")
+                        raise RuntimeError("contract_mismatch")
                     if on_event is not None:
                         emitted = on_event(row)
                         if inspect.isawaitable(emitted):
                             await emitted
                 elif response is None:
+                    validate_response(row, method, request_id)
                     response = row
-                else:
-                    raise RuntimeError("invalid_core_response")
-            await process.wait()
-            if process.returncode != 0:
-                raise RuntimeError("core_process_failed")
-            if (not isinstance(response, dict) or response.get("protocol_version") != PROTOCOL_VERSION
-                    or response.get("request_id") != request_id or not isinstance(response.get("ok"), bool)):
-                raise RuntimeError("invalid_core_response")
+                    terminal_received.set()
+                    # EOF stops renewals and seals the first verified receipt.
+                    # Trailing bytes are host diagnostics, regardless of shape.
+                    try:
+                        process.stdin.close()
+                    except Exception as exc:
+                        logging.getLogger(__name__).warning("core_stdin_close_after_terminal_failed: %s", type(exc).__name__)
+                    break
+            if response is not None:
+                state = {"bytes": 0}
+                logger = logging.getLogger(__name__)
+
+                async def observe_terminal(byte_limit=None):
+                    while True:
+                        size = TERMINAL_DRAIN_CHUNK_BYTES
+                        if byte_limit is not None:
+                            remaining = byte_limit - state["bytes"]
+                            if remaining <= 0:
+                                return False
+                            size = min(size, remaining)
+                        chunk = await process.stdout.read(size)
+                        if not chunk:
+                            await process.wait()
+                            if process.returncode != 0:
+                                logger.warning("core_exit_after_terminal: %s", process.returncode)
+                            return True
+                        state["bytes"] += len(chunk)
+                        # Buffered or synthetic peers must not starve the timer.
+                        await asyncio.sleep(0)
+
+                reason = None
+                try:
+                    observed = await asyncio.wait_for(observe_terminal(TERMINAL_DRAIN_BYTES), TERMINAL_DRAIN_SECONDS)
+                    if not observed:
+                        reason = "byte_limit"
+                except asyncio.TimeoutError:
+                    observed = False
+                    reason = "timeout"
+                except Exception as exc:
+                    observed = False
+                    reason = "read_failed"
+                    logger.warning("core_drain_after_terminal_failed: %s", type(exc).__name__)
+                if state["bytes"]:
+                    logger.warning("core_output_after_terminal: %s bytes", state["bytes"])
+                if not observed:
+                    logger.warning("core_observation_after_terminal_deferred: %s", reason)
+
+                    async def background_observation():
+                        previous_bytes = state["bytes"]
+                        try:
+                            await observe_terminal()
+                        except Exception as exc:
+                            logger.warning("core_observation_after_terminal_failed: %s", type(exc).__name__)
+                            try:
+                                await process.wait()
+                            except Exception as wait_error:
+                                logger.warning("core_exit_observation_after_terminal_failed: %s", type(wait_error).__name__)
+                        finally:
+                            if state["bytes"] != previous_bytes:
+                                logger.warning("core_output_after_terminal: %s bytes", state["bytes"])
+                    observer = asyncio.create_task(background_observation())
+                    self._terminal_observers.add(observer)
+                    observer.add_done_callback(self._terminal_observers.discard)
+            else:
+                await process.wait()
+                if process.returncode != 0:
+                    raise RuntimeError("core_process_failed")
+            if response is None:
+                raise RuntimeError("contract_mismatch")
             if not response["ok"]:
                 error = response.get("error") or {}
-                raise CoreError(error.get("code", "core_error"), error.get("detail"))
+                raise CoreError(error["code"], error.get("detail"))
             return response["result"]
 
         guard = asyncio.create_task(signal_cancel()) if controlled else None
@@ -267,6 +346,10 @@ class CoreBridge:
         effective_timeout = timeout if timeout is not None else (self.timeout if not controlled else None)
         try:
             return await asyncio.wait_for(asyncio.shield(running), effective_timeout)
+        except asyncio.TimeoutError:
+            if terminal_received.is_set():
+                return await running
+            raise
         except asyncio.CancelledError:
             # Task/UI cancellation must never kill a writer. Drain it until rollback
             # or the durable commit reports its actual outcome.
@@ -276,7 +359,7 @@ class CoreBridge:
             raise
         finally:
             self.active_calls.discard(cancel)
-            if process.returncode is None:
+            if process.returncode is None and not terminal_received.is_set():
                 if controlled:
                     cancel.set()
                     if not running.done():
@@ -295,7 +378,7 @@ class CoreBridge:
             if guard:
                 guard.cancel()
                 await asyncio.gather(guard, return_exceptions=True)
-            if process.stdin:
+            if process.stdin and not terminal_received.is_set():
                 process.stdin.close()
 
     async def call_sync(self, method: str, params: dict, timeout: float | None = None):

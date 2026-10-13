@@ -1,4 +1,4 @@
-import { candidateMatched, hasMatchedPatch, type Install, type SourceCandidate } from "@steam-patch/ui";
+import { sourceQueryComplete, candidateMatched, hasMatchedPatch, type Install, type SourceCandidate } from "@steam-patch/ui";
 
 export function discoveryStatus(status?: string): string {
   const labels: Record<string, string> = {
@@ -13,7 +13,7 @@ export function discoverySummary(row: Install): string {
   const count = row.discovery?.candidates.filter(candidateMatched).length ?? 0;
   if (count) return `已找到补丁 · ${count} 个来源候选`;
   if (row.discovery?.candidates.length) return "待确认来源";
-  if (["complete", "cache_complete", "empty"].includes(row.discovery?.status ?? "")) return "已查询的来源未找到补丁";
+  if (sourceQueryComplete(row.discovery?.status)) return "已查询的来源未找到补丁";
   return discoveryStatus(row.discovery?.status);
 }
 export function unqueriedCount(rows: Install[]): number {
@@ -21,7 +21,7 @@ export function unqueriedCount(rows: Install[]): number {
 }
 export function candidateSource(candidate: SourceCandidate): string {
   const labels: Record<string, string> = { "kagura-cn": "Kagura Games 国内", "kagura-en": "Kagura Games 海外", hgamer: "HGamer" };
-  const name = candidate.source_name || labels[candidate.source_id] || candidate.source_id;
+  const name = labels[candidate.source_id] || candidate.source_id;
   return `${name}${candidate.source_id === "hgamer" ? " · 补丁索引" : " · 发行商补丁源"}${candidateMatched(candidate) ? "" : " · 游戏身份待确认"}`;
 }
 export function candidateLanguage(candidate: SourceCandidate): string {
@@ -37,13 +37,4 @@ export function candidateConditions(candidate: SourceCandidate): string {
   if (candidate.requires_dlc == null && candidate.excludes_dlc == null) parts.push("DLC 条件待确认");
   return parts.join(" · ");
 }
-export function safeSourceUrl(value: string): boolean {
-  try {
-    const url = new URL(value);
-    if (url.protocol !== "https:" || url.username || url.password || (url.port && url.port !== "443")) return false;
-    const host = url.hostname.toLowerCase();
-    if (!host.includes(".") || host === "localhost" || host.endsWith(".localhost") || host.endsWith(".local") || host.includes(":")) return false;
-    if (/^\d+\.\d+\.\d+\.\d+$/.test(host)) return false;
-    return true;
-  } catch { return false; }
-}
+export { safeSourceUrl } from "@steam-patch/ui";

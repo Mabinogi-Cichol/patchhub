@@ -13,14 +13,14 @@ class ExeRpcTests(unittest.IsolatedAsyncioTestCase):
         self.plugin.settings = SimpleNamespace(auto_cleanup=False)
         self.plugin.bridge = SimpleNamespace(selection=module.CoreBridge.selection,
             preview=AsyncMock(return_value={"executable": False, "selection_id": self.selection, "changes": []}),
-            install_patch=AsyncMock(return_value={"state": "committed", "selection_id": self.selection,
+            install_patch=AsyncMock(return_value={"disposition": "completed", "state": "committed", "selection_id": self.selection,
                 "content_id": "exe-content-actual", "release_id": "source-official-42", "transaction_id": "core-id"}),
             list_transactions=AsyncMock(return_value=[{"transaction_id": "core-id", "state": "needs_recovery"}]),
             recover=AsyncMock(return_value=[{"transaction_id": "core-id", "state": "rolled_back"}]))
 
     async def test_exe_archive_import_rejected_before_core(self):
         with self.assertRaisesRegex(ValueError, "archive_not_allowed_for_selection"):
-            await self.plugin.start_patch_install_task("instance", None, self.selection, "/tmp/arbitrary.exe")
+            await self.plugin.start_patch_install_task("instance", None, self.selection, "/tmp/arbitrary.exe", "overwrite")
         self.plugin.bridge.install_patch.assert_not_awaited()
         self.assertFalse(self.plugin.tasks.busy())
 

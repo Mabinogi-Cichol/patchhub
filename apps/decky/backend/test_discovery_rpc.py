@@ -46,6 +46,19 @@ class DiscoveryRpcTests(unittest.IsolatedAsyncioTestCase):
                     await plugin.discover_game(instance, hints, language, force)
         plugin.sources.discover_game.assert_not_called()
 
+    async def test_instance_identity_uses_generated_utf8_limit_and_rejects_controls(self):
+        plugin = self.plugin()
+        limit = module.MAX_INSTANCE_ID_BYTES
+        instance = "界" * (limit // 3) + "a" * (limit % 3)
+        plugin._scan_games[instance] = {"instance_id": instance, "appid": 123, "name": "Actual Game"}
+        result = await plugin.discover_game(instance)
+        self.assertEqual(result["instance_id"], instance)
+        self.assertEqual(plugin.sources.discover_game.await_count, 1)
+        for invalid in (instance + "a", "local\u0085", "local\x7f"):
+            with self.assertRaisesRegex(ValueError, "invalid_id"):
+                await plugin.discover_game(invalid)
+        self.assertEqual(plugin.sources.discover_game.await_count, 1)
+
     async def test_scan_and_settings_changes_invalidate_result_and_commit_callback(self):
         for field in ("generation", "revision"):
             plugin = self.plugin()

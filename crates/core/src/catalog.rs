@@ -18,14 +18,18 @@ pub struct Catalog {
     pub releases: Vec<PatchRelease>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema, ts_rs::TS,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum Platform {
     Windows,
     Steamos,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema, ts_rs::TS,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum SupportLevel {
     DiscoverOnly,
@@ -92,17 +96,21 @@ pub struct FileMapping {
     pub installed_sha256: String,
 }
 
-#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema, ts_rs::TS, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PatchMatch {
     pub release_id: String,
     /// Display attribution from the current trusted source candidate.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional = nullable)]
     pub source_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional = nullable)]
     pub candidate_id: Option<String>,
     /// Dynamic selection route (`zip-selection-*`); absent for signed catalog
     /// releases (p1-zip-orchestration §4.2).
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional = nullable)]
     pub selection_id: Option<String>,
     pub name: String,
     pub source_page: String,
@@ -113,15 +121,19 @@ pub struct PatchMatch {
     pub detection: Detection,
 }
 
-#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema, ts_rs::TS, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Detection {
+    #[ts(type = "DetectionStatus")]
     pub status: String,
     pub files: Vec<FileEvidence>,
 }
 
-#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema, ts_rs::TS, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct FileEvidence {
     pub path: String,
+    #[ts(type = "EvidenceStatus")]
     pub status: String,
     pub actual_sha256: Option<String>,
 }

@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/core", "crates/cli", "crates/installer-format", "crates/installer-worker", "apps/windows/src-tauri"]
+members = ["crates/protocol", "crates/contract-gen", "crates/core", "crates/cli", "crates/installer-format", "crates/installer-worker", "apps/windows/src-tauri"]
 resolver = "2"
 
 [workspace.package]
@@ -28,3 +28,5 @@ scraper = { version = "0.27", default-features = false, features = ["errors"] }
 unicode-normalization = "0.1"
 caseless = "0.2"
 unicode-general-category = "1"
+
+ts-rs = { version = "12", features = ["serde-json-impl", "no-serde-warnings"] }

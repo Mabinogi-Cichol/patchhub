@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { candidateMatched, displayPatches, filterInstalls, gameDisplayName, isExternal, isManaged, patchState, reason, splitError, workflowState, type DiscoveryResult, type Filter, type GameSourceSubscription, type Install, type Preview, type ScanResult, type SourceCandidate, type Transaction } from "@steam-patch/ui";
+import { candidateMatched, displayPatches, filterInstalls, gameDisplayName, isExternal, isManaged, patchState, reason, installationResult, progressStageLabel, progressPercent, workflowState, type DiscoveryResult, type Filter, type GameSourceSubscription, type Install, type Preview, type ScanResult, type SourceCandidate, type Transaction, type InstallerOutcome } from "@steam-patch/ui";
 import {
   actionBlockers,
   primaryInstallAction,
@@ -33,16 +33,7 @@ type CoreOperation = "scan" | "preview" | "list_transactions" | "recover";
 type InstallStatus = {
   running: boolean;
   cancelled: boolean;
-  progress: {
-    stage: string;
-    substage?: string | null;
-    bytes_done: number;
-    total_bytes: number | null;
-    files_done: number;
-    total_files: number | null;
-    current_file: string | null;
-    archive_bytes: number | null;
-  } | null;
+  progress: Omit<import("../../../packages/contracts/generated/protocol").InstallProgressEvent, "event" | "protocol_version" | "request_id" | "sequence" | "instance_id" | "selection_id"> | null;
 };
 
 type SourceScanState = {
@@ -60,21 +51,13 @@ function call<T>(operation: CoreOperation, args: { instanceId?: string; releaseI
 
 /** Turn a raw host error (`code` or `code: detail`) into a real, readable message. */
 function describeError(value: unknown): string {
-  const { code, detail } = splitError(String(value));
-  const base = reason(code);
-  return detail ? `${base}（${detail}）` : base;
+  if (value && typeof value === "object" && "code" in value && typeof value.code === "string") {
+    const detail = "detail" in value && typeof value.detail === "string" ? value.detail : null;
+    return detail ? `${reason(value.code)}（${detail}）` : reason(value.code);
+  }
+  return typeof value === "string" ? value : String(value);
 }
 
-function transactionResult(tx: Transaction): string {
-  const details = tx.error ? ` 原因：${reason(tx.error)}` : "";
-  switch (tx.state) {
-    case "committed": return "安装完成";
-    case "superseded": return `之前已安装补丁，现已重新安装。${details}`;
-    case "rolled_back": return `安装失败，已恢复到安装前。${details}`;
-    case "needs_recovery": return `安装中断，需要恢复。${details}`;
-    default: return `安装返回状态：${tx.state}。${details}`;
-  }
-}
 
 const EMPTY_SOURCE_SCAN: SourceScanState = { started: false, running: false, cancelled: false, completed: 0, total: 0, settingsRevision: null };
 
@@ -205,7 +188,7 @@ function App() {
       }));
       return;
     }
-    if (payload.event === "source_update" && payload.discovery) {
+    if (payload.event === "source_update" && "discovery" in payload) {
       const discovery = payload.discovery;
       const instanceId = payload.instance_id ?? null;
       const appid = payload.appid ?? null;
@@ -262,7 +245,7 @@ function App() {
       if (scanTokenRef.current === token) applyScanResults(result);
       if (cancelledRef.current) setSourceNotice("已取消查找，已保留取得的结果；可稍后重新查找。");
     } catch (e) {
-      if (!String(e).includes("source_scan_in_progress")) setSourceNotice(describeError(e));
+      if (!(e && typeof e === "object" && "code" in e && e.code === "source_scan_in_progress")) setSourceNotice(describeError(e));
     } finally {
       if (scanTokenRef.current === token) {
         activeEventRef.current = { token: 0, id: null, seq: -1 };
@@ -320,12 +303,12 @@ function App() {
 
   async function refresh() {
     const caps = await loadCapabilities();
+    if (!caps) { setError(capabilityErrorRef.current ?? "核心契约不可用"); return; }
     let nextScan: ScanResult | null = null;
     await run("正在扫描 Steam 库…", async () => {
       // Both core calls open the same journal; finish one before starting the other.
       const value = await call<ScanResult>("scan");
-      const rawTransactions = await call<Transaction[] | { transactions: Transaction[] }>("list_transactions");
-      const nextTransactions = Array.isArray(rawTransactions) ? rawTransactions : rawTransactions.transactions ?? [];
+      const nextTransactions = await call<Transaction[]>("list_transactions");
       return { nextScan: value, nextTransactions };
     }, ({ nextScan: value, nextTransactions }) => {
       nextScan = value;
@@ -470,16 +453,14 @@ function App() {
     requestIds.current.set(key, requestId);
     setInstalling(true); setJob(null); setBusy("正在安装…"); setError(null); setNotice(null);
     try {
-      const tx = await invoke<Transaction>("start_install", {
+      const outcome = await invoke<InstallerOutcome>("start_install", {
         instanceId: selected,
         ...(latest.selection_id ? { selectionId: latest.selection_id } : { releaseId: latest.release_id }),
         operation,
         requestId,
         archive: action.input === "local_archive" ? archive ?? undefined : undefined,
       });
-      const message = tx.state === "committed"
-        ? (wasInstalled ? "覆盖安装完成" : "安装完成")
-        : transactionResult(tx);
+      const message = installationResult(outcome, wasInstalled);
       requestIds.current.delete(key);
       setInstalling(false); setJob(null); setBusy(null);
       await refresh();
@@ -504,23 +485,17 @@ function App() {
     });
   }
 
-  const stageLabels: Record<string, string> = {
-    connecting: "正在连接", downloading: "下载补丁", validating: "检查已下载补丁", analyzing_installer: "分析安装包",
-    extracting: "提取文件", planning: "检查安装条件", applying: "写入文件", rolling_back: "恢复原文件",
-    cleanup: "清理临时文件",
-  };
-  const substageLabels: Record<string, string> = { backing_up: "保护现有文件", writing: "写入文件", committing: "提交安装" };
   const progress = job?.progress;
-  const progressIndeterminate = !progress || progress.total_bytes == null || progress.total_bytes <= 0;
-  const progressWidth = progress && progress.total_bytes ? Math.min(100, progress.bytes_done / progress.total_bytes * 100) : 0;
+  const progressWidth = progress ? progressPercent(progress.bytes_done, progress.total_bytes) : null;
+  const progressIndeterminate = progressWidth == null;
   const detailChip = game ? sourceChip(game, sourceScan.running) : null;
 
   return <div className="shell">
     <header><div><h1>Steam 补丁管理</h1><p>本地游戏 · 已审核来源 · 文件变更先预览</p></div><div className="header-actions"><button onClick={() => setSourcesOpen(true)}>来源管理</button><button onClick={recover} disabled={!!busy}>尝试恢复未完成操作</button><button className="primary" onClick={() => void refresh()} disabled={!!busy}>重新扫描</button></div></header>
     {busy && !installing && <div role="status" className="status">{busy} 任务完成后会显示结果；当前没有百分比进度。</div>}
     {error && <div role="alert" className="error">{error}</div>}{notice && <div role="status" className="notice">{notice}</div>}
-    {installing && <section className="progress" aria-live="polite"><h3>{progress ? (stageLabels[progress.stage] ?? progress.stage) : "正在准备安装"}{progress?.substage ? ` · ${substageLabels[progress.substage] ?? progress.substage}` : ""}</h3><div className={`progress-bar${progressIndeterminate ? " indeterminate" : ""}`}><div className="progress-fill" style={progressIndeterminate ? undefined : { width: `${progressWidth}%` }} /></div>{progress && <div className="progress-meta"><span>{progress.total_bytes ? `${progress.bytes_done} / ${progress.total_bytes} bytes` : "正在处理"}</span>{progress.total_files != null && <span>{progress.files_done} / {progress.total_files} 个文件</span>}</div>}{progress?.current_file && <p className="path">{progress.current_file}</p>}<button className="cancel" onClick={() => void invoke("cancel_install")} disabled={job?.cancelled === true}>{job?.cancelled ? "正在取消…" : "取消安装"}</button></section>}
-    {sourceScan.running && <section className="progress source-progress" aria-live="polite"><h3>正在查找补丁来源</h3><div className={`progress-bar${sourceScan.total > 0 ? "" : " indeterminate"}`}><div className="progress-fill" style={sourceScan.total > 0 ? { width: `${Math.min(100, sourceScan.completed / sourceScan.total * 100)}%` } : undefined} /></div><div className="progress-meta"><span>{sourceScan.total > 0 ? `已查询 ${sourceScan.completed} / ${sourceScan.total} 款游戏` : "正在准备查询已安装游戏"}</span>{settingsRevision != null && <span>来源设置版本 {settingsRevision}</span>}</div><button className="cancel" onClick={() => void cancelSourceScan()} disabled={sourceScan.cancelled}>{sourceScan.cancelled ? "正在取消…" : "取消查找"}</button></section>}
+    {installing && <section className="progress" aria-live="polite"><h3>{progress ? progressStageLabel(progress.stage, progress.substage) : "正在准备安装"}</h3><div className={`progress-bar${progressIndeterminate ? " indeterminate" : ""}`}><div className="progress-fill" style={progressIndeterminate ? undefined : { width: `${progressWidth}%` }} /></div>{progress && <div className="progress-meta"><span>{progress.total_bytes ? `${progress.bytes_done} / ${progress.total_bytes} bytes` : "正在处理"}</span>{progress.total_files != null && <span>{progress.files_done} / {progress.total_files} 个文件</span>}</div>}{progress?.current_file && <p className="path">{progress.current_file}</p>}<button className="cancel" onClick={() => void invoke("cancel_install")} disabled={job?.cancelled === true}>{job?.cancelled ? "正在取消…" : "取消安装"}</button></section>}
+    {sourceScan.running && <section className="progress source-progress" aria-live="polite"><h3>正在查找补丁来源</h3><div className={`progress-bar${sourceScan.total > 0 ? "" : " indeterminate"}`}><div className="progress-fill" style={sourceScan.total > 0 ? { width: `${(progressPercent(sourceScan.completed, sourceScan.total) ?? 0)}%` } : undefined} /></div><div className="progress-meta"><span>{sourceScan.total > 0 ? `已查询 ${sourceScan.completed} / ${sourceScan.total} 款游戏` : "正在准备查询已安装游戏"}</span>{settingsRevision != null && <span>来源设置版本 {settingsRevision}</span>}</div><button className="cancel" onClick={() => void cancelSourceScan()} disabled={sourceScan.cancelled}>{sourceScan.cancelled ? "正在取消…" : "取消查找"}</button></section>}
     {!sourceScan.running && sourceNotice && <div role="status" className="status">{sourceNotice}</div>}
     <div className="workspace"><aside><div className="search"><input aria-label="搜索游戏" placeholder="搜索游戏或 AppID" value={query} onChange={e => setQuery(e.target.value)} /></div>
       <div className="filters">{(["all", "matched", "installed", "attention"] as Filter[]).map((key, i) => <button key={key} className={filter === key ? "active" : ""} onClick={() => setFilter(key)}>{["全部", "有补丁", "已安装", "需处理"][i]}</button>)}</div>

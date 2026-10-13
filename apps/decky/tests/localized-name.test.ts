@@ -9,7 +9,7 @@ const oldInstall = (): Install => JSON.parse(JSON.stringify({
     library_path: "/steam", install_path: "/steam/game", buildid: null,
     availability: "installed", kind: "game",
   },
-  match_status: "unmatched", patches: [],
+  match_status: "no_catalog_match", patches: [],
 }));
 
 function withAppStore(store: object | undefined, check: () => void) {

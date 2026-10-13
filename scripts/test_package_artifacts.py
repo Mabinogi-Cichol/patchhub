@@ -30,12 +30,14 @@ class PackagingTests(unittest.TestCase):
         plugin = root / 'apps/decky/plugin-output'
         for name in packager.PRODUCTION_BACKEND:
             self.write(plugin, 'backend/' + name)
+        for name in ('protocol.py', 'v4.schema.json'):
+            self.write(root, 'packages/contracts/generated/' + name)
         files = []
         for name in ('steam-patch', 'sf-worker'):
             data = b'\x7fELF' + name.encode()
             self.write(plugin, 'bin/' + name, data)
             files.append({'path': 'bin/' + name, 'size': len(data), 'sha256': hashlib.sha256(data).hexdigest()})
-        self.write(plugin, 'bin/runtime.json', json.dumps({'protocol_version': 3, 'worker_protocol': 1, 'files': files}).encode())
+        self.write(plugin, 'bin/runtime.json', json.dumps({'protocol_version': 4, 'worker_protocol': 1, 'files': files}).encode())
         properties = [{'name': 'steam-patch:reference-commit', 'value': packager.SFEXTRACT_COMMIT}]
         for source, dest, prefix in packager.INSTALLER_FILES:
             data = source.encode()
@@ -91,6 +93,15 @@ class PackagingTests(unittest.TestCase):
                 if missing: binary.unlink()
                 else: binary.write_bytes(b'MZ Windows binary')
                 with self.assertRaises((ValueError, FileNotFoundError)):
+                    self.run_package(root, 'decky')
+                self.assertFalse(list((root / '.artifacts').glob('*.zip')))
+
+    def test_generated_contract_tampering_refuses_before_zip(self):
+        for name in ('protocol.py', 'v4.schema.json'):
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp); plugin = self.fixture(root)
+                self.write(plugin, 'backend/' + name, b'old contract')
+                with self.assertRaisesRegex(ValueError, 'generated contract mismatch'):
                     self.run_package(root, 'decky')
                 self.assertFalse(list((root / '.artifacts').glob('*.zip')))
 

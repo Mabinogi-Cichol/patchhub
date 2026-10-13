@@ -6,6 +6,7 @@ import unittest
 
 from source_service import SourceService, REQUIRED_METHODS
 from bridge import METHODS
+from protocol_test_support import response
 
 SUMMARIES = [
     {"id": "patchmoe", "name": "patch.moe", "adapter": "patchmoe", "role": "publisher",
@@ -66,7 +67,7 @@ class SourceServiceTests(unittest.IsolatedAsyncioTestCase):
         self.root = Path(self.temp.name)
         self.bridge = FakeBridge()
         self.bridge.sync_results = {
-            "get_capabilities": {"methods": sorted(METHODS), "protocol_version": 3},
+            "get_capabilities": response("get_capabilities")["result"],
             "list_sources": list(SUMMARIES),
         }
         self.service = SourceService(self.bridge, self.root)

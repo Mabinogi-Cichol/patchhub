@@ -2,14 +2,18 @@
 use crate::install::Transaction;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema, ts_rs::TS,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum Disposition {
     Completed,
     Cancelled,
     Failed,
 }
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema, ts_rs::TS,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum CancellationCause {
     UserCancelled,
@@ -40,31 +44,38 @@ impl CancellationCause {
         }
     }
 }
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema, ts_rs::TS,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum FailureKind {
     UserCancelled,
     LeaseExpired,
     DomainFailure,
 }
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema, ts_rs::TS)]
 #[serde(deny_unknown_fields)]
 pub struct FailureCause {
     pub kind: FailureKind,
     pub code: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional = nullable)]
     pub detail: Option<String>,
 }
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema, ts_rs::TS)]
 #[serde(deny_unknown_fields)]
 pub struct RecoveryRequirement {
     pub required: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional = nullable)]
     pub code: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional = nullable)]
     pub detail: Option<String>,
 }
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema, ts_rs::TS,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum CleanupStatus {
     NotRequested,
@@ -73,7 +84,9 @@ pub enum CleanupStatus {
     Failed,
     Busy,
 }
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema, ts_rs::TS,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum CleanupErrorCode {
     CleanupFailed,
@@ -82,14 +95,15 @@ pub enum CleanupErrorCode {
     CleanupSizeOverflow,
     InstallerBusy,
 }
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema, ts_rs::TS)]
 #[serde(deny_unknown_fields)]
 pub struct CleanupFailure {
     pub code: CleanupErrorCode,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional = nullable)]
     pub detail: Option<String>,
 }
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema, ts_rs::TS)]
 #[serde(deny_unknown_fields)]
 pub struct CleanupResult {
     pub status: CleanupStatus,
@@ -107,7 +121,7 @@ impl Default for CleanupResult {
         }
     }
 }
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema, ts_rs::TS)]
 #[serde(deny_unknown_fields)]
 pub struct InstallerOutcome {
     pub transaction_id: String,
@@ -116,6 +130,7 @@ pub struct InstallerOutcome {
     pub selection_id: Option<String>,
     pub content_id: Option<String>,
     pub release_id: String,
+    #[ts(type = "OutcomeState")]
     pub state: String,
     pub error: Option<String>,
     pub created_at: u64,
@@ -219,7 +234,8 @@ impl InstallerOutcome {
                 .or_else(|| content_id.map(str::to_owned)),
             release_id: t.release_id.clone(),
             state: t.state.clone(),
-            error: t.error.clone(),
+            // Wire diagnostic copy; durable Transaction/ledger keep the original text.
+            error: t.error.clone().map(bounded_detail),
             created_at: t.created_at,
             updated_at: t.updated_at,
             has_replacements: t.has_replacements,

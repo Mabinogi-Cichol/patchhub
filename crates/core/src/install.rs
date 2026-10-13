@@ -22,7 +22,16 @@ pub const MAX_PLAN_METADATA_BYTES: usize = crate::zip_metadata::MAX_METADATA_BYT
 pub const PLAN_TTL_SECONDS: u64 = 900;
 
 #[derive(
-    Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
+    Debug,
+    Clone,
+    Copy,
+    Default,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    schemars::JsonSchema,
+    ts_rs::TS,
 )]
 #[serde(rename_all = "snake_case")]
 pub enum InstallOperation {
@@ -94,13 +103,14 @@ pub struct InstallPlan {
     pub preconditions: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, ts_rs::TS)]
 #[serde(deny_unknown_fields)]
 pub struct Transaction {
     pub transaction_id: String,
     pub plan_id: String,
     pub instance_id: String,
     pub release_id: String,
+    #[ts(type = "TransactionState")]
     pub state: String,
     pub error: Option<String>,
     pub created_at: u64,

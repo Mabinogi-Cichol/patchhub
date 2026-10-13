@@ -1,4 +1,4 @@
-"""Decky host for the bundled protocol-v3 Rust installer and sf-worker."""
+"""Decky host for the bundled protocol-v4 Rust installer and sf-worker."""
 from pathlib import Path
 import sys
 import os
@@ -10,6 +10,7 @@ import decky
 
 sys.path.insert(0, str(Path(__file__).parent / "backend"))
 from bridge import CoreBridge
+from protocol_validation import validate_id, MAX_INSTANCE_ID_BYTES
 from plugin_settings import Settings, _no_links
 from source_service import SourceService
 from state_host import prepare_host_state
@@ -49,10 +50,11 @@ class Plugin:
             if account.pw_uid == 0 or Path(account.pw_dir) != home:
                 raise ValueError("unprivileged_user_required")
             run_uid, run_gid = account.pw_uid, account.pw_gid
-        prepare_host_state(state_dir, home, run_uid, run_gid)
         self.bridge = CoreBridge(root / "bin/steam-patch", root / "bin/catalog.json",
             signed_catalog=root / "bin/signed-catalog.json", trust_keys=root / "bin/trust-keys.json",
             state_dir=state_dir, run_uid=run_uid, run_gid=run_gid, user_home=home)
+        await self.bridge.preflight()
+        prepare_host_state(state_dir, home, run_uid, run_gid)
         self.downloads = (home / "Downloads").resolve()
         self.tasks = TaskManager(state_dir=state_dir / "host-v3")
         self.settings = Settings(state_dir)
@@ -140,8 +142,7 @@ class Plugin:
 
     async def discover_game(self, instance_id: str, name_hints=None, preferred_language=None, force: bool = False):
         """Discover metadata for a trusted local instance without occupying the installer."""
-        if not isinstance(instance_id, str) or not instance_id or len(instance_id) > 1024:
-            raise ValueError("invalid_id")
+        validate_id(instance_id, MAX_INSTANCE_ID_BYTES)
         if name_hints is None:
             name_hints = []
         if (not isinstance(name_hints, list) or len(name_hints) > 3
@@ -242,14 +243,14 @@ class Plugin:
         return path
 
     async def start_patch_install_task(self, instance_id, release_id=None, selection_id=None,
-                                       archive=None, operation="install", request_id=None):
+                                       archive=None, operation=None, request_id=None):
         self.bridge.selection(instance_id, release_id, selection_id)
         if operation not in ("install", "reinstall", "overwrite"):
             raise ValueError("invalid_operation")
         if selection_id is not None and archive is not None:
             raise ValueError("archive_not_allowed_for_selection")
         local = self._local_archive(archive) if archive is not None else None
-        request_id = request_id or str(uuid.uuid4())
+        request_id = str(uuid.uuid4()) if request_id is None else validate_id(request_id, 128, "invalid_request_id")
         cleanup_policy = "after_commit" if self.settings.auto_cleanup else "disabled"
 
         async def work(task):
@@ -268,7 +269,7 @@ class Plugin:
             archive_path=str(local) if local is not None else None)
 
     async def start_install(self, instance_id, release_id=None, selection_id=None,
-                            archive=None, operation="install", request_id=None):
+                            archive=None, operation=None, request_id=None):
         return await self.start_patch_install_task(instance_id, release_id, selection_id,
             archive, operation, request_id)
 

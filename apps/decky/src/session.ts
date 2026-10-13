@@ -1,4 +1,7 @@
-import { reason, type DiscoveryResult, type ScanResult, type Transaction } from "@steam-patch/ui";
+import { reason, type DiscoveryResult as WireDiscoveryResult, type Patch, type ScanResult, type Transaction } from "@steam-patch/ui";
+
+// Decky appends freshly validated scan projections to the core discovery result.
+export type DiscoveryResult = WireDiscoveryResult & { patches: Patch[] };
 
 type Snapshot = { report: ScanResult; transactions: Transaction[] };
 type SessionState = {

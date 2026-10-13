@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import { build } from "esbuild";
 import { fileURLToPath } from "node:url";
 
@@ -47,3 +48,27 @@ assert.deepEqual(actionBlockers(patch({ automatic: true, input: "automatic", blo
 assert.deepEqual(actionBlockers(manual), [{ code: "zip_download_unavailable" }, { code: "local_archive_signed_only" }], "local archive primary explains automatic and local blockers without reinstall-only blockers");
 assert.deepEqual(actionBlockers(patch({ input: "unavailable", blockers: [{ code: "game_not_ready" }], overwriteBlockers: [{ code: "needs_recovery" }] })), [{ code: "needs_recovery" }], "unavailable primary shows overwrite blockers only");
 console.log(`${cases.length} game-status cases and 13 Windows action assertions passed`);
+const fixture = JSON.parse(await readFile(new URL("../../../packages/contracts/fixtures/v4/cases.json", import.meta.url), "utf8"));
+const shared = await build({ entryPoints: [fileURLToPath(new URL("../../../packages/ui/src/index.ts", import.meta.url))], bundle: true, write: false, platform: "node", format: "esm" });
+const { installationResult, progressStageLabel, progressPercent } = await import(`data:text/javascript;base64,${Buffer.from(shared.outputFiles[0].text).toString("base64")}`);
+const completed = fixture.responses.find(item => item.name === "install_patch-success").response.result;
+assert.equal(completed.disposition, "completed");
+assert.match(installationResult(completed), /安装完成/);
+assert.match(installationResult(completed, true), /覆盖安装完成/);
+for (const item of fixture.events) {
+  if (!item.error && item.event.event === "install_progress") {
+    assert.equal(typeof progressStageLabel(item.event.stage, item.event.substage), "string");
+    const percent = progressPercent(item.event.bytes_done, item.event.total_bytes);
+    assert.ok(percent == null || percent >= 0 && percent <= 100);
+  }
+}
+console.log("Shared generated v4 Windows outcome and event presentation fixtures passed");
+
+for (const fixtureOutcome of fixture.responses.filter(item => item.name.startsWith("outcome-"))) {
+  const outcome = fixtureOutcome.response.result;
+  const text = installationResult(outcome);
+  if (outcome.recovery?.required) assert.match(text, /修复/);
+  else if (outcome.disposition === "cancelled") assert.match(text, /取消/);
+  else assert.match(text, /安装未完成/);
+}
+console.log("Windows generated cancelled/failed/recovery dispositions passed");

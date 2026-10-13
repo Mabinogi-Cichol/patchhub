@@ -1,9 +1,5 @@
-export type CleanupResult = {
-  status: "not_requested" | "completed" | "partial" | "failed" | "busy";
-  performed: boolean;
-  removed_bytes: number;
-  failures?: { code: string; detail?: string | null }[];
-};
+import type { CleanupResult } from "@steam-patch/ui";
+export type { CleanupResult } from "@steam-patch/ui";
 export type CacheStatus = CleanupResult;
 export type Settings = { schema_version: number; auto_cleanup: boolean; cache: CacheStatus | null };
 

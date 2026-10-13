@@ -10,7 +10,7 @@ class CacheCleanupTests(unittest.IsolatedAsyncioTestCase):
         plugin = module.Plugin()
         plugin.settings = SimpleNamespace(auto_cleanup=enabled)
         plugin.tasks = module.TaskManager()
-        outcome = {"state": state, "transaction_id": "t", "cleanup": cleanup or {
+        outcome = {"disposition": "completed" if state == "committed" else "failed", "state": state, "transaction_id": "t", "cleanup": cleanup or {
             "status": "not_requested", "performed": False, "removed_bytes": 0, "failures": []}}
         plugin.bridge = SimpleNamespace(selection=module.CoreBridge.selection,
             install_patch=AsyncMock(return_value=outcome),
@@ -18,7 +18,7 @@ class CacheCleanupTests(unittest.IsolatedAsyncioTestCase):
         return plugin
 
     async def install(self, plugin):
-        started = await plugin.start_patch_install_task("instance", "signed")
+        started = await plugin.start_patch_install_task("instance", "signed", operation="install")
         task = plugin.tasks.get(started["task_id"])
         await task.worker
         return task.snapshot()

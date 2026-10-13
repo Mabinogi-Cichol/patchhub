@@ -15,7 +15,8 @@ pub struct ScanReport {
     pub diagnostics: Vec<Diagnostic>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, ts_rs::TS)]
+#[serde(deny_unknown_fields)]
 pub struct GameInstall {
     pub instance_id: String,
     pub appid: u32,

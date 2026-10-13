@@ -44,7 +44,9 @@ macro_rules! identity {
     };
 }
 identity!(RequestId, 128, "invalid_request_id");
-identity!(InstanceId, 256, "invalid_instance_id");
+/// Steam identity includes both complete paths; never hash or truncate durable IDs.
+pub const MAX_INSTANCE_ID_BYTES: usize = 16 * 1024;
+identity!(InstanceId, MAX_INSTANCE_ID_BYTES, "invalid_instance_id");
 identity!(ReleaseId, 256, "invalid_release_id");
 identity!(PlanId, 256, "invalid_plan_id");
 #[derive(Debug, Clone)]
@@ -121,6 +123,7 @@ pub enum InstallTarget {
     serde::Serialize,
     serde::Deserialize,
     schemars::JsonSchema,
+    ts_rs::TS,
 )]
 #[serde(rename_all = "snake_case")]
 pub enum CleanupPolicy {
