@@ -627,10 +627,12 @@ impl Transport for ReqwestTransport {
             .to_socket_addrs()
             .map_err(|_| invalid("download_dns_failed"))?
             .collect();
-        if addresses.is_empty() || addresses.iter().any(|a| !public_ip(a.ip())) {
-            return Err(invalid("download_private_address"));
+        if addresses.is_empty() {
+            return Err(invalid("download_dns_failed"));
         }
-        // Resolve exactly once per hop and pin every connection, preserving TLS hostname verification.
+        // Use the system's resolved addresses without classifying the user's network
+        // (for example, a TUN may intentionally return non-public addresses).
+        // Resolve once per hop and pin connections, preserving TLS hostname verification.
         let client = reqwest::blocking::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
             .no_proxy()
@@ -676,32 +678,6 @@ impl Transport for ReqwestTransport {
             final_url,
             body: Box::new(response),
         })
-    }
-}
-
-/// Conservative routable-address allowlist; reject private/reserved and transition networks.
-fn public_ip(ip: std::net::IpAddr) -> bool {
-    match ip {
-        std::net::IpAddr::V4(ip) => {
-            let [a, b, c, _] = ip.octets();
-            !(a == 0
-                || a == 10
-                || a == 127
-                || a >= 224
-                || (a == 100 && (64..=127).contains(&b))
-                || (a == 169 && b == 254)
-                || (a == 172 && (16..=31).contains(&b))
-                || (a == 192 && (b == 168 || b == 0 || b == 2 || b == 88 && c == 99))
-                || (a == 198 && (b == 18 || b == 19 || b == 51 && c == 100))
-                || (a == 203 && b == 0 && c == 113))
-        }
-        std::net::IpAddr::V6(ip) => {
-            let s = ip.segments();
-            s[0] & 0xe000 == 0x2000
-                && s[0] != 0x2002
-                && s[0] != 0x3fff
-                && !(s[0] == 0x2001 && (s[1] < 0x200 || s[1] == 0xdb8))
-        }
     }
 }
 
@@ -794,34 +770,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn public_dns_policy_rejects_reserved_and_transition_ranges() {
-        for address in [
-            "0.0.0.0",
-            "10.1.2.3",
-            "127.0.0.1",
-            "100.64.0.1",
-            "169.254.1.2",
-            "172.31.1.2",
-            "192.168.1.1",
-            "192.0.2.1",
-            "198.18.1.1",
-            "198.51.100.1",
-            "203.0.113.1",
-            "224.1.1.1",
-            "::1",
-            "::ffff:8.8.8.8",
-            "fc00::1",
-            "fe80::1",
-            "2001:db8::1",
-            "2002:0808:0808::1",
-        ] {
-            assert!(!public_ip(address.parse().unwrap()), "{address}");
-        }
-        for address in ["8.8.8.8", "1.1.1.1", "2606:4700:4700::1111"] {
-            assert!(public_ip(address.parse().unwrap()));
-        }
-    }
     #[test]
     fn exe_magic_and_redirect_policy_are_bound() {
         let (_temp, paths) = setup();
