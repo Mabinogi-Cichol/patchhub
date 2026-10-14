@@ -272,7 +272,7 @@ pub fn file_table(metadata: &[u8], version: &str) -> Result<(Vec<Value>, Value)>
         let compressed = r.u8()?;
         let original = r.u8()?;
         let forced = r.u8()?;
-        require(compressed <= 1 && original <= 1, "invalid_file_flags")?;
+        require(compressed <= 1, "invalid_file_flags")?;
         unknown.push(opaque(&mut r, 10)?);
         let size = r.u16()? as usize * 2;
         unknown.push(opaque(&mut r, size)?);

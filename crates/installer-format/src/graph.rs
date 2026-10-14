@@ -1,6 +1,6 @@
 //! Bounded SF9 CArchive decoding and diagnostic-only serialized inventory.
 //!
-//! Complete decoding follows the sequential class map and checks every byte.
+//! Complete decoding follows the sequential class map. Configuration values are data, not admission rules.
 //! The scanning inventory is evidence only and never authorizes installation.
 use crate::{
     audit::{evidence, file_table, Reader},
@@ -24,31 +24,6 @@ const CONTROLS: &[(&str, usize)] = &[
     ("CSUFCtrlEditField", 17),
     ("CSUFCtrlProgressBar", 11),
 ];
-const SCREEN_EVENTS: &[&str] = &[
-    "On Preload",
-    "On Back",
-    "On Next",
-    "On Cancel",
-    "On Help",
-    "On Ctrl Message",
-];
-const PROGRESS_EVENTS: &[&str] = &["On Preload", "On Progress", "On Cancel"];
-const UNINSTALL_EVENTS: &[&str] = &[
-    "On Startup",
-    "On Pre Uninstall",
-    "On Uninstall Error",
-    "On Post Uninstall",
-    "On Shutdown",
-];
-const PROJECT_EVENTS: &[&str] = &[
-    "Global Functions",
-    "On Startup",
-    "On Pre Install",
-    "On Install Error",
-    "On Post Install",
-    "On Shutdown",
-];
-
 fn python_space(c: char) -> bool {
     c.is_whitespace() || matches!(c, '\u{001c}'..='\u{001f}')
 }
@@ -63,16 +38,6 @@ fn identifier(s: &str) -> bool {
 fn parameter(s: &str) -> bool {
     let parts: Vec<_> = s.split(python_space).filter(|v| !v.is_empty()).collect();
     parts.len() == 2 && identifier(parts[0]) && identifier(parts[1])
-}
-fn object_names(values: &[Value], expected: &[&str]) -> Result<()> {
-    require(
-        values.len() == expected.len()
-            && values
-                .iter()
-                .zip(expected)
-                .all(|(v, name)| v["name"].as_str() == Some(name)),
-        "exe_event_order_unsupported",
-    )
 }
 fn map_evidence(map: &mut Map<String, Value>, data: &[u8], offset: usize) {
     if let Value::Object(fields) = evidence(data, offset) {
@@ -154,6 +119,7 @@ struct Archive<'a> {
     files: Vec<Value>,
     file_index: usize,
     context: String,
+    lifecycle: &'static str,
 }
 impl<'a> Archive<'a> {
     fn new(data: &'a [u8], version: &'a str) -> Result<Self> {
@@ -177,6 +143,7 @@ impl<'a> Archive<'a> {
             files,
             file_index: 0,
             context: "project".into(),
+            lifecycle: "project",
         })
     }
     fn nums(&mut self, count: usize) -> Result<Vec<u32>> {
@@ -186,7 +153,7 @@ impl<'a> Archive<'a> {
         require(self.nums(values.len())? == values, code)
     }
     fn byte(&mut self) -> Result<()> {
-        require(self.r.u8()? == 0, "exe_project_options_unsupported")
+        self.r.u8().map(|_| ())
     }
     fn string(&mut self) -> Result<String> {
         self.r.string()
@@ -274,9 +241,8 @@ impl<'a> Archive<'a> {
         result.insert("offset".into(), json!(start));
         match name.as_str() {
             "CGlobalIncludeLuaFile" => {
-                self.expected(&[1], "exe_project_options_unsupported")?;
+                self.expected(&[1], "exe_include_schema_unsupported")?;
                 let kind = self.r.u32()?;
-                require(kind <= 1, "exe_include_kind_unsupported")?;
                 result.insert("name".into(), json!(self.string()?));
                 result.insert("script".into(), json!(self.string()?));
                 result.insert("source_kind".into(), json!(kind));
@@ -284,10 +250,7 @@ impl<'a> Archive<'a> {
                 require(count <= 64, "exe_include_selectors_unsupported")?;
                 let selectors: Vec<String> =
                     (0..count).map(|_| self.string()).collect::<Result<_>>()?;
-                require(
-                    selectors.is_empty() || selectors == ["All"],
-                    "exe_include_selectors_unsupported",
-                )?;
+                result.insert("selectors".into(), json!(selectors));
             }
             "CSetupFileData" => {
                 self.expected(&[1], "exe_file_schema_unsupported")?;
@@ -308,7 +271,7 @@ impl<'a> Archive<'a> {
                     usize::try_from(size).map_err(|_| Error("exe_file_framing_invalid".into()))?,
                 )?;
                 let index = row["index"].clone();
-                self.byte()?;
+                result.insert("tail_flag".into(), json!(self.r.u8()?));
                 result.insert("file_index".into(), index);
             }
             n if SCREENS.contains(&n) => {
@@ -319,24 +282,13 @@ impl<'a> Archive<'a> {
                 result.insert("kind".into(), json!(self.r.u32()?));
                 let screen_name = self.string()?;
                 result.insert("name".into(), json!(screen_name));
-                require(
-                    matches!(self.r.u32()?, 1 | 2),
-                    "exe_screen_schema_unsupported",
-                )?;
+                self.nums(1)?;
                 self.display()?;
-                self.expected(&[0, 0, 0], "exe_screen_conditions_unsupported")?;
+                self.nums(3)?;
                 let old = std::mem::replace(&mut self.context, format!("{n}:{screen_name}"));
                 let controls: Vec<&str> = CONTROLS.iter().map(|v| v.0).collect();
                 result.insert("controls".into(), json!(self.array(&controls, 128)?));
                 let events = self.array(&["CIREvent"], 32)?;
-                object_names(
-                    &events,
-                    if n == "CSUFScreenProgressBars" {
-                        PROGRESS_EVENTS
-                    } else {
-                        SCREEN_EVENTS
-                    },
-                )?;
                 result.insert("events".into(), json!(events));
                 let languages = self.array(&["CSUFLanguageFile"], 16)?;
                 self.appearance()?;
@@ -345,7 +297,7 @@ impl<'a> Archive<'a> {
                         self.expected(&[1], "exe_screen_schema_unsupported")?
                     }
                     "CSUFScreenLicenseAgreement" => {
-                        self.expected(&[1, 1], "exe_terms_selection_unsupported")?;
+                        self.nums(2)?;
                         for language in &languages {
                             for message in language["messages"].as_array().into_iter().flatten() {
                                 if message["name"] == "IDS_CTRL_SCROLLTEXT_BODY" {
@@ -358,10 +310,7 @@ impl<'a> Archive<'a> {
                     }
                     "CSUFScreenInstallFolder" => {
                         self.expected(&[1], "exe_screen_schema_unsupported")?;
-                        require(
-                            self.string()? == "%AppFolder%",
-                            "unsupported_target_variable",
-                        )?;
+                        self.string()?;
                     }
                     _ => {}
                 }
@@ -377,10 +326,7 @@ impl<'a> Archive<'a> {
                     "CSUFCtrlScrollingText" => self.byte()?,
                     "CSUFCtrlEditField" => {
                         let variable = self.string()?;
-                        require(
-                            variable == "%AppFolder%",
-                            "exe_control_variable_unsupported",
-                        )?;
+
                         result.insert("variable".into(), json!(variable));
                     }
                     _ => {}
@@ -399,19 +345,17 @@ impl<'a> Archive<'a> {
                 )?;
                 result.insert("parameters".into(), json!(parameters));
                 let event_name = self.string()?;
-                require(
-                    event_name.starts_with("On ") || event_name == "Global Functions",
-                    "exe_event_name_invalid",
-                )?;
                 result.insert("name".into(), json!(event_name));
                 result.insert("script".into(), json!(self.string()?));
                 result.insert("context".into(), json!(self.context));
+                result.insert("lifecycle".into(), json!(self.lifecycle));
             }
             "CSUFLanguageFile" => {
-                self.expected(&[1, 1], "exe_language_schema_unsupported")?;
+                self.expected(&[1], "exe_language_schema_unsupported")?;
+                self.nums(1)?;
                 result.insert("name".into(), json!(self.string()?));
                 self.byte()?;
-                self.expected(&[0, 0, 1, 4], "exe_language_schema_unsupported")?;
+                self.nums(4)?;
                 let count = self.r.u16()? as usize;
                 require(count <= 128, "exe_language_count_limit")?;
                 result.insert("order".into(), json!(self.r.read(count)?));
@@ -429,9 +373,9 @@ impl<'a> Archive<'a> {
                 self.expected(&[1], "exe_variable_schema_unsupported")?;
                 let variable = self.string()?;
                 let value = self.display()?;
-                let flag = self.r.u32()?;
+                let _flag = self.r.u32()?;
                 require(
-                    flag <= 2 && !self.variables.contains_key(&variable),
+                    !self.variables.contains_key(&variable),
                     "exe_variable_invalid",
                 )?;
                 self.variables.insert(variable, json!(value));
@@ -440,10 +384,15 @@ impl<'a> Archive<'a> {
                 self.expected(&[1], "exe_package_schema_unsupported")?;
                 let package = self.string()?;
                 result.insert("name".into(), json!(package));
-                self.expected(&[0, 0, 0], "exe_package_selection_unsupported")?;
-                require(self.string()? == "0", "exe_package_condition_unsupported")?;
+                let options = self.nums(3)?;
+                result.insert("install".into(), json!(options[0] != 0));
+                result.insert("enabled".into(), json!(options[1] != 0));
+                result.insert("additional_space".into(), json!(options[2]));
+                result.insert("condition".into(), json!(self.string()?));
                 self.array(&["CSUFLanguageFile"], 16)?;
-                self.packages.push(package);
+                if options[0] == 0 {
+                    self.packages.push(package);
+                }
             }
             "CPasswordData" => {
                 self.display()?;
@@ -451,16 +400,13 @@ impl<'a> Archive<'a> {
                 require(count <= 64, "exe_password_list_limit")?;
                 let components: Vec<String> =
                     (0..count).map(|_| self.string()).collect::<Result<_>>()?;
-                require(components == ["All"], "exe_password_components_unsupported")?;
+                let _ = components;
                 require(self.r.u16()? == 0, "exe_password_unsupported")?;
             }
             "CImageInfo" => {
                 self.display()?;
                 self.display()?;
-                require(
-                    matches!(self.r.u32()?, 1 | 2),
-                    "exe_image_reference_unsupported",
-                )?;
+                self.nums(1)?;
             }
             _ => return Err(Error("exe_object_class_unsupported".into())),
         }
@@ -473,8 +419,11 @@ impl<'a> Archive<'a> {
         if name == "CGlobalIncludeLuaFile" {
             self.includes.push(result.clone());
         }
-        self.objects
-            .push(json!({"class": name, "offset": start, "size": size}));
+        self.objects.push(if name == "CSUFPackage" {
+            result.clone()
+        } else {
+            json!({"class": name, "offset": start, "size": size})
+        });
         Ok(result)
     }
     fn appearance(&mut self) -> Result<()> {
@@ -497,46 +446,47 @@ impl<'a> Archive<'a> {
             self.nums(4)?;
             self.display()?;
             self.nums(4)?;
-            require(self.r.u8()? <= 1, "exe_appearance_schema_unsupported")?;
+            self.byte()?;
         }
         Ok(())
     }
     fn uninstall(&mut self) -> Result<()> {
-        self.expected(&[1, 0], "exe_create_uninstall_unsupported")?;
+        self.lifecycle = "uninstall";
+        self.expected(&[1], "exe_uninstall_schema_unsupported")?;
+        self.nums(1)?;
         for _ in 0..3 {
             self.display()?;
         }
-        self.expected(&[0, 0, 0, 1, 0], "exe_project_options_unsupported")?;
+        self.nums(5)?;
         self.byte()?;
         self.nums(5)?;
         self.byte()?;
         self.labels()?;
-        self.expected(&[1, 1, 1, 1], "exe_project_options_unsupported")?;
+        self.nums(4)?;
         self.display()?;
         self.display()?;
-        self.expected(&[0, 0], "exe_project_options_unsupported")?;
+        self.nums(2)?;
         self.byte()?;
         for _ in 0..5 {
             self.display()?;
         }
-        self.expected(&[0], "exe_project_options_unsupported")?;
+        self.nums(1)?;
         self.byte()?;
         self.display()?;
-        self.expected(&[0, 0], "exe_project_options_unsupported")?;
+        self.nums(2)?;
         self.empty_array()?;
         self.display()?;
         self.display()?;
-        self.expected(&[0, 0], "exe_project_options_unsupported")?;
+        self.nums(2)?;
         self.empty_array()?;
         self.display()?;
         self.empty_array()?;
         let old = std::mem::replace(&mut self.context, "uninstall".into());
         self.array(SCREENS, 32)?;
-        self.expected(&[1, 1], "exe_project_options_unsupported")?;
+        self.nums(2)?;
         self.array(SCREENS, 32)?;
         self.array(SCREENS, 32)?;
-        let events = self.array(&["CIREvent"], 32)?;
-        object_names(&events, UNINSTALL_EVENTS)?;
+        self.array(&["CIREvent"], 32)?;
         self.context = old;
         Ok(())
     }
@@ -549,49 +499,38 @@ impl<'a> Archive<'a> {
         Ok(())
     }
     fn project(&mut self) -> Result<()> {
-        self.expected(&[1], "exe_project_options_unsupported")?;
+        self.lifecycle = "project";
+        self.expected(&[1], "exe_project_schema_unsupported")?;
         self.byte()?;
         self.display()?;
-        require(
-            self.r.read(6)? == [0, 1, 0, 0, 1, 0],
-            "exe_project_options_unsupported",
-        )?;
-        self.expected(&[1, 0], "exe_project_options_unsupported")?;
+        self.r.read(6)?;
+        self.nums(2)?;
         self.byte()?;
         self.nums(4)?;
-        require(self.r.read(2)? == [0, 1], "exe_project_options_unsupported")?;
+        self.r.read(2)?;
         self.display()?;
-        require(self.r.read(2)? == [0, 0], "exe_project_options_unsupported")?;
+        self.r.read(2)?;
         self.labels()?;
-        self.expected(&[1, 0, 0, 30, 30, 1], "exe_project_options_unsupported")?;
+        self.nums(6)?;
         self.timestamp()?;
-        self.expected(&[0, 0, 1, 1, 2, 1, 0], "exe_project_options_unsupported")?;
+        self.nums(7)?;
         self.display()?;
-        self.expected(&[0], "exe_project_options_unsupported")?;
+        self.nums(1)?;
         self.display()?;
         self.display()?;
         self.byte()?;
         self.byte()?;
-        self.expected(&[1], "exe_project_options_unsupported")?;
+        self.nums(1)?;
         let count = self.r.u16()? as usize;
-        require(
-            count == if self.version == "9.5" { 16 } else { 19 },
-            "exe_platform_condition_unsupported",
-        )?;
-        let mask = self.r.read(count * 2)?;
-        require(
-            mask[..2] == [0, 128] && mask[2..].iter().all(|v| *v == 255),
-            "exe_platform_condition_unsupported",
-        )?;
-        self.expected(&[0, 0, 0, 0, 1, 0], "exe_project_options_unsupported")?;
+        self.r.read(count * 2)?;
+        self.nums(6)?;
         for _ in 0..11 {
             self.display()?;
         }
-        self.expected(&[0, 0], "exe_project_options_unsupported")?;
+        self.nums(2)?;
         self.empty_array()?;
         self.context = "project".into();
-        let events = self.array(&["CIREvent"], 32)?;
-        object_names(&events, PROJECT_EVENTS)?;
+        self.array(&["CIREvent"], 32)?;
         self.array(&["CImageInfo"], 16)?;
         self.empty_array()?;
         self.array(&["CSUFLanguageFile"], 16)?;
@@ -605,9 +544,12 @@ impl<'a> Archive<'a> {
             "exe_file_count_mismatch",
         )?;
         self.empty_array()?;
+        self.lifecycle = "before";
         self.array(SCREENS, 32)?;
-        self.expected(&[1, 1], "exe_project_options_unsupported")?;
+        self.nums(2)?;
+        self.lifecycle = "while";
         self.array(SCREENS, 32)?;
+        self.lifecycle = "after";
         self.array(SCREENS, 32)?;
         self.array(&["CSessionVar"], 256)?;
         self.array(&["CSUFPackage"], 64)?;
@@ -616,7 +558,7 @@ impl<'a> Archive<'a> {
         self.project()?;
         require(self.r.pos == self.data.len(), "exe_metadata_trailing_data")?;
         Ok(
-            json!({"decoder": "sf9-graph-v1", "coverage": {"complete": true, "bytes": self.r.pos},
+            json!({"decoder": "sf9-graph-v2", "coverage": {"complete": true, "bytes": self.r.pos},
             "metadata": evidence(self.data, 0), "events": self.events, "includes": self.includes,
             "variables": self.variables, "disabled_packages": self.packages, "terms": self.terms,
             "objects": self.objects, "installable": false}),

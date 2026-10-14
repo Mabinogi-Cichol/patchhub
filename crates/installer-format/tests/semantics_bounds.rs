@@ -132,7 +132,7 @@ fn runtime_guards_progress_and_unknown_effects_fail_closed() {
     }
 }
 #[test]
-fn complete_coverage_and_every_file_option_are_required() {
+fn complete_structure_is_required_but_configuration_values_are_not_whitelisted() {
     let mut value = graph("Screen.Next()");
     value["coverage"]["complete"] = json!(false);
     assert_eq!(
@@ -148,7 +148,7 @@ fn complete_coverage_and_every_file_option_are_required() {
             let mut changed = file.clone();
             changed["unreviewed_fields"][i]["base64"] = json!("AQ==");
             assert!(
-                behavior::file_policy(&[changed], version).is_err(),
+                behavior::file_policy(&[changed], version).is_ok(),
                 "field {i} {version}"
             );
         }
@@ -161,7 +161,7 @@ fn complete_coverage_and_every_file_option_are_required() {
             let mut changed = file.clone();
             changed["destination"] = json!(destination);
             assert!(
-                behavior::file_policy(&[changed], version).is_err(),
+                behavior::file_policy(&[changed], version).is_ok(),
                 "{destination}"
             );
         }
@@ -341,5 +341,151 @@ fn global_immutable_aliases_do_not_copy_environment_per_statement() {
     assert_eq!(
         behavior::lower(&value, &[checked_file("9.5")], "9.5").unwrap()["condition"],
         true
+    );
+}
+
+#[test]
+fn ordinary_configuration_and_nested_conditions_are_compatible() {
+    let mut file = checked_file("9.5");
+    file["runtime_folder"] = json!(r"Archive\www\images");
+    file["attributes"] = json!(7);
+    file["use_original_attributes"] = json!(0);
+    file["forced_attributes"] = json!(128);
+    file["shortcuts"] = json!(["Desktop", "Game", "", "", ""]);
+    file["icon"] = json!("custom.ico");
+    file["font"] = json!("publisher.ttf");
+    file["install_type"] = json!("Custom build");
+    file["extra"] = json!("Publisher config");
+    file["destination"] = json!("savedata/template.dat");
+    let g = graph(r#"if File.DoesExist("%AppFolder%\\sub\\engine.exe") then Screen.Next() end"#);
+    let result = behavior::lower(&g, &[file], "9.5").unwrap();
+    assert_eq!(result["copy_files"], json!(["savedata/template.dat"]));
+    assert_eq!(
+        result["condition"],
+        json!(["symbol", "exists", "sub/engine.exe"])
+    );
+}
+
+#[test]
+fn optional_files_and_package_install_state_are_real_selection_inputs() {
+    let mut first = checked_file("9.5");
+    first["destination"] = json!("optional.bin");
+    first["condition"] = json!(r#"File.DoesExist("%AppFolder%\\dlc\\identity.dat")"#);
+    let mut second = checked_file("9.5");
+    second["destination"] = json!("component.bin");
+    second["packages"] = json!(["off", "on"]);
+    let mut g = graph("Screen.Next()");
+    g["objects"] = json!([
+        {"class":"CSUFPackage","name":"off","install":false,"enabled":true},
+        {"class":"CSUFPackage","name":"on","install":true,"enabled":false}
+    ]);
+    let result = behavior::lower(&g, &[first.clone(), second.clone()], "9.5").unwrap();
+    assert_eq!(result["condition"], true);
+    assert_eq!(
+        result["file_conditions"],
+        json!([
+            {"path":"optional.bin","condition":["symbol","exists","dlc/identity.dat"]}
+        ])
+    );
+    second["packages"] = json!(["off"]);
+    first["condition"] = json!("false");
+    let result = behavior::lower(&g, &[first, second], "9.5").unwrap();
+    assert_eq!(
+        result["file_conditions"],
+        json!([
+            {"path":"optional.bin","condition":false},
+            {"path":"component.bin","condition":false}
+        ])
+    );
+    g["events"][0]["script"] =
+        json!("SetupData.SetPackageProperties('off', {Install=true}); Screen.Next()");
+    let mut file = checked_file("9.5");
+    file["packages"] = json!(["off"]);
+    assert_eq!(
+        behavior::lower(&g, &[file], "9.5").unwrap()["file_conditions"],
+        json!([])
+    );
+}
+
+#[test]
+fn package_properties_table_and_install_lifecycle_are_respected() {
+    let mut g=graph("local p=SetupData.GetPackageProperties('component'); p.Install=true; SetupData.SetPackageProperties('component',p); Screen.Next()");
+    g["objects"] = json!([{"class":"CSUFPackage","name":"component","install":false}]);
+    let mut file = checked_file("9.5");
+    file["packages"] = json!(["component"]);
+    assert_eq!(
+        behavior::lower(&g, &[file.clone()], "9.5").unwrap()["file_conditions"],
+        json!([])
+    );
+    for (context, event) in [
+        ("project", "On Post Install"),
+        ("project", "On Shutdown"),
+        ("uninstall", "On Preload"),
+    ] {
+        let mut changed = g.clone();
+        changed["events"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"context":context,"name":event,
+            "script":"SetupData.SetPackageProperties('component',{Install=false})"}));
+        assert_eq!(
+            behavior::lower(&changed, &[file.clone()], "9.5").unwrap()["file_conditions"],
+            json!([]),
+            "{context} {event}"
+        );
+    }
+}
+
+#[test]
+fn project_startup_precedes_screens_and_help_does_not_choose_components() {
+    let mut g = graph("SetupData.SetPackageProperties('component',{Install=true}); Screen.Next()");
+    g["events"][0]["context"] = json!("CSUFScreenInstallFolder:first");
+    g["objects"] = json!([{"class":"CSUFPackage","name":"component","install":true}]);
+    g["events"].as_array_mut().unwrap().extend([
+        json!({"context":"CSUFScreenInstallFolder:later","name":"On Help","script":"SetupData.SetPackageProperties('component',{Install=false})"}),
+        json!({"context":"project","name":"On Startup","script":"SetupData.SetPackageProperties('component',{Install=false})"})
+    ]);
+    let mut file = checked_file("9.5");
+    file["packages"] = json!(["component"]);
+    assert_eq!(
+        behavior::lower(&g, &[file], "9.5").unwrap()["file_conditions"],
+        json!([])
+    );
+}
+
+#[test]
+fn global_functions_are_defined_once_before_install_events() {
+    let mut g = graph("if eligible() then Screen.Next() end");
+    g["events"].as_array_mut().unwrap().push(json!({"context":"project","name":"Global Functions","script":"function eligible() return true end"}));
+    assert_eq!(
+        behavior::lower(&g, &[checked_file("9.5")], "9.5").unwrap()["condition"],
+        true
+    );
+}
+
+#[test]
+fn after_and_uninstall_screens_do_not_change_installation_choices_or_gates() {
+    let mut g = graph("Screen.Next()");
+    g["objects"] = json!([{"class":"CSUFPackage","name":"component","install":true}]);
+    let mut file = checked_file("9.5");
+    file["packages"] = json!(["component"]);
+    for stage in ["after", "uninstall"] {
+        let mut changed = g.clone();
+        changed["events"].as_array_mut().unwrap().push(json!({"lifecycle":stage,
+            "context":"CSUFScreenInstallFolder:same-name","name":"On Next",
+            "script":"SetupData.SetPackageProperties('component',{Install=false}); if File.DoesExist('%AppFolder%\\\\post-only.dat') then Screen.Next() end"}));
+        let result = behavior::lower(&changed, &[file.clone()], "9.5").unwrap();
+        assert_eq!(result["condition"], true, "{stage}");
+        assert_eq!(result["file_conditions"], json!([]), "{stage}");
+    }
+    g["events"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"lifecycle":"while",
+        "context":"CSUFScreenProgressBars:progress","name":"On Preload",
+        "script":"SetupData.SetPackageProperties('component',{Install=false})"}));
+    assert_eq!(
+        behavior::lower(&g, &[file], "9.5").unwrap()["file_conditions"],
+        json!([{"path":"payload.bin","condition":false}])
     );
 }

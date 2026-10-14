@@ -248,11 +248,20 @@ pub fn process(file: &File, descriptor: &Descriptor, output: &Path) -> Result<Va
                 "exe_behavior_changed",
             )?;
             let files = manifest(&report)?;
+            let actual: std::collections::BTreeMap<_, _> =
+                files.iter().map(|p| (p.path.as_str(), p)).collect();
             let mut wanted = payload.clone();
-            let mut actual = files.clone();
             wanted.sort_by(|a, b| a.path.cmp(&b.path));
-            actual.sort_by(|a, b| a.path.cmp(&b.path));
-            require(wanted == actual, "exe_manifest_changed")?;
+            require(
+                wanted.windows(2).all(|v| v[0].path != v[1].path)
+                    && wanted.iter().all(|item| {
+                        actual
+                            .get(item.path.as_str())
+                            .is_some_and(|value| *value == item)
+                    }),
+                "exe_manifest_changed",
+            )?;
+            let files = payload.clone();
             let parent = output
                 .parent()
                 .ok_or_else(|| Error("worker_output_invalid".into()))?;
@@ -269,7 +278,7 @@ pub fn process(file: &File, descriptor: &Descriptor, output: &Path) -> Result<Va
                 .create_new(true)
                 .open(&partial)?;
             let outcome = (|| {
-                write_zip(&mut target, &data, &report)?;
+                write_zip(&mut target, &data, &report, &files)?;
                 target.sync_all()?;
                 require(identity(file)? == before, "exe_changed_during_extraction")?;
                 require(
@@ -410,11 +419,18 @@ fn write_end_records(w: &mut impl Write, count: u16, size: u64, start: u64) -> R
 }
 
 // Match the frozen CPython 3.12 ZIP_STORED / force_zip64 bytes exactly.
-fn write_zip(w: &mut File, data: &[u8], report: &Value) -> Result<()> {
+fn write_zip(w: &mut File, data: &[u8], report: &Value, selected: &[Payload]) -> Result<()> {
+    let selected_paths: std::collections::BTreeSet<_> =
+        selected.iter().map(|p| p.path.as_str()).collect();
     let mut rows: Vec<&Value> = report["files"]
         .as_array()
         .ok_or_else(|| Error("invalid_report".into()))?
         .iter()
+        .filter(|row| {
+            row["destination"]
+                .as_str()
+                .is_some_and(|p| selected_paths.contains(p))
+        })
         .collect();
     rows.sort_by(|a, b| a["destination"].as_str().cmp(&b["destination"].as_str()));
     let mut central = Vec::new();

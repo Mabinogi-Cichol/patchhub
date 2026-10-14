@@ -171,7 +171,27 @@ fn run(
                 error(e)
             }
         })?;
-    let report = exe_report::validate_response(&analysis.response, &acquired.sha256, acquired.size)
+    let mut report =
+        exe_report::validate_response(&analysis.response, &acquired.sha256, acquired.size)
+            .map_err(error)?;
+    let expectation = exe_resolve::expectation(inputs.selection);
+    let game = facts::game_facts_unreviewed(inputs.game, &expectation, &control.cancel);
+    if !game.is_valid() {
+        return Err(Error::new(
+            "exe_facts_failed",
+            format!("{:?}", game.failures()),
+        ));
+    }
+    let reinstall = if inputs.operation == InstallOperation::Reinstall {
+        reinstall_evidence(deps.paths, inputs.game, &report)?
+    } else {
+        None
+    };
+    if inputs.operation == InstallOperation::Reinstall && reinstall.is_none() {
+        return Err(Error::code("reinstall_unowned_or_incomplete"));
+    }
+    report
+        .select_payload_with_evidence(&game, &control.cancel, reinstall.as_ref())
         .map_err(error)?;
     let variant = serde_json::to_value(inputs.selection.candidate.variant)
         .map_err(error)?
@@ -198,23 +218,6 @@ fn run(
     {
         use std::os::unix::fs::PermissionsExt;
         let _ = fs::set_permissions(&reports, fs::Permissions::from_mode(0o700));
-    }
-    let expectation = exe_resolve::expectation(inputs.selection);
-    let game = facts::game_facts_unreviewed(inputs.game, &expectation, &control.cancel);
-    if !game.is_valid() {
-        return Err(Error::new(
-            "exe_facts_failed",
-            format!("{:?}", game.failures()),
-        ));
-    }
-    let reinstall = if inputs.operation == InstallOperation::Reinstall {
-        reinstall_evidence(deps.paths, inputs.game, &content)?
-    } else {
-        // Overwrite must evaluate the actual current files, even for owned content.
-        None
-    };
-    if inputs.operation == InstallOperation::Reinstall && reinstall.is_none() {
-        return Err(Error::code("reinstall_unowned_or_incomplete"));
     }
     let snapshot = report
         .evaluate_with_reinstall(&game, &control.cancel, Some(&content), reinstall.as_ref())
@@ -359,7 +362,11 @@ fn run(
             settings_revision: inputs.selection.settings_revision,
             conditions_sha256: &snapshot.sha256(),
             content: content_binding,
-            policy: PolicyVersions::default(),
+            policy: PolicyVersions {
+                adapter_version: 2,
+                report_schema_version: 2,
+                ..PolicyVersions::default()
+            },
             plan_id: &plan.plan_id,
             task_id: Some(&control.id),
             request_id: Some(inputs.request_id),
@@ -443,7 +450,11 @@ fn run(
                 && (deps.cancel_reason)().is_none(),
             facts: current_facts,
             settings_revision: fresh.settings_revision,
-            policy: PolicyVersions::default(),
+            policy: PolicyVersions {
+                adapter_version: 2,
+                report_schema_version: 2,
+                ..PolicyVersions::default()
+            },
             candidate_sha256: fresh.candidate_sha256,
             rule_fingerprint: fresh.rule_fingerprint,
             conditions_sha256: current_condition.sha256(),
@@ -493,15 +504,28 @@ fn run(
 fn reinstall_evidence(
     paths: &InstallerPaths,
     game: &GameInstall,
-    content: &str,
+    report: &PreparedReport,
 ) -> Result<Option<ReinstallEvidence>> {
     let transactions = install::list_transactions_at(paths.root()).map_err(error)?;
-    let Some(t) = transactions.into_iter().rev().find(|t| {
-        t.instance_id == game.instance_id && t.release_id == content && t.state == "committed"
-    }) else {
-        return Ok(None);
-    };
-    let Some(auth) = authorization::load(paths, &t.plan_id).map_err(error)? else {
+    let mut matched = None;
+    for t in transactions
+        .into_iter()
+        .rev()
+        .filter(|t| t.instance_id == game.instance_id && t.state == "committed")
+    {
+        let Some(auth) = authorization::load(paths, &t.plan_id).map_err(error)? else {
+            continue;
+        };
+        if auth.content.exe_sha256.as_deref() == Some(report.binding().exe_sha256.as_str())
+            && auth.content.metadata_sha256.as_deref()
+                == Some(report.binding().metadata_sha256.as_str())
+            && auth.content.exe_size == Some(report.binding().exe_size)
+        {
+            matched = Some((t, auth));
+            break;
+        }
+    }
+    let Some((t, auth)) = matched else {
         return Ok(None);
     };
     for owned in &auth.content.mappings {

@@ -42,6 +42,7 @@ pub struct PreparedReport {
     payload: Vec<PayloadEntry>,
     condition: Condition,
     condition_sha256: String,
+    file_conditions: Vec<(String, Condition)>,
 }
 #[derive(Debug, Clone)]
 enum Number {
@@ -82,7 +83,6 @@ impl ConditionSnapshot {
 pub struct ReinstallEvidence {
     instance_id: String,
     content_id: String,
-    behavior_sha256: String,
     binding: ReportBinding,
     owned: BTreeMap<String, String>,
     original: BTreeMap<String, Option<FileDigest>>,
@@ -162,7 +162,6 @@ impl ReinstallEvidence {
         Ok(Self {
             instance_id: transaction.instance_id.clone(),
             content_id: content_id.clone(),
-            behavior_sha256: original.behavior_sha256.clone(),
             binding,
             owned,
             original: previous,
@@ -170,6 +169,105 @@ impl ReinstallEvidence {
     }
 }
 impl PreparedReport {
+    /// Resolve optional members against the same read-only game facts used by
+    /// the installation gate, before content identity and conversion are bound.
+    pub fn select_payload(&mut self, game: &GameFacts, cancel: &AtomicBool) -> Result<()> {
+        self.select_payload_with_evidence(game, cancel, None)
+    }
+    pub fn select_payload_with_evidence(
+        &mut self,
+        game: &GameFacts,
+        cancel: &AtomicBool,
+        evidence: Option<&ReinstallEvidence>,
+    ) -> Result<()> {
+        if self.file_conditions.is_empty() {
+            return Ok(());
+        }
+        if let Some(e) = evidence {
+            require(
+                e.instance_id == game.instance.instance_id
+                    && e.binding.exe_sha256 == self.binding.exe_sha256
+                    && e.binding.exe_size == self.binding.exe_size
+                    && e.binding.metadata_sha256 == self.binding.metadata_sha256,
+                "exe_reinstall_evidence_invalid",
+            )?;
+        }
+        let files = self.observe_condition_files(game, cancel)?;
+        let mut effective: BTreeMap<_, _> =
+            files.into_iter().map(|f| (f.path, f.observed)).collect();
+        if let Some(e) = evidence {
+            for (path, sha) in &e.owned {
+                if effective
+                    .get(path)
+                    .and_then(Option::as_ref)
+                    .is_some_and(|d| &d.sha256 == sha)
+                {
+                    if let Some(original) = e.original.get(path) {
+                        effective.insert(path.clone(), original.clone());
+                    }
+                }
+            }
+        }
+        let mut excluded = BTreeSet::new();
+        for (path, condition) in &self.file_conditions {
+            let selected = match condition.eval(&effective) {
+                Ok(value) => value,
+                Err(e) if e.to_string() == "exe_installer_condition_mismatch" => false,
+                Err(e) => return Err(e),
+            };
+            if !selected {
+                excluded.insert(path.clone());
+            }
+        }
+        self.payload.retain(|p| !excluded.contains(&p.path));
+        require(!self.payload.is_empty(), "exe_no_selected_files")?;
+        self.binding.payload_sha256 = canonical::canonical_sha256(&self.payload);
+        Ok(())
+    }
+    fn observe_condition_files(
+        &self,
+        game: &GameFacts,
+        cancel: &AtomicBool,
+    ) -> Result<Vec<ConditionFileFact>> {
+        require(
+            game.instance.install_path.is_absolute()
+                && super::zip_recipe::no_links(&game.instance.install_path)
+                && game.instance.install_path.is_dir(),
+            "exe_game_identity_changed",
+        )?;
+        let mut paths = BTreeSet::new();
+        self.condition.paths(&mut paths);
+        for (_, condition) in &self.file_conditions {
+            condition.paths(&mut paths);
+        }
+        let mut files = Vec::new();
+        // Record all static references, including skipped boolean branches and absence.
+        for path in paths {
+            if cancel.load(Ordering::Relaxed) {
+                return Err(invalid("download_cancelled"));
+            }
+            let target = game.instance.install_path.join(&path);
+            require(super::zip_recipe::no_links(&target), "linked_target")?;
+            let observed = match fs::symlink_metadata(&target) {
+                Ok(m) if m.is_file() => Some(facts::digest_file(
+                    &target,
+                    facts::MAX_BASELINE_BYTES,
+                    cancel,
+                )?),
+                Ok(_) => return Err(invalid("exe_condition_not_file")),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    require(
+                        super::zip_recipe::no_links(&target) && !target.try_exists()?,
+                        "exe_game_file_changed",
+                    )?;
+                    None
+                }
+                Err(e) => return Err(e),
+            };
+            files.push(ConditionFileFact { path, observed });
+        }
+        Ok(files)
+    }
     pub fn binding(&self) -> &ReportBinding {
         &self.binding
     }
@@ -231,8 +329,10 @@ impl PreparedReport {
             require(
                 e.instance_id == game.instance.instance_id
                     && content_id == Some(e.content_id.as_str())
-                    && e.behavior_sha256 == self.binding.behavior_sha256
-                    && e.binding == self.binding
+                    && e.binding.exe_sha256 == self.binding.exe_sha256
+                    && e.binding.exe_size == self.binding.exe_size
+                    && e.binding.metadata_sha256 == self.binding.metadata_sha256
+                    && e.binding.payload_sha256 == self.binding.payload_sha256
                     && e.owned.len() == self.payload.len()
                     && self
                         .payload
@@ -241,34 +341,7 @@ impl PreparedReport {
                 "exe_reinstall_evidence_invalid",
             )?;
         }
-        let mut paths = BTreeSet::new();
-        self.condition.paths(&mut paths);
-        let mut files = Vec::new();
-        // Record all static references, including skipped boolean branches and absence.
-        for path in paths {
-            if cancel.load(Ordering::Relaxed) {
-                return Err(invalid("download_cancelled"));
-            }
-            let target = game.instance.install_path.join(&path);
-            require(super::zip_recipe::no_links(&target), "linked_target")?;
-            let observed = match fs::symlink_metadata(&target) {
-                Ok(m) if m.is_file() => Some(facts::digest_file(
-                    &target,
-                    facts::MAX_BASELINE_BYTES,
-                    cancel,
-                )?),
-                Ok(_) => return Err(invalid("exe_condition_not_file")),
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                    require(
-                        super::zip_recipe::no_links(&target) && !target.try_exists()?,
-                        "exe_game_file_changed",
-                    )?;
-                    None
-                }
-                Err(e) => return Err(e),
-            };
-            files.push(ConditionFileFact { path, observed });
-        }
+        let files = self.observe_condition_files(game, cancel)?;
         let actual: BTreeMap<_, _> = files
             .iter()
             .map(|f| (f.path.clone(), f.observed.clone()))
@@ -287,6 +360,18 @@ impl PreparedReport {
                     }
                 }
             }
+        }
+        let selected_paths: BTreeSet<_> = self.payload.iter().map(|p| p.path.as_str()).collect();
+        for (path, condition) in &self.file_conditions {
+            let selected = match condition.eval(&effective) {
+                Ok(value) => value,
+                Err(e) if e.to_string() == "exe_installer_condition_mismatch" => false,
+                Err(e) => return Err(e),
+            };
+            require(
+                selected == selected_paths.contains(path.as_str()),
+                "exe_selection_changed",
+            )?;
         }
         Ok(ConditionSnapshot {
             instance_id: game.instance.instance_id.clone(),
@@ -606,13 +691,14 @@ pub fn validate_response(
             "policy",
             "condition",
             "copy_files",
+            "file_conditions",
             "terms",
             "coverage",
         ],
     )?;
     require(
         behavior["schema_version"] == 1
-            && behavior["policy"] == "sf9-behavior-v1"
+            && behavior["policy"] == "sf9-behavior-v2"
             && behavior["coverage"]["complete"] == true
             && report["script_inventory"]["coverage"]["complete"] == true,
         "exe_report_coverage_incomplete",
@@ -626,7 +712,7 @@ pub fn validate_response(
         &["bytes", "complete"],
     )?;
     require(
-        report["script_inventory"]["decoder"] == "sf9-graph-v1"
+        report["script_inventory"]["decoder"] == "sf9-graph-v2"
             && uint(&report["script_inventory"]["coverage"], "bytes")?
                 == uint(&report["metadata"], "size")?,
         "exe_report_coverage_incomplete",
@@ -772,6 +858,26 @@ pub fn validate_response(
                 .all(|(v, p)| v.as_str() == Some(p.path.as_str())),
         "exe_manifest_invalid",
     )?;
+    let payload_paths: BTreeSet<_> = payload.iter().map(|p| p.path.as_str()).collect();
+    let mut file_conditions = Vec::new();
+    let mut condition_paths = BTreeSet::new();
+    for entry in behavior["file_conditions"]
+        .as_array()
+        .ok_or_else(|| invalid("exe_manifest_invalid"))?
+    {
+        exact(entry, &["path", "condition"])?;
+        let path = text(entry, "path")?;
+        require(
+            paths.contains(&path.nfc().default_case_fold().collect::<String>())
+                && payload_paths.contains(path)
+                && condition_paths.insert(path.to_owned()),
+            "exe_manifest_invalid",
+        )?;
+        file_conditions.push((
+            path.to_owned(),
+            self::condition(&entry["condition"], &mut MAX_NODES.clone(), 0)?,
+        ));
+    }
     let payload_sha256 = canonical::canonical_sha256(&payload);
     Ok(PreparedReport {
         binding: ReportBinding {
@@ -782,6 +888,7 @@ pub fn validate_response(
             payload_sha256,
         },
         payload,
+        file_conditions,
         condition,
         condition_sha256: canonical::canonical_sha256(&behavior["condition"]),
     })
@@ -869,7 +976,7 @@ pub fn worker_behavior_sha256(v: &Value) -> Result<String> {
     Ok(format!("{:x}", Sha256::digest(bytes.as_bytes())))
 }
 
-fn file_policy(row: &Value, installer: &str) -> Result<()> {
+fn file_policy(row: &Value, _installer: &str) -> Result<()> {
     exact(
         row,
         &[
@@ -905,39 +1012,8 @@ fn file_policy(row: &Value, installer: &str) -> Result<()> {
         ],
     )?;
     require(
-        row["runtime_folder"] == "Archive"
-            && row["condition"] == ""
-            && row["install_type"] == "All"
-            && row["extra"] == "None"
-            && row["packages"] == json!([]),
-        "exe_file_selection_unsupported",
-    )?;
-    require(
-        row["shortcuts"]
-            .as_array()
-            .is_some_and(|a| a.len() == 5 && a.iter().all(|v| v == ""))
-            && row["icon"] == ""
-            && row["font"] == "",
-        "exe_file_registration_unsupported",
-    )?;
-    require(
-        matches!(row["attributes"].as_u64(), Some(0 | 32))
-            && row["use_original_attributes"] == 1
-            && row["forced_attributes"] == 0
-            && row["compressed"].is_boolean(),
-        "exe_file_attributes_unsupported",
-    )?;
-    let path = text(row, "destination")?
-        .nfc()
-        .default_case_fold()
-        .collect::<String>();
-    require(
-        !path
-            .split('/')
-            .any(|p| ["save", "saves", "savedata", "userdata", "user_data"].contains(&p))
-            && !path.ends_with(".sav")
-            && !path.ends_with(".save"),
-        "exe_user_data_target_unsupported",
+        row["compressed"].is_boolean(),
+        "exe_file_schema_unsupported",
     )?;
     let fields = row["unreviewed_fields"]
         .as_array()
@@ -956,30 +1032,6 @@ fn file_policy(row: &Value, installer: &str) -> Result<()> {
         )?;
         decoded.push(bytes);
     }
-    let stamp = [10, 0, 0, 128];
-    let mut mask = vec![0, 128];
-    mask.extend(std::iter::repeat_n(
-        255,
-        if installer.ends_with("9.5") { 30 } else { 36 },
-    ));
-    let mut flag = vec![2];
-    flag.extend([0; 10]);
-    require(
-        decoded[0] == [1, 0]
-            && decoded[1] == stamp
-            && decoded[2].len() == 16
-            && decoded[2][..4] == stamp
-            && decoded[2][12..] == stamp
-            && decoded[3] == vec![0; 25]
-            && decoded[4] == flag
-            && decoded[5] == [0]
-            && decoded[6] == [0; 8]
-            && decoded[7] == vec![0; if installer.ends_with("9.7") { 4 } else { 3 }]
-            && decoded[8] == [0, 0, 0, 0, 232, 3, 0, 0, 0, 0]
-            && decoded[9] == mask
-            && decoded[10] == [1, 0],
-        "exe_file_actions_or_options_unsupported",
-    )?;
     Ok(())
 }
 
@@ -1042,6 +1094,105 @@ mod tests {
             baselines: vec![],
         }
     }
+
+    #[test]
+    fn member_conditions_select_and_snapshot_actual_files() {
+        let mut r = initial();
+        let mut second = r["report"]["files"][0].clone();
+        second["destination"] = json!("optional.bin");
+        r["report"]["files"].as_array_mut().unwrap().push(second);
+        let first_path = r["report"]["files"][0]["destination"].clone();
+        r["report"]["behavior"]["copy_files"] = json!([first_path, "optional.bin"]);
+        r["report"]["behavior"]["condition"] = json!(true);
+        r["report"]["behavior"]["file_conditions"] = json!([
+            {"path":"optional.bin","condition":["symbol","exists","dlc/marker.dat"]}
+        ]);
+        r["report"]["behavior_sha256"] =
+            json!(worker_behavior_sha256(&r["report"]["behavior"]).unwrap());
+        let root = tempfile::tempdir().unwrap();
+        let game = facts(root.path());
+        let cancel = AtomicBool::new(false);
+        let mut absent = admit(&r).unwrap();
+        absent.select_payload(&game, &cancel).unwrap();
+        assert_eq!(absent.payload().len(), 1);
+        let snapshot = absent.evaluate(&game, &cancel).unwrap();
+        assert!(snapshot.satisfied);
+        assert!(snapshot
+            .files
+            .iter()
+            .any(|f| f.path == "dlc/marker.dat" && f.observed.is_none()));
+        fs::create_dir(root.path().join("dlc")).unwrap();
+        fs::write(root.path().join("dlc/marker.dat"), "present").unwrap();
+        assert_eq!(
+            absent.evaluate(&game, &cancel).unwrap_err().to_string(),
+            "exe_selection_changed"
+        );
+        let mut present = admit(&r).unwrap();
+        present.select_payload(&game, &cancel).unwrap();
+        assert_eq!(present.payload().len(), 2);
+        assert!(present.evaluate(&game, &cancel).unwrap().satisfied);
+    }
+
+    #[test]
+    fn optional_self_reference_reinstall_uses_owned_original_baseline() {
+        let mut r = initial();
+        r["report"]["behavior"]["condition"] = json!(true);
+        let path = r["report"]["files"][0]["destination"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let patched = b"patched payload";
+        let sha = format!("{:x}", Sha256::digest(patched));
+        r["report"]["files"][0]["payload"]["sha256"] = json!(sha);
+        r["report"]["behavior"]["file_conditions"] = json!([{"path":path,
+            "condition":["symbol","not",["symbol","exists",path]]}]);
+        r["report"]["behavior_sha256"] =
+            json!(worker_behavior_sha256(&r["report"]["behavior"]).unwrap());
+        let root = tempfile::tempdir().unwrap();
+        let game = facts(root.path());
+        let cancel = AtomicBool::new(false);
+        let mut first = admit(&r).unwrap();
+        first.select_payload(&game, &cancel).unwrap();
+        let content = first
+            .content_id(42, "source", "page", "zh-CN", "base")
+            .unwrap();
+        let original = first.evaluate(&game, &cancel).unwrap();
+        let evidence = ReinstallEvidence {
+            instance_id: game.instance.instance_id.clone(),
+            content_id: content.clone(),
+            binding: first.binding.clone(),
+            owned: BTreeMap::from([(path.clone(), sha)]),
+            original: original
+                .files
+                .iter()
+                .map(|f| (f.path.clone(), f.observed.clone()))
+                .collect(),
+        };
+        fs::write(root.path().join(&path), patched).unwrap();
+        assert!(admit(&r).unwrap().select_payload(&game, &cancel).is_err());
+        let mut second = admit(&r).unwrap();
+        second
+            .select_payload_with_evidence(&game, &cancel, Some(&evidence))
+            .unwrap();
+        assert_eq!(
+            second
+                .content_id(42, "source", "page", "zh-CN", "base")
+                .unwrap(),
+            content
+        );
+        assert!(
+            second
+                .evaluate_with_reinstall(&game, &cancel, Some(&content), Some(&evidence))
+                .unwrap()
+                .satisfied
+        );
+        fs::write(root.path().join(&path), "external edit").unwrap();
+        assert!(admit(&r)
+            .unwrap()
+            .select_payload_with_evidence(&game, &cancel, Some(&evidence))
+            .is_err());
+    }
+
     #[test]
     fn frozen_worker_reports_are_admitted() {
         for c in golden()["cases"].as_array().unwrap() {
@@ -1100,8 +1251,8 @@ mod tests {
         r["report"]["script_inventory"]["coverage"]["complete"] = json!(false);
         assert!(admit(&r).is_err());
         let mut r = original.clone();
-        r["report"]["files"][0]["extra"] = json!("Delete");
-        assert!(admit(&r).is_err());
+        r["report"]["files"][0]["extra"] = json!("Custom build setting");
+        assert!(admit(&r).is_ok());
         let mut r = original.clone();
         r["report"]["exe"]["size"] = json!(1);
         assert!(validate_response(

@@ -1,7 +1,6 @@
 //! Static, fail-closed lowering of bounded Lua syntax into installation predicates.
 //! Only reviewed read-only APIs and inert UI operations are modeled. Lua is never executed.
 use crate::{audit::safe_target, lua, require, Error, Result};
-use base64::{engine::general_purpose::STANDARD, Engine};
 use serde_json::{json, Value};
 use std::{
     cell::{Cell, RefCell},
@@ -9,7 +8,7 @@ use std::{
     rc::Rc,
 };
 
-pub const VERSION: &str = "sf9-behavior-v1";
+pub const VERSION: &str = "sf9-behavior-v2";
 const ROOT: &str = "X:\\__scanned_game__";
 const MAX_STEPS: usize = 200_000;
 const MAX_BRANCHES: usize = 1024;
@@ -312,7 +311,9 @@ struct Compiler {
     next_paths: Vec<Val>,
     mode: String,
     event_name: String,
+    lifecycle: String,
     protected: HashSet<String>,
+    packages: HashMap<String, Val>,
     baseline: Env,
 }
 impl Compiler {
@@ -345,7 +346,9 @@ impl Compiler {
             next_paths: Vec::new(),
             mode: "project".into(),
             event_name: "Global Functions".into(),
+            lifecycle: "global".into(),
             protected: HashSet::new(),
+            packages: HashMap::new(),
             baseline: Env {
                 values,
                 locals: HashSet::new(),
@@ -675,7 +678,16 @@ impl Compiler {
                     } else {
                         "crc32"
                     },
-                    vec![Val::Str(safe_target("%AppFolder%", relative)?.into())],
+                    vec![Val::Str({
+                        let relative = relative.replace('/', "\\");
+                        let (parent, leaf) = relative.rsplit_once('\\').unwrap_or(("", &relative));
+                        let directory = if parent.is_empty() {
+                            "%AppFolder%".to_owned()
+                        } else {
+                            format!("%AppFolder%\\{parent}")
+                        };
+                        safe_target(&directory, leaf)?.into()
+                    })],
                 ))
             }
             "Registry.GetValue" => {
@@ -722,6 +734,61 @@ impl Compiler {
                 )?;
                 require(self.next_paths.len() < MAX_STEPS, "exe_lua_analysis_limit")?;
                 self.next_paths.push(path.clone());
+                Ok(Val::Nil)
+            }
+            "SetupData.GetPackageProperties" => {
+                let name = args
+                    .first()
+                    .and_then(Val::text)
+                    .ok_or_else(|| error("exe_package_name_missing"))?;
+                let install = self
+                    .packages
+                    .get(name)
+                    .cloned()
+                    .ok_or_else(|| error("exe_package_not_found"))?;
+                Ok(Val::table(vec![(Val::Str("Install".into()), install)]))
+            }
+            "SetupData.SetPackageProperties" => {
+                // Only phases on the default forward installation route change
+                // the selection. Back/help/cancel/post/uninstall are not executed.
+                let choosing = (self.lifecycle == "global")
+                    || (self.lifecycle == "before"
+                        && matches!(self.event_name.as_str(), "On Preload" | "On Next"))
+                    || (self.lifecycle == "project"
+                        && matches!(self.event_name.as_str(), "On Startup" | "On Pre Install"))
+                    || (self.lifecycle == "while" && self.event_name == "On Preload");
+                if !choosing {
+                    return Ok(Val::Nil);
+                }
+                let name = args
+                    .first()
+                    .and_then(Val::text)
+                    .ok_or_else(|| error("exe_package_name_missing"))?
+                    .to_owned();
+                let old = self
+                    .packages
+                    .get(&name)
+                    .cloned()
+                    .ok_or_else(|| error("exe_package_not_found"))?;
+                let table = match args.get(1) {
+                    Some(Val::Table(t)) => t.borrow().clone(),
+                    _ => return Err(error("exe_package_properties_invalid")),
+                };
+                if let Some((_, value)) =
+                    table.iter().find(|(key, _)| key.text() == Some("Install"))
+                {
+                    let chosen = boolean(
+                        "or",
+                        boolean("and", path.clone(), Some(value.truth())),
+                        Some(boolean(
+                            "and",
+                            boolean("not", path.clone(), None),
+                            Some(old),
+                        )),
+                    );
+                    chosen.check_symbol_bound()?;
+                    self.packages.insert(name, chosen);
+                }
                 Ok(Val::Nil)
             }
             "Screen.Back" => Ok(Val::Nil),
@@ -783,6 +850,11 @@ impl Compiler {
             | "DlgButton.SetProperties"
             | "DlgEditField.SetProperties"
             | "DlgProgressBar.SetPos" => Ok(Val::Nil),
+            n if n.starts_with("Dlg")
+                && (n.contains(".Set") || n.ends_with(".Show") || n.ends_with(".Hide")) =>
+            {
+                Ok(Val::Nil)
+            }
             _ => Err(error(&format!("exe_lua_call_unsupported:{name}"))),
         }
     }
@@ -869,7 +941,7 @@ impl Compiler {
                                         ) && matches!(parent, Val::Table(_))
                                             && matches!(
                                                 key.text(),
-                                                Some("Text" | "Checked" | "Enabled")
+                                                Some("Text" | "Checked" | "Enabled" | "Install")
                                             ),
                                         "exe_lua_assignment_unsupported",
                                     )?;
@@ -1019,108 +1091,17 @@ fn number(value: &Val) -> Option<f64> {
     }
 }
 
-/// Verify every serialized file option before any copy is authorized.
-pub fn file_policy(files: &[Value], version: &str) -> Result<()> {
-    use caseless::Caseless;
-    require(
-        matches!(version, "9.5" | "9.6" | "9.7"),
-        "unsupported_installer_version",
-    )?;
+/// Check the fields used by member selection; publisher preferences are data.
+pub fn file_policy(files: &[Value], _version: &str) -> Result<()> {
     for row in files {
-        let destination = row["destination"]
-            .as_str()
-            .ok_or_else(|| error("exe_file_schema_unsupported"))?
-            .replace('\\', "/")
-            .chars()
-            .default_case_fold()
-            .collect::<String>();
         require(
-            !destination
-                .split('/')
-                .any(|s| matches!(s, "save" | "saves" | "savedata" | "userdata" | "user_data"))
-                && !destination.ends_with(".sav")
-                && !destination.ends_with(".save"),
-            "exe_user_data_target_unsupported",
-        )?;
-        require(
-            row["runtime_folder"] == "Archive"
-                && row["condition"] == ""
-                && row["install_type"] == "All"
-                && row["extra"] == "None"
-                && row["packages"].as_array().is_some_and(Vec::is_empty),
-            "exe_file_selection_unsupported",
-        )?;
-        let shortcuts = row["shortcuts"]
-            .as_array()
-            .ok_or_else(|| error("exe_file_registration_unsupported"))?;
-        require(
-            shortcuts.iter().all(json_falsy) && row["icon"] == "" && row["font"] == "",
-            "exe_file_registration_unsupported",
-        )?;
-        require(
-            matches!(row["attributes"].as_u64(), Some(0 | 32))
-                && row["use_original_attributes"] == 1
-                && row["forced_attributes"] == 0,
-            "exe_file_attributes_unsupported",
-        )?;
-        let fields = row["unreviewed_fields"]
-            .as_array()
-            .ok_or_else(|| error("exe_file_schema_unsupported"))?;
-        require(fields.len() == 11, "exe_file_schema_unsupported")?;
-        let decoded: Vec<Vec<u8>> = fields
-            .iter()
-            .map(|field| {
-                let encoded = field["base64"]
-                    .as_str()
-                    .ok_or_else(|| error("exe_file_schema_unsupported"))?;
-                require(
-                    encoded.len() <= MAX_VALUE_SIZE,
-                    "exe_file_schema_unsupported",
-                )?;
-                STANDARD
-                    .decode(encoded)
-                    .map_err(|_| error("exe_file_schema_unsupported"))
-            })
-            .collect::<Result<_>>()?;
-        let stamp = [10, 0, 0, 128];
-        require(
-            decoded[0] == [1, 0]
-                && decoded[1] == stamp
-                && decoded[2].len() == 16
-                && decoded[2][..4] == stamp
-                && decoded[2][12..] == stamp,
-            "exe_file_timestamp_unsupported",
-        )?;
-        let mut mask = vec![0, 128];
-        mask.extend(std::iter::repeat_n(
-            255,
-            if version == "9.5" { 30 } else { 36 },
-        ));
-        let mut flag = vec![2];
-        flag.extend([0; 10]);
-        require(
-            decoded[3] == vec![0; 25]
-                && decoded[4] == flag
-                && decoded[5] == [0]
-                && decoded[6] == [0; 8]
-                && decoded[7] == vec![0; if version == "9.7" { 4 } else { 3 }]
-                && decoded[8] == [0, 0, 0, 0, 232, 3, 0, 0, 0, 0]
-                && decoded[9] == mask
-                && decoded[10] == [1, 0],
-            "exe_file_actions_or_options_unsupported",
+            row["destination"].is_string()
+                && row["condition"].is_string()
+                && row["packages"].is_array(),
+            "exe_file_schema_unsupported",
         )?;
     }
     Ok(())
-}
-fn json_falsy(value: &Value) -> bool {
-    match value {
-        Value::Null => true,
-        Value::Bool(v) => !*v,
-        Value::Number(n) => n.as_f64() == Some(0.0),
-        Value::String(s) => s.is_empty(),
-        Value::Array(a) => a.is_empty(),
-        Value::Object(o) => o.is_empty(),
-    }
 }
 fn validate(node: &Val, budget: &mut usize, depth: usize) -> Result<()> {
     require(*budget > 0 && depth <= 96, "exe_condition_ir_limit")?;
@@ -1182,6 +1163,19 @@ pub fn lower(graph: &Value, files: &[Value], version: &str) -> Result<Value> {
         "exe_lua_analysis_limit",
     )?;
     let mut compiler = Compiler::new(total);
+    for object in graph["objects"].as_array().into_iter().flatten() {
+        if object["class"] == "CSUFPackage" {
+            let name = object["name"]
+                .as_str()
+                .ok_or_else(|| error("exe_package_name_missing"))?;
+            let install = object["install"]
+                .as_bool()
+                .ok_or_else(|| error("exe_package_properties_invalid"))?;
+            compiler
+                .packages
+                .insert(name.to_owned(), Val::Bool(install));
+        }
+    }
     let mut global_nodes = Vec::new();
     let mut global_source_bytes = 0usize;
     for include in includes {
@@ -1234,7 +1228,41 @@ pub fn lower(graph: &Value, files: &[Value], version: &str) -> Result<Value> {
     }
     compiler.protected = compiler.baseline.values.keys().cloned().collect();
     let mut gates = Vec::new();
-    for event in events {
+    let lifecycle = |event: &Value| -> String {
+        event["lifecycle"]
+            .as_str()
+            .map(str::to_owned)
+            .unwrap_or_else(|| {
+                if event["context"] == "uninstall" {
+                    "uninstall".into()
+                } else if event["context"] == "project" {
+                    "project".into()
+                } else {
+                    "before".into()
+                }
+            })
+    };
+    let mut install_events: Vec<_> = events
+        .iter()
+        .enumerate()
+        .filter(|(_, event)| lifecycle(event) != "uninstall" && event["name"] != "Global Functions")
+        .collect();
+    install_events.sort_by_key(|(index, event)| {
+        let stage = lifecycle(event);
+        let phase = match (stage.as_str(), event["name"].as_str()) {
+            ("project", Some("On Startup")) => 0,
+            ("before", _) => 1,
+            ("project", Some("On Pre Install")) => 2,
+            ("while", Some("On Preload")) => 3,
+            ("while", _) => 4,
+            ("project", Some("On Post Install")) => 5,
+            ("after", _) => 6,
+            _ => 7,
+        };
+        (phase, *index)
+    });
+    for (_, event) in install_events {
+        compiler.lifecycle = lifecycle(event);
         let nodes = lua::parse(
             event["script"]
                 .as_str()
@@ -1266,7 +1294,7 @@ pub fn lower(graph: &Value, files: &[Value], version: &str) -> Result<Value> {
             scope.values.insert("e_Stage".into(), stage);
             compiler.block(array(&nodes)?, vec![State::new(scope, Val::Bool(true))])?;
         }
-        if name == "On Next" {
+        if name == "On Next" && compiler.lifecycle == "before" {
             let mut condition = Val::Bool(false);
             for path in &compiler.next_paths {
                 condition = boolean("or", condition, Some(path.clone()));
@@ -1276,11 +1304,48 @@ pub fn lower(graph: &Value, files: &[Value], version: &str) -> Result<Value> {
             gates.push(condition);
         }
     }
-    require(!gates.is_empty(), "exe_installation_conditions_unresolved")?;
     let mut condition = Val::Bool(true);
     for gate in gates {
         condition = boolean("and", condition, Some(gate));
         condition.check_symbol_bound()?;
+    }
+    let mut file_conditions = Vec::new();
+    compiler.mode = "event".into();
+    for row in files {
+        let expression = row["condition"]
+            .as_str()
+            .ok_or_else(|| error("exe_file_condition_invalid"))?;
+        let mut selected = if expression.trim().is_empty() {
+            Val::Bool(true)
+        } else {
+            let nodes = lua::parse(&format!("return ({expression})"))?;
+            let mut scope = compiler.baseline.scope_copy()?;
+            compiler
+                .value(&nodes[0][1][0], &mut scope, &Val::Bool(true))?
+                .truth()
+        };
+        let packages = row["packages"]
+            .as_array()
+            .ok_or_else(|| error("exe_package_properties_invalid"))?;
+        if !packages.is_empty() {
+            let mut installed = Val::Bool(false);
+            for package in packages {
+                let name = package
+                    .as_str()
+                    .ok_or_else(|| error("exe_package_name_missing"))?;
+                let value = compiler
+                    .packages
+                    .get(name)
+                    .cloned()
+                    .ok_or_else(|| error("exe_package_not_found"))?;
+                installed = boolean("or", installed, Some(value));
+            }
+            selected = boolean("and", selected, Some(installed));
+        }
+        if !matches!(selected, Val::Bool(true)) {
+            validate(&selected, &mut MAX_IR_NODES.clone(), 0)?;
+            file_conditions.push(json!({"path":row["destination"],"condition":selected.to_json(&mut MAX_IR_NODES.clone(),0)?}));
+        }
     }
     let mut validation_budget = MAX_IR_NODES;
     validate(&condition, &mut validation_budget, 0)?;
@@ -1288,7 +1353,7 @@ pub fn lower(graph: &Value, files: &[Value], version: &str) -> Result<Value> {
     let condition = condition.to_json(&mut encoding_budget, 0)?;
     Ok(
         json!({"schema_version":1,"policy":VERSION,"condition":condition,
-        "copy_files":files.iter().map(|f|f["destination"].clone()).collect::<Vec<_>>(),"terms":graph["terms"],
+        "file_conditions":file_conditions,"copy_files":files.iter().map(|f|f["destination"].clone()).collect::<Vec<_>>(),"terms":graph["terms"],
         "coverage":{"complete":true,"events":events.len(),"includes":includes.len(),"steps":compiler.steps}}),
     )
 }

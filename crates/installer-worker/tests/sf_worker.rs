@@ -136,3 +136,51 @@ fn binary_rejects_paths_commands_and_unknown_actions() {
     );
     let _action: Option<Descriptor> = None;
 }
+
+#[test]
+fn selected_subset_conversion_never_writes_unselected_members() {
+    use sha2::{Digest, Sha256};
+    let fixture: Value = serde_json::from_str(include_str!(
+        "../../installer-format/tests/fixtures/sf/selection-golden.json"
+    ))
+    .unwrap();
+    let raw = unhex(fixture["data_hex"].as_str().unwrap());
+    let sha = format!("{:x}", Sha256::digest(&raw));
+    let root = tempfile::tempdir().unwrap();
+    let input = root.path().join("input.exe");
+    fs::write(&input, &raw).unwrap();
+    let file = sf::open_input(&input).unwrap();
+    let output = root.path().join("normalized.zip");
+    let analysis = sf::process(
+        &file,
+        &sf::parse_descriptor(
+            &serde_json::to_vec(&json!({"action":"analyze_behavior",
+        "exe_sha256":sha,"exe_size":raw.len()}))
+            .unwrap(),
+        )
+        .unwrap(),
+        &output,
+    )
+    .unwrap();
+    assert_eq!(analysis["report"]["files"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        analysis["report"]["behavior"]["file_conditions"],
+        json!([{"path":"optional.bin","condition":false}])
+    );
+    let row = &analysis["report"]["files"][0];
+    let payload = json!([{"path":row["destination"],"size":row["unpacked_size"],"sha256":row["payload"]["sha256"]}]);
+    let descriptor = json!({"action":"convert_behavior","exe_sha256":sha,"exe_size":raw.len(),
+        "metadata_sha256":analysis["report"]["metadata"]["sha256"],
+        "behavior_sha256":analysis["report"]["behavior_sha256"],"payload":payload});
+    let converted = sf::process(
+        &file,
+        &sf::parse_descriptor(&serde_json::to_vec(&descriptor).unwrap()).unwrap(),
+        &output,
+    )
+    .unwrap();
+    assert_eq!(converted["files"], payload);
+    let zip = fs::read(output).unwrap();
+    assert!(zip.windows(7).any(|b| b == b"keep-me"));
+    assert!(!zip.windows(7).any(|b| b == b"skip-me"));
+    assert!(!zip.windows(12).any(|b| b == b"optional.bin"));
+}

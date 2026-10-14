@@ -385,7 +385,40 @@
       }
     },
     {
-      "error": "exe_user_data_target_unsupported",
+      "expected": {
+        "condition": [
+          "symbol",
+          "and",
+          [
+            "symbol",
+            "exists",
+            "engine.exe"
+          ],
+          [
+            "symbol",
+            "==",
+            [
+              "symbol",
+              "crc32",
+              "identity.dat"
+            ],
+            123
+          ]
+        ],
+        "copy_files": [
+          "userdata/settings.bin"
+        ],
+        "coverage": {
+          "complete": true,
+          "events": 17,
+          "includes": 0,
+          "steps": 19
+        },
+        "file_conditions": [],
+        "policy": "sf9-behavior-v2",
+        "schema_version": 1,
+        "terms": []
+      },
       "id": "0f438938ccaf12878a5a6f802bf0e40825f5d7898eb1f376ddb2126f98777030",
       "input": {
         "files": [
@@ -1946,7 +1979,8 @@
           "includes": 0,
           "steps": 13
         },
-        "policy": "sf9-behavior-v1",
+        "file_conditions": [],
+        "policy": "sf9-behavior-v2",
         "schema_version": 1,
         "terms": []
       },
@@ -2717,7 +2751,40 @@
       }
     },
     {
-      "error": "exe_user_data_target_unsupported",
+      "expected": {
+        "condition": [
+          "symbol",
+          "and",
+          [
+            "symbol",
+            "exists",
+            "engine.exe"
+          ],
+          [
+            "symbol",
+            "==",
+            [
+              "symbol",
+              "crc32",
+              "identity.dat"
+            ],
+            123
+          ]
+        ],
+        "copy_files": [
+          "savedata/file.dat"
+        ],
+        "coverage": {
+          "complete": true,
+          "events": 17,
+          "includes": 0,
+          "steps": 19
+        },
+        "file_conditions": [],
+        "policy": "sf9-behavior-v2",
+        "schema_version": 1,
+        "terms": []
+      },
       "id": "85bddfd7af2dbacf03cb45485f40540c3511369e4b51ec6f00c440237230afa9",
       "input": {
         "files": [
@@ -3101,7 +3168,40 @@
       }
     },
     {
-      "error": "exe_user_data_target_unsupported",
+      "expected": {
+        "condition": [
+          "symbol",
+          "and",
+          [
+            "symbol",
+            "exists",
+            "engine.exe"
+          ],
+          [
+            "symbol",
+            "==",
+            [
+              "symbol",
+              "crc32",
+              "identity.dat"
+            ],
+            123
+          ]
+        ],
+        "copy_files": [
+          "PROFILE.SAV"
+        ],
+        "coverage": {
+          "complete": true,
+          "events": 17,
+          "includes": 0,
+          "steps": 19
+        },
+        "file_conditions": [],
+        "policy": "sf9-behavior-v2",
+        "schema_version": 1,
+        "terms": []
+      },
       "id": "8a0bb7c1866794183fd22734db41bbcd8e4e0f1743ab11507a80378fc79f23f1",
       "input": {
         "files": [
@@ -3514,7 +3614,8 @@
           "includes": 0,
           "steps": 19
         },
-        "policy": "sf9-behavior-v1",
+        "file_conditions": [],
+        "policy": "sf9-behavior-v2",
         "schema_version": 1,
         "terms": []
       },
@@ -3912,7 +4013,8 @@
           "includes": 0,
           "steps": 7
         },
-        "policy": "sf9-behavior-v1",
+        "file_conditions": [],
+        "policy": "sf9-behavior-v2",
         "schema_version": 1,
         "terms": []
       },
@@ -4328,7 +4430,8 @@
           "includes": 0,
           "steps": 19
         },
-        "policy": "sf9-behavior-v1",
+        "file_conditions": [],
+        "policy": "sf9-behavior-v2",
         "schema_version": 1,
         "terms": []
       },
@@ -5518,7 +5621,8 @@
           "includes": 0,
           "steps": 19
         },
-        "policy": "sf9-behavior-v1",
+        "file_conditions": [],
+        "policy": "sf9-behavior-v2",
         "schema_version": 1,
         "terms": []
       },
@@ -5934,7 +6038,8 @@
           "includes": 0,
           "steps": 19
         },
-        "policy": "sf9-behavior-v1",
+        "file_conditions": [],
+        "policy": "sf9-behavior-v2",
         "schema_version": 1,
         "terms": []
       },
@@ -6321,7 +6426,40 @@
       }
     },
     {
-      "error": "exe_user_data_target_unsupported",
+      "expected": {
+        "condition": [
+          "symbol",
+          "and",
+          [
+            "symbol",
+            "exists",
+            "engine.exe"
+          ],
+          [
+            "symbol",
+            "==",
+            [
+              "symbol",
+              "crc32",
+              "identity.dat"
+            ],
+            123
+          ]
+        ],
+        "copy_files": [
+          "www/save/file.rpgsave"
+        ],
+        "coverage": {
+          "complete": true,
+          "events": 17,
+          "includes": 0,
+          "steps": 19
+        },
+        "file_conditions": [],
+        "policy": "sf9-behavior-v2",
+        "schema_version": 1,
+        "terms": []
+      },
       "id": "c575c9647c7fdf364a3da295921a1595b33d14e703cee3474e0c87cb4784c5be",
       "input": {
         "files": [
