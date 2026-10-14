@@ -1,8 +1,10 @@
 # 通用 EXE 自动安装施工记录
 
-设计：[design.md](design.md)。调研：[research.md](research.md)。验收审计：[acceptance.md](acceptance.md)。
+设计：[design.md](design.md)。当前修订计划：[fix-plan.md](fix-plan.md)。调研：[research.md](research.md)。验收审计：[acceptance.md](acceptance.md)。
 
-状态：**实施与验收完成。SF9.5–9.7 按安装器行为准入，无新增游戏白名单；四款本地实际安装、重装/失败恢复/存档保护及真实写入取消通过，用户确认四款生效。最终 Decky 部署/RPC/真实页面、合成任务 UI、设备只读 worker 和用户实体手柄验收完成；证据边界见验收审计。**
+历史阶段状态：**实施与验收完成。SF9.5–9.7 按安装器行为准入，无新增游戏白名单；四款本地实际安装、重装/失败恢复/存档保护及真实写入取消通过，用户确认四款生效。最终 Decky 部署/RPC/真实页面、合成任务 UI、设备只读 worker 和用户实体手柄验收完成；证据边界见验收审计。**
+
+2026-10-15 当前增量状态：**默认值限制移除已实现，自动化、双平台回归及 Steam Deck 部署/隔离 worker/RPC/真实页面验收通过；未写入实际游戏，历史验收不覆盖本次修订。**
 
 ## 任务状态
 
@@ -16,6 +18,7 @@
 | P2 分析服务与 worker | 已实现并本地验证 | analyze_behavior / convert_behavior 共用真实 bwrap；三个大型官方包转换摘要正确 |
 | P3–P4 授权与产品流程 | 已实现并验收 | 动态来源、Rust 实际写入、重启路由；后端 EXE 运行 69 项，67 通过、2 跳过；前端 44 项通过 |
 | P5 自动化与实机验收 | 已完成 | 四款本地矩阵与用户游戏内确认、Deck 部署/RPC/真实页面、合成任务 UI、只读 worker、用户手柄确认及清理完成 |
+| 2026-10-14 安装器默认值限制移除 | 方案已修订，待实现 | [修复计划](fix-plan.md)；本轮仅文档，代码/自动化/正式 worker/部署与实机验收未执行 |
 
 ## 2026-10-07
 
@@ -211,3 +214,50 @@
 - 真实界面：QAM 游戏列表显示“妃神会秘史 有可用补丁”；全屏概览“补丁状态：有可用补丁”；补丁管理页仍显示兼容性“安装时自动检查条件”、安装方式“自动提取并安装”与“安装补丁”按钮。截图 `qam.png`、`main_overview2.png`。
 - 未点击真实下载/安装；游戏文件未写入。实体手柄 A/B/焦点、真实下载/取消/恢复仍待验收。部署后 `list_tasks` 仍为 3 条全终态。
 - 清理：删除远端暂存目录 `statuslabel-20261007-165048`；正式 `dist/index.js` 复核为新 SHA。本地首次备份与证据保留于 `.artifacts/statuslabel-deck-20261007-165048/`。
+
+## 2026-10-14：夏日 DLC 故障取证与计划修订
+
+- 前一轮按用户授权通过当前 Devkit 配对和已有可信独立 known_hosts 只读连接设备。任务记录确认两次夏日 DLC 安装/覆盖在 analyzing_installer 失败，下载缓存 EXE/元数据摘要与历史样本一致；未进行正式安装、重载或部署。
+- 纯静态、仅驻留内存的 Python 参考诊断逐项定位尾字节必须为 0、runtime_folder 必须精确为 Archive 和条件子路径误用 basename 校验。诊断中调整三处假设后完整图/行为可解析；不等同于正式 Rust worker 或实机安装通过。原始证据在忽略目录 `.artifacts/summer-memories-diagnosis-20261014/`。
+- 用户进一步明确移除多余防御性策略，随后要求先修改计划、不要施工。中断前调用只有只读命令；本轮编辑前 git status --short 为空，确认没有代码改动。
+- 新建 [fix-plan.md](fix-plan.md)，将旧“先逐字段审核，再扩展允许取值”路线改为删除样本默认值准入，按结构读取配置、按真实载荷选择与提取操作处理。范围覆盖项目/界面/卸载、属性/时间戳、附带配置、名称启发式及路径条件，不局限于夏日三处错误。
+- 同步设计当前决策和功能索引，保留既有历史验收事实。仅进行文档差异与相对链接检查；代码、测试、构建、正式 worker 分析/转换、设备连接、部署与游戏写入均未在本次计划修订中执行。
+- 后续状态：限制清单与代码调整待实现；参数变化回归、正式 Rust 样本矩阵与实机验收待验证。用户尚未授权本轮施工，不能按已修复汇报。
+
+- 本轮文档检查：4 份计划/设计/施工/索引文档的 83 条相对链接均存在；git diff --check 通过。新增任务表链接复核存在。检查仅证明文档引用与编辑范围，不证明插件修复完成。
+
+## 2026-10-15：默认值限制移除施工
+
+- 用户明确授权“开始施工”后实施，共享 Rust 格式/行为、报告、编排及 worker 同步修改；无逐游戏分支、摘要许可表或新增用户确认流程。
+- graph/audit 移除尾字节、普通项目/界面/卸载配置、文件原始属性等样本值断言，读取保留配置；behavior 移除 Archive 精确匹配、属性/时间戳/opaque 默认字节、空 shortcuts/icon/font、save 文件名启发式与固定事件组合准入。完整依据见 [限制处理清单](policy-inventory.md)。
+- 只读 exists/CRC 按完整相对路径拆分目录与叶文件名。实际 package Install 默认值及安装前脚本修改、每成员 condition 生成选择条件；多包归属按 OR。Disabled/Enabled 不混淆，后置/卸载/返回帮助事件不改变安装成员。
+- 图保留事件 lifecycle，并按启动、安装前、安装中准备与安装后的顺序编译；仅安装前 OnNext 贡献全局 gate。Global Functions 只定义一次。显示进度屏幕配置尚未映射的行为覆盖边界见设计第 9 节。
+- 报告/核心/worker 使用 v2 decoder/policy 和 file_conditions；一次观测所有条件引用，选中成员后生成内容身份与 ZIP。转换请求中的子集必须来自同一完整报告，重复或篡改成员拒绝。
+- 同内容重装从倒序事务中找到 EXE/meta/size 匹配的可信记录，使用原始条件事实选择成员；当前现场文件与选中内容身份继续核对。旧策略版本可重分析同一原始包，不继承旧任意许可布尔值。
+- 新增参数变动、生命周期、组件状态、多包 OR、子路径、逐成员条件、选择子集实际 ZIP、同内容重装/外部修改回归。独立 Python 参考生成 golden，原始输入、载荷和 ZIP 基线保持；研究脚本没有进入生产引擎。
+- 独立复核使用 multi-agent 技能要求的 1 名只读 reviewer（gpt-6.1-sol / high）。复核发现的选择时序、卸载事件、重装查找与重复观测问题均已修正；最终静态复核无新增可操作问题。测试和真实转换由主 Agent 执行。
+- 验证与候选包：最终源码回归与候选包核对均通过，见下节实际结果。证据保存在忽略目录 `.artifacts/summer-memories-diagnosis-20261014/`。未提交 Git、未部署、未执行实际游戏安装。
+
+### 最终源码自动化与候选包
+
+- Windows：`cargo test --locked -j 1 -p steam-patch-core -p steam-patch-installer-format -p steam-patch-installer-worker`，29 个 suite 共 543 passed / 0 failed / 7 ignored。首次并行编译曾在 rustc 退出 1 时未给出诊断，串行重试完整通过；首次失败不计作通过。日志 `final-stable-windows-tests.log`、`final-stable-windows-tests-retry.log`。
+- Linux：同源码格式/worker 共 66 passed，核心 exe_report 10 passed，均 0 failed；日志 `final-linux-format-tests.log`、`final-linux-core-tests.log`。
+- Windows 正式 release worker 的 LPAC 集成：`sandbox_to_authorization_install_retry_reinstall_and_external_edit --ignored --exact` 单独执行通过（1 passed）；使用临时合成游戏实例覆盖隔离分析/转换、授权安装、重试、同内容重装和外部修改拒绝，不作为真实游戏安装证据。日志 `final-stable-lpac.log`。
+- Windows/Linux CLI、worker、隔离验证 runner 的最终 release 构建通过；日志 `final-stable-windows-build.log`、`final-linux-build.log`。Rust fmt 检查、git diff --check 和 93 条相对文档链接检查通过。golden JSON 最后仅排序键，值未变。
+- 候选包 `.artifacts/summer-memories-diagnosis-20261014/candidate-20261015/steam-patch-manager-decky.zip`：7,228,118 字节，SHA-256 `f2a7ce9248f0358c211783f7ba5de0b357169d4684e954b7b642e1f717b0a3a2`，24 个 ZIP 成员。打包入口检查当前 SBOM/后端/协议；独立 ZIP 检查 CRC、runtime.json 摘要及两个 ELF 的 755 权限。没有覆盖历史候选 ZIP。
+- Linux CLI SHA-256 `4a8c6d874aae030d29acaac0f75e36dfe810e517c5e21b70b3ed0475a155bded`；sf-worker `0b8299570d0f599f62074462adc0e5504a8d69679300aa4eca0241febe9c4636`。前端与 Python host 无修改。
+- 夏日最终正式隔离分析/转换双平台通过，5,874 个成员全部以独立 Python ZipFile 核对路径、大小、CRC 与 SHA。规范化 ZIP 双平台相同 SHA `7b20d4bc35fb66e6dabe746b7ceea48fadebf8491a7a396ba8e7119434c75bfe`；全局条件仍为 Game.exe 存在及 Script.vdf CRC32=2002373744。其余三款（2303800/SF9.5、3721970/SF9.7、3606360/SF9.6）最终源码双平台矩阵均通过；分析的全部载荷和条件与独立参考报告一致，转换 ZIP 每个成员路径/大小/CRC/SHA 完整核对，四款双平台产物 SHA 均相同。汇总 `windows-samples.json`、`linux-samples.json`、`final-verification-summary.json`，日志 `final-stable-windows-samples.log`、`final-stable-linux-samples.log`。
+- 本次没有重载、部署、修改 Deck 状态或写入真实游戏；实际安装、生效及设备平台性能仍待本次修复验收。
+
+- 最终状态：本次代码与文档施工完成，自动化、独立复核、四款双平台正式隔离 worker 回归和候选包验证通过；设备部署与实际游戏安装/生效验收待执行，未提交 Git。
+
+## 2026-10-15：新版 Steam Deck 部署与验收
+
+- 用户要求“部署至steamdeck并验收”后使用项目 decky-deploy-verify 技能完成备份、正式 Loader ZIP 更新、后端正常重启、24 文件/实际 HTTP 摘要、唯一实例、RPC、设备实际隔离分析/转换及真实 QAM/全屏页面验证。详细验收与明确边界见 [本轮部署验收](deployment-20261015.md)。
+- 夏日 DLC 在已部署 sf-worker 的真实 bwrap 环境以 uid 1000 分析 3.156 秒、转换 3.578 秒，全部 5,874 文件逐项独立核对；ZIP 与 Windows/Linux 本机相同，原项目选项错误未出现。
+- 完整第一次备份、回滚包和设备证据已取回并核对；外部状态没有异常变更。仅自然来源缓存更新，23 条旧终态任务/14 条事务与 Loader 设置保留。唯一远端暂存和本轮 SSH 隧道已清理，用户原路由已恢复。
+- 当前状态：用户明确选择“只部署插件并验收运行与界面”，本次按确认范围完成；实体手柄未验证，实际夏日安装/覆盖和游戏内生效不在本轮范围，未写游戏。下述 Git 提交前保留本阶段未提交的历史事实。
+
+## 2026-10-15：Git 归档
+
+- 用户要求提交目前为止的改动。安装器修复与必要测试已独立提交 `439408d`（fix(installer): 移除安装器默认值准入并修复夏日补丁解析）；本功能设计/取证/施工与部署验收另作独立文档提交，备份全清计划属于另一功能。沿用本 session 已通过验证，没有新增产品代码或重复测试。
