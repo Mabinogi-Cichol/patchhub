@@ -162,4 +162,5 @@
 - 删除 UI 中已无 Rust 生产者的 `exe_original_size_limit` 文案。
 - `cargo test --locked --offline --workspace --no-fail-fast`：37 个目标全 `ok`，0 失败 / 0 编译错误 / 0 panic；日志 `.artifacts/install-footprint-p1-p4-tests.log`。
 - `cargo check --locked --offline --workspace`：通过。
-- 仍未执行：真实大包/大 EXE 端到端、真实磁盘峰值采样、Windows/Steam Deck 实机安装与恢复。未提交或推送 Git、未发布、未部署设备。
+- 前端/契约：`node --experimental-strip-types --test apps/decky/tests/*.test.ts` 70 通过 0 失败；`npm run typecheck`（Windows + Decky `tsc --noEmit`）通过；`npm run test:contracts` 通过。
+- 仍未执行：真实大包/大 EXE 端到端、真实磁盘峰值采样、Windows/Steam Deck 实机安装与恢复、P4 的整包 mmap 与 3 GiB 地址空间窗口映射（设计留待平台内存语义实测）。未提交或推送 Git、未发布、未部署设备。
