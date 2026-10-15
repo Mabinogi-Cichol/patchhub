@@ -152,8 +152,14 @@ class SourceService:
         self.diagnostics = diagnostics
         return diagnostics
 
-    async def scan_sources(self, force=False, on_event=None, cancel=None):
-        result = await self.bridge._call("scan_sources", {"force": bool(force)},
+    async def scan_sources(self, force=False, on_event=None, cancel=None,
+                           instance_id=None, name_hints=None, preferred_language=None):
+        params = {"force": bool(force)}
+        if instance_id is not None:
+            params.update(instance_id=instance_id, name_hints=list(name_hints or []))
+            if preferred_language is not None:
+                params["preferred_language"] = preferred_language
+        result = await self.bridge._call("scan_sources", params,
                                          on_event=on_event, cancel=cancel)
         if isinstance(result, dict):
             revision = result.get("settings_revision")

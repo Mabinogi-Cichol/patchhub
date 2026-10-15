@@ -51,12 +51,6 @@ pub fn resolve(
             if let Some(code) = source_admission_blocker(registry, &candidate, game.appid) {
                 return Err(ResolveError::code(code));
             }
-            if format == "exe"
-                && (!matches!(rule.id.as_str(), "kagura-cn" | "kagura-en")
-                    || registry.source_origin(&rule.id) != Some("builtin"))
-            {
-                return Err(ResolveError::code("exe_source_disabled"));
-            }
             let mut chosen = candidate.clone();
             chosen.mirrors = vec![mirror.clone()];
             let download_url = select_download_url(

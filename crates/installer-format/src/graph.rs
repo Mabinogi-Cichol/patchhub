@@ -538,7 +538,7 @@ impl<'a> Archive<'a> {
     }
     fn decode(mut self) -> Result<Value> {
         self.array(&["CGlobalIncludeLuaFile"], 64)?;
-        self.array(&["CSetupFileData"], 8192)?;
+        self.array(&["CSetupFileData"], u16::MAX as usize)?;
         require(
             self.file_index == self.files.len(),
             "exe_file_count_mismatch",

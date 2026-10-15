@@ -11,7 +11,7 @@ from threading import Event
 
 
 class ScanSession:
-    def __init__(self, report, refresh, scan_sources, project, current, project_on_update=True):
+    def __init__(self, report, refresh, scan_sources, project, current, project_on_update=True, target_instance=None):
         self.report = copy.deepcopy(report)
         self.refresh = refresh
         self.scan_sources = scan_sources
@@ -19,7 +19,8 @@ class ScanSession:
         self.project_on_update = project_on_update
         self.current = current
         self._cancel = Event()
-        self.rows = [row for row in self.report["installs"] if row["game"].get("availability") == "installed"]
+        self.rows = [row for row in self.report["installs"] if row["game"].get("availability") == "installed"
+                     and (target_instance is None or row["game"].get("instance_id") == target_instance)]
         self._by_instance = {}
         self._by_appid = {}
         for row in self.rows:
@@ -65,6 +66,10 @@ class ScanSession:
             try:
                 if self.project_on_update:
                     await self.project(row)
+                    # Projection supplies actions; terminal pause/retry details
+                    # belong to the task event, not its persisted candidate cache.
+                    row["discovery"] = {key: discovery.get(key, [])
+                                        for key in ("status", "candidates", "diagnostics")}
             except asyncio.CancelledError:
                 raise
             except Exception as error:

@@ -665,7 +665,6 @@
     "FailureKind": {
       "enum": [
         "user_cancelled",
-        "lease_expired",
         "domain_failure"
       ],
       "type": "string"

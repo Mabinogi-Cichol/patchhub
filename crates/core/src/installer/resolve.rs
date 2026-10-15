@@ -150,17 +150,28 @@ pub struct ResolvedZipCandidate {
 }
 
 impl ResolvedZipCandidate {
+    pub fn is_manual(&self) -> bool {
+        let automatic = if self.selection_id.starts_with("exe-") {
+            super::exe_resolve::exe_selection_id(&self.candidate)
+        } else {
+            zip_selection_id(&self.candidate)
+        };
+        automatic.as_deref() != Some(self.selection_id.as_str())
+    }
+
     /// Facts expectation for this candidate (`verified_buildids` = the live
     /// build, p1-zip-orchestration §2.1 step 8). The orchestrator supplies the
     /// current `buildid` because the pure source layer has none.
-    pub fn expectation(&self, buildid: Option<&str>) -> FactsExpectation {
+    pub fn expectation(&self, _buildid: Option<&str>) -> FactsExpectation {
         FactsExpectation {
             appid: self.appid,
             language: self.language.clone(),
-            verified_buildids: buildid.map(str::to_string).into_iter().collect(),
+            verified_buildids: Vec::new(),
             // Language gates publisher discoveries only; index sources record it
             // as evidence so the selected patch language is not a blocker.
-            require_language: self.rule.discovery_only && !self.language.is_empty(),
+            require_language: self.rule.discovery_only
+                && !self.language.is_empty()
+                && !self.is_manual(),
             requires_dlc: self.candidate.requires_dlc.clone().unwrap_or_default(),
             excludes_dlc: self.candidate.excludes_dlc.clone().unwrap_or_default(),
             baselines: Vec::new(),
@@ -938,7 +949,8 @@ mod tests {
                 "key",
             )
             .unwrap();
-        // Advance past `DISCOVERY_SUCCESS_TTL` (6h) without re-publishing.
+        // Advance far past the old 6h source TTL: time no longer expires the
+        // shared discovery, so the selection stays resolvable without re-publishing.
         now.store(1_000 + 30 * 24 * 3_600, Ordering::SeqCst);
         assert!(resolve_zip(&registry, &game(), &selection_id).is_ok());
     }

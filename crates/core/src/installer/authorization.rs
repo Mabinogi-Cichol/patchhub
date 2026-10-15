@@ -5,13 +5,13 @@
 //! plan/task/request ownership, the adapter/policy/report versions and a
 //! [`GameFacts`] snapshot. Before apply, [`validate`] re-reads the current facts
 //! and re-resolves every binding; any difference (facts, content, policy,
-//! settings revision) or expiry/revocation invalidates the authorization with a
+//! scoped source evidence) or revocation invalidates the authorization with a
 //! diagnosable [`Invalidation`].
 //!
 //! Persistence lives at the protected `installer/rust-v1/jobs/<plan_id>/`
 //! location (`authorization.json`, p0-contracts §3.1–§3.2). It never replaces the
 //! `journal.sqlite` transaction truth source: the journal still owns the plan,
-//! TTL and recovery material, and this file only records the authorization
+//! recovery material, and this file only records the authorization
 //! bindings referenced by the same `plan_id`.
 //!
 //! Integration points:
@@ -25,7 +25,6 @@
 use super::facts::GameFacts;
 use super::{invalid, InstallerPaths, Result};
 use crate::catalog::FileMapping;
-use crate::install::PLAN_TTL_SECONDS;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fs;
@@ -198,10 +197,8 @@ pub struct Authorization {
     pub policy: PolicyVersions,
     /// Instance fact snapshot.
     pub facts: GameFacts,
-    /// Validity window and revocation state.
+    /// Diagnostic record timestamp and durable revocation state.
     pub created_at: u64,
-    pub expires_at: u64,
-    pub lease_active: bool,
     pub revoked: bool,
 }
 
@@ -223,7 +220,6 @@ pub struct AuthorizeInput<'a> {
     pub request_id: Option<&'a str>,
     pub facts: GameFacts,
     pub now: u64,
-    pub ttl_seconds: u64,
 }
 
 /// Current instance state supplied to [`validate`].
@@ -234,7 +230,6 @@ pub struct CurrentState {
     pub instance_id: String,
     /// Persistent revocation marker (`jobs/<plan_id>/revoked`).
     pub revoked: bool,
-    pub lease_active: bool,
     pub facts: GameFacts,
     pub settings_revision: u64,
     pub policy: PolicyVersions,
@@ -282,19 +277,9 @@ pub type AuthResult<T> = std::result::Result<T, Invalidation>;
 
 /// Generates a new authorization from verified server-side inputs.
 ///
-/// Rejects invalid TTL, empty mappings, malformed plan ids and instances whose
-/// facts already carry a failure.
+/// Rejects empty mappings, malformed plan ids and instances whose facts already
+/// carry a failure.
 pub fn authorize(input: AuthorizeInput<'_>) -> AuthResult<Authorization> {
-    if input.ttl_seconds == 0 || input.ttl_seconds > PLAN_TTL_SECONDS {
-        return Err(Invalidation::new(
-            "authorization_ttl_invalid",
-            "ttl outside the 1..=900 second plan bound",
-        ));
-    }
-    let expires_at = input
-        .now
-        .checked_add(input.ttl_seconds)
-        .ok_or_else(|| Invalidation::new("authorization_ttl_invalid", "expiry overflow"))?;
     if input.content.mappings.is_empty() {
         return Err(Invalidation::code("authorization_content_empty"));
     }
@@ -318,12 +303,8 @@ pub fn authorize(input: AuthorizeInput<'_>) -> AuthResult<Authorization> {
             "plan id is not a UUID",
         ));
     }
-    if let Some(failure) = input.facts.failures().first() {
-        return Err(Invalidation::new(
-            failure.code.clone(),
-            failure.detail.clone(),
-        ));
-    }
+    // Collected fact failures are no longer a blanket install gate (design D06):
+    // only the facts an actual action depends on are checked at the boundary.
 
     Ok(Authorization {
         schema_version: AUTHORIZATION_SCHEMA_VERSION,
@@ -346,8 +327,6 @@ pub fn authorize(input: AuthorizeInput<'_>) -> AuthResult<Authorization> {
         policy: input.policy,
         facts: input.facts,
         created_at: input.now,
-        expires_at,
-        lease_active: true,
         revoked: false,
     })
 }
@@ -355,8 +334,7 @@ pub fn authorize(input: AuthorizeInput<'_>) -> AuthResult<Authorization> {
 /// Re-checks every binding against the current instance (design §5.2).
 ///
 /// Returns the first failing check with a stable code, in the order: schema,
-/// revocation, lease, expiry, ownership, settings revision, policy, candidate,
-/// rule, conditions, content, facts.
+/// revocation, ownership, policy, candidate, rule, conditions, content, facts.
 pub fn validate(authorization: &Authorization, current: &CurrentState) -> AuthResult<()> {
     validate_stored(authorization)
         .map_err(|error| Invalidation::new("authorization_invalid", error.to_string()))?;
@@ -364,28 +342,13 @@ pub fn validate(authorization: &Authorization, current: &CurrentState) -> AuthRe
     if authorization.revoked || current.revoked {
         return Err(Invalidation::code("authorization_revoked"));
     }
-    if !authorization.lease_active || !current.lease_active {
-        return Err(Invalidation::code("authorization_lease_inactive"));
-    }
-    if current.now > authorization.expires_at {
-        return Err(Invalidation::new(
-            "authorization_expired",
-            format!("expired at {}", authorization.expires_at),
-        ));
-    }
     if authorization.plan_id != current.plan_id || authorization.instance_id != current.instance_id
     {
         return Err(Invalidation::code("authorization_ownership_changed"));
     }
-    if authorization.settings_revision != current.settings_revision {
-        return Err(Invalidation::new(
-            "authorization_settings_revision_changed",
-            format!(
-                "{} -> {}",
-                authorization.settings_revision, current.settings_revision
-            ),
-        ));
-    }
+    // A global settings revision can change for an unrelated source/game.
+    // Callers re-resolve the enabled/subscribed source immediately before apply;
+    // the exact rule, candidate, content, facts and conditions below remain gates.
     if authorization.policy != current.policy {
         return Err(Invalidation::code("authorization_policy_changed"));
     }
@@ -401,21 +364,15 @@ pub fn validate(authorization: &Authorization, current: &CurrentState) -> AuthRe
     if authorization.content != current.content {
         return Err(Invalidation::code("authorization_content_changed"));
     }
-    if authorization.facts != current.facts {
-        let failure = current
-            .facts
-            .failures()
-            .first()
-            .map(|failure| failure.code.clone());
-        return Err(match failure {
-            Some(code) => Invalidation::new("authorization_facts_changed", code),
-            None => Invalidation::code("authorization_facts_changed"),
-        });
-    }
+    // The full fact snapshot is intentionally NOT compared: unrelated manifest
+    // bytes (or unrelated build/language/DLC collection failures) must not
+    // invalidate an unchanged scoped plan (design D06). Content, conditions,
+    // candidate, rule, policy and ownership above remain the real gates; the
+    // actions' actual preconditions are checked at the install boundary.
     Ok(())
 }
 
-/// Structural validation used before persist/load (schema/path/TTL bounds).
+/// Structural validation used before persist/load (schema/path bounds).
 pub fn validate_stored(authorization: &Authorization) -> Result<()> {
     if authorization.schema_version != AUTHORIZATION_SCHEMA_VERSION {
         return Err(invalid("authorization_schema_unsupported"));
@@ -429,11 +386,6 @@ pub fn validate_stored(authorization: &Authorization) -> Result<()> {
     if authorization.instance_id.is_empty()
         || authorization.release_id.is_empty()
         || authorization.source_id.is_empty()
-    {
-        return Err(invalid("authorization_invalid"));
-    }
-    if authorization.expires_at < authorization.created_at
-        || authorization.expires_at - authorization.created_at > PLAN_TTL_SECONDS
     {
         return Err(invalid("authorization_invalid"));
     }
@@ -507,7 +459,7 @@ mod tests {
                 buildid: Some("12345".into()),
             }),
             build: Fact::evidence(BuildFacts {
-                buildid: "12345".into(),
+                buildid: Some("12345".into()),
                 verified: true,
             }),
             language: Fact::evidence(LanguageFacts {
@@ -556,7 +508,6 @@ mod tests {
             request_id: Some("req-1"),
             facts: facts(),
             now: 1_000,
-            ttl_seconds: 900,
         })
         .unwrap()
     }
@@ -567,7 +518,6 @@ mod tests {
             plan_id: PLAN.into(),
             instance_id: format!("2303800|{}|{}", "/lib", "/lib/steamapps/common/Test"),
             revoked: false,
-            lease_active: true,
             facts: facts(),
             settings_revision: 7,
             policy: PolicyVersions::default(),
@@ -581,7 +531,6 @@ mod tests {
     #[test]
     fn authorize_and_validate_round_trip() {
         let authorization = authorize_ok();
-        assert_eq!(authorization.expires_at, 1_900);
         validate(&authorization, &current()).unwrap();
     }
 
@@ -589,15 +538,14 @@ mod tests {
     fn recheck_matrix_is_diagnosable() {
         let authorization = authorize_ok();
 
+        // Unrelated fact/manifest changes no longer invalidate the plan (D06);
+        // the scoped bindings checked below are the real gates.
         let mut state = current();
         state.facts.build = Fact::evidence(BuildFacts {
-            buildid: "99999".into(),
+            buildid: Some("99999".into()),
             verified: true,
         });
-        assert_eq!(
-            validate(&authorization, &state).unwrap_err().code,
-            "authorization_facts_changed"
-        );
+        validate(&authorization, &state).unwrap();
 
         let mut state = current();
         state.content = ContentBinding::publisher_zip(&"0".repeat(64), 42, &mappings());
@@ -608,9 +556,9 @@ mod tests {
 
         let mut state = current();
         state.settings_revision += 1;
-        assert_eq!(
-            validate(&authorization, &state).unwrap_err().code,
-            "authorization_settings_revision_changed"
+        assert!(
+            validate(&authorization, &state).is_ok(),
+            "unrelated settings changes must not invalidate unchanged scoped evidence"
         );
 
         let mut state = current();
@@ -645,24 +593,10 @@ mod tests {
         );
 
         let mut state = current();
-        state.now = 1_901;
-        assert_eq!(
-            validate(&authorization, &state).unwrap_err().code,
-            "authorization_expired"
-        );
-
-        let mut state = current();
         state.revoked = true;
         assert_eq!(
             validate(&authorization, &state).unwrap_err().code,
             "authorization_revoked"
-        );
-
-        let mut state = current();
-        state.lease_active = false;
-        assert_eq!(
-            validate(&authorization, &state).unwrap_err().code,
-            "authorization_lease_inactive"
         );
 
         let mut state = current();
@@ -676,7 +610,6 @@ mod tests {
     #[test]
     fn authorize_rejects_bad_inputs() {
         fn input<'a>(
-            ttl: u64,
             facts: GameFacts,
             plan: &'a str,
             candidate: &'a str,
@@ -699,7 +632,6 @@ mod tests {
                 request_id: None,
                 facts,
                 now: 10,
-                ttl_seconds: ttl,
             }
         }
 
@@ -710,20 +642,7 @@ mod tests {
         let rule = "1".repeat(64);
         let conditions = "2".repeat(64);
         assert_eq!(
-            authorize(input(0, facts(), PLAN, &candidate, &rule, &conditions))
-                .unwrap_err()
-                .code,
-            "authorization_ttl_invalid"
-        );
-        assert_eq!(
-            authorize(input(901, facts(), PLAN, &candidate, &rule, &conditions))
-                .unwrap_err()
-                .code,
-            "authorization_ttl_invalid"
-        );
-        assert_eq!(
             authorize(input(
-                900,
                 facts(),
                 "not-a-uuid",
                 &candidate,
@@ -735,21 +654,18 @@ mod tests {
             "authorization_plan_invalid"
         );
 
-        let mut invalid_facts = facts();
-        invalid_facts.build = Fact::failed_code("build_not_verified", "x");
-        assert_eq!(
-            authorize(input(
-                900,
-                invalid_facts,
-                PLAN,
-                &candidate,
-                &rule,
-                &conditions
-            ))
-            .unwrap_err()
-            .code,
-            "build_not_verified"
-        );
+        // Collected fact failures no longer block authorization (D06): the
+        // action preconditions are evaluated at the install boundary instead.
+        let mut failed_facts = facts();
+        failed_facts.build = Fact::failed_code("build_not_verified", "x");
+        authorize(input(
+            failed_facts,
+            PLAN,
+            &candidate,
+            &rule,
+            &conditions,
+        ))
+        .unwrap();
     }
 
     #[test]

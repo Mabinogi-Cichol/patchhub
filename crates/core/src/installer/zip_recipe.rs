@@ -233,7 +233,7 @@ fn relative(name: &str) -> Result<()> {
 }
 
 /// Port of `publisher.py::_extra_safe`.
-fn extra_safe(extra: &[u8]) -> Result<()> {
+pub(crate) fn extra_safe(extra: &[u8]) -> Result<()> {
     let mut i = 0usize;
     while i + 4 <= extra.len() {
         let tag = u16::from_le_bytes([extra[i], extra[i + 1]]);
@@ -246,8 +246,24 @@ fn extra_safe(extra: &[u8]) -> Result<()> {
         if tag == 0x000d || tag == 0x756e {
             return Err(invalid("zip_unsafe_extra_metadata"));
         }
-        if tag == 0x000a && (record.len() != 32 || record[..8] != [0, 0, 0, 0, 1, 0, 24, 0]) {
-            return Err(invalid("zip_unsafe_extra_metadata"));
+        if tag == 0x000a {
+            // NTFS timestamps are descriptive and never applied. Validate its
+            // reserved prefix and subrecord framing, without default-value gates.
+            if record.len() < 4 {
+                return Err(invalid("zip_invalid_extra_metadata"));
+            }
+            let mut at = 4;
+            while at + 4 <= record.len() {
+                let length = u16::from_le_bytes([record[at + 2], record[at + 3]]) as usize;
+                at += 4;
+                if length > record.len() - at {
+                    return Err(invalid("zip_invalid_extra_metadata"));
+                }
+                at += length;
+            }
+            if at != record.len() {
+                return Err(invalid("zip_invalid_extra_metadata"));
+            }
         }
         i += size;
     }
@@ -260,8 +276,11 @@ fn extra_safe(extra: &[u8]) -> Result<()> {
 /// The zip crate decodes flagged names lossily from UTF-8 and unflagged names
 /// as CP437. Python rejects non-ASCII names that are not UTF-8 flagged, which is
 /// equivalent to `decoded == from_utf8_lossy(raw)` for non-ASCII raw bytes.
-fn name_encoding_ok(raw: &[u8], decoded: &str) -> bool {
-    raw.is_ascii() || decoded == String::from_utf8_lossy(raw)
+pub(crate) fn name_encoding_ok(raw: &[u8], decoded: &str) -> bool {
+    // zip decodes unflagged legacy names using CP437. Accept that lossless
+    // standard representation, but never a replacement-decoded UTF-8 name.
+    raw == decoded.as_bytes()
+        || (std::str::from_utf8(raw).is_err() && !decoded.contains('\u{fffd}'))
 }
 
 const YPF_SIGNATURE: [u8; 4] = *b"YPF\0";

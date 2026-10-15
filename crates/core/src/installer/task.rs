@@ -7,7 +7,7 @@ use std::{
     io::Write,
     path::PathBuf,
     sync::{
-        atomic::{AtomicBool, AtomicU64, Ordering},
+        atomic::{AtomicBool, Ordering},
         Arc, Mutex,
     },
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -18,7 +18,6 @@ pub struct TaskControl {
     pub id: String,
     job: PathBuf,
     pub cancel: Arc<AtomicBool>,
-    deadline: Arc<AtomicU64>,
     plan: Arc<Mutex<Option<PathBuf>>>,
     failure: Arc<Mutex<Option<String>>>,
     cause: Arc<Mutex<Option<CancellationCause>>>,
@@ -57,7 +56,6 @@ impl TaskControl {
         request: &str,
         instance: &str,
         selection: &str,
-        deadline: u64,
     ) -> Result<Self> {
         // Abandoned tasks are reclaimed only by CacheService under cache exclusive.
         let id = uuid::Uuid::new_v4().to_string();
@@ -95,7 +93,6 @@ impl TaskControl {
             id,
             job: job.clone(),
             cancel: Arc::new(AtomicBool::new(false)),
-            deadline: Arc::new(AtomicU64::new(deadline)),
             plan: Arc::new(Mutex::new(None)),
             failure: Arc::new(Mutex::new(None)),
             cause: Arc::new(Mutex::new(None)),
@@ -104,7 +101,6 @@ impl TaskControl {
             )?))),
             owner_lock: Arc::new(Mutex::new(Some(owner_lock))),
         };
-        control.renew(deadline)?;
         Ok(control)
     }
     pub fn job(&self) -> &std::path::Path {
@@ -115,20 +111,6 @@ impl TaskControl {
         *plan = Some(paths.job(id)?);
         if self.cancel.load(Ordering::SeqCst) {
             marker(plan.as_ref().unwrap())?;
-        }
-        let lease = serde_json::to_vec(
-            &serde_json::json!({"deadline_ms":self.deadline.load(Ordering::Acquire),"renewed_at":now_ms()}),
-        )?;
-        store::write_atomic(&plan.as_ref().unwrap().join("lease.json"), &lease, 4096)?;
-        Ok(())
-    }
-    pub fn renew(&self, deadline: u64) -> Result<()> {
-        self.deadline.store(deadline, Ordering::Release);
-        let bytes =
-            serde_json::to_vec(&serde_json::json!({"deadline_ms":deadline,"renewed_at":now_ms()}))?;
-        store::write_atomic(&self.job.join("lease.json"), &bytes, 4096)?;
-        if let Some(plan) = self.plan.lock().unwrap().as_ref() {
-            store::write_atomic(&plan.join("lease.json"), &bytes, 4096)?;
         }
         Ok(())
     }
@@ -171,40 +153,27 @@ impl TaskControl {
         }
         Ok(())
     }
-    pub fn check_requested(
-        &self,
-        requested: &AtomicBool,
-        deadline: &dyn Fn() -> u64,
-    ) -> Result<()> {
-        self.check_requested_with_cause(requested, deadline, &|| None)
+    pub fn check_requested(&self, requested: &AtomicBool) -> Result<()> {
+        self.check_requested_with_cause(requested, &|| None)
     }
     pub fn check_requested_with_cause(
         &self,
         requested: &AtomicBool,
-        deadline: &dyn Fn() -> u64,
         cause: &dyn Fn() -> Option<CancellationCause>,
     ) -> Result<()> {
         if let Some(cause) = cause() {
             self.revoke_with_cause(cause)?;
         } else if requested.load(Ordering::Acquire) {
             self.revoke()?;
-        } else if now_ms() >= deadline() {
-            self.revoke_with_cause(CancellationCause::LeaseExpired)?;
         }
         self.check()
     }
-    pub fn run<T>(
-        &self,
-        requested: &AtomicBool,
-        deadline: &(dyn Fn() -> u64 + Sync),
-        work: impl FnOnce() -> T,
-    ) -> T {
-        self.run_with_cause(requested, deadline, &|| None, work)
+    pub fn run<T>(&self, requested: &AtomicBool, work: impl FnOnce() -> T) -> T {
+        self.run_with_cause(requested, &|| None, work)
     }
     pub fn run_with_cause<T>(
         &self,
         requested: &AtomicBool,
-        deadline: &(dyn Fn() -> u64 + Sync),
         cause: &(dyn Fn() -> Option<CancellationCause> + Sync),
         work: impl FnOnce() -> T,
     ) -> T {
@@ -217,41 +186,18 @@ impl TaskControl {
         }
         std::thread::scope(|scope| {
             let worker = scope.spawn(|| {
-                let mut last = 0;
                 while !done.load(Ordering::Acquire) {
-                    let d = deadline();
-                    if cause().is_some() || requested.load(Ordering::Acquire) || now_ms() >= d {
-                        let reason = cause().unwrap_or_else(|| {
-                            if requested.load(Ordering::Acquire) {
-                                CancellationCause::UserCancelled
-                            } else {
-                                CancellationCause::LeaseExpired
-                            }
-                        });
+                    if cause().is_some() || requested.load(Ordering::Acquire) {
+                        let reason = cause().unwrap_or(CancellationCause::UserCancelled);
                         let _ = self.revoke_with_cause(reason);
                         break;
-                    }
-                    if d != last {
-                        if let Err(e) = self.renew(d) {
-                            *self.failure.lock().unwrap() =
-                                Some(format!("lease_persist_failed: {e}"));
-                            let _ = self.revoke_for_failure();
-                            break;
-                        }
-                        last = d;
                     }
                     std::thread::sleep(Duration::from_millis(25));
                 }
             });
             // Synchronous first gate closes the monitor scheduling race.
-            if cause().is_some() || requested.load(Ordering::Acquire) || now_ms() >= deadline() {
-                let reason = cause().unwrap_or_else(|| {
-                    if requested.load(Ordering::Acquire) {
-                        CancellationCause::UserCancelled
-                    } else {
-                        CancellationCause::LeaseExpired
-                    }
-                });
+            if cause().is_some() || requested.load(Ordering::Acquire) {
+                let reason = cause().unwrap_or(CancellationCause::UserCancelled);
                 let _ = self.revoke_with_cause(reason);
             }
             let finish = Finish(&done);
@@ -261,13 +207,9 @@ impl TaskControl {
                 crate::operation::with_gate(
                     move || {
                         if original.as_ref().is_some_and(|c| c.load(Ordering::Acquire)) {
-                            if now_ms() >= durable.deadline.load(Ordering::Acquire) {
-                                durable.revoke_with_cause(CancellationCause::LeaseExpired)?;
-                            } else {
-                                // The borrowed host cause is read by the scoped monitor and
-                                // terminal route; this static gate must not invent a cause.
-                                durable.revoke_for_failure()?;
-                            }
+                            // The borrowed host cause is read by the scoped monitor and
+                            // terminal route; this static gate must not invent a cause.
+                            durable.revoke_for_failure()?;
                         }
                         durable.check()
                     },
@@ -295,13 +237,13 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let paths = InstallerPaths::new(dir.path());
         super::super::init_atomic(&paths).unwrap();
-        let control = TaskControl::new(&paths, "gate", "instance", "selection", u64::MAX).unwrap();
+        let control = TaskControl::new(&paths, "gate", "instance", "selection").unwrap();
         let requested = Arc::new(AtomicBool::new(false));
         crate::operation::run(
             requested.clone(),
             |_| {},
             || {
-                control.run(&requested, &|| u64::MAX, || {
+                control.run(&requested, || {
                     requested.store(true, Ordering::Release);
                     assert!(crate::operation::check().is_err());
                     assert!(control.job.join("revoked").is_file());
@@ -318,7 +260,7 @@ mod tests {
         let paths = InstallerPaths::new(dir.path());
         super::super::init_atomic(&paths).unwrap();
         let control =
-            TaskControl::new(&paths, "failure", "instance", "selection", u64::MAX).unwrap();
+            TaskControl::new(&paths, "failure", "instance", "selection").unwrap();
         fs::create_dir(control.job.join("revoked")).unwrap();
         assert!(control.revoke().is_err());
         assert!(control.cancel.load(Ordering::Acquire));
@@ -333,14 +275,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let paths = InstallerPaths::new(dir.path());
         super::super::init_atomic(&paths).unwrap();
-        let control = TaskControl::new(
-            &paths,
-            "req",
-            "instance",
-            "exe-selection-x",
-            now_ms() + 15000,
-        )
-        .unwrap();
+        let control = TaskControl::new(&paths, "req", "instance", "exe-selection-x").unwrap();
         let plan = uuid::Uuid::new_v4().to_string();
         fs::create_dir(paths.job(&plan).unwrap()).unwrap();
         control.attach_plan(&paths, &plan).unwrap();
@@ -351,37 +286,33 @@ mod tests {
         assert_eq!(control.check().unwrap_err().to_string(), "cancelled");
     }
     #[test]
-    fn eof_or_expired_lease_cancels_before_work() {
+    fn requested_cancel_before_work_marks_revocation() {
         let dir = tempfile::tempdir().unwrap();
         let paths = InstallerPaths::new(dir.path());
         super::super::init_atomic(&paths).unwrap();
-        let control = TaskControl::new(&paths, "req", "instance", "selection", 1).unwrap();
-        control.run(&AtomicBool::new(false), &|| 1, || {
+        let control = TaskControl::new(&paths, "req", "instance", "selection").unwrap();
+        control.run(&AtomicBool::new(true), || {
             assert!(control.job.join("revoked").exists());
             assert!(control.check().is_err());
         });
     }
 
     #[test]
-    fn typed_user_and_lease_reasons_survive_task_teardown() {
-        for (requested, deadline, external, expected) in [
-            (true, u64::MAX, None, CancellationCause::UserCancelled),
-            (false, 1, None, CancellationCause::LeaseExpired),
+    fn typed_user_cause_survives_task_teardown() {
+        for (requested, external, expected) in [
+            (true, None, CancellationCause::UserCancelled),
             (
-                true,
-                u64::MAX,
-                Some(CancellationCause::LeaseExpired),
-                CancellationCause::LeaseExpired,
+                false,
+                Some(CancellationCause::UserCancelled),
+                CancellationCause::UserCancelled,
             ),
         ] {
             let dir = tempfile::tempdir().unwrap();
             let paths = InstallerPaths::new(dir.path());
             super::super::init_atomic(&paths).unwrap();
-            let control =
-                TaskControl::new(&paths, "typed", "instance", "selection", deadline).unwrap();
+            let control = TaskControl::new(&paths, "typed", "instance", "selection").unwrap();
             control.run_with_cause(
                 &AtomicBool::new(requested),
-                &|| deadline,
                 &|| external,
                 || {
                     assert_eq!(control.check().unwrap_err().to_string(), expected.code());
@@ -398,10 +329,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let paths = InstallerPaths::new(dir.path());
         super::super::init_atomic(&paths).unwrap();
-        let control = TaskControl::new(&paths, "req", "instance", "selection", u64::MAX).unwrap();
+        let control = TaskControl::new(&paths, "req", "instance", "selection").unwrap();
         let id = control.id.clone();
         assert!(paths.task(&id).unwrap().join("owner.lock").is_file());
-        let outcome = control.run(&AtomicBool::new(false), &|| u64::MAX, || 42);
+        let outcome = control.run(&AtomicBool::new(false), || 42);
         assert_eq!(outcome, 42);
         assert!(
             !paths.task(&id).unwrap().exists(),

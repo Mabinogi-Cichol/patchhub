@@ -11,8 +11,6 @@ use std::{
     time::SystemTime,
 };
 
-pub const DEFAULT_MAX_BYTES: u64 = crate::installer::space::MAX_ORIGINAL_BYTES;
-
 #[derive(Debug, Clone)]
 pub struct RelativeGamePath(String);
 impl RelativeGamePath {
@@ -78,7 +76,9 @@ pub struct EvidenceRequest<'a> {
     pub game: &'a GameInstall,
     pub relative_path: &'a RelativeGamePath,
     pub expected_sha256: &'a Sha256Digest,
-    pub max_bytes: u64,
+    /// Optional caller budget for the hashed file size. `None` streams to EOF
+    /// with a fixed buffer; there is no global default cap.
+    pub max_bytes: Option<u64>,
     pub cancel: &'a AtomicBool,
 }
 fn fail(code: &'static str) -> io::Error {
@@ -107,7 +107,7 @@ pub fn inspect_file(
     game: &GameInstall,
     relative: &str,
     expected: &str,
-    max_bytes: u64,
+    max_bytes: Option<u64>,
     cancel: &AtomicBool,
 ) -> FileEvidence {
     let Ok(path) = RelativeGamePath::parse(relative) else {
@@ -447,7 +447,7 @@ fn read_digest_with(
         return Ok(None);
     };
     let before = snapshot(&held[index].file)?;
-    if before.size > request.max_bytes.min(DEFAULT_MAX_BYTES) {
+    if request.max_bytes.is_some_and(|max| before.size > max) {
         return Err(fail("evidence_size_limit"));
     }
     let mut hasher = Sha256::new();
@@ -455,12 +455,14 @@ fn read_digest_with(
     let mut buffer = [0_u8; 65536];
     loop {
         cancelled(request.cancel)?;
-        // Read at most one sentinel byte beyond the pre-read size/limit, so
-        // growing files cannot make this readonly operation unbounded.
-        let remaining = before
-            .size
-            .min(request.max_bytes.min(DEFAULT_MAX_BYTES))
-            .saturating_sub(total);
+        // Read at most one sentinel byte beyond the pre-read size (or the
+        // caller budget when smaller), so growing files cannot make this
+        // readonly operation unbounded. Without a budget the pre-read size is
+        // the bound.
+        let ceiling = request
+            .max_bytes
+            .map_or(before.size, |max| before.size.min(max));
+        let remaining = ceiling.saturating_sub(total);
         let capacity = remaining.saturating_add(1).min(buffer.len() as u64) as usize;
         let count = (&held[index].file).read(&mut buffer[..capacity])?;
         if count == 0 {
@@ -469,7 +471,7 @@ fn read_digest_with(
         total = total
             .checked_add(count as u64)
             .ok_or_else(|| fail("evidence_size_overflow"))?;
-        if total > request.max_bytes.min(DEFAULT_MAX_BYTES) {
+        if request.max_bytes.is_some_and(|max| total > max) {
             return Err(fail("evidence_size_limit"));
         }
         if total > before.size {
@@ -520,7 +522,7 @@ mod tests {
             game: &game,
             relative_path: &path,
             expected_sha256: &hash,
-            max_bytes: DEFAULT_MAX_BYTES,
+            max_bytes: None,
             cancel: &cancel,
         };
         let error = read_digest_with(&request, |total| {
@@ -549,7 +551,7 @@ mod tests {
             game: &game,
             relative_path: &path,
             expected_sha256: &hash,
-            max_bytes: DEFAULT_MAX_BYTES,
+            max_bytes: None,
             cancel: &cancel,
         };
         let error = read_digest_with(&request, |total| {
@@ -573,7 +575,7 @@ mod tests {
             game: &game,
             relative_path: &path,
             expected_sha256: &hash,
-            max_bytes: DEFAULT_MAX_BYTES,
+            max_bytes: None,
             cancel: &cancel,
         };
         let error =

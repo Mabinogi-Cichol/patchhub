@@ -12,7 +12,7 @@ use std::sync::{
     Arc,
 };
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use windows::core::{PCWSTR, PWSTR};
 use windows::Win32::Foundation::{
@@ -427,6 +427,9 @@ fn run_internal(
                 }
             }
         }
+        // Enforce only an explicitly configured timeout (the probe's start /
+        // no-response bound). Normal analyze/convert work runs to completion;
+        // no wall-clock ceiling is imposed here (D05).
         if let Some(limit) = cfg.limits.timeout {
             if elapsed >= limit && !terminated && !job_closed {
                 let _ = job.terminate(3);
@@ -441,10 +444,6 @@ fn run_internal(
         }
         if wr != WAIT_TIMEOUT {
             let _ = job.terminate(7);
-            break;
-        }
-        if job_closed && elapsed > Duration::from_secs(300) {
-            // Safety valve: a KILL_ON_JOB_CLOSE member that refuses to die.
             break;
         }
     }

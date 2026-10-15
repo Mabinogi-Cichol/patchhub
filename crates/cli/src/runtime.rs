@@ -445,16 +445,7 @@ fn validate_state_boundary(
 
 pub fn execute(method: &str, params: Params) -> Result<Value, DomainError> {
     let cancel = AtomicBool::new(false);
-    execute_controlled(method, params, &cancel, &always_active, &no_lease_deadline)
-}
-
-fn always_active(_now: u64) -> bool {
-    true
-}
-
-/// No task channel: no persisted foreground lease deadline.
-fn no_lease_deadline() -> u64 {
-    u64::MAX
+    execute_controlled(method, params, &cancel)
 }
 
 pub fn failed(code: impl Into<String>, detail: impl Into<String>) -> DomainError {
@@ -468,12 +459,10 @@ pub fn failed(code: impl Into<String>, detail: impl Into<String>) -> DomainError
 
 /// Executes one method with the task control channel available to
 /// `install_patch` (p1-zip-orchestration §3.10/§4.1).
-pub fn execute_controlled<L: Fn(u64) -> bool + Sync, D: Fn() -> u64 + Sync>(
+pub fn execute_controlled(
     method: &str,
     params: Params,
     cancel: &AtomicBool,
-    lease_active: &L,
-    lease_deadline_ms: &D,
 ) -> Result<Value, DomainError> {
     if !METHODS.contains(&method) {
         return Err(DomainError::code("unsupported_method"));
@@ -549,14 +538,7 @@ pub fn execute_controlled<L: Fn(u64) -> bool + Sync, D: Fn() -> u64 + Sync>(
     }
     let platform = params.platform.unwrap_or_else(host_platform);
     if method == "install_patch" {
-        return install_patch(
-            &params,
-            &report,
-            platform,
-            cancel,
-            lease_active,
-            lease_deadline_ms,
-        );
+        return install_patch(&params, &report, platform, cancel);
     }
     let projection_now = trust::now().map_err(err)?;
     let mut catalog_error = None;
@@ -921,53 +903,75 @@ fn scan_sources_impl(
     };
     let report = steam::scan(&roots);
     validate_state_boundary(&state, &report.installs)?;
+    if let Some(id) = &params.instance_id {
+        let install = report
+            .installs
+            .iter()
+            .find(|g| &g.instance_id == id)
+            .ok_or_else(|| DomainError::code("instance_not_found"))?;
+        sources::registry::SourceRegistry::validate_query(
+            &game_query(install),
+            &params.name_hints,
+            params.preferred_language.as_deref(),
+        )
+        .map_err(err)?;
+    }
     let mut handle = sources::Sources::open(&state).map_err(err)?;
     let revision = handle.settings_revision();
 
     let mut seen = HashSet::new();
     let mut entries: Vec<(sources::GameQuery, String)> = Vec::new();
-    for install in report
-        .installs
-        .iter()
-        .filter(|game| game.availability == "installed")
-    {
+    for install in report.installs.iter().filter(|game| {
+        game.availability == "installed"
+            && params
+                .instance_id
+                .as_ref()
+                .is_none_or(|id| id == &game.instance_id)
+    }) {
         if seen.insert(install.appid) {
             entries.push((game_query(install), install.instance_id.clone()));
         }
     }
     let games: Vec<sources::GameQuery> = entries.iter().map(|(query, _)| query.clone()).collect();
     let discoveries = handle
-        .scan_sources(&games, params.force, cancel, |event| match event {
-            sources::session::ScanEvent::Progress {
-                completed,
-                total,
-                running,
-            } => emit(json!({
-                "event": "source_progress",
-                "completed": completed,
-                "total": total,
-                "running": running,
-                "settings_revision": revision,
-            })),
-            sources::session::ScanEvent::Update {
-                appid,
-                index,
-                discovery,
-            } => {
-                let instance_id = entries
-                    .iter()
-                    .find(|(query, _)| query.appid == *appid)
-                    .map(|(_, id)| id.clone());
-                emit(json!({
-                    "event": "source_update",
-                    "appid": appid,
-                    "index": index,
-                    "instance_id": instance_id,
+        .scan_sources_with_query(
+            &games,
+            params.force,
+            &params.name_hints,
+            params.preferred_language.as_deref(),
+            cancel,
+            |event| match event {
+                sources::session::ScanEvent::Progress {
+                    completed,
+                    total,
+                    running,
+                } => emit(json!({
+                    "event": "source_progress",
+                    "completed": completed,
+                    "total": total,
+                    "running": running,
                     "settings_revision": revision,
-                    "discovery": discovery.clone(),
-                }));
-            }
-        })
+                })),
+                sources::session::ScanEvent::Update {
+                    appid,
+                    index,
+                    discovery,
+                } => {
+                    let instance_id = entries
+                        .iter()
+                        .find(|(query, _)| query.appid == *appid)
+                        .map(|(_, id)| id.clone());
+                    emit(json!({
+                        "event": "source_update",
+                        "appid": appid,
+                        "index": index,
+                        "instance_id": instance_id,
+                        "settings_revision": revision,
+                        "discovery": discovery.clone(),
+                    }));
+                }
+            },
+        )
         .map_err(err)?;
     let results: Vec<Value> = discoveries
         .iter()
@@ -1043,36 +1047,21 @@ mod tests {
 /// route (priority) or the dynamic `selection_id` prefix route.
 struct HostLease<'a> {
     cancel: &'a AtomicBool,
-    active: &'a (dyn Fn(u64) -> bool + Sync),
-    deadline: &'a (dyn Fn() -> u64 + Sync),
 }
 impl installer::service::TaskLease for HostLease<'_> {
     fn cancelled(&self) -> bool {
         self.cancel.load(std::sync::atomic::Ordering::Acquire)
     }
-    fn lease_active(&self, now: u64) -> bool {
-        (self.active)(now)
-    }
-    fn deadline_ms(&self) -> u64 {
-        (self.deadline)()
-    }
     fn cancellation_cause(&self) -> Option<installer::outcome::CancellationCause> {
-        if self.cancelled() {
-            Some(installer::outcome::CancellationCause::UserCancelled)
-        } else if !self.lease_active(trust::now().unwrap_or(u64::MAX)) {
-            Some(installer::outcome::CancellationCause::LeaseExpired)
-        } else {
-            None
-        }
+        self.cancelled()
+            .then_some(installer::outcome::CancellationCause::UserCancelled)
     }
 }
-fn install_patch<L: Fn(u64) -> bool + Sync, D: Fn() -> u64 + Sync>(
+fn install_patch(
     params: &Params,
     _report: &steam::ScanReport,
     platform: Platform,
     cancel: &AtomicBool,
-    lease_active: &L,
-    deadline: &D,
 ) -> Result<Value, DomainError> {
     use installer::service::*;
     let request = RequestId::new(
@@ -1131,11 +1120,7 @@ fn install_patch<L: Fn(u64) -> bool + Sync, D: Fn() -> u64 + Sync>(
     } else {
         None
     };
-    let lease = HostLease {
-        cancel,
-        active: lease_active,
-        deadline,
-    };
+    let lease = HostLease { cancel };
     let result = installer::service::install(
         InstallRequest {
             request_id: request,

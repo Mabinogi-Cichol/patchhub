@@ -78,3 +78,34 @@ class DiscoveryRpcTests(unittest.IsolatedAsyncioTestCase):
         plugin = self.plugin()
         for name in ("_plan_install", "fetch_artifact", "_prepare_install", "_start_install", "exe_installation_reviews"):
             self.assertFalse(hasattr(plugin, name))
+
+
+class ProgressiveQueryTests(DiscoveryRpcTests):
+    async def test_query_returns_immediately_streams_and_cancels_without_losing_results(self):
+        plugin = self.plugin()
+        game = {**plugin._scan_games["local"], "availability": "installed"}
+        report = {"installs": [{"game": game, "patches": []}], "settings_revision": 2, "generation": 8}
+        plugin._read_report = AsyncMock(return_value=report)
+        entered = asyncio.Event()
+        async def query(**kwargs):
+            await kwargs["on_event"]({"event": "source_update", "instance_id": "local",
+                "discovery": {"status": "partial", "candidates": [{"candidate_id": "found"}], "diagnostics": []}})
+            entered.set()
+            await asyncio.Event().wait()
+        plugin.sources.scan_sources = AsyncMock(side_effect=query)
+        first = await plugin.start_game_discovery("local", ["hint"], "zh-CN", True)
+        self.assertTrue(first["scan_progress"]["running"])
+        await entered.wait()
+        second = await plugin.start_game_discovery("local", ["hint"], "zh-CN", True)
+        self.assertEqual(plugin.sources.scan_sources.await_count, 1)
+        self.assertEqual(second["installs"][0]["discovery"]["candidates"][0]["candidate_id"], "found")
+        self.assertTrue(await plugin.cancel_source_query())
+        final = await plugin.scan_status(8)
+        self.assertFalse(final["scan_progress"]["running"])
+        self.assertEqual(final["installs"][0]["discovery"]["candidates"][0]["candidate_id"], "found")
+        self.assertEqual(plugin.sources.scan_sources.call_args.kwargs["instance_id"], "local")
+
+    async def test_task_entry_rejects_unknown_game_before_starting_network(self):
+        plugin = self.plugin()
+        with self.assertRaises(ValueError):
+            await plugin.start_game_discovery("foreign")

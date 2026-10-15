@@ -11,7 +11,6 @@ use std::{
     fs::{self, File},
     io::{self, Read},
     path::{Path, PathBuf},
-    time::{SystemTime, UNIX_EPOCH},
 };
 
 const MAX_ENTRIES: u64 = 100_000;
@@ -51,6 +50,11 @@ impl<'a> CacheService<'a> {
         let tasks = self.task_root()?;
         lock.validate()?;
         let mut state = Walk::default();
+        state.retained_archives =
+            crate::install::protected_archive_sources_at(self.host.installer_paths().root())
+                .map_err(|e| {
+                    DomainError::new("cleanup_failed", format!("archive retention: {e}"))
+                })?;
         for root in roots {
             if !validate_lock(Some(&lock), &mut state) {
                 break;
@@ -139,7 +143,7 @@ impl<'a> CacheService<'a> {
             if children.iter().any(|n| {
                 !matches!(
                     n.to_str(),
-                    Some("task.json" | "lease.json" | "owner.lock" | "revoked")
+                    Some("task.json" | "owner.lock" | "revoked")
                 )
             }) {
                 continue;
@@ -148,14 +152,7 @@ impl<'a> CacheService<'a> {
                 Ok(v) => v,
                 _ => continue,
             };
-            let lease = match task.json("lease.json", 4096) {
-                Ok(v) => v,
-                _ => continue,
-            };
             let Some(doc) = document.as_object() else {
-                continue;
-            };
-            let Some(lease_fields) = lease.as_object() else {
                 continue;
             };
             if doc.len() != 6
@@ -170,38 +167,12 @@ impl<'a> CacheService<'a> {
                             | "created_at_ms"
                     )
                 })
-                || lease_fields.len() != 2
-                || lease_fields
-                    .keys()
-                    .any(|k| !matches!(k.as_str(), "deadline_ms" | "renewed_at"))
+                || doc.get("schema_version").and_then(|v| v.as_u64()) != Some(1)
+                || doc.get("task_id").and_then(|v| v.as_str()) != Some(id)
             {
                 continue;
             }
-            let (Some(created), Some(renewed)) = (
-                document.get("created_at_ms").and_then(|v| v.as_u64()),
-                lease.get("renewed_at").and_then(|v| v.as_u64()),
-            ) else {
-                continue;
-            };
-            if created > renewed {
-                continue;
-            }
-            let now = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis();
-            if u128::from(renewed) > now
-                || document.get("schema_version").and_then(|v| v.as_u64()) != Some(1)
-                || document.get("task_id").and_then(|v| v.as_str()) != Some(id)
-                || lease
-                    .get("deadline_ms")
-                    .and_then(|v| v.as_u64())
-                    .is_none_or(|d| u128::from(d) >= now)
-                || lease.get("renewed_at").and_then(|v| v.as_u64()).is_none()
-            {
-                continue;
-            }
-            let Some(request) = document.get("request_id").and_then(|v| v.as_str()) else {
+            let Some(request) = doc.get("request_id").and_then(|v| v.as_str()) else {
                 continue;
             };
             if request.is_empty() || request.len() > 128 || request.chars().any(char::is_control) {
@@ -221,6 +192,8 @@ impl<'a> CacheService<'a> {
             }) {
                 continue;
             }
+            // The owner lock is the liveness signal: if it is still held, a live
+            // task owns the directory and reclamation is refused.
             let owner = match task.child(OsStr::new("owner.lock"), true) {
                 Ok(n) => n,
                 _ => continue,
@@ -294,7 +267,7 @@ impl OwnedTaskDirectory {
         if names.iter().any(|name| {
             !matches!(
                 name.to_str(),
-                Some("task.json" | "lease.json" | "owner.lock" | "revoked")
+                Some("task.json" | "owner.lock" | "revoked")
             )
         }) {
             return;
@@ -348,6 +321,7 @@ fn protected(name: &OsStr) -> bool {
 }
 #[derive(Default)]
 struct Walk {
+    retained_archives: Vec<PathBuf>,
     bytes: u64,
     entries: u64,
     deleted: u64,
@@ -415,13 +389,25 @@ fn inspect_entry(parent: &Node, name: &OsStr, depth: usize, state: &mut Walk) {
     }
 }
 fn remove_entry(parent: &Node, name: &OsStr, depth: usize, task: bool, state: &mut Walk) {
+    if !state.retained_archives.is_empty() {
+        if let Ok(path) = fs::canonicalize(parent.path.join(name)) {
+            // Preserve the referenced file and any containing cache directory.
+            if state
+                .retained_archives
+                .iter()
+                .any(|source| source.starts_with(&path))
+            {
+                return;
+            }
+        }
+    }
     let result = (|| {
         state.visit(depth)?;
         if (!task && protected(name))
             || (task
                 && !matches!(
                     name.to_str(),
-                    Some("task.json" | "lease.json" | "owner.lock" | "revoked")
+                    Some("task.json" | "owner.lock" | "revoked")
                 )
                 && depth != 0)
         {
@@ -1063,11 +1049,6 @@ mod tests {
         fs::create_dir(&task).unwrap();
         fs::write(task.join("owner.lock"), b"").unwrap();
         fs::write(task.join("task.json"), serde_json::to_vec(&serde_json::json!({"schema_version":1,"task_id":id,"request_id":"request","instance_id":"instance","selection_id":"release","created_at_ms":0})).unwrap()).unwrap();
-        fs::write(
-            task.join("lease.json"),
-            br#"{"deadline_ms":1,"renewed_at":1}"#,
-        )
-        .unwrap();
         fs::write(task.join("revoked"), b"revoked").unwrap();
         let unknown = tasks.join("unknown");
         fs::create_dir(&unknown).unwrap();
@@ -1080,27 +1061,16 @@ mod tests {
         assert!(unknown.join("original").exists());
         assert_eq!(state.deleted, 0);
     }
-    fn task_with_journal(
-        host: &ValidatedHostContext,
-        request: &str,
-        terminal: &str,
-        deadline: u64,
-    ) -> PathBuf {
+    fn task_with_journal(host: &ValidatedHostContext, request: &str, terminal: &str) -> PathBuf {
         let paths = host.installer_paths();
         let id = uuid::Uuid::new_v4().to_string();
         let task = paths.tasks_dir().join(&id);
         fs::create_dir_all(&task).unwrap();
         fs::write(task.join("owner.lock"), b"").unwrap();
         fs::write(task.join("task.json"), serde_json::to_vec(&serde_json::json!({"schema_version":1,"task_id":id,"request_id":request,"instance_id":"instance","selection_id":"release","created_at_ms":0})).unwrap()).unwrap();
-        fs::write(
-            task.join("lease.json"),
-            serde_json::to_vec(&serde_json::json!({"deadline_ms":deadline,"renewed_at":0}))
-                .unwrap(),
-        )
-        .unwrap();
         let plan = super::super::requests::request_plan_id(request);
         let document = serde_json::json!({
-            "plan":{"plan_id":plan,"instance_id":"instance","release_id":"release","catalog_revision":1,"created_at":0,"expires_at":900,
+            "plan":{"plan_id":plan,"instance_id":"instance","release_id":"release","catalog_revision":1,"created_at":0,
                 "install":{"instance_id":"instance","appid":1,"name":"fixture","localized_name":null,"name_language":null,"library_path":host.state_dir().join("unused-library"),"install_path":host.state_dir().join("unused-game"),"buildid":null,"availability":"installed","kind":"game"},
                 "changes":[{"path":"patch","action":"add","original_sha256":null,"installed_sha256":"1".repeat(64),"size":1}],"disk_requirement":1,"blockers":[]},
             "transaction":{"transaction_id":plan,"plan_id":plan,"instance_id":"instance","release_id":"release","state":terminal,"error":null,"created_at":0,"updated_at":1},
@@ -1120,13 +1090,12 @@ mod tests {
         task
     }
     #[test]
-    fn terminal_expired_task_reclaimed_owner_and_recovery_tasks_preserved() {
+    fn terminal_task_reclaimed_owner_lock_and_recovery_tasks_preserved() {
         let (_dir, host) = fixture();
-        let free = task_with_journal(&host, "free", "committed", 1);
-        let held = task_with_journal(&host, "held", "committed", 1);
-        let active = task_with_journal(&host, "active", "committed", u64::MAX);
-        let recovery = task_with_journal(&host, "recovery", "needs_recovery", 1);
-        let material = task_with_journal(&host, "material", "committed", 1);
+        let free = task_with_journal(&host, "free", "committed");
+        let held = task_with_journal(&host, "held", "committed");
+        let recovery = task_with_journal(&host, "recovery", "needs_recovery");
+        let material = task_with_journal(&host, "material", "committed");
         fs::write(material.join("original.backup"), b"recover").unwrap();
         let owner = fs::OpenOptions::new()
             .read(true)
@@ -1138,7 +1107,7 @@ mod tests {
             crate::install::list_transactions_at(host.installer_paths().root())
                 .unwrap()
                 .len(),
-            5
+            4
         );
         let mut state = Walk::default();
         let service = CacheService::new(&host);
@@ -1148,7 +1117,6 @@ mod tests {
         assert!(!free.exists());
         assert!(state.bytes > 0);
         assert!(held.exists());
-        assert!(active.exists());
         assert!(recovery.exists());
         assert_eq!(
             fs::read(material.join("original.backup")).unwrap(),

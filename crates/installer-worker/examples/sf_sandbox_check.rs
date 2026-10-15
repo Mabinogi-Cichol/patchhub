@@ -56,7 +56,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     cfg.limits.active_process_limit = Some(1);
     cfg.limits.per_job_user_time_100ns = Some(300 * 10_000_000);
     cfg.limits.timeout = Some(Duration::from_secs(480));
-    cfg.limits.file_size_bytes = Some(steam_patch_installer_worker::sf::MAX_ARTIFACT);
     #[cfg(windows)]
     {
         use steam_patch_installer_worker::win::{ensure_profile, grant_path_access, AccessKind};

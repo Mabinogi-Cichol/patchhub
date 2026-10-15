@@ -29,7 +29,6 @@ pub(crate) struct SignedInstallInputs<'a> {
     pub operation: InstallOperation,
     pub request_id: &'a str,
     pub now: u64,
-    pub ttl_seconds: u64,
 }
 
 pub(crate) struct SignedInstallDeps<'a> {
@@ -40,8 +39,6 @@ pub(crate) struct SignedInstallDeps<'a> {
     pub transport: &'a dyn Transport,
     pub cancel: &'a AtomicBool,
     pub cancel_reason: &'a (dyn Fn() -> Option<CancellationCause> + Sync),
-    pub lease_active: &'a dyn Fn(u64) -> bool,
-    pub lease_deadline_ms: &'a (dyn Fn() -> u64 + Sync),
     pub clock: &'a dyn Fn() -> Result<u64, DomainError>,
 }
 
@@ -64,6 +61,7 @@ fn io_error(error: io::Error) -> DomainError {
         "recovery_conflict",
         "baseline_conflict",
         "insufficient_space",
+        "archive_source_missing",
     ] {
         if let Some(detail) = text.strip_prefix(&format!("{code}:")) {
             return DomainError::new(code, detail);
@@ -79,11 +77,8 @@ fn task_error(error: orchestrator::ZipTaskError) -> DomainError {
     }
 }
 
-fn cancellation(deps: &SignedInstallDeps<'_>, control: &TaskControl) -> DomainError {
-    match (deps.cancel_reason)().or_else(|| control.cancellation_cause()) {
-        Some(CancellationCause::LeaseExpired) => DomainError::code("lease_expired"),
-        _ => DomainError::code("cancelled"),
-    }
+fn cancellation(_deps: &SignedInstallDeps<'_>, _control: &TaskControl) -> DomainError {
+    DomainError::code("cancelled")
 }
 
 fn normalize_cancel(
@@ -104,9 +99,6 @@ fn normalize_cancel(
 fn boundary(deps: &SignedInstallDeps<'_>, control: &TaskControl) -> Result<(), DomainError> {
     if (deps.cancel_reason)().is_some() || deps.cancel.load(Ordering::Acquire) {
         return Err(cancellation(deps, control));
-    }
-    if !(deps.lease_active)((deps.clock)()?) {
-        return Err(DomainError::code("lease_expired"));
     }
     control
         .check()
@@ -129,15 +121,11 @@ pub(crate) fn install_signed(
         inputs.request_id,
         &inputs.game.instance_id,
         inputs.release_id,
-        (deps.lease_deadline_ms)(),
     )
     .map_err(io_error)?;
-    control.run_with_cause(
-        deps.cancel,
-        deps.lease_deadline_ms,
-        deps.cancel_reason,
-        || install_signed_inner(&inputs, &deps, &control),
-    )
+    control.run_with_cause(deps.cancel, deps.cancel_reason, || {
+        install_signed_inner(&inputs, &deps, &control)
+    })
 }
 
 fn ready_release<'a>(
@@ -223,6 +211,10 @@ fn install_signed_inner(
     deps.revision_store.remember_verified_revision(&catalog)?;
     let release = ready_release(&catalog, inputs, deps.platform, inputs.now)?;
     boundary(deps, control)?;
+    // A caller-supplied local ZIP is external and user-owned: it must be copied
+    // into the managed plan archive before apply (design §4.3). A fetched
+    // artifact already lives in the managed download cache.
+    let external_archive = inputs.archive.is_some();
     let archive = match inputs.archive {
         Some(path) => path.to_path_buf(),
         None => fetch_signed(
@@ -307,7 +299,6 @@ fn install_signed_inner(
             request_id: Some(inputs.request_id),
             facts,
             now: (deps.clock)()?,
-            ttl_seconds: inputs.ttl_seconds,
         })
         .map_err(|e| DomainError::new(e.code.clone(), e.to_string()))?;
         authorization::write(deps.paths, &authorization).map_err(io_error)?;
@@ -329,7 +320,6 @@ fn install_signed_inner(
             plan_id: plan.plan_id.clone(),
             instance_id: inputs.game.instance_id.clone(),
             revoked: authorization::is_revoked(deps.paths, &plan.plan_id).map_err(io_error)?,
-            lease_active: (deps.lease_active)(now),
             facts: facts::game_facts(inputs.game, &current_expected, &control.cancel),
             settings_revision: current_catalog.catalog().revision,
             policy: authorization::PolicyVersions::default(),
@@ -348,17 +338,16 @@ fn install_signed_inner(
         };
         boundary(deps, control)?;
         authorization::validate(&authorization, &current).map_err(|e| {
-            if e.code == "authorization_lease_inactive" {
-                DomainError::code("lease_expired")
-            } else {
-                DomainError::new(e.code.clone(), e.to_string())
-            }
+            DomainError::new(e.code.clone(), e.to_string())
         })?;
         boundary(deps, control)?;
-        // Refresh the durable lease immediately before the writer's own gate.
-        control
-            .renew((deps.lease_deadline_ms)())
-            .map_err(io_error)?;
+        // §4.3: an external local ZIP must not leave the journal pointing at a
+        // user-controlled path. Adopt it into the owned plan archive before apply.
+        if external_archive {
+            install::adopt_external_plan_archive_at(deps.paths.root(), &plan.plan_id)
+                .map_err(io_error)?;
+        }
+        boundary(deps, control)?;
         let transaction = install::apply_at(deps.paths.root(), &plan.plan_id).map_err(io_error)?;
         if transaction.state == "rolled_back"
             && transaction

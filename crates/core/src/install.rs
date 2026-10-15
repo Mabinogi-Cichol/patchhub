@@ -19,7 +19,6 @@ use std::{
 use uuid::Uuid;
 
 pub const MAX_PLAN_METADATA_BYTES: usize = crate::zip_metadata::MAX_METADATA_BYTES as usize;
-pub const PLAN_TTL_SECONDS: u64 = 900;
 
 #[derive(
     Debug,
@@ -74,6 +73,12 @@ pub struct PlannedChange {
     /// Archive member this change was extracted from (`None` for journals written
     /// before the field existed, or for non-recipe callers). It lets the
     /// orchestrator rebuild the authorization `ContentBinding` from the plan.
+    ///
+    /// The member *name* is the stable locator (design §4.2): prepare rejects
+    /// duplicate or case-colliding member names and verifies that the name maps
+    /// to exactly one member, so a later re-open (`write_archive_member` /
+    /// `verified_archive_prefix`) resolves the same member by name. No persisted
+    /// member index is needed while that uniqueness check holds.
     #[serde(default)]
     pub source: Option<String>,
 }
@@ -90,7 +95,6 @@ pub struct InstallPlan {
     pub release_id: String,
     pub catalog_revision: u64,
     pub created_at: u64,
-    pub expires_at: u64,
     pub install: GameInstall,
     pub changes: Vec<PlannedChange>,
     pub disk_requirement: u64,
@@ -132,6 +136,16 @@ pub struct Transaction {
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+struct ArchiveSource {
+    path: PathBuf,
+    sha256: String,
+    size: u64,
+    #[serde(default)]
+    managed: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct Job {
     plan: InstallPlan,
     transaction: Transaction,
@@ -147,6 +161,10 @@ struct Job {
     /// their original recovery representation when this field is absent.
     #[serde(default)]
     progress_format: u32,
+    /// New task plans read members from this content-bound archive. Legacy
+    /// plans omit it and keep the original stage-based recovery representation.
+    #[serde(default)]
+    archive_source: Option<ArchiveSource>,
 }
 
 fn invalid(code: impl Into<String>) -> io::Error {
@@ -707,6 +725,15 @@ fn validate_metadata_budget(job: &Job) -> io::Result<()> {
 }
 
 fn validate_job(job: &Job, id: &str) -> io::Result<()> {
+    if let Some(source) = &job.archive_source {
+        if !source.path.is_absolute()
+            || !valid_hash(&source.sha256)
+            || source.size == 0
+            || job.plan.changes.iter().any(|c| c.source.is_none())
+        {
+            return Err(invalid("journal_invalid_archive_source"));
+        }
+    }
     let p = &job.plan;
     if p.plan_id != id
         || job.transaction.plan_id != id
@@ -717,8 +744,6 @@ fn validate_job(job: &Job, id: &str) -> io::Result<()> {
         || job.progress_format > 1
         || p.changes.is_empty()
         || job.progress.len() != p.changes.len()
-        || p.expires_at < p.created_at
-        || p.expires_at - p.created_at > PLAN_TTL_SECONDS
     {
         return Err(invalid("journal_invalid"));
     }
@@ -973,18 +998,23 @@ pub(crate) fn prepare_for_request_at(
     content_id: Option<&str>,
     request_id: Option<&str>,
 ) -> io::Result<InstallPlan> {
-    Catalog {
+    let validation_catalog = Catalog {
         schema_version: 1,
         revision: catalog_revision,
         releases: vec![release.clone()],
+    };
+    if selection_id.is_some() {
+        validation_catalog.validate_dynamic()?;
+    } else {
+        validation_catalog.validate()?;
     }
-    .validate()?;
     if install.appid != release.appid
         || release.support_level != SupportLevel::ManagedZip
-        || !install
-            .buildid
-            .as_ref()
-            .is_some_and(|b| release.verified_buildids.contains(b))
+        || (selection_id.is_none()
+            && !install
+                .buildid
+                .as_ref()
+                .is_some_and(|b| release.verified_buildids.contains(b)))
     {
         return Err(invalid("release_not_compatible"));
     }
@@ -1113,7 +1143,7 @@ pub(crate) fn prepare_for_request_at(
                 return Err(invalid("zip_duplicate_or_case_collision"));
             }
         }
-        if member.name_raw() != member.name().as_bytes() {
+        if !crate::installer::zip_recipe::name_encoding_ok(member.name_raw(), member.name()) {
             return Err(invalid("zip_name_encoding"));
         }
         let mode = member.unix_mode().unwrap_or(0) & 0o170000;
@@ -1122,30 +1152,8 @@ pub(crate) fn prepare_for_request_at(
         {
             return Err(invalid("zip_link_or_special_file"));
         }
-        // Only recognize the fixed NTFS timestamp record. Never apply archive attributes.
         if let Some(extra) = member.extra_data() {
-            let mut cursor = 0;
-            while cursor + 4 <= extra.len() {
-                let tag = u16::from_le_bytes([extra[cursor], extra[cursor + 1]]);
-                let size = u16::from_le_bytes([extra[cursor + 2], extra[cursor + 3]]) as usize;
-                cursor += 4;
-                if [0x000d, 0x756e].contains(&tag) || cursor + size > extra.len() {
-                    return Err(invalid("zip_unsafe_extra_metadata"));
-                }
-                if tag == 0x000a {
-                    let record = &extra[cursor..cursor + size];
-                    if record.len() != 32
-                        || record[..4] != [0, 0, 0, 0]
-                        || record[4..8] != [1, 0, 24, 0]
-                    {
-                        return Err(invalid("zip_unsafe_extra_metadata"));
-                    }
-                }
-                cursor += size;
-            }
-            if cursor != extra.len() {
-                return Err(invalid("zip_invalid_extra_metadata"));
-            }
+            crate::installer::zip_recipe::extra_safe(extra)?;
         }
         total = total
             .checked_add(member.size())
@@ -1171,6 +1179,8 @@ pub(crate) fn prepare_for_request_at(
     // aggregate expansion cap.
     let mut mapped_bytes = 0_u64;
     let mut original_total = 0_u64;
+    let archive_backed = request_id.is_some();
+    let mut file_sizes = Vec::with_capacity(recipe.files.len());
     for mapping in &recipe.files {
         let (index, name, directory) = names
             .get(&mapping.source.to_lowercase())
@@ -1188,12 +1198,16 @@ pub(crate) fn prepare_for_request_at(
             Err(error) if error.kind() == io::ErrorKind::NotFound => 0,
             Err(error) => return Err(error),
         };
+        file_sizes.push((member.size(), original_bytes));
         original_total = original_total
             .checked_add(original_bytes)
             .ok_or_else(|| invalid("space_overflow"))?;
     }
-    let space_budget =
-        crate::installer::space::ZipSpaceBudget::for_stage(mapped_bytes, original_total)?;
+    let space_budget = if archive_backed {
+        crate::installer::space::ZipSpaceBudget::for_archive(&file_sizes)?
+    } else {
+        crate::installer::space::ZipSpaceBudget::for_stage(mapped_bytes, original_total)?
+    };
     space_budget.inspect(&store.root, &install.install_path)?;
     let id = request_id
         .map(crate::installer::requests::request_plan_id)
@@ -1228,23 +1242,32 @@ pub(crate) fn prepare_for_request_at(
             let mut member = zip
                 .by_index(*member_index)
                 .map_err(|e| invalid(e.to_string()))?;
-            let stage = store.item(&id, index, "stage")?;
-            let mut out = OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&stage)?;
             let declared_size = member.size();
-            let read_limit = declared_size
-                .checked_add(1)
-                .ok_or_else(|| invalid("size_overflow"))?;
-            let copied = operation::copy(&mut member.by_ref().take(read_limit), &mut out)?;
-            out.sync_all()?;
-            drop(out);
-            if copied != declared_size
-                || hash_at(&stage)?.as_deref() != Some(&mapping.installed_sha256)
-            {
-                return Err(invalid("installed_hash_or_size_mismatch"));
-            }
+            let copied = if archive_backed {
+                let (hash, size) = digest_measured(&mut member, declared_size)?;
+                if size != declared_size || hash != mapping.installed_sha256 {
+                    return Err(invalid("installed_hash_or_size_mismatch"));
+                }
+                size
+            } else {
+                let stage = store.item(&id, index, "stage")?;
+                let mut out = OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&stage)?;
+                let read_limit = declared_size
+                    .checked_add(1)
+                    .ok_or_else(|| invalid("size_overflow"))?;
+                let copied = operation::copy(&mut member.by_ref().take(read_limit), &mut out)?;
+                out.sync_all()?;
+                drop(out);
+                if copied != declared_size
+                    || hash_at(&stage)?.as_deref() != Some(&mapping.installed_sha256)
+                {
+                    return Err(invalid("installed_hash_or_size_mismatch"));
+                }
+                copied
+            };
             disk = disk
                 .checked_add(
                     old_size
@@ -1293,13 +1316,16 @@ pub(crate) fn prepare_for_request_at(
         release_id: release.release_id.clone(),
         catalog_revision,
         created_at: now(),
-        expires_at: now() + PLAN_TTL_SECONDS,
         install: serde_json::from_value(
             serde_json::to_value(install).map_err(|e| invalid(e.to_string()))?,
         )
         .map_err(|e| invalid(e.to_string()))?,
         changes,
-        disk_requirement: disk,
+        disk_requirement: if archive_backed {
+            space_budget.required(true)?.0
+        } else {
+            disk
+        },
         space_budget: Some(space_budget),
         blockers,
         preconditions: Vec::new(),
@@ -1325,6 +1351,12 @@ pub(crate) fn prepare_for_request_at(
         uninstall_requested: false,
         transient_recovery: true,
         progress_format: 1,
+        archive_source: archive_backed.then(|| ArchiveSource {
+            path: archive_path,
+            sha256: recipe.artifact_sha256.clone(),
+            size: file_len,
+            managed: false,
+        }),
     };
     operation::stage("planning", None, None);
     if let Err(error) = operation::check()
@@ -1437,6 +1469,308 @@ pub(crate) fn set_terminal_error_at(
     Ok(job.transaction)
 }
 
+/// Cache cleanup must retain sources referenced by unfinished new journals.
+pub(crate) fn protected_archive_sources_at(root: &Path) -> io::Result<Vec<PathBuf>> {
+    let store = match Store::open_ro(root) {
+        Ok(store) => store,
+        Err(e)
+            if e.kind() == io::ErrorKind::NotFound
+                || e.to_string() == "installer_state_missing" =>
+        {
+            return Ok(Vec::new())
+        }
+        Err(e) => return Err(e),
+    };
+    let mut sources = Vec::new();
+    for id in store.ids()? {
+        let job = store.load(&id)?;
+        if !["committed", "superseded", "rolled_back", "uninstalled"]
+            .contains(&job.transaction.state.as_str())
+        {
+            if let Some(source) = job.archive_source {
+                // Only non-managed sources point into the shared download cache
+                // and must be retained for cache cleanup. A managed source is the
+                // journal-owned plan archive (`jobs/<id>/payload.zip`) and is
+                // released with its own journal, never by the cache cleaner.
+                if source.managed {
+                    continue;
+                }
+                match fs::canonicalize(&source.path) {
+                    Ok(path) => sources.push(path),
+                    Err(e) if e.kind() == io::ErrorKind::NotFound => (),
+                    Err(e) => return Err(e),
+                }
+            }
+        }
+    }
+    Ok(sources)
+}
+
+/// Transfer an EXE output from temporary worker ownership to its journal.
+/// The caller validates authorization before this handoff and holds CacheLock.
+pub(crate) fn retain_plan_archive_at(root: &Path, id: &str) -> io::Result<()> {
+    let store = Store::open_at(root)?;
+    let mut job = store.load(id)?;
+    if job.transaction.state != "planned" {
+        return Err(invalid("plan_already_consumed"));
+    }
+    let Some(source) = job.archive_source.as_mut() else {
+        return Ok(());
+    };
+    let destination = store.directory(id)?.join("payload.zip");
+    if source.path == destination {
+        return Ok(());
+    }
+    safe_path(&destination)?;
+    if destination.try_exists()? {
+        return Err(invalid("archive_handoff_exists"));
+    }
+    let mut input = regular_file(&source.path)?;
+    if input.metadata()?.len() != source.size
+        || digest_reader(&mut input, source.size)?.0 != source.sha256
+    {
+        return Err(invalid("archive_source_changed"));
+    }
+    drop(input);
+    // Worker staging and jobs live on the same installer volume. An unexpected
+    // cross-volume move fails before game mutation instead of making a huge copy.
+    fs::rename(&source.path, &destination)?;
+    sync_dir(
+        destination
+            .parent()
+            .ok_or_else(|| invalid("missing_parent"))?,
+    )?;
+    source.path = destination;
+    source.managed = true;
+    store.save(&mut job)
+}
+
+/// Adopt an external (non-managed) local source archive into the journal-owned
+/// plan-archive path (`jobs/<plan_id>/payload.zip`). Unlike
+/// [`retain_plan_archive_at`] the user's own file is **copied**, never renamed,
+/// and the copy is re-verified for exact size and full SHA-256 before the
+/// journal adopts it (design §4.3). A task plan must never keep depending on a
+/// user-controlled absolute path that a later move/delete/rename can invalidate.
+pub(crate) fn adopt_external_plan_archive_at(root: &Path, id: &str) -> io::Result<()> {
+    let store = Store::open_at(root)?;
+    let mut job = store.load(id)?;
+    if job.transaction.state != "planned" {
+        return Err(invalid("plan_already_consumed"));
+    }
+    let Some(source) = job.archive_source.as_mut() else {
+        return Ok(());
+    };
+    if source.managed {
+        return Ok(());
+    }
+    let destination = store.directory(id)?.join("payload.zip");
+    if source.path == destination {
+        return Ok(());
+    }
+    let expected_size = source.size;
+    let expected_hash = source.sha256.clone();
+    safe_path(&destination)?;
+    // A partial copy from an interrupted attempt is never trusted; re-copy from
+    // the still-verified source instead.
+    match fs::remove_file(&destination) {
+        Ok(()) => (),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => (),
+        Err(e) => return Err(e),
+    }
+    copy_external_archive(&source.path, &destination, expected_size, &expected_hash)?;
+    source.path = destination;
+    source.managed = true;
+    store.save(&mut job)
+}
+
+/// Copy an external source archive into its managed location, verifying the
+/// recorded size and full SHA-256 of the copy. On any failure the partial copy
+/// is removed so a retry starts clean.
+fn copy_external_archive(
+    source: &Path,
+    destination: &Path,
+    expected_size: u64,
+    expected_hash: &str,
+) -> io::Result<()> {
+    let fail = |error: io::Error| {
+        let _ = fs::remove_file(destination);
+        error
+    };
+    let mut input = match regular_file(source) {
+        Ok(file) => file,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {
+            return Err(fail(archive_source_missing(source)))
+        }
+        Err(e) => return Err(fail(e)),
+    };
+    if input.metadata()?.len() != expected_size {
+        return Err(fail(invalid("archive_source_changed")));
+    }
+    let mut output = match OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(destination)
+    {
+        Ok(file) => file,
+        Err(e) => return Err(fail(e)),
+    };
+    let read_limit = expected_size
+        .checked_add(1)
+        .ok_or_else(|| invalid("size_overflow"))?;
+    let copied = operation::copy(&mut Read::by_ref(&mut input).take(read_limit), &mut output);
+    let bytes = match copied {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            drop(output);
+            return Err(fail(error));
+        }
+    };
+    // The plan archive is internal: inherit no source permission bits, so a
+    // read-only user ZIP cannot make the owned copy undeletable at cleanup.
+    if let Err(error) = output.sync_all() {
+        drop(output);
+        return Err(fail(error));
+    }
+    drop(output);
+    // Re-verify the copy itself: exact size and full SHA-256 of the payload.
+    let mut copied_file = match regular_file(destination) {
+        Ok(file) => file,
+        Err(e) => return Err(fail(e)),
+    };
+    let actual_size = match copied_file.metadata() {
+        Ok(metadata) => metadata.len(),
+        Err(e) => return Err(fail(e)),
+    };
+    let digest = match digest_reader(&mut copied_file, expected_size) {
+        Ok((hash, _)) => hash,
+        Err(e) => return Err(fail(e)),
+    };
+    drop(copied_file);
+    if bytes != expected_size || actual_size != expected_size || digest != expected_hash {
+        return Err(fail(invalid("archive_source_changed")));
+    }
+    sync_dir(destination.parent().ok_or_else(|| invalid("missing_parent"))?)?;
+    Ok(())
+}
+
+/// A recorded archive path that cannot be read as an owned regular file: it is
+/// missing, or present but not a regular file (directory, link, ...). Distinct
+/// from a present-but-changed archive (`archive_source_changed`).
+fn archive_path_unusable(path: &Path) -> bool {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) => !metadata.is_file(),
+        Err(error) => error.kind() == io::ErrorKind::NotFound,
+    }
+}
+
+fn archive_source_missing(path: &Path) -> io::Error {
+    invalid(format!("archive_source_missing:{}", path.display()))
+}
+
+fn open_payload_archive(store: &Store, job: &Job) -> io::Result<Option<zip::ZipArchive<File>>> {
+    let Some(source) = &job.archive_source else {
+        return Ok(None);
+    };
+    // A crash after the owned artifact rename/copy but before the journal update
+    // is recoverable from the deterministic job path, still checked by digest.
+    let managed = store.directory(&job.plan.plan_id)?.join("payload.zip");
+    let mut file = match regular_file(&source.path) {
+        Ok(file) => file,
+        Err(_) if archive_path_unusable(&source.path) => match regular_file(&managed) {
+            Ok(file) => file,
+            Err(_) => return Err(archive_source_missing(&source.path)),
+        },
+        Err(error) => return Err(error),
+    };
+    if file.metadata()?.len() != source.size
+        || digest_reader(&mut file, source.size)?.0 != source.sha256
+    {
+        return Err(invalid("archive_source_changed"));
+    }
+    file.seek(SeekFrom::Start(0))?;
+    crate::zip_metadata::preflight(&mut file)?;
+    Ok(Some(
+        zip::ZipArchive::new(file).map_err(|e| invalid(format!("invalid_zip:{e}")))?,
+    ))
+}
+
+fn write_archive_member(
+    zip: &mut zip::ZipArchive<File>,
+    change: &PlannedChange,
+    temp: &Path,
+) -> io::Result<()> {
+    let source = change
+        .source
+        .as_deref()
+        .ok_or_else(|| invalid("recipe_source_missing"))?;
+    let mut member = zip.by_name(source).map_err(|e| invalid(e.to_string()))?;
+    if member.name() != source || member.size() != change.size {
+        return Err(invalid("recipe_source_mismatch"));
+    }
+    safe_path(temp)?;
+    let mut output = OpenOptions::new().write(true).create_new(true).open(temp)?;
+    // Keep a failed partial for authenticated recovery, just as a crashed copy.
+    let limit = change
+        .size
+        .checked_add(1)
+        .ok_or_else(|| invalid("size_overflow"))?;
+    let copied = operation::copy(&mut member.by_ref().take(limit), &mut output)?;
+    output.sync_all()?;
+    drop(output);
+    if copied != change.size || hash_at(temp)?.as_deref() != Some(&change.installed_sha256) {
+        return Err(invalid("installed_hash_or_size_mismatch"));
+    }
+    sync_dir(temp.parent().ok_or_else(|| invalid("missing_parent"))?)
+}
+
+fn verified_archive_prefix(
+    zip: &mut zip::ZipArchive<File>,
+    change: &PlannedChange,
+    temp: &Path,
+) -> io::Result<bool> {
+    let source = change
+        .source
+        .as_deref()
+        .ok_or_else(|| invalid("recipe_source_missing"))?;
+    let mut member = zip.by_name(source).map_err(|e| invalid(e.to_string()))?;
+    if member.name() != source || member.size() != change.size {
+        return Err(invalid("recipe_source_mismatch"));
+    }
+    let mut partial = regular_file(temp)?;
+    let length = partial.metadata()?.len();
+    if length >= change.size {
+        return Ok(false);
+    }
+    let mut matched = true;
+    let mut total = 0u64;
+    let mut hash = Sha256::new();
+    let mut buffer = [0u8; 65536];
+    let mut compare = [0u8; 65536];
+    loop {
+        operation::check()?;
+        let count = member.read(&mut buffer)?;
+        if count == 0 {
+            break;
+        }
+        if total < length {
+            let n = (length - total).min(count as u64) as usize;
+            partial.read_exact(&mut compare[..n])?;
+            matched &= buffer[..n] == compare[..n];
+        }
+        total = total
+            .checked_add(count as u64)
+            .ok_or_else(|| invalid("size_overflow"))?;
+        if total > change.size {
+            return Err(invalid("temporary_source_changed"));
+        }
+        hash.update(&buffer[..count]);
+    }
+    if total != change.size || format!("{:x}", hash.finalize()) != change.installed_sha256 {
+        return Err(invalid("temporary_source_changed"));
+    }
+    Ok(matched && partial.read(&mut compare[..1])? == 0)
+}
+
 fn copy_checked(source: &Path, destination: &Path, expected: &str) -> io::Result<()> {
     let mut input = regular_file(source)?;
     safe_path(destination)?;
@@ -1542,9 +1876,6 @@ pub(crate) fn apply_at(root: &Path, plan_id: &str) -> io::Result<Transaction> {
         return Err(invalid("plan_already_consumed"));
     }
     check_revoked(&store, plan_id)?;
-    if now() < job.plan.created_at || now() > job.plan.expires_at {
-        return Err(invalid("plan_expired"));
-    }
     if !job.plan.blockers.is_empty() {
         return Err(invalid("plan_has_blockers"));
     }
@@ -1645,6 +1976,7 @@ fn apply_files(store: &Store, job: &mut Job) -> io::Result<()> {
                 .ok_or_else(|| invalid("space_overflow"))?;
         }
     }
+    let mut archive = open_payload_archive(store, job)?;
     operation::stage(
         "backing_up",
         Some(backup_bytes),
@@ -1654,9 +1986,11 @@ fn apply_files(store: &Store, job: &mut Job) -> io::Result<()> {
         operation::check()?;
         let change = &job.plan.changes[i];
         operation::file(i, &change.path);
-        let stage = store.item(&job.plan.plan_id, i, "stage")?;
-        if hash_at(&stage)?.as_deref() != Some(&change.installed_sha256) {
-            return Err(invalid("staged_file_changed"));
+        if archive.is_none() {
+            let stage = store.item(&job.plan.plan_id, i, "stage")?;
+            if hash_at(&stage)?.as_deref() != Some(&change.installed_sha256) {
+                return Err(invalid("staged_file_changed"));
+            }
         }
         if let Some(hash) = &change.original_sha256 {
             copy_checked(
@@ -1687,11 +2021,15 @@ fn apply_files(store: &Store, job: &mut Job) -> io::Result<()> {
         let change = &job.plan.changes[i];
         let dest = target(&job.plan.install.install_path, &change.path)?;
         let temp = temporary(job, i)?;
-        copy_checked(
-            &store.item(&job.plan.plan_id, i, "stage")?,
-            &temp,
-            &change.installed_sha256,
-        )?;
+        if let Some(archive) = archive.as_mut() {
+            write_archive_member(archive, change, &temp)?;
+        } else {
+            copy_checked(
+                &store.item(&job.plan.plan_id, i, "stage")?,
+                &temp,
+                &change.installed_sha256,
+            )?;
+        }
         if hash_at(&dest)? != change.original_sha256 {
             return Err(invalid(format!("file_changed:{}", change.path)));
         }
@@ -1756,6 +2094,14 @@ fn validate_temporary(store: &Store, job: &Job, index: usize) -> io::Result<bool
     let change = &job.plan.changes[index];
     if hash == change.installed_sha256 || change.original_sha256.as_ref() == Some(&hash) {
         return Ok(true);
+    }
+    if job.progress[index] == "writing" && job.archive_source.is_some() {
+        let mut archive =
+            open_payload_archive(store, job)?.ok_or_else(|| invalid("archive_source_missing"))?;
+        if verified_archive_prefix(&mut archive, change, &temp)? {
+            return Ok(true);
+        }
+        return Err(invalid("temporary_file_changed"));
     }
     let source = match job.progress[index].as_str() {
         "writing" => Some((
@@ -2197,6 +2543,15 @@ fn cleanup_terminal(store: &Store, job: &mut Job) -> io::Result<()> {
                     Err(error) => return Err(error),
                 }
             }
+        }
+        let payload = store.directory(&job.plan.plan_id)?.join("payload.zip");
+        match regular_file(&payload) {
+            Ok(file) => {
+                drop(file);
+                fs::remove_file(payload)?;
+            }
+            Err(e) if e.kind() == io::ErrorKind::NotFound => (),
+            Err(e) => return Err(e),
         }
         sync_dir(&store.directory(&job.plan.plan_id)?)
     })();

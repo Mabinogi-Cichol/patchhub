@@ -99,7 +99,7 @@ impl InstallerPaths {
     }
 
     /// `<uuid>` **transient** task runtime directories (`task.json`,
-    /// `lease.json`, `revoked`, `owner.lock`). Reclaimed on terminal state and
+    /// `revoked`, `owner.lock`). Reclaimed on terminal state and
     /// swept by [`super::cache::CacheService`] after a crash. Deliberately
     /// **not** part of [`Self::cleanable_dirs`] (unlocked deletes are unsafe)
     /// and **not** protected by [`Self::is_protected`].

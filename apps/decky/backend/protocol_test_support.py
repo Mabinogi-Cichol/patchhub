@@ -28,7 +28,9 @@ def outcome(state="committed", error=None, **updates):
         row.update(disposition="failed", cause={"kind": "domain_failure", "code": error or "restore_conflict", "detail": None},
                    recovery={"required": True, "code": error or "restore_conflict", "detail": None})
     else:
-        cancelled = error in ("cancelled", "task_cancelled", "lease_expired")
+        # Legacy `lease_expired`/`installer_lease_expired` rows recover as user
+        # cancellation (the short-term lease is deleted).
+        cancelled = error in ("cancelled", "task_cancelled", "lease_expired", "installer_lease_expired")
         row.update(disposition="cancelled" if cancelled else "failed", recovery=None,
                    cause={"kind": "user_cancelled" if cancelled else "domain_failure", "code": error or "file_changed", "detail": None})
     return row

@@ -43,12 +43,6 @@ impl TaskLease for Lease {
     fn cancelled(&self) -> bool {
         false
     }
-    fn lease_active(&self, _: u64) -> bool {
-        true
-    }
-    fn deadline_ms(&self) -> u64 {
-        u64::MAX
-    }
     fn cancellation_cause(&self) -> Option<CancellationCause> {
         None
     }

@@ -147,11 +147,10 @@ pub fn discover(
     }
     outcome.diagnostics = diagnostics;
 
-    let incomplete = outcome.diagnostics.iter().any(|diagnostic| {
-        diagnostic.code.contains("budget")
-            || diagnostic.code.contains("incomplete")
-            || diagnostic.code.contains("retry_deferred")
-    });
+    let incomplete = outcome
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.code.contains("incomplete"));
     let has_diagnostics = !outcome.diagnostics.is_empty();
     outcome.status = if has_diagnostics && (!outcome.candidates.is_empty() || incomplete) {
         "partial"
@@ -405,12 +404,7 @@ mod tests {
     }
 
     fn context(fake: &Arc<FakeFetcher>) -> RequestContext {
-        RequestContext::with_settings(
-            Box::new(Arc::clone(fake)),
-            20,
-            Duration::from_secs(30),
-            Duration::ZERO,
-        )
+        RequestContext::with_settings(Box::new(Arc::clone(fake)), Duration::ZERO)
     }
 
     #[test]

@@ -61,18 +61,8 @@ impl TaskLease for Lease {
     fn cancelled(&self) -> bool {
         self.0.load(Ordering::Acquire) == 1
     }
-    fn lease_active(&self, _: u64) -> bool {
-        self.0.load(Ordering::Acquire) != 2
-    }
-    fn deadline_ms(&self) -> u64 {
-        u64::MAX
-    }
     fn cancellation_cause(&self) -> Option<CancellationCause> {
-        match self.0.load(Ordering::Acquire) {
-            1 => Some(CancellationCause::UserCancelled),
-            2 => Some(CancellationCause::LeaseExpired),
-            _ => None,
-        }
+        (self.0.load(Ordering::Acquire) == 1).then_some(CancellationCause::UserCancelled)
     }
 }
 struct Provider {
@@ -659,65 +649,63 @@ fn apply_rechecks_release_fingerprint_and_live_manifest() {
                 InstallOperation::Overwrite,
             )
             .unwrap();
-        assert_eq!(result.state, "rolled_back");
-        assert_eq!(result.disposition, Disposition::Failed);
-        assert_eq!(
-            result.cause.unwrap().code,
-            if change_release {
-                "authorization_rule_changed"
-            } else {
-                "authorization_facts_changed"
-            }
-        );
-        f.unchanged();
+        if change_release {
+            assert_eq!(result.state, "rolled_back");
+            assert_eq!(result.disposition, Disposition::Failed);
+            assert_eq!(result.cause.unwrap().code, "authorization_rule_changed");
+            f.unchanged();
+        } else {
+            // A mutated live buildid is now caught by the real target-state
+            // recheck (`game_changed_or_unavailable`), not by the removed
+            // whole-snapshot facts gate (design D06).
+            assert_eq!(result.state, "rolled_back");
+            assert_eq!(result.cause.unwrap().code, "game_changed_or_unavailable");
+        }
     }
 }
 
 #[test]
-fn postplan_user_cancel_and_lease_expiry_persist_exact_causes_and_replay() {
+fn postplan_user_cancel_persists_exact_cause_and_replays() {
     if !can_install() {
         return;
     }
-    for (value, code, kind) in [
-        (1, "cancelled", FailureKind::UserCancelled),
-        (2, "lease_expired", FailureKind::LeaseExpired),
-    ] {
-        let f = Fixture::new();
-        let p = f.provider();
-        let lease = Arc::new(Lease::default());
-        let observed = lease.clone();
-        p.on_second.replace(Some(Box::new(move || {
-            observed.0.store(value, Ordering::Release)
-        })));
-        let result = f
-            .run(
-                &p,
-                &lease,
-                &Offline,
-                code,
-                true,
-                InstallOperation::Overwrite,
-            )
-            .unwrap();
-        assert_eq!(result.state, "rolled_back");
-        assert_eq!(result.error.as_deref(), Some(code));
-        assert_eq!(result.disposition, Disposition::Cancelled);
-        assert_eq!(result.cause.as_ref().unwrap().kind, kind);
-        f.unchanged();
-        let replay = f
-            .run(
-                &p,
-                &lease,
-                &Offline,
-                code,
-                true,
-                InstallOperation::Overwrite,
-            )
-            .unwrap();
-        assert_eq!(replay.transaction_id, result.transaction_id);
-        assert_eq!(replay.error, result.error);
-        assert_eq!(replay.disposition, Disposition::Cancelled);
-    }
+    let f = Fixture::new();
+    let p = f.provider();
+    let lease = Arc::new(Lease::default());
+    let observed = lease.clone();
+    p.on_second
+        .replace(Some(Box::new(move || observed.0.store(1, Ordering::Release))));
+    let result = f
+        .run(
+            &p,
+            &lease,
+            &Offline,
+            "cancelled",
+            true,
+            InstallOperation::Overwrite,
+        )
+        .unwrap();
+    assert_eq!(result.state, "rolled_back");
+    assert_eq!(result.error.as_deref(), Some("cancelled"));
+    assert_eq!(result.disposition, Disposition::Cancelled);
+    assert_eq!(
+        result.cause.as_ref().unwrap().kind,
+        FailureKind::UserCancelled
+    );
+    f.unchanged();
+    let replay = f
+        .run(
+            &p,
+            &lease,
+            &Offline,
+            "cancelled",
+            true,
+            InstallOperation::Overwrite,
+        )
+        .unwrap();
+    assert_eq!(replay.transaction_id, result.transaction_id);
+    assert_eq!(replay.error, result.error);
+    assert_eq!(replay.disposition, Disposition::Cancelled);
 }
 
 #[test]
@@ -891,33 +879,6 @@ fn both_plan_binding_and_terminal_backfill_failure_replay_the_same_journal_trans
 }
 
 #[test]
-fn preplan_expired_lease_uses_host_compatible_cancelled_code() {
-    let f = Fixture::new();
-    let p = f.provider();
-    let lease = Lease::default();
-    lease.0.store(2, Ordering::Release);
-    assert_eq!(
-        f.run(
-            &p,
-            &lease,
-            &Offline,
-            "preplan-expired",
-            true,
-            InstallOperation::Overwrite
-        )
-        .unwrap_err()
-        .code,
-        "cancelled"
-    );
-    assert!(install::list_transactions_at(
-        steam_patch_core::installer::InstallerPaths::new(&f.state).root()
-    )
-    .unwrap()
-    .is_empty());
-    f.unchanged();
-}
-
-#[test]
 fn recovery_revalidates_committed_uninstall_intent_against_trusted_steam_instances() {
     let f = Fixture::new();
     let p = f.provider();
@@ -962,10 +923,7 @@ fn recovery_revalidates_committed_uninstall_intent_against_trusted_steam_instanc
 #[test]
 fn typed_cancel_with_rollback_cleanup_failure_remains_cancelled_on_replay() {
     use std::sync::atomic::AtomicBool;
-    for (signal, kind, code) in [
-        (1, FailureKind::UserCancelled, "cancelled"),
-        (2, FailureKind::LeaseExpired, "lease_expired"),
-    ] {
+    for (signal, kind, code) in [(1, FailureKind::UserCancelled, "cancelled")] {
         let f = Fixture::new();
         let p = f.provider();
         let lease = Arc::new(Lease::default());
@@ -983,7 +941,9 @@ fn typed_cancel_with_rollback_cleanup_failure_remains_cancelled_on_replay() {
                         .unwrap()
                         .path();
                     let stage = job.join("0.stage");
-                    fs::remove_file(&stage).unwrap();
+                    if stage.exists() {
+                        fs::remove_file(&stage).unwrap();
+                    }
                     fs::create_dir(&stage).unwrap();
                     changed_lease.0.store(signal, Ordering::Release);
                     // Wait for the actual task monitor to acknowledge this signal.
@@ -1047,7 +1007,7 @@ fn typed_cancel_with_rollback_cleanup_failure_remains_cancelled_on_replay() {
 
 #[test]
 fn planned_discard_cleanup_failure_returns_real_cancel_or_domain_terminal_and_replays() {
-    for signal in [0, 1, 2] {
+    for signal in [0, 1] {
         let f = Fixture::new();
         let mut p = f.provider();
         let lease = Arc::new(Lease::default());
@@ -1065,7 +1025,9 @@ fn planned_discard_cleanup_failure_returns_real_cancel_or_domain_terminal_and_re
                 .unwrap()
                 .path();
             let stage = job.join("0.stage");
-            fs::remove_file(&stage).unwrap();
+            if stage.exists() {
+                fs::remove_file(&stage).unwrap();
+            }
             fs::create_dir(&stage).unwrap();
             changed_lease.0.store(signal, Ordering::Release);
         })));
@@ -1086,11 +1048,6 @@ fn planned_discard_cleanup_failure_returns_real_cancel_or_domain_terminal_and_re
                 Disposition::Cancelled,
                 FailureKind::UserCancelled,
                 "cancelled",
-            ),
-            2 => (
-                Disposition::Cancelled,
-                FailureKind::LeaseExpired,
-                "lease_expired",
             ),
             _ => (
                 Disposition::Failed,

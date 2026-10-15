@@ -1,4 +1,4 @@
-"""Foreground tasks with cancellation and safe rollback after UI lease expiry."""
+"""Foreground tasks with cancellation and safe rollback after UI cancellation."""
 import asyncio
 from collections import deque
 from contextvars import ContextVar
@@ -13,14 +13,13 @@ from protocol_validation import truncate_detail
 
 current_task = ContextVar("patch_task", default=None)
 TERMINAL = {"completed", "cancelled", "failed"}
-LEASE_SECONDS = 15
 
 
 class Task:
     def __init__(self, kind, metadata):
         self.cancel = Event()
         self.lock = RLock()
-        self.started = self.lease = time.monotonic()
+        self.started = time.monotonic()
         self.samples = deque()
         self.value = dict(task_id=str(uuid.uuid4()), kind=kind, state="running", stage="connecting",
                           bytes_done=0, total_bytes=None, files_done=0, total_files=None,
@@ -57,11 +56,9 @@ class Task:
                 if self.value["state"] != "rolling_back":
                     self.value["state"] = "cancelling"
 
-    def snapshot(self, renew=False):
+    def snapshot(self):
         with self.lock:
             now = time.monotonic()
-            if renew:
-                self.lease = now
             result = dict(self.value)
             speed = 0
             if len(self.samples) > 1 and now - self.samples[-1][0] < 2:
@@ -77,8 +74,7 @@ class Task:
 
 
 class TaskManager:
-    def __init__(self, lease_seconds=LEASE_SECONDS, state_dir=None):
-        self.lease_seconds = lease_seconds
+    def __init__(self, state_dir=None):
         self.tasks = {}
         self.path = Path(state_dir) / "tasks.json" if state_dir else None
         self.requests = {}
@@ -139,7 +135,6 @@ class TaskManager:
 
     async def _run(self, task, work):
         token = current_task.set(task)
-        guard = asyncio.create_task(self._watch_lease(task))
         try:
             task.check()
             result = await work(task)
@@ -165,8 +160,6 @@ class TaskManager:
                         error=code, error_detail=detail,
                         error_origin="domain" if domain else "host")
         finally:
-            guard.cancel()
-            await asyncio.gather(guard, return_exceptions=True)
             current_task.reset(token)
             try:
                 self._save()
@@ -174,21 +167,9 @@ class TaskManager:
                 # The durable core receipt is authoritative after a commit.
                 pass
 
-    def _expire_lease(self, task):
-        with task.lock:
-            if time.monotonic() - task.lease >= self.lease_seconds:
-                task.request_cancel()
-
-    async def _watch_lease(self, task):
-        while task.value["state"] not in TERMINAL and not task.cancel.is_set():
-            self._expire_lease(task)
-            await asyncio.sleep(min(1, self.lease_seconds / 4))
-
     def status(self, task_id):
         task = self.get(task_id)
-        # A late reconnect cannot revive an expired foreground lease.
-        self._expire_lease(task)
-        return task.snapshot(renew=not task.cancel.is_set())
+        return task.snapshot()
 
     def get(self, task_id):
         if not isinstance(task_id, str) or task_id not in self.tasks:

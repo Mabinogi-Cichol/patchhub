@@ -127,6 +127,7 @@ function App() {
   const capabilitiesPromise = useRef<Promise<Capabilities | null> | null>(null);
   const capabilityErrorRef = useRef<string | null>(null);
   const sourceRunningRef = useRef(false);
+  const sourceProjectionSequenceRef = useRef(0);
   const cancelledRef = useRef(false);
   const scanTokenRef = useRef(0);
   const activeEventRef = useRef<{ token: number; id: string | null; seq: number }>({ token: 0, id: null, seq: -1 });
@@ -191,6 +192,18 @@ function App() {
       return;
     }
     if (payload.event === "source_update" && "discovery" in payload) {
+      // Refresh install actions as candidates arrive, so a long lookup needn't
+      // finish before its already discovered patches can be selected.
+      const requestId = payload.request_id;
+      const projectionSequence = ++sourceProjectionSequenceRef.current;
+      void call<ScanResult>("scan").then(fresh => {
+        if (activeEventRef.current.id !== requestId || sourceProjectionSequenceRef.current !== projectionSequence) return;
+        const rows = new Map(fresh.installs.map(row => [row.game.instance_id, row]));
+        setScan(prev => prev ? { ...prev, installs: prev.installs.map(row => {
+          const projected = rows.get(row.game.instance_id);
+          return projected ? { ...row, patches: projected.patches } : row;
+        }) } : prev);
+      }).catch(() => setSourceNotice("已保留查询结果，安装操作刷新失败，可重新扫描后重试。"));
       const discovery = payload.discovery;
       const instanceId = payload.instance_id ?? null;
       const appid = payload.appid ?? null;
@@ -234,7 +247,7 @@ function App() {
     if (result.settings_revision != null) setSourceScan(prev => ({ ...prev, settingsRevision: result.settings_revision ?? prev.settingsRevision }));
   }
 
-  async function startSourceScan(force: boolean) {
+  async function startSourceScan(force: boolean, instanceId?: string) {
     if (sourceRunningRef.current) return;
     const token = ++scanTokenRef.current;
     activeEventRef.current = { token, id: null, seq: -1 };
@@ -243,8 +256,16 @@ function App() {
     setSourceNotice(null);
     setSourceScan({ started: true, running: true, cancelled: false, completed: 0, total: 0, settingsRevision: null });
     try {
-      const result = await invoke<SourceScanResult>("start_source_scan", { force });
-      if (scanTokenRef.current === token) applyScanResults(result);
+      const result = await invoke<SourceScanResult>("start_source_scan", { force, instanceId, preferredLanguage: instanceId ? preferredLanguage : undefined });
+      if (scanTokenRef.current === token) {
+        applyScanResults(result);
+        // Reproject newly found candidates into install actions after the task.
+        const fresh = await call<ScanResult>("scan");
+        if (scanTokenRef.current === token) {
+          setScan(fresh);
+          applyScanResults(result);
+        }
+      }
       if (cancelledRef.current) setSourceNotice("已取消查找，已保留取得的结果；可稍后重新查找。");
     } catch (e) {
       if (!(e && typeof e === "object" && "code" in e && e.code === "source_scan_in_progress")) setSourceNotice(describeError(e));
@@ -277,10 +298,7 @@ function App() {
     if (discoveryBusy) return;
     setDiscoveryBusy(instanceId); setError(null); setNotice(null);
     try {
-      const args: Record<string, unknown> = { instanceId, force };
-      if (preferredLanguage) args.preferredLanguage = preferredLanguage;
-      const result = await invoke<DiscoveryResult>("discover_game", args);
-      mergeDiscoveryResult(instanceId, result);
+      await startSourceScan(force, instanceId);
     } catch (e) {
       setError(describeError(e));
     } finally {
@@ -518,7 +536,7 @@ function App() {
           const primaryAction = primaryInstallAction(current, !!archive);
           const blockers = actionBlockers(current);
           return <>
-            <section className="card"><h3>{current.name}</h3><div className="facts"><div><label>检测状态</label><strong>{patchState(current.detection.status)}</strong></div><div><label>来源能力</label><strong>{workflowState(current.support_level)}</strong></div><div><label>兼容性</label><strong>{workflowState(current.compatibility)}</strong></div><div><label>游戏版本</label><strong>{game.game.buildid ?? "未知，需审核"}</strong></div></div><p>补丁标识：{current.selection_id ?? current.release_id}</p><button onClick={() => openUrl(current.source_page)}>在外部浏览器打开官方来源 ↗</button>{current.support_level === "publisher_exe" && <p className="hint">安装时自动检查条件；下载后会先分析安装包，条件不满足不会写入文件。</p>}{blockers.map((b, i) => <p className="warning" key={i}>{reason(b.code)}{b.detail ? ` · ${b.detail}` : ""}</p>)}{isExternal(current.detection.status) && <p className="warning">检测到外部安装；没有本工具的原版备份，不能由此卸载。</p>}{dynamic && current.compatibility !== "manual_selection_required" && current.actions.automatic.available && <p className="hint">可自动安装；点击安装后会从来源下载并核对内容后写入。</p>}</section>
+            <section className="card"><h3>{current.name}</h3><div className="facts"><div><label>检测状态</label><strong>{patchState(current.detection.status)}</strong></div><div><label>来源能力</label><strong>{workflowState(current.support_level)}</strong></div><div><label>兼容性</label><strong>{workflowState(current.compatibility)}</strong></div><div><label>游戏版本</label><strong>{game.game.buildid ?? "未知，可手动选择"}</strong></div></div><p>补丁标识：{current.selection_id ?? current.release_id}</p><button onClick={() => openUrl(current.source_page)}>在外部浏览器打开官方来源 ↗</button>{current.support_level === "publisher_exe" && <p className="hint">安装时自动检查条件；下载后会先分析安装包，条件不满足不会写入文件。</p>}{blockers.map((b, i) => <p className="warning" key={i}>{reason(b.code)}{b.detail ? ` · ${b.detail}` : ""}</p>)}{isExternal(current.detection.status) && <p className="warning">检测到外部安装；没有本工具的原版备份，不能由此卸载。</p>}{dynamic && current.compatibility !== "manual_selection_required" && current.actions.automatic.available && <p className="hint">可自动安装；点击安装后会从来源下载并核对内容后写入。</p>}</section>
             <section className="card"><h3>安装与预览</h3>{entry.kind === "installable" && entry.choices.length > 1 && <label>下载文件与镜像<select value={current.selection_id ?? current.release_id} onChange={e => {setSelectedDownload(e.target.value);setManualConfirmation(null);setPreview(null);setArchive(null);}}>{entry.choices.map(p => <option key={p.selection_id ?? p.release_id} value={p.selection_id ?? p.release_id}>{p.download_label || "来源下载"} · {p.download_url ? downloadFileName(p.download_url) : p.name}</option>)}</select></label>}{current.download_url && <><p><b>下载项：</b>{current.download_label || downloadFileName(current.download_url)}</p><p className="path">{current.download_url}</p></>}{current.compatibility === "manual_selection_required" && game.discovery?.candidates.filter(c => c.candidate_id === current.candidate_id).map(c => <div key={c.candidate_id}><p>版本：{c.version_raw || "未标明"} · 类型：{c.variant} · 语言：{c.languages.join("、") || "未标明"}</p><p>需要 DLC：{c.requires_dlc?.join("、") || "未标明"} · 排除 DLC：{c.excludes_dlc?.join("、") || "未标明"}</p></div>)}{current.compatibility === "manual_selection_required" && <label><input type="checkbox" checked={manualConfirmation === current.selection_id} onChange={e => setManualConfirmation(e.target.checked ? current.selection_id ?? null : null)} />我选择将此候选安装到当前游戏（请核对来源、语言和 DLC；未标明的条件由你选择）</label>}<p>{primaryAction.input === "local_archive" ? "此操作需要导入本地 ZIP；查看文件变更仅供只读核对。" : "安装会按核心提供的主要操作路线核对补丁后写入游戏文件；查看文件变更仅供只读核对。"}</p><div className="actions"><button onClick={viewPreview} disabled={!!busy}>查看文件变更（只读）</button>{current.actions.local_archive.available && <button onClick={chooseArchive} disabled={!!busy}>导入本地 ZIP</button>}{archive && current.actions.local_archive.available && <button onClick={() => void startInstall("local_archive")} disabled={!!busy || installing || !primaryInstallAction(current, true, "local_archive").available}>使用本地 ZIP 安装</button>}<button className="primary" onClick={() => void startInstall()} disabled={!!busy || installing || !primaryAction.available || (current.compatibility === "manual_selection_required" && manualConfirmation !== current.selection_id)}>{primaryAction.label === "overwrite" ? "覆盖安装补丁" : "安装补丁"}</button></div>{archive && <p className="path">已选择：{archive}</p>}{preview && <ChangeList title="只读文件变更" value={preview} />}</section>
           </>;
         })()}

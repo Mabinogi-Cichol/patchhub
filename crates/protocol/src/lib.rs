@@ -175,6 +175,7 @@ params!(ListGameSourcesParams{#[ts(optional = nullable)]pub instance_id:Option<S
 params!(SetSourceEnabledParams{pub source_id:String,pub enabled:bool,});
 params!(SetGameSourceParams{pub source_id:String,pub subscribed:bool,#[ts(optional = nullable)]pub instance_id:Option<String>,#[ts(optional = nullable)]pub appid:Option<u32>,});
 params!(AddSourceParams{pub rule:RawSourceRule,});
+params!(ScanSourcesParams{#[ts(optional = nullable)]pub instance_id:Option<String>,#[serde(default)]#[ts(as="Option<Vec<String>>", optional)]pub name_hints:Vec<String>,#[ts(optional = nullable)]pub preferred_language:Option<String>,#[serde(default)]#[ts(as="Option<bool>", optional)]pub force:bool,});
 params!(SourceTaskParams{#[serde(default)]#[ts(as="Option<bool>", optional)]pub force:bool,});
 params!(DiscoverGameParams{pub instance_id:String,#[serde(default)]#[ts(as="Option<Vec<String>>", optional)]pub name_hints:Vec<String>,#[ts(optional = nullable)]pub preferred_language:Option<String>,#[serde(default)]#[ts(as="Option<bool>", optional)]pub force:bool,#[ts(type="number | null")]#[ts(optional = nullable)]pub generation:Option<u64>,});
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
@@ -196,7 +197,7 @@ pub enum RequestParams {
     SetGameSource(SetGameSourceParams),
     AddSource(AddSourceParams),
     RefreshSources(SourceTaskParams),
-    ScanSources(SourceTaskParams),
+    ScanSources(ScanSourcesParams),
     DiscoverGame(DiscoverGameParams),
 }
 impl RequestParams {
@@ -217,7 +218,8 @@ impl RequestParams {
             Self::SetSourceEnabled(p) => &p.host,
             Self::SetGameSource(p) => &p.host,
             Self::AddSource(p) => &p.host,
-            Self::RefreshSources(p) | Self::ScanSources(p) => &p.host,
+            Self::RefreshSources(p) => &p.host,
+            Self::ScanSources(p) => &p.host,
             Self::DiscoverGame(p) => &p.host,
         }
     }
@@ -1284,7 +1286,8 @@ pub fn schema() -> Value {
             Method::SetSourceEnabled => "SetSourceEnabledParams",
             Method::SetGameSource => "SetGameSourceParams",
             Method::AddSource => "AddSourceParams",
-            Method::RefreshSources | Method::ScanSources => "SourceTaskParams",
+            Method::RefreshSources => "SourceTaskParams",
+            Method::ScanSources => "ScanSourcesParams",
             Method::DiscoverGame => "DiscoverGameParams",
         };
         serde_json::json!({"type":"object","additionalProperties":false,"required":["protocol_version","request_id","method","params"],"properties":{"protocol_version":{"const":PROTOCOL_VERSION},"request_id":{"type":"string"},"method":{"const":method.as_str()},"params":{"$ref":format!("#/$defs/{name}")}}})

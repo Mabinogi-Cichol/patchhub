@@ -1141,7 +1141,10 @@ pub fn lower(graph: &Value, files: &[Value], version: &str) -> Result<Value> {
         graph["coverage"]["complete"] == true,
         "exe_serialized_object_graph_incomplete",
     )?;
-    require(files.len() <= 8192, "exe_file_schema_unsupported")?;
+    require(
+        files.len() <= u16::MAX as usize,
+        "exe_file_schema_unsupported",
+    )?;
     file_policy(files, version)?;
     let mut total = 0i128;
     for file in files {

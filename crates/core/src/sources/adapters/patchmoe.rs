@@ -271,12 +271,7 @@ mod tests {
     }
 
     fn context(fake: &Arc<FakeFetcher>) -> RequestContext {
-        RequestContext::with_settings(
-            Box::new(Arc::clone(fake)),
-            20,
-            Duration::from_secs(30),
-            Duration::ZERO,
-        )
+        RequestContext::with_settings(Box::new(Arc::clone(fake)), Duration::ZERO)
     }
 
     const INITIAL: &str = r#"<html><body>

@@ -2,7 +2,22 @@
 use crate::operation;
 use std::io::{self, Read, Seek, SeekFrom};
 
+/// Upper bound on the central-directory/metadata bytes inspected before
+/// `zip::ZipArchive` allocates per-member entries.
+///
+/// Protection object: the memory a caller must hold while planning/installing an
+/// archive (central directory plus per-member bookkeeping), not an arbitrary
+/// accepted payload size. Basis: a byte budget rather than a member-count line,
+/// so an ordinary ZIP is admitted while `cd_size + count * RECORD_ESTIMATE`
+/// stays within this value (roughly 62.7k members before the estimate
+/// dominates). Checked in `exceeds_budget`, reached from `preflight` and
+/// `inspect` for every candidate EOCD/ZIP64 record. Over-limit archives fail
+/// with the explicit `zip_metadata_limit` error; members are never silently
+/// truncated or dropped.
 pub const MAX_METADATA_BYTES: u64 = 64 * 1024 * 1024;
+/// Conservative per-member estimate for the plan/authorization bookkeeping that
+/// accompanies each central-directory record, used only inside
+/// `exceeds_budget` to convert a member count into budgeted bytes.
 const RECORD_ESTIMATE: u64 = 1024;
 
 fn invalid() -> io::Error {

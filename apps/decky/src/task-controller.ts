@@ -137,7 +137,7 @@ export function createTaskController(api: TaskApi, pollMs = 750, retryMs = 1500)
       if (starting) cancelling = true;
       if (value && !taskIsTerminal(value.state)) {
         publish({ ...value, state: value.state === "rolling_back" ? "rolling_back" : "cancelling" });
-        // Stop renewing the foreground lease; the backend guards lost cancel RPCs.
+        // Cancel the backend task; its own journal/rollback owns the outcome.
         void api.cancel(value.task_id).catch(() => {});
       }
       disposed = true; stopTimer();

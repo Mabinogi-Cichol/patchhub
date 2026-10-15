@@ -349,3 +349,24 @@ test("explicit force query is not swallowed by pending cached query and fences i
   assert.deepEqual(calls, [false, true]);
   assert.deepEqual(session.getSnapshot().report!.installs[0].patches.map(p => p.release_id), ["fresh"]);
 });
+
+
+test("a targeted query switches to task generation and continues polling after its starting RPC", async () => {
+  const base = discoveryReport();
+  const running: ScanResult = { ...base, generation: 4, scan_progress: { running: true, completed: 0, total: 1 } };
+  let polls = 0;
+  const session = createManagerSession(async () => ({ report: base, transactions: [] }),
+    async () => ({ ...discovery(), patches: [], query_report: running }),
+    async generation => {
+      assert.equal(generation, 4);
+      polls++;
+      return { ...running, scan_progress: { running: false, completed: 1, total: 1 } };
+    });
+  await session.refresh();
+  await session.discover("a", [], null, true);
+  assert.equal(session.getSnapshot().report!.generation, 4);
+  assert.equal(session.getSnapshot().report!.scan_progress!.running, true);
+  await new Promise(resolve => setTimeout(resolve, 1100));
+  assert.equal(polls, 1);
+  assert.equal(session.getSnapshot().report!.scan_progress!.running, false);
+});

@@ -129,7 +129,7 @@ pub struct ManifestFacts {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct BuildFacts {
-    pub buildid: String,
+    pub buildid: Option<String>,
     pub verified: bool,
 }
 
@@ -245,21 +245,24 @@ pub struct BaselineExpectation {
     pub crc32: Option<u32>,
 }
 
-/// Reads a regular unlinked file and returns `sha256`/`crc32`/size, checking
-/// identity before and after the read (`exe_facts.py::read_file`).
-pub fn digest_file(path: &Path, limit: u64, cancel: &AtomicBool) -> Result<FileDigest> {
-    read_bounded(path, limit, cancel, false).map(|(digest, _)| digest)
+/// Streams a regular unlinked file to EOF with a fixed buffer and returns
+/// `sha256`/`crc32`/size, checking identity before and after the read
+/// (`exe_facts.py::read_file`). Digest-only reads have no artificial size cap;
+/// the file's own length and identity checks bound the work.
+pub fn digest_file(path: &Path, cancel: &AtomicBool) -> Result<FileDigest> {
+    read_bounded(path, None, cancel, false).map(|(digest, _)| digest)
 }
 
-/// Like [`digest_file`] but also returns the bytes (`contents=True`).
+/// Like [`digest_file`] but also returns the bytes (`contents=True`). `limit` is
+/// a real caller memory bound for the returned buffer.
 pub fn read_file(path: &Path, limit: u64, cancel: &AtomicBool) -> Result<(FileDigest, Vec<u8>)> {
-    read_bounded(path, limit, cancel, true)
+    read_bounded(path, Some(limit), cancel, true)
         .map(|(digest, bytes)| (digest, bytes.unwrap_or_default()))
 }
 
 fn read_bounded(
     path: &Path,
-    limit: u64,
+    limit: Option<u64>,
     cancel: &AtomicBool,
     contents: bool,
 ) -> Result<(FileDigest, Option<Vec<u8>>)> {
@@ -270,7 +273,7 @@ fn read_bounded(
     let before = file.metadata()?;
     #[cfg(windows)]
     let identity_before = windows_handle_identity(&file)?;
-    if !before.is_file() || before.len() > limit {
+    if !before.is_file() || limit.is_some_and(|limit| before.len() > limit) {
         return Err(invalid("exe_game_file_limit"));
     }
 
@@ -287,8 +290,10 @@ fn read_bounded(
         if count == 0 {
             break;
         }
-        size = size.saturating_add(count as u64);
-        if size > limit {
+        size = size
+            .checked_add(count as u64)
+            .ok_or_else(|| invalid("exe_game_file_limit"))?;
+        if limit.is_some_and(|limit| size > limit) {
             return Err(invalid("exe_game_file_limit"));
         }
         hasher.update(&buffer[..count]);
@@ -413,17 +418,14 @@ fn game_facts_inner(
 
     let manifest = manifest_fact(game, &parsed);
     let build = if unreviewed {
-        match field_text(&parsed.state, "buildid") {
-            Some(build) if valid_buildid(build) && game.buildid.as_deref() == Some(build) => {
-                Fact::evidence(BuildFacts {
-                    buildid: build.to_owned(),
-                    verified: false,
-                })
-            }
-            _ => Fact::failed_code(
-                "exe_game_identity_changed",
-                "current build missing or changed",
-            ),
+        let observed = field_text(&parsed.state, "buildid").map(str::to_owned);
+        if observed.as_ref().is_some_and(|v| !valid_buildid(v)) || observed != game.buildid {
+            Fact::failed_code("exe_game_identity_changed", "current build changed")
+        } else {
+            Fact::evidence(BuildFacts {
+                buildid: observed,
+                verified: false,
+            })
         }
     } else {
         build_fact(game, &parsed.state, expectation)
@@ -434,7 +436,16 @@ fn game_facts_inner(
             .iter()
             .all(|key| field(&parsed.state, key).is_none())
     {
-        Fact::failed_code("exe_dlc_unknown", "manifest has no installation evidence")
+        if expectation.requires_dlc.is_empty() && expectation.excludes_dlc.is_empty() {
+            // Unknown is not proof that no DLC is installed, nor a blocker
+            // when this installation has no DLC dependency.
+            Fact {
+                evidence: None,
+                failure: None,
+            }
+        } else {
+            Fact::failed_code("exe_dlc_unknown", "manifest has no installation evidence")
+        }
     } else {
         dlc_fact(&parsed.state, expectation)
     };
@@ -581,13 +592,13 @@ fn build_fact(
                     .any(|item| item == &build) =>
         {
             Fact::evidence(BuildFacts {
-                buildid: build,
+                buildid: Some(build),
                 verified: true,
             })
         }
         Some(build) => Fact {
             evidence: Some(BuildFacts {
-                buildid: build,
+                buildid: Some(build),
                 verified: false,
             }),
             failure: Some(FactFailure::new("build_not_verified", "buildid mismatch")),
@@ -760,7 +771,7 @@ fn baseline_facts(
                 return fact;
             }
             let target = root.join(baseline.path.split('/').collect::<PathBuf>());
-            match digest_file(&target, MAX_BASELINE_BYTES, cancel) {
+            match digest_file(&target, cancel) {
                 Ok(digest) => {
                     if digest.sha256 != baseline.sha256
                         || baseline.crc32.is_some_and(|crc| digest.crc32 != crc)
@@ -1119,7 +1130,7 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("data.bin");
         write_file(&path, b"123456789");
-        let digest = digest_file(&path, 1024, &AtomicBool::new(false)).unwrap();
+        let digest = digest_file(&path, &AtomicBool::new(false)).unwrap();
         assert_eq!(digest.crc32, 0xcbf4_3926);
         assert_eq!(digest.size, 9);
         assert_eq!(digest.sha256, format!("{:x}", Sha256::digest(b"123456789")));
@@ -1130,23 +1141,26 @@ mod tests {
     }
 
     #[test]
-    fn digest_file_rejects_missing_directory_and_oversize() {
+    fn digest_file_rejects_missing_and_directory_and_read_file_bounds_size() {
         let temp = tempfile::tempdir().unwrap();
         let missing = temp.path().join("missing");
-        assert!(digest_file(&missing, 1024, &AtomicBool::new(false)).is_err());
+        assert!(digest_file(&missing, &AtomicBool::new(false)).is_err());
 
         let directory = temp.path().join("dir");
         fs::create_dir(&directory).unwrap();
-        assert!(digest_file(&directory, 1024, &AtomicBool::new(false)).is_err());
+        assert!(digest_file(&directory, &AtomicBool::new(false)).is_err());
 
+        // Digest-only reads have no cap; the caller memory bound still guards
+        // the buffered `read_file` variant.
         let big = temp.path().join("big");
         write_file(&big, &[0u8; 16]);
         assert_eq!(
-            digest_file(&big, 8, &AtomicBool::new(false))
+            read_file(&big, 8, &AtomicBool::new(false))
                 .unwrap_err()
                 .to_string(),
             "exe_game_file_limit"
         );
+        assert!(digest_file(&big, &AtomicBool::new(false)).is_ok());
     }
 
     #[cfg(unix)]
@@ -1158,7 +1172,7 @@ mod tests {
         let link = temp.path().join("link");
         std::os::unix::fs::symlink(&target, &link).unwrap();
         assert_eq!(
-            digest_file(&link, 1024, &AtomicBool::new(false))
+            digest_file(&link, &AtomicBool::new(false))
                 .unwrap_err()
                 .to_string(),
             "exe_linked_game_file"
@@ -1181,12 +1195,7 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let (game, install) = instance(temp.path(), &manifest("schinese", "4", "12345", ""));
         write_file(&install.join("data.xp3"), b"baseline");
-        let observed = digest_file(
-            &install.join("data.xp3"),
-            MAX_BASELINE_BYTES,
-            &AtomicBool::new(false),
-        )
-        .unwrap();
+        let observed = digest_file(&install.join("data.xp3"), &AtomicBool::new(false)).unwrap();
         let facts = game_facts(
             &game,
             &expectation(vec![BaselineExpectation {
@@ -1201,7 +1210,10 @@ mod tests {
             facts.manifest.evidence.as_ref().unwrap().installdir,
             "TestGame"
         );
-        assert_eq!(facts.build.evidence.as_ref().unwrap().buildid, "12345");
+        assert_eq!(
+            facts.build.evidence.as_ref().unwrap().buildid.as_deref(),
+            Some("12345")
+        );
         assert_eq!(
             facts
                 .language
@@ -1404,7 +1416,9 @@ mod generic_current_tests {
     fn unknown_language_or_dlc_never_satisfies_constraints() {
         let t = tempfile::tempdir().unwrap();
         let g = game(t.path(), "", " ");
-        let f = game_facts_unreviewed(&g, &expectation(), &AtomicBool::new(false));
+        let mut expected = expectation();
+        expected.requires_dlc = vec![99];
+        let f = game_facts_unreviewed(&g, &expected, &AtomicBool::new(false));
         assert_eq!(f.language.failure.unwrap().code, "exe_language_mismatch");
         assert_eq!(f.dlc.failure.unwrap().code, "exe_dlc_unknown");
     }

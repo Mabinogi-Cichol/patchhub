@@ -301,7 +301,10 @@ impl SourceStore {
     }
 
     pub fn load_discovery_index(&self, source_id: &str) -> Result<Option<DiscoveryIndexRecord>> {
-        read_json(&self.paths.discovery_index(source_id), MAX_DISCOVERY_OUTPUT)
+        read_json(
+            &self.paths.discovery_index(source_id),
+            super::MAX_DISCOVERY_INDEX_BYTES,
+        )
     }
 
     pub fn save_discovery_index(
@@ -312,7 +315,7 @@ impl SourceStore {
         write_json(
             &self.paths.discovery_index(source_id),
             record,
-            MAX_DISCOVERY_OUTPUT,
+            super::MAX_DISCOVERY_INDEX_BYTES,
         )
     }
 
@@ -697,9 +700,15 @@ mod tests {
             "file_too_large"
         );
         let rule = builtins().into_iter().find(|r| r.id == "patchmoe").unwrap();
+        // Entry count is no longer a separate ceiling (design D08): a large but
+        // otherwise valid entry list is accepted, bounded by the byte/parse budget.
         let entries = vec![entry("G", "https://download.patch.moe/G.zip", Some(1)); 4097];
         assert_eq!(
-            validate::validate_entries(&rule, &entries)
+            validate::validate_entries(&rule, &entries).unwrap().len(),
+            4097
+        );
+        assert_eq!(
+            validate::validate_entries(&rule, &[])
                 .unwrap_err()
                 .to_string(),
             "empty_or_oversized_source"

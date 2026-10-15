@@ -34,7 +34,7 @@ fn error(e: impl std::fmt::Display) -> Error {
     ) {
         return Error::code("cancelled");
     }
-    if detail.starts_with("durable_revoke_failed") || detail.starts_with("lease_persist_failed") {
+    if detail.starts_with("durable_revoke_failed") {
         return Error::new("needs_recovery", detail);
     }
     if !detail.is_empty()
@@ -58,7 +58,6 @@ pub(crate) struct ExeInstallInputs<'a> {
     pub selection: &'a exe_resolve::ResolvedExeCandidate,
     pub operation: InstallOperation,
     pub request_id: &'a str,
-    pub ttl_seconds: u64,
 }
 pub(crate) struct ExeInstallDeps<'a> {
     pub paths: &'a InstallerPaths,
@@ -67,7 +66,6 @@ pub(crate) struct ExeInstallDeps<'a> {
     pub runtime: &'a WorkerRuntime,
     pub cancel: &'a AtomicBool,
     pub cancel_reason: &'a (dyn Fn() -> Option<CancellationCause> + Sync),
-    pub lease_deadline_ms: &'a (dyn Fn() -> u64 + Sync),
 }
 #[cfg(test)]
 pub(crate) fn install_exe(
@@ -101,12 +99,10 @@ pub(crate) fn execute_exe(
         inputs.request_id,
         &inputs.game.instance_id,
         &inputs.selection.selection_id,
-        (deps.lease_deadline_ms)(),
     )
     .map_err(error)?;
     control.run_with_cause(
         deps.cancel,
-        deps.lease_deadline_ms,
         deps.cancel_reason,
         || run(&inputs, &deps, &control, &binding).map(super::InstallExecution::fresh),
     )
@@ -116,7 +112,7 @@ fn boundary(deps: &ExeInstallDeps<'_>, control: &TaskControl) -> Result<()> {
         control.revoke_with_cause(cause).map_err(error)?;
     }
     control
-        .check_requested_with_cause(deps.cancel, deps.lease_deadline_ms, deps.cancel_reason)
+        .check_requested_with_cause(deps.cancel, deps.cancel_reason)
         .map_err(error)
 }
 
@@ -127,10 +123,6 @@ fn run(
     binding: &super::requests::RequestBinding,
 ) -> Result<Transaction> {
     boundary(deps, control)?;
-    let volume = space::inspect_volume(deps.paths.root()).map_err(error)?;
-    if volume.available_bytes < 2 * 1024 * 1024 * 1024 + space::SPACE_MARGIN_BYTES {
-        return Err(Error::code("insufficient_space"));
-    }
     operation::stage("connecting", None, None);
     let request = acquire::DownloadRequest {
         url: &inputs.selection.download_url,
@@ -147,10 +139,19 @@ fn run(
     )
     .map_err(common::map_download_error)?;
     boundary(deps, control)?;
+    // The state root holds the cached download D; analysis then makes a sandbox
+    // input copy of D before the conversion budget (which needs the payload
+    // size) can run. Require one known download length plus the documented
+    // metadata/runtime margin here; the exact per-volume budget is re-checked
+    // after analysis (design §5.2), so this is not a second fixed ceiling.
+    let state_needed = acquired
+        .size
+        .checked_add(space::SPACE_MARGIN_BYTES)
+        .ok_or_else(|| Error::code("exe_space_budget_overflow"))?;
     if space::inspect_volume(deps.paths.root())
         .map_err(error)?
         .available_bytes
-        < acquired.size + 32 * 1024 * 1024
+        < state_needed
     {
         return Err(Error::code("insufficient_space"));
     }
@@ -176,12 +177,8 @@ fn run(
             .map_err(error)?;
     let expectation = exe_resolve::expectation(inputs.selection);
     let game = facts::game_facts_unreviewed(inputs.game, &expectation, &control.cancel);
-    if !game.is_valid() {
-        return Err(Error::new(
-            "exe_facts_failed",
-            format!("{:?}", game.failures()),
-        ));
-    }
+    // A whole-snapshot validity gate is intentionally NOT applied (design D06);
+    // the concrete action preconditions are evaluated later at the boundary.
     let reinstall = if inputs.operation == InstallOperation::Reinstall {
         reinstall_evidence(deps.paths, inputs.game, &report)?
     } else {
@@ -225,12 +222,13 @@ fn run(
     if !snapshot.satisfied {
         return Err(Error::code("exe_conditions_not_satisfied"));
     }
-    let budget = space::SpaceBudget::new(
-        acquired.size,
-        report.payload_bytes(),
-        space::original_bytes(&inputs.game.install_path, report.payload()).map_err(error)?,
-    )
-    .map_err(error)?;
+    let report_bytes = serde_json::to_vec(&analysis.response).map_err(error)?;
+    drop(analysis);
+    let sizes =
+        space::original_sizes(&inputs.game.install_path, report.payload()).map_err(error)?;
+    let budget =
+        space::SpaceBudget::for_conversion(acquired.size, report.payload_bytes().map_err(error)?, &sizes)
+            .map_err(error)?;
     let evidence = budget
         .inspect(deps.paths.root(), &inputs.game.install_path)
         .map_err(error)?;
@@ -240,8 +238,6 @@ fn run(
         65536,
     )
     .map_err(error)?;
-    let report_bytes = serde_json::to_vec(&analysis.response).map_err(error)?;
-    drop(analysis);
     store::write_atomic(
         &reports.join("report.json"),
         &report_bytes,
@@ -250,7 +246,7 @@ fn run(
     .map_err(error)?;
     operation::stage(
         "extracting",
-        Some(report.payload_bytes()),
+        Some(report.payload_bytes().map_err(error)?),
         Some(report.payload().len()),
     );
     let b = report.binding();
@@ -272,15 +268,16 @@ fn run(
         })?;
     let artifact = converted
         .artifact_path()
-        .ok_or_else(|| Error::code("exe_conversion_failed"))?;
-    let digest = validate_artifact(artifact, &converted.response, &report, &control.cancel)
+        .ok_or_else(|| Error::code("exe_conversion_failed"))?
+        .to_path_buf();
+    let digest = validate_artifact(&artifact, &converted.response, &report, &control.cancel)
         .map_err(error)?;
     let mut mappings = Vec::new();
     for file in report.payload() {
         let target = inputs.game.install_path.join(&file.path);
         let original = if target.exists() {
             Some(
-                facts::digest_file(&target, space::MAX_ORIGINAL_BYTES, &control.cancel)
+                facts::digest_file(&target, &control.cancel)
                     .map_err(error)?
                     .sha256,
             )
@@ -297,27 +294,22 @@ fn run(
     let mut selection = inputs.selection.clone();
     selection.release_id = content.clone();
     let normalized = acquire::AcquiredArchive {
-        path: artifact.into(),
+        path: artifact.clone(),
         sha256: digest.sha256.clone(),
         size: digest.size,
         final_url: acquired.final_url.clone(),
         source: acquire::Acquisition::Downloaded,
     };
-    let mut managed_expectation = expectation.clone();
-    // Legacy prepare's internal build gate; generic facts still record verified=false.
-    managed_expectation.verified_buildids = inputs.game.buildid.clone().into_iter().collect();
-    let mut release =
-        common::build_release(&selection, &normalized, &mappings, &managed_expectation);
+    let mut release = common::build_release(&selection, &normalized, &mappings, &expectation);
     release.category = "publisher_exe".into();
     boundary(deps, control)?;
-    budget
-        .inspect(deps.paths.root(), &inputs.game.install_path)
-        .map_err(error)?;
+    // Download and normalized ZIP already occupy disk. Prepare and apply each
+    // check the remaining ZIP transaction budget, without reserving them again.
     let plan = install::prepare_for_request_at(
         deps.paths.root(),
         inputs.game,
         &release,
-        artifact,
+        &artifact,
         0,
         inputs.operation,
         Some(&inputs.selection.selection_id),
@@ -372,7 +364,6 @@ fn run(
             request_id: Some(inputs.request_id),
             facts: game.clone(),
             now: now(),
-            ttl_seconds: inputs.ttl_seconds,
         })
         .map_err(error)?;
         authorization::write(deps.paths, &auth).map_err(error)?;
@@ -422,7 +413,7 @@ fn run(
             acquired.size,
         )
         .map_err(error)?;
-        if validate_artifact(artifact, &converted.response, &report, &control.cancel)
+        if validate_artifact(&artifact, &converted.response, &report, &control.cancel)
             .map_err(error)?
             != digest
         {
@@ -446,8 +437,6 @@ fn run(
             plan_id: plan.plan_id.clone(),
             instance_id: inputs.game.instance_id.clone(),
             revoked: authorization::is_revoked(deps.paths, &plan.plan_id).map_err(error)?,
-            lease_active: !control.cancel.load(std::sync::atomic::Ordering::Acquire)
-                && (deps.cancel_reason)().is_none(),
             facts: current_facts,
             settings_revision: fresh.settings_revision,
             policy: PolicyVersions {
@@ -461,9 +450,8 @@ fn run(
             content: current_content,
         };
         authorization::validate(&auth, &current).map_err(error)?;
-        budget
-            .inspect(deps.paths.root(), &inputs.game.install_path)
-            .map_err(error)?;
+        install::retain_plan_archive_at(deps.paths.root(), &plan.plan_id).map_err(error)?;
+        drop(converted);
         boundary(deps, control)?;
         install::apply_at(deps.paths.root(), &plan.plan_id).map_err(common::map_plan_error)
     })();
@@ -531,7 +519,6 @@ fn reinstall_evidence(
     for owned in &auth.content.mappings {
         let actual = facts::digest_file(
             &game.install_path.join(&owned.destination),
-            space::MAX_ORIGINAL_BYTES,
             &AtomicBool::new(false),
         )
         .map_err(error)?;
@@ -577,7 +564,7 @@ pub fn validate_artifact(
     {
         return Err(super::invalid("conversion_binding_changed"));
     }
-    let digest = facts::digest_file(path, steam_patch_installer_worker::sf::MAX_ARTIFACT, cancel)?;
+    let digest = facts::digest_file(path, cancel)?;
     if response["artifact_sha256"] != digest.sha256 || response["artifact_size"] != digest.size {
         return Err(super::invalid("conversion_artifact_changed"));
     }
@@ -732,7 +719,6 @@ mod tests {
             selection,
             operation: op,
             request_id: request,
-            ttl_seconds: 900,
         };
         let deps = ExeInstallDeps {
             paths,
@@ -741,7 +727,6 @@ mod tests {
             runtime,
             cancel,
             cancel_reason: &|| None,
-            lease_deadline_ms: &|| u64::MAX,
         };
         operation::run(
             std::sync::Arc::new(AtomicBool::new(false)),
@@ -760,7 +745,7 @@ mod tests {
         let mut evidence = Vec::new();
         for appid in [2303800u32, 3606360, 3721970] {
             let archive = root.join(format!(".artifacts/generic-exe-local/{appid}-archive.exe"));
-            let exe = facts::digest_file(&archive, 2 * 1024 * 1024 * 1024, &cancel).unwrap();
+            let exe = facts::digest_file(&archive, &cancel).unwrap();
             let descriptor =
                 json!({"action":"analyze_behavior","exe_sha256":exe.sha256,"exe_size":exe.size});
             let analysis = runtime
@@ -948,37 +933,6 @@ mod tests {
         assert_eq!(fs::read_dir(&stage).unwrap().count(), 0);
     }
     #[test]
-    fn synchronous_boundary_rejects_inactive_live_lease_with_infinite_deadline() {
-        let temp = tempfile::tempdir().unwrap();
-        let paths = InstallerPaths::new(temp.path());
-        super::super::init_atomic(&paths).unwrap();
-        let runtime_dir = temp.path().join("runtime");
-        fs::create_dir(&runtime_dir).unwrap();
-        let runtime =
-            WorkerRuntime::new(std::env::current_exe().unwrap(), &runtime_dir, None).unwrap();
-        let cancel = AtomicBool::new(false);
-        let transport = FakeTransport::new(Vec::new());
-        let deps = ExeInstallDeps {
-            paths: &paths,
-            state_dir: temp.path(),
-            transport: &transport,
-            runtime: &runtime,
-            cancel: &cancel,
-            cancel_reason: &|| Some(CancellationCause::LeaseExpired),
-            lease_deadline_ms: &|| u64::MAX,
-        };
-        let control =
-            TaskControl::new(&paths, "expired", "instance", "selection", u64::MAX).unwrap();
-        let failure = boundary(&deps, &control).unwrap_err();
-        assert_eq!(failure.code, "lease_expired");
-        assert_eq!(
-            control.cancellation_cause(),
-            Some(CancellationCause::LeaseExpired)
-        );
-        assert!(control.job().join("revoked").is_file());
-    }
-
-    #[test]
     fn normalized_response_rejects_unknown_output_and_artifact_tamper() {
         let c = golden()["cases"][0].clone();
         let response = json!({"schema_version":1,"action":"analyze_behavior","exe_sha256":c["descriptor"]["exe_sha256"],"report":c["report"],"installable":false});
@@ -1002,43 +956,5 @@ mod tests {
                 .to_string(),
             "conversion_binding_changed"
         );
-    }
-    /// EXE publisher sources keep the language gate: a zh-CN kagura EXE against
-    /// an English manifest still fails with `exe_facts_failed`.
-    #[test]
-    #[ignore = "actual bundled worker fixture; set SF_WORKER_TEST_BIN (release profile)"]
-    fn english_manifest_blocks_kagura_exe_with_exe_facts_failed() {
-        let (temp, game, _) = fixture::setup();
-        fs::write(game.install_path.join("engine.exe"), b"inert").unwrap();
-        fs::write(game.install_path.join("identity.dat"), [87, 164, 242, 220]).unwrap();
-        let manifest = game
-            .library_path
-            .join("steamapps")
-            .join(format!("appmanifest_{}.acf", game.appid));
-        let text = fs::read_to_string(&manifest)
-            .unwrap()
-            .replace("\"schinese\"", "\"english\"");
-        fs::write(&manifest, text).unwrap();
-        let state = temp.path().join("state");
-        let paths = InstallerPaths::new(&state);
-        super::super::init_atomic(&paths).unwrap();
-        let stage = temp.path().join("runtime");
-        fs::create_dir(&stage).unwrap();
-        let runtime = runtime(&stage);
-        assert!(runtime.probe().available);
-        let selection = seed(&state);
-        let cancel = AtomicBool::new(false);
-        let error = invoke(
-            &state,
-            &paths,
-            &game,
-            &selection,
-            &runtime,
-            "exe-language",
-            InstallOperation::Install,
-            &cancel,
-        )
-        .unwrap_err();
-        assert_eq!(error.code, "exe_facts_failed");
     }
 }

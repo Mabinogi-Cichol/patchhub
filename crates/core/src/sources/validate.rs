@@ -9,8 +9,7 @@ use super::canonical;
 use super::invalid;
 use super::model::*;
 use super::{
-    DISCOVERY_ADAPTERS, MAX_CANDIDATES, MAX_DISCOVERY_OUTPUT, MAX_ENTRIES, MAX_EVIDENCE,
-    MAX_MIRRORS_PERSIST, MAX_SOURCES,
+    DISCOVERY_ADAPTERS, MAX_DISCOVERY_OUTPUT, MAX_SOURCES,
 };
 use std::collections::HashSet;
 use std::io;
@@ -427,7 +426,7 @@ pub fn validate_entries(
     source: &SourceRule,
     entries: &[SourceEntry],
 ) -> io::Result<Vec<SourceEntry>> {
-    if entries.is_empty() || entries.len() > MAX_ENTRIES {
+    if entries.is_empty() {
         return Err(invalid("empty_or_oversized_source"));
     }
     let mut clean = Vec::with_capacity(entries.len());
@@ -523,10 +522,9 @@ pub fn validate_candidates(
     appid: u32,
     candidates: &[SourceCandidate],
 ) -> io::Result<Vec<SourceCandidate>> {
-    if candidates.len() > MAX_CANDIDATES {
-        return Err(invalid("invalid_discovery_candidates"));
-    }
     // Size is measured with the frozen deterministic encoding (contract §1).
+    // This byte budget is the real bound; overlapping candidate/mirror/evidence
+    // count ceilings were removed (design D08).
     if canonical::canonical_bytes(candidates)?.len() as u64 > MAX_DISCOVERY_OUTPUT {
         return Err(invalid("oversized_discovery_candidates"));
     }
@@ -573,14 +571,8 @@ pub fn validate_candidates(
                 navigation_url(upstream)?;
             }
         }
-        if candidate.mirrors.len() > MAX_MIRRORS_PERSIST {
-            return Err(invalid("invalid_discovery_candidate"));
-        }
         for mirror in &candidate.mirrors {
             navigation_url(&mirror.url)?;
-        }
-        if candidate.identity_evidence.len() > MAX_EVIDENCE {
-            return Err(invalid("invalid_discovery_candidate"));
         }
         for evidence in &candidate.identity_evidence {
             if let Some(page) = &evidence.page {
@@ -589,16 +581,10 @@ pub fn validate_candidates(
                 }
             }
         }
-        if candidate.provenance.len() > MAX_EVIDENCE {
-            return Err(invalid("invalid_discovery_candidate"));
-        }
         for evidence in &candidate.provenance {
             if !evidence.page.is_empty() {
                 navigation_url(&evidence.page)?;
             }
-        }
-        if candidate.related_index_pages.len() > MAX_EVIDENCE {
-            return Err(invalid("invalid_discovery_candidate"));
         }
         for evidence in &candidate.related_index_pages {
             if !evidence.page.is_empty() {

@@ -1,7 +1,6 @@
 //! HGamer fallback-index adapter (`hgamer_html`), porting `discovery.py::_hgamer`:
-//! search via `query_terms`, numeric result-count requirement, per-game/patch
-//! detail budget (6), Steam-appid identity, alias extraction, format report and
-//! mirror collection.
+//! search via `query_terms`, numeric result-count requirement, Steam-appid
+//! identity, alias extraction, format report and mirror collection.
 
 use super::super::http::RequestContext;
 use super::super::model::{QueryContext, SourceCandidate, SourceRule};
@@ -123,11 +122,6 @@ fn hgamer(
 
     let mut identities: Vec<identity::Identity> = Vec::new();
     for (page, _) in &games {
-        if ctx.detail_requests >= 6 {
-            diagnostics.push("discovery_detail_budget_exhausted".to_string());
-            break;
-        }
-        ctx.detail_requests += 1;
         let (html, final_url) = match fetch_page(ctx, page, &rule.page_hosts) {
             Ok(value) => value,
             Err(error) => {
@@ -171,11 +165,6 @@ fn hgamer(
 
     let mut candidates = Vec::new();
     for (page, _) in &patches {
-        if ctx.detail_requests >= 6 {
-            diagnostics.push("discovery_detail_budget_exhausted".to_string());
-            break;
-        }
-        ctx.detail_requests += 1;
         let (html, final_url) = match fetch_page(ctx, page, &rule.page_hosts) {
             Ok(value) => value,
             Err(error) => {
@@ -425,12 +414,7 @@ mod tests {
     }
 
     fn context(fake: &Arc<FakeFetcher>) -> RequestContext {
-        RequestContext::with_settings(
-            Box::new(Arc::clone(fake)),
-            20,
-            Duration::from_secs(30),
-            Duration::ZERO,
-        )
+        RequestContext::with_settings(Box::new(Arc::clone(fake)), Duration::ZERO)
     }
 
     const SEARCH: &str = r#"<html><body>
@@ -556,12 +540,30 @@ mod tests {
             .any(|diagnostic| diagnostic.code == "discovery_search_structure_changed"));
     }
 
+    const SEARCH_MANY: &str = r#"<html><body>
+<div class="summary"><h1>Search</h1><p>找到 7 笔 results for Game</p></div>
+<div><h2>游戏</h2><ul>
+<li><a href="/zh-CN/games/1">G1</a></li>
+<li><a href="/zh-CN/games/2">G2</a></li>
+<li><a href="/zh-CN/games/3">G3</a></li>
+<li><a href="/zh-CN/games/4">G4</a></li>
+<li><a href="/zh-CN/games/5">G5</a></li>
+<li><a href="/zh-CN/games/6">G6</a></li>
+<li><a href="/zh-CN/games/7">G7</a></li>
+</ul></div>
+</body></html>"#;
+
     #[test]
-    fn detail_budget_exhaustion() {
+    fn detail_requests_are_not_capped() {
         let fake = Arc::new(FakeFetcher::new());
-        fake.push(response(SEARCH, "https://hgamer.tw/zh-CN/search?q=Game"));
+        fake.push(response(SEARCH_MANY, "https://hgamer.tw/zh-CN/search?q=Game"));
+        for index in 1..=7 {
+            fake.push(response(
+                "<html><body></body></html>",
+                &format!("https://hgamer.tw/zh-CN/games/{index}"),
+            ));
+        }
         let mut ctx = context(&fake);
-        ctx.detail_requests = 6;
         let outcome = HgamerAdapter
             .discover(
                 &rule(),
@@ -570,9 +572,12 @@ mod tests {
                 &DiscoverPrevious::default(),
             )
             .unwrap();
-        assert!(outcome
+        // Every game detail page is fetched; no request-count cap stops the
+        // traversal.
+        assert_eq!(fake.call_count(), 8);
+        assert!(!outcome
             .diagnostics
             .iter()
-            .any(|diagnostic| diagnostic.code == "discovery_detail_budget_exhausted"));
+            .any(|diagnostic| diagnostic.code.contains("budget")));
     }
 }

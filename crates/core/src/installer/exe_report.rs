@@ -17,7 +17,6 @@ use std::{
 };
 use unicode_normalization::UnicodeNormalization;
 pub const MAX_REPORT_BYTES: usize = 16 * 1024 * 1024;
-pub const MAX_PAYLOAD_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const MAX_NODES: usize = 8192;
 const MAX_DEPTH: usize = 96;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -249,11 +248,7 @@ impl PreparedReport {
             let target = game.instance.install_path.join(&path);
             require(super::zip_recipe::no_links(&target), "linked_target")?;
             let observed = match fs::symlink_metadata(&target) {
-                Ok(m) if m.is_file() => Some(facts::digest_file(
-                    &target,
-                    facts::MAX_BASELINE_BYTES,
-                    cancel,
-                )?),
+                Ok(m) if m.is_file() => Some(facts::digest_file(&target, cancel)?),
                 Ok(_) => return Err(invalid("exe_condition_not_file")),
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                     require(
@@ -277,8 +272,12 @@ impl PreparedReport {
     pub fn condition_sha256(&self) -> &str {
         &self.condition_sha256
     }
-    pub fn payload_bytes(&self) -> u64 {
-        self.payload.iter().map(|p| p.size).sum()
+    pub fn payload_bytes(&self) -> Result<u64> {
+        self.payload.iter().try_fold(0u64, |total, p| {
+            total
+                .checked_add(p.size)
+                .ok_or_else(|| invalid("exe_manifest_invalid"))
+        })
     }
     /// Content identity follows the Rust UTF-8 canonical contract, not worker report encoding.
     pub fn content_id(
@@ -316,9 +315,9 @@ impl PreparedReport {
         if cancel.load(Ordering::Relaxed) {
             return Err(invalid("download_cancelled"));
         }
-        if let Some(f) = game.failures().first() {
-            return Err(invalid(f.code.clone()));
-        }
+        // Unrelated fact-collection failures no longer block wholesale (design
+        // D06). The concrete preconditions below (instance identity/dir, baselines,
+        // payload hashes) are the real gates.
         require(
             game.instance.install_path.is_absolute()
                 && super::zip_recipe::no_links(&game.instance.install_path)
@@ -593,10 +592,7 @@ pub fn validate_response(
     exe_size: u64,
 ) -> Result<PreparedReport> {
     hash(exe_sha256)?;
-    require(
-        exe_size > 0 && exe_size <= MAX_PAYLOAD_BYTES,
-        "exe_size_limit",
-    )?;
+    require(exe_size > 0, "exe_size_limit")?;
     bounded_json(response, 0, &mut 1_000_000usize)?;
     require(
         serde_json::to_vec(response)
@@ -785,7 +781,7 @@ pub fn validate_response(
         .as_array()
         .ok_or_else(|| invalid("exe_worker_invalid_response"))?;
     require(
-        !rows.is_empty() && rows.len() <= MAX_NODES,
+        !rows.is_empty() && rows.len() <= u16::MAX as usize,
         "exe_manifest_invalid",
     )?;
     let mut payload = Vec::new();
@@ -798,8 +794,7 @@ pub fn validate_response(
         relative_path(path)?;
         let size = uint(row, "unpacked_size")?;
         require(
-            size <= MAX_PAYLOAD_BYTES
-                && uint(&row["payload"], "size")? == size
+            uint(&row["payload"], "size")? == size
                 && uint(&row["payload"], "crc32")? == uint(row, "crc32")?
                 && uint(row, "crc32")? <= u32::MAX as u64,
             "exe_manifest_invalid",
@@ -817,8 +812,7 @@ pub fn validate_response(
             .checked_add(size)
             .ok_or_else(|| invalid("exe_manifest_invalid"))?;
         require(
-            total <= MAX_PAYLOAD_BYTES
-                && paths.insert(path.nfc().default_case_fold().collect::<String>()),
+            paths.insert(path.nfc().default_case_fold().collect::<String>()),
             "exe_manifest_invalid",
         )?;
         let parts: Vec<_> = path.split('/').collect();
@@ -1082,7 +1076,7 @@ mod tests {
                 buildid: Some("1".into()),
             }),
             build: Fact::evidence(BuildFacts {
-                buildid: "1".into(),
+                buildid: Some("1".into()),
                 verified: false,
             }),
             language: Fact::evidence(LanguageFacts {
@@ -1413,7 +1407,6 @@ mod reinstall_tests {
             request_id: None,
             facts: g.clone(),
             now: 1,
-            ttl_seconds: 900,
         })
         .unwrap()
     }

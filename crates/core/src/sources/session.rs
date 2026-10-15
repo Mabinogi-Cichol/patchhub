@@ -12,13 +12,11 @@ use super::model::{
 };
 use super::registry::{self, SourceRegistry};
 use super::{
-    invalid, official_subbudget, Result, OFFICIAL_SUBDEADLINE, PARSER_VERSION, QUERY_VERSION,
-    SOURCES_ENCODING_VERSION,
+    invalid, Result, PARSER_VERSION, QUERY_VERSION, SOURCES_ENCODING_VERSION,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Instant;
 
 /// Capability negotiation payload (`get_capabilities`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -73,8 +71,8 @@ pub fn capabilities() -> Capabilities {
 }
 
 /// `discover_game`: validate, resolve effective rules, short-circuit fresh cache,
-/// then dispatch each pending rule through one shared budget/deadline and
-/// compare-and-publish the commit.
+/// then traverse each pending rule's queued work and publish through the normal
+/// commit path.
 pub fn discover_game(
     registry: &mut SourceRegistry,
     ctx: &mut RequestContext,
@@ -120,8 +118,6 @@ pub fn discover_game(
         return Ok(registry.cached_discovery(game));
     }
 
-    let captured = registry.settings_revision();
-    let mut stale = false;
     let mut diagnostics: Vec<Diagnostic> = Vec::new();
 
     let official_rules: Vec<SourceRule> = rules
@@ -151,15 +147,7 @@ pub fn discover_game(
             .map(|c| c.source_page.clone())
             .collect();
         let input = discover_previous(registry, rule, game.appid, pages);
-        // Keep most of the single-game deadline/budget for the fallback pass
-        // (design §0 `OFFICIAL_SUBDEADLINE` / `OFFICIAL_SUBBUDGET`).
-        let deadline = ctx.deadline;
-        let budget = ctx.budget;
-        ctx.deadline = deadline.min(Instant::now() + OFFICIAL_SUBDEADLINE);
-        ctx.budget = official_subbudget(budget, ctx.requests);
         let outcome = adapters::discover(rule, &query, ctx, &input);
-        ctx.deadline = deadline;
-        ctx.budget = budget;
         match outcome {
             Ok(outcome) => results.push((rule.clone(), outcome)),
             Err(error) => diagnostics.push(Diagnostic {
@@ -343,31 +331,22 @@ pub fn discover_game(
             queries: None,
             query_cache: None,
         };
-        match registry.commit_if_revision(rule, game.appid, result, &previous, &key, captured) {
-            Ok(true) => {}
-            Ok(false) => {
-                stale = true;
-                break;
-            }
-            Err(error) => diagnostics.push(Diagnostic {
+        if let Err(error) = registry.commit(rule, game.appid, result, &previous, &key) {
+            diagnostics.push(Diagnostic {
                 source_id: Some(rule.id.clone()),
                 code: error.to_string(),
                 detail: None,
-            }),
+            });
         }
     }
 
     let mut discovery = registry.cached_discovery(game);
-    if stale {
-        discovery.status = "stale".to_string();
-    } else {
-        discovery.status = match discovery.status.as_str() {
-            "cache_complete" => "complete",
-            "cache_partial" => "partial",
-            other => other,
-        }
-        .to_string();
+    discovery.status = match discovery.status.as_str() {
+        "cache_complete" => "complete",
+        "cache_partial" => "partial",
+        other => other,
     }
+    .to_string();
     discovery.diagnostics.extend(diagnostics);
     Ok(discovery)
 }
@@ -593,9 +572,32 @@ fn link_index_provenance(
 /// scan stops early and returns the results already produced.
 pub fn scan_sources(
     registry: &mut SourceRegistry,
+    make_ctx: impl FnMut() -> Result<RequestContext>,
+    games: &[GameQuery],
+    force: bool,
+    cancel: &AtomicBool,
+    on_event: impl FnMut(&ScanEvent),
+) -> Result<Vec<GameDiscovery>> {
+    scan_sources_with_query(
+        registry,
+        make_ctx,
+        games,
+        force,
+        &[],
+        None,
+        cancel,
+        on_event,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn scan_sources_with_query(
+    registry: &mut SourceRegistry,
     mut make_ctx: impl FnMut() -> Result<RequestContext>,
     games: &[GameQuery],
     force: bool,
+    name_hints: &[String],
+    language: Option<&str>,
     cancel: &AtomicBool,
     mut on_event: impl FnMut(&ScanEvent),
 ) -> Result<Vec<GameDiscovery>> {
@@ -618,7 +620,9 @@ pub fn scan_sources(
         }
         crate::operation::check()?;
         let mut ctx = make_ctx()?;
-        let discovery = match discover_game(registry, &mut ctx, game, &[], None, force, cancel) {
+        let discovery = match discover_game(
+            registry, &mut ctx, game, name_hints, language, force, cancel,
+        ) {
             Ok(discovery) => discovery,
             Err(error) => GameDiscovery {
                 status: "failed".to_string(),
@@ -817,13 +821,8 @@ mod tests {
         SourceRegistry::load_with_clock(store, rules, Box::new(FakeClock::new(now))).unwrap()
     }
 
-    fn context(fake: &Arc<FakeFetcher>, budget: u32) -> RequestContext {
-        RequestContext::with_settings(
-            Box::new(Arc::clone(fake)),
-            budget,
-            Duration::from_secs(30),
-            Duration::ZERO,
-        )
+    fn context(fake: &Arc<FakeFetcher>) -> RequestContext {
+        RequestContext::with_settings(Box::new(Arc::clone(fake)), Duration::ZERO)
     }
 
     fn empty_index() -> FetchResponse {
@@ -891,7 +890,7 @@ mod tests {
             .unwrap();
 
         let fake = Arc::new(FakeFetcher::new());
-        let mut ctx = context(&fake, 24);
+        let mut ctx = context(&fake);
         let discovery = discover_game(
             &mut registry,
             &mut ctx,
@@ -924,7 +923,7 @@ mod tests {
 
         let fake = Arc::new(FakeFetcher::new());
         fake.push(empty_index());
-        let mut ctx = context(&fake, 24);
+        let mut ctx = context(&fake);
         let discovery = discover_game(
             &mut registry,
             &mut ctx,
@@ -940,12 +939,13 @@ mod tests {
     }
 
     #[test]
-    fn budget_is_shared_across_rules() {
+    fn all_rules_traverse_without_budget_exhaustion() {
         let temp = tempfile::tempdir().unwrap();
         let mut registry = registry_at(temp.path(), vec![kagura_rule(), hgamer_rule()], 1000);
         let fake = Arc::new(FakeFetcher::new());
         fake.push(empty_index());
-        let mut ctx = context(&fake, 1);
+        fake.push(empty_index());
+        let mut ctx = context(&fake);
         let discovery = discover_game(
             &mut registry,
             &mut ctx,
@@ -956,10 +956,13 @@ mod tests {
             &AtomicBool::new(false),
         )
         .unwrap();
-        assert!(discovery
+        // Both the publisher and the fallback rule were queried; the shared
+        // context no longer stops at a request count.
+        assert!(fake.call_count() >= 2, "both rules must be traversed");
+        assert!(!discovery
             .diagnostics
             .iter()
-            .any(|diagnostic| diagnostic.code == "discovery_budget_exhausted"));
+            .any(|diagnostic| diagnostic.code.contains("budget")));
     }
 
     #[test]
@@ -967,7 +970,7 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let mut registry = registry_at(temp.path(), vec![hgamer_rule()], 1000);
         let fake = Arc::new(FakeFetcher::new());
-        let mut ctx = context(&fake, 24);
+        let mut ctx = context(&fake);
         let mut game = game(42, "Game");
         game.localized_name = Some("LocalizedName".to_string());
         discover_game(
@@ -989,28 +992,27 @@ mod tests {
     }
 
     #[test]
-    fn stale_revision_never_publishes() {
+    fn unrelated_settings_revision_does_not_block_publication() {
         let temp = tempfile::tempdir().unwrap();
         let mut registry = registry_at(temp.path(), vec![kagura_rule()], 1000);
         let rule = registry.rules()[0].clone();
-        let captured = registry.settings_revision();
+        // A global settings revision change (another source/game) must not veto
+        // publishing this query's own results.
         registry.store().bump_revision().unwrap();
-        let published = registry
-            .commit_if_revision(
+        registry
+            .commit(
                 &rule,
                 42,
                 complete_record(),
                 &DiscoveryRecord::default(),
                 "k",
-                captured,
             )
             .unwrap();
-        assert!(!published);
         assert!(registry
             .store()
             .load_discovery(&rule.id, 42)
             .unwrap()
-            .is_none());
+            .is_some());
     }
 
     #[test]
@@ -1018,7 +1020,7 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let mut registry = registry_at(temp.path(), vec![kagura_rule()], 1000);
         let fake = Arc::new(FakeFetcher::new());
-        let mut ctx = context(&fake, 24);
+        let mut ctx = context(&fake);
         let error = discover_game(
             &mut registry,
             &mut ctx,
@@ -1043,7 +1045,7 @@ mod tests {
         let mut events = Vec::new();
         let results = scan_sources(
             &mut registry,
-            || Ok(context(&fake, 24)),
+            || Ok(context(&fake)),
             &games,
             false,
             &AtomicBool::new(false),
@@ -1088,7 +1090,7 @@ mod tests {
             final_url: "https://example.com/list".to_string(),
             ..FetchResponse::default()
         });
-        let mut ctx = context(&fake, 24);
+        let mut ctx = context(&fake);
         let status = registry
             .refresh_source(&rule, true, &mut ctx, &AtomicBool::new(false))
             .unwrap();
@@ -1106,7 +1108,7 @@ mod tests {
                 .push(("Retry-After".to_string(), "0".to_string()));
             failing.push(response);
         }
-        let mut ctx = context(&failing, 24);
+        let mut ctx = context(&failing);
         let status = registry
             .refresh_source(&rule, true, &mut ctx, &AtomicBool::new(false))
             .unwrap();

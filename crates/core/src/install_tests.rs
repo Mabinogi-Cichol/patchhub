@@ -295,6 +295,15 @@ impl Fixture {
         )
         .unwrap();
     }
+    fn journal(&self, id: &str) -> serde_json::Value {
+        let db = rusqlite::Connection::open(self.state.join("journal.sqlite")).unwrap();
+        let text: String = db
+            .query_row("SELECT document FROM jobs WHERE id=?1", [id], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        serde_json::from_str(&text).unwrap()
+    }
     fn assert_original(&self) {
         assert_eq!(
             fs::read(self.game.join("original.dat")).unwrap(),
@@ -337,7 +346,7 @@ fn legacy_uninstall_recovery_is_persistent_idempotent_and_preserves_unrelated_fi
 }
 
 #[test]
-fn unmanaged_baseline_conflicts_and_stale_plans_never_write() {
+fn unmanaged_baseline_conflicts_and_blocked_plans_never_write() {
     let f = Fixture::new();
     let plan = f.plan().unwrap();
     fs::write(f.game.join("original.dat"), b"new user bytes").unwrap();
@@ -354,12 +363,13 @@ fn unmanaged_baseline_conflicts_and_stale_plans_never_write() {
     assert!(apply(&blocked.plan_id, &f.state).is_err());
     f.edit_journal(&plan.plan_id, |j| {
         j["plan"]["created_at"] = 1.into();
-        j["plan"]["expires_at"] = 2.into();
     });
+    // The recorded plan time is diagnostic only: a legal plan is never rejected
+    // by age, only by its real baseline/blocker conditions.
     assert!(apply(&plan.plan_id, &f.state)
         .unwrap_err()
         .to_string()
-        .contains("plan_expired"));
+        .contains("file_changed"));
 }
 
 #[test]
@@ -841,9 +851,9 @@ fn legacy_committed_uninstall_intent_is_recovered() {
 }
 
 #[test]
-fn fixed_ntfs_timestamps_are_ignored_but_other_ntfs_metadata_is_rejected() {
+fn ntfs_reserved_values_are_ignored_and_decoder_boundaries_remain_enforced() {
     for case in 0..5 {
-        let safe = case == 0;
+        let safe = case == 0 || case == 2;
         let mut f = Fixture::new();
         let mut timestamps = vec![0u8; 32];
         timestamps[4] = 1;
@@ -1534,4 +1544,238 @@ fn manual_backup_cleanup_keeps_journal_and_recovery_reports_missing_original() {
         b"patched bytes"
     );
     assert!(f.job_file(&plan.plan_id, "0.stage").exists());
+}
+
+fn archive_task_plan(f: &Fixture, id: &str) -> std::io::Result<InstallPlan> {
+    let game = steam::scan(std::slice::from_ref(&f.library))
+        .installs
+        .remove(0);
+    prepare_for_request_at(
+        &f.state,
+        &game,
+        &f.release,
+        &f.archive,
+        1,
+        InstallOperation::Install,
+        None,
+        None,
+        Some(id),
+    )
+}
+
+#[test]
+fn archive_backed_task_has_no_stage_and_commits_verified_members() {
+    let f = Fixture::new();
+    let plan = archive_task_plan(&f, "archive-success").unwrap();
+    assert!(!f.job_file(&plan.plan_id, "0.stage").exists());
+    assert!(!f.job_file(&plan.plan_id, "1.stage").exists());
+    assert!(plan
+        .space_budget
+        .as_ref()
+        .unwrap()
+        .target_peak_bytes
+        .is_some());
+    assert_eq!(apply(&plan.plan_id, &f.state).unwrap().state, "committed");
+    assert_eq!(
+        fs::read(f.game.join("original.dat")).unwrap(),
+        b"patched bytes"
+    );
+    assert_eq!(
+        fs::read(f.game.join("content/new.dat")).unwrap(),
+        b"new bytes"
+    );
+    assert!(!f.job_file(&plan.plan_id, "0.backup").exists());
+}
+
+#[test]
+fn archive_backed_task_rejects_changed_source_before_overwriting_game() {
+    let f = Fixture::new();
+    let plan = archive_task_plan(&f, "archive-tamper").unwrap();
+    fs::write(&f.archive, b"replaced source").unwrap();
+    let tx = apply(&plan.plan_id, &f.state).unwrap();
+    assert_eq!(tx.state, "rolled_back", "{:?}", tx.error);
+    assert!(tx.error.unwrap().contains("archive_source_changed"));
+    f.assert_original();
+}
+
+#[test]
+fn archive_backed_partial_member_cancellation_restores_without_stage() {
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    };
+    use steam_patch_core::operation;
+    let mut f = Fixture::new();
+    let patched = vec![2u8; 1024 * 1024];
+    f.release.recipe.as_mut().unwrap().files[0].installed_sha256 = hash(&patched);
+    f.archive_with(&[("replace.dat", &patched), ("add.dat", b"new bytes")]);
+    let plan = archive_task_plan(&f, "archive-cancel").unwrap();
+    let cancel = Arc::new(AtomicBool::new(false));
+    let signal = cancel.clone();
+    let tx = operation::run(
+        cancel,
+        move |p| {
+            if p.stage == "writing" && p.bytes_done > 0 && p.bytes_done < p.total_bytes.unwrap_or(0)
+            {
+                signal.store(true, Ordering::Relaxed);
+            }
+        },
+        || apply(&plan.plan_id, &f.state),
+    )
+    .unwrap();
+    assert_eq!(tx.state, "rolled_back", "{:?}", tx.error);
+    f.assert_original();
+    assert!(!f.job_file(&plan.plan_id, "0.stage").exists());
+    assert!(fs::read_dir(&f.game).unwrap().all(|p| !p
+        .unwrap()
+        .path()
+        .to_string_lossy()
+        .ends_with(".tmp")));
+}
+
+#[test]
+fn archive_handoff_crash_before_journal_update_uses_protected_payload() {
+    let f = Fixture::new();
+    let plan = archive_task_plan(&f, "archive-handoff-crash").unwrap();
+    let owned = f.job_file(&plan.plan_id, "payload.zip");
+    fs::rename(&f.archive, &owned).unwrap();
+    // Journal still names the vanished worker output: recovery finds only the
+    // deterministic owned path and still authenticates its full digest.
+    assert_eq!(apply(&plan.plan_id, &f.state).unwrap().state, "committed");
+    assert!(!owned.exists());
+}
+
+#[test]
+fn external_local_zip_is_adopted_into_managed_plan_archive() {
+    let f = Fixture::new();
+    let plan = archive_task_plan(&f, "external-copy").unwrap();
+    adopt_external_plan_archive_at(&f.state, &plan.plan_id).unwrap();
+    let journal = f.journal(&plan.plan_id);
+    assert_eq!(journal["archive_source"]["managed"], serde_json::json!(true));
+    let recorded = PathBuf::from(journal["archive_source"]["path"].as_str().unwrap());
+    assert_eq!(recorded.file_name().unwrap(), "payload.zip");
+    let managed = f.job_file(&plan.plan_id, "payload.zip");
+    assert!(managed.exists());
+    // The user's file is copied, not consumed, and the journal no longer
+    // depends on it: deleting the original does not break apply.
+    assert!(f.archive.exists());
+    fs::remove_file(&f.archive).unwrap();
+    assert_eq!(apply(&plan.plan_id, &f.state).unwrap().state, "committed");
+    assert_eq!(
+        fs::read(f.game.join("original.dat")).unwrap(),
+        b"patched bytes"
+    );
+    assert_eq!(
+        fs::read(f.game.join("content/new.dat")).unwrap(),
+        b"new bytes"
+    );
+    assert!(!managed.exists());
+}
+
+#[test]
+fn external_local_zip_recovery_uses_managed_copy_after_source_deleted() {
+    let f = Fixture::new();
+    let plan = archive_task_plan(&f, "external-recovery").unwrap();
+    adopt_external_plan_archive_at(&f.state, &plan.plan_id).unwrap();
+    fs::remove_file(&f.archive).unwrap();
+    // Model a crash mid-write: a strict prefix temp plus a writing intent.
+    let temp = f.temp_file(&plan.plan_id, 0, "original.dat");
+    fs::write(&temp, b"pat").unwrap();
+    f.edit_journal(&plan.plan_id, |j| {
+        j["transaction"]["state"] = "applying".into();
+        j["progress"] = serde_json::json!(["writing", "backed_up"]);
+    });
+    assert_eq!(recover(&f.state).unwrap()[0].state, "rolled_back");
+    assert!(!temp.exists());
+    f.assert_original();
+}
+
+#[test]
+fn missing_managed_archive_reports_named_diagnostic() {
+    let f = Fixture::new();
+    let plan = archive_task_plan(&f, "external-missing").unwrap();
+    adopt_external_plan_archive_at(&f.state, &plan.plan_id).unwrap();
+    fs::remove_file(f.job_file(&plan.plan_id, "payload.zip")).unwrap();
+    let tx = apply(&plan.plan_id, &f.state).unwrap();
+    assert_ne!(tx.state, "committed");
+    let error = tx.error.unwrap();
+    assert!(error.contains("archive_source_missing"), "{error}");
+    assert!(!error.contains("archive_source_changed"), "{error}");
+    f.assert_original();
+}
+
+#[test]
+fn external_local_zip_tampered_before_adoption_is_rejected() {
+    let f = Fixture::new();
+    let plan = archive_task_plan(&f, "external-tamper").unwrap();
+    fs::write(&f.archive, b"replaced source").unwrap();
+    let error = adopt_external_plan_archive_at(&f.state, &plan.plan_id).unwrap_err();
+    assert!(
+        error.to_string().contains("archive_source_changed"),
+        "{error}"
+    );
+    assert!(!f.job_file(&plan.plan_id, "payload.zip").exists());
+}
+
+#[test]
+fn cache_cleanup_retains_unfinished_archive_source_and_releases_terminal_cache() {
+    use steam_patch_core::installer::{self, cache::CacheService, service::ValidatedHostContext};
+    let f = Fixture::new();
+    let platform = if cfg!(windows) {
+        Platform::Windows
+    } else {
+        Platform::Steamos
+    };
+    let host =
+        ValidatedHostContext::new(&f.state, std::slice::from_ref(&f.library), platform).unwrap();
+    let paths = host.installer_paths();
+    installer::init_atomic(&paths).unwrap();
+    let archive = paths.downloads_dir().join("retained.zip");
+    fs::copy(&f.archive, &archive).unwrap();
+    let game = steam::scan(std::slice::from_ref(&f.library))
+        .installs
+        .remove(0);
+    let plan = prepare_for_request_at(
+        paths.root(),
+        &game,
+        &f.release,
+        &archive,
+        1,
+        InstallOperation::Install,
+        None,
+        None,
+        Some("retained-archive"),
+    )
+    .unwrap();
+    CacheService::new(&host).cleanup().unwrap();
+    assert!(
+        archive.exists(),
+        "unfinished journal still needs this package for recovery"
+    );
+    assert_eq!(
+        apply_at(paths.root(), &plan.plan_id).unwrap().state,
+        "committed"
+    );
+    CacheService::new(&host).cleanup().unwrap();
+    assert!(!archive.exists());
+}
+
+#[test]
+fn lossless_cp437_member_names_use_the_same_recipe_and_transaction_policy() {
+    let mut f = Fixture::new();
+    f.archive_with(&[("a.dat", b"patched bytes"), ("add.dat", b"new bytes")]);
+    let mut bytes = fs::read(&f.archive).unwrap();
+    let mut replaced = 0;
+    for at in 0..bytes.len().saturating_sub(4) {
+        if &bytes[at..at + 5] == b"a.dat" {
+            bytes[at] = 0x82; // standard unflagged CP437 e-acute
+            replaced += 1;
+        }
+    }
+    assert_eq!(replaced, 2);
+    fs::write(&f.archive, bytes).unwrap();
+    f.rehash_archive();
+    f.release.recipe.as_mut().unwrap().files[0].source = "é.dat".into();
+    let plan = archive_task_plan(&f, "cp437-archive").unwrap();
+    assert_eq!(apply(&plan.plan_id, &f.state).unwrap().state, "committed");
 }

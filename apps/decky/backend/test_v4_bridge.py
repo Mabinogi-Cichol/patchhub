@@ -1,4 +1,4 @@
-"""Protocol-v4 lease, transport, identity and terminal-outcome regression tests."""
+"""Protocol-v4 transport, identity and terminal-outcome regression tests."""
 import asyncio
 import json
 from pathlib import Path
@@ -19,15 +19,12 @@ class Peer:
         self.request = None
         self.lines = []
         self.cancelled = asyncio.Event()
-        self.renewed = asyncio.Event()
         self.finished = asyncio.Event()
 
     def write(self, data):
         self.lines.append(data)
         if self.request is None:
             self.request = json.loads(data)
-        elif data == b"renew\n":
-            self.renewed.set()
         elif data == b"cancel\n":
             self.cancelled.set()
 
@@ -57,14 +54,15 @@ class V4BridgeTests(unittest.IsolatedAsyncioTestCase):
         self.bridge = CoreBridge(binary, binary)
         self.bridge._preflight_done = True
 
-    async def test_renew_control_continues_until_cancel_and_receipt_drains(self):
+    async def test_control_cancel_continues_until_receipt_drains(self):
         peer = Peer()
         task = Task("install", {})
         token = current_task.set(task)
         try:
-            with patch("bridge.asyncio.create_subprocess_exec", return_value=peer), patch("bridge.RENEW_SECONDS", .01):
+            with patch("bridge.asyncio.create_subprocess_exec", return_value=peer):
                 pending = asyncio.create_task(self.bridge.install_patch("local", selection_id="exe-selection-aaaaaaaaaaaaaaaaaaaaaaaa-1", request_id="same", operation="overwrite"))
-                await asyncio.wait_for(peer.renewed.wait(), 1)
+                while peer.request is None:
+                    await asyncio.sleep(0)
                 self.assertEqual(peer.request["request_id"], "same")
                 self.assertNotIn("request_id", peer.request["params"])
                 self.assertEqual(peer.request["params"]["cleanup_policy"], "disabled")
@@ -95,13 +93,16 @@ class V4BridgeTests(unittest.IsolatedAsyncioTestCase):
             peer.finish({"state": "committed"})
             await pending
 
-    async def test_ui_lease_expiry_controls_renewal_not_background_bridge(self):
-        manager = TaskManager(lease_seconds=.03)
+    async def test_task_cancel_controls_background_bridge(self):
+        manager = TaskManager()
         peer = Peer()
         async def work(task):
             return await self.bridge.install_patch("local", release_id="signed", operation="overwrite")
-        with patch("bridge.asyncio.create_subprocess_exec", return_value=peer), patch("bridge.RENEW_SECONDS", .01):
+        with patch("bridge.asyncio.create_subprocess_exec", return_value=peer):
             task = manager.get(manager.start("install", work)["task_id"])
+            while peer.request is None:
+                await asyncio.sleep(0)
+            task.request_cancel()
             await asyncio.wait_for(peer.cancelled.wait(), 1)
             self.assertTrue(task.cancel.is_set())
             self.assertFalse(task.worker.done())
@@ -165,7 +166,7 @@ class V4BridgeTests(unittest.IsolatedAsyncioTestCase):
                 peer = TailPeer(mode)
                 pending_call = None
                 try:
-                    with patch("bridge.asyncio.create_subprocess_exec", return_value=peer), patch("bridge.TERMINAL_DRAIN_SECONDS", .02), patch("bridge.TERMINAL_DRAIN_BYTES", 1024), patch("bridge.RENEW_SECONDS", .001):
+                    with patch("bridge.asyncio.create_subprocess_exec", return_value=peer), patch("bridge.TERMINAL_DRAIN_SECONDS", .02), patch("bridge.TERMINAL_DRAIN_BYTES", 1024):
                         with self.assertLogs("bridge", level="WARNING") as captured:
                             pending_call = asyncio.create_task(self.bridge.install_patch("local", "signed", operation="overwrite"))
                             completed, _ = await asyncio.wait({pending_call}, timeout=.5)
@@ -177,7 +178,6 @@ class V4BridgeTests(unittest.IsolatedAsyncioTestCase):
                         self.assertEqual(peer.kill_calls, 0)
                         self.assertEqual(len(peer.lines), 1)
                         self.assertFalse(peer.cancelled.is_set())
-                        self.assertFalse(peer.renewed.is_set())
                         self.assertTrue(self.bridge._terminal_observers)
                         self.assertTrue(all(0 < size <= 65536 for size in peer.stdout.read_sizes))
                 finally:

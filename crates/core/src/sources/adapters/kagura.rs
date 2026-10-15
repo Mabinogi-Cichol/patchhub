@@ -47,7 +47,7 @@ impl Adapter for KaguraAdapter {
     }
 }
 
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq, serde::Serialize)]
 struct IndexItem {
     title: String,
     page: String,
@@ -247,7 +247,16 @@ fn official(
                         }
                     }
                 }
-                merged.truncate(4096);
+                // Full index data is stored separately from a per-game result.
+                // Never silently truncate the record containing a later DLC.
+                if serde_json::to_vec(&merged).map_or(true, |v| {
+                    v.len() as u64 > super::super::MAX_DISCOVERY_INDEX_BYTES
+                }) {
+                    diagnostics.push("discovery_index_resource_limit_incomplete".into());
+                    // Preserve the last bounded index and the unvisited page.
+                    pages.push(url.clone());
+                    break;
+                }
                 records = merged;
 
                 if let Some(next) = next_page(&root, &final_url) {
@@ -383,11 +392,7 @@ fn official(
             Err(e) => {
                 diagnostics.push(e.to_string());
                 retry.push(task);
-                if ctx.requests >= ctx.budget || std::time::Instant::now() >= ctx.deadline {
-                    break;
-                } else {
-                    continue;
-                }
+                continue;
             }
         };
         if task.kind == "category" {
@@ -801,12 +806,7 @@ mod tests {
     }
 
     fn context(fake: &Arc<FakeFetcher>) -> RequestContext {
-        RequestContext::with_settings(
-            Box::new(Arc::clone(fake)),
-            20,
-            Duration::from_secs(30),
-            Duration::ZERO,
-        )
+        RequestContext::with_settings(Box::new(Arc::clone(fake)), Duration::ZERO)
     }
 
     const INDEX: &str = r#"<html><body>
@@ -1174,11 +1174,17 @@ mod tests {
         .is_empty());
     }
     #[test]
-    fn budget_checkpoint_resumes_missing_dlc_before_repeating_base() {
+    fn checkpoint_resumes_missing_dlc_before_repeating_base() {
         let fake = Arc::new(FakeFetcher::new());
         fake.push(response(SUMMER_BASE, "https://kagurafan.com/base/"));
+        // The DLC page is unavailable this pass; traversal must stop with the
+        // unfinished work preserved in a checkpoint, not by a request budget.
+        fake.push(FetchResponse {
+            status: 404,
+            final_url: "https://kagurafan.com/dlc/".to_string(),
+            ..FetchResponse::default()
+        });
         let mut ctx = context(&fake);
-        ctx.budget = 1;
         let q = query(1227890, "夏日狂想曲：乡间的难忘回忆");
         let mut previous = summer_previous(true);
         previous.index.as_mut().unwrap().records.clear();

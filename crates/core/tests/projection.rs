@@ -175,7 +175,6 @@ fn records(
         release_id: t.release_id.clone(),
         catalog_revision: 0,
         created_at: time,
-        expires_at: time + 900,
         install: game.clone(),
         changes: vec![PlannedChange {
             path: path.into(),
@@ -311,7 +310,9 @@ fn frozen_subscriptions_and_shared_stale_codes() {
         .set_game_source(42, "kagura-cn", true)
         .unwrap();
     drop(handle);
-    let stale = load(&state, &steam, now + sources::DISCOVERY_SUCCESS_TTL + 1);
+    // Advance well past the old 6h source TTL: time no longer expires a
+    // subscription or invalidates the live selection (design D08/S04).
+    let stale = load(&state, &steam, now + 6 * 3600 + 1);
     let row = project_instance(
         &inputs(&steam, &c, Some(&stale), &tx, &caps, &cancel),
         &steam.installs[0].instance_id,

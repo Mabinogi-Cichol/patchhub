@@ -190,20 +190,20 @@ impl WorkerRuntime {
     ) -> Result<WorkerExecution, IsolationError> {
         cancelled(cancel)?;
         let descriptor = sf::parse_descriptor(raw).map_err(|e| err("descriptor", e.0))?;
-        let (hash, size, seconds, convert) = match &descriptor {
+        let (hash, size, convert) = match &descriptor {
             sf::Descriptor::Analyze {
                 exe_sha256,
                 exe_size,
-            } => (exe_sha256, *exe_size, 180, false),
+            } => (exe_sha256, *exe_size, false),
             sf::Descriptor::AnalyzeBehavior {
                 exe_sha256,
                 exe_size,
-            } => (exe_sha256, *exe_size, 240, false),
+            } => (exe_sha256, *exe_size, false),
             sf::Descriptor::ConvertBehavior {
                 exe_sha256,
                 exe_size,
                 ..
-            } => (exe_sha256, *exe_size, 480, true),
+            } => (exe_sha256, *exe_size, true),
         };
         no_links(archive)?;
         no_links(&self.worker_exe)?;
@@ -238,10 +238,26 @@ impl WorkerRuntime {
         cfg.environment = Some(Vec::new());
         cfg.limits.process_memory_bytes = Some(3 * 1024 * 1024 * 1024);
         cfg.limits.job_memory_bytes = cfg.limits.process_memory_bytes;
+        // File-backed mappings consume address space but are not a whole-file
+        // heap allocation. Linux RLIMIT_AS must include the actual input map.
+        cfg.limits.address_space_bytes = Some(
+            size.checked_add(3 * 1024 * 1024 * 1024)
+                .ok_or_else(|| err("limits", "input address-space overflow"))?,
+        );
         cfg.limits.active_process_limit = Some(1);
-        cfg.limits.per_job_user_time_100ns = Some(300 * 10_000_000);
-        cfg.limits.timeout = Some(Duration::from_secs(if probe { 10 } else { seconds }));
-        cfg.limits.file_size_bytes = Some(sf::MAX_ARTIFACT);
+        // Only the probe carries a timeout: it bounds start/no-response of the
+        // capability check. Normal analyze/convert work has no wall-clock or
+        // CPU-time permit (D05); cancellation and real process failure still
+        // terminate it.
+        if probe {
+            cfg.limits.timeout = Some(Duration::from_secs(10));
+        }
+        // No fixed artifact-size permit: the worker writes a STORED ZIP whose
+        // size is bounded by the actual input map (address-space limit), the
+        // real free space of the staging volume, and cancellation. Deriving a
+        // cap from the EXE size would be wrong because STORED members may
+        // expand beyond the compressed input.
+        cfg.limits.file_size_bytes = None;
         #[cfg(windows)]
         let mut profile_guard = ProfileGuard::prepare(&mut cfg, root, &runtime, &input, &output)?;
         #[cfg(target_os = "linux")]
@@ -313,8 +329,8 @@ impl WorkerRuntime {
             let path = output.join("normalized.zip");
             no_links(&path)?;
             let size = fs::metadata(&path).map_err(|e| ioerr("artifact", e))?.len();
-            if size > sf::MAX_ARTIFACT || response["artifact_size"].as_u64() != Some(size) {
-                return Err(err("artifact", "artifact size mismatch/limit"));
+            if response["artifact_size"].as_u64() != Some(size) {
+                return Err(err("artifact", "artifact size mismatch"));
             }
             let mut f = File::open(&path).map_err(|e| ioerr("artifact", e))?;
             let hash = hash_reader(&mut f, cancel)?;
@@ -325,6 +341,11 @@ impl WorkerRuntime {
         } else {
             None
         };
+        // The sandbox has terminated and its profile/handles are closed. Keep
+        // the output owner alive, but release the duplicate input and runtime.
+        // A cleanup failure must not discard an otherwise verified artifact;
+        // the directory owner retries on drop and free-space checks see reality.
+        directory.release_inputs();
         Ok(WorkerExecution {
             response,
             artifact,
@@ -497,6 +518,23 @@ struct InvocationDirectory {
     _lock: File,
 }
 impl InvocationDirectory {
+    fn release_inputs(&self) {
+        for name in ["input", "runtime"] {
+            let path = self.path().join(name);
+            if no_links(&path).is_err() {
+                continue;
+            }
+            #[cfg(target_os = "linux")]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                if fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).is_err() {
+                    continue;
+                }
+            }
+            // Fixed host-created directories; no worker-selected cleanup paths.
+            let _ = fs::remove_dir_all(path);
+        }
+    }
     fn path(&self) -> &Path {
         self.directory.path()
     }

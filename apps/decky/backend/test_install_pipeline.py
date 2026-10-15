@@ -63,10 +63,10 @@ class InstallPipelineTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(RuntimeError, "plugin_startup_failed"):
             await plugin.list_tasks()
 
-    async def test_public_status_renews_foreground_but_task_list_does_not(self):
+    async def test_public_status_and_task_list_report_running_without_lease(self):
         import asyncio
         plugin = module.Plugin()
-        plugin.tasks = module.TaskManager(lease_seconds=60)
+        plugin.tasks = module.TaskManager()
         finish = asyncio.Event()
         async def work(task):
             await finish.wait()
@@ -74,12 +74,9 @@ class InstallPipelineTests(unittest.IsolatedAsyncioTestCase):
             return {"disposition": "completed", "state": "committed"}
         task = plugin.tasks.get(plugin.tasks.start("install", work)["task_id"])
         try:
-            task.lease -= 5
-            previous = task.lease
             await plugin.list_tasks()
-            self.assertEqual(task.lease, previous)
             self.assertEqual((await plugin.task_status(task.value["task_id"]))["state"], "running")
-            self.assertGreater(task.lease, previous)
+            self.assertFalse(task.cancel.is_set())
         finally:
             task.request_cancel()
             finish.set()

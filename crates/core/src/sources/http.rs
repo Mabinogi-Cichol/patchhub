@@ -1,12 +1,12 @@
 //! Bounded public-HTML fetching: a [`Fetcher`] trait with a real
-//! [`ReqwestFetcher`] plus the [`RequestContext`] budget / deadline / throttle /
-//! retry / redirect policy ported from `discovery.py` (P2 network foundation).
+//! [`ReqwestFetcher`] plus the [`RequestContext`] throttle / retry / redirect /
+//! cookie policy ported from `discovery.py` (P2 network foundation).
 //!
 //! This layer never downloads patches or executes page scripts: it only reads
 //! bounded public metadata, rejects unsafe hops, and decodes the body to text.
 
 use super::validate;
-use super::{invalid, Result, DISCOVERY_CONTEXT_DEADLINE, MAX_HTML};
+use super::{invalid, Result, MAX_HTML};
 use reqwest::blocking::Client;
 use reqwest::redirect::Policy;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -454,78 +454,46 @@ impl Fetcher for Arc<FakeFetcher> {
     }
 }
 
-/// One game's shared request budget, including upstream delegation
-/// (discovery.py `RequestContext`; design §6.2).
+/// One game's bounded request context: per-host throttle, response cache,
+/// visited-URL dedup, cookie jar and transient-retry policy (discovery.py
+/// `RequestContext`; design §6.2/§9).
 pub struct RequestContext {
     fetcher: Box<dyn Fetcher>,
-    pub budget: u32,
-    pub deadline: Instant,
     pub interval: Duration,
     pub visited: HashSet<String>,
     pub responses: HashMap<String, FetchResponse>,
     pub last_request: HashMap<String, Instant>,
-    pub requests: u32,
-    pub detail_requests: u32,
     /// Cookies captured from responses and re-sent to matching hosts.
     pub cookies: CookieJar,
 }
 
 impl RequestContext {
-    /// Builds a context with the real HTTPS fetcher (29s deadline, 1s throttle).
-    pub fn new(budget: u32) -> Result<Self> {
+    /// Builds a context with the real HTTPS fetcher (1s throttle).
+    pub fn new() -> Result<Self> {
         let fetcher = Box::new(ReqwestFetcher::new()?);
-        Ok(Self::with_settings(
-            fetcher,
-            budget,
-            DISCOVERY_CONTEXT_DEADLINE,
-            DEFAULT_INTERVAL,
-        ))
+        Ok(Self::with_settings(fetcher, DEFAULT_INTERVAL))
     }
 
     /// Builds a context with an injected fetcher (offline / fixture use).
-    pub fn with_fetcher(fetcher: Box<dyn Fetcher>, budget: u32) -> Self {
-        Self::with_settings(
-            fetcher,
-            budget,
-            DISCOVERY_CONTEXT_DEADLINE,
-            DEFAULT_INTERVAL,
-        )
+    pub fn with_fetcher(fetcher: Box<dyn Fetcher>) -> Self {
+        Self::with_settings(fetcher, DEFAULT_INTERVAL)
     }
 
-    /// Full constructor controlling budget, deadline and per-host interval.
-    pub fn with_settings(
-        fetcher: Box<dyn Fetcher>,
-        budget: u32,
-        deadline: Duration,
-        interval: Duration,
-    ) -> Self {
+    /// Full constructor controlling the per-host interval.
+    pub fn with_settings(fetcher: Box<dyn Fetcher>, interval: Duration) -> Self {
         Self {
             fetcher,
-            budget,
-            deadline: Instant::now() + deadline,
             interval,
             visited: HashSet::new(),
             responses: HashMap::new(),
             last_request: HashMap::new(),
-            requests: 0,
-            detail_requests: 0,
             cookies: CookieJar::default(),
         }
     }
 
-    /// Remaining time before the monotonic deadline (never negative).
-    pub fn remaining(&self) -> Duration {
-        self.deadline.saturating_duration_since(Instant::now())
-    }
-
-    /// Counts a detail-page request against the shared budget (adapters).
-    pub fn note_detail_request(&mut self) {
-        self.detail_requests = self.detail_requests.saturating_add(1);
-    }
-
     /// Fetches `url`, following validated redirect hops. Returns the final
     /// response for any non-transient status (e.g. 304) so adapters can handle
-    /// conditional caching; only transport/transient/budget failures error.
+    /// conditional caching; only transport/transient failures error.
     pub fn fetch(&mut self, url: &str, hosts: &[String]) -> Result<FetchResponse> {
         self.fetch_with(url, hosts, RequestOptions::get(Vec::new()))
     }
@@ -584,8 +552,8 @@ impl RequestContext {
         )
     }
 
-    /// Fetches and requires a 200 HTML body: enforces the 4 MiB cap, challenge
-    /// detection and the final deadline check.
+    /// Fetches and requires a 200 HTML body: enforces the 4 MiB cap and
+    /// challenge detection.
     pub fn fetch_html(&mut self, url: &str, hosts: &[String]) -> Result<String> {
         let response = self.fetch(url, hosts)?;
         if response.status != 200 {
@@ -600,9 +568,6 @@ impl RequestContext {
         }
         if is_challenge(&text) {
             return Err(invalid("discovery_challenge"));
-        }
-        if Instant::now() > self.deadline {
-            return Err(invalid("discovery_budget_exhausted"));
         }
         Ok(text)
     }
@@ -673,7 +638,7 @@ impl RequestContext {
         Err(invalid("discovery_too_many_redirects"))
     }
 
-    /// One logical request (budget + throttle + transport retry), no redirects.
+    /// One logical request (throttle + transport retry), no redirects.
     fn request_once(
         &mut self,
         url: &str,
@@ -683,9 +648,6 @@ impl RequestContext {
         content_type: Option<&str>,
     ) -> Result<FetchResponse> {
         crate::operation::check()?;
-        if self.requests >= self.budget || self.remaining().is_zero() {
-            return Err(invalid("discovery_budget_exhausted"));
-        }
         let host = validate::split_url(url).hostname().unwrap_or_default();
         let wait = self
             .last_request
@@ -693,15 +655,10 @@ impl RequestContext {
             .map(|last| self.interval.saturating_sub(last.elapsed()))
             .unwrap_or(Duration::ZERO);
         if !wait.is_zero() {
-            if wait >= self.remaining() {
-                return Err(invalid("discovery_budget_exhausted"));
-            }
             sleep_interruptible(wait)?;
         }
-        self.requests += 1;
         self.last_request.insert(host.clone(), Instant::now());
 
-        let mut timeout = self.request_timeout();
         let mut headers: Vec<(String, String)> =
             vec![("Accept".to_string(), "text/html".to_string())];
         headers.extend_from_slice(extra);
@@ -717,7 +674,7 @@ impl RequestContext {
                 headers: headers.clone(),
                 body: body.map(|bytes| bytes.to_vec()),
                 content_type: content_type.map(str::to_string),
-                timeout,
+                timeout: REQUEST_TIMEOUT,
             };
             let result = self.fetcher.fetch(&request);
             match result {
@@ -728,39 +685,25 @@ impl RequestContext {
                 }
                 Ok(response) => {
                     self.cookies.store_from_response(url, &response);
-                    if attempt == 1 || self.requests >= self.budget {
+                    if attempt == 1 {
                         return Err(invalid("discovery_retry_exhausted"));
                     }
                     let retry_after = response.header("retry-after").unwrap_or("1");
                     let wait = self.interval.max(parse_retry_after(retry_after));
-                    if wait >= self.remaining() {
-                        return Err(invalid("discovery_retry_deferred"));
-                    }
                     sleep_interruptible(wait)?;
-                    self.requests += 1;
                     self.last_request.insert(host.clone(), Instant::now());
-                    timeout = self.request_timeout();
                 }
                 Err(error) => {
                     if attempt == 1 {
                         return Err(error);
                     }
                     let wait = self.interval.max(Duration::from_secs(1));
-                    if wait >= self.remaining() {
-                        return Err(invalid("discovery_retry_deferred"));
-                    }
                     sleep_interruptible(wait)?;
-                    self.requests += 1;
                     self.last_request.insert(host.clone(), Instant::now());
-                    timeout = self.request_timeout();
                 }
             }
         }
         Err(invalid("discovery_retry_exhausted"))
-    }
-
-    fn request_timeout(&self) -> Duration {
-        self.remaining().min(REQUEST_TIMEOUT)
     }
 }
 
@@ -852,8 +795,7 @@ fn check_encoding(response: &FetchResponse) -> Result<()> {
 fn parse_retry_after(value: &str) -> Duration {
     if let Ok(seconds) = value.trim().parse::<f64>() {
         if seconds.is_finite() && seconds >= 0.0 {
-            // Cap to a value guaranteed representable; anything this large is
-            // already "past the deadline" for every discovery context.
+            // Cap to a value guaranteed representable.
             return Duration::from_secs_f64(seconds.min(1_000_000_000.0));
         }
     }
@@ -976,45 +918,37 @@ mod tests {
         }
     }
 
-    fn context(
-        fake: &Arc<FakeFetcher>,
-        budget: u32,
-        deadline: Duration,
-        interval: Duration,
-    ) -> RequestContext {
-        RequestContext::with_settings(Box::new(Arc::clone(fake)), budget, deadline, interval)
+    fn context(fake: &Arc<FakeFetcher>, interval: Duration) -> RequestContext {
+        RequestContext::with_settings(Box::new(Arc::clone(fake)), interval)
     }
 
     #[test]
-    fn budget_exhaustion_counts_requests() {
+    fn sequential_requests_are_not_capped() {
         let fake = new_fake();
         fake.push(ok(200, b"a"));
         fake.push(ok(200, b"b"));
-        let mut ctx = context(&fake, 1, Duration::from_secs(30), Duration::ZERO);
+        let mut ctx = context(&fake, Duration::ZERO);
         assert_eq!(
             ctx.fetch("https://example.com/a", &hosts()).unwrap().status,
             200
         );
         assert_eq!(
-            ctx.fetch("https://example.com/b", &hosts())
-                .unwrap_err()
-                .to_string(),
-            "discovery_budget_exhausted"
+            ctx.fetch("https://example.com/b", &hosts()).unwrap().status,
+            200
         );
+        assert_eq!(fake.call_count(), 2);
     }
 
     #[test]
-    fn expired_deadline_fails_without_network() {
+    fn request_without_deadline_still_calls_network() {
         let fake = new_fake();
         fake.push(ok(200, b"a"));
-        let mut ctx = context(&fake, 5, Duration::ZERO, Duration::ZERO);
+        let mut ctx = context(&fake, Duration::ZERO);
         assert_eq!(
-            ctx.fetch("https://example.com/a", &hosts())
-                .unwrap_err()
-                .to_string(),
-            "discovery_budget_exhausted"
+            ctx.fetch("https://example.com/a", &hosts()).unwrap().status,
+            200
         );
-        assert_eq!(fake.call_count(), 0);
+        assert_eq!(fake.call_count(), 1);
     }
 
     #[test]
@@ -1023,7 +957,7 @@ mod tests {
         fake.push(ok(200, b"a"));
         fake.push(ok(200, b"b"));
         let interval = Duration::from_millis(120);
-        let mut ctx = context(&fake, 5, Duration::from_secs(30), interval);
+        let mut ctx = context(&fake, interval);
         let start = Instant::now();
         ctx.fetch("https://example.com/a", &hosts()).unwrap();
         ctx.fetch("https://example.com/b", &hosts()).unwrap();
@@ -1039,7 +973,7 @@ mod tests {
             .push(("Retry-After".to_string(), "0".to_string()));
         fake.push(throttled);
         fake.push(ok(200, b"page"));
-        let mut ctx = context(&fake, 5, Duration::from_secs(30), Duration::ZERO);
+        let mut ctx = context(&fake, Duration::ZERO);
         let response = ctx.fetch("https://example.com/", &hosts()).unwrap();
         assert_eq!(response.status, 200);
         assert_eq!(fake.call_count(), 2);
@@ -1055,7 +989,7 @@ mod tests {
                 .push(("Retry-After".to_string(), "0".to_string()));
             fake.push(throttled);
         }
-        let mut ctx = context(&fake, 5, Duration::from_secs(30), Duration::ZERO);
+        let mut ctx = context(&fake, Duration::ZERO);
         assert_eq!(
             ctx.fetch("https://example.com/", &hosts())
                 .unwrap_err()
@@ -1066,27 +1000,25 @@ mod tests {
     }
 
     #[test]
-    fn retry_after_beyond_deadline_defers() {
+    fn retry_after_without_deadline_retries_instead_of_deferring() {
         let fake = new_fake();
         let mut throttled = ok(503, b"");
         throttled
             .headers
-            .push(("Retry-After".to_string(), "10".to_string()));
+            .push(("Retry-After".to_string(), "0.02".to_string()));
         fake.push(throttled);
-        let mut ctx = context(&fake, 5, Duration::from_secs(1), Duration::ZERO);
-        assert_eq!(
-            ctx.fetch("https://example.com/", &hosts())
-                .unwrap_err()
-                .to_string(),
-            "discovery_retry_deferred"
-        );
+        fake.push(ok(200, b"page"));
+        let mut ctx = context(&fake, Duration::ZERO);
+        let response = ctx.fetch("https://example.com/", &hosts()).unwrap();
+        assert_eq!(response.status, 200);
+        assert_eq!(fake.call_count(), 2);
     }
 
     #[test]
     fn conditional_304_passes_through_without_retry() {
         let fake = new_fake();
         fake.push(ok(304, b""));
-        let mut ctx = context(&fake, 5, Duration::from_secs(30), Duration::ZERO);
+        let mut ctx = context(&fake, Duration::ZERO);
         let response = ctx
             .fetch_conditional("https://example.com/", &hosts(), Some("\"etag\""), None)
             .unwrap();
@@ -1107,7 +1039,7 @@ mod tests {
             final_url: "https://example.com/".to_string(),
             ..FetchResponse::default()
         });
-        let mut ctx = context(&fake, 5, Duration::from_secs(30), Duration::ZERO);
+        let mut ctx = context(&fake, Duration::ZERO);
         assert_eq!(
             ctx.fetch_html("https://example.com/", &hosts())
                 .unwrap_err()
@@ -1122,7 +1054,7 @@ mod tests {
         let mut compressed = ok(200, b"x");
         compressed.content_encoding = Some("br".to_string());
         fake.push(compressed);
-        let mut ctx = context(&fake, 5, Duration::from_secs(30), Duration::ZERO);
+        let mut ctx = context(&fake, Duration::ZERO);
         assert_eq!(
             ctx.fetch("https://example.com/", &hosts())
                 .unwrap_err()
@@ -1137,7 +1069,7 @@ mod tests {
         let mut redirect = ok(302, b"");
         redirect.location = Some("https://10.0.0.1/x".to_string());
         fake.push(redirect);
-        let mut ctx = context(&fake, 5, Duration::from_secs(30), Duration::ZERO);
+        let mut ctx = context(&fake, Duration::ZERO);
         assert_eq!(
             ctx.fetch("https://example.com/start", &hosts())
                 .unwrap_err()
@@ -1149,7 +1081,7 @@ mod tests {
         let mut redirect = ok(302, b"");
         redirect.location = Some("https://user@example.com/x".to_string());
         fake2.push(redirect);
-        let mut ctx = context(&fake2, 5, Duration::from_secs(30), Duration::ZERO);
+        let mut ctx = context(&fake2, Duration::ZERO);
         assert_eq!(
             ctx.fetch("https://example.com/start", &hosts())
                 .unwrap_err()
@@ -1165,7 +1097,7 @@ mod tests {
         redirect.location = Some("https://example.com/next".to_string());
         fake.push(redirect);
         fake.push(ok(200, b"final"));
-        let mut ctx = context(&fake, 5, Duration::from_secs(30), Duration::ZERO);
+        let mut ctx = context(&fake, Duration::ZERO);
         assert_eq!(
             ctx.fetch("https://example.com/start", &hosts())
                 .unwrap()
@@ -1180,14 +1112,14 @@ mod tests {
         redirect.location = Some("https://other.example/next".to_string());
         fake2.push(redirect);
         fake2.push(ok(200, b"final"));
-        let mut ctx = context(&fake2, 5, Duration::from_secs(30), Duration::ZERO);
+        let mut ctx = context(&fake2, Duration::ZERO);
         assert!(ctx.fetch("https://example.com/start", &hosts()).is_err());
     }
 
     #[test]
     fn cancellation_aborts_before_any_request() {
         let fake = new_fake();
-        let mut ctx = context(&fake, 5, Duration::from_secs(30), Duration::ZERO);
+        let mut ctx = context(&fake, Duration::ZERO);
         let cancel = Arc::new(AtomicBool::new(true));
         let result = crate::operation::run(
             Arc::clone(&cancel),
@@ -1210,7 +1142,7 @@ mod tests {
         fake.push(redirect);
         fake.push(ok(200, b"gate"));
 
-        let mut ctx = context(&fake, 5, Duration::from_secs(30), Duration::ZERO);
+        let mut ctx = context(&fake, Duration::ZERO);
         ctx.fetch("https://example.com/start", &hosts()).unwrap();
 
         let calls = fake.calls();
@@ -1235,7 +1167,7 @@ mod tests {
         fake.push(ok(200, b"c"));
 
         let hosts = vec!["example.com".to_string(), "other.example".to_string()];
-        let mut ctx = context(&fake, 5, Duration::from_secs(30), Duration::ZERO);
+        let mut ctx = context(&fake, Duration::ZERO);
         ctx.fetch("https://example.com/a", &hosts).unwrap();
         ctx.fetch("https://example.com/b", &hosts).unwrap();
         ctx.fetch("https://other.example/c", &hosts).unwrap();
@@ -1265,7 +1197,7 @@ mod tests {
         fake.push(second);
         fake.push(ok(200, b"c"));
 
-        let mut ctx = context(&fake, 5, Duration::from_secs(30), Duration::ZERO);
+        let mut ctx = context(&fake, Duration::ZERO);
         ctx.fetch("https://example.com/a", &hosts()).unwrap();
         ctx.fetch("https://example.com/b", &hosts()).unwrap();
         ctx.fetch("https://example.com/c", &hosts()).unwrap();
@@ -1282,7 +1214,7 @@ mod tests {
     fn post_request_carries_method_body_and_content_type() {
         let fake = new_fake();
         fake.push(ok(200, b"localized"));
-        let mut ctx = context(&fake, 5, Duration::from_secs(30), Duration::ZERO);
+        let mut ctx = context(&fake, Duration::ZERO);
         ctx.fetch_form(
             "https://example.com/zh",
             &hosts(),
@@ -1307,7 +1239,7 @@ mod tests {
         fake.push(redirect);
         fake.push(ok(200, b"done"));
 
-        let mut ctx = context(&fake, 5, Duration::from_secs(30), Duration::ZERO);
+        let mut ctx = context(&fake, Duration::ZERO);
         ctx.fetch_form(
             "https://example.com/zh",
             &hosts(),
@@ -1331,7 +1263,7 @@ mod tests {
         fake.push(ok(200, b"should not be fetched"));
 
         let hosts = vec!["kaguragames.com".to_string()];
-        let mut ctx = context(&fake, 5, Duration::from_secs(30), Duration::ZERO);
+        let mut ctx = context(&fake, Duration::ZERO);
         assert_eq!(
             ctx.fetch("https://kaguragames.com/product/x/", &hosts)
                 .unwrap_err()
@@ -1344,7 +1276,7 @@ mod tests {
     #[test]
     fn initial_url_is_validated_before_request() {
         let fake = new_fake();
-        let mut ctx = context(&fake, 5, Duration::from_secs(30), Duration::ZERO);
+        let mut ctx = context(&fake, Duration::ZERO);
         assert_eq!(
             ctx.fetch("https://evil.example/x", &hosts())
                 .unwrap_err()
@@ -1375,7 +1307,7 @@ mod tests {
         ] {
             let fake = new_fake();
             fake.push(ok(200, body.as_bytes()));
-            let mut ctx = context(&fake, 5, Duration::from_secs(30), Duration::ZERO);
+            let mut ctx = context(&fake, Duration::ZERO);
             assert_eq!(
                 ctx.fetch_html("https://example.com/", &hosts())
                     .unwrap_err()
@@ -1402,7 +1334,7 @@ mod tests {
     fn cached_response_is_reused_without_new_request() {
         let fake = new_fake();
         fake.push(ok(200, b"page"));
-        let mut ctx = context(&fake, 5, Duration::from_secs(30), Duration::ZERO);
+        let mut ctx = context(&fake, Duration::ZERO);
         ctx.fetch("https://example.com/", &hosts()).unwrap();
         ctx.fetch("https://example.com/", &hosts()).unwrap();
         assert_eq!(fake.call_count(), 1);
@@ -1413,7 +1345,7 @@ mod tests {
         let fake = new_fake();
         fake.push_error("discovery_network_error");
         fake.push_error("discovery_network_error");
-        let mut ctx = context(&fake, 5, Duration::from_secs(30), Duration::ZERO);
+        let mut ctx = context(&fake, Duration::ZERO);
         assert_eq!(
             ctx.fetch("https://example.com/", &hosts())
                 .unwrap_err()

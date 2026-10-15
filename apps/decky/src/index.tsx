@@ -18,8 +18,17 @@ const scan = callable<[boolean], ScanResult>("scan");
 const scanStatusRpc = callable<[number], ScanResult>("scan_status");
 const previewRpc = callable<[string, string | null, string | null], Preview>("preview");
 const scanStatus = (generation: number) => scanStatusRpc(generation);
-const discoverGameRpc = callable<[string, string[], string | null, boolean], DiscoveryResult>("discover_game");
-const discoverGame = (instance: string, names: string[], language: string | null, force: boolean): Promise<DiscoveryResult> => discoverGameRpc(instance, names, language, force);
+const discoverGameRpc = callable<[string, string[], string | null, boolean], ScanResult>("start_game_discovery");
+const cancelSourceQueryRpc = callable<[], boolean>("cancel_source_query");
+const discoverGame = async (instance: string, names: string[], language: string | null, force: boolean): Promise<DiscoveryResult> => {
+  const report = await discoverGameRpc(instance, names, language, force);
+  const row = report.installs.find(item => item.game.instance_id === instance);
+  if (!row) throw new Error("instance_not_found");
+  return { ...row.discovery, status: row.discovery?.status ?? "not_queried", candidates: row.discovery?.candidates ?? [],
+    diagnostics: row.discovery?.diagnostics ?? [], appid: row.game.appid, instance_id: instance,
+    generation: report.generation ?? null, settings_revision: report.settings_revision ?? 0,
+    patches: row.patches, query_report: report };
+};
 const listTransactions = callable<[], Transaction[]>("list_transactions");
 const recover = callable<[], Transaction[]>("recover");
 const setSourceEnabled = callable<[string, boolean], SourceSubscription[]>("set_source_enabled");
@@ -208,6 +217,7 @@ function QuickAccess() {
     <div className="patch-qam-controls"><PanelSection>
       <Row><Action onClick={openSources}>全局设置 ›</Action></Row>
       <Row><Action onClick={() => void session.refresh()} disabled={!!busy}>重新扫描</Action></Row>
+      {session.getSnapshot().report?.scan_progress?.running && <Row><Action onClick={() => void cancelSourceQueryRpc()}>取消来源查询（保留已找到的结果）</Action></Row>}
     </PanelSection></div>
   </div>;
 }
@@ -380,6 +390,7 @@ function GameManager({ item, seg, panel }: { item: Install; seg: string; panel?:
       {owned.some(needsRecovery) && <Row><Status warning>有未完成的操作需要处理。</Status><Action onClick={() => navigatePanel("records")}>查看操作记录</Action></Row>}
     </PanelSection>
     <PanelSection title="查找来源">
+      {session.getSnapshot().report?.scan_progress?.running && <Row><Status>正在持续查找，已找到的候选可先选择。</Status><Action onClick={() => void cancelSourceQueryRpc()}>取消查询</Action></Row>}
       <InfoRow label="查询状态">{discoveryStatus(item.discovery?.status)}</InfoRow>
       <Row><DropdownItem label="偏好的补丁语言" layout="below" rgOptions={[{ data: "", label: "未指定" }, { data: "zh-CN", label: "简体中文" }, { data: "zh-TW", label: "繁体中文" }, { data: "en", label: "英文" }, { data: "ja", label: "日文" }]}
         selectedOption={preferredLanguage ?? ""} onChange={option => setPreferredLanguage(option.data || null)} /></Row>

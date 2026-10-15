@@ -429,8 +429,14 @@ fn table_limits_marker_and_duplicate_destinations() {
         .position(|w| w == b"CSetupFileData")
         .unwrap()
         - 8;
+    // A u16 count of 8193 is within the real SF field width; the table is then
+    // bounded by the actual serialized record bytes, so this is truncation.
     put16(&mut bytes, offset, 8193);
-    rejects(file_table(&bytes, "9.5"), "file_count_limit");
+    rejects(file_table(&bytes, "9.5"), "truncated_record");
+    // Zero remains a genuine "no entries" rejection.
+    let mut empty = metadata(&[record("x", "%AppFolder%", b"x", "9.5")]);
+    put16(&mut empty, offset, 0);
+    rejects(file_table(&empty, "9.5"), "file_count_limit");
     rejects(file_table(b"nothing", "9.5"), "ambiguous_file_table");
     let mut bytes = metadata(&[record("x", "%AppFolder%", b"x", "9.5")]);
     bytes.extend(b"CSetupFileData");

@@ -33,6 +33,7 @@ def main():
         ('offset-at-limit', 0, limit, limit + 62),
         ('offset-above-limit', 0, limit + 1, limit + 63),
         ('size-and-offset-extras', limit + 1, limit + 1, 2 * limit + 128),
+        ('size-and-offset-extras-beyond-32bit', 5 * 2**30, 5 * 2**30 + 123, 2 * (5 * 2**30) + 128),
         ('end-at-limit', 0, 0, limit),
         ('end-above-limit', 0, 0, limit + 1),
         ('unicode-size-above-limit', limit + 1, 0, limit + 80),

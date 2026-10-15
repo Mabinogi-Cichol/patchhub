@@ -51,7 +51,7 @@ fn production_download_uses_system_dns() {
     assert_eq!(acquired.source, Acquisition::Downloaded);
     assert!(acquired.size > 0);
     let file = fs::File::open(&acquired.path).unwrap();
-    let digest = installer::digest_file(&acquired.path, acquired.size, &cancel).unwrap();
+    let digest = installer::digest_file(&acquired.path, &cancel).unwrap();
     assert_eq!(digest.sha256, acquired.sha256);
     let zip_entries = if parsed.path().to_ascii_lowercase().ends_with(".zip") {
         Some(

@@ -89,7 +89,7 @@ fn call(method: &str, id: &str, params: Value) -> Value {
             break;
         }
     }
-    // Keep stdin open through the terminal response; EOF would cancel the foreground lease.
+    // Keep stdin open through the terminal response; EOF would cancel the task.
     drop(input);
     drop(stdout);
     let output = child.wait_with_output().unwrap();

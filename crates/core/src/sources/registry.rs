@@ -735,6 +735,22 @@ impl SourceRegistry {
     /// only a non-confirmed (negative/empty) cache.
     pub fn needs_refresh(&self, rule: &SourceRule, appid: u32, key: &str, force: bool) -> bool {
         let record = self.discovery_record(rule, appid);
+        if record.attempt.as_ref().is_some_and(|attempt| {
+            attempt.status == "partial"
+                && attempt.query_key == key
+                && attempt.parser_version == PARSER_VERSION
+                && attempt.encoding_version == super::SOURCES_ENCODING_VERSION
+                && (attempt.checkpoint.is_some()
+                    || attempt
+                        .index
+                        .as_ref()
+                        .is_some_and(|i| !i.pending.is_empty())
+                    || self
+                        .shared_index(&rule.id)
+                        .is_some_and(|i| !i.pending.is_empty()))
+        }) {
+            return true;
+        }
         let old = record.success.unwrap_or_else(empty_success);
         // A title-only candidate is still a useful positive cache for manual selection.
         let confirmed = !old.candidates.is_empty();
@@ -843,21 +859,16 @@ impl SourceRegistry {
             attempt.candidates = Vec::new();
         }
 
-        let record = DiscoveryRecord {
+        let mut record = DiscoveryRecord {
             schema_version: 1,
             source_id: rule.id.clone(),
             appid,
             success: success.clone(),
             attempt: Some(attempt),
         };
-        let blob = serde_json::to_vec(&record).map_err(|error| invalid(error.to_string()))?;
-        if blob.len() as u64 > MAX_DISCOVERY_OUTPUT {
-            return Ok(record);
-        }
-        self.store.save_discovery(&rule.id, appid, &record)?;
-        self.discovery
-            .insert((rule.id.clone(), appid), record.clone());
-
+        // A shared index must not consume the per-game result envelope twice.
+        // Save the full bounded index first; large indexes are referenced through
+        // the shared store instead of copied into every game's attempt.
         if let Some(index) = &result.index {
             let existing_checked = self.indexes.get(&rule.id).map(|record| record.checked_at);
             let envelope_checked = if index.checked_at != 0 {
@@ -882,11 +893,26 @@ impl SourceRegistry {
             };
             let index_blob =
                 serde_json::to_vec(&index_record).map_err(|error| invalid(error.to_string()))?;
-            if index_blob.len() as u64 <= MAX_DISCOVERY_OUTPUT {
+            if index_blob.len() as u64 <= super::MAX_DISCOVERY_INDEX_BYTES {
                 self.store.save_discovery_index(&rule.id, &index_record)?;
                 self.indexes.insert(rule.id.clone(), index_record);
+            } else {
+                return Err(invalid("discovery_index_resource_limit"));
             }
         }
+        let mut blob = serde_json::to_vec(&record).map_err(|error| invalid(error.to_string()))?;
+        if blob.len() as u64 > MAX_DISCOVERY_OUTPUT {
+            if let Some(attempt) = record.attempt.as_mut() {
+                attempt.index = None;
+            }
+            blob = serde_json::to_vec(&record).map_err(|error| invalid(error.to_string()))?;
+        }
+        if blob.len() as u64 > MAX_DISCOVERY_OUTPUT {
+            return Err(invalid("discovery_output_resource_limit"));
+        }
+        self.store.save_discovery(&rule.id, appid, &record)?;
+        self.discovery
+            .insert((rule.id.clone(), appid), record.clone());
 
         let success_candidates = success
             .as_ref()
@@ -943,29 +969,6 @@ impl SourceRegistry {
             }
         }
         out
-    }
-
-    /// Compare-and-publish: re-checks the captured settings revision under the
-    /// store short lock and only then commits. Returns whether it published.
-    pub fn commit_if_revision(
-        &mut self,
-        rule: &SourceRule,
-        appid: u32,
-        result: DiscoveryOutcome,
-        previous: &DiscoveryRecord,
-        key: &str,
-        captured: u64,
-    ) -> Result<bool> {
-        if self.revision != captured {
-            return Ok(false);
-        }
-        let store = &self.store;
-        let current = store.with_short_lock(|| Ok(store.revision()))?;
-        if current != captured {
-            return Ok(false);
-        }
-        self.commit(rule, appid, result, previous, key)?;
-        Ok(true)
     }
 
     /// Refreshes one ZIP-index source (design §5.3; Python `_refresh_one`).
@@ -2259,5 +2262,40 @@ mod tests {
         assert_eq!(candidates[0].match_basis, MatchBasis::Title);
         // The game AppID supplies the missing entry AppID.
         assert_eq!(candidates[0].game_appid, Some(42));
+    }
+    #[test]
+    fn shared_index_larger_than_game_envelope_is_not_silently_lost() {
+        use crate::sources::model::IndexRecord;
+        let temp = tempfile::tempdir().unwrap();
+        let mut registry = registry_at(temp.path(), 1000);
+        let rule = rule(&registry, "hgamer");
+        let mut large = index(1000);
+        large.records = (0..6000)
+            .map(|i| IndexRecord {
+                title: format!("Game {i} {}", "title".repeat(12)),
+                page: format!("https://hgamer.tw/zh-CN/patches/game-{i}"),
+                kind: "article".into(),
+            })
+            .collect();
+        assert!(serde_json::to_vec(&large).unwrap().len() as u64 > MAX_DISCOVERY_OUTPUT);
+        registry
+            .commit(
+                &rule,
+                42,
+                DiscoveryOutcome {
+                    status: "partial".into(),
+                    index: Some(large),
+                    ..Default::default()
+                },
+                &DiscoveryRecord::default(),
+                "many",
+            )
+            .unwrap();
+        let reopened = registry_at(temp.path(), 1001);
+        assert_eq!(reopened.shared_index(&rule.id).unwrap().records.len(), 6000);
+        assert_eq!(
+            reopened.previous_record(&rule, 42).attempt.unwrap().status,
+            "partial"
+        );
     }
 }

@@ -9,14 +9,13 @@ use std::{
     path::PathBuf,
     process::ExitCode,
     sync::{
-        atomic::{AtomicBool, AtomicU64, Ordering},
+        atomic::{AtomicBool, Ordering},
         Arc,
     },
 };
 use steam_patch_core::catalog::Platform;
 
 use steam_patch_protocol::{MAX_REQUEST_BYTES, PROTOCOL_VERSION};
-const LEASE_TTL_MILLIS: u64 = 15_000;
 
 /// Internal execution arguments, constructed only after the sole wire decoder.
 struct Request {
@@ -60,40 +59,23 @@ fn error(id: Option<&str>, code: &str) -> Value {
 
 fn respond(bytes: &[u8]) -> Value {
     let cancel = AtomicBool::new(false);
-    respond_with_channel(bytes, &cancel, &|_| true, &|| 0_u64, false)
+    respond_with_channel(bytes, &cancel, false)
 }
 
 /// `serve` and `serve-task` share this parser/executor; only `serve-task` may
 /// dispatch the task-channel methods (`install_patch` and the streaming source
-/// tasks), carrying the live lease closures.
-fn respond_with<L: Fn(u64) -> bool + Sync, D: Fn() -> u64 + Sync>(
-    bytes: &[u8],
-    cancel: &AtomicBool,
-    lease_active: &L,
-    lease_deadline_ms: &D,
-) -> Value {
-    respond_with_channel(bytes, cancel, lease_active, lease_deadline_ms, true)
+/// tasks).
+fn respond_with(bytes: &[u8], cancel: &AtomicBool) -> Value {
+    respond_with_channel(bytes, cancel, true)
 }
 
-fn respond_with_channel<L: Fn(u64) -> bool + Sync, D: Fn() -> u64 + Sync>(
-    bytes: &[u8],
-    cancel: &AtomicBool,
-    lease_active: &L,
-    lease_deadline_ms: &D,
-    task_channel: bool,
-) -> Value {
+fn respond_with_channel(bytes: &[u8], cancel: &AtomicBool, task_channel: bool) -> Value {
     let request = match parse_request(bytes, task_channel) {
         Ok(r) => r,
         Err(e) => return error_with_detail(e.request_id.as_deref(), &e.code, e.detail.as_deref()),
     };
     let params = request.params;
-    match runtime::execute_controlled(
-        &request.method,
-        params,
-        cancel,
-        lease_active,
-        lease_deadline_ms,
-    ) {
+    match runtime::execute_controlled(&request.method, params, cancel) {
         Ok(result) => {
             json!({ "protocol_version": PROTOCOL_VERSION, "request_id": request.request_id, "ok": true, "result": result })
         }
@@ -158,154 +140,49 @@ fn serve(reader: &mut impl BufRead, writer: &mut impl Write) -> io::Result<()> {
     Ok(())
 }
 
-/// One cancellable task. The controller keeps stdin open and may send `renew`
-/// (refresh the foreground lease) or `cancel` control lines; EOF is equivalent
-/// to `cancel` and reclaims the worker process group (p1-host-contract §1.1 C,
-/// §5.2, §5.3). In particular a disconnected Python host cannot leave an
-/// installer running unattended.
+/// One cancellable task. The controller keeps stdin open and may send `cancel`
+/// control lines; EOF is equivalent to `cancel` and reclaims the worker process
+/// group (p1-host-contract §1.1 C, §5.3). In particular a disconnected Python
+/// host cannot leave an installer running unattended.
 fn serve_task() -> io::Result<()> {
     let Some((bytes, oversized)) = read_request(&mut io::stdin().lock())? else {
         return Ok(());
     };
     let cancel = Arc::new(AtomicBool::new(false));
-    let lease = Arc::new(LeaseState::new());
-    spawn_control_thread(Arc::clone(&cancel), Arc::clone(&lease));
-    spawn_lease_watchdog(Arc::clone(&cancel), Arc::clone(&lease));
-    let response = {
-        let lease_active = Arc::clone(&lease);
-        let lease_deadline = Arc::clone(&lease);
-        run_task_with_lease(
-            &bytes,
-            oversized,
-            cancel,
-            move |now| lease_active.active(now),
-            move || lease_deadline.deadline_ms(),
-            |value| {
-                let mut output = io::stdout().lock();
-                // A closed output pipe must not abort the rollback path.
-                let _ = write_line(&mut output, &value);
-            },
-        )
-    };
+    spawn_control_thread(Arc::clone(&cancel));
+    let response = run_task(&bytes, oversized, cancel, |value| {
+        let mut output = io::stdout().lock();
+        // A closed output pipe must not abort the rollback path.
+        let _ = write_line(&mut output, &value);
+    });
     let mut output = io::stdout().lock();
     write_line(&mut output, &response)
 }
 
-/// Epoch milliseconds (foreground lease clock).
-fn now_millis() -> u64 {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_millis() as u64)
-        .unwrap_or(0)
-}
-
-/// In-memory foreground lease (15s). `renew` refreshes the shared deadline; the
-/// watchdog and the authorization re-check treat an expired deadline as
-/// inactive (p1-host-contract §5.2; p0-contracts §5.1).
-struct LeaseState {
-    deadline_ms: AtomicU64,
-}
-
-impl LeaseState {
-    fn new() -> Self {
-        Self {
-            deadline_ms: AtomicU64::new(now_millis().saturating_add(LEASE_TTL_MILLIS)),
-        }
-    }
-
-    fn renew(&self) -> bool {
-        let now = now_millis();
-        let mut previous = self.deadline_ms.load(Ordering::Acquire);
-        loop {
-            if now >= previous {
-                return false;
-            }
-            match self.deadline_ms.compare_exchange_weak(
-                previous,
-                now.saturating_add(LEASE_TTL_MILLIS),
-                Ordering::AcqRel,
-                Ordering::Acquire,
-            ) {
-                Ok(_) => return true,
-                Err(current) => previous = current,
-            }
-        }
-    }
-
-    fn active(&self, now_seconds: u64) -> bool {
-        now_seconds.saturating_mul(1000) <= self.deadline_ms.load(Ordering::Relaxed)
-    }
-
-    /// Current foreground-lease deadline (epoch ms) for `lease.json`
-    /// persistence (p1-zip-orchestration §3.5).
-    fn deadline_ms(&self) -> u64 {
-        self.deadline_ms.load(Ordering::Relaxed)
-    }
-}
-
-/// Reads `renew`/`cancel` control lines from the task stdin. EOF (`None` or a
-/// read error) is treated as `cancel`.
-fn spawn_control_thread(cancel: Arc<AtomicBool>, lease: Arc<LeaseState>) {
+/// Reads `cancel` control lines from the task stdin. EOF (`None` or a read
+/// error) is treated as `cancel`.
+fn spawn_control_thread(cancel: Arc<AtomicBool>) {
     std::thread::spawn(move || {
         use std::io::BufRead;
         let stdin = io::stdin();
         let mut lines = stdin.lock().lines();
         while let Some(Ok(line)) = lines.next() {
-            match line.trim() {
-                "renew" => {
-                    if !lease.renew() {
-                        cancel.store(true, Ordering::Release);
-                        return;
-                    }
-                }
-                "cancel" => {
-                    cancel.store(true, Ordering::Relaxed);
-                    return;
-                }
-                _ => {}
+            if line.trim() == "cancel" {
+                cancel.store(true, Ordering::Relaxed);
+                return;
             }
         }
         cancel.store(true, Ordering::Relaxed);
     });
 }
 
-/// Expired lease watchdog: stops an unattended task after `LEASE_TTL_MILLIS`
-/// without a `renew` (p1-zip-orchestration §3.10).
-fn spawn_lease_watchdog(cancel: Arc<AtomicBool>, lease: Arc<LeaseState>) {
-    std::thread::spawn(move || loop {
-        std::thread::sleep(std::time::Duration::from_millis(500));
-        if cancel.load(Ordering::Relaxed) {
-            return;
-        }
-        if !lease.active(now_millis() / 1000) {
-            cancel.store(true, Ordering::Relaxed);
-            return;
-        }
-    });
-}
-
-/// Runs one `serve-task` request with the always-active placeholder lease
-/// (used by tests); `serve_task` uses [`run_task_with_lease`].
-#[allow(dead_code)]
+/// Runs one `serve-task` request: stream methods emit their events, everything
+/// else runs under `operation::run` and emits flat `install_progress` events.
+/// Returns the single final response line value.
 pub(crate) fn run_task(
     bytes: &[u8],
     oversized: bool,
     cancel: Arc<AtomicBool>,
-    emit: impl FnMut(Value) + 'static,
-) -> Value {
-    run_task_with_lease(bytes, oversized, cancel, |_| true, || u64::MAX, emit)
-}
-
-/// Runs one `serve-task` request: stream methods emit their events, everything
-/// else runs under `operation::run` and emits flat `install_progress` events.
-/// Returns the single final response line value.
-pub(crate) fn run_task_with_lease<L: Fn(u64) -> bool + Sync, D: Fn() -> u64 + Sync>(
-    bytes: &[u8],
-    oversized: bool,
-    cancel: Arc<AtomicBool>,
-    lease_active: L,
-    lease_deadline_ms: D,
     mut emit: impl FnMut(Value) + 'static,
 ) -> Value {
     let parsed = if oversized {
@@ -334,7 +211,7 @@ pub(crate) fn run_task_with_lease<L: Fn(u64) -> bool + Sync, D: Fn() -> u64 + Sy
                 if oversized {
                     error(None, "request_too_large")
                 } else {
-                    respond_with(bytes, cancel.as_ref(), &lease_active, &lease_deadline_ms)
+                    respond_with(bytes, cancel.as_ref())
                 }
             },
         );
@@ -343,7 +220,7 @@ pub(crate) fn run_task_with_lease<L: Fn(u64) -> bool + Sync, D: Fn() -> u64 + Sy
         error(None, "request_too_large")
     } else {
         let cancel_ref = AtomicBool::new(false);
-        respond_with(bytes, &cancel_ref, &|_| true, &|| 0u64)
+        respond_with(bytes, &cancel_ref)
     }
 }
 
@@ -556,17 +433,6 @@ mod tests {
     use super::*;
     use std::io::Cursor;
 
-    #[test]
-    fn expired_lease_cannot_be_renewed() {
-        let lease = LeaseState {
-            deadline_ms: AtomicU64::new(now_millis().saturating_sub(1)),
-        };
-        let old = lease.deadline_ms();
-        assert!(!lease.renew());
-        assert_eq!(lease.deadline_ms(), old);
-        let active = LeaseState::new();
-        assert!(active.renew());
-    }
     #[test]
     fn protocol_recovers_after_bad_or_oversized_line() {
         let root = tempfile::tempdir().unwrap();

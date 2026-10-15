@@ -1,7 +1,7 @@
 import { reason, type DiscoveryResult as WireDiscoveryResult, type Patch, type ScanResult, type Transaction } from "@steam-patch/ui";
 
 // Decky appends freshly validated scan projections to the core discovery result.
-export type DiscoveryResult = WireDiscoveryResult & { patches: Patch[] };
+export type DiscoveryResult = WireDiscoveryResult & { patches: Patch[]; query_report?: ScanResult };
 
 type Snapshot = { report: ScanResult; transactions: Transaction[] };
 type SessionState = {
@@ -102,6 +102,10 @@ export function createManagerSession(readSnapshot: () => Promise<Snapshot>, disc
     const operation = (async () => {
       try {
         const result = await discoverGame(instance, [...new Set(names.map(name => name.trim()).filter(Boolean))].slice(0, 3).map(name => name.slice(0, 256)), language, force);
+        if (result.query_report) {
+          if (identityCurrent()) acceptSnapshot({ report: result.query_report, transactions: state.transactions });
+          return;
+        }
         if (!identityCurrent() || result.generation !== report.generation || result.settings_revision !== report.settings_revision || result.instance_id !== instance || result.appid !== row.game.appid || result.status === "stale") {
           attempted.delete(key);
           clearDynamicProjection();

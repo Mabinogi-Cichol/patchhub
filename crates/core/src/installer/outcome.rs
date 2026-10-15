@@ -17,13 +17,11 @@ pub enum Disposition {
 #[serde(rename_all = "snake_case")]
 pub enum CancellationCause {
     UserCancelled,
-    LeaseExpired,
 }
 impl CancellationCause {
     pub fn code(self) -> &'static str {
         match self {
             Self::UserCancelled => "cancelled",
-            Self::LeaseExpired => "lease_expired",
         }
     }
     /// Only the writer's exact cleanup suffix may accompany a durable cancel code.
@@ -36,10 +34,13 @@ impl CancellationCause {
         };
         Self::from_code(head)
     }
+    /// Legacy `lease_expired`/`installer_lease_expired` rows still recover; the
+    /// short-term lease is deleted, so they are read back as user cancellation.
     pub fn from_code(code: &str) -> Option<Self> {
         match code {
-            "cancelled" | "task_cancelled" => Some(Self::UserCancelled),
-            "lease_expired" => Some(Self::LeaseExpired),
+            "cancelled" | "task_cancelled" | "lease_expired" | "installer_lease_expired" => {
+                Some(Self::UserCancelled)
+            }
             _ => None,
         }
     }
@@ -50,7 +51,6 @@ impl CancellationCause {
 #[serde(rename_all = "snake_case")]
 pub enum FailureKind {
     UserCancelled,
-    LeaseExpired,
     DomainFailure,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema, ts_rs::TS)]
@@ -208,7 +208,6 @@ impl InstallerOutcome {
             Some(FailureCause {
                 kind: match cancellation {
                     Some(CancellationCause::UserCancelled) => FailureKind::UserCancelled,
-                    Some(CancellationCause::LeaseExpired) => FailureKind::LeaseExpired,
                     None => FailureKind::DomainFailure,
                 },
                 code,

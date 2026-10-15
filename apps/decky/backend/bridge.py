@@ -13,7 +13,6 @@ from tasks import current_task
 from protocol_validation import (PROTOCOL_VERSION, METHODS, SOURCE_METHODS, CONTROLLED_METHODS,
     SOURCE_EVENTS, INSTALL_STAGES, MAX_RESPONSE_BYTES, MAX_INSTANCE_ID_BYTES, MAX_REQUEST_BYTES,
     validate_id, validate_request, validate_response, validate_event, validate_capabilities, JS_MAX_INTEGER)
-RENEW_SECONDS = 3
 TERMINAL_DRAIN_SECONDS = 1.0
 TERMINAL_DRAIN_BYTES = MAX_RESPONSE_BYTES
 TERMINAL_DRAIN_CHUNK_BYTES = 64 * 1024
@@ -202,10 +201,9 @@ class CoreBridge:
         terminal_received = asyncio.Event()
 
         async def signal_cancel():
-            # The control message must follow the request, including when a
-            # lease expires while the subprocess is starting.
+            # The control message must follow the request. EOF and an explicit
+            # `cancel` line both request cancellation; no periodic renewal.
             await request_sent.wait()
-            next_renew = asyncio.get_running_loop().time() + RENEW_SECONDS
             while process.returncode is None and not terminal_received.is_set():
                 if cancel.is_set():
                     try:
@@ -214,13 +212,6 @@ class CoreBridge:
                     except (BrokenPipeError, ConnectionResetError):
                         pass
                     return
-                if asyncio.get_running_loop().time() >= next_renew:
-                    try:
-                        process.stdin.write(b"renew\n")
-                        await process.stdin.drain()
-                    except (BrokenPipeError, ConnectionResetError):
-                        return
-                    next_renew = asyncio.get_running_loop().time() + RENEW_SECONDS
                 await asyncio.sleep(.1)
 
         async def exchange():
@@ -274,8 +265,9 @@ class CoreBridge:
                     validate_response(row, method, request_id)
                     response = row
                     terminal_received.set()
-                    # EOF stops renewals and seals the first verified receipt.
-                    # Trailing bytes are host diagnostics, regardless of shape.
+                    # EOF cancels any remaining monitoring and seals the first
+                    # verified receipt. Trailing bytes are host diagnostics,
+                    # regardless of shape.
                     try:
                         process.stdin.close()
                     except Exception as exc:

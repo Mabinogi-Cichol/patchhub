@@ -51,7 +51,7 @@ fn durable_terminal_truth_table() {
             "rolled_back",
             Some("lease_expired"),
             Disposition::Cancelled,
-            Some(FailureKind::LeaseExpired),
+            Some(FailureKind::UserCancelled),
             false,
         ),
         (
@@ -78,8 +78,8 @@ fn durable_terminal_truth_table() {
         (
             "rolled_back",
             Some("installer_lease_expired"),
-            Disposition::Failed,
-            Some(FailureKind::DomainFailure),
+            Disposition::Cancelled,
+            Some(FailureKind::UserCancelled),
             false,
         ),
         (
@@ -201,7 +201,7 @@ fn wire_shape_keeps_transaction_fields_and_required_cleanup() {
     );
     let json = serde_json::to_value(out).unwrap();
     assert_eq!(json["disposition"], "cancelled");
-    assert_eq!(json["cause"]["kind"], "lease_expired");
+    assert_eq!(json["cause"]["kind"], "user_cancelled");
     assert_eq!(json["cleanup"]["status"], "not_requested");
     assert_eq!(json["cleanup"]["performed"], false);
     assert_eq!(json["cleanup"]["removed_bytes"], 0);
@@ -241,7 +241,7 @@ fn writers_exact_cleanup_suffix_preserves_cancel_cause_but_free_text_does_not() 
     for (code, kind) in [
         ("cancelled", FailureKind::UserCancelled),
         ("task_cancelled", FailureKind::UserCancelled),
-        ("lease_expired", FailureKind::LeaseExpired),
+        ("lease_expired", FailureKind::UserCancelled),
     ] {
         let raw = format!("{code}; cleanup_pending:unsafe_path");
         let result =

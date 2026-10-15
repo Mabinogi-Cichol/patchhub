@@ -23,13 +23,7 @@ fn digest(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
 fn inspect(game: &GameInstall, path: &str, expected: &str) -> detection::FileEvidence {
-    detection::inspect_file(
-        game,
-        path,
-        expected,
-        detection::DEFAULT_MAX_BYTES,
-        &AtomicBool::new(false),
-    )
+    detection::inspect_file(game, path, expected, None, &AtomicBool::new(false))
 }
 fn code(e: &detection::FileEvidence) -> &str {
     &e.diagnostic.as_ref().unwrap().code
@@ -94,7 +88,7 @@ fn size_limit_and_cancel_do_not_return_a_digest() {
         &game,
         "patch.dat",
         &digest(b"patch"),
-        4,
+        Some(4),
         &AtomicBool::new(false),
     );
     assert_eq!(code(&e), "evidence_size_limit");
@@ -103,12 +97,13 @@ fn size_limit_and_cancel_do_not_return_a_digest() {
         &game,
         "patch.dat",
         &digest(b"patch"),
-        u64::MAX,
+        None,
         &AtomicBool::new(true),
     );
     assert_eq!(code(&e), "evidence_cancelled");
     assert!(e.actual_sha256.is_none());
-    // A sparse file verifies the frozen 16 GiB default without allocating it.
+    // An explicit caller budget remains enforceable without a global size gate.
+    const EXPLICIT_BUDGET: u64 = 16 * 1024 * 1024;
     let large = fs::OpenOptions::new()
         .write(true)
         .open(temp.path().join("patch.dat"))
@@ -130,7 +125,7 @@ fn size_limit_and_cancel_do_not_return_a_digest() {
             ) -> i32;
         }
         let mut returned = 0;
-        // FSCTL_SET_SPARSE avoids allocating 16 GiB for a metadata-only limit fixture.
+        // Keep this metadata-only caller-limit fixture sparse.
         assert_ne!(
             unsafe {
                 DeviceIoControl(
@@ -147,9 +142,15 @@ fn size_limit_and_cancel_do_not_return_a_digest() {
             0
         );
     }
-    large.set_len(detection::DEFAULT_MAX_BYTES + 1).unwrap();
+    large.set_len(EXPLICIT_BUDGET + 1).unwrap();
     drop(large);
-    let e = inspect(&game, "patch.dat", &digest(b"patch"));
+    let e = detection::inspect_file(
+        &game,
+        "patch.dat",
+        &digest(b"patch"),
+        Some(EXPLICIT_BUDGET),
+        &AtomicBool::new(false),
+    );
     assert_eq!(code(&e), "evidence_size_limit");
 }
 #[cfg(unix)]

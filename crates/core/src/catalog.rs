@@ -218,6 +218,13 @@ pub fn relative_path(path: &str) -> io::Result<PathBuf> {
 
 impl Catalog {
     pub fn validate(&self) -> io::Result<()> {
+        self.validate_with_build_evidence(true)
+    }
+    /// Dynamic candidates carry observed facts, never reviewed build IDs.
+    pub(crate) fn validate_dynamic(&self) -> io::Result<()> {
+        self.validate_with_build_evidence(false)
+    }
+    fn validate_with_build_evidence(&self, require_build: bool) -> io::Result<()> {
         if self.schema_version != 1 {
             return Err(invalid("unsupported_catalog_schema"));
         }
@@ -267,7 +274,7 @@ impl Catalog {
             }
             if release.support_level == SupportLevel::ManagedZip
                 && (release.recipe.is_none()
-                    || release.verified_buildids.is_empty()
+                    || (require_build && release.verified_buildids.is_empty())
                     || release.detection.is_empty())
             {
                 return Err(invalid("managed_release_missing_evidence"));
@@ -334,13 +341,8 @@ pub fn detect_with_diagnostics(
     let files: Vec<_> = rules
         .into_iter()
         .map(|(path, expected)| {
-            let evidence = crate::detection::inspect_file(
-                install,
-                path,
-                expected,
-                crate::detection::DEFAULT_MAX_BYTES,
-                cancel,
-            );
+            let evidence =
+                crate::detection::inspect_file(install, path, expected, None, cancel);
             let result = FileEvidence {
                 path: path.clone(),
                 status: evidence.status.as_str().into(),
@@ -510,7 +512,7 @@ pub fn preview_with_diagnostics(
                 file.original_sha256
                     .as_deref()
                     .unwrap_or(&file.installed_sha256),
-                crate::detection::DEFAULT_MAX_BYTES,
+                None,
                 cancel,
             );
             let baseline_matches = if file.original_sha256.is_some() {

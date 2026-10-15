@@ -10,7 +10,6 @@ use std::{
     borrow::Cow,
     collections::{HashMap, HashSet},
     io::{Cursor, Read, Write},
-    time::{Duration, Instant},
 };
 use unicode_normalization::UnicodeNormalization;
 
@@ -18,11 +17,8 @@ pub const VERSION: &str = "sf9-audit-v3";
 pub const SIGNATURE: [u8; 16] = [
     0xe0, 0xe0, 0xe1, 0xe1, 0xe2, 0xe2, 0xe3, 0xe3, 0xe4, 0xe4, 0xe5, 0xe5, 0xe6, 0xe6, 0xe7, 0xe7,
 ];
-pub const MAX_EXE: u64 = 2 * 1024 * 1024 * 1024;
-pub const MAX_FILE: u64 = MAX_EXE;
-pub const MAX_TOTAL: u64 = MAX_EXE;
 pub const MAX_METADATA: usize = 16 * 1024 * 1024;
-pub const MAX_ENTRIES: usize = 8192;
+pub const MAX_ENTRIES: usize = u16::MAX as usize;
 pub const MAX_DICTIONARY: u64 = 128 * 1024 * 1024;
 const CHUNK: usize = 64 * 1024;
 const MAX_MANIFEST_DEPTH: usize = 96;
@@ -237,7 +233,6 @@ pub fn file_table(metadata: &[u8], version: &str) -> Result<(Vec<Value>, Value)>
     require(r.read(14)? == marker, "unsupported_file_table")?;
     let header = r.read(5)?;
     let mut records = Vec::with_capacity(count);
-    let mut total = 0u64;
     for index in 0..count {
         let record_start = r.pos;
         let source = r.string()?;
@@ -249,12 +244,7 @@ pub fn file_table(metadata: &[u8], version: &str) -> Result<(Vec<Value>, Value)>
         let mut unknown = Vec::new();
         unknown.push(opaque(&mut r, 2)?);
         let unpacked = r.i64()?;
-        require(
-            unpacked >= 0 && unpacked as u64 <= MAX_FILE,
-            "file_size_limit",
-        )?;
-        total += unpacked as u64;
-        require(total <= MAX_TOTAL, "expanded_size_limit")?;
+        require(unpacked >= 0, "file_size_limit")?;
         let attributes = r.u8()?;
         unknown.push(opaque(&mut r, 4)?);
         let creation = r.i64()?;
@@ -288,10 +278,7 @@ pub fn file_table(metadata: &[u8], version: &str) -> Result<(Vec<Value>, Value)>
         let notes = r.string()?;
         let packed = r.i64()?;
         let crc = r.u32()?;
-        require(
-            packed >= 0 && packed as u64 <= MAX_EXE,
-            "invalid_packed_size",
-        )?;
+        require(packed >= 0, "invalid_packed_size")?;
         let record_end = r.pos;
         let framing = if index + 1 < count {
             opaque(&mut r, 8)?
@@ -740,14 +727,10 @@ fn crc_update(mut crc: u32, bytes: &[u8]) -> u32 {
 }
 struct Decoder {
     total: u64,
-    deadline: Instant,
 }
 impl Decoder {
     fn new() -> Self {
-        Self {
-            total: 0,
-            deadline: Instant::now() + Duration::from_secs(180),
-        }
+        Self { total: 0 }
     }
     #[allow(clippy::too_many_arguments)]
     fn decode(
@@ -761,18 +744,22 @@ impl Decoder {
         compressed: bool,
         mut sink: Option<&mut dyn Write>,
     ) -> Result<(Value, Vec<u8>)> {
-        let limit = if retain {
-            MAX_METADATA as u64
-        } else {
-            MAX_FILE
-        };
         require(
             offset <= data.len() && packed <= data.len().saturating_sub(offset) as u64,
             "truncated_payload",
         )?;
-        if let Some(expected) = expected {
+        // Only retained metadata is a real in-memory allocation, so it alone
+        // keeps a bound. Streamed/digested output is bounded by the advertised
+        // size when present and by end-of-stream otherwise.
+        if retain {
             require(
-                expected <= limit && self.total + expected <= MAX_TOTAL,
+                expected.is_none_or(|size| size <= MAX_METADATA as u64),
+                "expanded_size_limit",
+            )?;
+        }
+        if let Some(size) = expected {
+            require(
+                self.total.checked_add(size).is_some(),
                 "expanded_size_limit",
             )?;
         }
@@ -791,12 +778,17 @@ impl Decoder {
             };
             require(dict <= MAX_DICTIONARY, "dictionary_limit")?;
             let header = u64::from_le_bytes(bytes[1..9].try_into().unwrap());
-            require(header <= limit, "expanded_size_limit")?;
+            if retain {
+                require(header <= MAX_METADATA as u64, "expanded_size_limit")?;
+            }
             if let Some(size) = expected {
                 require(header == size, "lzma2_size_mismatch")?;
             }
             expected = Some(header);
-            require(self.total + header <= MAX_TOTAL, "expanded_size_limit")?;
+            require(
+                self.total.checked_add(header).is_some(),
+                "expanded_size_limit",
+            )?;
             input.set_position(9);
             lzma = Some(
                 lzma_rust2::Lzma2Reader::new_mem_limit(
@@ -815,11 +807,20 @@ impl Decoder {
         let mut parts = Vec::new();
         let mut chunk = [0u8; CHUNK];
         loop {
-            require(Instant::now() < self.deadline, "audit_timeout")?;
-            // A one-byte probe beyond the advertised size bounds decoder output,
-            // while still requiring an actual end-of-stream marker.
-            let available = (limit - size + 1)
-                .min(expected.map_or(u64::MAX, |n| n - size + 1))
+            // A one-byte probe beyond the advertised size (or, for retained
+            // metadata, the metadata bound) detects decoder output past the
+            // declared length while still requiring an actual end-of-stream
+            // marker. Without an advertised size the stream runs to EOF in
+            // fixed chunks.
+            let ceiling = match (retain, expected) {
+                (true, Some(advertised)) => Some((MAX_METADATA as u64).min(advertised)),
+                (true, None) => Some(MAX_METADATA as u64),
+                (false, advertised) => advertised,
+            };
+            let available = ceiling
+                .map_or(CHUNK as u64, |ceiling| {
+                    ceiling.saturating_sub(size).saturating_add(1)
+                })
                 .min(CHUNK as u64) as usize;
             let count = if let Some(decoder) = lzma.as_mut() {
                 decoder.read(&mut chunk[..available]).map_err(|e| {
@@ -838,12 +839,16 @@ impl Decoder {
             if count == 0 {
                 break;
             }
-            size += count as u64;
-            self.total += count as u64;
-            require(
-                size <= limit && self.total <= MAX_TOTAL,
-                "expanded_size_limit",
-            )?;
+            size = size
+                .checked_add(count as u64)
+                .ok_or_else(|| Error("expanded_size_limit".into()))?;
+            self.total = self
+                .total
+                .checked_add(count as u64)
+                .ok_or_else(|| Error("expanded_size_limit".into()))?;
+            if retain {
+                require(size <= MAX_METADATA as u64, "expanded_size_limit")?;
+            }
             require(expected.is_none_or(|n| size <= n), "payload_size_mismatch")?;
             digest.update(&chunk[..count]);
             checksum = crc_update(checksum, &chunk[..count]);
@@ -965,10 +970,7 @@ pub fn behavior_digest(value: &Value) -> Result<String> {
     Ok(sha(python_json(value)?.as_bytes()))
 }
 pub fn audit(data: &[u8], behavior: bool) -> Result<Value> {
-    require(
-        !data.is_empty() && data.len() as u64 <= MAX_EXE,
-        "exe_size_limit",
-    )?;
+    require(!data.is_empty(), "exe_size_limit")?;
     let (overlay, overlay_end, manifest, certificate) = pe_overlay(data)?;
     let version = manifest["version"]
         .as_str()
@@ -984,10 +986,7 @@ pub fn audit(data: &[u8], behavior: bool) -> Result<Value> {
     let mut diagnostics = Vec::new();
     for name in ["irsetup.exe", "lua5.1.dll"] {
         let size = r.i64()?;
-        require(
-            size > 0 && size as u64 <= MAX_FILE && decoder.total + size as u64 <= MAX_TOTAL,
-            "runtime_size_limit",
-        )?;
+        require(size > 0, "runtime_size_limit")?;
         let offset = r.pos;
         let mut info = decoder
             .decode(
@@ -1051,27 +1050,21 @@ pub fn audit(data: &[u8], behavior: bool) -> Result<Value> {
         crate::graph::inventory(&metadata)?
     };
     let (mut records, table) = file_table(&metadata, &version)?;
-    let packed_total: u64 = records
-        .iter()
-        .map(|v| v["packed_size"].as_u64().unwrap())
-        .sum();
-    let payload_end = r.pos as u64 + packed_total;
+    let packed_total: u64 = records.iter().try_fold(0u64, |sum, v| {
+        sum.checked_add(v["packed_size"].as_u64().unwrap())
+            .ok_or_else(|| Error("payload_size_overflow".into()))
+    })?;
+    let payload_end = (r.pos as u64)
+        .checked_add(packed_total)
+        .ok_or_else(|| Error("payload_size_overflow".into()))?;
     let padding = if certificate.is_null() {
         0
     } else {
         (8 - payload_end % 8) % 8
     };
     require(
-        payload_end + padding == r.end as u64,
+        payload_end.checked_add(padding) == Some(r.end as u64),
         "overlay_size_or_tail_mismatch",
-    )?;
-    let unpacked_total: u64 = records
-        .iter()
-        .map(|v| v["unpacked_size"].as_u64().unwrap())
-        .sum();
-    require(
-        decoder.total + unpacked_total <= MAX_TOTAL,
-        "expanded_size_limit",
     )?;
     for record in &mut records {
         let packed = record["packed_size"].as_u64().unwrap();

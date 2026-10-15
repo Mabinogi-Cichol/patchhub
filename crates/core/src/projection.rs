@@ -483,6 +483,7 @@ fn project_instance_impl(
                 })
                 .collect();
             if !usable
+                || game.buildid.is_none()
                 || artifacts.len() > 1
                 || candidate
                     .mirrors
@@ -550,7 +551,7 @@ fn project_instance_impl(
                 blockers.push("game_not_ready".into());
                 automatic.push(ActionBlocker::code(ActionBlockerCode::GameNotReady));
             }
-            if has_zip && game.buildid.is_none() {
+            if has_zip && !manual && game.buildid.is_none() {
                 blockers.push("build_not_verified".into());
                 automatic.push(ActionBlocker::code(ActionBlockerCode::BuildNotVerified));
             }
@@ -893,7 +894,7 @@ fn dynamic_detection(
             game,
             &change.path,
             &change.installed_sha256,
-            detection::DEFAULT_MAX_BYTES,
+            None,
             inputs.cancel,
         );
         let status = file.status.as_str().to_owned();

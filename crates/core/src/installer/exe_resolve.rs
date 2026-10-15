@@ -34,7 +34,7 @@ pub fn expectation(selection: &ResolvedExeCandidate) -> FactsExpectation {
         language: selection.language.clone(),
         verified_buildids: Vec::new(),
         // EXE publisher sources keep the language gate (legacy behaviour).
-        require_language: !selection.language.is_empty(),
+        require_language: !selection.language.is_empty() && !selection.is_manual(),
         requires_dlc: selection.candidate.requires_dlc.clone().unwrap_or_default(),
         excludes_dlc: selection.candidate.excludes_dlc.clone().unwrap_or_default(),
         baselines: Vec::new(),
@@ -65,11 +65,9 @@ pub fn resolve_exe(
         .find(|r| r.id == candidate.source_id)
         .cloned()
         .ok_or_else(|| ResolveError::code("exe_source_disabled"))?;
-    if !matches!(rule.id.as_str(), "kagura-cn" | "kagura-en")
-        || rule.role != SourceRole::Publisher
+    if rule.role != SourceRole::Publisher
         || !rule.enabled
         || !registry.game_subscribed(appid, &rule.id)
-        || registry.source_origin(&rule.id) != Some("builtin")
     {
         return Err(ResolveError::code("exe_source_disabled"));
     }
@@ -201,6 +199,73 @@ mod tests {
                 "{variant:?}",
             );
         }
+    }
+
+    #[test]
+    fn supported_exe_from_an_added_non_builtin_source_is_admitted_manually() {
+        use crate::sources::model::{ArtifactFormat, DiscoveryRecord, RawSourceRule};
+        use crate::sources::registry::DiscoveryOutcome;
+        use crate::sources::Sources;
+
+        let temp = tempfile::tempdir().unwrap();
+        let mut candidate = super::super::orchestrator::tests::candidate();
+        let appid = candidate.game_appid.unwrap();
+        candidate.source_id = "custom-exe".to_string();
+        candidate.source_record_id = "https://mirror.example/p/1".to_string();
+        candidate.source_page = "https://mirror.example/p/1".to_string();
+        candidate.mirrors[0].format = "exe".into();
+        candidate.mirrors[0].url = "https://dl.mirror.example/a.exe".into();
+        candidate.format_reported = ArtifactFormat::Exe;
+        candidate.format_observed = ArtifactFormat::Exe;
+
+        let mut sources = Sources::open(temp.path()).unwrap();
+        let rule = sources
+            .registry_mut()
+            .add_source(&RawSourceRule {
+                id: "custom-exe".to_string(),
+                name: "Custom".to_string(),
+                adapter: "kagura_wordpress".to_string(),
+                role: None,
+                discovery_only: Some(true),
+                priority: None,
+                enabled: true,
+                pages: vec!["https://mirror.example/".to_string()],
+                page_hosts: vec!["mirror.example".to_string()],
+                download_hosts: Some(vec!["dl.mirror.example".to_string()]),
+                root_layout: None,
+                columns: None,
+                table_id: None,
+                language: None,
+                url: None,
+            })
+            .unwrap();
+        assert_eq!(sources.registry().source_origin(&rule.id), Some("added"));
+        sources
+            .registry_mut()
+            .commit(
+                &rule,
+                appid,
+                DiscoveryOutcome {
+                    status: "complete".into(),
+                    candidates: vec![candidate.clone()],
+                    ..Default::default()
+                },
+                &DiscoveryRecord::default(),
+                "test",
+            )
+            .unwrap();
+
+        let mut query = super::super::orchestrator::tests::query();
+        query.instance_id = Some("instance".to_string());
+        let selection = super::super::manual_selection::selection_id(
+            &candidate,
+            &query,
+            &candidate.mirrors[0],
+        )
+        .unwrap();
+        let resolved = resolve_exe(sources.registry(), &query, &selection).unwrap();
+        assert_eq!(resolved.source_id, "custom-exe");
+        assert_eq!(resolved.download_url, "https://dl.mirror.example/a.exe");
     }
 
     #[test]

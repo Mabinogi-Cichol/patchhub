@@ -271,7 +271,7 @@ fn protocol_error(error: protocol::ProtocolError) -> HostError {
 }
 
 /// Probe the fixed binary for every newly spawned core lifecycle. No write
-/// request, lease renewal, or state-directory creation precedes this gate.
+/// request or state-directory creation precedes this gate.
 fn require_capabilities(app: &AppHandle) -> Result<(), HostError> {
     let id = request_id();
     let request = json!({"protocol_version":PROTOCOL_VERSION,"request_id":id,
@@ -574,7 +574,7 @@ async fn refresh_sources(
     force: Option<bool>,
 ) -> Result<Value, HostError> {
     // `refresh_sources` is a task-channel method (p1-host-contract §1.1 B): it
-    // must run on the `serve-task` control channel (renew/cancel/EOF) exactly
+    // must run on the `serve-task` control channel (cancel/EOF) exactly
     // like `scan_sources`. The one-shot `serve` face is rejected by the core
     // with `task_required`, which is the failure this command previously hit.
     require_capabilities(&app)?;
@@ -595,7 +595,7 @@ async fn refresh_sources(
     let closing = app.state::<Closing>().inner().clone();
     let jobs = app.state::<Jobs>().inner().clone();
     // Keep the mutex guard inside this block so no non-Send guard is held across the `.await` below.
-    let (child_handle, progress, stdout, renew_handle, renew_stop) = {
+    let (child_handle, progress, stdout) = {
         let mut slot = scans.0.lock().map_err(|_| "job_state_unavailable")?;
         // A refresh shares the single source-task slot with `scan_sources`: the
         // core permits one task per `serve-task` child and both methods stream
@@ -621,11 +621,6 @@ async fn refresh_sources(
 
         let stdin_handle = Arc::new(Mutex::new(ClosableWriter(Some(stdin))));
         let cancelled = Arc::new(AtomicBool::new(false));
-        let renew_stop = Arc::new(AtomicBool::new(false));
-        // Refreshes hold the same 15s foreground lease as installs/scans, so the
-        // host must forward `renew` here too (p1-host-contract §5.2).
-        let renew_handle =
-            spawn_renew_forwarder(stdin_handle.clone(), cancelled.clone(), renew_stop.clone());
         let active = SourceScanJob {
             child: Arc::new(Mutex::new(child)),
             stdin: stdin_handle,
@@ -635,7 +630,7 @@ async fn refresh_sources(
         let child_handle = active.child.clone();
         let progress = active.progress.clone();
         slot.active = Some(active);
-        (child_handle, progress, stdout, renew_handle, renew_stop)
+        (child_handle, progress, stdout)
     };
 
     let app_for_task = app.clone();
@@ -644,11 +639,9 @@ async fn refresh_sources(
     let response_id = id.clone();
     let task = tauri::async_runtime::spawn_blocking(move || {
         let rejection_child = child_handle.clone();
-        let rejection_stop = renew_stop.clone();
         let reader = thread::spawn(move || {
             let result = read_refresh_task_output(stdout, response_id, app_for_reader, progress);
             if result.is_err() {
-                rejection_stop.store(true, Ordering::SeqCst);
                 // This source lookup child owns no installer game writes or
                 // rollback. Installer rejection uses cancel/EOF instead.
                 if let Ok(mut child) = rejection_child.lock() {
@@ -665,11 +658,6 @@ async fn refresh_sources(
         // A validated terminal is authoritative even if the process fails
         // during teardown. Incomplete or corrupt streams already return Err.
         let result = task_terminal_result(response, status);
-        // Stop lease forwarding, then drop the job so its stdin is closed
-        // (EOF is equivalent to `cancel`, p1-host-contract §1.1 C/§5.3).
-        renew_stop.store(true, Ordering::SeqCst);
-        renew_handle.thread().unpark();
-        let _ = renew_handle.join();
         if let Ok(mut slot) = scans_for_task.0.lock() {
             slot.active = None;
             // `refresh_sources` returns `{settings_revision, statuses}`, a
@@ -712,7 +700,7 @@ fn valid_archive(value: String) -> Result<PathBuf, HostError> {
 }
 
 /// Writes one newline-terminated control line to the `serve-task` stdin channel
-/// (`renew`/`cancel`, p1-host-contract §1.1 C). Generic over the writer so the
+/// (`cancel`, p1-host-contract §1.1 C). Generic over the writer so the
 /// wire shape can be asserted without spawning the core.
 fn task_terminal_result(
     response: Result<Value, HostError>,
@@ -745,68 +733,18 @@ fn write_control_line(writer: &mut impl Write, line: &[u8]) -> Result<(), HostEr
         .map_err(|_| HostError::from("control_write_failed"))
 }
 
-/// Interval between forwarded `renew` control lines. Kept well below the 15s
-/// foreground lease TTL (p1-host-contract §5.2).
-const RENEW_INTERVAL: Duration = Duration::from_secs(3);
-
-/// Whether the renew loop should still emit another control line: forwarding
-/// stops once the task is terminal (`stop`) or the user cancelled it. A late
-/// `renew` after `cancel` must therefore have no effect (p1-host-contract §5.2).
-fn should_forward_renew(stop: &AtomicBool, cancelled: &AtomicBool) -> bool {
-    !stop.load(Ordering::SeqCst) && !cancelled.load(Ordering::SeqCst)
-}
-
-/// Forwards `renew` to the task stdin every `RENEW_INTERVAL` until the task
-/// reaches a terminal state, is cancelled, or the host exits (p1-host-contract
-/// §5.2). Returns promptly on `stop`/`cancel` via an `unpark` wake-up.
-fn spawn_renew_forwarder(
-    stdin: StdinHandle,
-    cancelled: Arc<AtomicBool>,
-    stop: Arc<AtomicBool>,
-) -> thread::JoinHandle<()> {
-    spawn_renew_forwarder_with_interval(stdin, cancelled, stop, RENEW_INTERVAL)
-}
-
-/// Generic/injectable variant of [`spawn_renew_forwarder`]: the writer and
-/// interval are parameters so the start/stop behaviour can be asserted without
-/// spawning the core or waiting out the production 3s cadence.
-fn spawn_renew_forwarder_with_interval<W>(
-    stdin: Arc<Mutex<W>>,
-    cancelled: Arc<AtomicBool>,
-    stop: Arc<AtomicBool>,
-    interval: Duration,
-) -> thread::JoinHandle<()>
-where
-    W: Write + Send + 'static,
-{
-    thread::spawn(move || loop {
-        thread::park_timeout(interval);
-        if !should_forward_renew(&stop, &cancelled) {
-            return;
-        }
-        let Ok(mut stdin) = stdin.lock() else {
-            return;
-        };
-        if write_control_line(&mut *stdin, b"renew\n").is_err() {
-            return;
-        }
-    })
-}
-
 fn cancel_job(stdin: &StdinHandle, cancelled: &AtomicBool) -> Result<(), HostError> {
     cancelled.store(true, Ordering::SeqCst);
     let mut stdin = stdin.lock().map_err(|_| "job_state_unavailable")?;
     write_control_line(&mut *stdin, b"cancel\n")
 }
 
-/// Wire rejection revokes the lease and closes the control pipe; it never
+/// Wire rejection cancels the task and closes the control pipe; it never
 /// terminates the writer process while it may be applying or rolling back.
 fn cancel_and_close<W: Write>(
     stdin: &Arc<Mutex<ClosableWriter<W>>>,
-    stop: &AtomicBool,
     cancelled: &AtomicBool,
 ) {
-    stop.store(true, Ordering::SeqCst);
     cancelled.store(true, Ordering::SeqCst);
     if let Ok(mut control) = stdin.lock() {
         let _ = write_control_line(&mut *control, b"cancel\n");
@@ -1199,7 +1137,7 @@ async fn start_install(
     let jobs = jobs.inner().clone();
     let closing = app.state::<Closing>().inner().clone();
     // Keep the mutex guard inside this block so no non-Send guard is held across the `.await` below.
-    let (child_handle, control_stdin, cancelled, progress, stdout, renew_handle, renew_stop) = {
+    let (child_handle, control_stdin, cancelled, progress, stdout) = {
         let mut slot = jobs.0.lock().map_err(|_| "job_state_unavailable")?;
         if slot.is_some() {
             return Err("install_in_progress".into());
@@ -1221,9 +1159,6 @@ async fn start_install(
 
         let stdin_handle = Arc::new(Mutex::new(ClosableWriter(Some(stdin))));
         let cancelled = Arc::new(AtomicBool::new(false));
-        let renew_stop = Arc::new(AtomicBool::new(false));
-        let renew_handle =
-            spawn_renew_forwarder(stdin_handle.clone(), cancelled.clone(), renew_stop.clone());
         let active = ActiveJob {
             child: Arc::new(Mutex::new(child)),
             stdin: stdin_handle,
@@ -1235,38 +1170,27 @@ async fn start_install(
         let control_stdin = active.stdin.clone();
         let cancelled = active.cancelled.clone();
         *slot = Some(active);
-        (
-            child_handle,
-            control_stdin,
-            cancelled,
-            progress,
-            stdout,
-            renew_handle,
-            renew_stop,
-        )
+        (child_handle, control_stdin, cancelled, progress, stdout)
     };
 
     let app_for_task = app.clone();
     let response_id = request_id.clone();
     let task = tauri::async_runtime::spawn_blocking(move || {
         let (sender, messages) = std::sync::mpsc::channel();
-        let rejection_stop = renew_stop.clone();
         let rejection_stdin = control_stdin.clone();
         let rejection_cancelled = cancelled.clone();
         let terminal_sender = sender.clone();
         let terminal_stdin = control_stdin.clone();
-        let terminal_stop = renew_stop.clone();
         let reader = thread::spawn(move || {
             let result = read_install_task_output(
                 stdout,
                 &response_id,
                 progress,
                 |error| {
-                    cancel_and_close(&rejection_stdin, &rejection_stop, &rejection_cancelled);
+                    cancel_and_close(&rejection_stdin, &rejection_cancelled);
                     let _ = sender.send(InstallReaderMessage::Rejected(error.clone()));
                 },
                 |value| {
-                    terminal_stop.store(true, Ordering::SeqCst);
                     close_control(&terminal_stdin);
                     let _ = terminal_sender.send(InstallReaderMessage::Terminal(value.clone()));
                 },
@@ -1306,7 +1230,7 @@ async fn start_install(
             }
         };
         if response.is_err() {
-            cancel_and_close(&control_stdin, &renew_stop, &cancelled);
+            cancel_and_close(&control_stdin, &cancelled);
         }
         let status = wait_core_until(
             &child_handle,
@@ -1319,11 +1243,6 @@ async fn start_install(
         // A validated terminal is authoritative even if the process fails
         // during teardown. Incomplete or corrupt streams already return Err.
         let result = task_terminal_result(response, status);
-        // Stop lease forwarding, then drop the job so its stdin is closed
-        // (EOF is equivalent to `cancel`, p1-host-contract §1.1 C/§5.3).
-        renew_stop.store(true, Ordering::SeqCst);
-        renew_handle.thread().unpark();
-        let _ = renew_handle.join();
         if exited {
             if let Ok(mut current) = jobs.0.lock() {
                 current.take();
@@ -1445,10 +1364,23 @@ async fn start_source_scan(
     app: AppHandle,
     scans: State<'_, SourceScans>,
     force: Option<bool>,
+    instance_id: Option<String>,
+    name_hints: Option<Vec<String>>,
+    preferred_language: Option<String>,
 ) -> Result<Value, HostError> {
     require_capabilities(&app)?;
     let id = request_id();
-    let request = source_scan_request(&id, common_params(&app)?, force.unwrap_or(false))?;
+    let mut common = common_params(&app)?;
+    if let Some(instance) = instance_id {
+        common["instance_id"] = json!(instance);
+    }
+    if let Some(hints) = name_hints {
+        common["name_hints"] = json!(hints);
+    }
+    if let Some(language) = preferred_language {
+        common["preferred_language"] = json!(language);
+    }
+    let request = source_scan_request(&id, common, force.unwrap_or(false))?;
     let payload = serde_json::to_vec(&request).map_err(|_| "request_encoding_failed")?;
     let mut request_line = payload.clone();
     request_line.push(b'\n');
@@ -1464,7 +1396,7 @@ async fn start_source_scan(
     let closing = app.state::<Closing>().inner().clone();
     let jobs = app.state::<Jobs>().inner().clone();
     // Keep the mutex guard inside this block so no non-Send guard is held across the `.await` below.
-    let (child_handle, progress, stdout, renew_handle, renew_stop) = {
+    let (child_handle, progress, stdout) = {
         let mut slot = scans.0.lock().map_err(|_| "job_state_unavailable")?;
         if slot.active.is_some() {
             return Err("source_scan_in_progress".into());
@@ -1487,11 +1419,6 @@ async fn start_source_scan(
 
         let stdin_handle = Arc::new(Mutex::new(ClosableWriter(Some(stdin))));
         let cancelled = Arc::new(AtomicBool::new(false));
-        let renew_stop = Arc::new(AtomicBool::new(false));
-        // Source scans run on the same 15s foreground lease as installs, so the
-        // host must forward `renew` here too (p1-host-contract §5.2).
-        let renew_handle =
-            spawn_renew_forwarder(stdin_handle.clone(), cancelled.clone(), renew_stop.clone());
         let active = SourceScanJob {
             child: Arc::new(Mutex::new(child)),
             stdin: stdin_handle,
@@ -1501,7 +1428,7 @@ async fn start_source_scan(
         let child_handle = active.child.clone();
         let progress = active.progress.clone();
         slot.active = Some(active);
-        (child_handle, progress, stdout, renew_handle, renew_stop)
+        (child_handle, progress, stdout)
     };
 
     let app_for_task = app.clone();
@@ -1510,11 +1437,9 @@ async fn start_source_scan(
     let response_id = id.clone();
     let task = tauri::async_runtime::spawn_blocking(move || {
         let rejection_child = child_handle.clone();
-        let rejection_stop = renew_stop.clone();
         let reader = thread::spawn(move || {
             let result = read_source_task_output(stdout, response_id, app_for_reader, progress);
             if result.is_err() {
-                rejection_stop.store(true, Ordering::SeqCst);
                 // This source lookup child owns no installer game writes or
                 // rollback. Installer rejection uses cancel/EOF instead.
                 if let Ok(mut child) = rejection_child.lock() {
@@ -1531,11 +1456,6 @@ async fn start_source_scan(
         // A validated terminal is authoritative even if the process fails
         // during teardown. Incomplete or corrupt streams already return Err.
         let result = task_terminal_result(response, status);
-        // Stop lease forwarding, then drop the job so its stdin is closed
-        // (EOF is equivalent to `cancel`, p1-host-contract §1.1 C/§5.3).
-        renew_stop.store(true, Ordering::SeqCst);
-        renew_handle.thread().unpark();
-        let _ = renew_handle.join();
         if let Ok(mut slot) = scans_for_task.0.lock() {
             slot.active = None;
             if let Ok(value) = &result {
@@ -2271,94 +2191,10 @@ mod tests {
     }
 
     #[test]
-    fn control_lines_write_renew_and_cancel() {
-        let mut renew = Vec::new();
-        write_control_line(&mut renew, b"renew\n").unwrap();
-        assert_eq!(renew, b"renew\n");
-
+    fn control_line_writes_cancel() {
         let mut cancel = Vec::new();
         write_control_line(&mut cancel, b"cancel\n").unwrap();
         assert_eq!(cancel, b"cancel\n");
-    }
-
-    #[test]
-    fn renew_forwarding_stops_on_stop_or_cancel() {
-        let stop = AtomicBool::new(false);
-        let cancelled = AtomicBool::new(false);
-        assert!(should_forward_renew(&stop, &cancelled));
-
-        // A cancelled task must not accept a late `renew`.
-        cancelled.store(true, Ordering::SeqCst);
-        assert!(!should_forward_renew(&stop, &cancelled));
-
-        // Terminal/stop signal also halts forwarding.
-        cancelled.store(false, Ordering::SeqCst);
-        stop.store(true, Ordering::SeqCst);
-        assert!(!should_forward_renew(&stop, &cancelled));
-    }
-
-    /// Waits until `writer` has at least `len` bytes, panicking past the deadline.
-    fn wait_for_bytes(writer: &Arc<Mutex<Vec<u8>>>, len: usize) {
-        let deadline = std::time::Instant::now() + Duration::from_secs(2);
-        while writer.lock().unwrap().len() < len {
-            assert!(
-                std::time::Instant::now() < deadline,
-                "renew line was not forwarded in time"
-            );
-            thread::sleep(Duration::from_millis(2));
-        }
-    }
-
-    #[test]
-    fn renew_forwarder_writes_until_stopped() {
-        let writer = Arc::new(Mutex::new(Vec::<u8>::new()));
-        let cancelled = Arc::new(AtomicBool::new(false));
-        let stop = Arc::new(AtomicBool::new(false));
-        let handle = spawn_renew_forwarder_with_interval(
-            writer.clone(),
-            cancelled.clone(),
-            stop.clone(),
-            Duration::from_millis(2),
-        );
-        wait_for_bytes(&writer, b"renew\nrenew\n".len());
-
-        stop.store(true, Ordering::SeqCst);
-        handle.thread().unpark();
-        handle.join().unwrap();
-
-        let after_stop = writer.lock().unwrap().len();
-        thread::sleep(Duration::from_millis(20));
-        assert_eq!(
-            writer.lock().unwrap().len(),
-            after_stop,
-            "forwarding continued after the stop signal"
-        );
-    }
-
-    #[test]
-    fn renew_forwarder_ignores_renew_after_cancel() {
-        let writer = Arc::new(Mutex::new(Vec::<u8>::new()));
-        let cancelled = Arc::new(AtomicBool::new(false));
-        let stop = Arc::new(AtomicBool::new(false));
-        let handle = spawn_renew_forwarder_with_interval(
-            writer.clone(),
-            cancelled.clone(),
-            stop.clone(),
-            Duration::from_millis(2),
-        );
-        wait_for_bytes(&writer, b"renew\n".len());
-
-        cancelled.store(true, Ordering::SeqCst);
-        handle.thread().unpark();
-        handle.join().unwrap();
-
-        let after_cancel = writer.lock().unwrap().len();
-        thread::sleep(Duration::from_millis(20));
-        assert_eq!(
-            writer.lock().unwrap().len(),
-            after_cancel,
-            "a cancelled task kept forwarding renew"
-        );
     }
 
     fn task_stream(lines: &[Value]) -> Vec<u8> {
@@ -2828,19 +2664,18 @@ mod tests {
                 child.stdin.take().unwrap(),
             ))));
             let stdout = child.stdout.take().unwrap();
-            let stop = Arc::new(AtomicBool::new(false));
             let cancelled = Arc::new(AtomicBool::new(false));
             let progress = Arc::new(Mutex::new(Progress::default()));
             let error = read_install_task_output(
                 stdout,
                 "req-1",
                 progress.clone(),
-                |_| cancel_and_close(&stdin, &stop, &cancelled),
+                |_| cancel_and_close(&stdin, &cancelled),
                 |_| panic!("invalid envelope must retain transport error"),
             )
             .unwrap_err();
             assert_eq!(error, "invalid_core_response");
-            assert!(stop.load(Ordering::SeqCst));
+            assert!(cancelled.load(Ordering::SeqCst));
             assert!(stdin.lock().unwrap().0.is_none());
             assert_eq!(
                 progress.lock().unwrap().as_ref().unwrap().stage,

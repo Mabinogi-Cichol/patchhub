@@ -117,12 +117,7 @@ mod tests {
     }
 
     fn context(fake: &Arc<FakeFetcher>) -> RequestContext {
-        RequestContext::with_settings(
-            Box::new(Arc::clone(fake)),
-            20,
-            Duration::from_secs(30),
-            Duration::ZERO,
-        )
+        RequestContext::with_settings(Box::new(Arc::clone(fake)), Duration::ZERO)
     }
 
     const ROW: &str = r#"<tr><td>Game</td><td><a href="https://download.example.com/g.zip">dl</a></td><td>2024/1/2</td><td>zh-CN</td></tr>"#;

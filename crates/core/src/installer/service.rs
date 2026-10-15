@@ -20,7 +20,7 @@ use std::{
         atomic::{AtomicBool, Ordering},
         Arc,
     },
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::Duration,
 };
 
 fn checked(value: &str, max: usize, code: &str) -> Result<String, DomainError> {
@@ -214,8 +214,6 @@ impl Clock for SystemClock {
 }
 pub trait TaskLease: Sync {
     fn cancelled(&self) -> bool;
-    fn lease_active(&self, now_seconds: u64) -> bool;
-    fn deadline_ms(&self) -> u64;
     fn cancellation_cause(&self) -> Option<CancellationCause>;
 }
 pub struct InstallerDeps<'a> {
@@ -242,14 +240,6 @@ fn query(game: &steam::GameInstall) -> sources::GameQuery {
         instance_id: Some(game.instance_id.clone()),
     }
 }
-fn wall_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis()
-        .try_into()
-        .unwrap_or(u64::MAX)
-}
 pub fn install(
     request: InstallRequest,
     deps: InstallerDeps<'_>,
@@ -269,17 +259,9 @@ pub fn install(
     let now = deps.clock.now_seconds()?;
     let reason = || {
         deps.control.cancellation_cause().or_else(|| {
-            if deps.control.cancelled() {
-                Some(CancellationCause::UserCancelled)
-            } else if !deps
-                .control
-                .lease_active(deps.clock.now_seconds().unwrap_or(u64::MAX))
-                || wall_ms() >= deps.control.deadline_ms()
-            {
-                Some(CancellationCause::LeaseExpired)
-            } else {
-                None
-            }
+            deps.control
+                .cancelled()
+                .then_some(CancellationCause::UserCancelled)
         })
     };
     let cancel = Arc::new(AtomicBool::new(false));
@@ -293,17 +275,11 @@ pub fn install(
     });
     let execution = std::thread::scope(|scope| {
         let control = deps.control;
-        let clock = deps.clock;
         let flag = cancel.clone();
         let done = &done;
         scope.spawn(move || {
             while !done.load(Ordering::Acquire) {
-                if control.cancelled()
-                    || !clock
-                        .now_seconds()
-                        .is_ok_and(|now| control.lease_active(now))
-                    || wall_ms() >= control.deadline_ms()
-                {
+                if control.cancelled() {
                     flag.store(true, Ordering::Release);
                     break;
                 }
@@ -317,8 +293,6 @@ pub fn install(
             }
         }
         let _finish = Finish(done);
-        let lease = |now| deps.control.lease_active(now);
-        let deadline = || deps.control.deadline_ms();
         let safety_guard = cache_guard.clone();
         operation::with_cancel(cancel.clone(), || {
             operation::with_safety(
@@ -339,7 +313,6 @@ pub fn install(
                             operation: request.operation,
                             request_id: request.request_id.as_str(),
                             now,
-                            ttl_seconds: install::PLAN_TTL_SECONDS,
                         },
                         signed::SignedInstallDeps {
                             paths,
@@ -347,8 +320,6 @@ pub fn install(
                             revision_store: deps.revision_store,
                             transport: deps.transport,
                             cancel: &cancel,
-                            lease_active: &lease,
-                            lease_deadline_ms: &deadline,
                             clock: &|| deps.clock.now_seconds(),
                             cancel_reason: &reason,
                             platform: deps.host.platform,
@@ -368,16 +339,12 @@ pub fn install(
                                 selection: &selection,
                                 operation: request.operation,
                                 request_id: request.request_id.as_str(),
-                                now,
-                                ttl_seconds: install::PLAN_TTL_SECONDS,
                             },
                             super::ZipInstallDeps {
                                 paths,
                                 state_dir: deps.host.state_dir(),
                                 transport: deps.transport,
                                 cancel: &cancel,
-                                lease_active: &lease,
-                                lease_deadline_ms: &deadline,
                                 cancel_reason: &reason,
                             },
                         )
@@ -404,7 +371,6 @@ pub fn install(
                                 selection: &selection,
                                 operation: request.operation,
                                 request_id: request.request_id.as_str(),
-                                ttl_seconds: install::PLAN_TTL_SECONDS,
                             },
                             super::exe_orchestrator::ExeInstallDeps {
                                 paths,
@@ -412,7 +378,6 @@ pub fn install(
                                 transport: deps.transport,
                                 runtime,
                                 cancel: &cancel,
-                                lease_deadline_ms: &deadline,
                                 cancel_reason: &reason,
                             },
                         )
@@ -425,7 +390,7 @@ pub fn install(
     .map_err(|error| {
         if matches!(
             error.code.as_str(),
-            "cancelled" | "task_cancelled" | "download_cancelled" | "lease_expired"
+            "cancelled" | "task_cancelled" | "download_cancelled"
         ) {
             DomainError::new("cancelled", error.code)
         } else {

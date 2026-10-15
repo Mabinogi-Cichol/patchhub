@@ -140,8 +140,7 @@ class Plugin:
             raise ValueError("scan_stale")
         return session.snapshot()
 
-    async def discover_game(self, instance_id: str, name_hints=None, preferred_language=None, force: bool = False):
-        """Discover metadata for a trusted local instance without occupying the installer."""
+    def _discovery_game(self, instance_id, name_hints, preferred_language, force):
         validate_id(instance_id, MAX_INSTANCE_ID_BYTES)
         if name_hints is None:
             name_hints = []
@@ -157,6 +156,44 @@ class Plugin:
         game = games.get(instance_id)
         if game is None:
             raise ValueError("instance_not_found")
+        return game
+
+    async def start_game_discovery(self, instance_id: str, name_hints=None,
+                                   preferred_language=None, force: bool = False):
+        self._discovery_game(instance_id, name_hints, preferred_language, force)
+        query = (instance_id, tuple(name_hints or []), preferred_language, force)
+        previous = getattr(self, "_scan_session", None)
+        if (previous and not previous.worker.done()
+                and getattr(self, "_discovery_query", None) == query):
+            return previous.snapshot()
+        if previous:
+            await previous.close()
+        self._scan_generation = getattr(self, "_scan_generation", 0) + 1
+        generation = self._scan_generation
+        report = await self._read_report()
+        revision = self.sources.settings_revision
+        self._discovery_query = query
+        def current():
+            return self._scan_generation == generation and self.sources.settings_revision == revision
+        async def no_refresh(on_event, cancel):
+            return []
+        async def lookup(on_event, cancel):
+            return await self.sources.scan_sources(force=force, on_event=on_event, cancel=cancel,
+                instance_id=instance_id, name_hints=name_hints, preferred_language=preferred_language)
+        self._scan_session = ScanSession(report, no_refresh, lookup, self._project_row, current, target_instance=instance_id)
+        return self._scan_session.snapshot()
+
+    async def cancel_source_query(self):
+        session = getattr(self, "_scan_session", None)
+        if not session or session.worker.done():
+            return False
+        await session.close()
+        return True
+
+    async def discover_game(self, instance_id: str, name_hints=None, preferred_language=None, force: bool = False):
+        """Discover metadata for a trusted local instance without occupying the installer."""
+        game = self._discovery_game(instance_id, name_hints, preferred_language, force)
+        name_hints = name_hints or []
         generation = self._scan_generation
         revision = self.sources.settings_revision
         result = await self.sources.discover_game(game, name_hints, preferred_language, force, generation,

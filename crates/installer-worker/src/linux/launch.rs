@@ -62,7 +62,9 @@ pub const BWRAP_PATH: &str = "/usr/bin/bwrap";
 
 /// Production `RLIMIT_AS` (3 GiB). Matches `scripts/sf95_worker.py`.
 pub const DEFAULT_ADDRESS_SPACE_BYTES: u64 = 3 * 1024 * 1024 * 1024;
-/// Production `RLIMIT_CPU` (300 s). Matches `scripts/sf95_worker.py`.
+/// `RLIMIT_CPU` value retained for callers that explicitly configure
+/// `SandboxLimits::cpu_seconds` (probe/diagnostic use). No production CPU-time
+/// ceiling is applied by default (D05); see `apply_limits`.
 pub const DEFAULT_CPU_SECONDS: u64 = 300;
 /// Production `RLIMIT_CORE` (0, never dump core).
 pub const DEFAULT_CORE_BYTES: u64 = 0;
@@ -79,8 +81,6 @@ const OVERFLOW_IO: u8 = 3;
 
 const TERM_GRACE: Duration = Duration::from_secs(1);
 const POLL_INTERVAL: Duration = Duration::from_millis(20);
-/// Safety valve so a wedged monitor can never hang the host forever.
-const HARD_CEILING: Duration = Duration::from_secs(3600);
 
 /// Build the bubblewrap argv for `cfg`. The command after `--` runs inside the
 /// sandbox; the sandbox layout is `/input`, `/tool` (read-only) and `/output`
@@ -381,13 +381,13 @@ fn run_internal(
         if overflow.load(Ordering::SeqCst) != OVERFLOW_NONE {
             break End::OutputLimit;
         }
+        // Enforce only an explicitly configured timeout (the probe's start /
+        // no-response bound). Normal analyze/convert work runs to completion;
+        // no wall-clock ceiling is imposed here (D05).
         if let Some(limit) = cfg.limits.timeout {
             if start.elapsed() >= limit {
                 break End::TimedOut;
             }
-        }
-        if start.elapsed() >= HARD_CEILING {
-            break End::TimedOut;
         }
         match child.try_wait() {
             Ok(Some(status)) => break End::Exited(status),
@@ -531,10 +531,11 @@ fn apply_limits(limits: &SandboxLimits) -> std::io::Result<()> {
             .address_space_bytes
             .unwrap_or(DEFAULT_ADDRESS_SPACE_BYTES),
     )?;
-    set_one(
-        sys::RLIMIT_CPU,
-        limits.cpu_seconds.unwrap_or(DEFAULT_CPU_SECONDS),
-    )?;
+    // CPU-time termination is not applied to normal work (D05); only an
+    // explicitly configured per-process CPU limit is honored (probe use).
+    if let Some(seconds) = limits.cpu_seconds {
+        set_one(sys::RLIMIT_CPU, seconds)?;
+    }
     set_one(
         sys::RLIMIT_CORE,
         limits.core_bytes.unwrap_or(DEFAULT_CORE_BYTES),

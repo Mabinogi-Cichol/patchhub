@@ -122,7 +122,6 @@ export function reason(code: string): string {
     discovery_budget_exhausted: "本次查询时间已用尽，显示已取得的结果。",
     discovery_detail_budget_exhausted: "本次详情查询已达到上限，显示已取得的结果。",
     discovery_index_incomplete: "来源目录尚未查完，可重新查找以继续获取。",
-    discovery_retry_deferred: "来源要求稍后重试，显示已取得的结果。",
     discovery_retry_exhausted: "来源仍暂不可用，显示上次成功结果。",
     discovery_challenge: "来源网页需要验证码或访问确认，可在浏览器中打开。",
     discovery_compressed_response: "来源网页的压缩格式暂不支持，保留上次查询结果。",
@@ -181,6 +180,9 @@ export function reason(code: string): string {
     exe_manifest_unavailable: "无法读取游戏版本信息，请检查 Steam 游戏安装。",
     exe_manifest_invalid: "游戏版本信息无效，请检查 Steam 游戏安装。",
     exe_manifest_duplicate: "游戏版本信息冲突，请重新扫描。",
+    discovery_output_resource_limit: "来源结果超过当前元数据预算，旧结果已保留。",
+    discovery_index_resource_limit: "来源索引超过当前元数据预算，旧索引已保留。",
+    discovery_index_resource_limit_incomplete: "来源索引尚未查完，已保留已有结果。",
     exe_manifest_limit: "游戏版本信息超出安全限制。",
     exe_baseline_invalid: "已审核的游戏文件条件无效，暂不能安装。",
     exe_game_file_changed: "游戏原文件已变化，请重新准备安装。",
@@ -190,11 +192,9 @@ export function reason(code: string): string {
     exe_game_file_limit: "游戏文件超出检查限制，暂不能安装。",
     exe_state_insufficient_space: "插件状态目录空间不足，请清理空间后重试。",
     exe_target_insufficient_space: "游戏所在磁盘空间不足，请清理空间后重试。",
-    exe_original_size_limit: "原游戏文件超过备份安全限制，暂不能安装。",
     exe_payload_changed: "安装包内容已变化，请重新查找补丁。",
     exe_manifest_changed: "安装包文件清单已变化，请重新安装。",
     exe_worker_evidence_changed: "安装包检查结果不一致，请重新安装。",
-    exe_local_authorization_changed: "本机安装计划授权已变化，请重新准备。",
     exe_policy_identity_changed: "安装计划关联的游戏或补丁已变化，请重新准备。",
     exe_policy_invalid: "安装计划记录无效，请重新准备。",
     exe_policy_unavailable: "安装计划记录不可用，请重新准备。",
@@ -224,8 +224,6 @@ export function reason(code: string): string {
     catalog_expired: "签名目录已到期，请更新目录后重新生成计划。",
     catalog_rollback: "目录版本低于本机已验证版本，请使用较新的可信目录。",
     release_revoked: "此补丁版本已被维护端撤销，不能安装。",
-    plan_expired: "安装计划已过期，请重新预检。",
-    plan_authorization_changed: "目录授权或配方已变化，请重新生成计划。",
     plan_has_blockers: "安装计划存在阻止条件，请先处理列出的问题。",
     game_closed_confirmation_required: "请关闭游戏并暂停 Steam 更新后确认。",
     game_changed_or_unavailable: "游戏版本或库状态已变化，请重新扫描和预检。",
@@ -270,7 +268,6 @@ export function reason(code: string): string {
      ,capability_mismatch: "核心能力与客户端要求不一致，请更新客户端或核心后重试。"
      ,contract_mismatch: "客户端与核心的安装契约不一致，请更新客户端。"
      ,installer_schema_unsupported: "安装器数据结构版本不受支持，请更新客户端与核心。"
-     ,installer_lease_expired: "安装授权已过期，请重新发起安装。"
      ,cleanup_failed: "临时文件清理失败；安装已完成，可稍后重新扫描确认。"
      ,task_required: "此操作必须通过安装任务执行，请从安装按钮重新发起。"
      ,invalid_selection_id: "补丁选择标识无效，请重新查找来源。"

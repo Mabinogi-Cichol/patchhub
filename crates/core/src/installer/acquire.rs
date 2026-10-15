@@ -30,7 +30,6 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-const MAX_EXE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const DOWNLOAD_RESERVE_BYTES: u64 = 8 * 1024 * 1024;
 const SPACE_CHECK_INTERVAL_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_REDIRECTS: usize = 5;
@@ -147,12 +146,6 @@ impl ArchiveKind {
         match self {
             Self::Zip => "zip",
             Self::Exe => "exe",
-        }
-    }
-    fn limit(self) -> Option<u64> {
-        match self {
-            Self::Zip => None,
-            Self::Exe => Some(MAX_EXE_BYTES),
         }
     }
     fn url(self, url: &str, hosts: &[String]) -> Result<String> {
@@ -289,19 +282,6 @@ fn download_and_persist(
         return Err(invalid("download_response_url_changed"));
     }
 
-    if response
-        .content_type
-        .as_deref()
-        .is_some_and(|mime| mime.contains("text/html") || mime.contains("application/json"))
-    {
-        return Err(invalid("download_not_zip"));
-    }
-    if kind.limit().is_some_and(|max| {
-        response.content_length.is_some_and(|length| length > max)
-            || request.expected_size.is_some_and(|size| size > max)
-    }) {
-        return Err(invalid("download_size_limit"));
-    }
     if let (Some(expected), Some(length)) = (request.expected_size, response.content_length) {
         if length != expected {
             return Err(invalid("download_size_mismatch"));
@@ -331,7 +311,6 @@ fn download_and_persist(
     let expected = Expected {
         sha256: request.expected_sha256,
         size: request.expected_size.or(response.content_length),
-        max: kind.limit(),
         kind,
         total_hint,
         space_dir: dir,
@@ -342,7 +321,7 @@ fn download_and_persist(
 
     let destination = dir.join(format!("{digest}.{}", kind.extension()));
     if destination.exists() {
-        let (existing, existing_size) = hash_file(&destination, kind.limit(), cancel)?;
+        let (existing, existing_size) = hash_file(&destination, cancel)?;
         if existing != digest || existing_size != size {
             return Err(invalid("download_cache_conflict"));
         }
@@ -374,7 +353,6 @@ fn download_and_persist(
 struct Expected<'a> {
     sha256: Option<&'a str>,
     size: Option<u64>,
-    max: Option<u64>,
     kind: ArchiveKind,
     total_hint: u64,
     space_dir: &'a Path,
@@ -410,9 +388,6 @@ fn copy_verified(
         total = total
             .checked_add(count as u64)
             .ok_or_else(|| invalid("download_size_overflow"))?;
-        if expected.max.is_some_and(|max| total > max) {
-            return Err(invalid("download_size_limit"));
-        }
         if expected.size.is_some_and(|size| total > size) {
             return Err(invalid("download_size_mismatch"));
         }
@@ -522,7 +497,7 @@ fn load_cached(
             return Err(invalid("download_cancelled"));
         }
         operation::stage("validating", None, None);
-        let (digest, size) = hash_file(&archive, kind.limit(), cancel)?;
+        let (digest, size) = hash_file(&archive, cancel)?;
         if digest != meta.sha256 || size != meta.size {
             continue;
         }
@@ -557,12 +532,8 @@ fn write_manifest(dir: &Path, meta: &CacheEntry) -> Result<()> {
     Ok(())
 }
 
-fn hash_file(path: &Path, limit: Option<u64>, cancel: &AtomicBool) -> Result<(String, u64)> {
-    let size = fs::metadata(path)?.len();
-    if limit.is_some_and(|max| size > max) {
-        return Err(invalid("download_size_limit"));
-    }
-    let digest = super::facts::digest_file(path, size, cancel)?;
+fn hash_file(path: &Path, cancel: &AtomicBool) -> Result<(String, u64)> {
+    let digest = super::facts::digest_file(path, cancel)?;
     Ok((digest.sha256, digest.size))
 }
 
@@ -805,7 +776,7 @@ mod tests {
     }
 
     #[test]
-    fn zip_uses_real_download_space_and_exe_keeps_format_limit() {
+    fn zip_and_exe_use_real_download_space_without_a_format_size_limit() {
         let (_temp, paths) = setup();
         let hosts = hosts();
         let available = fs2::available_space(paths.downloads_dir()).unwrap();
@@ -823,17 +794,17 @@ mod tests {
                 .is_some_and(|ext| ext == "partial")
         }));
 
+        // An EXE has no artificial format size cap: it is admitted and checked
+        // against the actual free space exactly like a ZIP, so a declared size
+        // at the volume limit is rejected by the real space check.
         let mut exe = request("https://download.example.com/a.exe", &hosts);
-        exe.expected_size = Some(MAX_EXE_BYTES + 1);
-        let mut response = response(200, b"MZ".to_vec(), Some(MAX_EXE_BYTES + 1));
+        exe.expected_size = Some(available);
+        let mut response = response(200, b"MZ".to_vec(), Some(available));
         response.final_url = exe.url.into();
         let transport = FakeTransport::new(vec![response]);
-        assert_eq!(
-            acquire_exe_with(&transport, &exe, &paths, &AtomicBool::new(false), |_, _| {})
-                .unwrap_err()
-                .to_string(),
-            "download_size_limit"
-        );
+        let error = acquire_exe_with(&transport, &exe, &paths, &AtomicBool::new(false), |_, _| {})
+            .unwrap_err();
+        assert!(error.to_string().starts_with("insufficient_space:state:"));
     }
 
     #[test]
@@ -987,6 +958,27 @@ mod tests {
         .unwrap();
         assert_eq!(acquired.source, Acquisition::Downloaded);
         assert_eq!(transport.calls().len(), 2);
+    }
+
+    #[test]
+    fn mime_header_alone_does_not_reject_valid_zip_content() {
+        let (_temp, paths) = setup();
+        let hosts = hosts();
+        let bytes = data(b"payload");
+        let mut mislabelled = response(200, bytes.clone(), Some(bytes.len() as u64));
+        // A server mislabelling a valid archive as HTML/JSON must not be
+        // rejected before the content magic/size/hash checks run.
+        mislabelled.content_type = Some("text/html; charset=utf-8".to_string());
+        let transport = FakeTransport::new(vec![mislabelled]);
+        let acquired = acquire_with(
+            &transport,
+            &request("https://download.example.com/a.zip", &hosts),
+            &paths,
+            &AtomicBool::new(false),
+            |_, _| {},
+        )
+        .unwrap();
+        assert_eq!(acquired.size, bytes.len() as u64);
     }
 
     #[test]

@@ -10,8 +10,6 @@ use std::path::Path;
 use steam_patch_installer_format::{audit, require, Error, Result};
 
 pub const MAX_MESSAGE: usize = 16 * 1024 * 1024;
-pub const MAX_EXE: u64 = 2 * 1024 * 1024 * 1024;
-pub const MAX_ARTIFACT: u64 = MAX_EXE + MAX_MESSAGE as u64;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -61,10 +59,7 @@ impl Descriptor {
     }
     fn validate(&self) -> Result<()> {
         let (hash, size) = self.binding();
-        require(
-            is_sha(hash) && size > 0 && size <= MAX_EXE,
-            "invalid_descriptor",
-        )?;
+        require(is_sha(hash) && size > 0, "invalid_descriptor")?;
         if let Self::ConvertBehavior {
             metadata_sha256,
             behavior_sha256,
@@ -76,17 +71,18 @@ impl Descriptor {
                 is_sha(metadata_sha256)
                     && is_sha(behavior_sha256)
                     && !payload.is_empty()
-                    && payload.len() <= 8192,
+                    && payload.len() <= audit::MAX_ENTRIES,
                 "invalid_descriptor",
             )?;
-            let mut total = 0u64;
-            for p in payload {
-                require(is_sha(&p.sha256) && p.size <= MAX_EXE, "invalid_descriptor")?;
-                total = total
+            // Validate every declared member and keep the running total
+            // overflow-checked; collection to a real artifact is bounded by
+            // the actual input and disk at conversion time.
+            let _total = payload.iter().try_fold(0u64, |total, p| {
+                require(is_sha(&p.sha256), "invalid_descriptor")?;
+                total
                     .checked_add(p.size)
-                    .ok_or_else(|| Error("invalid_descriptor".into()))?;
-            }
-            require(total <= MAX_EXE, "invalid_descriptor")?;
+                    .ok_or_else(|| Error("invalid_descriptor".into()))
+            })?;
         }
         Ok(())
     }
@@ -286,7 +282,6 @@ pub fn process(file: &File, descriptor: &Descriptor, output: &Path) -> Result<Va
                     "exe_payload_changed",
                 )?;
                 let size = target.metadata()?.len();
-                require(size <= MAX_ARTIFACT, "normalized_zip_limit")?;
                 target.rewind()?;
                 let mut hash = Sha256::new();
                 let mut buf = [0u8; 64 * 1024];
@@ -390,8 +385,8 @@ fn write_central_record(
     Ok(())
 }
 
-fn write_end_records(w: &mut impl Write, count: u16, size: u64, start: u64) -> Result<()> {
-    if start > PY_ZIP64_LIMIT || size > PY_ZIP64_LIMIT {
+fn write_end_records(w: &mut impl Write, count: u64, size: u64, start: u64) -> Result<()> {
+    if start > PY_ZIP64_LIMIT || size > PY_ZIP64_LIMIT || count >= u16::MAX as u64 {
         u32le(w, 0x06064b50)?;
         u64le(w, 44)?;
         u16le(w, 45)?;
@@ -404,14 +399,19 @@ fn write_end_records(w: &mut impl Write, count: u16, size: u64, start: u64) -> R
         u64le(w, start)?;
         u32le(w, 0x07064b50)?;
         u32le(w, 0)?;
-        u64le(w, start + size)?;
+        u64le(
+            w,
+            start
+                .checked_add(size)
+                .ok_or_else(|| Error("normalized_zip_limit".into()))?,
+        )?;
         u32le(w, 1)?;
     }
     u32le(w, 0x06054b50)?;
     u16le(w, 0)?;
     u16le(w, 0)?;
-    u16le(w, count)?;
-    u16le(w, count)?;
+    u16le(w, count.min(u16::MAX as u64) as u16)?;
+    u16le(w, count.min(u16::MAX as u64) as u16)?;
     u32le(w, size.min(u32::MAX as u64) as u32)?;
     u32le(w, start.min(u32::MAX as u64) as u32)?;
     u16le(w, 0)?;
@@ -439,9 +439,10 @@ fn write_zip(w: &mut File, data: &[u8], report: &Value, selected: &[Payload]) ->
         require(name.len() <= u16::MAX as usize, "normalized_zip_path_limit")?;
         let flags = if name.is_ascii() { 0 } else { 0x800 };
         let size = number(row, "unpacked_size")?;
-        let crc = number(row, "crc32")? as u32;
+        let crc = u32::try_from(number(row, "crc32")?)
+            .map_err(|_| Error("invalid_report".into()))?;
         let start = w.stream_position()?;
-        require(start <= u32::MAX as u64, "normalized_zip_limit")?;
+
         u32le(w, 0x04034b50)?;
         u16le(w, 45)?;
         u16le(w, flags)?;
@@ -460,7 +461,8 @@ fn write_zip(w: &mut File, data: &[u8], report: &Value, selected: &[Payload]) ->
         u64le(w, size)?;
         let info = audit::decode_payload(
             data,
-            number(row, "payload_offset")? as usize,
+            usize::try_from(number(row, "payload_offset")?)
+                .map_err(|_| Error("invalid_report".into()))?,
             number(row, "packed_size")?,
             size,
             crc,
@@ -473,17 +475,8 @@ fn write_zip(w: &mut File, data: &[u8], report: &Value, selected: &[Payload]) ->
         write_central_record(&mut central, name, flags, size, crc, start)?;
     }
     let start = w.stream_position()?;
-    let end_size = if start > PY_ZIP64_LIMIT || central.len() as u64 > PY_ZIP64_LIMIT {
-        98
-    } else {
-        22
-    };
-    require(
-        start + central.len() as u64 + end_size <= MAX_ARTIFACT,
-        "normalized_zip_limit",
-    )?;
     w.write_all(&central)?;
-    write_end_records(w, rows.len() as u16, central.len() as u64, start)?;
+    write_end_records(w, rows.len() as u64, central.len() as u64, start)?;
     Ok(())
 }
 
@@ -516,13 +509,7 @@ mod tests {
             changed["action"] = json!(action);
             assert!(parse_descriptor(&serde_json::to_vec(&changed).unwrap()).is_err());
         }
-        for size in [
-            json!(-1),
-            json!(1.5),
-            json!(true),
-            json!(0),
-            json!(MAX_EXE + 1),
-        ] {
+        for size in [json!(-1), json!(1.5), json!(true), json!(0)] {
             let mut changed = valid.clone();
             changed["exe_size"] = size;
             assert!(parse_descriptor(&serde_json::to_vec(&changed).unwrap()).is_err());
@@ -588,5 +575,65 @@ mod tests {
                 .0,
             "worker_response_limit"
         );
+    }
+    #[test]
+    fn zip64_records_keep_full_offsets_sizes_and_member_counts() {
+        let mut central = Vec::new();
+        let size = 5u64 * 1024 * 1024 * 1024;
+        let offset = size + 123;
+        write_central_record(&mut central, b"file.dat", 0, size, 0, offset).unwrap();
+        assert!(central.windows(8).any(|v| v == offset.to_le_bytes()));
+        // Both the classic compressed/uncompressed fields saturate to
+        // u32::MAX and the ZIP64 extra carries the nonzero size twice before
+        // the relative offset (uncompressed, compressed, offset order).
+        assert_eq!(&central[20..28], &[0xff; 8]);
+        let mut extra = Vec::new();
+        u64le(&mut extra, size).unwrap();
+        u64le(&mut extra, size).unwrap();
+        u64le(&mut extra, offset).unwrap();
+        assert!(central.ends_with(&extra), "size twice then offset");
+        let mut footer = Vec::new();
+        write_end_records(&mut footer, 70_000, 1024, offset).unwrap();
+        assert_eq!(&footer[..4], &0x06064b50u32.to_le_bytes());
+        assert_eq!(
+            u64::from_le_bytes(footer[24..32].try_into().unwrap()),
+            70_000
+        );
+        assert_eq!(
+            u64::from_le_bytes(footer[48..56].try_into().unwrap()),
+            offset
+        );
+        assert_eq!(footer.len(), 98);
+    }
+
+    #[test]
+    fn zip64_end_record_triggers_at_member_count_boundary() {
+        // The classic ZIP32 EOCD holds at most u16::MAX - 1 members, so the
+        // writer must emit ZIP64 EOCD + locator as soon as count == u16::MAX.
+        let mut below = Vec::new();
+        write_end_records(&mut below, u16::MAX as u64 - 1, 1024, 0).unwrap();
+        assert_eq!(&below[..4], &0x06054b50u32.to_le_bytes(), "plain EOCD");
+        assert_eq!(below.len(), 22);
+
+        let mut at = Vec::new();
+        write_end_records(&mut at, u16::MAX as u64, 1024, 0).unwrap();
+        assert_eq!(&at[..4], &0x06064b50u32.to_le_bytes(), "ZIP64 EOCD");
+        assert_eq!(
+            u64::from_le_bytes(at[24..32].try_into().unwrap()),
+            u16::MAX as u64
+        );
+        // The classic EOCD count is saturated (not truncated) and sits last.
+        let eocd = &at[at.len() - 22..];
+        assert_eq!(&eocd[..4], &0x06054b50u32.to_le_bytes());
+        assert_eq!(u16::from_le_bytes(eocd[8..10].try_into().unwrap()), u16::MAX);
+        assert_eq!(at.len(), 98);
+    }
+
+    #[test]
+    fn descriptor_accepts_large_representable_exe_without_allocating_its_contents() {
+        let bytes = serde_json::to_vec(&json!({"action":"analyze_behavior",
+            "exe_sha256":"a".repeat(64),"exe_size":5u64*1024*1024*1024}))
+        .unwrap();
+        assert!(parse_descriptor(&bytes).is_ok());
     }
 }
