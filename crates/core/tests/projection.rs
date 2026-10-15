@@ -175,6 +175,7 @@ fn records(
         release_id: t.release_id.clone(),
         catalog_revision: 0,
         created_at: time,
+        expires_at: None,
         install: game.clone(),
         changes: vec![PlannedChange {
             path: path.into(),

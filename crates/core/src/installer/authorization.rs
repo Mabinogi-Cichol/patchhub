@@ -200,6 +200,15 @@ pub struct Authorization {
     /// Diagnostic record timestamp and durable revocation state.
     pub created_at: u64,
     pub revoked: bool,
+    /// Legacy short-term-authorization lifecycle written before the local plan
+    /// TTL/heartbeat lease were removed (design D01/D02). Read-only
+    /// compatibility for authorizations written by older builds: never written
+    /// again, never gating. `#[serde(default)]` keeps `deny_unknown_fields`
+    /// while accepting the old keys.
+    #[serde(default, skip_serializing)]
+    pub expires_at: Option<u64>,
+    #[serde(default, skip_serializing)]
+    pub lease_active: Option<bool>,
 }
 
 /// Server-side input for [`authorize`].
@@ -328,6 +337,8 @@ pub fn authorize(input: AuthorizeInput<'_>) -> AuthResult<Authorization> {
         facts: input.facts,
         created_at: input.now,
         revoked: false,
+        expires_at: None,
+        lease_active: None,
     })
 }
 
@@ -690,5 +701,24 @@ mod tests {
 
         fs::write(paths.job(PLAN).unwrap().join("revoked"), b"revoked\n").unwrap();
         assert!(is_revoked(&paths, PLAN).unwrap());
+    }
+
+    /// Authorizations written before the local TTL/heartbeat lease were removed
+    /// still contain `expires_at`/`lease_active`. They must load read-only
+    /// instead of rejecting as `authorization_invalid` (design D01/D02 legacy
+    /// compat), and the new code must not write those keys again.
+    #[test]
+    fn legacy_expiry_and_lease_fields_load_read_only() {
+        let mut value = serde_json::to_value(authorize_ok()).unwrap();
+        value["expires_at"] = serde_json::json!(1_234);
+        value["lease_active"] = serde_json::json!(true);
+        let parsed: Authorization = serde_json::from_value(value).unwrap();
+        assert_eq!(parsed.expires_at, Some(1_234));
+        assert_eq!(parsed.lease_active, Some(true));
+        validate_stored(&parsed).unwrap();
+
+        let out = serde_json::to_value(&parsed).unwrap();
+        assert!(out.get("expires_at").is_none());
+        assert!(out.get("lease_active").is_none());
     }
 }

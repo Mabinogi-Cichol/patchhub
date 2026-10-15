@@ -95,6 +95,11 @@ pub struct InstallPlan {
     pub release_id: String,
     pub catalog_revision: u64,
     pub created_at: u64,
+    /// Legacy plan-expiry timestamp written before the local plan TTL was
+    /// removed (design D01). Read-only compatibility for journals created by
+    /// older builds: it is never written again and never gates anything.
+    #[serde(default, skip_serializing)]
+    pub expires_at: Option<u64>,
     pub install: GameInstall,
     pub changes: Vec<PlannedChange>,
     pub disk_requirement: u64,
@@ -1316,6 +1321,7 @@ pub(crate) fn prepare_for_request_at(
         release_id: release.release_id.clone(),
         catalog_revision,
         created_at: now(),
+        expires_at: None,
         install: serde_json::from_value(
             serde_json::to_value(install).map_err(|e| invalid(e.to_string()))?,
         )
@@ -2630,5 +2636,29 @@ mod transaction_binding_tests {
             "zip-selection-000000000000000000000000-42"
         );
         assert_eq!(value["content_id"], "exe-content-abc");
+    }
+
+    /// Journals written before the local plan TTL was removed still contain
+    /// `plan.expires_at`. It must load read-only instead of failing as
+    /// `journal_invalid` (design D01 legacy compat), and must not be written
+    /// again by the new code.
+    #[test]
+    fn legacy_plan_document_with_expiry_loads_read_only() {
+        let legacy = r#"{
+            "plan": {
+                "operation":"install","recipe_sha256":null,
+                "plan_id":"11111111-1111-1111-1111-111111111111",
+                "instance_id":"42|/lib|/lib/game","release_id":"rel",
+                "catalog_revision":1,"created_at":10,"expires_at":910,
+                "install":{"instance_id":"42|/lib|/lib/game","appid":42,"name":"N","localized_name":null,"name_language":null,"library_path":"/lib","install_path":"/lib/game","buildid":null,"availability":"installed","kind":"game"},
+                "changes":[],"disk_requirement":0,"space_budget":null,"blockers":[],"preconditions":[]
+            },
+            "transaction":{"transaction_id":"t","plan_id":"11111111-1111-1111-1111-111111111111","instance_id":"42|/lib|/lib/game","release_id":"rel","state":"committed","error":null,"created_at":1,"updated_at":2,"has_replacements":false},
+            "progress":[],"created_dirs":[],"uninstall_requested":false,"transient_recovery":false
+        }"#;
+        let job: super::Job = serde_json::from_str(legacy).unwrap();
+        assert_eq!(job.plan.expires_at, Some(910));
+        let value = serde_json::to_value(&job.plan).unwrap();
+        assert!(value.get("expires_at").is_none());
     }
 }
