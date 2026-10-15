@@ -118,3 +118,10 @@
 - 用户要求提交本轮修复并更新提交技能的语言规范。修复代码及必要测试已提交为 `ac379b8`（`fix(kagura): 修复DLC候选漏查和镜像重复显示`）；功能文档与提交技能规则分别提交。
 - 沿用已完成的自动化、独立复核、构建与Steam Deck实机验证，代码未再修改，未重复运行功能测试。提交技能增加冒号后中文描述及中文正文要求，并通过skill-creator结构校验。
 - 备份、部署包和实机证据保留在忽略的.artifacts目录。本次仅创建本地提交，未推送或改写历史。
+
+## 2026-10-15 v0.1.0 发布前检查
+
+- 最新远端基线为 `be099fa`。GitHub Actions `38611291201` 的 Linux core 在 Clippy 阶段发现 `candidate_from_root` 内 5 处 `needless_borrow`，阻断发布；Windows、Decky 构建任务成功。
+- 按 Clippy 建议移除已为引用的 `root` / `final_url` 外层借用，候选解析、匹配与安装行为不变。
+- 本地相关 core/CLI/protocol/contract-gen 的 `clippy --all-targets --locked -- -D warnings`、Kagura 筛选回归（18 passed、1 既有 ignored）及 `cargo fmt --all -- --check` 通过。沙箱内测试曾在状态初始化文件锁处返回 `source_state_busy`；正常 Windows 权限重跑通过，未修改文件锁实现。
+- 用户版根 README 与修复代码分别提交。v0.1.0 将基于包含本次修正的最新提交，通过 Tag 工作流重新构建 Windows 安装版、便携版与 Decky ZIP；在线 CI 和发行附件验证结果发布后补记。既有实机验证沿用前文，本轮未重新部署或修改游戏。
