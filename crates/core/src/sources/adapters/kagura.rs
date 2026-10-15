@@ -630,7 +630,7 @@ fn candidate_from_root(
     fallback_title: Option<&str>,
     previous: &DiscoverPrevious,
 ) -> Result<Vec<SourceCandidate>> {
-    let heading = dom::first(&root, |node| {
+    let heading = dom::first(root, |node| {
         matches!(dom::tag(node), "h1" | "h2")
             && (dom::has_class(node, "entry-title") || adapter == "kagura_en_html")
     });
@@ -643,9 +643,9 @@ fn candidate_from_root(
         return Err(invalid("discovery_structure_changed"));
     }
     let body = if adapter == "kagura_en_html" {
-        dom::first(&root, |node| dom::attr(node, "id") == Some("tab-patch"))
+        dom::first(root, |node| dom::attr(node, "id") == Some("tab-patch"))
     } else {
-        dom::first(&root, |node| {
+        dom::first(root, |node| {
             dom::has_class(node, "entry-content")
                 && dom::ancestors(node)
                     .iter()
@@ -656,7 +656,7 @@ fn candidate_from_root(
         return Err(invalid("discovery_structure_changed"));
     };
     let ids = identity::steam_ids(&dom::link_urls(&body));
-    let mirrors = dom::mirrors(&body, &final_url);
+    let mirrors = dom::mirrors(&body, final_url);
     let body_text = dom::text(&body);
     let mut related_query = query.clone();
     let known = previous.known_candidates.iter().any(|c| {
@@ -682,7 +682,7 @@ fn candidate_from_root(
     let mut found = identity::build_candidates(
         rule,
         &title,
-        &final_url,
+        final_url,
         &body_text,
         &ids,
         &[],

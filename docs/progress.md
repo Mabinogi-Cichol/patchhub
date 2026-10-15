@@ -1,5 +1,9 @@
 # 开发进度
 
+## 2026-10-15：v0.1.0 首个公开版本已发布
+
+基于最新插件代码完成首发，Tag 固定于 `a4e1056`。双平台 CI 全部成功，Windows 安装版、便携版与 Decky 插件共 8 个发行附件已公开并下载核验。根 README 改为用户介绍与使用指南，补充用户操作的 Steam Deck 实机截图；《夏日狂想曲+》覆盖安装任务 completed/committed，自动清理成功，未核验游戏内效果。发布记录与校验范围见[发行检查](release-checklist.md#v010-首发记录2026-10-15)。
+
 ## 2026-10-13：Rust 核心收敛 P6 完成，最终 gate 通过
 
 最终取消标准化修复完成，Windows604/Linux576、Decky Python78与fmt/Clippy/release、计数基准、双端最终包和同包冒烟通过。Deck本机WSL构建的新包已正式部署，ZIP/EXE覆盖、实际写入取消回滚、恢复/清理、真实界面和用户两款游戏/手柄确认均完成；远端暂存清理，本地备份核验保留。Windows真实UI/直链EXE按用户决定跳过；最终只读gate findings=[]，D1–D10已关闭、P6完成；本轮未提交/推送/发布。详见 [P6验证](features/rust-core-consolidation/p6-validation.md)、[复核](features/rust-core-consolidation/p6-review.md)与[施工记录](features/rust-core-consolidation/progress.md)。
