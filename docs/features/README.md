@@ -6,6 +6,7 @@
 
 | 功能 | 状态 | 设计文档 | 施工记录 | 附加文档 |
 | --- | --- | --- | --- | --- |
+| 安装磁盘占用与兼容性精简 | D01–D10 删除与 P1/P3/P4 收敛已实施并通过 Rust 工作区自动化检查（超大常量改为真实删除、容量模型、外部ZIP受管理化、ZIP64 checked 转换）；真实大包、容量与双平台实机验收待执行 | [设计](install-footprint-and-compatibility/design.md) | [施工记录](install-footprint-and-compatibility/progress.md) | [全项目审计](install-footprint-and-compatibility/audit.md) |
 | Decky 终端安装与更新 | 安装器/README 短链入口/自动恢复/清理及 CI 分发已实现，短链已创建并核对目标；引导/隔离自动化和真实 Release 校验通过，实机验收/禁用态升级/安装器附件发布待完成 | [设计](decky-cli-installation/design.md) | [施工记录](decky-cli-installation/progress.md) | — |
 | 全部安装备份清理 | 已实现，本地 Windows / Linux 自动化通过；候选包已构建校验，实机待验收 | [设计](backup-cleanup/design.md) | [施工记录](backup-cleanup/progress.md) | — |
 | 来源缓存持久化与重新查找修复 | 已实现并部署；国内DLC漏查/镜像重复回归已修复，自动化/独立复核通过，Deck真实本体+DLC恢复/单行候选/镜像/重复查询/普通扫描验证通过；真实补丁安装与实体手柄待验证 | [设计与修复计划](persistent-source-cache/design.md) | [施工记录](persistent-source-cache/progress.md) | [候选回归修复计划](persistent-source-cache/fix-plan.md) |

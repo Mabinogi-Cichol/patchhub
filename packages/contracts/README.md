@@ -17,7 +17,7 @@
 
 - `serve`：一次性短调用（扫描、能力、来源读写、缓存清理）。
 - `serve-task`：单任务、可取消、可流式（`install_patch`、`scan_sources`、`refresh_sources`），一个任务一个子进程。任务面方法经 `serve` 调用一律拒绝并返回 `task_required`。
-- 任务控制通道（非 JSON-RPC 方法）：`serve-task` stdin 行 `renew`（续 15s 前台租约）、`cancel`（先持久撤销再停获取/worker）；stdin EOF 等价 `cancel` 并回收 worker 进程组。
+- 任务控制通道（非 JSON-RPC 方法）：`serve-task` stdin 行 `cancel`（先持久撤销再停获取/worker）；stdin EOF 等价 `cancel` 并回收 worker 进程组。
 
 ## 方法白名单（16）
 
@@ -50,7 +50,7 @@
 
 - 生命周期写入前校验版本、methods、四项 contracts 版本及六项 installer schema；不匹配必须先于状态目录创建或修改。
 - `get_capabilities.installer.links.*.available`（按平台探针）决定是否可安装；`formats` 仅表示核心支持该类格式，不代表本机可用。隔离缺失只阻断对应 EXE，来源页与签名 ZIP 保留。
-- 新增/冻结错误码：`unsupported_protocol`、`capability_mismatch`、`installer_schema_unsupported`、`installer_lease_expired`、`cleanup_failed`、`task_required`。契约不匹配明确报错并保留真实 `detail`，不做“仅静态扫描”降级。
+- 新增/冻结错误码：`unsupported_protocol`、`capability_mismatch`、`installer_schema_unsupported`、`cleanup_failed`、`task_required`。契约不匹配明确报错并保留真实 `detail`，不做“仅静态扫描”降级。
 
 ## 目录与信任
 
