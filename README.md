@@ -17,6 +17,23 @@
 
 Windows 提供独立桌面应用；Steam Deck 通过 Decky 插件在游戏模式中使用。
 
+## 已支持的发行商源
+
+目前支持以下发行商的补丁来源，默认启用，可在“管理订阅源”中调整：
+
+| 发行商 | 对应补丁来源 |
+| --- | --- |
+| Shiravune（白舟） | [patch.moe](https://www.patch.moe/) |
+| Kagura Games（神乐游戏） | [国内站](https://kagurafan.com/) · [海外站补丁页](https://www.kaguragames.com/patch/) |
+
+来源支持表示工具已能查询或匹配该站点，不代表站内所有补丁均可自动安装。实际安装仍取决于文件格式、游戏版本、语言及 DLC 条件。
+
+### Fallback 手动索引
+
+| 索引 | 用途 |
+| --- | --- |
+| [HGamer 补丁索引](https://hgamer.tw/zh-CN/patches) | 在发行商源匹配不足时补充候选及上游发布页，供手动核对与选择；索引条目本身不作为自动安装包 |
+
 ## 下载与安装
 
 打开 [Releases 下载页](https://github.com/Mabinogi-Cichol/steam-hentai-patch-searcher/releases/latest)，根据设备选择附件。GitHub 自动生成的 `Source code` 是源码，使用工具请下载下列安装包。
