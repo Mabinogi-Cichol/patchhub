@@ -156,24 +156,14 @@ pub fn open_input(path: &Path) -> Result<File> {
     Ok(f)
 }
 
-struct LimitedVec(Vec<u8>);
-impl Write for LimitedVec {
-    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-        if self.0.len().saturating_add(bytes.len()) >= MAX_MESSAGE {
-            return Err(std::io::Error::other("worker_response_limit"));
-        }
-        self.0.extend_from_slice(bytes);
-        Ok(bytes.len())
-    }
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
-}
 pub fn encode_response(value: &Value) -> Result<Vec<u8>> {
-    let mut out = LimitedVec(Vec::new());
-    serde_json::to_writer(&mut out, value).map_err(|_| Error("worker_response_limit".into()))?;
-    out.0.push(b'\n');
-    Ok(out.0)
+    // No artificial response/report ceiling: the report grows with a legitimate
+    // installer's file table. The worker's own sandbox memory limit bounds it,
+    // and consumers bound memory by the actual document (design D08).
+    let mut out = Vec::new();
+    serde_json::to_writer(&mut out, value).map_err(|_| Error("invalid_report".into()))?;
+    out.push(b'\n');
+    Ok(out)
 }
 fn manifest(report: &Value) -> Result<Vec<Payload>> {
     report["files"]
@@ -562,19 +552,14 @@ mod tests {
         }
     }
     #[test]
-    fn response_is_bounded() {
-        assert_eq!(
-            encode_response(&json!({"installable":false}))
-                .unwrap()
-                .last(),
-            Some(&b'\n')
-        );
-        assert_eq!(
-            encode_response(&json!("x".repeat(MAX_MESSAGE)))
-                .unwrap_err()
-                .0,
-            "worker_response_limit"
-        );
+    fn response_has_no_artificial_size_ceiling() {
+        let small = encode_response(&json!({"installable":false})).unwrap();
+        assert_eq!(small.last(), Some(&b'\n'));
+        // A report larger than the descriptor/protocol message bound is allowed;
+        // the report grows with a legitimate installer's file table.
+        let big = encode_response(&json!("x".repeat(MAX_MESSAGE))).unwrap();
+        assert!(big.len() > MAX_MESSAGE);
+        assert_eq!(big.last(), Some(&b'\n'));
     }
     #[test]
     fn zip64_records_keep_full_offsets_sizes_and_member_counts() {

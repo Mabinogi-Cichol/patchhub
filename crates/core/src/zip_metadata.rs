@@ -112,8 +112,21 @@ fn inspect_candidate<R: Read + Seek>(reader: &mut R, end: u64, eocd_pos: u64) ->
     let mut cd_size = u32_at(&eocd, 12) as u64;
     let mut cd_offset = u32_at(&eocd, 16) as u64;
     let mut cd_end = eocd_pos;
-    // Match zip 6's may_be_zip64 exactly; other saturated fields remain ZIP32.
-    let zip64_needed = u16_at(&eocd, 10) == u16::MAX || cd_offset == u32::MAX as u64;
+    // ZIP64 is present when a classic field is saturated (zip 6's
+    // `may_be_zip64`) OR when a ZIP64 EOCD locator sits immediately before the
+    // classic EOCD. The second condition is required for real ZIP64 archives
+    // whose values still fit in 32 bits: CPython (and this project's writer,
+    // frozen to it) only saturates on overflow, so a central-directory offset
+    // in [2 GiB, 4 GiB) is written raw while a ZIP64 EOCD is still emitted.
+    // Without this the reader mis-locates the central directory and rejects a
+    // valid archive as `zip_metadata_invalid`.
+    let saturated = u16_at(&eocd, 10) == u16::MAX || cd_offset == u32::MAX as u64;
+    let has_locator = eocd_pos >= 20 && {
+        let mut signature = [0u8; 4];
+        reader.seek(SeekFrom::Start(eocd_pos - 20))?;
+        reader.read_exact(&mut signature).is_ok() && signature == *b"PK\x06\x07"
+    };
+    let zip64_needed = saturated || has_locator;
     if !zip64_needed && u16_at(&eocd, 4) != u16_at(&eocd, 6) {
         return Err(candidate_invalid());
     }
@@ -318,6 +331,44 @@ mod tests {
             preflight(&mut Cursor::new(bytes)).unwrap_err().to_string(),
             "zip_metadata_limit"
         );
+    }
+
+    #[test]
+    fn accepts_zip64_with_unsaturated_classic_fields() {
+        // A real ZIP64 archive whose values fit in 32 bits: CPython (and this
+        // project's writer, frozen to it) writes a ZIP64 EOCD but leaves the
+        // classic count/size/offset raw, never saturating to 0xFFFF/0xFFFFFFFF.
+        // A central-directory offset in [2 GiB, 4 GiB) is the common case for a
+        // large package. The reader must detect ZIP64 from the locator.
+        let mut bytes = one_file_zip();
+        let eocd = bytes.len() - 22;
+        let cd_size = u32_at(&bytes[eocd..], 12) as u64;
+        let cd_offset = u32_at(&bytes[eocd..], 16) as u64;
+        bytes.truncate(eocd);
+        let zip64_pos = bytes.len() as u64;
+        bytes.extend_from_slice(b"PK\x06\x06");
+        bytes.extend_from_slice(&44u64.to_le_bytes());
+        bytes.extend_from_slice(&45u16.to_le_bytes());
+        bytes.extend_from_slice(&45u16.to_le_bytes());
+        bytes.extend_from_slice(&0u32.to_le_bytes());
+        bytes.extend_from_slice(&0u32.to_le_bytes());
+        bytes.extend_from_slice(&1u64.to_le_bytes());
+        bytes.extend_from_slice(&1u64.to_le_bytes());
+        bytes.extend_from_slice(&cd_size.to_le_bytes());
+        bytes.extend_from_slice(&cd_offset.to_le_bytes());
+        bytes.extend_from_slice(b"PK\x06\x07");
+        bytes.extend_from_slice(&0u32.to_le_bytes());
+        bytes.extend_from_slice(&zip64_pos.to_le_bytes());
+        bytes.extend_from_slice(&1u32.to_le_bytes());
+        bytes.extend_from_slice(b"PK\x05\x06");
+        bytes.extend_from_slice(&0u16.to_le_bytes());
+        bytes.extend_from_slice(&0u16.to_le_bytes());
+        bytes.extend_from_slice(&1u16.to_le_bytes());
+        bytes.extend_from_slice(&1u16.to_le_bytes());
+        bytes.extend_from_slice(&(cd_size as u32).to_le_bytes());
+        bytes.extend_from_slice(&(cd_offset as u32).to_le_bytes());
+        bytes.extend_from_slice(&0u16.to_le_bytes());
+        preflight(&mut Cursor::new(bytes)).unwrap();
     }
 
     #[test]

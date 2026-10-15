@@ -1094,9 +1094,9 @@ pub fn audit(data: &[u8], behavior: bool) -> Result<Value> {
         report["capability"] = json!("behavior_supported");
         report["blockers"] = json!(["game_and_source_conditions_pending"]);
     }
-    require(
-        python_json(&report)?.len() < MAX_METADATA,
-        "report_size_limit",
-    )?;
+    // No whole-report byte cap: the report grows with the (legitimate) size of a
+    // large installer's file table, and its consumers bound memory by the actual
+    // document size and structural node budget instead (design D08: a byte cap
+    // with no independent resource basis is deleted, not enlarged).
     Ok(report)
 }

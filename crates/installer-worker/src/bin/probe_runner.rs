@@ -2053,25 +2053,18 @@ mod linux_impl {
         }
     }
 
-    /// M3: exceeding the stdout/stderr capture limit is a hard, fail-closed
-    /// error (`exe_worker_response_limit`) and the sandbox is reclaimed.
+    /// M3: the stderr capture limit is a hard, fail-closed error
+    /// (`exe_worker_response_limit`) and the sandbox is reclaimed. A large worker
+    /// report on stdout is intentionally NOT bounded any more (design D08: the
+    /// report grows with a legitimate installer's file table).
     fn check_output_limit(h: &Harness, checks: &mut Vec<CheckResult>) {
-        for (id, title, scenario, mb, stream) in [
-            (
-                "output_limit_stdout",
-                "stdout 超限 fail-closed",
-                "big_output",
-                17u64,
-                "stdout",
-            ),
-            (
-                "output_limit_stderr",
-                "stderr 超限 fail-closed",
-                "big_stderr",
-                1u64,
-                "stderr",
-            ),
-        ] {
+        for (id, title, scenario, mb, stream) in [(
+            "output_limit_stderr",
+            "stderr 超限 fail-closed",
+            "big_stderr",
+            1u64,
+            "stderr",
+        )] {
             let req = WorkerRequest::new(scenario).mb(mb);
             let (status, actual) = match h.launch(&req, |_| {}) {
                 Err(err) => {

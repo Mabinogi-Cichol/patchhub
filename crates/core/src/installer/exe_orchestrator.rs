@@ -241,7 +241,7 @@ fn run(
     store::write_atomic(
         &reports.join("report.json"),
         &report_bytes,
-        exe_report::MAX_REPORT_BYTES as u64,
+        report_bytes.len() as u64,
     )
     .map_err(error)?;
     operation::stage(
@@ -367,14 +367,15 @@ fn run(
         })
         .map_err(error)?;
         authorization::write(deps.paths, &auth).map_err(error)?;
+        let condition_bytes = serde_json::to_vec(&snapshot).map_err(error)?;
         store::write_atomic(
             &deps
                 .paths
                 .job(&plan.plan_id)
                 .map_err(error)?
                 .join("condition.json"),
-            &serde_json::to_vec(&snapshot).map_err(error)?,
-            exe_report::MAX_REPORT_BYTES as u64,
+            &condition_bytes,
+            condition_bytes.len() as u64,
         )
         .map_err(error)?;
         let sources = Sources::open(deps.state_dir).map_err(error)?;
@@ -397,13 +398,9 @@ fn run(
                 reinstall.as_ref(),
             )
             .map_err(error)?;
-        let saved = facts::read_file(
-            &reports.join("report.json"),
-            exe_report::MAX_REPORT_BYTES as u64,
-            &control.cancel,
-        )
-        .map_err(error)?
-        .1;
+        let saved = facts::read_file_full(&reports.join("report.json"), &control.cancel)
+            .map_err(error)?
+            .1;
         if saved != report_bytes {
             return Err(Error::code("authorization_report_changed"));
         }
@@ -526,9 +523,8 @@ fn reinstall_evidence(
             return Err(Error::code("reinstall_unowned_or_incomplete"));
         }
     }
-    let bytes = facts::read_file(
+    let bytes = facts::read_file_full(
         &paths.job(&t.plan_id).map_err(error)?.join("condition.json"),
-        exe_report::MAX_REPORT_BYTES as u64,
         &AtomicBool::new(false),
     )
     .map_err(error)?

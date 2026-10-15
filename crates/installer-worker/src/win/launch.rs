@@ -339,12 +339,13 @@ fn run_internal(
     let mut stdout_file =
         unsafe { File::from_raw_handle(take_handle(&mut stdout_pipe.read).0 as RawHandle) };
     let stdout_join =
-        thread::spawn(move || read_bounded(&mut stdout_file, 16 * 1024 * 1024, stdout_flag));
+        thread::spawn(move || read_bounded(&mut stdout_file, None, stdout_flag));
 
     let stderr_flag = Arc::clone(&overflow);
     let mut stderr_file =
         unsafe { File::from_raw_handle(take_handle(&mut stderr_pipe.read).0 as RawHandle) };
-    let stderr_join = thread::spawn(move || read_bounded(&mut stderr_file, 64 * 1024, stderr_flag));
+    let stderr_join =
+        thread::spawn(move || read_bounded(&mut stderr_file, Some(64 * 1024), stderr_flag));
 
     let previous = unsafe { ResumeThread(thread_handle) };
     if previous == u32::MAX {
@@ -652,13 +653,15 @@ fn null_pcwstr() -> PCWSTR {
     PCWSTR::null()
 }
 
-fn read_bounded(reader: &mut impl Read, limit: usize, overflow: Arc<AtomicU8>) -> Vec<u8> {
+fn read_bounded(reader: &mut impl Read, limit: Option<usize>, overflow: Arc<AtomicU8>) -> Vec<u8> {
     let mut out = Vec::new();
     let mut buf = [0u8; 64 * 1024];
     loop {
         match reader.read(&mut buf) {
             Ok(0) => return out,
-            Ok(n) if out.len().saturating_add(n) <= limit => out.extend_from_slice(&buf[..n]),
+            Ok(n) if limit.is_none_or(|limit| out.len().saturating_add(n) <= limit) => {
+                out.extend_from_slice(&buf[..n])
+            }
             _ => {
                 overflow.store(1, Ordering::Release);
                 return Vec::new();

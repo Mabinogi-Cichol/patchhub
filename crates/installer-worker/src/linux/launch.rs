@@ -69,8 +69,6 @@ pub const DEFAULT_CPU_SECONDS: u64 = 300;
 /// Production `RLIMIT_CORE` (0, never dump core).
 pub const DEFAULT_CORE_BYTES: u64 = 0;
 
-/// stdout capture limit (contract §6.1: 16 MiB). Exceeding it is a hard error.
-pub const MAX_STDOUT_BYTES: usize = 16 * 1024 * 1024;
 /// stderr capture limit (matches Python `_bounded(..., 65536)`).
 pub const MAX_STDERR_BYTES: usize = 64 * 1024;
 
@@ -233,9 +231,9 @@ fn append_system_binds(argv: &mut Vec<OsString>) {
 
 /// Launch the worker under bwrap and collect its output and termination reason.
 ///
-/// Returns an [`IsolationError`] with stage `output-limit` when the worker
-/// writes more than [`MAX_STDOUT_BYTES`] to stdout or [`MAX_STDERR_BYTES`] to
-/// stderr; the sandbox is terminated first (fail-closed, matching Python).
+/// The worker report on stdout is unbounded (it grows with a legitimate
+/// installer's file table); only [`MAX_STDERR_BYTES`] of stderr is bounded, and
+/// exceeding it is fail-closed (`output-limit`).
 pub fn run_sandboxed(cfg: &SandboxConfig) -> Result<LaunchOutcome, IsolationError> {
     run_internal(cfg, None)
 }
@@ -368,11 +366,11 @@ fn run_internal(
     let stdout = child.stdout.take().expect("stdout piped");
     let stdout_flag = Arc::clone(&overflow);
     let stdout_join =
-        thread::spawn(move || read_bounded(stdout, MAX_STDOUT_BYTES, OVERFLOW_STDOUT, stdout_flag));
+        thread::spawn(move || read_bounded(stdout, None, OVERFLOW_STDOUT, stdout_flag));
     let stderr = child.stderr.take().expect("stderr piped");
     let stderr_flag = Arc::clone(&overflow);
     let stderr_join =
-        thread::spawn(move || read_bounded(stderr, MAX_STDERR_BYTES, OVERFLOW_STDERR, stderr_flag));
+        thread::spawn(move || read_bounded(stderr, Some(MAX_STDERR_BYTES), OVERFLOW_STDERR, stderr_flag));
 
     let end = loop {
         if cancel.is_some_and(|c| c.load(Ordering::Acquire)) {
@@ -474,7 +472,7 @@ enum End {
 
 fn overflow_reason(flag: &AtomicU8) -> Option<String> {
     match flag.load(Ordering::SeqCst) {
-        OVERFLOW_STDOUT => Some(format!("stdout exceeded {MAX_STDOUT_BYTES} bytes")),
+        OVERFLOW_STDOUT => Some("stdout capture limit exceeded".into()),
         OVERFLOW_STDERR => Some(format!("stderr exceeded {MAX_STDERR_BYTES} bytes")),
         OVERFLOW_IO => Some("stdio read failed".into()),
         _ => None,
@@ -578,7 +576,7 @@ fn set_one(resource: i32, desired: u64) -> std::io::Result<()> {
 /// are identical to the previous truncating implementation.
 fn read_bounded(
     mut reader: impl Read,
-    limit: usize,
+    limit: Option<usize>,
     kind: u8,
     flag: Arc<AtomicU8>,
 ) -> Result<Vec<u8>, ()> {
@@ -588,7 +586,7 @@ fn read_bounded(
         match reader.read(&mut buf) {
             Ok(0) => return Ok(out),
             Ok(n) => {
-                if out.len().saturating_add(n) > limit {
+                if limit.is_some_and(|limit| out.len().saturating_add(n) > limit) {
                     flag.store(kind, Ordering::SeqCst);
                     return Err(());
                 }

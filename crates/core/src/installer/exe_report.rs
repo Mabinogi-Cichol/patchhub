@@ -16,7 +16,6 @@ use std::{
     sync::atomic::{AtomicBool, Ordering},
 };
 use unicode_normalization::UnicodeNormalization;
-pub const MAX_REPORT_BYTES: usize = 16 * 1024 * 1024;
 const MAX_NODES: usize = 8192;
 const MAX_DEPTH: usize = 96;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -593,14 +592,10 @@ pub fn validate_response(
 ) -> Result<PreparedReport> {
     hash(exe_sha256)?;
     require(exe_size > 0, "exe_size_limit")?;
-    bounded_json(response, 0, &mut 1_000_000usize)?;
-    require(
-        serde_json::to_vec(response)
-            .map_err(|_| invalid("exe_worker_invalid_response"))?
-            .len()
-            < MAX_REPORT_BYTES,
-        "exe_report_size_limit",
-    )?;
+    // No whole-response byte/node ceiling and no redundant recursive pre-walk:
+    // the report grows with a legitimate installer's file table; structure and
+    // values are validated by the typed field reads below, and content is bound
+    // by the digest/hash checks (design D08 / AGENTS 精简设计).
     exact(
         response,
         &[
@@ -674,9 +669,7 @@ pub fn validate_response(
     let metadata_sha256 = text(&report["metadata"], "sha256")?;
     hash(metadata_sha256)?;
     require(
-        report["metadata"]["offset"] == 0
-            && uint(&report["metadata"], "size")? > 0
-            && uint(&report["metadata"], "size")? <= MAX_REPORT_BYTES as u64,
+        report["metadata"]["offset"] == 0 && uint(&report["metadata"], "size")? > 0,
         "exe_worker_invalid_response",
     )?;
     let behavior = &report["behavior"];
@@ -887,25 +880,6 @@ pub fn validate_response(
         condition_sha256: canonical::canonical_sha256(&behavior["condition"]),
     })
 }
-fn bounded_json(v: &Value, d: usize, b: &mut usize) -> Result<()> {
-    require(d <= 128 && *b > 0, "exe_report_size_limit")?;
-    *b -= 1;
-    match v {
-        Value::Array(a) => {
-            for v in a {
-                bounded_json(v, d + 1, b)?;
-            }
-        }
-        Value::Object(o) => {
-            for v in o.values() {
-                bounded_json(v, d + 1, b)?;
-            }
-        }
-        Value::Number(n) => require(n.is_i64() || n.is_u64(), "exe_worker_invalid_response")?,
-        _ => {}
-    }
-    Ok(())
-}
 /// The frozen worker report binding has ASCII escaping, separate from content ID.
 pub fn worker_behavior_sha256(v: &Value) -> Result<String> {
     fn encode(v: &Value, o: &mut String) -> Result<()> {
@@ -964,7 +938,6 @@ pub fn worker_behavior_sha256(v: &Value) -> Result<String> {
         }
         Ok(())
     }
-    bounded_json(v, 0, &mut 1_000_000usize)?;
     let mut bytes = String::new();
     encode(v, &mut bytes)?;
     Ok(format!("{:x}", Sha256::digest(bytes.as_bytes())))

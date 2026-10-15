@@ -25,8 +25,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Maximum Steam app-manifest size (`exe_facts.py::MAX_MANIFEST`).
 pub const MAX_MANIFEST_BYTES: u64 = 1024 * 1024;
-/// Maximum reviewed baseline file size (`exe_facts.py::MAX_BASELINE`).
-pub const MAX_BASELINE_BYTES: u64 = 512 * 1024 * 1024;
 /// Read chunk size (`exe_facts.py` reads 1 MiB at a time).
 const CHUNK_BYTES: usize = 1024 * 1024;
 
@@ -257,6 +255,15 @@ pub fn digest_file(path: &Path, cancel: &AtomicBool) -> Result<FileDigest> {
 /// a real caller memory bound for the returned buffer.
 pub fn read_file(path: &Path, limit: u64, cancel: &AtomicBool) -> Result<(FileDigest, Vec<u8>)> {
     read_bounded(path, Some(limit), cancel, true)
+        .map(|(digest, bytes)| (digest, bytes.unwrap_or_default()))
+}
+
+/// Read a trusted, core-/worker-produced report/condition file in full with no
+/// arbitrary fixed byte cap; memory is bounded by the file's own checked length
+/// (design D08: a report byte ceiling with no independent resource basis is
+/// deleted, not enlarged). Identity, digest and cancellation checks are kept.
+pub fn read_file_full(path: &Path, cancel: &AtomicBool) -> Result<(FileDigest, Vec<u8>)> {
+    read_bounded(path, None, cancel, true)
         .map(|(digest, bytes)| (digest, bytes.unwrap_or_default()))
 }
 
