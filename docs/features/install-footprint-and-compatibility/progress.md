@@ -176,3 +176,15 @@
 - 验证：Windows `cargo test -p steam-patch-core` 394 通过 0 失败；Linux `build-linux.sh` 测试 18 通过；Decky TS 70 通过、`typecheck`、`test:contracts` 通过。
 - 待验证：真实屏幕（QAM/全屏）截图未取到（CDP 对 `QuickAccess_uid2` 截图超时），仅完成文件/RPC/实例验证，故界面视觉与实体手柄交互标为待验证；真实游戏补丁安装/卸载不在本轮范围。
 - 远端暂存目录已按脚本核验后清理，仅保留本轮 `steam-patch-validation/<round>/`；本地保留备份与证据于 `.artifacts/install-footprint-deck-20261016-031616/`。
+
+## 2026-10-16：大包 EXE 实机验证与报告/ZIP64 修复
+
+- 验证对象：AppID 1011940「冲突的意志 / Ideology in Friction」的 kagura-cn EXE 补丁，包 **3,788,037,984 B（3.53 GiB）**、内含 **12,141** 个文件。
+- 逐层实测暴露并修复三处真实缺陷（均为既有实现中的无依据上限或错误，按“精简设计/防御性逻辑”直接删除或修正，不放宽阈值）：
+  1. **报告体积上限**：worker `installer-format::audit` 的 `report_size_limit`（报告 < 16 MiB）直接删除；连带删除 worker 响应编码 `LimitedVec` 的 `MAX_MESSAGE` 上限、core `exe_report::MAX_REPORT_BYTES` 的读取/写入/校验上限，以及冗余的 `bounded_json` 递归预校验（serde_json 已限深，字段类型由后续读取校验）。
+  2. **沙箱 stdout 捕获上限**：Linux/Windows 启动器的 16 MiB stdout 上限移除（仅保留 stderr 64 KiB 上限）；报告随合法文件表增长，由 worker 沙箱内存上限与真实文档大小约束。
+  3. **ZIP64 读取错误**：CPython（及本写入器，字节冻结对齐 CPython 3.12）仅在值溢出 32 位时饱和经典 EOCD 字段，而中心目录偏移落在 `[2 GiB, 4 GiB)` 时经典偏移保持原值却仍写 ZIP64 EOCD。读取器原先仅按 `0xFFFF/0xFFFFFFFF` 判定 ZIP64，导致这类合法 ZIP64 包被误判为 `zip_metadata_invalid`。改为同时依据经典 EOCD 前的 ZIP64 locator 判定；新增回归测试 `accepts_zip64_with_unsaturated_classic_fields`。
+- 顺带删除死常量 `MAX_BASELINE_BYTES`（512 MiB，无调用点）。
+- 实机结果：完整安装**成功** — `state=committed`、`disposition=completed`、`error=null`，提交后清理 ~3.82 GB；游戏目录 **1.5 GB → 4.2 GB**，无 `.backup`/`.tmp` 残留，`downloads/`、`runtime/` 均已清空。总耗时 ~1354s（下载 ~350s、分析 ~60–120s、转换 ~120s、校验 ~200s、写盘 ~800s）。
+- 验证：Windows `cargo test --workspace` 37 目标全绿；Linux `build-linux.sh` 测试 18 通过。
+- 待验证：游戏实际启动/运行未执行；本次 3.53 GiB 包在整包 mmap + `size+3 GiB` 地址空间下通过，但更大的单成员/偏移（F02 窗口映射）仍未覆盖；真实磁盘峰值未采样。
