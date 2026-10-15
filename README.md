@@ -36,13 +36,13 @@ Windows 提供独立桌面应用；Steam Deck 通过 Decky 插件在游戏模式
 
 ## 下载与安装
 
-打开 [Releases 下载页](https://github.com/Mabinogi-Cichol/steam-hentai-patch-searcher/releases/latest)，根据设备选择附件。GitHub 自动生成的 `Source code` 是源码，使用工具请下载下列安装包。
+安装包可从 [Releases 下载页](https://github.com/Mabinogi-Cichol/steam-hentai-patch-searcher/releases/latest) 获取，根据设备选择附件。GitHub 自动生成的 `Source code` 是源码；Steam Deck 也可直接使用下方的命令行在线安装。
 
 | 设备 | 下载文件 | 安装方式 |
 | --- | --- | --- |
 | Windows 64 位 | 文件名以 `x64-setup.exe` 结尾的安装包 | 运行安装程序，按提示完成安装 |
 | Windows 64 位，免安装 | `steam-patch-manager-windows-portable.zip` | 完整解压到一个文件夹，运行 `steam-patch-windows.exe` |
-| Steam Deck / SteamOS | `steam-patch-manager-decky.zip` | 通过 Decky Loader 安装插件 ZIP |
+| Steam Deck / SteamOS | `steam-patch-manager-decky.zip` | [命令行在线安装](#命令行在线安装)或 [ZIP 离线安装](#zip-离线安装) |
 
 ### Windows
 
@@ -52,12 +52,36 @@ Windows 安装包目前没有代码签名；系统可能提示未知发布者。
 
 ### Steam Deck
 
-1. 先安装并启用 [Decky Loader](https://github.com/SteamDeckHomebrew/decky-loader)。
-2. 下载 `steam-patch-manager-decky.zip`，在 Decky 设置中使用从 ZIP 或 URL 安装插件的入口；部分版本需要先启用开发者模式。
-3. 安装完成后，在游戏模式按 **“…”** 打开快捷访问菜单，进入 Decky，选择 **Steam 补丁管理**。
-4. 等待扫描完成，选择游戏进入补丁管理页面。
+两种方式均需提前安装并启用 [Decky Loader](https://github.com/SteamDeckHomebrew/decky-loader)。更新已有插件前，请结束正在运行的下载、安装或恢复任务。
 
-插件包已包含运行所需的核心程序，无需另外安装 Python 或 Rust 开发环境。
+#### 命令行在线安装
+
+适用于 Steam Deck 可以访问 GitHub 的情况，自动获取最新正式版；安装和更新使用同一条命令。
+
+1. 在 Steam Deck **桌面模式**打开 **Konsole（终端）**，保持 Steam 运行。
+2. 复制下面这一行并执行：
+
+```bash
+curl -fsSL https://ba.sh/tz4y | bash
+```
+
+3. 核对终端显示的版本，输入 `y` 确认安装；更新已有插件也使用同一条命令。
+
+命令会下载安装器、获取最新正式版并校验安装包。安装器在内存中执行；安装成功或失败后恢复完成时，自动清理本次下载、备份和暂存文件。无需手动下载文件、克隆仓库或安装开发工具链，不要加 `sudo`。
+
+终端安装入口仍待 Steam Deck 实机验收；当前适配 **Decky Loader 3.2.9**，需要 Steam 的 CEF 调试连接可用。更新前请在 Decky 启用本插件。指定版本、只检查与恢复用法见 [Decky 终端安装说明](apps/decky/README.md#终端安装器开发版)。
+
+#### ZIP 离线安装
+
+适用于 Steam Deck 无法访问 GitHub，或希望手动选择版本的情况。先在可联网的设备下载完整 ZIP，再传到 Steam Deck 本地安装。
+
+1. 从 [Releases](https://github.com/Mabinogi-Cichol/steam-hentai-patch-searcher/releases) 选择所需版本，下载 **`steam-patch-manager-decky.zip`**。
+2. 通过 U 盘或局域网文件传输，将 ZIP 放到 Steam Deck 的“下载”目录等易于找到的位置，保留完整 ZIP。
+3. 打开 Decky 设置，使用**从 ZIP / 本地文件安装插件**的入口，选择刚传入的 ZIP 并确认安装；部分版本需要先启用开发者模式。
+
+ZIP 已包含插件运行所需的核心程序，本地安装这一步无需从 GitHub 下载依赖。查找和下载游戏补丁仍需联网。
+
+任一方式安装完成后，返回游戏模式，按 **“…”** 打开快捷访问菜单，进入 Decky，选择 **Steam 补丁管理**，等待游戏库扫描完成。
 
 ## 安装第一个补丁
 
