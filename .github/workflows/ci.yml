@@ -95,7 +95,10 @@ jobs:
           cp release-input/windows-portable/steam-patch-manager-windows-portable.zip release-assets/
           cp release-input/windows-portable/checksums-windows.json release-assets/
           cp release-input/windows-portable/dependencies.cdx.json release-assets/dependencies-windows.cdx.json
-          cp release-input/windows-nsis/*.exe release-assets/
+          for installer in release-input/windows-nsis/*.exe; do
+            filename="$(basename "$installer")"
+            cp "$installer" "release-assets/${filename// /.}"
+          done
           cp release-input/decky-plugin/steam-patch-manager-decky.zip release-assets/
           cp release-input/decky-plugin/checksums-decky.json release-assets/
           cp release-input/decky-plugin/dependencies.cdx.json release-assets/dependencies-decky.cdx.json
