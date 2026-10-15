@@ -32,3 +32,16 @@ export function cacheClearNote(result: CleanupResult) {
 export function autoCleanupNote(enabled: boolean) {
   return enabled ? "已开启安装成功后自动清理下载缓存。" : "已关闭自动清理，缓存将保留直至手动清理。";
 }
+
+export type { BackupInventory, BackupCleanupResult } from "@steam-patch/ui";
+import type { BackupInventory, BackupCleanupResult } from "@steam-patch/ui";
+export function backupSummary(value: BackupInventory) {
+  return `${value.files} 个文件 · ${formatSize(value.total_bytes)}${value.failures.length ? "（部分路径无法统计）" : ""}`;
+}
+export function backupClearNote(value: BackupCleanupResult) {
+  const deleted = `已删除 ${value.removed_files} 个备份文件，释放 ${formatSize(value.removed_bytes)}`;
+  const detail = value.failures.map(f => f.detail || f.code).join("；");
+  if (value.status === "completed") return value.removed_files ? `${deleted}。` : "当前没有需要清理的安装备份。";
+  if (value.removed_files === 0 && (value.status === "busy" || value.failures.some(f => f.code === "installer_busy"))) return "安装任务进行中，请结束后重试。";
+  return `${deleted}；${value.status === "partial" ? "部分清理失败" : "清理失败"}：${detail}。可重试清理。`;
+}

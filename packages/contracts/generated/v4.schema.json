@@ -140,6 +140,64 @@
       ],
       "type": "string"
     },
+    "BackupCleanupResult": {
+      "additionalProperties": false,
+      "properties": {
+        "failures": {
+          "items": {
+            "$ref": "#/$defs/CleanupFailure"
+          },
+          "type": "array"
+        },
+        "removed_bytes": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "removed_files": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "status": {
+          "$ref": "#/$defs/CleanupStatus"
+        }
+      },
+      "required": [
+        "status",
+        "removed_bytes",
+        "removed_files",
+        "failures"
+      ],
+      "type": "object"
+    },
+    "BackupInventory": {
+      "additionalProperties": false,
+      "properties": {
+        "failures": {
+          "items": {
+            "$ref": "#/$defs/CleanupFailure"
+          },
+          "type": "array"
+        },
+        "files": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "total_bytes": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "total_bytes",
+        "files",
+        "failures"
+      ],
+      "type": "object"
+    },
     "CacheStatus": {
       "enum": [
         "fresh",
@@ -1663,6 +1721,8 @@
         "recover",
         "discard_plan",
         "cleanup_cache",
+        "backup_status",
+        "cleanup_backups",
         "list_sources",
         "list_game_sources",
         "set_source_enabled",
@@ -1696,6 +1756,12 @@
         },
         {
           "$ref": "#/$defs/Transaction"
+        },
+        {
+          "$ref": "#/$defs/BackupInventory"
+        },
+        {
+          "$ref": "#/$defs/BackupCleanupResult"
         },
         {
           "$ref": "#/$defs/CleanupResult"
@@ -2454,6 +2520,54 @@
           "properties": {
             "method": {
               "const": "cleanup_cache"
+            },
+            "params": {
+              "$ref": "#/$defs/HostParams"
+            },
+            "protocol_version": {
+              "const": 4
+            },
+            "request_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "protocol_version",
+            "request_id",
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "method": {
+              "const": "backup_status"
+            },
+            "params": {
+              "$ref": "#/$defs/HostParams"
+            },
+            "protocol_version": {
+              "const": 4
+            },
+            "request_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "protocol_version",
+            "request_id",
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "method": {
+              "const": "cleanup_backups"
             },
             "params": {
               "$ref": "#/$defs/HostParams"

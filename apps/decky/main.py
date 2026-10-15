@@ -208,6 +208,13 @@ class Plugin:
         self.settings.set_auto_cleanup(enabled)
         return await self.get_settings()
 
+    async def backup_status(self):
+        return await self.bridge.backup_status()
+
+    async def cleanup_backups(self):
+        self._require_idle()
+        return await self.bridge.cleanup_backups()
+
     async def clear_cache(self):
         self._require_idle()
         self._cache_result = await self.bridge.cleanup_cache()

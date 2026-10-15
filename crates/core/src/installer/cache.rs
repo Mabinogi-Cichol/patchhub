@@ -353,6 +353,8 @@ struct Walk {
     deleted: u64,
     failures: Vec<CleanupFailure>,
     failure_count: u64,
+    #[cfg(unix)]
+    backup_cleanup: bool,
 }
 impl Walk {
     fn fail(&mut self, failure: CleanupFailure) {
@@ -477,12 +479,34 @@ fn delete_open(
     Ok(())
 }
 
-struct Node {
+pub(crate) struct Node {
     file: File,
     path: PathBuf,
     _ancestors: Vec<File>,
 }
 impl Node {
+    pub(crate) fn path(&self) -> &Path {
+        &self.path
+    }
+    pub(crate) fn metadata(&self) -> io::Result<fs::Metadata> {
+        self.file.metadata()
+    }
+    pub(crate) fn remove_empty(self, parent: &Node, name: &OsStr) -> io::Result<u64> {
+        if self.file.metadata()?.is_dir() && !self.names()?.is_empty() {
+            return Err(unknown());
+        }
+        self.delete(
+            parent,
+            name,
+            0,
+            false,
+            &mut Walk {
+                #[cfg(unix)]
+                backup_cleanup: true,
+                ..Walk::default()
+            },
+        )
+    }
     fn json(&self, name: &str, limit: u64) -> io::Result<serde_json::Value> {
         let node = self.child(OsStr::new(name), false)?;
         if !node.file.metadata()?.is_file() || node.file.metadata()?.len() > limit {
@@ -571,7 +595,7 @@ mod native {
         Ok(())
     }
     impl Node {
-        pub(super) fn absolute(path: &Path) -> io::Result<Self> {
+        pub(crate) fn absolute(path: &Path) -> io::Result<Self> {
             let path = std::path::absolute(path)?;
             let mut current = open(libc::AT_FDCWD, OsStr::new("/"), true)?;
             let mut ancestors = Vec::new();
@@ -592,14 +616,14 @@ mod native {
                 _ancestors: ancestors,
             })
         }
-        pub(super) fn child(&self, name: &OsStr, _delete: bool) -> io::Result<Self> {
+        pub(crate) fn child(&self, name: &OsStr, _delete: bool) -> io::Result<Self> {
             Ok(Self {
                 file: open(self.file.as_raw_fd(), name, false)?,
                 path: self.path.join(name),
                 _ancestors: Vec::new(),
             })
         }
-        pub(super) fn names(&self) -> io::Result<Vec<std::ffi::OsString>> {
+        pub(crate) fn names(&self) -> io::Result<Vec<std::ffi::OsString>> {
             // /proc resolves this already-held directory descriptor, never a mutable path ancestor.
             let path = format!("/proc/self/fd/{}", self.file.as_raw_fd());
             let mut result = Vec::new();
@@ -621,7 +645,12 @@ mod native {
         ) -> io::Result<u64> {
             // Capture by rename into a fresh private directory. A replacement between
             // open and rename is preserved, never unlinked based on the old stat.
-            let quarantine = format!(".cleanup-{}", uuid::Uuid::new_v4());
+            let prefix = if state.backup_cleanup {
+                ".backup-cleanup-"
+            } else {
+                ".cleanup-"
+            };
+            let quarantine = format!("{prefix}{}", uuid::Uuid::new_v4());
             if unsafe {
                 libc::mkdirat(
                     parent.file.as_raw_fd(),
@@ -646,6 +675,15 @@ mod native {
                 let error = io::Error::last_os_error();
                 let _ = unlink(&parent.file, OsStr::new(&quarantine), true);
                 return Err(error);
+            }
+            #[cfg(test)]
+            if state.backup_cleanup {
+                if let Some(marker) = std::env::var_os("STEAM_PATCH_TEST_BACKUP_CAPTURE") {
+                    fs::write(marker, b"captured")?;
+                    loop {
+                        std::thread::sleep(std::time::Duration::from_millis(10));
+                    }
+                }
             }
             let result = (|| {
                 let captured = q.child(item, false)?;
@@ -750,7 +788,7 @@ mod native {
         Ok(())
     }
     impl Node {
-        pub(super) fn identity(&self) -> io::Result<(u64, u64)> {
+        pub(crate) fn identity(&self) -> io::Result<(u64, u64)> {
             let mut info: Information = unsafe { std::mem::zeroed() };
             if unsafe { GetFileInformationByHandle(self.file.as_raw_handle(), &mut info) } == 0 {
                 return Err(io::Error::last_os_error());
@@ -760,7 +798,7 @@ mod native {
                 (u64::from(info.index_high) << 32) | u64::from(info.index_low),
             ))
         }
-        pub(super) fn absolute(path: &Path) -> io::Result<Self> {
+        pub(crate) fn absolute(path: &Path) -> io::Result<Self> {
             let path = std::path::absolute(path)?;
             let mut current = PathBuf::new();
             let mut ancestors = Vec::new();
@@ -781,7 +819,7 @@ mod native {
                 _ancestors: ancestors,
             })
         }
-        pub(super) fn child(&self, name: &OsStr, delete: bool) -> io::Result<Self> {
+        pub(crate) fn child(&self, name: &OsStr, delete: bool) -> io::Result<Self> {
             let path = self.path.join(name);
             let directory = fs::symlink_metadata(&path)?.is_dir();
             Ok(Self {
@@ -790,7 +828,7 @@ mod native {
                 _ancestors: Vec::new(),
             })
         }
-        pub(super) fn names(&self) -> io::Result<Vec<std::ffi::OsString>> {
+        pub(crate) fn names(&self) -> io::Result<Vec<std::ffi::OsString>> {
             let mut result = Vec::new();
             for entry in fs::read_dir(&self.path)? {
                 if result.len() >= MAX_ENTRIES as usize {

@@ -392,7 +392,7 @@ Usage: steam-patch scan [--steam-root PATH]... [--catalog PATH] [--platform wind
        steam-patch preview --instance ID --release ID [scan options]\n\
        steam-patch serve  (versioned JSON-lines on stdin/stdout)\n\
 Installation requires a signed catalog. Close the game and pause Steam updates before installing.
-Methods: get_capabilities scan preview install_patch list_transactions recover discard_plan cleanup_cache.
+Methods: get_capabilities scan preview install_patch list_transactions recover discard_plan cleanup_cache backup_status cleanup_backups.
 Sources: list_sources list_game_sources set_source_enabled set_game_source add_source refresh_sources scan_sources discover_game.
 Options: --signed-catalog --trust-keys --state-dir --archive --operation install|reinstall --request-id ID.
 Source options: --source-id ID --appid N --enabled true|false --subscribed true|false --rule JSON --name-hint TEXT --preferred-language CODE --force --generation N.
@@ -634,6 +634,8 @@ mod tests {
         "recover",
         "discard_plan",
         "cleanup_cache",
+        "backup_status",
+        "cleanup_backups",
         "list_sources",
         "list_game_sources",
         "set_source_enabled",
@@ -650,7 +652,7 @@ mod tests {
         expected.sort_unstable();
         let mut actual = runtime::METHODS.to_vec();
         actual.sort_unstable();
-        assert_eq!(runtime::METHODS.len(), 16);
+        assert_eq!(runtime::METHODS.len(), 18);
         assert_eq!(actual, expected);
 
         let capabilities = respond(
@@ -662,7 +664,7 @@ mod tests {
             .iter()
             .map(|method| method.as_str().unwrap())
             .collect();
-        assert_eq!(methods.len(), 16);
+        assert_eq!(methods.len(), 18);
         let mut sorted = methods.clone();
         sorted.sort_unstable();
         assert_eq!(sorted, expected);
@@ -998,5 +1000,30 @@ mod tests {
             };
             assert_eq!(respond(&raw), case["response"], "{}", case["name"]);
         }
+    }
+    #[test]
+    fn backup_rpc_inventory_cleanup_and_unknown_path_are_contract_checked() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = dir.path().join("state");
+        let paths = steam_patch_core::installer::InstallerPaths::new(&state);
+        let job = paths.jobs_dir().join("orphan");
+        std::fs::create_dir_all(&job).unwrap();
+        std::fs::write(job.join("0.backup"), b"original").unwrap();
+        std::fs::write(job.join("0.stage"), b"stage").unwrap();
+        let host = json!({"state_dir":state,"roots":[dir.path().join("no-steam")],"catalog":null,"signed_catalog":null,"trust_keys":null,"platform":if cfg!(windows) {"windows"} else {"steamos"}});
+        let request = |method: &str, params: Value| {
+            respond(serde_json::to_vec(&json!({"protocol_version":4,"request_id":"backup-rpc","method":method,"params":params})).unwrap().as_slice())
+        };
+        let inventory = request("backup_status", json!({"host":host}));
+        assert_eq!(inventory["ok"], true);
+        assert_eq!(inventory["result"]["files"], 1);
+        let rejected = request("cleanup_backups", json!({"host":host,"path":dir.path()}));
+        assert_eq!(rejected["ok"], false);
+        assert!(job.join("0.backup").exists());
+        let result = request("cleanup_backups", json!({"host":host}));
+        assert_eq!(result["ok"], true);
+        assert_eq!(result["result"]["removed_files"], 1);
+        assert_eq!(result["result"]["removed_bytes"], 8);
+        assert!(job.join("0.stage").exists());
     }
 }

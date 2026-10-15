@@ -491,6 +491,7 @@ pub fn execute_controlled<L: Fn(u64) -> bool + Sync, D: Fn() -> u64 + Sync>(
             "recover",
             "discard_plan",
             "cleanup_cache",
+            "cleanup_backups",
         ]
         .contains(&method)
         {
@@ -499,6 +500,9 @@ pub fn execute_controlled<L: Fn(u64) -> bool + Sync, D: Fn() -> u64 + Sync>(
     }
     if method == "get_capabilities" {
         return Ok(capabilities(&params));
+    }
+    if method == "backup_status" || method == "cleanup_backups" {
+        return backups(&params, method == "cleanup_backups");
     }
     if method == "cleanup_cache" {
         return cleanup_cache(&params);
@@ -672,6 +676,26 @@ pub fn execute_controlled<L: Fn(u64) -> bool + Sync, D: Fn() -> u64 + Sync>(
     // Catalog failures remain structured read-only diagnostics.
     result["catalog_error"] = json!(catalog_error);
     Ok(result)
+}
+
+fn backups(params: &Params, delete: bool) -> Result<Value, DomainError> {
+    let state = state(params)?;
+    let host = installer::service::ValidatedHostContext::new(
+        &state,
+        &params.roots,
+        params.platform.unwrap_or(if cfg!(windows) {
+            Platform::Windows
+        } else {
+            Platform::Steamos
+        }),
+    )
+    .map_err(projection_error)?;
+    let service = installer::backup::BackupService::new(&host);
+    if delete {
+        value(service.cleanup().map_err(projection_error)?)
+    } else {
+        value(service.inspect().map_err(projection_error)?)
+    }
 }
 
 /// Thin adapter to the validated core cache service.

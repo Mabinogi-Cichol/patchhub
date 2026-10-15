@@ -7,6 +7,7 @@ pub use steam_patch_core::{
     catalog::{PatchMatch, Platform, SupportLevel},
     install::{InstallOperation, Transaction},
     installer::{
+        backup::{BackupCleanupResult, BackupInventory},
         outcome::{CleanupResult, InstallerOutcome},
         service::CleanupPolicy,
     },
@@ -83,6 +84,8 @@ pub enum Method {
     Recover,
     DiscardPlan,
     CleanupCache,
+    BackupStatus,
+    CleanupBackups,
     ListSources,
     ListGameSources,
     SetSourceEnabled,
@@ -92,7 +95,7 @@ pub enum Method {
     ScanSources,
     DiscoverGame,
 }
-pub const ALL_METHODS: [Method; 16] = [
+pub const ALL_METHODS: [Method; 18] = [
     Method::GetCapabilities,
     Method::Scan,
     Method::Preview,
@@ -101,6 +104,8 @@ pub const ALL_METHODS: [Method; 16] = [
     Method::Recover,
     Method::DiscardPlan,
     Method::CleanupCache,
+    Method::BackupStatus,
+    Method::CleanupBackups,
     Method::ListSources,
     Method::ListGameSources,
     Method::SetSourceEnabled,
@@ -110,7 +115,7 @@ pub const ALL_METHODS: [Method; 16] = [
     Method::ScanSources,
     Method::DiscoverGame,
 ];
-pub const METHODS: [&str; 16] = [
+pub const METHODS: [&str; 18] = [
     "get_capabilities",
     "scan",
     "preview",
@@ -119,6 +124,8 @@ pub const METHODS: [&str; 16] = [
     "recover",
     "discard_plan",
     "cleanup_cache",
+    "backup_status",
+    "cleanup_backups",
     "list_sources",
     "list_game_sources",
     "set_source_enabled",
@@ -181,6 +188,8 @@ pub enum RequestParams {
     Recover(HostParams),
     DiscardPlan(DiscardPlanParams),
     CleanupCache(HostParams),
+    BackupStatus(HostParams),
+    CleanupBackups(HostParams),
     ListSources(HostParams),
     ListGameSources(ListGameSourcesParams),
     SetSourceEnabled(SetSourceEnabledParams),
@@ -198,6 +207,8 @@ impl RequestParams {
             | Self::ListTransactions(p)
             | Self::Recover(p)
             | Self::CleanupCache(p)
+            | Self::BackupStatus(p)
+            | Self::CleanupBackups(p)
             | Self::ListSources(p) => &p.host,
             Self::Preview(p) => &p.host,
             Self::InstallPatch(p) => &p.host,
@@ -551,6 +562,8 @@ pub enum MethodResult {
     Install(InstallerOutcome),
     Transactions(Vec<Transaction>),
     Transaction(Transaction),
+    BackupInventory(BackupInventory),
+    BackupCleanup(BackupCleanupResult),
     Cleanup(CleanupResult),
     Sources(Vec<SourceSummary>),
     GameSources(Vec<GameSourceSummary>),
@@ -694,6 +707,12 @@ pub fn validate_response(
         Some(Method::DiscardPlan) => {
             check!(Transaction);
             validate_transaction(r)?;
+        }
+        Some(Method::BackupStatus) => {
+            check!(BackupInventory);
+        }
+        Some(Method::CleanupBackups) => {
+            check!(BackupCleanupResult);
         }
         Some(Method::CleanupCache) => {
             check!(CleanupResult);
@@ -1254,25 +1273,22 @@ pub fn schema() -> Value {
         serde_json::json!({"const":false});
     defs.get_mut("InstallerOutcome").unwrap()["properties"]["error"]["x-max-utf8-bytes"] =
         serde_json::json!(MAX_DETAIL_BYTES);
-    let names = [
-        "HostParams",
-        "HostParams",
-        "PreviewParams",
-        "InstallPatchParams",
-        "HostParams",
-        "HostParams",
-        "DiscardPlanParams",
-        "HostParams",
-        "HostParams",
-        "ListGameSourcesParams",
-        "SetSourceEnabledParams",
-        "SetGameSourceParams",
-        "AddSourceParams",
-        "SourceTaskParams",
-        "SourceTaskParams",
-        "DiscoverGameParams",
-    ];
-    let variants:Vec<Value>=METHODS.iter().zip(names).map(|(method,name)|serde_json::json!({"type":"object","additionalProperties":false,"required":["protocol_version","request_id","method","params"],"properties":{"protocol_version":{"const":PROTOCOL_VERSION},"request_id":{"type":"string"},"method":{"const":method},"params":{"$ref":format!("#/$defs/{name}")}}})).collect();
+    let variants: Vec<Value> = ALL_METHODS.iter().map(|method| {
+        let name = match method {
+            Method::GetCapabilities | Method::Scan | Method::ListTransactions | Method::Recover
+                | Method::CleanupCache | Method::BackupStatus | Method::CleanupBackups | Method::ListSources => "HostParams",
+            Method::Preview => "PreviewParams",
+            Method::InstallPatch => "InstallPatchParams",
+            Method::DiscardPlan => "DiscardPlanParams",
+            Method::ListGameSources => "ListGameSourcesParams",
+            Method::SetSourceEnabled => "SetSourceEnabledParams",
+            Method::SetGameSource => "SetGameSourceParams",
+            Method::AddSource => "AddSourceParams",
+            Method::RefreshSources | Method::ScanSources => "SourceTaskParams",
+            Method::DiscoverGame => "DiscoverGameParams",
+        };
+        serde_json::json!({"type":"object","additionalProperties":false,"required":["protocol_version","request_id","method","params"],"properties":{"protocol_version":{"const":PROTOCOL_VERSION},"request_id":{"type":"string"},"method":{"const":method.as_str()},"params":{"$ref":format!("#/$defs/{name}")}}})
+    }).collect();
     defs.insert("Request".to_owned(), serde_json::json!({"oneOf":variants}));
     for (name, item) in [
         ("Transactions", "Transaction"),
@@ -1448,6 +1464,8 @@ pub fn result_schema_name(method: Method) -> &'static str {
         Method::ListTransactions | Method::Recover => "Transactions",
         Method::DiscardPlan => "Transaction",
         Method::CleanupCache => "CleanupResult",
+        Method::BackupStatus => "BackupInventory",
+        Method::CleanupBackups => "BackupCleanupResult",
         Method::ListSources => "Sources",
         Method::ListGameSources => "GameSources",
         Method::SetSourceEnabled => "SourceEnabledResult",
@@ -1623,5 +1641,28 @@ mod early_error_tests {
             &schema["$defs"]["Response"],
             &schema
         ));
+    }
+}
+
+#[test]
+fn schema_request_branches_accept_every_declared_method() {
+    let schema = schema();
+    assert_eq!(
+        schema["$defs"]["Request"]["oneOf"]
+            .as_array()
+            .unwrap()
+            .len(),
+        ALL_METHODS.len()
+    );
+    for method in ALL_METHODS {
+        assert!(
+            matches_schema(
+                &fixtures::request(method),
+                &schema["$defs"]["Request"],
+                &schema
+            ),
+            "{}",
+            method.as_str()
+        );
     }
 }

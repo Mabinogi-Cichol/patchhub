@@ -9,7 +9,7 @@ import { installationResult } from "@steam-patch/ui";
 import { installInput, primaryActionBlockers, primaryInstallAction } from "./actions";
 import { createManagerSession, feedbackFor, needsRecovery, type DiscoveryResult } from "./session";
 import { decodeInstance, encodeInstance, settingsPage, settingsRoutes } from "./route";
-import { autoCleanupNote, cacheClearNote, cacheSummary, type CacheStatus, type CleanupResult, type Settings } from "./cache";
+import { backupSummary, backupClearNote, type BackupInventory, type BackupCleanupResult, autoCleanupNote, cacheClearNote, cacheSummary, type CacheStatus, type CleanupResult, type Settings } from "./cache";
 import { tasks, taskIsTerminal, type TaskSnapshot } from "./tasks";
 import { TaskProgressView, TaskResultView } from "./task-progress-view";
 import { candidateConditions, candidateLanguage, candidateSource, discoveryStatus, safeSourceUrl, unqueriedCount } from "./discovery";
@@ -25,6 +25,8 @@ const recover = callable<[], Transaction[]>("recover");
 const setSourceEnabled = callable<[string, boolean], SourceSubscription[]>("set_source_enabled");
 const setGameSource = callable<[number, string, boolean], { appid: number }>("set_game_source");
 const addSource = callable<[string], SourceSubscription[]>("add_source");
+const backupStatus = callable<[], BackupInventory>("backup_status");
+const cleanupBackups = callable<[], BackupCleanupResult>("cleanup_backups");
 const clearCache = callable<[], CacheStatus>("clear_cache");
 const getSettings = callable<[], Settings>("get_settings");
 const setAutoCleanup = callable<[boolean], Settings>("set_auto_cleanup");
@@ -515,10 +517,13 @@ function GlobalCache() {
   const { busy } = state;
   const { error, note } = feedbackFor(state);
   const [settings, setSettings] = useState<Settings | null>(null);
+  const [backups, setBackups] = useState<BackupInventory | null>(null);
+  const [backupError, setBackupError] = useState("");
   const [failed, setFailed] = useState(false);
   useEffect(() => {
     let live = true;
     getSettings().then(value => { if (live) setSettings(value); }).catch(() => { if (live) setFailed(true); });
+    backupStatus().then(value => { if (live) setBackups(value); }).catch(() => { if (live) setBackupError("读取安装备份占用失败。"); });
     return () => { live = false; };
   }, []);
   const toggle = (enabled: boolean) => void session.work(enabled ? "正在开启自动清理…" : "正在关闭自动清理…",
@@ -529,6 +534,12 @@ function GlobalCache() {
         session.update({ note: cacheClearNote(value) });
       });
   };
+  const cleanBackups = () => void session.work("正在清理全部安装备份…", async () => {
+    const result = await cleanupBackups();
+    try { setBackups(await backupStatus()); setBackupError(""); }
+    catch { setBackups(null); setBackupError("清理已返回，但刷新备份占用失败，请重开页面查看。"); }
+    return result;
+  }, value => session.update({ note: backupClearNote(value) }));
   return <div className="patch-page">
     <div>{busy && <Status>{busy}</Status>}{error && <Status warning>{error}</Status>}{note && <Status>{note}</Status>}</div>
     <Status>全局设置，对所有游戏生效。</Status>
@@ -539,6 +550,12 @@ function GlobalCache() {
         <Row><Status>{settings.auto_cleanup ? "安装成功后删除本次下载的补丁包。" : "缓存将保留直至手动清理。"}</Status></Row>
         <Row><Action disabled={!!busy} onClick={clean}>清理下载缓存</Action></Row>
       </> : <Row><Status warning={failed}>{failed ? "读取缓存设置失败。" : "正在读取缓存设置…"}</Status></Row>}
+    </PanelSection>
+    <PanelSection title="安装备份">
+      <InfoRow label="当前占用">{backups ? backupSummary(backups) : backupError || "正在统计安装备份…"}</InfoRow>
+      <Row><Status>删除所有安装备份，包括中断任务留下的备份；清理后无法用这些备份恢复原文件。</Status></Row>
+      {backups?.failures.map((failure, index) => <Row key={index}><Status warning>{failure.detail || failure.code}</Status></Row>)}
+      <Row><Action disabled={!!busy} onClick={cleanBackups}>清理全部安装备份</Action></Row>
     </PanelSection>
   </div>;
 }
@@ -553,7 +570,7 @@ function Manager() {
     {instance === sourceRoute ? <SidebarNavigation showTitle disableRouteReporting title={<div className="patch-nav-header"><span className="patch-nav-tool">Steam 补丁管理</span><span className="patch-nav-game">全局设置</span></div>} page={settingsPage(panel)} pages={[
       { identifier: settingsRoutes.sources, route: settingsRoutes.sources, title: "管理订阅源", visible: true, content: <GlobalSources /> },
       "separator",
-      { identifier: settingsRoutes.cache, route: settingsRoutes.cache, title: "下载缓存", visible: true, content: <GlobalCache /> },
+      { identifier: settingsRoutes.cache, route: settingsRoutes.cache, title: "缓存与备份", visible: true, content: <GlobalCache /> },
     ]} />
       : item ? <GameManager key={instance} item={item} seg={instance!} panel={panel} />
         : <div className="patch-page"><h2>Steam 补丁管理</h2><Status>{report ? "游戏已不在当前扫描结果中。" : "正在加载游戏列表…"}</Status><Action onClick={() => Navigation.NavigateBack()}>返回游戏列表</Action></div>}

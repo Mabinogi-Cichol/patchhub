@@ -1499,3 +1499,39 @@ fn failed_install_recovery_is_confined_to_its_own_plan() {
         "uninstalling"
     );
 }
+
+#[test]
+fn manual_backup_cleanup_keeps_journal_and_recovery_reports_missing_original() {
+    use crate::installer::{backup::BackupService, service::ValidatedHostContext};
+    let f = Fixture::new();
+    let plan = f.plan().unwrap();
+    fs::write(f.job_file(&plan.plan_id, "0.backup"), b"original bytes").unwrap();
+    fs::write(f.game.join("original.dat"), b"patched bytes").unwrap();
+    f.edit_journal(&plan.plan_id, |j| {
+        j["transaction"]["state"] = "needs_recovery".into();
+        j["progress"][0] = "installed".into();
+    });
+    let platform = if cfg!(windows) {
+        Platform::Windows
+    } else {
+        Platform::Steamos
+    };
+    let host =
+        ValidatedHostContext::new(&f.state, std::slice::from_ref(&f.library), platform).unwrap();
+    assert_eq!(
+        BackupService::new(&host).cleanup().unwrap().removed_files,
+        1
+    );
+    let result = recover(&f.state).unwrap();
+    assert_eq!(result[0].state, "needs_recovery");
+    assert!(result[0]
+        .error
+        .as_deref()
+        .unwrap()
+        .contains("backup_missing_or_changed"));
+    assert_eq!(
+        fs::read(f.game.join("original.dat")).unwrap(),
+        b"patched bytes"
+    );
+    assert!(f.job_file(&plan.plan_id, "0.stage").exists());
+}

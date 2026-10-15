@@ -62,6 +62,10 @@ pub fn success_result(method: Method) -> Value {
         Method::InstallPatch => outcome("committed", "completed"),
         Method::ListTransactions | Method::Recover => json!([transaction("committed")]),
         Method::DiscardPlan => transaction("rolled_back"),
+        Method::BackupStatus => json!({"total_bytes":0,"files":0,"failures":[]}),
+        Method::CleanupBackups => {
+            json!({"status":"completed","removed_bytes":0,"removed_files":0,"failures":[]})
+        }
         Method::CleanupCache => {
             json!(steam_patch_core::installer::outcome::CleanupResult::default())
         }

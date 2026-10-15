@@ -1,6 +1,6 @@
 // Wire DTOs are generated from the Rust protocol/core types.
 import type { ActionBlocker, InstallerOutcome, PatchMatch, InstanceProjection, ScanReport, SourceCandidate } from "../../contracts/generated/protocol";
-export type { ActionBlockerCode, ActionBlocker, ActionAvailability, PatchActions, SourceCandidate, DiscoveryDiagnostic, GameDiscovery, DiscoveryResult, Transaction, InstallerOutcome, CleanupResult, InstallStage, DomainError } from "../../contracts/generated/protocol";
+export type { ActionBlockerCode, ActionBlocker, ActionAvailability, PatchActions, SourceCandidate, DiscoveryDiagnostic, GameDiscovery, DiscoveryResult, Transaction, InstallerOutcome, BackupInventory, BackupCleanupResult, CleanupResult, InstallStage, DomainError } from "../../contracts/generated/protocol";
 export type { PatchMatch as Patch, InstanceProjection as Install, SourceSummary as SourceSubscription, GameSourceSummary as GameSourceSubscription, PreviewReport as Preview, ProposedChange as Change } from "../../contracts/generated/protocol";
 type Patch = PatchMatch;
 type Install = InstanceProjection;

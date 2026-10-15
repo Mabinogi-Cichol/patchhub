@@ -29,6 +29,23 @@ impl CacheLock {
         Self::acquire(host, true)
     }
 
+    /// Legacy transaction stores share their fixed journal.lock with older writers.
+    /// Create it even for orphan stores so a later writer cannot bypass the sweep.
+    pub(crate) fn legacy_journal(root: &Path) -> Result<Self> {
+        let anchors = directories(root)?;
+        let path = root.join("journal.lock");
+        let file = open_lock(&anchors.last().ok_or_else(unsafe_state)?.file, &path)?;
+        validate_file(&file)?;
+        let guard = Self {
+            file,
+            anchors,
+            path,
+        };
+        FileExt::try_lock_exclusive(&guard.file).map_err(lock_error)?;
+        guard.validate()?;
+        Ok(guard)
+    }
+
     fn acquire(host: &ValidatedHostContext, exclusive: bool) -> Result<Self> {
         // Both modes may create the fixed lock, hence both require write identity
         // and fresh state/game boundary validation before any filesystem mutation.
@@ -244,9 +261,11 @@ fn open_child_directory(_parent: &File, _name: &std::ffi::OsStr, path: &Path) ->
 }
 
 #[cfg(unix)]
-fn open_lock(root: &File, _path: &Path) -> Result<File> {
+fn open_lock(root: &File, path: &Path) -> Result<File> {
     use std::os::unix::io::{AsRawFd, FromRawFd};
-    let name = c"cache.lock";
+    use std::{ffi::CString, os::unix::ffi::OsStrExt};
+    let name = CString::new(path.file_name().ok_or_else(unsafe_state)?.as_bytes())
+        .map_err(|_| unsafe_state())?;
     let flags = libc::O_RDWR | libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK;
     let mut fd = unsafe {
         libc::openat(
@@ -383,7 +402,11 @@ mod tests {
         let mode = std::env::var("STEAM_PATCH_CACHE_LOCK_CHILD_MODE").unwrap();
         let expected = std::env::var("STEAM_PATCH_CACHE_LOCK_CHILD_EXPECT").unwrap();
         let paths = InstallerPaths::new(Path::new(&state));
-        let result = CacheLock::acquire_paths(&paths, mode == "exclusive");
+        let result = if mode == "legacy" {
+            CacheLock::legacy_journal(paths.root())
+        } else {
+            CacheLock::acquire_paths(&paths, mode == "exclusive")
+        };
         if expected == "ok" {
             result.unwrap();
         } else {
@@ -428,6 +451,17 @@ mod tests {
         child(temp.path(), "exclusive", "installer_busy");
         drop(writer);
         child(temp.path(), "exclusive", "ok");
+    }
+
+    #[test]
+    fn missing_legacy_journal_lock_is_created_and_excludes_a_later_process() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = InstallerPaths::new(temp.path());
+        let guard = CacheLock::legacy_journal(paths.root()).unwrap();
+        assert!(paths.journal_lock().is_file());
+        child(temp.path(), "legacy", "installer_busy");
+        drop(guard);
+        child(temp.path(), "legacy", "ok");
     }
 
     #[test]

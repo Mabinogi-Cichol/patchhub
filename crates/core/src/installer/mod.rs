@@ -8,6 +8,7 @@
 
 pub mod acquire;
 pub mod authorization;
+pub mod backup;
 pub mod cache;
 mod cache_lock;
 pub mod exe_orchestrator;

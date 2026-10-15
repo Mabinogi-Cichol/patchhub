@@ -710,6 +710,44 @@
       "task_channel": false
     },
     {
+      "name": "backup_status-request",
+      "request": {
+        "method": "backup_status",
+        "params": {
+          "host": {
+            "catalog": null,
+            "platform": "windows",
+            "roots": [],
+            "signed_catalog": null,
+            "state_dir": null,
+            "trust_keys": null
+          }
+        },
+        "protocol_version": 4,
+        "request_id": "fixture"
+      },
+      "task_channel": false
+    },
+    {
+      "name": "cleanup_backups-request",
+      "request": {
+        "method": "cleanup_backups",
+        "params": {
+          "host": {
+            "catalog": null,
+            "platform": "windows",
+            "roots": [],
+            "signed_catalog": null,
+            "state_dir": null,
+            "trust_keys": null
+          }
+        },
+        "protocol_version": 4,
+        "request_id": "fixture"
+      },
+      "task_channel": false
+    },
+    {
       "name": "list_sources-request",
       "request": {
         "method": "list_sources",
@@ -1477,6 +1515,8 @@
             "recover",
             "discard_plan",
             "cleanup_cache",
+            "backup_status",
+            "cleanup_backups",
             "list_sources",
             "list_game_sources",
             "set_source_enabled",
@@ -1868,6 +1908,61 @@
     {
       "method": "cleanup_cache",
       "name": "cleanup_cache-failure",
+      "response": {
+        "error": {
+          "code": "io_error",
+          "detail": "固定诊断"
+        },
+        "ok": false,
+        "protocol_version": 4,
+        "request_id": "fixture"
+      }
+    },
+    {
+      "method": "backup_status",
+      "name": "backup_status-success",
+      "response": {
+        "ok": true,
+        "protocol_version": 4,
+        "request_id": "fixture",
+        "result": {
+          "failures": [],
+          "files": 0,
+          "total_bytes": 0
+        }
+      }
+    },
+    {
+      "method": "backup_status",
+      "name": "backup_status-failure",
+      "response": {
+        "error": {
+          "code": "io_error",
+          "detail": "固定诊断"
+        },
+        "ok": false,
+        "protocol_version": 4,
+        "request_id": "fixture"
+      }
+    },
+    {
+      "method": "cleanup_backups",
+      "name": "cleanup_backups-success",
+      "response": {
+        "ok": true,
+        "protocol_version": 4,
+        "request_id": "fixture",
+        "result": {
+          "failures": [],
+          "removed_bytes": 0,
+          "removed_files": 0,
+          "status": "completed"
+        }
+      }
+    },
+    {
+      "method": "cleanup_backups",
+      "name": "cleanup_backups-failure",
       "response": {
         "error": {
           "code": "io_error",
@@ -3883,6 +3978,8 @@
             "recover",
             "discard_plan",
             "cleanup_cache",
+            "backup_status",
+            "cleanup_backups",
             "list_sources",
             "list_game_sources",
             "set_source_enabled",
@@ -4033,6 +4130,8 @@
             "recover",
             "discard_plan",
             "cleanup_cache",
+            "backup_status",
+            "cleanup_backups",
             "list_sources",
             "list_game_sources",
             "set_source_enabled",
@@ -4117,6 +4216,8 @@
             "recover",
             "discard_plan",
             "cleanup_cache",
+            "backup_status",
+            "cleanup_backups",
             "list_sources",
             "list_game_sources",
             "set_source_enabled",
@@ -4197,6 +4298,8 @@
             "recover",
             "discard_plan",
             "cleanup_cache",
+            "backup_status",
+            "cleanup_backups",
             "list_sources",
             "list_game_sources",
             "set_source_enabled",
@@ -4285,6 +4388,8 @@
             "recover",
             "discard_plan",
             "cleanup_cache",
+            "backup_status",
+            "cleanup_backups",
             "list_sources",
             "list_game_sources",
             "set_source_enabled",
