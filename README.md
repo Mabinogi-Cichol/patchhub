@@ -1,5 +1,7 @@
 # Steam 补丁管理
 
+![Steam 补丁管理：查找、下载、安装，支持 Windows 和 Steam Deck](docs/images/branding/banner.png)
+
 为 Windows 和 Steam Deck 上已安装的 Steam 游戏查找、下载和安装补丁，省去逐个搜索发布页、核对下载文件和手动复制的步骤。
 
 工具会读取本机 Steam 游戏库，展示补丁来源、语言、适用版本和安装状态。支持的补丁可以直接安装或覆盖安装；无法自动处理的补丁，也可以从详情页打开来源网站，按发布方说明操作。
