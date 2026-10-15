@@ -125,3 +125,8 @@
 - 按 Clippy 建议移除已为引用的 `root` / `final_url` 外层借用，候选解析、匹配与安装行为不变。
 - 本地相关 core/CLI/protocol/contract-gen 的 `clippy --all-targets --locked -- -D warnings`、Kagura 筛选回归（18 passed、1 既有 ignored）及 `cargo fmt --all -- --check` 通过。沙箱内测试曾在状态初始化文件锁处返回 `source_state_busy`；正常 Windows 权限重跑通过，未修改文件锁实现。
 - 用户版根 README 与修复代码分别提交。v0.1.0 将基于包含本次修正的最新提交，通过 Tag 工作流重新构建 Windows 安装版、便携版与 Decky ZIP；在线 CI 和发行附件验证结果发布后补记。既有实机验证沿用前文，本轮未重新部署或修改游戏。
+
+### 首发在线验证结果
+
+- `v0.1.0` 已固定于 `a4e1056` 并公开发布，Tag 构建 `38689216660` 全部成功，Clippy 阻塞关闭；8 个公开附件已下载核验。
+- 用户版 README 后续补充实机截图，发行校验名称修正与在线验证记录见[发行检查](../../release-checklist.md#v010-首发记录2026-10-15)。本次没有变更来源发现行为或重新部署插件。

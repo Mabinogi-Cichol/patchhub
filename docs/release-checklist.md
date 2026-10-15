@@ -31,3 +31,15 @@ Windows 当前未配置 Authenticode 证书，安装包没有发行者身份认�
 RustSec 提示：RUSTSEC-2024-0429（glib 0.18.5，unsound）与 RUSTSEC-2024-0370（proc-macro-error 1.0.4，unmaintained）。cargo tree 分别按 steam-patch-windows / x86_64-pc-windows-msvc 及 steam-patch-cli / x86_64-unknown-linux-gnu 核对，均没有这些依赖路径；它们来自全平台锁文件中的其他平台 UI 依赖。当前不提供 Linux Tauri 桌面客户端。未来增加该平台前必须重新处理这些提示，未添加全局忽略。
 
 许可证材料仍需补齐：从本地依赖包收集了 LICENSE / COPYING / NOTICE 文本，但 53 个全平台 / 开发 / 工作区包未发现顶层许可文件（不等于它们没有许可）。正式分发前需按实际发行依赖复核这些材料与图标来源署名，不能以 SBOM 中有 SPDX 声明推导全部分发条件已满足。
+
+## v0.1.0 首发记录（2026-10-15）
+
+- 发行 Tag `v0.1.0` 固定于 `a4e1056ce9ffb770672637ff893488ef8b18bfcc`，包含最新插件代码与用户版 README。GitHub Actions `38689216660` 的 Windows/Linux core、Windows、Decky 和 release 任务全部成功。
+- 首个正式 Release 已公开，包含 Windows NSIS、Windows 便携 ZIP、Decky ZIP、两端校验与 SBOM，以及 `SHA256SUMS.txt`；中文说明列明功能、安装方法及已知限制。
+- 从公开 Release 下载全部 8 个附件，核对 7 个内容附件的 SHA-256、两端 ZIP 校验、SBOM 锁文件摘要、11/24 文件 allowlist、ZIP CRC、PE/ELF x86_64、Unix 执行权限、runtime 哈希和 Tag 内资源/桥接源码。Windows 文本按 runner CRLF 检出规则核对；没有以 Windows SBOM 的锁文件哈希直接比较 Git 的 LF blob。
+- GitHub 上传时会把 NSIS 文件名的空格转换成点号，原工作流在转换前生成 SHA256SUMS，导致名称不一致。所有附件内容哈希均正确；本轮按公开文件名重写该清单并上传，重新下载核对通过。工作流改为暂存 NSIS 时先把空格改成点号，再生成摘要，供后续版本使用；已发布 Tag 保持不变。
+- 验证 JSON、下载附件、原始/修正清单及构建日志保存在忽略目录 `.artifacts/release-v0.1.0/`。本轮发布检查不替代逐游戏兼容性、全新安装或独立安全/许可证审计。
+- 工作流修正的实际 Bash 暂存片段已在隔离夹具目录运行，带空格的 NSIS 名称转换为点号后，`sha256sum -c SHA256SUMS.txt` 通过。
+- 用户要求补充 Decky 实机截图，随后明确由用户操作、助手仅按指令截图，最后停止追加截图。已选取游戏列表、夏日 DLC 补丁/镜像选择、人工确认及实际下载 30% 共 4 张原始 PNG，放入 `docs/images/decky/` 并链接至 README；未合成或伪造安装完成画面。
+- 只读 RPC 确认用户实际执行的《夏日狂想曲+》覆盖任务 `38a5cc1d-35e9-4087-8156-16de0725582b` completed、事务 `96b611cf-f42c-880b-ae07-d23892f88aeb` committed，自动清理 completed/failures=[]，无活动任务、插件实例 1。助手没有触发本次安装，没有核验游戏内效果。设备现有插件用于截图，未重新部署 Release ZIP；这组画面不作为 Release 包的设备部署证明。
+- 原计划演示《夜勤病栋》时创建的 71 文件游戏及工具状态备份（4,864,491,520 字节）已取回本地并校验 SHA-256，保留于 `.artifacts/release-v0.1.0/deck-backup/`；未修改夜勤游戏。远端仅清理本轮独立备份暂存，用户当前页面不回退。
