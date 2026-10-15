@@ -163,4 +163,16 @@
 - `cargo test --locked --offline --workspace --no-fail-fast`：37 个目标全 `ok`，0 失败 / 0 编译错误 / 0 panic；日志 `.artifacts/install-footprint-p1-p4-tests.log`。
 - `cargo check --locked --offline --workspace`：通过。
 - 前端/契约：`node --experimental-strip-types --test apps/decky/tests/*.test.ts` 70 通过 0 失败；`npm run typecheck`（Windows + Decky `tsc --noEmit`）通过；`npm run test:contracts` 通过。
-- 仍未执行：真实大包/大 EXE 端到端、真实磁盘峰值采样、Windows/Steam Deck 实机安装与恢复、P4 的整包 mmap 与 3 GiB 地址空间窗口映射（设计留待平台内存语义实测）。未提交或推送 Git、未发布、未部署设备。
+- 仍未执行：真实大包/大 EXE 端到端、真实磁盘峰值采样、P4 的整包 mmap 与 3 GiB 地址空间窗口映射（设计留待平台内存语义实测）。未再提交或推送 Git。
+
+## 2026-10-16：Steam Deck 实机部署与旧 journal 兼容修复
+
+- 按 [decky-deploy-verify](../../../.agents/skills/decky-deploy-verify/SKILL.md) 流程部署完整插件到 `deck@192.168.31.186`（SteamOS holo）。设备基线：`plugin_loader` active、插件目录 `root:root 755`、`list_tasks` 25 条全终态；本轮 host key 记录于 `.artifacts/install-footprint-deck-20261016-031616/known_hosts`。
+- 构建：前端 `npm run build:decky`；Linux CLI/worker 用仓库内 WSL 工具链 `scripts/build-linux.sh` 重建（18 个 Linux 测试通过），产物 `target/linux/release/{steam-patch,sf-worker}`；打包 `steam-patch-manager-decky.zip`（首版 `06c0a1bc…`，修复版 `1cb0564c…`）。
+- 部署方式：Loader 本地 ZIP 安装（`utilities/install_plugin` + `utilities/confirm_plugin_install`），正式目录 24 个文件哈希与清单一致，`bin/*` 执行位保留。
+- **实机发现回归**：新核心读取设备上已有的 `installer/rust-v1/journal.sqlite`（16 条含 `plan.expires_at`）与旧 `authorization.json`（含 `expires_at`/`lease_active`）时报 `journal_invalid`，插件 `main.py::_initialize` 的 `bridge.recover()` 启动失败。
+- **修复（设计“旧持久化字段仅作最小兼容读取”）**：`InstallPlan` 加回只读 `expires_at`，`Authorization` 加回只读 `expires_at`/`lease_active`，均 `#[serde(default, skip_serializing)]`，不恢复 TTL/心跳逻辑；补齐三处构造点；新增兼容回归测试 `legacy_plan_document_with_expiry_loads_read_only`、`legacy_expiry_and_lease_fields_load_read_only`。
+- 修复后重新部署：`recover()` 正常，日志无 `journal_invalid`/Traceback；`list_tasks` 25 条全终态、`scan(false)` 返回 28 条真实实例（诊断仅为未挂载 SD 卡的 `library_unavailable`）；插件实例 1，`plugin_loader` active。
+- 验证：Windows `cargo test -p steam-patch-core` 394 通过 0 失败；Linux `build-linux.sh` 测试 18 通过；Decky TS 70 通过、`typecheck`、`test:contracts` 通过。
+- 待验证：真实屏幕（QAM/全屏）截图未取到（CDP 对 `QuickAccess_uid2` 截图超时），仅完成文件/RPC/实例验证，故界面视觉与实体手柄交互标为待验证；真实游戏补丁安装/卸载不在本轮范围。
+- 远端暂存目录已按脚本核验后清理，仅保留本轮 `steam-patch-validation/<round>/`；本地保留备份与证据于 `.artifacts/install-footprint-deck-20261016-031616/`。
