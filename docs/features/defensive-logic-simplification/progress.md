@@ -4,7 +4,7 @@
 
 ## 当前状态
 
-**已实施，本地自动化验证通过；P5 独立复核完成并收尾；实机、Unix 分支与真实跨端传输待验证。**S01–S19 全部完成（含配套收尾与 P5 复核修正），改动、复核与验证记录见“2026-10-17：S01–S19 实施与自动化验证”。生产代码改动尚未提交。
+**已实施并提交（e70799e、bc122fd、82e3d92）；外部审查发现的三项问题已修复并验证（见“外部审查响应”）；实机、Unix 分支与真实跨端传输待验证。**S01–S19 全部完成（含配套收尾、P5 复核与审查响应），记录见下文。
 
 | 批次 | 项目 | 状态 |
 | --- | --- | --- |
@@ -12,7 +12,7 @@
 | P2 | S03、S04、S16 清理与事实 | 已实施；本地自动化通过（含 100,001 条目慢测试实跑、160 层深目录）；Unix 分支待 Linux/实机验证 |
 | P3 | S09、S10、S17、S18 协议与调用生命周期 | 已实施；本地自动化通过（Rust/CLI/Windows/Decky/契约）；真实跨端传输待验证 |
 | P4 | S11–S15 下载与格式解析 | 已实施；本地自动化通过；真实网络下载与实机待验证 |
-| P5 | 最终路径审阅及文档收口 | 独立过度设计审阅完成并收尾（死分支、死文案、注释、设计措辞 4 项）；文档本轮更新 |
+| P5 | 最终路径审阅及文档收口 | 独立过度设计审阅完成并收尾（4 项）；外部审查响应三项修复完成（见文末）；文档更新 |
 
 ## 2026-10-17：建立独立精简计划
 
@@ -112,3 +112,13 @@
 - Unix 分支编译与专属测试（本机仅 Windows std；cache/backup 显式栈的 Unix quarantine/链接路径、launcher 等）。
 - 真实 Windows 宿主与 Decky 实机跨端 >8 MiB 响应、大请求传输；真实网络无后缀端点下载；真实 SF9.x 大包样本；Decky/SteamOS 实机安装。
 - `freeze_sf_rust_fixtures.py` 未实际执行（需真实 fixture 输入）。
+
+## 2026-10-17：外部审查响应（GPT，三项 P2）
+
+外部审查针对已提交的 e70799e/bc122fd/82e3d92 提出 3 项问题，均已核实为真并修复后提交：
+
+- **缓存盘点句柄随目录宽度增长**（S16 改写引入）：`inspect_tree` 曾把每个同级子目录的已打开句柄压入工作列表，句柄数随目录宽度增长（审查者在 Linux 以 fd 上限 256、300 个同级目录复现 47 次 EMFILE 与盘点遗漏）；改为保存枚举进度的深度优先帧栈（每帧一个打开目录句柄与游标），任一时刻打开句柄数 ≤ 当前深度，visit/record/protected/单条失败继续等语义与改写前等价。新增 `wide_and_deep_cache_tree_is_fully_inventoried`（300 同级 + 150 层链，entries=752、bytes=301、无诊断）。
+- **Unix 捕获 rename 后丢失恢复**（S16 改写引入）：`Node::capture` 在 `renameat` 成功后，`q.child(item)` 或 `same(...)` 失败会经 `?` 直接返回，原条目滞留 `.cleanup-*/item` 且隔离目录不清理；改为 rename 成功后所有失败统一执行现有 `restore` 与 quarantine 清理，与改写前递归版逐路径等价；Windows 捕获无 quarantine，无需恢复。
+- **正文读取期间不可取消**（S19 决策遗留）：`ReqwestFetcher::fetch` 的 `read_to_end` 无取消检查，持续流式响应下取消需等整页读完；改为 `read_body_checked` 64 KiB 分块、逐块 `operation::check()`（不恢复大小上限与总时限，传输错误仍映射 `discovery_network_error`，取消错误原样传播）；CLI `stream_sources_task` 以 `operation::with_cancel` 安装取消作用域，使 scan/refresh 读取与任务取消共享同一标志。新增 3 个合成读取测试（>8 MiB 完整读取、激活未取消作用域、读中取消返回 `task_cancelled` 且无部分正文外泄）。
+
+验证：本机 `cargo fmt --all --check`、CI clippy 命令、`cargo test -p steam-patch-core`（lib 407 passed/6 ignored 与全部集成套件）、`cargo test -p steam-patch-cli` 全部通过；独立审阅（静态逐路径核对）结论“通过，无必须修改项”，并确认 Unix 恢复修复消除的是 HEAD 上的真实缺陷。待验证：Unix 分支编译与 Unix 捕获用例（需 Linux/CI，建议 `cargo test -p steam-patch-core installer::cache`）、真实流式网络中途取消时序、CLI serve-task 端到端取消事件序列。
