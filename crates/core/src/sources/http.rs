@@ -384,9 +384,7 @@ impl Fetcher for ReqwestFetcher {
         // Full body read: no fixed byte cap, so a large legitimate page is
         // decoded and parsed completely instead of being rejected.
         let mut body = Vec::new();
-        response
-            .read_to_end(&mut body)
-            .map_err(|_| invalid("discovery_network_error"))?;
+        read_body_checked(&mut response, &mut body)?;
         Ok(FetchResponse {
             status,
             body,
@@ -398,6 +396,22 @@ impl Fetcher for ReqwestFetcher {
             location,
             headers,
         })
+    }
+}
+
+/// Reads the full body in fixed-size chunks, checking for cancellation before
+/// each chunk so a large transfer stays interruptible. No size cap is applied.
+fn read_body_checked(reader: &mut impl Read, body: &mut Vec<u8>) -> Result<()> {
+    let mut buffer = [0u8; 65536];
+    loop {
+        crate::operation::check()?;
+        let count = reader
+            .read(&mut buffer)
+            .map_err(|_| invalid("discovery_network_error"))?;
+        if count == 0 {
+            return Ok(());
+        }
+        body.extend_from_slice(&buffer[..count]);
     }
 }
 
@@ -890,7 +904,7 @@ fn sniff_meta_charset(body: &[u8]) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::AtomicBool;
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     fn new_fake() -> Arc<FakeFetcher> {
         Arc::new(FakeFetcher::new())
@@ -1359,6 +1373,85 @@ mod tests {
             crate::operation::check,
         );
         assert!(result.is_ok());
+    }
+
+    /// `Read` source that yields fixed data and can flip a cancel flag on a
+    /// chosen read number.
+    struct ChunkedReader {
+        data: Vec<u8>,
+        position: usize,
+        reads: usize,
+        cancel_at: Option<(usize, Arc<AtomicBool>)>,
+    }
+
+    impl ChunkedReader {
+        fn new(data: Vec<u8>) -> Self {
+            Self {
+                data,
+                position: 0,
+                reads: 0,
+                cancel_at: None,
+            }
+        }
+
+        fn cancelling(mut self, at: usize, flag: Arc<AtomicBool>) -> Self {
+            self.cancel_at = Some((at, flag));
+            self
+        }
+    }
+
+    impl Read for ChunkedReader {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            self.reads += 1;
+            if let Some((at, flag)) = &self.cancel_at {
+                if self.reads == *at {
+                    flag.store(true, Ordering::Relaxed);
+                }
+            }
+            let remaining = &self.data[self.position..];
+            let count = remaining.len().min(buf.len());
+            buf[..count].copy_from_slice(&remaining[..count]);
+            self.position += count;
+            Ok(count)
+        }
+    }
+
+    #[test]
+    fn body_read_returns_full_body_without_operation_scope() {
+        let data: Vec<u8> = (0..9 * 1024 * 1024).map(|i| (i % 251) as u8).collect();
+        let mut reader = ChunkedReader::new(data.clone());
+        let mut body = Vec::new();
+        read_body_checked(&mut reader, &mut body).unwrap();
+        assert_eq!(body.len(), data.len());
+        assert_eq!(body, data);
+    }
+
+    #[test]
+    fn body_read_completes_under_active_uncancelled_scope() {
+        let flag = Arc::new(AtomicBool::new(false));
+        let data = vec![3u8; 200_000];
+        let mut reader = ChunkedReader::new(data.clone());
+        let mut body = Vec::new();
+        crate::operation::with_cancel(Arc::clone(&flag), || {
+            read_body_checked(&mut reader, &mut body)
+        })
+        .unwrap();
+        assert_eq!(body, data);
+    }
+
+    #[test]
+    fn body_read_stops_at_cancellation_without_partial_body() {
+        let flag = Arc::new(AtomicBool::new(false));
+        let data = vec![7u8; 4 * 1024 * 1024];
+        let mut reader = ChunkedReader::new(data.clone()).cancelling(2, Arc::clone(&flag));
+        let mut body = Vec::new();
+        let error = crate::operation::with_cancel(Arc::clone(&flag), || {
+            read_body_checked(&mut reader, &mut body)
+        })
+        .unwrap_err();
+        assert_eq!(error.to_string(), "task_cancelled");
+        assert!(reader.position < data.len());
+        assert!(body.len() < data.len());
     }
 
     #[test]

@@ -183,20 +183,24 @@ fn stream_sources_task(
         ..
     } = request;
     let mut sequence = 0_u64;
-    let response = runtime::execute_streaming(&method, params, cancel.as_ref(), &mut |payload| {
-        let mut object = match payload {
-            Value::Object(map) => map,
-            other => {
-                let mut map = serde_json::Map::new();
-                map.insert("payload".to_string(), other);
-                map
-            }
-        };
-        object.insert("protocol_version".to_string(), json!(PROTOCOL_VERSION));
-        object.insert("request_id".to_string(), json!(request_id.clone()));
-        object.insert("sequence".to_string(), json!(sequence));
-        sequence += 1;
-        emit(Value::Object(object));
+    // Install the operation scope so `operation::check` inside the source
+    // fetchers observes this stream task's cancel flag.
+    let response = steam_patch_core::operation::with_cancel(cancel.clone(), || {
+        runtime::execute_streaming(&method, params, cancel.as_ref(), &mut |payload| {
+            let mut object = match payload {
+                Value::Object(map) => map,
+                other => {
+                    let mut map = serde_json::Map::new();
+                    map.insert("payload".to_string(), other);
+                    map
+                }
+            };
+            object.insert("protocol_version".to_string(), json!(PROTOCOL_VERSION));
+            object.insert("request_id".to_string(), json!(request_id.clone()));
+            object.insert("sequence".to_string(), json!(sequence));
+            sequence += 1;
+            emit(Value::Object(object));
+        })
     });
     match response {
         Ok(result) => json!({
