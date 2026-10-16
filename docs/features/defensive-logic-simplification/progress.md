@@ -4,12 +4,12 @@
 
 ## 当前状态
 
-**已实施并提交（e70799e、bc122fd、82e3d92）；外部审查发现的三项问题已修复并验证（见“外部审查响应”）；实机、Unix 分支与真实跨端传输待验证。**S01–S19 全部完成（含配套收尾、P5 复核与审查响应），记录见下文。
+**已实施并提交（e70799e、bc122fd、82e3d92、5cc6843、22ee515、7bb7604）；外部审查三项修复已复验；Steam Deck 实机部署与运行时/RPC 验证通过（WSL Linux 测试含 Unix 专属用例）；界面面板/全屏画面与实体手柄操作待人工确认。**S01–S19 全部完成（含配套收尾、P5 复核、审查响应与实机部署），记录见下文。
 
 | 批次 | 项目 | 状态 |
 | --- | --- | --- |
 | P1 | S01、S02、S05–S08、S19 来源与设置 | 已实施；本地自动化通过（S05 为 Decky/Python 侧） |
-| P2 | S03、S04、S16 清理与事实 | 已实施；本地自动化通过（含 100,001 条目慢测试实跑、160 层深目录）；Unix 分支待 Linux/实机验证 |
+| P2 | S03、S04、S16 清理与事实 | 已实施；本地与 WSL Linux 测试通过（含 100,001 条目慢测试实跑、160 层深目录与 Unix 专属用例）；SteamOS 实机未单独复跑 Unix 清理用例 |
 | P3 | S09、S10、S17、S18 协议与调用生命周期 | 已实施；本地自动化通过（Rust/CLI/Windows/Decky/契约）；真实跨端传输待验证 |
 | P4 | S11–S15 下载与格式解析 | 已实施；本地自动化通过；真实网络下载与实机待验证 |
 | P5 | 最终路径审阅及文档收口 | 独立过度设计审阅完成并收尾（4 项）；外部审查响应三项修复完成（见文末）；文档更新 |
@@ -26,10 +26,11 @@
 
 ## 待办
 
-- 实机/真实端到端：Windows 宿主与 Decky 实机 >8 MiB 响应与大请求传输、真实网络无后缀下载、真实 SF9.x 大样本、Decky 实机安装。
-- Unix 分支：本机仅安装 Windows std，cache/backup 显式栈的 Unix 专属路径需在 Linux/SteamOS 编译并运行专属测试；未执行前保持待验证。
+- 界面人工确认：Steam Deck 上插件 QAM 面板与全屏页的真实画面、实体手柄焦点/返回（用户在设备上操作；脚本点击未定位到面板入口，不冒充通过）。
+- 实机/真实端到端仍待覆盖：Windows 宿主与 Decky 实机 >8 MiB 响应与大请求传输、真实网络无后缀下载、真实流式网络中途取消、真实 SF9.x 大样本、Decky 实机游戏安装（本轮部署不含游戏安装/卸载）。
+- Unix 分支：WSL Linux 编译与测试已通过（`build-linux.sh`；core lib 415 passed 含 Unix 专属用例）；SteamOS 实机如需单独复跑 Unix 清理用例再补。
 - 基线门禁修复已完成（见“基线门禁修复”）；如需复跑完整 CI（合约 check、打包等）按需执行。
-- 提交按用户指示另行执行（基线门禁修复与 feature 属不同变更集，建议分开）；未验证部分不得声称实机验收或全量 CI 通过。
+- 本轮记录（含后续进度修复重新部署）已按用户指示提交。未验证部分不得声称实机验收或全量 CI 通过。
 
 ## 2026-10-17：完成原未决边界核查
 
@@ -122,3 +123,25 @@
 - **正文读取期间不可取消**（S19 决策遗留）：`ReqwestFetcher::fetch` 的 `read_to_end` 无取消检查，持续流式响应下取消需等整页读完；改为 `read_body_checked` 64 KiB 分块、逐块 `operation::check()`（不恢复大小上限与总时限，传输错误仍映射 `discovery_network_error`，取消错误原样传播）；CLI `stream_sources_task` 以 `operation::with_cancel` 安装取消作用域，使 scan/refresh 读取与任务取消共享同一标志。新增 3 个合成读取测试（>8 MiB 完整读取、激活未取消作用域、读中取消返回 `task_cancelled` 且无部分正文外泄）。
 
 验证：本机 `cargo fmt --all --check`、CI clippy 命令、`cargo test -p steam-patch-core`（lib 407 passed/6 ignored 与全部集成套件）、`cargo test -p steam-patch-cli` 全部通过；独立审阅（静态逐路径核对）结论“通过，无必须修改项”，并确认 Unix 恢复修复消除的是 HEAD 上的真实缺陷。待验证：Unix 分支编译与 Unix 捕获用例（需 Linux/CI，建议 `cargo test -p steam-patch-core installer::cache`）、真实流式网络中途取消时序、CLI serve-task 端到端取消事件序列。
+
+## 2026-10-17：Steam Deck 实机部署与验证
+
+按 [decky-deploy-verify](../../../.agents/skills/decky-deploy-verify/SKILL.md) 流程把 S01–S19 与审查修复部署至当前 Devkit 配对设备并完成运行时/RPC 验证；界面面板与手柄操作留待人工确认（未冒充通过）。
+
+- 设备与安全：Devkit 当前配对 `deck@192.168.31.186`；WSL `ssh-keyscan` 三类主机密钥与本轮 `known_hosts`（沿用上轮已确认记录）完全一致；部署前 `list_tasks` 30 项全部终态（completed 13 / failed 11 / cancelled 6），无进行中任务。
+- 构建：前端 `npm run build:decky` 重建 dist；Linux 侧经 `scripts/build-linux.sh`（WSL，仓库本地工具链）先测后建——core lib **415 passed / 0 failed / 6 ignored**（含 Unix 专属用例，解除 P2“Unix 分支待编译/验证”在测试层面的限制）、CLI 47+1+2 passed；产出 `target/linux/release/{steam-patch,sf-worker}` 为新 ELF（14,306,704 / 1,800,272 B）。
+- 打包：`package:plugin` + `package-artifacts.py --platform decky`；ZIP `steam-patch-manager-decky.zip` sha256 `8ba1dd3b…`（7,231,393 B），24 个成员与本地清单一致。
+- 备份：旧插件全量 tar.gz sha256 `75cac1f7…`（24 文件）取回本地 `.artifacts/defensive-logic-deck-20261017/backup/` 并核对，旧清单/大小表同目录。
+- 部署：经 Loader `utilities/install_plugin` + `confirm_plugin_install`（prompt 参数核对：`steam-patch-manager` / `dev` / request_id / hash 与本轮 ZIP 一致）；正式目录 24/24 文件哈希与清单全等、`bin/*` 保持执行位、`plugin_loader` active、后端进程重启。
+- 运行时：插件实例 1、版本 0.1.0；HTTP bundle 返回 200、115,789 B、sha256 `996223c2…` 与本轮 `dist/index.js` 一致。注：Loader 的 dist 路由以 plugin.json `name`（URL 编码）为键，用插件目录名请求会 500，属查询方式问题而非插件缺陷。
+- RPC：`list_tasks` 全终态；`list_transactions` 17；`scan(false)` 返回真实结构（28 安装实例 / 4 来源）——新版 CLI 在 SteamOS 实际执行。
+- 界面：QAM 已打开并取得整屏截图；插件面板与全屏页真实画面、实体手柄焦点/返回由用户在设备上人工确认。
+- 清理：远端暂存目录 `/home/deck/steam-patch-validation/defensive-logic-deck-20261017/` 已删除；CEF 隧道已关闭（18080 无监听）；本地保留备份与全部证据（`deployed-manifest.sha256`、install/runtime/RPC JSON、qam.png 等）。
+- 未覆盖：SteamOS 实机单独复跑 Unix 专属清理用例；真实流式网络中途取消；>8 MiB 跨端传输；游戏安装/卸载不在本轮范围。
+
+### 2026-10-17 后续：进度显示修复的重新部署
+
+- 实机反馈 EXE 安装"分析/提取"阶段进度恒 0%；核查为 EXE 编排实现以来的既有显示行为（部署前 10-08~10-10、10-16 轮实机记录一致），非 S01–S19 回归。修复仅动 `exe_orchestrator.rs` 两处 stage 调用（不再上报 total，前端显示不确定进度），详见 [generic-exe-installation 施工记录](../generic-exe-installation/progress.md) 2026-10-17 条目。
+- 重新构建并按同一流程 Loader ZIP 部署（ZIP 7,231,185 B `bcd725d7…`；相对线上仅 `bin/steam-patch` + `bin/runtime.json` 变化）。正式目录 24/24 与新清单全等；实例 1 / 0.1.0、`plugin_loader` active；HTTP bundle 200（`996223c2…` 未变）；RPC `scan(false)` 28 实例 / 4 来源、`list_tasks` 31 全终态、`list_transactions` 18；Loader 设置前后一致；远端暂存已清理、隧道已关闭。
+- 用户在该构建上完成一单 3.53 GiB EXE 实机安装（task `8d0c735d-…`，终态 completed/cleanup）：安装、核对、写入、清理全阶段实机完整跑通，上述"游戏安装不在本轮范围"的限制由本次实机安装覆盖。
+- 仍待验证：修复后的分析/提取不确定进度显示需下一次实机安装确认；Unix 专属用例复跑、真实流式网络中途取消、>8 MiB 跨端传输保持原状态。证据：`.artifacts/defensive-logic-deck-20261017/`（stagefix 文件集）。
