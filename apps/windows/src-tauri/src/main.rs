@@ -17,9 +17,6 @@ use tauri::{AppHandle, Emitter, Manager, State, WindowEvent};
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_opener::OpenerExt;
 
-const MAX_RESPONSE: u64 = protocol::MAX_RESPONSE_BYTES as u64;
-const MAX_REQUEST: usize = protocol::MAX_REQUEST_BYTES;
-
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum Operation {
@@ -210,15 +207,6 @@ fn common_params(app: &AppHandle) -> Result<Value, HostError> {
     }}))
 }
 
-/// Maximum length of a forwarded `error.detail` before it is truncated
-/// (p1-host-contract §3.3: optional, ≤2 KiB).
-#[cfg(test)]
-const MAX_DETAIL: usize = protocol::MAX_DETAIL_BYTES;
-
-fn truncate_detail(detail: &str) -> String {
-    protocol::truncate_detail(detail)
-}
-
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(transparent)]
 struct HostError(protocol::DomainError);
@@ -263,10 +251,7 @@ fn validate_response(response: Value, id: &str) -> Result<Value, HostError> {
 fn protocol_error(error: protocol::ProtocolError) -> HostError {
     HostError(protocol::DomainError {
         code: error.code,
-        detail: error
-            .detail
-            .filter(|detail| !detail.is_empty())
-            .map(|detail| truncate_detail(&detail)),
+        detail: error.detail.filter(|detail| !detail.is_empty()),
     })
 }
 
@@ -281,28 +266,12 @@ fn require_capabilities(app: &AppHandle) -> Result<(), HostError> {
     Ok(())
 }
 
-fn read_all_bounded(mut reader: impl Read) -> Result<Vec<u8>, HostError> {
+fn read_all(mut reader: impl Read) -> Result<Vec<u8>, HostError> {
     let mut bytes = Vec::new();
-    let mut buffer = [0u8; 8192];
-    let mut oversized = false;
-    loop {
-        let count = reader
-            .read(&mut buffer)
-            .map_err(|_| "core_process_failed")?;
-        if count == 0 {
-            break;
-        }
-        if bytes.len().saturating_add(count) <= MAX_RESPONSE as usize && !oversized {
-            bytes.extend_from_slice(&buffer[..count]);
-        } else {
-            oversized = true;
-        }
-    }
-    if oversized {
-        Err("response_too_large".into())
-    } else {
-        Ok(bytes)
-    }
+    reader
+        .read_to_end(&mut bytes)
+        .map_err(|_| "core_process_failed")?;
+    Ok(bytes)
 }
 
 /// Validates the (camelCase, `deny_unknown_fields`) host arguments for a given
@@ -446,9 +415,6 @@ fn run_one_shot(app: &AppHandle, request: Value, id: &str) -> Result<Value, Host
             .is_some_and(|m| matches!(m, "install_patch" | "scan_sources" | "refresh_sources")),
     )
     .map_err(protocol_error)?;
-    if payload.len().saturating_add(1) > MAX_REQUEST {
-        return Err("request_too_large".into());
-    }
     let mut child = core_command(&binary(app)?)
         .arg("serve")
         .stdin(Stdio::piped())
@@ -463,7 +429,7 @@ fn run_one_shot(app: &AppHandle, request: Value, id: &str) -> Result<Value, Host
         .and_then(|_| stdin.write_all(b"\n"))
         .map_err(|_| "core_process_failed")?;
     drop(stdin);
-    let bytes = read_all_bounded(stdout)?;
+    let bytes = read_all(stdout)?;
     if !child.wait().map_err(|_| "core_process_failed")?.success() {
         return Err("core_process_failed".into());
     }
@@ -869,6 +835,19 @@ fn source_event_name(value: &Value) -> Option<&'static str> {
     }
 }
 
+/// One LF-terminated line for the normal task stream. JSON Lines framing has no
+/// line-size limit; each accepted line is still schema-checked downstream.
+fn read_line(reader: &mut impl BufRead) -> std::io::Result<Option<Vec<u8>>> {
+    let mut bytes = Vec::new();
+    if reader.read_until(b'\n', &mut bytes)? == 0 {
+        return Ok(None);
+    }
+    Ok(Some(bytes))
+}
+
+/// One LF-terminated line for the post-terminal drain, bounded by the retained
+/// drain budget so a hostile tail cannot allocate without limit. A line over
+/// the budget reports `oversized`, which stops the drain.
 fn read_bounded_line(reader: &mut impl BufRead) -> std::io::Result<Option<(Vec<u8>, bool)>> {
     let mut bytes = Vec::new();
     let mut oversized = false;
@@ -883,7 +862,7 @@ fn read_bounded_line(reader: &mut impl BufRead) -> std::io::Result<Option<(Vec<u
         }
         let newline = available.iter().position(|byte| *byte == b'\n');
         let take = newline.map_or(available.len(), |position| position + 1);
-        if !oversized && bytes.len().saturating_add(take) <= MAX_RESPONSE as usize {
+        if !oversized && bytes.len().saturating_add(take) <= INSTALL_DRAIN_BYTES {
             bytes.extend_from_slice(&available[..take]);
         } else {
             oversized = true;
@@ -904,12 +883,7 @@ fn read_core_stream(
     mut event_handler: impl FnMut(&str, Value) -> Result<(), HostError>,
 ) -> Result<Value, HostError> {
     let mut sequence = EventSequence::new(request_id.to_string());
-    while let Some((line, oversized)) =
-        read_bounded_line(reader).map_err(|_| "core_process_failed")?
-    {
-        if oversized {
-            return Err("response_too_large".into());
-        }
+    while let Some(line) = read_line(reader).map_err(|_| "core_process_failed")? {
         if line.last() != Some(&b'\n') {
             return Err("invalid_core_response".into());
         }
@@ -1094,9 +1068,6 @@ fn build_install_request(
             .is_some_and(|m| matches!(m, "install_patch" | "scan_sources" | "refresh_sources")),
     )
     .map_err(protocol_error)?;
-    if payload.len().saturating_add(1) > MAX_REQUEST {
-        return Err("request_too_large".into());
-    }
     Ok(request)
 }
 
@@ -1322,9 +1293,6 @@ fn source_scan_request(id: &str, common: Value, force: bool) -> Result<Value, Ho
             .is_some_and(|m| matches!(m, "install_patch" | "scan_sources" | "refresh_sources")),
     )
     .map_err(protocol_error)?;
-    if payload.len().saturating_add(1) > MAX_REQUEST {
-        return Err("request_too_large".into());
-    }
     Ok(request)
 }
 
@@ -1353,9 +1321,6 @@ fn source_refresh_request(id: &str, common: Value, force: bool) -> Result<Value,
             .is_some_and(|m| matches!(m, "install_patch" | "scan_sources" | "refresh_sources")),
     )
     .map_err(protocol_error)?;
-    if payload.len().saturating_add(1) > MAX_REQUEST {
-        return Err("request_too_large".into());
-    }
     Ok(request)
 }
 
@@ -2172,22 +2137,20 @@ mod tests {
     }
 
     #[test]
-    fn error_detail_is_truncated_to_the_frozen_bound() {
-        let long = "x".repeat(MAX_DETAIL + 500);
-        let rendered = truncate_detail(&long);
-        // The bounded wire detail has no presentation ellipsis.
-        assert!(rendered.len() <= MAX_DETAIL);
-        assert!(!rendered.ends_with('…'));
-        assert_eq!(rendered.len(), MAX_DETAIL);
-        assert_eq!(truncate_detail("short"), "short");
-
-        // Multi-byte boundary: truncation must land on a char boundary and the
-        // rendered value must still stay within the frozen bound.
-        let multibyte = "补".repeat(MAX_DETAIL); // 3 bytes per code point
-        let rendered = truncate_detail(&multibyte);
-        assert!(rendered.len() <= MAX_DETAIL);
-        assert!(!rendered.ends_with('…'));
-        assert!(rendered.is_char_boundary(rendered.len()));
+    fn error_detail_is_forwarded_without_truncation() {
+        let long = "补".repeat(5000);
+        let error = protocol_error(protocol::ProtocolError {
+            code: "download_failed".into(),
+            detail: Some(long.clone()),
+            request_id: None,
+        });
+        assert_eq!(error.detail.as_deref(), Some(long.as_str()));
+        let short = protocol_error(protocol::ProtocolError {
+            code: "cancelled".into(),
+            detail: Some("short".into()),
+            request_id: None,
+        });
+        assert_eq!(short.detail.as_deref(), Some("short"));
     }
 
     #[test]
@@ -2498,15 +2461,25 @@ mod tests {
     }
 
     #[test]
-    fn line_limit_includes_lf_and_rejects_one_extra_byte() {
-        let exact = vec![b' '; MAX_RESPONSE as usize - 1];
+    fn stream_line_reader_has_no_size_cap() {
+        let mut input = vec![b'x'; 9 * 1024 * 1024];
+        input.push(b'\n');
+        let line = read_line(&mut std::io::Cursor::new(input))
+            .unwrap()
+            .unwrap();
+        assert_eq!(line.len(), 9 * 1024 * 1024 + 1);
+    }
+
+    #[test]
+    fn drain_line_budget_includes_lf_and_rejects_one_extra_byte() {
+        let exact = vec![b' '; INSTALL_DRAIN_BYTES - 1];
         let mut input = exact.clone();
         input.push(b'\n');
         let (line, oversized) = read_bounded_line(&mut std::io::Cursor::new(input))
             .unwrap()
             .unwrap();
         assert!(!oversized);
-        assert_eq!(line.len(), MAX_RESPONSE as usize);
+        assert_eq!(line.len(), INSTALL_DRAIN_BYTES);
         let mut oversized_line = exact;
         oversized_line.extend_from_slice(b" \n");
         assert!(
@@ -2729,17 +2702,8 @@ mod tests {
     }
 
     #[test]
-    fn response_limit_accepts_exact_boundary_and_rejects_the_next_byte() {
-        assert_eq!(
-            read_all_bounded(std::io::Cursor::new(vec![b'x'; MAX_RESPONSE as usize]))
-                .unwrap()
-                .len(),
-            MAX_RESPONSE as usize
-        );
-        assert_eq!(
-            read_all_bounded(std::io::Cursor::new(vec![b'x'; MAX_RESPONSE as usize + 1]))
-                .unwrap_err(),
-            "response_too_large"
-        );
+    fn read_all_returns_the_complete_stream_past_8mib() {
+        let bytes = read_all(std::io::Cursor::new(vec![b'x'; 9 * 1024 * 1024])).unwrap();
+        assert_eq!(bytes.len(), 9 * 1024 * 1024);
     }
 }

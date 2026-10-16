@@ -32,7 +32,6 @@ MAX_EXE = 2 * 1024 ** 3
 MAX_FILE = 2 * 1024 ** 3
 MAX_TOTAL = 2 * 1024 ** 3
 MAX_METADATA = 16 * 1024 ** 2
-MAX_ENTRIES = 8192
 MAX_DICTIONARY = 128 * 1024 ** 2
 CHUNK = 64 * 1024
 
@@ -161,7 +160,6 @@ def pe_overlay(data, *, supported_versions=("9.5",)):
         cursor = Reader(data, resource + relative, resource + resource_size)
         cursor.read(12)
         n = cursor.number("H") + cursor.number("H")
-        require(n <= 256, "resource_entry_limit")
         return [(cursor.number("I"), cursor.number("I")) for _ in range(n)]
 
     manifests = []
@@ -240,7 +238,9 @@ def file_table(metadata, *, installer_version="9.5"):
     start = marker - 8
     r = Reader(metadata, start)
     count = r.number("H")
-    require(0 < count <= MAX_ENTRIES, "file_count_limit")
+    # The count is a genuine u16 field; the serialized records bound how many
+    # entries actually exist, so only an empty table is rejected here.
+    require(count > 0, "file_count_limit")
     require(r.read(4) == b"\xff\xff\x01\0" and r.number("H") == 14, "unsupported_file_table")
     require(r.read(14) == b"CSetupFileData", "unsupported_file_table")
     table_header = r.read(5)
@@ -285,7 +285,6 @@ def file_table(metadata, *, installer_version="9.5"):
         unknown(2)
         install_type, extra = r.string(), r.string()
         packages_count = r.number("H")
-        require(packages_count <= 256, "package_count_limit")
         packages = [r.string() for _ in range(packages_count)]
         notes = r.string()
         packed, crc = r.number("q"), r.number("I")

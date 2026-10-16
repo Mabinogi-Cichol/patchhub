@@ -5,12 +5,9 @@
 //! `_normal`, `_split_names` plus a std `urlsplit` replacement (design §2.6,
 //! §8). Every failure uses the frozen `invalid_*` / `*_source*` error codes.
 
-use super::canonical;
 use super::invalid;
 use super::model::*;
-use super::{
-    DISCOVERY_ADAPTERS, MAX_DISCOVERY_OUTPUT, MAX_SOURCES,
-};
+use super::DISCOVERY_ADAPTERS;
 use std::collections::HashSet;
 use std::io;
 
@@ -217,6 +214,10 @@ fn is_ip_address(value: &str) -> bool {
 }
 
 /// Port of `sources.py::_allowed_url`.
+///
+/// `download` marks a download URL: such a URL must not carry a fragment, whose
+/// presence would make the response identity ambiguous. The path extension is
+/// not admission evidence; the downloaded bytes are validated as an archive.
 pub fn allowed_url(url: &str, hosts: &[String], download: bool) -> io::Result<String> {
     if url.is_empty() || url != url.trim() || url.chars().any(|c| (c as u32) < 33) {
         return Err(invalid("invalid_source_url"));
@@ -235,8 +236,7 @@ pub fn allowed_url(url: &str, hosts: &[String], download: bool) -> io::Result<St
         || credentials
         || !matches!(port, None | Some(443))
         || !parsed.path.starts_with('/')
-        || (download
-            && (!parsed.path.to_lowercase().ends_with(".zip") || !parsed.fragment.is_empty()))
+        || (download && !parsed.fragment.is_empty())
     {
         return Err(invalid("invalid_source_url"));
     }
@@ -522,12 +522,6 @@ pub fn validate_candidates(
     appid: u32,
     candidates: &[SourceCandidate],
 ) -> io::Result<Vec<SourceCandidate>> {
-    // Size is measured with the frozen deterministic encoding (contract §1).
-    // This byte budget is the real bound; overlapping candidate/mirror/evidence
-    // count ceilings were removed (design D08).
-    if canonical::canonical_bytes(candidates)?.len() as u64 > MAX_DISCOVERY_OUTPUT {
-        return Err(invalid("oversized_discovery_candidates"));
-    }
     for candidate in candidates {
         if !valid_candidate_id(&candidate.candidate_id)
             || candidate.source_id != rule.id
@@ -605,18 +599,14 @@ fn valid_game_appid(value: &str) -> bool {
 }
 
 /// Structural validation of a parsed [`Overrides`] (port of the `sources.py`
-/// `_reload` games validation). Cross-rule uniqueness against builtins, the
-/// `MAX_SOURCES` merge cap and enabled-flag merging are enforced by the registry
-/// merge (later task).
+/// `_reload` games validation). Cross-rule uniqueness against builtins and
+/// enabled-flag merging are enforced by the registry merge (later task).
 pub fn validate_overrides(overrides: &Overrides) -> io::Result<()> {
     let mut ids = HashSet::new();
     for rule in &overrides.added {
         if !valid_source_id(&rule.id) || !ids.insert(rule.id.as_str()) {
             return Err(invalid("invalid_source_overrides"));
         }
-    }
-    if ids.len() > MAX_SOURCES {
-        return Err(invalid("invalid_source_overrides"));
     }
     for (appid, choices) in &overrides.games {
         if !valid_game_appid(appid) {
@@ -888,7 +878,10 @@ mod tests {
             assert!(allowed_url(bad, &hosts, false).is_err(), "allow {bad:?}");
         }
         assert!(allowed_url("https://example.com/patch.zip", &hosts, true).is_ok());
-        assert!(allowed_url("https://example.com/patch.rar", &hosts, true).is_err());
+        // Download admission does not depend on the path extension (S11); the
+        // fragment rule stays.
+        assert!(allowed_url("https://example.com/patch.rar", &hosts, true).is_ok());
+        assert!(allowed_url("https://example.com/download?id=7", &hosts, true).is_ok());
         assert!(allowed_url("https://example.com/patch.zip#frag", &hosts, true).is_err());
     }
 
@@ -941,7 +934,7 @@ mod tests {
         );
 
         let mut bad = entry();
-        bad.url = "https://download.example.com/patch.rar".into();
+        bad.url = "http://download.example.com/patch.rar".into();
         assert_eq!(
             validate_entries(&rule, &[bad]).unwrap_err().to_string(),
             "invalid_source_url"

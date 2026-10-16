@@ -9,7 +9,6 @@ from threading import Event, RLock
 import time
 import uuid
 from plugin_settings import _write_json, _no_links
-from protocol_validation import truncate_detail
 
 current_task = ContextVar("patch_task", default=None)
 TERMINAL = {"completed", "cancelled", "failed"}
@@ -154,8 +153,6 @@ class TaskManager:
             raw = domain or str(error)
             code = raw if re.fullmatch(r"[a-z0-9_]{1,128}", raw) else "host_transport_failed"
             detail = getattr(error, "detail", None) or (str(error) if code != raw else None)
-            if detail is not None:
-                detail = truncate_detail(str(detail))
             task.update(state="cancelled" if code in ("cancelled", "task_cancelled") else "failed",
                         error=code, error_detail=detail,
                         error_origin="domain" if domain else "host")

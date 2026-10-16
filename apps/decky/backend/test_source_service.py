@@ -89,11 +89,43 @@ class SourceServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(discovery["status"], "cache_complete")
         self.assertEqual(discovery["settings_revision"], 5)
 
+    async def test_prime_and_reads_handle_optional_protocol_fields(self):
+        report = {
+            "settings_revision": 3,
+            "sources": None,
+            "installs": [{
+                "game": {"instance_id": "i9", "appid": 9, "name": "G", "library_path": "/l",
+                         "install_path": "/g", "availability": "installed", "kind": "app"},
+                "sources": None,
+                "discovery": None,
+            }],
+        }
+        self.service.prime(report)
+        self.assertEqual(self.service.settings_revision, 3)
+        self.assertEqual(self.service.list_sources(), [])
+        discovery = self.service.cached_discovery({"instance_id": "i9", "appid": 9})
+        self.assertEqual(discovery["status"], "not_queried")
+        self.assertEqual(discovery["appid"], 9)
+        self.assertEqual(discovery["candidates"], [])
+        self.assertEqual(discovery["settings_revision"], 3)
+
+    async def test_internal_contract_violations_fail_loudly(self):
+        with self.assertRaises(ValueError):
+            self.service.prime(["not", "a", "report"])
+        with self.assertRaises(ValueError):
+            self.service.prime({"installs": [], "sources": "not a list"})
+        self.bridge.sync_results["list_sources"] = {"not": "a list"}
+        with self.assertRaises(ValueError):
+            await self.service.initialize()
+
     async def test_local_writes_use_one_shot_call_and_reload(self):
         await self.service.initialize()
         updated_list = lambda _params: [{**SUMMARIES[0], "enabled": False}, SUMMARIES[1]]
         self.bridge.sync_results["set_source_enabled"] = {"settings_revision": 6,
                                                           "source_id": "patchmoe", "enabled": False}
+        self.bridge.sync_results["add_source"] = {"settings_revision": 6, "rule": {"id": "custom"}}
+        self.bridge.sync_results["set_game_source"] = {"settings_revision": 6,
+                                                       "source_id": "patchmoe", "subscribed": False}
         self.bridge.sync_results["list_sources"] = updated_list
         await self.service.set_enabled("patchmoe", False)
         self.assertEqual(self.service.settings_revision, 6)
@@ -142,6 +174,16 @@ class SourceServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(stale["generation"], 10)
         self.assertEqual(stale["candidates"][0]["candidate_id"], "c3")
         self.assertEqual(len(self.bridge.stream_calls), before)
+
+    async def test_scan_sources_skips_items_without_appid(self):
+        await self.service.initialize()
+        self.bridge.stream_results["scan_sources"] = {
+            "settings_revision": 8,
+            "results": [{"status": "complete", "candidates": [{"candidate_id": "c"}],
+                         "diagnostics": [], "appid": None}]}
+        await self.service.scan_sources(force=False)
+        self.assertEqual(self.service.settings_revision, 8)
+        self.assertEqual(self.service.cached_discovery(GAME)["status"], "not_queried")
 
     async def test_close_is_idempotent(self):
         await self.service.initialize()

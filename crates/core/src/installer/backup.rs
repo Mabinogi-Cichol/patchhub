@@ -7,9 +7,11 @@ use super::{
 };
 use crate::projection::DomainError;
 use serde::{Deserialize, Serialize};
-use std::{ffi::OsStr, io, path::Path};
-const LIMIT: u64 = 100_000;
-const DEPTH: usize = 128;
+use std::{
+    ffi::{OsStr, OsString},
+    io,
+    path::{Path, PathBuf},
+};
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, ts_rs::TS)]
 #[serde(deny_unknown_fields)]
 pub struct BackupInventory {
@@ -120,7 +122,6 @@ fn collect_jobs(store: Node, roots: &mut Vec<(Node, Node)>, scan: &mut Scan) {
 struct Scan {
     bytes: u64,
     files: u64,
-    visited: u64,
     failed: u64,
     failures: Vec<CleanupFailure>,
 }
@@ -134,13 +135,6 @@ impl Scan {
                 None
             }
         }
-    }
-    fn visit(&mut self, depth: usize) -> io::Result<()> {
-        if self.visited >= LIMIT || depth > DEPTH {
-            return Err(io::Error::other("backup_scan_limit"));
-        }
-        self.visited += 1;
-        Ok(())
     }
     fn fail(&mut self, path: &Path, e: &io::Error) {
         self.failed += 1;
@@ -159,11 +153,7 @@ impl Scan {
             code,
             detail: DomainError::new("", format!("{}: {e}", path.display())).detail,
         };
-        if self.failures.len() < 512 {
-            self.failures.push(f);
-        } else {
-            self.failures[511].detail = Some("Additional backup cleanup failures omitted.".into());
-        }
+        self.failures.push(f);
     }
 }
 fn children(node: &Node, scan: &mut Scan, mut action: impl FnMut(&Node, &mut Scan)) {
@@ -175,19 +165,13 @@ fn children(node: &Node, scan: &mut Scan, mut action: impl FnMut(&Node, &mut Sca
         }
     };
     for name in names {
-        let result = scan.visit(0).and_then(|_| node.child(&name, false));
-        match result {
+        match node.child(&name, false) {
             Ok(child) => match child.metadata() {
                 Ok(m) if m.is_dir() => action(&child, scan),
                 Ok(_) => (),
                 Err(e) => scan.fail(child.path(), &e),
             },
-            Err(e) => {
-                scan.fail(&node.path().join(&name), &e);
-                if scan.visited >= LIMIT {
-                    break;
-                }
-            }
+            Err(e) => scan.fail(&node.path().join(&name), &e),
         }
     }
 }
@@ -210,55 +194,168 @@ fn jobs(root: &Node, delete: bool, lock: Option<&CacheLock>, scan: &mut Scan) {
                 .strip_prefix(".backup-cleanup-")
                 .is_some_and(|id| uuid::Uuid::parse_str(id).is_ok_and(|v| v.to_string() == id));
             if text == "backup" || indexed || interrupted_cleanup {
-                material(job, &name, delete, lock, 0, scan);
+                material(job, &name, delete, lock, scan);
             }
         }
     });
 }
-fn material(
+enum MaterialEntry {
+    File {
+        node: Node,
+        path: PathBuf,
+        bytes: u64,
+    },
+    Dir {
+        node: Node,
+        name: OsString,
+        path: PathBuf,
+    },
+}
+/// Opens one backup entry and validates the sweep lock before touching it.
+fn open_material(
     parent: &Node,
     name: &OsStr,
     delete: bool,
     lock: Option<&CacheLock>,
-    depth: usize,
+    scan: &mut Scan,
+) -> Option<MaterialEntry> {
+    let path = parent.path().join(name);
+    if let Some(lock) = lock {
+        if let Err(e) = lock.validate().map_err(io::Error::other) {
+            scan.fail(&path, &e);
+            return None;
+        }
+    }
+    let node = match parent.child(name, delete) {
+        Ok(node) => node,
+        Err(e) => {
+            scan.fail(&path, &e);
+            return None;
+        }
+    };
+    match node.metadata() {
+        Ok(meta) if meta.is_dir() => Some(MaterialEntry::Dir {
+            node,
+            name: name.to_os_string(),
+            path,
+        }),
+        Ok(meta) => Some(MaterialEntry::File {
+            node,
+            path,
+            bytes: meta.len(),
+        }),
+        Err(e) => {
+            scan.fail(&path, &e);
+            None
+        }
+    }
+}
+fn count_file(
+    node: Node,
+    parent: &Node,
+    name: &OsStr,
+    path: &Path,
+    bytes: u64,
+    delete: bool,
     scan: &mut Scan,
 ) {
-    let path = parent.path().join(name);
     let result = (|| -> io::Result<()> {
-        scan.visit(depth)?;
-        if let Some(lock) = lock {
-            lock.validate().map_err(io::Error::other)?;
-        }
-        let node = parent.child(name, delete)?;
-        let meta = node.metadata()?;
-        if meta.is_dir() {
-            for child in node.names()? {
-                material(&node, &child, delete, lock, depth + 1, scan);
-            }
-            if delete && node.names()?.is_empty() {
-                node.remove_empty(parent, name)?;
-            }
+        scan.bytes
+            .checked_add(bytes)
+            .ok_or_else(|| io::Error::other("cleanup_size_overflow"))?;
+        let bytes = if delete {
+            node.remove_empty(parent, name)?
         } else {
-            let bytes = meta.len();
-            scan.bytes
-                .checked_add(bytes)
-                .ok_or_else(|| io::Error::other("cleanup_size_overflow"))?;
-            let bytes = if delete {
-                node.remove_empty(parent, name)?
-            } else {
-                bytes
-            };
-            let total = scan
-                .bytes
-                .checked_add(bytes)
-                .ok_or_else(|| io::Error::other("cleanup_size_overflow"))?;
-            scan.bytes = total;
-            scan.files += 1;
+            bytes
+        };
+        let total = scan
+            .bytes
+            .checked_add(bytes)
+            .ok_or_else(|| io::Error::other("cleanup_size_overflow"))?;
+        scan.bytes = total;
+        scan.files += 1;
+        Ok(())
+    })();
+    if let Err(e) = result {
+        scan.fail(path, &e);
+    }
+}
+/// One backup directory awaiting post-order teardown. `node` is also the parent
+/// handle for the level below, so a local stack is enough to carry depth.
+struct MaterialFrame {
+    node: Node,
+    name: OsString,
+    path: PathBuf,
+    names: Vec<OsString>,
+    index: usize,
+    loaded: bool,
+}
+fn finish_dir(frame: MaterialFrame, parent: &Node, delete: bool, scan: &mut Scan) {
+    if !delete {
+        return;
+    }
+    let result = (|| -> io::Result<()> {
+        if frame.node.names()?.is_empty() {
+            frame.node.remove_empty(parent, &frame.name)?;
         }
         Ok(())
     })();
     if let Err(e) = result {
-        scan.fail(&path, &e);
+        scan.fail(&frame.path, &e);
+    }
+}
+fn material(parent: &Node, name: &OsStr, delete: bool, lock: Option<&CacheLock>, scan: &mut Scan) {
+    let mut stack: Vec<MaterialFrame> = Vec::new();
+    match open_material(parent, name, delete, lock, scan) {
+        Some(MaterialEntry::File { node, path, bytes }) => {
+            count_file(node, parent, name, &path, bytes, delete, scan);
+        }
+        Some(MaterialEntry::Dir { node, name, path }) => {
+            stack.push(MaterialFrame {
+                node,
+                name,
+                path,
+                names: Vec::new(),
+                index: 0,
+                loaded: false,
+            });
+        }
+        None => return,
+    }
+    while let Some(last) = stack.len().checked_sub(1) {
+        if !stack[last].loaded {
+            stack[last].loaded = true;
+            match stack[last].node.names() {
+                Ok(names) => stack[last].names = names,
+                Err(e) => {
+                    let frame = stack.pop().unwrap();
+                    scan.fail(&frame.path, &e);
+                    continue;
+                }
+            }
+        }
+        if stack[last].index < stack[last].names.len() {
+            let child = stack[last].names[stack[last].index].clone();
+            stack[last].index += 1;
+            match open_material(&stack[last].node, &child, delete, lock, scan) {
+                Some(MaterialEntry::File { node, path, bytes }) => {
+                    count_file(node, &stack[last].node, &child, &path, bytes, delete, scan);
+                }
+                Some(MaterialEntry::Dir { node, name, path }) => stack.push(MaterialFrame {
+                    node,
+                    name,
+                    path,
+                    names: Vec::new(),
+                    index: 0,
+                    loaded: false,
+                }),
+                None => {}
+            }
+            continue;
+        }
+        let frame = stack.pop().unwrap();
+        let up = stack.last().map(|f| &f.node).unwrap_or(parent);
+        finish_dir(frame, up, delete, scan);
     }
 }
 
@@ -266,6 +363,20 @@ fn material(
 mod tests {
     use super::*;
     use std::fs;
+    #[test]
+    fn all_scan_failures_are_retained_beyond_the_former_limit() {
+        let mut scan = Scan::default();
+        for _ in 0..600 {
+            scan.fail(Path::new("jobs"), &io::Error::other("cleanup_failed"));
+        }
+        assert_eq!(scan.failures.len(), 600);
+        assert_eq!(scan.failed, 600);
+        assert!(scan.failures.iter().all(|failure| !failure
+            .detail
+            .as_deref()
+            .unwrap_or("")
+            .contains("omitted")));
+    }
     fn fixture() -> (tempfile::TempDir, ValidatedHostContext) {
         let dir = tempfile::tempdir().unwrap();
         let platform = if cfg!(windows) {

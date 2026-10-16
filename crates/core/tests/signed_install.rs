@@ -400,6 +400,38 @@ fn local_signed_without_artifact_commits_and_replays_after_cancel_and_revocation
 }
 
 #[test]
+fn signed_precheck_accepts_installed_dlc_beyond_the_former_manifest_limit() {
+    if !can_install() {
+        return;
+    }
+    let f = Fixture::new();
+    let installed_dlc = (0..129u32)
+        .map(|index| (4_000_000 + index).to_string())
+        .collect::<Vec<_>>()
+        .join(",");
+    fs::write(
+        f.library.join("steamapps/appmanifest_42.acf"),
+        format!(
+            r#""AppState" {{ "appid" "42" "name" "Signed Test" "installdir" "Signed Test" "buildid" "100" "StateFlags" "4" "UserConfig" {{ "language" "english" }} "installeddlc" "{installed_dlc}" }}"#
+        ),
+    )
+    .unwrap();
+    let result = f
+        .run(
+            &f.provider(),
+            &Lease::default(),
+            &Offline,
+            "signed-dlc-large",
+            true,
+            InstallOperation::Overwrite,
+        )
+        .unwrap();
+    assert_eq!(result.state, "committed");
+    assert_eq!(result.disposition, Disposition::Completed);
+    assert_eq!(fs::read(f.game.join("original.dat")).unwrap(), b"patched");
+}
+
+#[test]
 fn signed_auto_download_uses_injected_transport_and_accepts_extensionless_url() {
     if !can_install() {
         return;
@@ -673,8 +705,9 @@ fn postplan_user_cancel_persists_exact_cause_and_replays() {
     let p = f.provider();
     let lease = Arc::new(Lease::default());
     let observed = lease.clone();
-    p.on_second
-        .replace(Some(Box::new(move || observed.0.store(1, Ordering::Release))));
+    p.on_second.replace(Some(Box::new(move || {
+        observed.0.store(1, Ordering::Release)
+    })));
     let result = f
         .run(
             &p,
@@ -1538,8 +1571,8 @@ fn long_instance_and_large_durable_error_replay_preserve_committed_truth() {
         assert_eq!(replay.transaction_id, first.transaction_id);
         assert_eq!(replay.disposition, Disposition::Completed);
         assert_eq!(replay.state, "committed");
-        assert_eq!(replay.error.as_ref().unwrap().len(), 2046);
-        assert!(serde_json::to_vec(&replay).unwrap().len() < 64 * 1024);
+        assert_eq!(replay.error.as_deref(), Some(legacy_error.as_str()));
+        assert!(serde_json::to_vec(&replay).unwrap().len() >= legacy_error.len());
     }
     let db = rusqlite::Connection::open(paths.journal()).unwrap();
     let raw: String = db

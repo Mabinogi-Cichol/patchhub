@@ -11,10 +11,12 @@ from weakref import WeakValueDictionary
 from tasks import current_task
 
 from protocol_validation import (PROTOCOL_VERSION, METHODS, SOURCE_METHODS, CONTROLLED_METHODS,
-    SOURCE_EVENTS, INSTALL_STAGES, MAX_RESPONSE_BYTES, MAX_INSTANCE_ID_BYTES, MAX_REQUEST_BYTES,
+    SOURCE_EVENTS, INSTALL_STAGES, MAX_INSTANCE_ID_BYTES,
     validate_id, validate_request, validate_response, validate_event, validate_capabilities, JS_MAX_INTEGER)
 TERMINAL_DRAIN_SECONDS = 1.0
-TERMINAL_DRAIN_BYTES = MAX_RESPONSE_BYTES
+# UI wait budget for trailing core diagnostics after the verified terminal receipt;
+# independent of ordinary response size (defensive-logic-simplification §7).
+TERMINAL_DRAIN_BYTES = 8 * 1024 * 1024
 TERMINAL_DRAIN_CHUNK_BYTES = 64 * 1024
 PROGRESS_FIELDS = {"stage", "substage", "bytes_done", "total_bytes", "files_done",
                    "total_files", "current_file", "archive_bytes"}
@@ -42,7 +44,7 @@ _journal_read_locks = WeakValueDictionary()
 
 
 class CoreBridge:
-    def __init__(self, binary: Path, catalog: Path, timeout: float = 300,
+    def __init__(self, binary: Path, catalog: Path,
                  signed_catalog: Path | None = None, trust_keys: Path | None = None,
                  state_dir: Path | None = None, run_uid: int | None = None, run_gid: int | None = None, user_home: Path | None = None):
         self.binary = binary.resolve(strict=True)
@@ -50,7 +52,6 @@ class CoreBridge:
         self.signed_catalog = signed_catalog.resolve(strict=True) if signed_catalog and signed_catalog.is_file() else None
         self.trust_keys = trust_keys.resolve(strict=True) if trust_keys and trust_keys.is_file() else None
         self.state_dir = state_dir.resolve() if state_dir else None
-        self.timeout = timeout
         self.process_identity = {"user": run_uid, "group": run_gid, "extra_groups": []} if run_uid is not None else {}
         self.active_calls = set()
         self._terminal_observers = set()
@@ -153,7 +154,7 @@ class CoreBridge:
         return sequence
 
     async def _call(self, method: str, params: dict, on_event=None, cancel=None,
-                    timeout=None, controlled: bool | None = None, request_id=None):
+                    controlled: bool | None = None, request_id=None):
         # Both reads briefly take the core journal's exclusive lock. Source
         # event projection and UI requests must not race each other for it.
         # Writers still use the core lock and report genuine installer_busy.
@@ -164,10 +165,10 @@ class CoreBridge:
                 lock = asyncio.Lock()
                 _journal_read_locks[key] = lock
             async with lock:
-                return await self._exchange_call(method, params, on_event, cancel, timeout, controlled, request_id)
-        return await self._exchange_call(method, params, on_event, cancel, timeout, controlled, request_id)
+                return await self._exchange_call(method, params, on_event, cancel, controlled, request_id)
+        return await self._exchange_call(method, params, on_event, cancel, controlled, request_id)
 
-    async def _exchange_call(self, method, params, on_event, cancel, timeout, controlled, request_id):
+    async def _exchange_call(self, method, params, on_event, cancel, controlled, request_id):
         if method not in METHODS:
             raise ValueError("unsupported_method")
         request_id = str(uuid.uuid4()) if request_id is None else validate_id(request_id, 128, "invalid_request_id")
@@ -181,8 +182,6 @@ class CoreBridge:
                    "params": {"host": host, **params}}
         validate_request(request, method in CONTROLLED_METHODS if controlled is None else controlled)
         payload = json.dumps(request, ensure_ascii=False).encode("utf-8") + b"\n"
-        if len(payload) > MAX_REQUEST_BYTES:
-            raise ValueError("request_too_large")
         if method not in {"get_capabilities", "scan", "preview", "list_transactions", "list_sources", "list_game_sources", "discover_game"}:
             await self.preflight()
         task = current_task.get()
@@ -193,7 +192,7 @@ class CoreBridge:
         process = await asyncio.create_subprocess_exec(
             str(self.binary), "serve-task" if controlled else "serve", stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
-            limit=MAX_RESPONSE_BYTES + 1, env=self.process_env, **self.process_identity,
+            limit=float("inf"), env=self.process_env, **self.process_identity,
         )
         if controlled:
             self.active_calls.add(cancel)
@@ -223,15 +222,9 @@ class CoreBridge:
             response = None
             last_sequence = -1
             while True:
-                try:
-                    line = await process.stdout.readline()
-                except (ValueError, asyncio.LimitOverrunError) as exc:
-                    # StreamReader rejects a long line before our byte check.
-                    raise RuntimeError("response_too_large") from exc
+                line = await process.stdout.readline()
                 if not line:
                     break
-                if len(line) > MAX_RESPONSE_BYTES:
-                    raise RuntimeError("response_too_large")
                 if not line.endswith(b"\n"):
                     raise RuntimeError("contract_mismatch")
                 try:
@@ -341,13 +334,8 @@ class CoreBridge:
 
         guard = asyncio.create_task(signal_cancel()) if controlled else None
         running = asyncio.create_task(exchange())
-        effective_timeout = timeout if timeout is not None else (self.timeout if not controlled else None)
         try:
-            return await asyncio.wait_for(asyncio.shield(running), effective_timeout)
-        except asyncio.TimeoutError:
-            if terminal_received.is_set():
-                return await running
-            raise
+            return await asyncio.shield(running)
         except asyncio.CancelledError:
             # Task/UI cancellation must never kill a writer. Drain it until rollback
             # or the durable commit reports its actual outcome.
@@ -379,10 +367,10 @@ class CoreBridge:
             if process.stdin and not terminal_received.is_set():
                 process.stdin.close()
 
-    async def call_sync(self, method: str, params: dict, timeout: float | None = None):
+    async def call_sync(self, method: str, params: dict):
         """One-shot `serve` call outside the task controller; returns the result.
 
         Source config reads/writes are local and short, so they do not need the
         cancellable `serve-task` stream.
         """
-        return await self._call(method, params, timeout=timeout, controlled=False)
+        return await self._call(method, params, controlled=False)

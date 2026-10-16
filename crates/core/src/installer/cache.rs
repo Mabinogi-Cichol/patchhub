@@ -7,15 +7,13 @@ use super::{
 use crate::projection::DomainError;
 use serde::Serialize;
 use std::{
-    ffi::OsStr,
+    ffi::{OsStr, OsString},
     fs::{self, File},
     io::{self, Read},
     path::{Path, PathBuf},
 };
 
-const MAX_ENTRIES: u64 = 100_000;
-const MAX_DEPTH: usize = 128;
-const MAX_DIAGNOSTICS: usize = 512;
+use native::Captured;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct CacheInventory {
     pub total_bytes: u64,
@@ -34,7 +32,7 @@ impl<'a> CacheService<'a> {
         let roots = self.roots()?;
         let mut state = Walk::default();
         for root in roots {
-            walk(&root, false, 0, &mut state);
+            inspect_tree(&root, &mut state);
         }
         Ok(CacheInventory {
             total_bytes: state.bytes,
@@ -140,12 +138,10 @@ impl<'a> CacheService<'a> {
                 Ok(n) => n,
                 _ => continue,
             };
-            if children.iter().any(|n| {
-                !matches!(
-                    n.to_str(),
-                    Some("task.json" | "owner.lock" | "revoked")
-                )
-            }) {
+            if children
+                .iter()
+                .any(|n| !matches!(n.to_str(), Some("task.json" | "owner.lock" | "revoked")))
+            {
                 continue;
             }
             let document = match task.json("task.json", 65536) {
@@ -264,12 +260,10 @@ impl OwnedTaskDirectory {
         let task = self.task;
         let mut state = Walk::default();
         let Ok(names) = task.names() else { return };
-        if names.iter().any(|name| {
-            !matches!(
-                name.to_str(),
-                Some("task.json" | "owner.lock" | "revoked")
-            )
-        }) {
+        if names
+            .iter()
+            .any(|name| !matches!(name.to_str(), Some("task.json" | "owner.lock" | "revoked")))
+        {
             return;
         }
         for name in names {
@@ -327,26 +321,15 @@ struct Walk {
     deleted: u64,
     failures: Vec<CleanupFailure>,
     failure_count: u64,
-    #[cfg(unix)]
-    backup_cleanup: bool,
 }
 impl Walk {
     fn fail(&mut self, failure: CleanupFailure) {
         self.failure_count = self.failure_count.saturating_add(1);
-        if self.failures.len() < MAX_DIAGNOSTICS {
-            self.failures.push(failure);
-        } else {
-            self.failures[MAX_DIAGNOSTICS - 1] = CleanupFailure {
-                code: CleanupErrorCode::CleanupFailed,
-                detail: Some("Additional cleanup diagnostics omitted (limit 512).".into()),
-            };
-        }
+        self.failures.push(failure);
     }
 
-    fn visit(&mut self, depth: usize) -> io::Result<()> {
-        if depth > MAX_DEPTH || self.entries >= MAX_ENTRIES {
-            return Err(unknown());
-        }
+    /// Counts a visited entry; the running total is the only bounded arithmetic left.
+    fn visit(&mut self) -> io::Result<()> {
         self.entries = self.entries.checked_add(1).ok_or_else(overflow)?;
         Ok(())
     }
@@ -354,31 +337,40 @@ impl Walk {
         self.bytes = self.bytes.checked_add(bytes).ok_or_else(overflow)?;
         Ok(())
     }
-}
-fn walk(root: &Node, cleanup: bool, depth: usize, state: &mut Walk) {
-    match root.names() {
-        Ok(names) => {
-            for name in names {
-                if cleanup {
-                    remove_entry(root, &name, depth, false, state);
-                } else {
-                    inspect_entry(root, &name, depth, state);
-                }
-            }
-        }
-        Err(e) => state.fail(failure(&root.path, &e)),
+    fn count_removed(&mut self) -> io::Result<()> {
+        self.deleted = self.deleted.checked_add(1).ok_or_else(overflow)?;
+        Ok(())
     }
 }
-fn inspect_entry(parent: &Node, name: &OsStr, depth: usize, state: &mut Walk) {
+/// Read-only inventory. Nested directories are drained with a local stack so the
+/// walk depth is not limited by the OS thread stack.
+fn inspect_tree(root: &Node, state: &mut Walk) {
+    let mut dirs: Vec<Node> = Vec::new();
+    inspect_children(root, &mut dirs, state);
+    while let Some(dir) = dirs.pop() {
+        inspect_children(&dir, &mut dirs, state);
+    }
+}
+fn inspect_children(parent: &Node, dirs: &mut Vec<Node>, state: &mut Walk) {
+    match parent.names() {
+        Ok(names) => {
+            for name in names {
+                inspect_entry(parent, &name, dirs, state);
+            }
+        }
+        Err(e) => state.fail(failure(&parent.path, &e)),
+    }
+}
+fn inspect_entry(parent: &Node, name: &OsStr, dirs: &mut Vec<Node>, state: &mut Walk) {
     let result = (|| {
-        state.visit(depth)?;
+        state.visit()?;
         if protected(name) {
             return Err(unknown());
         }
         let node = parent.child(name, false)?;
         let meta = node.file.metadata()?;
         if meta.is_dir() {
-            walk(&node, false, depth + 1, state);
+            dirs.push(node);
         } else {
             state.record(meta.len())?;
         }
@@ -388,37 +380,44 @@ fn inspect_entry(parent: &Node, name: &OsStr, depth: usize, state: &mut Walk) {
         state.fail(failure(&parent.path.join(name), &e));
     }
 }
+/// Deletes every child of a root directory (the root itself is retained).
+fn remove_children(root: &Node, task: bool, state: &mut Walk) {
+    match root.names() {
+        Ok(names) => {
+            for name in names {
+                remove_entry(root, &name, 0, task, state);
+            }
+        }
+        Err(e) => state.fail(failure(&root.path, &e)),
+    }
+}
 fn remove_entry(parent: &Node, name: &OsStr, depth: usize, task: bool, state: &mut Walk) {
+    let path = parent.path.join(name);
     if !state.retained_archives.is_empty() {
-        if let Ok(path) = fs::canonicalize(parent.path.join(name)) {
+        if let Ok(candidate) = fs::canonicalize(&path) {
             // Preserve the referenced file and any containing cache directory.
             if state
                 .retained_archives
                 .iter()
-                .any(|source| source.starts_with(&path))
+                .any(|source| source.starts_with(&candidate))
             {
                 return;
             }
         }
     }
     let result = (|| {
-        state.visit(depth)?;
-        if (!task && protected(name))
-            || (task
-                && !matches!(
-                    name.to_str(),
-                    Some("task.json" | "owner.lock" | "revoked")
-                )
-                && depth != 0)
-        {
+        state.visit()?;
+        let allowed =
+            matches!(name.to_str(), Some("task.json" | "owner.lock" | "revoked")) || depth == 0;
+        if (!task && protected(name)) || (task && !allowed) {
             return Err(unknown());
         }
         let node = parent.child(name, true)?;
-        delete_open(node, parent, name, depth, task, state)?;
+        delete_open(node, parent, name, depth, task, state);
         Ok(())
     })();
     if let Err(e) = result {
-        state.fail(failure(&parent.path.join(name), &e));
+        state.fail(failure(&path, &e));
     }
 }
 fn validate_lock(lock: Option<&CacheLock>, state: &mut Walk) -> bool {
@@ -441,13 +440,17 @@ fn finish_open_entry(
     task: bool,
     state: &mut Walk,
 ) {
-    let result = state
-        .visit(depth)
-        .and_then(|()| delete_open(node, parent, name, depth, task, state));
+    let result = state.visit().and_then(|()| {
+        let removed = delete_subtree(node, parent, name, depth, task, false, state)?;
+        state.record(removed)?;
+        state.count_removed()
+    });
     if let Err(e) = result {
         state.fail(failure(&parent.path.join(name), &e));
     }
 }
+/// Accounts one already-open entry (its own bytes and removal count) and reports
+/// the entry's own failure; nested failures are reported inside [`delete_subtree`].
 fn delete_open(
     node: Node,
     parent: &Node,
@@ -455,14 +458,186 @@ fn delete_open(
     depth: usize,
     task: bool,
     state: &mut Walk,
-) -> io::Result<()> {
-    let meta = node.file.metadata()?;
-    let bytes = if meta.is_dir() { 0 } else { meta.len() };
-    state.bytes.checked_add(bytes).ok_or_else(overflow)?;
-    let removed = node.delete(parent, name, depth, task, state)?;
-    state.record(removed)?;
-    state.deleted = state.deleted.checked_add(1).ok_or_else(overflow)?;
-    Ok(())
+) {
+    let path = parent.path.join(name);
+    let result =
+        delete_subtree(node, parent, name, depth, task, false, state).and_then(|removed| {
+            state.record(removed)?;
+            state.count_removed()
+        });
+    if let Err(e) = result {
+        state.fail(failure(&path, &e));
+    }
+}
+/// One directory level awaiting deletion. The `captured` handle is kept until the
+/// level's children have been handled, so deletion proceeds post-order without
+/// relying on the call stack for depth.
+struct Frame {
+    captured: Captured,
+    name: OsString,
+    report_path: PathBuf,
+    depth: usize,
+    task: bool,
+    directory: bool,
+    names: Vec<OsString>,
+    index: usize,
+    loaded: bool,
+}
+/// Deletes `node` (and its subtree) with a local explicit stack. The removed bytes
+/// of the entry itself are returned; failures below the entry are recorded on
+/// `state`, while a failure of the entry's own platform step is returned.
+fn delete_subtree(
+    node: Node,
+    parent: &Node,
+    name: &OsStr,
+    depth: usize,
+    task: bool,
+    backup: bool,
+    state: &mut Walk,
+) -> io::Result<u64> {
+    let captured = node.capture(parent, name, backup)?;
+    let directory = match captured.is_dir() {
+        Ok(directory) => directory,
+        Err(e) => {
+            captured.abort(parent, name);
+            return Err(e);
+        }
+    };
+    let mut stack = vec![Frame {
+        captured,
+        name: name.to_os_string(),
+        report_path: parent.path.join(name),
+        depth,
+        task,
+        directory,
+        names: Vec::new(),
+        index: 0,
+        loaded: false,
+    }];
+    loop {
+        let last = stack.len() - 1;
+        if !stack[last].loaded {
+            stack[last].loaded = true;
+            if stack[last].directory {
+                match stack[last].captured.names() {
+                    Ok(names) => stack[last].names = names,
+                    Err(e) => {
+                        let frame = stack.pop().unwrap();
+                        if let Some(below) = stack.last() {
+                            let up = below.captured.parent_ref();
+                            frame.captured.abort(up, &frame.name);
+                            state.fail(failure(&frame.report_path, &e));
+                            continue;
+                        }
+                        frame.captured.abort(parent, &frame.name);
+                        return Err(e);
+                    }
+                }
+            }
+        }
+        if stack[last].index < stack[last].names.len() {
+            let child = stack[last].names[stack[last].index].clone();
+            stack[last].index += 1;
+            process_child(&mut stack, last, &child, backup, state);
+            continue;
+        }
+        let frame = stack.pop().unwrap();
+        let Some(below) = stack.last() else {
+            return frame.captured.finish(parent, &frame.name, frame.directory);
+        };
+        let up = below.captured.parent_ref();
+        match frame.captured.finish(up, &frame.name, frame.directory) {
+            Ok(removed) => {
+                if let Err(e) = state.record(removed).and_then(|()| state.count_removed()) {
+                    state.fail(failure(&frame.report_path, &e));
+                }
+            }
+            Err(e) => state.fail(failure(&frame.report_path, &e)),
+        }
+    }
+}
+fn process_child(
+    stack: &mut Vec<Frame>,
+    parent_index: usize,
+    name: &OsStr,
+    backup: bool,
+    state: &mut Walk,
+) {
+    let report = stack[parent_index].captured.parent_ref().path.join(name);
+    // A child is gated with the containing frame's depth, i.e. one less than the
+    // original recursion's `depth + 1`. The current task callers are equivalent
+    // because every task child is opened via `remove_entry`/`finish_open_entry`
+    // at depth 1 — `process_child` only ever sees a non-zero containing depth —
+    // and the task directory itself reaches `finish_open_entry(..., 0, true)`
+    // only after its whitelisted children were removed. `depth == 0` therefore
+    // still denotes the task directory root, never one of its entries.
+    let depth = stack[parent_index].depth;
+    let task = stack[parent_index].task;
+    if !state.retained_archives.is_empty() {
+        if let Ok(candidate) = fs::canonicalize(&report) {
+            if state
+                .retained_archives
+                .iter()
+                .any(|source| source.starts_with(&candidate))
+            {
+                return;
+            }
+        }
+    }
+    if let Err(e) = state.visit() {
+        state.fail(failure(&report, &e));
+        return;
+    }
+    let allowed =
+        matches!(name.to_str(), Some("task.json" | "owner.lock" | "revoked")) || depth == 0;
+    if (!task && protected(name)) || (task && !allowed) {
+        state.fail(failure(&report, &unknown()));
+        return;
+    }
+    let node = match stack[parent_index].captured.child(name, true) {
+        Ok(node) => node,
+        Err(e) => {
+            state.fail(failure(&report, &e));
+            return;
+        }
+    };
+    let captured = match node.capture(stack[parent_index].captured.parent_ref(), name, backup) {
+        Ok(captured) => captured,
+        Err(e) => {
+            state.fail(failure(&report, &e));
+            return;
+        }
+    };
+    let directory = match captured.is_dir() {
+        Ok(directory) => directory,
+        Err(e) => {
+            captured.abort(stack[parent_index].captured.parent_ref(), name);
+            state.fail(failure(&report, &e));
+            return;
+        }
+    };
+    if directory {
+        stack.push(Frame {
+            captured,
+            name: name.to_os_string(),
+            report_path: report,
+            depth: depth + 1,
+            task,
+            directory,
+            names: Vec::new(),
+            index: 0,
+            loaded: false,
+        });
+        return;
+    }
+    match captured.finish(stack[parent_index].captured.parent_ref(), name, false) {
+        Ok(removed) => {
+            if let Err(e) = state.record(removed).and_then(|()| state.count_removed()) {
+                state.fail(failure(&report, &e));
+            }
+        }
+        Err(e) => state.fail(failure(&report, &e)),
+    }
 }
 
 pub(crate) struct Node {
@@ -481,17 +656,9 @@ impl Node {
         if self.file.metadata()?.is_dir() && !self.names()?.is_empty() {
             return Err(unknown());
         }
-        self.delete(
-            parent,
-            name,
-            0,
-            false,
-            &mut Walk {
-                #[cfg(unix)]
-                backup_cleanup: true,
-                ..Walk::default()
-            },
-        )
+        // Nested failures are not this caller's concern; only the entry's own
+        // platform result is returned (as before, via a throwaway `Walk`).
+        delete_subtree(self, parent, name, 0, false, true, &mut Walk::default())
     }
     fn json(&self, name: &str, limit: u64) -> io::Result<serde_json::Value> {
         let node = self.child(OsStr::new(name), false)?;
@@ -614,24 +781,20 @@ mod native {
             let path = format!("/proc/self/fd/{}", self.file.as_raw_fd());
             let mut result = Vec::new();
             for entry in fs::read_dir(path)? {
-                if result.len() >= MAX_ENTRIES as usize {
-                    return Err(unknown());
-                }
                 result.push(entry?.file_name());
             }
             Ok(result)
         }
-        pub(super) fn delete(
+        /// Captures the open node by rename into a fresh private directory. A
+        /// replacement between open and rename is preserved, never unlinked based
+        /// on the old stat. The returned handle addresses the captured item.
+        pub(super) fn capture(
             self,
             parent: &Node,
             name: &OsStr,
-            depth: usize,
-            task: bool,
-            state: &mut Walk,
-        ) -> io::Result<u64> {
-            // Capture by rename into a fresh private directory. A replacement between
-            // open and rename is preserved, never unlinked based on the old stat.
-            let prefix = if state.backup_cleanup {
+            backup: bool,
+        ) -> io::Result<Captured> {
+            let prefix = if backup {
                 ".backup-cleanup-"
             } else {
                 ".cleanup-"
@@ -663,7 +826,7 @@ mod native {
                 return Err(error);
             }
             #[cfg(test)]
-            if state.backup_cleanup {
+            if backup {
                 if let Some(marker) = std::env::var_os("STEAM_PATCH_TEST_BACKUP_CAPTURE") {
                     fs::write(marker, b"captured")?;
                     loop {
@@ -671,46 +834,88 @@ mod native {
                     }
                 }
             }
+            let captured = q.child(item, false)?;
+            if !same(&self.file, &captured.file)? {
+                restore(&q, parent, name);
+                let _ = unlink(&parent.file, OsStr::new(&quarantine), true);
+                return Err(unsafe_path());
+            }
+            Ok(Captured {
+                q,
+                item: captured,
+                quarantine: OsString::from(quarantine),
+            })
+        }
+    }
+    /// No-replace restore keeps racing new cache entries untouched (Linux only).
+    fn restore(q: &Node, parent: &Node, name: &OsStr) {
+        #[cfg(target_os = "linux")]
+        unsafe {
+            if let (Ok(item), Ok(target)) = (c(OsStr::new("item")), c(name)) {
+                libc::renameat2(
+                    q.file.as_raw_fd(),
+                    item.as_ptr(),
+                    parent.file.as_raw_fd(),
+                    target.as_ptr(),
+                    libc::RENAME_NOREPLACE,
+                );
+            }
+        }
+        #[cfg(not(target_os = "linux"))]
+        let _ = (q, parent, name);
+    }
+    /// The renamed capture kept open while its children (if any) are deleted and
+    /// its quarantine directory removed afterwards.
+    pub(super) struct Captured {
+        q: Node,
+        item: Node,
+        quarantine: OsString,
+    }
+    impl Captured {
+        pub(super) fn parent_ref(&self) -> &Node {
+            &self.item
+        }
+        pub(super) fn is_dir(&self) -> io::Result<bool> {
+            Ok(self.item.file.metadata()?.is_dir())
+        }
+        pub(super) fn names(&self) -> io::Result<Vec<std::ffi::OsString>> {
+            self.item.names()
+        }
+        pub(super) fn child(&self, name: &OsStr, delete: bool) -> io::Result<Node> {
+            self.item.child(name, delete)
+        }
+        /// Verifies identity, unlinks the captured name and removes the quarantine.
+        pub(super) fn finish(
+            self,
+            parent: &Node,
+            name: &OsStr,
+            directory: bool,
+        ) -> io::Result<u64> {
             let result = (|| {
-                let captured = q.child(item, false)?;
-                if !same(&self.file, &captured.file)? {
-                    return Err(unsafe_path());
-                }
-                let directory = captured.file.metadata()?.is_dir();
-                if directory {
-                    for child in captured.names()? {
-                        remove_entry(&captured, &child, depth + 1, task, state);
-                    }
-                }
-                check(&captured.file)?;
+                check(&self.item.file)?;
+                let item = OsStr::new("item");
                 // Revalidate identity after traversal before unlinking the captured name.
-                if !same(&captured.file, &q.child(item, false)?.file)? {
+                if !same(&self.item.file, &self.q.child(item, false)?.file)? {
                     return Err(unsafe_path());
                 }
                 let bytes = if directory {
                     0
                 } else {
-                    captured.file.metadata()?.len()
+                    self.item.file.metadata()?.len()
                 };
-                state.bytes.checked_add(bytes).ok_or_else(overflow)?;
-                unlink(&q.file, item, directory)?;
+                unlink(&self.q.file, item, directory)?;
                 Ok(bytes)
             })();
             if result.is_err() {
-                // Linux restore is no-replace: racing new cache entries remain untouched.
-                #[cfg(target_os = "linux")]
-                unsafe {
-                    libc::renameat2(
-                        q.file.as_raw_fd(),
-                        c(item)?.as_ptr(),
-                        parent.file.as_raw_fd(),
-                        c(name)?.as_ptr(),
-                        libc::RENAME_NOREPLACE,
-                    );
-                }
+                restore(&self.q, parent, name);
             }
-            let _ = unlink(&parent.file, OsStr::new(&quarantine), true);
+            let _ = unlink(&parent.file, OsStr::new(&self.quarantine), true);
             result
+        }
+        /// Discards a capture whose children were never enumerated.
+        pub(super) fn abort(self, parent: &Node, name: &OsStr) {
+            restore(&self.q, parent, name);
+            let _ = unlink(&parent.file, OsStr::new(&self.quarantine), true);
         }
     }
 }
@@ -817,38 +1022,56 @@ mod native {
         pub(crate) fn names(&self) -> io::Result<Vec<std::ffi::OsString>> {
             let mut result = Vec::new();
             for entry in fs::read_dir(&self.path)? {
-                if result.len() >= MAX_ENTRIES as usize {
-                    return Err(unknown());
-                }
                 result.push(entry?.file_name());
             }
             Ok(result)
         }
-        pub(super) fn delete(
+        /// Windows deletes through the checked handle itself, so there is nothing
+        /// to capture before traversal; the returned handle is the directory pin.
+        pub(super) fn capture(
             self,
             _parent: &Node,
             _name: &OsStr,
-            depth: usize,
-            task: bool,
-            state: &mut Walk,
+            _backup: bool,
+        ) -> io::Result<Captured> {
+            Ok(Captured { node: self })
+        }
+    }
+    /// The open handle kept pinned while its children (if any) are deleted and
+    /// the handle itself is marked for deletion afterwards.
+    pub(super) struct Captured {
+        node: Node,
+    }
+    impl Captured {
+        pub(super) fn parent_ref(&self) -> &Node {
+            &self.node
+        }
+        pub(super) fn is_dir(&self) -> io::Result<bool> {
+            Ok(self.node.file.metadata()?.is_dir())
+        }
+        pub(super) fn names(&self) -> io::Result<Vec<std::ffi::OsString>> {
+            self.node.names()
+        }
+        pub(super) fn child(&self, name: &OsStr, delete: bool) -> io::Result<Node> {
+            self.node.child(name, delete)
+        }
+        pub(super) fn finish(
+            self,
+            _parent: &Node,
+            _name: &OsStr,
+            directory: bool,
         ) -> io::Result<u64> {
-            let bytes = if self.file.metadata()?.is_dir() {
+            let bytes = if directory {
                 0
             } else {
-                self.file.metadata()?.len()
+                self.node.file.metadata()?.len()
             };
-            state.bytes.checked_add(bytes).ok_or_else(overflow)?;
-            if self.file.metadata()?.is_dir() {
-                for name in self.names()? {
-                    remove_entry(&self, &name, depth + 1, task, state);
-                }
-            }
-            check(&self.file)?;
+            check(&self.node.file)?;
             let disposition = Disposition { delete: 1 };
             // Delete exactly the checked handle. Path/ancestor replacement cannot redirect it.
             if unsafe {
                 SetFileInformationByHandle(
-                    self.file.as_raw_handle(),
+                    self.node.file.as_raw_handle(),
                     4,
                     &disposition,
                     std::mem::size_of::<Disposition>() as u32,
@@ -857,9 +1080,11 @@ mod native {
             {
                 return Err(io::Error::last_os_error());
             }
-            drop(self);
+            drop(self.node);
             Ok(bytes)
         }
+        /// Windows has no quarantine to remove for a capture that was never traversed.
+        pub(super) fn abort(self, _parent: &Node, _name: &OsStr) {}
     }
 }
 
@@ -885,7 +1110,7 @@ mod tests {
     fn local_cleanup(host: &ValidatedHostContext) -> Walk {
         let mut state = Walk::default();
         for root in CacheService::new(host).roots().unwrap() {
-            walk(&root, true, 0, &mut state);
+            remove_children(&root, false, &mut state);
         }
         state
     }
@@ -1125,41 +1350,99 @@ mod tests {
         drop(owner);
     }
     #[test]
-    fn bounded_utf8_failure_and_checked_inventory() {
-        let f = failure(Path::new(&"测".repeat(3000)), &unknown());
-        assert!(f.detail.unwrap().len() <= 2048);
+    fn unbounded_utf8_failure_keeps_full_detail_and_checked_inventory() {
+        let path_text = "测".repeat(3000);
+        let f = failure(Path::new(&path_text), &unknown());
+        let detail = f.detail.unwrap();
+        assert!(detail.contains(&path_text));
+        assert!(detail.ends_with(": cleanup_unknown_path"));
         let mut state = Walk {
             bytes: u64::MAX,
             ..Walk::default()
         };
         assert!(state.record(1).is_err());
         assert_eq!(state.bytes, u64::MAX);
-        state.entries = MAX_ENTRIES;
-        assert!(state.visit(0).is_err());
-        assert_eq!(state.entries, MAX_ENTRIES);
+        let mut state = Walk {
+            entries: u64::MAX,
+            ..Walk::default()
+        };
+        assert!(state.visit().is_err());
+        assert_eq!(state.entries, u64::MAX);
     }
     #[test]
-    fn diagnostics_stay_bounded_and_keep_total_failure_count() {
+    fn deep_cache_tree_is_inventoried_and_cleaned() {
+        let (_dir, host) = fixture();
+        let paths = host.installer_paths();
+        // 160 levels exceeds the removed 128-deep recursion gate; the traversal
+        // must complete without relying on the OS thread stack.
+        let mut nested = paths.content_dir().to_path_buf();
+        for _ in 0..160 {
+            nested.push("d");
+        }
+        fs::create_dir_all(&nested).unwrap();
+        fs::write(nested.join("payload"), b"deep").unwrap();
+        let inventory = CacheService::new(&host).inspect().unwrap();
+        assert_eq!(inventory.entries, 161);
+        assert_eq!(inventory.total_bytes, 4);
+        assert!(
+            inventory.diagnostics.is_empty(),
+            "{:?}",
+            inventory.diagnostics
+        );
+        let result = local_cleanup(&host);
+        assert!(result.failures.is_empty(), "{:?}", result.failures);
+        assert_eq!(result.bytes, 4);
+        assert_eq!(result.deleted, 161);
+        assert!(!paths.content_dir().join("d").exists());
+        assert_eq!(CacheService::new(&host).inspect().unwrap().entries, 0);
+    }
+    #[test]
+    #[ignore = "creates and clears >100k real entries; run explicitly with --ignored"]
+    fn large_flat_cache_directory_is_inventoried_and_cleaned() {
+        let (_dir, host) = fixture();
+        let paths = host.installer_paths();
+        const COUNT: u64 = 100_001;
+        for index in 0..COUNT {
+            fs::File::create(paths.downloads_dir().join(format!("f{index}"))).unwrap();
+        }
+        let inventory = CacheService::new(&host).inspect().unwrap();
+        assert_eq!(inventory.entries, COUNT);
+        assert_eq!(inventory.total_bytes, 0);
+        assert!(
+            inventory.diagnostics.is_empty(),
+            "{:?}",
+            inventory.diagnostics
+        );
+        let result = local_cleanup(&host);
+        assert!(result.failures.is_empty(), "{:?}", result.failures);
+        assert_eq!(result.deleted, COUNT);
+        assert!(fs::read_dir(paths.downloads_dir())
+            .unwrap()
+            .next()
+            .is_none());
+        assert_eq!(CacheService::new(&host).inspect().unwrap().entries, 0);
+    }
+    #[test]
+    fn diagnostics_are_complete_and_keep_total_failure_count() {
+        const COUNT: usize = 600;
         let mut state = Walk::default();
-        for _ in 0..MAX_DIAGNOSTICS + 20 {
+        for _ in 0..COUNT {
             state.fail(failure(Path::new("cache"), &unknown()));
         }
-        assert_eq!(state.failures.len(), MAX_DIAGNOSTICS);
-        assert_eq!(state.failure_count, (MAX_DIAGNOSTICS + 20) as u64);
-        assert!(state
-            .failures
-            .last()
-            .unwrap()
+        assert_eq!(state.failures.len(), COUNT);
+        assert_eq!(state.failure_count, COUNT as u64);
+        assert!(state.failures.iter().all(|failure| !failure
             .detail
             .as_deref()
-            .unwrap()
-            .contains("omitted"));
+            .unwrap_or("")
+            .contains("omitted")));
         let before = state.failure_count;
         state.fail(failure(Path::new("task"), &unknown()));
         assert_ne!(
             state.failure_count, before,
             "task protection must observe failures after diagnostic truncation"
         );
+        assert_eq!(state.failures.len(), COUNT + 1);
     }
     #[test]
     fn shared_installer_blocks_manual_cleanup_without_deleting() {

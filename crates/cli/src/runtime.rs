@@ -1779,12 +1779,7 @@ mod install_flow_tests {
             let events = Arc::clone(&events);
             move |value| events.lock().unwrap().push(value)
         };
-        let response = crate::run_task(
-            request.as_bytes(),
-            false,
-            Arc::new(AtomicBool::new(false)),
-            sink,
-        );
+        let response = crate::run_task(request.as_bytes(), Arc::new(AtomicBool::new(false)), sink);
         let events = events.lock().unwrap();
         assert!(!events.is_empty(), "install_patch must stream progress");
         assert!(events

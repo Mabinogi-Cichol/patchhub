@@ -15,7 +15,7 @@ use std::{
 };
 use steam_patch_core::catalog::Platform;
 
-use steam_patch_protocol::{MAX_REQUEST_BYTES, PROTOCOL_VERSION};
+use steam_patch_protocol::PROTOCOL_VERSION;
 
 /// Internal execution arguments, constructed only after the sole wire decoder.
 struct Request {
@@ -36,10 +36,6 @@ fn parse_request(
     })
 }
 
-fn truncate_detail(detail: &str) -> String {
-    steam_patch_protocol::truncate_detail(detail)
-}
-
 fn error_with_detail(id: Option<&str>, code: &str, detail: Option<&str>) -> Value {
     let mut value = json!({
         "protocol_version": PROTOCOL_VERSION,
@@ -48,13 +44,9 @@ fn error_with_detail(id: Option<&str>, code: &str, detail: Option<&str>) -> Valu
         "error": { "code": code },
     });
     if let Some(detail) = detail {
-        value["error"]["detail"] = json!(truncate_detail(detail));
+        value["error"]["detail"] = json!(detail);
     }
     value
-}
-
-fn error(id: Option<&str>, code: &str) -> Value {
-    error_with_detail(id, code, None)
 }
 
 fn respond(bytes: &[u8]) -> Value {
@@ -87,55 +79,24 @@ fn respond_with_channel(bytes: &[u8], cancel: &AtomicBool, task_channel: bool) -
     }
 }
 
-/// Read one bounded JSON line without allocating for a hostile unbounded stream.
-fn read_request(reader: &mut impl BufRead) -> io::Result<Option<(Vec<u8>, bool)>> {
+/// Read one LF-terminated JSON line. JSON Lines framing has no line-size limit;
+/// the method schema and channel rules validate the request instead.
+fn read_request(reader: &mut impl BufRead) -> io::Result<Option<Vec<u8>>> {
     let mut bytes = Vec::new();
-    let mut oversized = false;
-    loop {
-        let available = reader.fill_buf()?;
-        if available.is_empty() {
-            return if bytes.is_empty() && !oversized {
-                Ok(None)
-            } else {
-                Ok(Some((bytes, oversized)))
-            };
-        }
-        let newline = available.iter().position(|b| *b == b'\n');
-        let take = newline.map_or(available.len(), |p| p + 1);
-        if bytes.len() + take <= MAX_REQUEST_BYTES && !oversized {
-            bytes.extend_from_slice(&available[..take]);
-        } else {
-            oversized = true;
-        }
-        reader.consume(take);
-        if newline.is_some() {
-            return Ok(Some((bytes, oversized)));
-        }
+    if reader.read_until(b'\n', &mut bytes)? == 0 {
+        return Ok(None);
     }
+    Ok(Some(bytes))
 }
 
-fn encoded_line(value: &Value) -> Vec<u8> {
-    steam_patch_protocol::bounded_json_line(value).unwrap_or_else(|_| {
-        steam_patch_protocol::bounded_json_line(&error(
-            value.get("request_id").and_then(Value::as_str),
-            "response_too_large",
-        ))
-        .expect("bounded error envelope fits response limit")
-    })
-}
 fn write_line(writer: &mut impl Write, value: &Value) -> io::Result<()> {
-    writer.write_all(&encoded_line(value))?;
+    writer.write_all(&steam_patch_protocol::json_line(value))?;
     writer.flush()
 }
 
 fn serve(reader: &mut impl BufRead, writer: &mut impl Write) -> io::Result<()> {
-    while let Some((bytes, oversized)) = read_request(reader)? {
-        let response = if oversized {
-            error(None, "request_too_large")
-        } else {
-            respond(&bytes)
-        };
-        write_line(writer, &response)?;
+    while let Some(bytes) = read_request(reader)? {
+        write_line(writer, &respond(&bytes))?;
     }
     Ok(())
 }
@@ -145,12 +106,12 @@ fn serve(reader: &mut impl BufRead, writer: &mut impl Write) -> io::Result<()> {
 /// group (p1-host-contract §1.1 C, §5.3). In particular a disconnected Python
 /// host cannot leave an installer running unattended.
 fn serve_task() -> io::Result<()> {
-    let Some((bytes, oversized)) = read_request(&mut io::stdin().lock())? else {
+    let Some(bytes) = read_request(&mut io::stdin().lock())? else {
         return Ok(());
     };
     let cancel = Arc::new(AtomicBool::new(false));
     spawn_control_thread(Arc::clone(&cancel));
-    let response = run_task(&bytes, oversized, cancel, |value| {
+    let response = run_task(&bytes, cancel, |value| {
         let mut output = io::stdout().lock();
         // A closed output pipe must not abort the rollback path.
         let _ = write_line(&mut output, &value);
@@ -181,16 +142,10 @@ fn spawn_control_thread(cancel: Arc<AtomicBool>) {
 /// Returns the single final response line value.
 pub(crate) fn run_task(
     bytes: &[u8],
-    oversized: bool,
     cancel: Arc<AtomicBool>,
     mut emit: impl FnMut(Value) + 'static,
 ) -> Value {
-    let parsed = if oversized {
-        None
-    } else {
-        parse_request(bytes, true).ok()
-    };
-    if let Some(request) = parsed {
+    if let Ok(request) = parse_request(bytes, true) {
         if runtime::SOURCE_STREAM_METHODS.contains(&request.method.as_str()) {
             return stream_sources_task(request, &cancel, emit);
         }
@@ -207,21 +162,11 @@ pub(crate) fn run_task(
                     emit(cursor.event(progress));
                 }
             },
-            || {
-                if oversized {
-                    error(None, "request_too_large")
-                } else {
-                    respond_with(bytes, cancel.as_ref())
-                }
-            },
+            || respond_with(bytes, cancel.as_ref()),
         );
     }
-    if oversized {
-        error(None, "request_too_large")
-    } else {
-        let cancel_ref = AtomicBool::new(false);
-        respond_with(bytes, &cancel_ref)
-    }
+    let cancel_ref = AtomicBool::new(false);
+    respond_with(bytes, &cancel_ref)
 }
 
 /// Streams a sources task: `source_progress`/`source_update` lines carrying the
@@ -383,8 +328,6 @@ fn main() -> ExitCode {
 
 #[cfg(test)]
 mod tests {
-    use steam_patch_protocol::MAX_DETAIL_BYTES;
-
     pub(crate) fn wire_params(method: &str, mut legacy: Value) -> Value {
         let object = legacy.as_object_mut().unwrap();
         let mut host = serde_json::Map::new();
@@ -434,10 +377,11 @@ mod tests {
     use std::io::Cursor;
 
     #[test]
-    fn protocol_recovers_after_bad_or_oversized_line() {
+    fn protocol_recovers_after_a_bad_line_larger_than_the_removed_cap() {
         let root = tempfile::tempdir().unwrap();
         let valid = json!({"protocol_version":4,"request_id":"r1","method":"scan","params":{"host":{"roots":[root.path()],"catalog":null,"signed_catalog":null,"trust_keys":null,"state_dir":null,"platform":"windows"}}}).to_string();
-        let input = format!("broken\n{}\n{valid}\n", "x".repeat(MAX_REQUEST_BYTES + 1));
+        // A line past the old 64 KiB cap is framed and parsed like any other.
+        let input = format!("{}\nbroken\n{valid}\n", "x".repeat(70_000));
         let mut output = Vec::new();
         serve(&mut Cursor::new(input), &mut output).unwrap();
         let rows: Vec<Value> = String::from_utf8(output)
@@ -447,9 +391,25 @@ mod tests {
             .collect();
         assert_eq!(rows.len(), 3);
         assert_eq!(rows[0]["error"]["code"], "invalid_request");
-        assert_eq!(rows[1]["error"]["code"], "request_too_large");
+        assert_eq!(rows[1]["error"]["code"], "invalid_request");
         assert_eq!(rows[2]["ok"], true);
         assert_eq!(rows[2]["request_id"], "r1");
+    }
+
+    #[test]
+    fn large_valid_request_is_parsed_without_a_line_cap() {
+        let hints: Vec<String> = (0..40)
+            .map(|index| format!("{index}-{}", "界".repeat(2000)))
+            .collect();
+        let request = json!({
+            "protocol_version":4,
+            "request_id":"big",
+            "method":"scan_sources",
+            "params":{"host":{"roots":[],"catalog":null,"signed_catalog":null,"trust_keys":null,"state_dir":null,"platform":"windows"},"name_hints":hints},
+        });
+        let bytes = serde_json::to_vec(&request).unwrap();
+        assert!(bytes.len() > 64 * 1024);
+        assert_eq!(parse_request(&bytes, true).unwrap().method, "scan_sources");
     }
 
     #[test]
@@ -682,31 +642,32 @@ mod tests {
     }
 
     #[test]
-    fn error_detail_is_optional_and_truncated_to_2kib() {
-        let plain = error(None, "unsupported_method");
+    fn error_detail_is_optional_and_not_truncated() {
+        let plain = error_with_detail(None, "unsupported_method", None);
         assert!(plain["error"].get("detail").is_none());
 
-        let long = "d".repeat(MAX_DETAIL_BYTES + 500);
+        let long = "补".repeat(5000);
         let detailed = error_with_detail(Some("r"), "boom", Some(&long));
-        let detail = detailed["error"]["detail"].as_str().unwrap();
-        assert_eq!(detail.len(), MAX_DETAIL_BYTES);
+        assert_eq!(detailed["error"]["detail"].as_str().unwrap(), long);
     }
 
     #[test]
-    fn bounded_response_accounts_for_newline_and_keeps_next_response_usable() {
-        let id = "bounded";
-        let skeleton = json!({"protocol_version":4,"request_id":id,"ok":true,"result":""});
-        let overhead = serde_json::to_vec(&skeleton).unwrap().len() + 1;
-        let mut response = skeleton;
-        response["result"] = json!("a".repeat(steam_patch_protocol::MAX_RESPONSE_BYTES - overhead));
-        let line = encoded_line(&response);
-        assert_eq!(line.len(), steam_patch_protocol::MAX_RESPONSE_BYTES);
-        response["result"] =
-            json!("a".repeat(steam_patch_protocol::MAX_RESPONSE_BYTES - overhead + 1));
-        let too_large: Value = serde_json::from_slice(&encoded_line(&response)).unwrap();
-        assert_eq!(too_large["error"]["code"], "response_too_large");
-        assert_eq!(too_large["request_id"], id);
-        let next = encoded_line(&error(Some("next"), "unknown_future_code"));
+    fn response_beyond_8mib_is_emitted_complete_and_keeps_the_channel_usable() {
+        let id = "big";
+        let payload = 9 * 1024 * 1024;
+        let mut response = json!({"protocol_version":4,"request_id":id,"ok":true,"result":""});
+        response["result"] = json!("a".repeat(payload));
+        let line = steam_patch_protocol::json_line(&response);
+        assert!(line.len() > 8 * 1024 * 1024);
+        assert!(line.ends_with(b"\n"));
+        let decoded: Value = serde_json::from_slice(&line).unwrap();
+        assert_eq!(decoded["ok"], true);
+        assert_eq!(decoded["result"].as_str().unwrap().len(), payload);
+        let next = steam_patch_protocol::json_line(&error_with_detail(
+            Some("next"),
+            "unknown_future_code",
+            None,
+        ));
         assert_eq!(
             serde_json::from_slice::<Value>(&next).unwrap()["request_id"],
             "next"
@@ -714,7 +675,7 @@ mod tests {
     }
 
     #[test]
-    fn committed_outcome_with_maximum_escaped_cleanup_diagnostics_fits() {
+    fn committed_outcome_with_maximum_escaped_cleanup_diagnostics_is_complete() {
         let mut result = steam_patch_protocol::fixtures::outcome("committed", "completed");
         result["cleanup"] = json!({"status":"partial","performed":true,"removed_bytes":0,
             "failures": vec![json!({"code":"cleanup_failed","detail":"\u{1}".repeat(2048)});512]});
@@ -725,8 +686,7 @@ mod tests {
             Some(steam_patch_protocol::Method::InstallPatch),
         )
         .unwrap();
-        let line = encoded_line(&value);
-        assert!(line.len() < steam_patch_protocol::MAX_RESPONSE_BYTES);
+        let line = steam_patch_protocol::json_line(&value);
         let decoded: Value = serde_json::from_slice(&line).unwrap();
         assert_eq!(decoded["result"]["disposition"], "completed");
         assert_eq!(

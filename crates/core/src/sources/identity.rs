@@ -950,7 +950,7 @@ pub fn validate_candidate(candidate: &SourceCandidate, rule: &SourceRule) -> Res
         &candidate.warnings,
         &candidate.version_evidence,
     ] {
-        if values.len() > 64 || values.iter().any(|value| value.chars().count() > 1024) {
+        if values.iter().any(|value| value.chars().count() > 1024) {
             return Err(invalid("invalid_discovery_list"));
         }
     }
@@ -958,7 +958,7 @@ pub fn validate_candidate(candidate: &SourceCandidate, rule: &SourceRule) -> Res
         .into_iter()
         .flatten()
     {
-        if values.len() > 32 || values.contains(&0) {
+        if values.contains(&0) {
             return Err(invalid("invalid_discovery_dlc"));
         }
     }
@@ -971,9 +971,6 @@ pub fn validate_candidate(candidate: &SourceCandidate, rule: &SourceRule) -> Res
         if !upstream.is_empty() {
             validate::navigation_url(upstream).map_err(|_| invalid("invalid_discovery_url"))?;
         }
-    }
-    if candidate.mirrors.len() > 64 {
-        return Err(invalid("invalid_discovery_mirrors"));
     }
     for mirror in &candidate.mirrors {
         if !matches!(mirror.format.as_str(), "zip" | "exe" | "web" | "unknown") {
@@ -1728,6 +1725,51 @@ mod tests {
             enriched[0].identity_evidence[0].page.as_deref(),
             Some("https://hgamer.tw/zh-TW/games/my-life-as-a-cult-leader")
         );
+    }
+
+    #[test]
+    fn candidates_above_former_count_caps_merge_and_validate() {
+        let rule = rule();
+        // Exceeds the removed 64-item list / 32-entry DLC / 64-mirror ceilings.
+        let mut candidate = sample(
+            'e',
+            "kagura-cn",
+            Some(1227890),
+            MatchBasis::Appid,
+            Variant::Base,
+            Vec::new(),
+        );
+        candidate.aliases = (0..70).map(|i| format!("alias {i}")).collect();
+        candidate.languages = (0..70).map(|i| format!("l{i}")).collect();
+        candidate.platforms = (0..70).map(|i| format!("p{i}")).collect();
+        candidate.warnings = (0..70).map(|i| format!("w{i}")).collect();
+        candidate.version_evidence = (0..70).map(|i| format!("v{i}")).collect();
+        candidate.requires_dlc = Some((1..=40).collect());
+        candidate.mirrors = (0..70)
+            .map(|i| mirror(&format!("https://kagurafan.com/dl/game-{i}.zip"), "zip"))
+            .collect();
+        assert!(validate_candidate(&candidate, &rule).is_ok());
+
+        // More than 64 distinct candidates merge without loss.
+        let many: Vec<SourceCandidate> = (0..70)
+            .map(|i| {
+                let mut item = sample(
+                    'f',
+                    "kagura-cn",
+                    Some(1227890),
+                    MatchBasis::Appid,
+                    Variant::Base,
+                    Vec::new(),
+                );
+                item.candidate_id = format!("candidate-{i:024x}");
+                item
+            })
+            .collect();
+        let merged = merge_candidates(&many);
+        assert_eq!(merged.len(), 70);
+        assert!(merged
+            .iter()
+            .all(|item| validate_candidate(item, &rule).is_ok()));
     }
 
     #[test]

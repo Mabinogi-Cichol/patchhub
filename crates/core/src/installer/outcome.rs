@@ -141,16 +141,6 @@ pub struct InstallerOutcome {
     pub recovery: Option<RecoveryRequirement>,
     pub cleanup: CleanupResult,
 }
-fn bounded_detail(mut detail: String) -> String {
-    if detail.len() > 2048 {
-        let mut end = 2048;
-        while !detail.is_char_boundary(end) {
-            end -= 1;
-        }
-        detail.truncate(end);
-    }
-    detail
-}
 
 impl InstallerOutcome {
     /// Route identities must be verified by the caller; durable identities take precedence.
@@ -211,13 +201,13 @@ impl InstallerOutcome {
                     None => FailureKind::DomainFailure,
                 },
                 code,
-                detail: detail.map(bounded_detail),
+                detail,
             })
         };
         let recovery = (t.state == "needs_recovery").then(|| RecoveryRequirement {
             required: true,
             code: Some("needs_recovery".into()),
-            detail: t.error.clone().map(bounded_detail),
+            detail: t.error.clone(),
         });
         Self {
             transaction_id: t.transaction_id.clone(),
@@ -234,7 +224,7 @@ impl InstallerOutcome {
             release_id: t.release_id.clone(),
             state: t.state.clone(),
             // Wire diagnostic copy; durable Transaction/ledger keep the original text.
-            error: t.error.clone().map(bounded_detail),
+            error: t.error.clone(),
             created_at: t.created_at,
             updated_at: t.updated_at,
             has_replacements: t.has_replacements,

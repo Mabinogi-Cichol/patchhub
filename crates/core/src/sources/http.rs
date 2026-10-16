@@ -1,12 +1,12 @@
-//! Bounded public-HTML fetching: a [`Fetcher`] trait with a real
+//! Public-HTML fetching: a [`Fetcher`] trait with a real
 //! [`ReqwestFetcher`] plus the [`RequestContext`] throttle / retry / redirect /
 //! cookie policy ported from `discovery.py` (P2 network foundation).
 //!
 //! This layer never downloads patches or executes page scripts: it only reads
-//! bounded public metadata, rejects unsafe hops, and decodes the body to text.
+//! public metadata, rejects unsafe hops, and decodes the body to text.
 
 use super::validate;
-use super::{invalid, Result, MAX_HTML};
+use super::{invalid, Result};
 use reqwest::blocking::Client;
 use reqwest::redirect::Policy;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -381,12 +381,10 @@ impl Fetcher for ReqwestFetcher {
         let content_encoding = header_value(&headers, "content-encoding").map(str::to_string);
         let location = header_value(&headers, "location").map(str::to_string);
 
-        // Bounded read: at most one byte past the cap so callers can detect
-        // `discovery_html_too_large` without buffering an unbounded body.
+        // Full body read: no fixed byte cap, so a large legitimate page is
+        // decoded and parsed completely instead of being rejected.
         let mut body = Vec::new();
         response
-            .by_ref()
-            .take((MAX_HTML as u64) + 1)
             .read_to_end(&mut body)
             .map_err(|_| invalid("discovery_network_error"))?;
         Ok(FetchResponse {
@@ -552,20 +550,13 @@ impl RequestContext {
         )
     }
 
-    /// Fetches and requires a 200 HTML body: enforces the 4 MiB cap and
-    /// challenge detection.
+    /// Fetches and requires a 200 HTML body: challenge detection only.
     pub fn fetch_html(&mut self, url: &str, hosts: &[String]) -> Result<String> {
         let response = self.fetch(url, hosts)?;
         if response.status != 200 {
             return Err(invalid(format!("discovery_http_{}", response.status)));
         }
-        if response.body.len() > MAX_HTML {
-            return Err(invalid("discovery_html_too_large"));
-        }
         let text = response.text();
-        if text.len() > MAX_HTML {
-            return Err(invalid("discovery_html_too_large"));
-        }
         if is_challenge(&text) {
             return Err(invalid("discovery_challenge"));
         }
@@ -1031,21 +1022,23 @@ mod tests {
     }
 
     #[test]
-    fn oversized_body_is_rejected() {
+    fn large_body_is_processed_in_full() {
+        // Raw body and its decoded text are both above the old 4 MiB cap; the
+        // full body must be read and decoded, not rejected.
+        let size = 4 * 1024 * 1024 + 4096;
+        assert!(size > 4 * 1024 * 1024);
         let fake = new_fake();
         fake.push(FetchResponse {
             status: 200,
-            body: vec![b'a'; MAX_HTML + 1],
+            body: vec![b'a'; size],
             final_url: "https://example.com/".to_string(),
             ..FetchResponse::default()
         });
         let mut ctx = context(&fake, Duration::ZERO);
-        assert_eq!(
-            ctx.fetch_html("https://example.com/", &hosts())
-                .unwrap_err()
-                .to_string(),
-            "discovery_html_too_large"
-        );
+        let text = ctx.fetch_html("https://example.com/", &hosts()).unwrap();
+        assert_eq!(text.len(), size);
+        assert!(text.len() > 4 * 1024 * 1024);
+        assert!(text.bytes().all(|byte| byte == b'a'));
     }
 
     #[test]

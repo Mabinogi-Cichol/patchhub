@@ -11,7 +11,6 @@ const protocol = await load("../packages/contracts/generated/protocol.ts");
 const cases = JSON.parse(await readFile(new URL("../packages/contracts/fixtures/v4/cases.json", import.meta.url), "utf8"));
 const success = method => cases.responses.find(c => c.name === `${method}-success`).response.result;
 assert.deepEqual(success("get_capabilities").methods, [...protocol.METHODS]);
-for (const c of cases.details) assert.equal(protocol.truncateDetail(c.input), c.expected, c.name);
 for (const id of ["", "a".repeat(129), "\u0001", "界".repeat(43)]) assert.equal(protocol.validId(id, protocol.MAX_REQUEST_ID_BYTES), false);
 assert.equal(protocol.validId("界".repeat(42), protocol.MAX_REQUEST_ID_BYTES), true);
 assert.equal(ui.reason("unknown_future_code"), "unknown_future_code");

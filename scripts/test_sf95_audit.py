@@ -28,15 +28,17 @@ def compressed(data, declared=None):
         data, format=lzma.FORMAT_RAW, filters=[{"id": lzma.FILTER_LZMA2, "dict_size": dictionary}])
 
 
-def file_record(name="测试.txt", directory="%AppFolder%\\www", content=b"test-data", condition="", package=None, installer_version="9.5"):
+def file_record(name="测试.txt", directory="%AppFolder%\\www", content=b"test-data", condition="", package=None,
+                installer_version="9.5", packages=None):
     payload = compressed(content)
     data = b"".join(string(s) for s in ("C:\\source\\" + name, name, "C:\\source", ".txt", "Archive", ""))
     data += bytes(2) + number("q", len(content)) + bytes(5) + bytes(8) + bytes(16) + bytes(8) + bytes(25)
     data += string(directory) + bytes(11) + string("") * 5 + bytes(1) + string("") + bytes(8) + string("")
     data += bytes(4 if installer_version == "9.7" else 3) + b"\x01\x01\0" + bytes(10) + number("H", 0) + string(condition) + bytes(2)
-    data += string("") * 2 + number("H", 1 if package else 0)
-    if package:
-        data += string(package)
+    names = packages if packages is not None else ([package] if package else [])
+    data += string("") * 2 + number("H", len(names))
+    for value in names:
+        data += string(value)
     data += string("") + number("q", len(payload)) + number("I", zlib.crc32(content)) + bytes(8)
     return data, payload
 
@@ -56,10 +58,7 @@ def overlay(records):
     return result + b"".join(r[1] for r in records)
 
 
-def sample(records=None, version="9.5.1.0", certificate=False, xml=None):
-    manifest = xml or (f'<assembly><assemblyIdentity version="{version}"/>'
-                       '<description>Setup Factory Run-time</description>'
-                       '<dependency><assemblyIdentity version="6.0.0.0"/></dependency></assembly>').encode()
+def manifest_resource(manifest):
     resource = bytearray(1024)
     # Three directories: RT_MANIFEST -> resource ID -> language -> data entry.
     for offset, identifier, child in ((0, 24, 0x80000020), (32, 1, 0x80000040), (64, 1033, 96)):
@@ -67,6 +66,10 @@ def sample(records=None, version="9.5.1.0", certificate=False, xml=None):
         struct.pack_into("<II", resource, offset + 16, identifier, child)
     struct.pack_into("<IIII", resource, 96, 0x1000 + 128, len(manifest), 0, 0)
     resource[128:128 + len(manifest)] = manifest
+    return resource
+
+
+def container(records, resource, certificate=False):
     headers = bytearray(512)
     headers[:2] = b"MZ"
     struct.pack_into("<I", headers, 60, 64)
@@ -76,14 +79,21 @@ def sample(records=None, version="9.5.1.0", certificate=False, xml=None):
     struct.pack_into("<H", headers, 88, 0x10b)
     struct.pack_into("<I", headers, 88 + 60, 512)
     struct.pack_into("<I", headers, 88 + 92, 16)
-    struct.pack_into("<II", headers, 88 + 112, 0x1000, 1024)
-    struct.pack_into("<IIII", headers, 88 + 224 + 8, 1024, 0x1000, 1024, 512)
-    result = bytes(headers) + bytes(resource) + overlay(records or [file_record()])
+    struct.pack_into("<II", headers, 88 + 112, 0x1000, len(resource))
+    struct.pack_into("<IIII", headers, 88 + 224 + 8, len(resource), 0x1000, len(resource), 512)
+    result = bytes(headers) + bytes(resource) + overlay(records)
     if certificate:
         result += bytes((-len(result)) % 8)
         struct.pack_into("<II", headers, 88 + 128, len(result), 16)
         result = bytes(headers) + result[512:] + number("I", 12) + number("H", 0x200) + number("H", 2) + b"cert" + bytes(4)
     return result
+
+
+def sample(records=None, version="9.5.1.0", certificate=False, xml=None):
+    manifest = xml or (f'<assembly><assemblyIdentity version="{version}"/>'
+                       '<description>Setup Factory Run-time</description>'
+                       '<dependency><assemblyIdentity version="6.0.0.0"/></dependency></assembly>').encode()
+    return container(records or [file_record()], manifest_resource(manifest), certificate)
 
 
 class AuditTests(unittest.TestCase):
@@ -235,8 +245,14 @@ class AuditTests(unittest.TestCase):
     def test_metadata_file_count_and_resource_budgets(self):
         table = bytearray(metadata([file_record()]))
         offset = table.find(b"CSetupFileData") - 8
-        struct.pack_into("<H", table, offset, sf.MAX_ENTRIES + 1)
-        self.rejects("file_count_limit", sf.file_table, table)
+        # The count is a u16; a longer declaration is bounded by the actual
+        # serialized record bytes rather than by an implementation threshold.
+        struct.pack_into("<H", table, offset, 8193)
+        self.rejects("truncated_record", sf.file_table, table)
+        # An empty table stays a genuine "no entries" rejection.
+        empty = bytearray(metadata([file_record()]))
+        struct.pack_into("<H", empty, offset, 0)
+        self.rejects("file_count_limit", sf.file_table, empty)
         payload = compressed(b"x" * 4096)
         with patch.object(sf, "MAX_FILE", 1024):
             self.rejects("expanded_size_limit", sf.Decoder().decode, sf.Reader(payload), len(payload))
@@ -245,6 +261,50 @@ class AuditTests(unittest.TestCase):
         worker = sf.Decoder()
         worker.deadline = 0
         self.rejects("audit_timeout", worker.decode, sf.Reader(payload), len(payload))
+
+    def test_declared_counts_beyond_256_are_read_in_full(self):
+        names = ["pkg%d" % index for index in range(300)]
+        rows, _ = sf.file_table(metadata([file_record(packages=names)]))
+        self.assertEqual(rows[0]["packages"], names)
+        # A declared count without enough serialized references is still truncation.
+        record, _ = file_record(packages=names)
+        block = sum(1 + len(value.encode()) for value in names)
+        tail = 1 + 8 + 4 + 8  # notes, packed size, crc32, inter-record framing
+        truncated = record[:len(record) - tail - block + 3]
+        self.rejects("truncated_record", sf.file_table, metadata([(truncated, b"")]))
+
+    def test_resource_directory_beyond_256_entries_still_finds_manifest(self):
+        manifest = (b'<assembly><assemblyIdentity version="9.5.1.0"/>'
+                    b'<description>Setup Factory Run-time</description></assembly>')
+        for entries in (257, 300):
+            with self.subTest(entries=entries):
+                report = sf.audit(container([file_record()], self.wide_resource(manifest, entries)))
+                self.assertEqual(report["manifest"]["version"], "9.5.1.0")
+        # The declared directory count is still bounded by the actual resource area.
+        resource = self.wide_resource(manifest, 257)
+        struct.pack_into("<H", resource, 14, 0xffff)
+        self.rejects("truncated_record", sf.audit, container([file_record()], resource))
+
+    @staticmethod
+    def wide_resource(manifest, entries):
+        name_dir = 16 + entries * 8
+        language_dir, leaf = name_dir + 24, name_dir + 48
+        manifest_at = leaf + 16
+        resource = bytearray(manifest_at + len(manifest))
+        struct.pack_into("<H", resource, 14, entries)
+        for index in range(entries):
+            at = 16 + index * 8
+            if index + 1 == entries:
+                struct.pack_into("<II", resource, at, 24, 0x80000000 | name_dir)
+            else:
+                struct.pack_into("<I", resource, at, 1000 + index)
+        struct.pack_into("<H", resource, name_dir + 14, 1)
+        struct.pack_into("<II", resource, name_dir + 16, 1, 0x80000000 | language_dir)
+        struct.pack_into("<H", resource, language_dir + 14, 1)
+        struct.pack_into("<II", resource, language_dir + 16, 1033, leaf)
+        struct.pack_into("<II", resource, leaf, 0x1000 + manifest_at, len(manifest))
+        resource[manifest_at:manifest_at + len(manifest)] = manifest
+        return resource
 
     def test_cli_isolated_no_side_effects_and_structured_failure(self):
         with tempfile.TemporaryDirectory() as temp:

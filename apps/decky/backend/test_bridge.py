@@ -7,8 +7,8 @@ from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import AsyncMock, patch
-from bridge import CoreBridge, CoreError, METHODS, MAX_RESPONSE_BYTES, _unique_object
-from protocol_validation import validate_response, validate_event, validate_request, validate_id, truncate_detail
+from bridge import CoreBridge, CoreError, METHODS, _unique_object
+from protocol_validation import validate_response, validate_event, validate_request, validate_id
 from protocol_test_support import CASES, response, event, outcome
 
 class _FakeProcess:
@@ -82,7 +82,7 @@ class GeneratedContractTests(unittest.TestCase):
                 else:
                     validate_event(case["event"], "fixture")
 
-    def test_shared_sequence_raw_json_and_detail_cases(self):
+    def test_shared_sequence_and_raw_json_cases(self):
         for case in CASES["sequences"]:
             last = -1
             decisions = []
@@ -102,17 +102,12 @@ class GeneratedContractTests(unittest.TestCase):
             payload = case["json"].encode("utf-8") if "json" in case else bytes.fromhex(case["hex"])
             with self.assertRaises((ValueError, UnicodeDecodeError), msg=case["name"]):
                 json.loads(payload, object_pairs_hook=_unique_object)
-        for case in CASES.get("details", []):
-            self.assertEqual(truncate_detail(case["input"]), case["expected"])
 
-    def test_utf8_id_controls_and_detail_boundaries(self):
+    def test_utf8_id_controls(self):
         self.assertEqual(validate_id("界" * 42, 128), "界" * 42)
         for value in ("界" * 43, "a\u0085", "a\x7f", "a\x00", "\ud800"):
             with self.assertRaises(ValueError):
                 validate_id(value, 128)
-        bounded = truncate_detail("界" * 1000)
-        self.assertEqual(len(bounded.encode("utf-8")), 2046)
-        self.assertFalse(bounded.endswith("…"))
 
 
 class BridgeStreamTests(unittest.IsolatedAsyncioTestCase):
@@ -180,7 +175,7 @@ class BridgeStreamTests(unittest.IsolatedAsyncioTestCase):
                 self.returncode = None
                 self.stdout = self
                 self.stdin = self
-                self.reader = asyncio.StreamReader(limit=MAX_RESPONSE_BYTES + 1)
+                self.reader = asyncio.StreamReader()
                 self.read_sizes = []
                 self.readline_calls = 0
                 self.messages = []
@@ -206,7 +201,7 @@ class BridgeStreamTests(unittest.IsolatedAsyncioTestCase):
                 self.drained += len(chunk)
                 return chunk
             async def wait(self): self.returncode = 0
-        tails = [b"{malformed JSON\n", b"\xff\n", b"x" * (MAX_RESPONSE_BYTES + 17) + b"\n",
+        tails = [b"{malformed JSON\n", b"\xff\n", b"x" * (1 << 20) + b"\n",
                  lambda rid: json.dumps(response("install_patch", rid, outcome("rolled_back", "task_cancelled"))).encode("utf-8") + b"\n"]
         for tail in tails:
             peer = Process(tail)
@@ -268,43 +263,47 @@ class BridgeStreamTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaisesRegex(RuntimeError, "contract_mismatch"):
                 await self.bridge.scan()
 
-    async def test_request_boundary_counts_lf_and_refuses_plus_one_before_spawn(self):
-        from bridge import MAX_REQUEST_BYTES
+    async def test_large_request_is_sent_without_a_fixed_line_limit(self):
         self.bridge._preflight_done = True
         rule = copy.deepcopy(next(case["request"]["params"]["rule"] for case in CASES["requests"] if case["name"] == "add_source-request"))
-        host = {"roots": [], "catalog": str(self.bridge.catalog), "signed_catalog": None,
-                "trust_keys": None, "state_dir": str(self.bridge.state_dir), "platform": "steamos"}
-        request = {"protocol_version": 4, "request_id": "boundary", "method": "add_source", "params": {"host": host, "rule": rule}}
-        size = len(json.dumps(request, ensure_ascii=False).encode("utf-8")) + 1
-        rule["name"] += "x" * (MAX_REQUEST_BYTES - size)
+        rule["name"] += "x" * (128 * 1024)
         peer = _FakeProcess(lambda rid, req: ([], response("add_source", rid)))
         with patch("bridge.asyncio.create_subprocess_exec", return_value=peer):
-            await self.bridge._call("add_source", {"rule": rule}, request_id="boundary")
-        self.assertEqual(len(peer.payload), MAX_REQUEST_BYTES)
-        rule["name"] += "x"
-        with patch("bridge.asyncio.create_subprocess_exec", new_callable=AsyncMock) as spawn:
-            with self.assertRaisesRegex(ValueError, "request_too_large"):
-                await self.bridge._call("add_source", {"rule": rule}, request_id="boundary")
-            spawn.assert_not_called()
+            await self.bridge._call("add_source", {"rule": rule}, request_id="large")
+        sent = json.loads(peer.payload.split(b"\n", 1)[0])
+        self.assertEqual(sent["params"]["rule"]["name"], rule["name"])
+        self.assertGreater(len(peer.payload), 128 * 1024)
 
-    async def test_real_streamreader_boundaries_include_lf_and_recover_next_call(self):
-        class Process(_FakeProcess):
+    async def test_large_response_line_is_read_fully_then_next_call_recovers(self):
+        line_size = 9 * 1024 * 1024
+        class Process:
+            """StreamReader built with the exact limit the bridge requested."""
+            def __init__(self, limit):
+                self.returncode = None
+                self.stdin = self
+                self.closed = False
+                self.payload = b""
+                self.stdout = asyncio.StreamReader(limit=limit)
+            def write(self, data):
+                self.payload += data
+                request = json.loads(data.split(b"\n", 1)[0])
+                encoded = json.dumps(response("scan", request["request_id"])).encode("utf-8")
+                self.stdout.feed_data(encoded + b" " * (line_size - len(encoded)) + b"\n")
+                self.stdout.feed_eof()
+            async def drain(self): pass
+            def close(self): self.closed = True
             def kill(self): self.returncode = 0
-            async def readline(self):
-                if not hasattr(self, "reader"):
-                    self.reader = asyncio.StreamReader(limit=MAX_RESPONSE_BYTES + 1)
-                    request = json.loads(self.payload.split(b"\n", 1)[0])
-                    row = {"protocol_version": 4, "request_id": request["request_id"], "ok": False,
-                           "error": {"code": "test_error", "detail": None}}
-                    encoded = json.dumps(row).encode()
-                    self.reader.feed_data(encoded + b" " * (self.line_size - len(encoded) - 1) + b"\n")
-                    self.reader.feed_eof()
-                return await self.reader.readline()
-        for length, expected in ((MAX_RESPONSE_BYTES, "test_error"), (MAX_RESPONSE_BYTES + 1, "response_too_large"), (MAX_RESPONSE_BYTES + 2, "response_too_large")):
-            peer = Process(None); peer.line_size = length
-            with patch("bridge.asyncio.create_subprocess_exec", return_value=peer):
-                with self.assertRaisesRegex(RuntimeError, expected):
-                    await self.bridge.scan()
+            async def wait(self): self.returncode = 0
+            async def read(self, size=65536): return await self.stdout.read(size)
+            async def readline(self): return await self.stdout.readline()
+        captured = {}
+        def spawn(*args, **kwargs):
+            captured.update(kwargs)
+            return Process(kwargs.get("limit", 2 ** 16))
+        with patch("bridge.asyncio.create_subprocess_exec", side_effect=spawn):
+            result = await self.bridge.scan()
+        self.assertEqual(captured["limit"], float("inf"))
+        self.assertEqual(result["installs"], response("scan")["result"]["installs"])
         with patch("bridge.asyncio.create_subprocess_exec", return_value=_FakeProcess(lambda rid, req: ([], response("scan", rid)))):
             self.assertIsInstance((await self.bridge.scan())["installs"], list)
 

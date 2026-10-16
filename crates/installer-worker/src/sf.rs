@@ -68,10 +68,7 @@ impl Descriptor {
         } = self
         {
             require(
-                is_sha(metadata_sha256)
-                    && is_sha(behavior_sha256)
-                    && !payload.is_empty()
-                    && payload.len() <= audit::MAX_ENTRIES,
+                is_sha(metadata_sha256) && is_sha(behavior_sha256) && !payload.is_empty(),
                 "invalid_descriptor",
             )?;
             // Validate every declared member and keep the running total

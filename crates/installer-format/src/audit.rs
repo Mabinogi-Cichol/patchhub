@@ -18,7 +18,6 @@ pub const SIGNATURE: [u8; 16] = [
     0xe0, 0xe0, 0xe1, 0xe1, 0xe2, 0xe2, 0xe3, 0xe3, 0xe4, 0xe4, 0xe5, 0xe5, 0xe6, 0xe6, 0xe7, 0xe7,
 ];
 pub const MAX_METADATA: usize = 16 * 1024 * 1024;
-pub const MAX_ENTRIES: usize = u16::MAX as usize;
 pub const MAX_DICTIONARY: u64 = 128 * 1024 * 1024;
 const CHUNK: usize = 64 * 1024;
 const MAX_MANIFEST_DEPTH: usize = 96;
@@ -225,7 +224,7 @@ pub fn file_table(metadata: &[u8], version: &str) -> Result<(Vec<Value>, Value)>
     let start = found[0] - 8;
     let mut r = Reader::at(metadata, start, metadata.len())?;
     let count = r.u16()? as usize;
-    require(count > 0 && count <= MAX_ENTRIES, "file_count_limit")?;
+    require(count > 0, "file_count_limit")?;
     require(
         r.read(4)? == [0xff, 0xff, 1, 0] && r.u16()? == 14,
         "unsupported_file_table",
@@ -271,7 +270,6 @@ pub fn file_table(metadata: &[u8], version: &str) -> Result<(Vec<Value>, Value)>
         let install_type = r.string()?;
         let extra = r.string()?;
         let packages_count = r.u16()? as usize;
-        require(packages_count <= 256, "package_count_limit")?;
         let packages = (0..packages_count)
             .map(|_| r.string())
             .collect::<Result<Vec<_>>>()?;
@@ -320,7 +318,6 @@ fn resource_directory(
     let mut r = Reader::at(data, resource + relative as usize, resource + size)?;
     r.read(12)?;
     let count = r.u16()? as usize + r.u16()? as usize;
-    require(count <= 256, "resource_entry_limit")?;
     (0..count).map(|_| Ok((r.u32()?, r.u32()?))).collect()
 }
 fn xml_char(c: char) -> bool {

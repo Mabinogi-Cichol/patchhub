@@ -35,17 +35,9 @@ impl DomainError {
         }
     }
     pub fn new(code: impl Into<String>, detail: impl Into<String>) -> Self {
-        let mut detail = detail.into();
-        if detail.len() > 2048 {
-            let mut end = 2048;
-            while !detail.is_char_boundary(end) {
-                end -= 1;
-            }
-            detail.truncate(end);
-        }
         Self {
             code: code.into(),
-            detail: Some(detail),
+            detail: Some(detail.into()),
         }
     }
 }
@@ -71,11 +63,6 @@ impl From<std::io::Error> for DomainError {
             Self::new("projection_read_failed", text)
         }
     }
-}
-fn bounded_message(message: impl Into<String>) -> String {
-    DomainError::new("diagnostic", message)
-        .detail
-        .unwrap_or_default()
 }
 #[derive(Debug, Clone, Serialize, ts_rs::TS, schemars::JsonSchema, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -272,7 +259,7 @@ fn diagnostics(inputs: &ProjectionInputs<'_>) -> Vec<ProjectionDiagnostic> {
         .map(|d| ProjectionDiagnostic {
             code: d.code.clone(),
             path: Some(d.path.clone()),
-            message: bounded_message(d.message.clone()),
+            message: d.message.clone(),
             instance_id: None,
         })
         .collect();
@@ -284,7 +271,7 @@ fn diagnostics(inputs: &ProjectionInputs<'_>) -> Vec<ProjectionDiagnostic> {
             .map(|d| ProjectionDiagnostic {
                 code: d.code.clone(),
                 path: Some(d.path.clone()),
-                message: bounded_message(d.message.clone()),
+                message: d.message.clone(),
                 instance_id: None,
             }),
     );
@@ -292,7 +279,7 @@ fn diagnostics(inputs: &ProjectionInputs<'_>) -> Vec<ProjectionDiagnostic> {
         diagnostics.extend(snapshot.diagnostics().iter().map(|d| ProjectionDiagnostic {
             code: d.code.clone(),
             path: None,
-            message: bounded_message(d.detail.clone().unwrap_or_default()),
+            message: d.detail.clone().unwrap_or_default(),
             instance_id: None,
         }));
     }
@@ -308,7 +295,7 @@ fn evidence_diagnostics(
             file.diagnostic.map(|d| ProjectionDiagnostic {
                 code: d.code,
                 path: Some(PathBuf::from(file.path)),
-                message: bounded_message(d.detail.unwrap_or_default()),
+                message: d.detail.unwrap_or_default(),
                 instance_id: Some(game.instance_id.clone()),
             })
         })
@@ -1013,7 +1000,7 @@ pub fn preview(
                                     Err(error) => report.diagnostics.push(ProjectionDiagnostic {
                                         code: "committed_plan_unsafe".into(),
                                         path: Some(PathBuf::from(&change.path)),
-                                        message: bounded_message(error.to_string()),
+                                        message: error.to_string(),
                                         instance_id: Some(game.instance_id.clone()),
                                     }),
                                 }

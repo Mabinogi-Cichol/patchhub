@@ -262,10 +262,8 @@ pub fn cases() -> Value {
     ] {
         responses.push(json!({"name":format!("outcome-{state}-{disposition}"),"method":"install_patch","response":{"protocol_version":4,"request_id":"fixture","ok":true,"result":outcome(state,disposition)}}));
     }
-    let mut v = json!({"protocol_version":4,"request_id":"fixture","ok":false,"error":{"code":"io_error","detail":"界".repeat(683)}});
-    responses.push(json!({"name":"detail-over-limit","method":"scan","response":v,"error":"invalid_core_response"}));
-    v = json!({"protocol_version":4,"request_id":"fixture","ok":false,"error":{"code":"io_error","detail":"界".repeat(682)+"ab"}});
-    responses.push(json!({"name":"detail-exact-limit","method":"scan","response":v}));
+    let v = json!({"protocol_version":4,"request_id":"fixture","ok":false,"error":{"code":"io_error","detail":"界".repeat(683)}});
+    responses.push(json!({"name":"detail-beyond-2048-bytes","method":"scan","response":v}));
     for version in [1, 2, 5, 999] {
         let mut r = request(Method::Scan);
         r["protocol_version"] = json!(version);
@@ -431,23 +429,8 @@ pub fn cases() -> Value {
     let mut v = success_result(Method::Preview);
     v["executable"] = json!(true);
     responses.push(json!({"name":"preview-never-executable","method":"preview","response":{"protocol_version":4,"request_id":"fixture","ok":true,"result":v},"error":"invalid_core_response"}));
-    for (name, error, expected) in [
-        (
-            "outcome-error-exact-2048",
-            json!("界".repeat(682) + "ab"),
-            None,
-        ),
-        (
-            "outcome-error-over-2048",
-            json!("界".repeat(683)),
-            Some("invalid_core_response"),
-        ),
-        ("outcome-error-null", serde_json::Value::Null, None),
-    ] {
-        let mut result = outcome("rolled_back", "failed");
-        result["error"] = error;
-        responses.push(json!({"name":name,"method":"install_patch","response":{"protocol_version":4,"request_id":"fixture","ok":true,"result":result},"error":expected}));
-    }
+    let result = outcome("rolled_back", "failed");
+    responses.push(json!({"name":"outcome-error-null","method":"install_patch","response":{"protocol_version":4,"request_id":"fixture","ok":true,"result":result}}));
     let mut history = transaction("rolled_back");
     history["error"] = json!(format!("journal_error:{}", "界".repeat(1000)));
     responses.push(json!({"name":"history-error-preserved-over-2048","method":"list_transactions","response":{"protocol_version":4,"request_id":"fixture","ok":true,"result":[history]}}));
@@ -511,5 +494,5 @@ pub fn cases() -> Value {
     e1["sequence"] = json!(1);
     let mut e2 = install_event();
     e2["sequence"] = json!(2);
-    json!({"early_errors":early_errors,"raw_requests":[{"name":"duplicate-key","json":"{\"protocol_version\":4,\"protocol_version\":3}","error":"invalid_request"},{"name":"invalid-utf8","hex":"ff","error":"invalid_request"}],"requests":requests,"responses":responses,"events":events,"sequences":[{"name":"shared-monotonic","events":[install_event(),e1.clone(),install_event(),e2],"expected":["accept","accept","drop","accept"]},{"name":"illegal-first","events":[e1],"expected":["error"]},{"name":"after-terminal","events":[install_event(),install_event()],"terminal_after":1,"expected":["accept","drop"]}],"boundaries":[{"name":"request-exact","kind":"request","bytes":MAX_REQUEST_BYTES,"accepted":true},{"name":"request-plus-one","kind":"request","bytes":MAX_REQUEST_BYTES+1,"accepted":false},{"name":"response-exact","kind":"response","bytes":MAX_RESPONSE_BYTES,"accepted":true},{"name":"response-plus-one","kind":"response","bytes":MAX_RESPONSE_BYTES+1,"accepted":false}],"details":[{"input":"界".repeat(683),"expected":"界".repeat(682)}]})
+    json!({"early_errors":early_errors,"raw_requests":[{"name":"duplicate-key","json":"{\"protocol_version\":4,\"protocol_version\":3}","error":"invalid_request"},{"name":"invalid-utf8","hex":"ff","error":"invalid_request"}],"requests":requests,"responses":responses,"events":events,"sequences":[{"name":"shared-monotonic","events":[install_event(),e1.clone(),install_event(),e2],"expected":["accept","accept","drop","accept"]},{"name":"illegal-first","events":[e1],"expected":["error"]},{"name":"after-terminal","events":[install_event(),install_event()],"terminal_after":1,"expected":["accept","drop"]}]})
 }

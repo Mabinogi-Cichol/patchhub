@@ -166,7 +166,7 @@ class V4BridgeTests(unittest.IsolatedAsyncioTestCase):
                 peer = TailPeer(mode)
                 pending_call = None
                 try:
-                    with patch("bridge.asyncio.create_subprocess_exec", return_value=peer), patch("bridge.TERMINAL_DRAIN_SECONDS", .02), patch("bridge.TERMINAL_DRAIN_BYTES", 1024):
+                    with patch("bridge.asyncio.create_subprocess_exec", return_value=peer), patch("bridge.TERMINAL_DRAIN_SECONDS", .2), patch("bridge.TERMINAL_DRAIN_BYTES", 1024):
                         with self.assertLogs("bridge", level="WARNING") as captured:
                             pending_call = asyncio.create_task(self.bridge.install_patch("local", "signed", operation="overwrite"))
                             completed, _ = await asyncio.wait({pending_call}, timeout=.5)
@@ -233,34 +233,60 @@ class V4BridgeTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(bridge.process_identity, {"user": 1000, "group": 1000, "extra_groups": []})
             self.assertEqual(bridge.worker, bridge.binary.with_name("sf-worker"))
 
-    async def test_oversized_scan_is_explicit_and_a_later_call_still_succeeds(self):
-        from bridge import MAX_RESPONSE_BYTES
+    async def test_large_valid_scan_result_succeeds_and_a_later_call_still_works(self):
         class Process(_FakeProcess):
             def kill(self):
                 self.returncode = 0
         def oversized(request_id, request):
-            return [], {"protocol_version": 4, "request_id": request_id, "ok": True,
-                        "result": {"installs": [], "detail": "x" * MAX_RESPONSE_BYTES}}
+            result = response("scan")["result"]
+            result["diagnostics"] = [{"code": "note", "message": "x" * (9 * 1024 * 1024)}]
+            return [], {"protocol_version": 4, "request_id": request_id, "ok": True, "result": result}
         with patch("bridge.asyncio.create_subprocess_exec", return_value=Process(oversized)):
-            with self.assertRaisesRegex(RuntimeError, "response_too_large"):
-                await self.bridge.scan()
+            result = await self.bridge.scan()
+        self.assertEqual(result["diagnostics"][0]["message"], "x" * (9 * 1024 * 1024))
         def normal(request_id, request):
             return [], {"protocol_version": 4, "request_id": request_id, "ok": True,
                         "result": response("scan")["result"]}
         with patch("bridge.asyncio.create_subprocess_exec", return_value=Process(normal)):
             self.assertEqual((await self.bridge.scan())["installs"], response("scan")["result"]["installs"])
 
-    async def test_real_streamreader_limit_uses_response_too_large_code(self):
-        from bridge import MAX_RESPONSE_BYTES
+    async def test_real_streamreader_reads_a_large_response_line(self):
+        line_size = 9 * 1024 * 1024
         class Process(_FakeProcess):
+            def __init__(self, limit):
+                super().__init__(None)
+                self._limit = limit
             def kill(self):
                 self.returncode = 0
             async def readline(self):
                 if not hasattr(self, "reader"):
-                    self.reader = asyncio.StreamReader(limit=MAX_RESPONSE_BYTES + 1)
-                    self.reader.feed_data(b"x" * (MAX_RESPONSE_BYTES + 2) + b"\n")
+                    self.reader = asyncio.StreamReader(limit=self._limit)
+                    request = json.loads(self.payload.split(b"\n", 1)[0])
+                    encoded = json.dumps(response("scan", request["request_id"])).encode("utf-8")
+                    self.reader.feed_data(encoded + b" " * (line_size - len(encoded)) + b"\n")
                     self.reader.feed_eof()
                 return await self.reader.readline()
-        with patch("bridge.asyncio.create_subprocess_exec", return_value=Process(None)):
-            with self.assertRaisesRegex(RuntimeError, "response_too_large"):
-                await self.bridge.scan()
+        captured = {}
+        def spawn(*args, **kwargs):
+            captured.update(kwargs)
+            return Process(kwargs.get("limit", 2 ** 16))
+        with patch("bridge.asyncio.create_subprocess_exec", side_effect=spawn):
+            result = await self.bridge.scan()
+        self.assertEqual(captured["limit"], float("inf"))
+        self.assertEqual(result["installs"], response("scan")["result"]["installs"])
+
+    def test_bridge_has_no_total_call_timeout(self):
+        with self.assertRaises(TypeError):
+            CoreBridge(self.bridge.binary, self.bridge.catalog, timeout=1)
+        self.assertFalse(hasattr(self.bridge, "timeout"))
+
+    async def test_progressing_call_is_not_interrupted_by_a_total_duration(self):
+        peer = Peer()
+        with patch("bridge.asyncio.create_subprocess_exec", return_value=peer):
+            pending = asyncio.create_task(self.bridge.install_patch("local", release_id="signed", operation="overwrite"))
+            while peer.request is None:
+                await asyncio.sleep(0)
+            done, _ = await asyncio.wait({pending}, timeout=.3)
+            self.assertEqual(done, set())
+            peer.finish({"state": "committed"})
+            self.assertEqual((await pending)["state"], "committed")

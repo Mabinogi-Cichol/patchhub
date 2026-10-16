@@ -356,9 +356,11 @@ fn verify_paths(held: &[HeldPath]) -> io::Result<()> {
     }
     Ok(())
 }
-/// Bounded immutable source JSON read using the same nofollow/identity guard
-/// as game evidence. Captured bytes never cross a linked ancestor boundary.
-pub(crate) fn read_bounded(path: &Path, max: u64) -> io::Result<Option<Vec<u8>>> {
+/// Immutable source JSON read using the same nofollow/identity guard as game
+/// evidence. The file is read to its pre-read size plus one sentinel byte, so a
+/// file that grows during the read is rejected as `evidence_changed`; captured
+/// bytes never cross a linked ancestor boundary.
+pub(crate) fn read_bounded(path: &Path) -> io::Result<Option<Vec<u8>>> {
     let path = std::path::absolute(path)?;
     let mut held = Vec::new();
     let index = walk(&path, false, true, &mut held)?;
@@ -367,9 +369,6 @@ pub(crate) fn read_bounded(path: &Path, max: u64) -> io::Result<Option<Vec<u8>>>
         return Ok(None);
     };
     let before = snapshot(&held[index].file)?;
-    if before.size > max {
-        return Err(fail("evidence_size_limit"));
-    }
     let mut bytes = Vec::new();
     (&held[index].file)
         .take(before.size.saturating_add(1))

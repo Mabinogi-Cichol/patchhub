@@ -22,8 +22,6 @@ CONTROLLED_METHODS = frozenset(generated.CONTROLLED_METHODS)
 SOURCE_EVENTS = frozenset(generated.SOURCE_EVENTS)
 INSTALL_STAGES = frozenset(generated.INSTALL_STAGES)
 MAX_INSTANCE_ID_BYTES = generated.MAX_INSTANCE_ID_BYTES
-MAX_REQUEST_BYTES = generated.MAX_REQUEST_BYTES
-MAX_RESPONSE_BYTES = generated.MAX_RESPONSE_BYTES
 SCHEMA = generated.SCHEMA
 JS_MAX_INTEGER = generated.MAX_SAFE_INTEGER
 
@@ -38,10 +36,6 @@ def validate_id(value, limit=generated.MAX_ID_BYTES, code="invalid_id"):
     except UnicodeEncodeError as exc:
         raise ValueError(code) from exc
     return value
-
-
-def truncate_detail(value):
-    return value.encode("utf-8")[:generated.MAX_DETAIL_BYTES].decode("utf-8", errors="ignore")
 
 
 def _valid(value, rule):
@@ -133,9 +127,6 @@ def _bytes_valid(value):
                 try:
                     validate_id(item, generated.MAX_REQUEST_ID_BYTES if key == "request_id" else generated.MAX_INSTANCE_ID_BYTES if key == "instance_id" else generated.MAX_ID_BYTES)
                 except ValueError:
-                    return False
-            if key == "detail" and item is not None:
-                if not isinstance(item, str) or len(item.encode("utf-8")) > generated.MAX_DETAIL_BYTES:
                     return False
             if key == "code" and item is not None and (not isinstance(item, str) or not re.fullmatch(r"[a-z0-9_]{1,128}", item)):
                 return False

@@ -11,8 +11,8 @@ use super::model::*;
 use super::store::SourceStore;
 use super::validate;
 use super::{
-    invalid, Clock, Result, SystemClock, BUILTIN_ADAPTERS, MAX_DISCOVERY_OUTPUT, MAX_SOURCES,
-    PARSER_VERSION, QUERY_VERSION, SOURCES_ENCODING_VERSION,
+    invalid, Clock, Result, SystemClock, BUILTIN_ADAPTERS, PARSER_VERSION, QUERY_VERSION,
+    SOURCES_ENCODING_VERSION,
 };
 use std::collections::{BTreeMap, HashSet};
 use std::sync::atomic::AtomicBool;
@@ -182,9 +182,9 @@ impl SourceRegistry {
     }
 
     /// Port of `_reload` merge (design §2.2): user `added` shadows builtins with
-    /// the same id, the `enabled` overlay is applied, and the result is capped.
+    /// the same id and the `enabled` overlay is applied.
     fn reload(&mut self) -> Result<()> {
-        let settings = self.store.settings();
+        let settings = self.store.settings()?;
         self.revision = settings.revision;
         let overrides = Overrides {
             enabled: settings.enabled.clone(),
@@ -205,9 +205,6 @@ impl SourceRegistry {
             .cloned()
             .collect();
         rules.extend(overrides.added.iter().cloned());
-        if rules.len() > MAX_SOURCES {
-            return Err(invalid("invalid_source_overrides"));
-        }
         let mut seen = HashSet::new();
         for rule in &rules {
             if !seen.insert(rule.id.clone()) {
@@ -563,9 +560,6 @@ impl SourceRegistry {
         if self.rules.iter().any(|existing| existing.id == rule.id) {
             return Err(invalid("source_exists_or_adapter_unavailable"));
         }
-        if self.rules.len() >= MAX_SOURCES {
-            return Err(invalid("source_limit"));
-        }
         let mut overrides = self.overrides.clone();
         overrides.added.push(rule.clone());
         self.store.apply_overrides(&overrides)?;
@@ -587,13 +581,6 @@ impl SourceRegistry {
             .entry(appid.to_string())
             .or_default()
             .insert(source_id.to_string(), subscribed);
-        if serde_json::to_vec(&overrides)
-            .map_err(|error| invalid(error.to_string()))?
-            .len()
-            > 256 * 1024
-        {
-            return Err(invalid("source_limit"));
-        }
         self.store.apply_overrides(&overrides)?;
         self.store.bump_revision()?;
         self.reload()
@@ -778,7 +765,7 @@ impl SourceRegistry {
 
     /// Port of the layered commit (design §4.4). Only a complete success replaces
     /// `success`; partial/failed update `attempt` and preserve the previous
-    /// success/checkpoint. Oversized records are not written.
+    /// success/checkpoint.
     pub fn commit(
         &mut self,
         rule: &SourceRule,
@@ -859,7 +846,7 @@ impl SourceRegistry {
             attempt.candidates = Vec::new();
         }
 
-        let mut record = DiscoveryRecord {
+        let record = DiscoveryRecord {
             schema_version: 1,
             source_id: rule.id.clone(),
             appid,
@@ -867,8 +854,7 @@ impl SourceRegistry {
             attempt: Some(attempt),
         };
         // A shared index must not consume the per-game result envelope twice.
-        // Save the full bounded index first; large indexes are referenced through
-        // the shared store instead of copied into every game's attempt.
+        // The full index is stored separately and reused from the shared store.
         if let Some(index) = &result.index {
             let existing_checked = self.indexes.get(&rule.id).map(|record| record.checked_at);
             let envelope_checked = if index.checked_at != 0 {
@@ -891,24 +877,8 @@ impl SourceRegistry {
                 checked_at: envelope_checked,
                 index: stored_index,
             };
-            let index_blob =
-                serde_json::to_vec(&index_record).map_err(|error| invalid(error.to_string()))?;
-            if index_blob.len() as u64 <= super::MAX_DISCOVERY_INDEX_BYTES {
-                self.store.save_discovery_index(&rule.id, &index_record)?;
-                self.indexes.insert(rule.id.clone(), index_record);
-            } else {
-                return Err(invalid("discovery_index_resource_limit"));
-            }
-        }
-        let mut blob = serde_json::to_vec(&record).map_err(|error| invalid(error.to_string()))?;
-        if blob.len() as u64 > MAX_DISCOVERY_OUTPUT {
-            if let Some(attempt) = record.attempt.as_mut() {
-                attempt.index = None;
-            }
-            blob = serde_json::to_vec(&record).map_err(|error| invalid(error.to_string()))?;
-        }
-        if blob.len() as u64 > MAX_DISCOVERY_OUTPUT {
-            return Err(invalid("discovery_output_resource_limit"));
+            self.store.save_discovery_index(&rule.id, &index_record)?;
+            self.indexes.insert(rule.id.clone(), index_record);
         }
         self.store.save_discovery(&rule.id, appid, &record)?;
         self.discovery
@@ -1470,7 +1440,7 @@ mod tests {
             checked_at: Some(900),
         };
         registry.store().save_cache("patchmoe", &cache).unwrap();
-        let before = read_bounded(&registry.store().paths().cache("patchmoe"), 4 * 1024 * 1024)
+        let before = read_bounded(&registry.store().paths().cache("patchmoe"))
             .unwrap()
             .unwrap();
         let rule = rule(&registry, "patchmoe");
@@ -1481,7 +1451,7 @@ mod tests {
         registry
             .commit(&rule, 42, failed, &DiscoveryRecord::default(), "k")
             .unwrap();
-        let after = read_bounded(&registry.store().paths().cache("patchmoe"), 4 * 1024 * 1024)
+        let after = read_bounded(&registry.store().paths().cache("patchmoe"))
             .unwrap()
             .unwrap();
         assert_eq!(before, after);
@@ -1569,6 +1539,67 @@ mod tests {
         );
         registry.set_game_source(42, "hgamer", true).unwrap();
         assert!(registry.game_subscribed(42, "hgamer"));
+    }
+
+    #[test]
+    fn game_subscription_over_256kib_persists_and_reloads() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = SourceStore::open(temp.path()).unwrap();
+        // Seed a valid overrides map whose serialization is far past the removed
+        // 256 KiB per-mutation ceiling.
+        let mut overrides = Overrides::default();
+        for appid in 1..=20_000u32 {
+            overrides.games.insert(
+                appid.to_string(),
+                BTreeMap::from([("hgamer".to_string(), true)]),
+            );
+        }
+        let bytes = serde_json::to_vec(&overrides).unwrap();
+        assert!(
+            bytes.len() > 256 * 1024,
+            "fixture must exceed the former ceiling: {} bytes",
+            bytes.len()
+        );
+        store.apply_overrides(&overrides).unwrap();
+        store.bump_revision().unwrap();
+        let mut registry = SourceRegistry::load(store, builtins()).unwrap();
+
+        // A normal subscription edit must still succeed on large settings.
+        registry.set_game_source(300_000, "hgamer", false).unwrap();
+        assert!(!registry.game_subscribed(300_000, "hgamer"));
+        drop(registry);
+
+        let reopened = registry_at(temp.path(), 1000);
+        assert!(!reopened.game_subscribed(300_000, "hgamer"));
+    }
+
+    #[test]
+    fn commit_publishes_candidates_above_former_count_caps() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut registry = registry_at(temp.path(), 1000);
+        let rule = rule(&registry, "hgamer");
+        let candidates: Vec<SourceCandidate> = (0..70)
+            .map(|i| {
+                let mut item = candidate('a', 42, MatchBasis::Appid);
+                item.candidate_id = format!("candidate-{i:024x}");
+                item.warnings = (0..70).map(|w| format!("w{w}")).collect();
+                item
+            })
+            .collect();
+        registry
+            .commit(
+                &rule,
+                42,
+                complete(candidates),
+                &DiscoveryRecord::default(),
+                "k1",
+            )
+            .unwrap();
+        assert_eq!(registry.cached_candidates(&game(42)).len(), 70);
+        // The persisted record survives a reopen: count ceilings no longer
+        // invalidate otherwise valid candidates.
+        let reopened = registry_at(temp.path(), 1001);
+        assert_eq!(reopened.cached_candidates(&game(42)).len(), 70);
     }
 
     #[test]
@@ -1831,14 +1862,14 @@ mod tests {
         let target = temp.path().join("published.json");
         let published = registry
             .store()
-            .run_if_revision(captured, || write_atomic(&target, b"x", 1024))
+            .run_if_revision(captured, || write_atomic(&target, b"x"))
             .unwrap();
         assert!(!published);
         assert!(!target.exists());
         let published = registry
             .store()
-            .run_if_revision(registry.store().revision(), || {
-                write_atomic(&target, b"x", 1024)
+            .run_if_revision(registry.store().revision().unwrap(), || {
+                write_atomic(&target, b"x")
             })
             .unwrap();
         assert!(published);
@@ -2277,7 +2308,6 @@ mod tests {
                 kind: "article".into(),
             })
             .collect();
-        assert!(serde_json::to_vec(&large).unwrap().len() as u64 > MAX_DISCOVERY_OUTPUT);
         registry
             .commit(
                 &rule,

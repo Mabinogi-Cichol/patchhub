@@ -2347,7 +2347,7 @@ impl TransactionSnapshot {
                 snapshot.diagnostics.push(SnapshotDiagnostic {
                     code: "transaction_snapshot_unreadable".into(),
                     path: root,
-                    message: bounded_snapshot_message(error.to_string()),
+                    message: error.to_string(),
                 });
                 return Ok(snapshot);
             }
@@ -2360,7 +2360,7 @@ impl TransactionSnapshot {
                 snapshot.diagnostics.push(SnapshotDiagnostic {
                     code: "transaction_snapshot_unreadable".into(),
                     path: root,
-                    message: bounded_snapshot_message(error.to_string()),
+                    message: error.to_string(),
                 });
                 return Ok(snapshot);
             }
@@ -2420,7 +2420,7 @@ impl TransactionSnapshot {
                     snapshot.diagnostics.push(SnapshotDiagnostic {
                         code: "transaction_plan_unreadable".into(),
                         path: root.join("jobs").join(id),
-                        message: bounded_snapshot_message(error.to_string()),
+                        message: error.to_string(),
                     });
                 }
             }
@@ -2457,17 +2457,6 @@ impl TransactionSnapshot {
     pub fn state_root(&self) -> Option<&Path> {
         self.state_root.as_deref()
     }
-}
-
-fn bounded_snapshot_message(mut message: String) -> String {
-    if message.len() > 2048 {
-        let mut end = 2048;
-        while !message.is_char_boundary(end) {
-            end -= 1;
-        }
-        message.truncate(end);
-    }
-    message
 }
 
 /// Shared direct-API state boundary for read-only snapshots and projection.

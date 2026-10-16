@@ -8,9 +8,9 @@
 
 ## 传输与信封
 
-- stdin/stdout **单行 JSON-lines**，一行一个对象；单行错误不终止后续请求。包含行末一个 LF：请求行 ≤64 KiB（超限 `request_too_large`），宿主响应/事件行 ≤8 MiB。
+- stdin/stdout **单行 JSON-lines**，一行一个对象；单行错误不终止后续请求。包含行末一个 LF，不设固定整行大小上限。
 - 请求：`{protocol_version, request_id, method, params}`，`deny_unknown_fields`；`request_id` 1–128 字节、非空、无控制字符；Steam instance_id 保留完整路径身份，单独上限 16 KiB，其余业务 ID 256 字节。
-- 响应成功：`{protocol_version, request_id, ok:true, result}`；失败：`{protocol_version, request_id, ok:false, error:{code, detail?}}`。`detail` 可选、≤2 KiB、按 UTF-8 字符边界截断且不追加省略号的底层诊断；无法解析的输入 `request_id` 为 null。
+- 响应成功：`{protocol_version, request_id, ok:true, result}`；失败：`{protocol_version, request_id, ok:false, error:{code, detail?}}`。`detail` 可选、完整不截断的底层诊断；无法解析的输入 `request_id` 为 null。
 - 宿主固定注入必需的 `params.host`，包含 `roots`/`catalog`/`signed_catalog`/`trust_keys`/`state_dir`/`platform` 六字段；可空路径也必须显式给出 null；UI 只传实例、选择与受限操作意图，不传配方/目标路径/任意 URL。
 
 ## 执行面

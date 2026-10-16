@@ -71,33 +71,28 @@ fn fixed_cross_language_corpus() {
             );
         }
     }
-    for c in cases["details"].as_array().unwrap() {
-        assert_eq!(
-            truncate_detail(c["input"].as_str().unwrap()),
-            c["expected"].as_str().unwrap()
-        );
-    }
 }
 #[test]
-fn complete_line_limits_and_recoverability() {
-    let value = fixtures::request(Method::Scan);
-    let mut request = serde_json::to_vec(&value).unwrap();
-    request.resize(MAX_REQUEST_BYTES - 1, b' ');
-    request.push(b'\n');
-    assert!(decode_request(&request, false).is_ok());
-    request.insert(request.len() - 1, b' ');
+fn large_request_and_response_payloads_are_not_size_rejected() {
+    // A valid request beyond the removed 64 KiB line cap still parses.
+    let mut request = fixtures::request(Method::DiscoverGame);
+    request["params"]["name_hints"] = json!((0..40)
+        .map(|i| format!("{i}-{}", "hint".repeat(2000)))
+        .collect::<Vec<_>>());
+    let bytes = serde_json::to_vec(&request).unwrap();
+    assert!(bytes.len() > 64 * 1024);
+    assert!(decode_request(&bytes, false).is_ok());
+    // A long error detail is preserved instead of rejected or truncated.
+    let detail = "界".repeat(5000);
+    let response = json!({"protocol_version":4,"request_id":"fixture","ok":false,"error":{"code":"io_error","detail":detail}});
+    validate_response(&response, "fixture", Some(Method::Scan)).unwrap();
+    // A wrong field type still fails.
+    let wrong_type = json!({"protocol_version":4,"request_id":"fixture","ok":false,"error":{"code":"io_error","detail":7}});
     assert_eq!(
-        decode_request(&request, false).unwrap_err().code,
-        "request_too_large"
-    );
-    assert!(decode_request(&serde_json::to_vec(&value).unwrap(), false).is_ok());
-    let overhead = serde_json::to_vec(&json!({"padding":""})).unwrap().len() + 1;
-    let exact = json!({"padding":"x".repeat(MAX_RESPONSE_BYTES-overhead)});
-    assert_eq!(bounded_json_line(&exact).unwrap().len(), MAX_RESPONSE_BYTES);
-    let over = json!({"padding":"x".repeat(MAX_RESPONSE_BYTES-overhead+1)});
-    assert_eq!(
-        bounded_json_line(&over).unwrap_err().code,
-        "response_too_large"
+        validate_response(&wrong_type, "fixture", Some(Method::Scan))
+            .unwrap_err()
+            .code,
+        "invalid_core_response"
     );
 }
 #[test]

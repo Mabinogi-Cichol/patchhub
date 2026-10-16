@@ -105,8 +105,8 @@ fn linked_internal_cache_status_discovery_and_index_are_never_read() {
         std::fs::write(outside.path().join("record.json"), b"{}").unwrap();
         let link = root.join(subdirectory);
         directory_link(outside.path(), &link);
-        let error = steam_patch_core::sources::store::read_bounded(&link.join("record.json"), 4096)
-            .unwrap_err();
+        let error =
+            steam_patch_core::sources::store::read_bounded(&link.join("record.json")).unwrap_err();
         assert_eq!(error.to_string(), "linked_source_state");
         // Snapshot also checks absent expected filenames under a linked ancestor.
         let result = SourceSnapshot::load(&state, &[game(42)], 1234);

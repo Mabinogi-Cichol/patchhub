@@ -211,18 +211,20 @@ fn wire_shape_keeps_transaction_fields_and_required_cleanup() {
 }
 
 #[test]
-fn wire_diagnostics_are_bounded_while_transaction_error_fact_is_retained() {
+fn wire_diagnostics_keep_transaction_error_fact_and_full_detail() {
     let error = format!("failure: {}", "中".repeat(1000));
     let original = transaction("needs_recovery", Some(&error));
     let out = InstallerOutcome::from_transaction(&original, None, None);
     assert_eq!(original.error.as_deref(), Some(error.as_str()));
-    let wire_error = out.error.as_ref().unwrap();
-    assert!(wire_error.len() <= 2048);
-    assert!(error.starts_with(wire_error));
-    assert_eq!(out.cause.unwrap().detail.unwrap().len(), 2046);
-    let detail = out.recovery.unwrap().detail.unwrap();
-    assert!(detail.len() <= 2048);
-    assert!(error.starts_with(&detail));
+    assert_eq!(out.error.as_deref(), Some(error.as_str()));
+    assert_eq!(
+        out.cause.unwrap().detail.as_deref(),
+        Some("中".repeat(1000).as_str())
+    );
+    assert_eq!(
+        out.recovery.unwrap().detail.as_deref(),
+        Some(error.as_str())
+    );
 }
 
 #[test]

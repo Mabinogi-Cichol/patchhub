@@ -300,9 +300,9 @@ mod tests {
         ] {
             assert!(serde_json::from_value::<ActionBlockerCode>(serde_json::json!(alias)).is_err());
         }
-        let blocker =
-            ActionBlocker::new(ActionBlockerCode::SourceRequiresGuidance, "字".repeat(1000));
-        assert!(blocker.detail.unwrap().len() <= 2048);
+        let detail = "字".repeat(1000);
+        let blocker = ActionBlocker::new(ActionBlockerCode::SourceRequiresGuidance, detail.clone());
+        assert_eq!(blocker.detail.as_deref(), Some(detail.as_str()));
         let unknown = ActionBlocker::from_domain(&DomainError::new(
             "zip_runtime_unavailable",
             "missing worker",

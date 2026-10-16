@@ -26,17 +26,6 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 // ---- §0 frozen constants (P1 implements, P2/P3 consume) ------------------
 
-pub const MAX_HTML: usize = 4 * 1024 * 1024;
-pub const MAX_SOURCES: usize = 32;
-/// Retained byte budget for a discovery result; consumed at the persistence
-/// boundary (`registry`/`store`) and by candidate validation. This is the real
-/// resource bound (design D08), so overlapping candidate/mirror/evidence count
-/// lines were removed rather than kept as a second, lower ceiling.
-pub const MAX_DISCOVERY_OUTPUT: u64 = 512 * 1024;
-pub const MAX_STATUS_BYTES: u64 = 4096;
-pub const MAX_CACHE_BYTES: u64 = 4 * 1024 * 1024;
-pub const MAX_DISCOVERY_INDEX_BYTES: u64 = MAX_CACHE_BYTES;
-
 pub const PARSER_VERSION: u32 = 2;
 pub const QUERY_VERSION: u32 = 1;
 /// Deterministic identity encoding version (P0 contract v0.5 §0/§1). Part of
@@ -45,8 +34,6 @@ pub const QUERY_VERSION: u32 = 1;
 pub const SOURCES_ENCODING_VERSION: u32 = 1;
 pub const DEFAULT_RULES_SCHEMA: u32 = 2;
 pub const STORE_SCHEMA_VERSION: u32 = 1;
-
-pub const REFRESH_WORKER_TIMEOUT: Duration = Duration::from_secs(180);
 
 pub const BUILTIN_ADAPTERS: &[&str] = &[
     "patchmoe",

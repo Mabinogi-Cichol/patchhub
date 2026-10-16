@@ -94,8 +94,10 @@ pub trait Transport {
 /// Validates a dynamic download URL against the rule's `download_hosts`.
 ///
 /// Reuses the source engine primitives so the URL/host contract is identical to
-/// discovery: HTTPS, approved host, no credentials, port `443`, rooted path and
-/// a `.zip` suffix (p0-contracts §4.1).
+/// discovery: HTTPS, approved host, no credentials, port `443` and a rooted
+/// path. The path extension is not admission evidence (p0-contracts §4.1); the
+/// downloaded bytes are checked against the archive magic and any published
+/// digest/size.
 pub fn validate_download(url: &str, download_hosts: &[String]) -> Result<String> {
     crate::sources::validate::allowed_url(url, download_hosts, true)
         .map_err(|_| invalid("invalid_download_url"))
@@ -149,18 +151,8 @@ impl ArchiveKind {
         }
     }
     fn url(self, url: &str, hosts: &[String]) -> Result<String> {
-        let valid = crate::sources::validate::allowed_url(url, hosts, matches!(self, Self::Zip))
-            .map_err(|_| invalid("invalid_download_url"))?;
-        if matches!(self, Self::Exe)
-            && !reqwest::Url::parse(&valid)
-                .map_err(|_| invalid("invalid_download_url"))?
-                .path()
-                .to_ascii_lowercase()
-                .ends_with(".exe")
-        {
-            return Err(invalid("invalid_download_url"));
-        }
-        Ok(valid)
+        crate::sources::validate::allowed_url(url, hosts, matches!(self, Self::Zip))
+            .map_err(|_| invalid("invalid_download_url"))
     }
 }
 /// Only bytes with MZ magic are accepted here; all PE/SF parsing runs in the sandbox.
@@ -501,12 +493,6 @@ fn load_cached(
         if digest != meta.sha256 || size != meta.size {
             continue;
         }
-        if request
-            .expected_sha256
-            .is_some_and(|expected| expected != digest)
-        {
-            continue;
-        }
         return Ok(Some((archive, meta, digest)));
     }
     Ok(None)
@@ -768,11 +754,101 @@ mod tests {
             "https://other.example.com/a.zip",
             "https://user@download.example.com/a.zip",
             "https://download.example.com:8443/a.zip",
-            "https://download.example.com/a.rar",
+            "https://download.example.com/a.zip#frag",
         ] {
             assert!(validate_download(bad, &hosts).is_err(), "{bad}");
         }
         assert!(validate_download("https://download.example.com/a.zip", &hosts).is_ok());
+        // The path extension is not admission evidence (S11).
+        assert!(validate_download("https://download.example.com/a.rar", &hosts).is_ok());
+        assert!(validate_download("https://download.example.com/download?id=7", &hosts).is_ok());
+    }
+
+    #[test]
+    fn extensionless_endpoints_are_admitted_and_content_checked() {
+        let (_temp, paths) = setup();
+        let hosts = hosts();
+        let bytes = data(b"payload");
+        let digest = format!("{:x}", Sha256::digest(&bytes));
+        let url = "https://download.example.com/download?id=7";
+
+        // An extensionless permitted endpoint serving real ZIP bytes is admitted
+        // and validated by the content magic.
+        let mut plain = response(200, bytes.clone(), Some(bytes.len() as u64));
+        plain.final_url = url.to_string();
+        let transport = FakeTransport::new(vec![plain]);
+        let acquired = acquire_with(
+            &transport,
+            &request(url, &hosts),
+            &paths,
+            &AtomicBool::new(false),
+            |_, _| {},
+        )
+        .unwrap();
+        assert_eq!(acquired.source, Acquisition::Downloaded);
+        assert_eq!(acquired.sha256, digest);
+
+        // A redirect may land on another extensionless URL of an approved host.
+        let mut redirect = response(302, Vec::new(), None);
+        redirect.location = Some("/mirror/payload".to_string());
+        let mut landed = response(200, bytes.clone(), Some(bytes.len() as u64));
+        landed.final_url = "https://download.example.com/mirror/payload".into();
+        let transport = FakeTransport::new(vec![redirect, landed]);
+        let acquired = acquire_with(
+            &transport,
+            &request(url, &hosts),
+            &paths,
+            &AtomicBool::new(false),
+            |_, _| {},
+        )
+        .unwrap();
+        assert_eq!(
+            acquired.final_url,
+            "https://download.example.com/mirror/payload"
+        );
+        assert_eq!(transport.calls().len(), 2);
+
+        // Wrong content behind an extensionless URL still fails on the magic.
+        let mut wrong = response(200, b"<html>not an archive</html>".to_vec(), None);
+        wrong.final_url = url.to_string();
+        let transport = FakeTransport::new(vec![wrong]);
+        assert_eq!(
+            acquire_with(
+                &transport,
+                &request(url, &hosts),
+                &paths,
+                &AtomicBool::new(false),
+                |_, _| {},
+            )
+            .unwrap_err()
+            .to_string(),
+            "download_not_zip"
+        );
+
+        // The EXE profile accepts an extensionless endpoint with MZ content and
+        // still rejects a URL on an unapproved host.
+        let exe_url = "https://download.example.com/download/exe?id=9";
+        let mut exe = response(200, b"MZ inert SF fixture".to_vec(), None);
+        exe.final_url = exe_url.to_string();
+        let transport = FakeTransport::new(vec![exe]);
+        let archive = acquire_exe_with(
+            &transport,
+            &request(exe_url, &hosts),
+            &paths,
+            &AtomicBool::new(false),
+            |_, _| {},
+        )
+        .unwrap();
+        assert_eq!(archive.path.extension().unwrap(), "exe");
+        let transport = FakeTransport::new(vec![]);
+        assert!(acquire_exe_with(
+            &transport,
+            &request("https://evil.example.com/download?id=9", &hosts),
+            &paths,
+            &AtomicBool::new(false),
+            |_, _| {},
+        )
+        .is_err());
     }
 
     #[test]

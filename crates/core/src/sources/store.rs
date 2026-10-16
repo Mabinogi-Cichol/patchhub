@@ -7,9 +7,7 @@
 use super::model::{
     DiscoveryIndexRecord, DiscoveryRecord, Overrides, SettingsFile, SourceCache, SourceStatus,
 };
-use super::{
-    invalid, Result, MAX_CACHE_BYTES, MAX_DISCOVERY_OUTPUT, MAX_STATUS_BYTES, STORE_SCHEMA_VERSION,
-};
+use super::{invalid, Result, STORE_SCHEMA_VERSION};
 use fs2::FileExt;
 use serde::{de::DeserializeOwned, Serialize};
 use std::collections::BTreeMap;
@@ -19,9 +17,6 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-/// `rust-v1/settings.json`; the store caps it well above the overrides cap so
-/// 32 added rules plus per-game subscriptions fit.
-const MAX_SETTINGS_BYTES: u64 = 4 * 1024 * 1024;
 const SHORT_LOCK_TIMEOUT: Duration = Duration::from_secs(2);
 const WRITE_RETRY_DELAY: Duration = Duration::from_millis(20);
 const WRITE_RETRIES: u32 = 5;
@@ -125,7 +120,7 @@ impl SourceStore {
             // `schema.json` completion marker last, so a crash mid-init simply
             // re-runs on the next open (idempotent).
             let settings = default_settings();
-            write_json(&store.paths.settings(), &settings, MAX_SETTINGS_BYTES)?;
+            write_json(&store.paths.settings(), &settings)?;
             store.write_schema_marker()?;
             *store.settings_guard()? = settings;
         }
@@ -140,8 +135,8 @@ impl SourceStore {
         if linked(&metadata) || !metadata.is_dir() {
             return Err(invalid("linked_source_state"));
         }
-        let settings_bytes = read_bounded(&paths.settings(), MAX_SETTINGS_BYTES)?;
-        let schema_bytes = read_bounded(&paths.schema(), MAX_STATUS_BYTES)?;
+        let settings_bytes = read_bounded(&paths.settings())?;
+        let schema_bytes = read_bounded(&paths.schema())?;
         if settings_bytes.is_none() && schema_bytes.is_none() {
             return Err(invalid("invalid_source_state"));
         }
@@ -181,7 +176,6 @@ impl SourceStore {
             &self.paths.schema(),
             format!("{{\"schema_version\":{STORE_SCHEMA_VERSION},\"created_at\":{created_at}}}")
                 .as_bytes(),
-            MAX_STATUS_BYTES,
         )
     }
 
@@ -189,30 +183,26 @@ impl SourceStore {
         &self.paths
     }
 
-    pub fn revision(&self) -> u64 {
-        self.settings_guard()
-            .map(|guard| guard.revision)
-            .unwrap_or(0)
+    pub fn revision(&self) -> Result<u64> {
+        self.settings_guard().map(|guard| guard.revision)
     }
 
-    pub fn settings(&self) -> SettingsFile {
-        self.settings_guard()
-            .map(|guard| guard.clone())
-            .unwrap_or_else(|_| default_settings())
+    pub fn settings(&self) -> Result<SettingsFile> {
+        self.settings_guard().map(|guard| guard.clone())
     }
 
     /// Reads `settings.json` from disk, falling back to the in-memory copy.
     pub fn load_settings(&self) -> Result<SettingsFile> {
-        match read_json(&self.paths.settings(), MAX_SETTINGS_BYTES)? {
+        match read_json(&self.paths.settings())? {
             Some(settings) => Ok(settings),
-            None => Ok(self.settings()),
+            None => self.settings(),
         }
     }
 
     /// Persists the in-memory settings atomically.
     pub fn save_settings(&self) -> Result<()> {
-        let settings = self.settings();
-        write_json(&self.paths.settings(), &settings, MAX_SETTINGS_BYTES)
+        let settings = self.settings()?;
+        write_json(&self.paths.settings(), &settings)
     }
 
     /// Applies user overrides to the in-memory settings (persisted by the next
@@ -254,7 +244,7 @@ impl SourceStore {
     /// revision is still current. Returns whether the write happened.
     pub fn run_if_revision(&self, captured: u64, f: impl FnOnce() -> Result<()>) -> Result<bool> {
         self.with_short_lock(|| {
-            if self.revision() != captured {
+            if self.revision()? != captured {
                 return Ok(false);
             }
             f()?;
@@ -265,26 +255,23 @@ impl SourceStore {
     // --- cache / status / discovery / index -------------------------------
 
     pub fn load_cache(&self, source_id: &str) -> Result<Option<SourceCache>> {
-        read_json(&self.paths.cache(source_id), MAX_CACHE_BYTES)
+        read_json(&self.paths.cache(source_id))
     }
 
     pub fn save_cache(&self, source_id: &str, cache: &SourceCache) -> Result<()> {
-        write_json(&self.paths.cache(source_id), cache, MAX_CACHE_BYTES)
+        write_json(&self.paths.cache(source_id), cache)
     }
 
     pub fn load_status(&self, source_id: &str) -> Result<Option<SourceStatus>> {
-        read_json(&self.paths.status(source_id), MAX_STATUS_BYTES)
+        read_json(&self.paths.status(source_id))
     }
 
     pub fn save_status(&self, source_id: &str, status: &SourceStatus) -> Result<()> {
-        write_json(&self.paths.status(source_id), status, MAX_STATUS_BYTES)
+        write_json(&self.paths.status(source_id), status)
     }
 
     pub fn load_discovery(&self, source_id: &str, appid: u32) -> Result<Option<DiscoveryRecord>> {
-        read_json(
-            &self.paths.discovery(source_id, appid),
-            MAX_DISCOVERY_OUTPUT,
-        )
+        read_json(&self.paths.discovery(source_id, appid))
     }
 
     pub fn save_discovery(
@@ -293,18 +280,11 @@ impl SourceStore {
         appid: u32,
         record: &DiscoveryRecord,
     ) -> Result<()> {
-        write_json(
-            &self.paths.discovery(source_id, appid),
-            record,
-            MAX_DISCOVERY_OUTPUT,
-        )
+        write_json(&self.paths.discovery(source_id, appid), record)
     }
 
     pub fn load_discovery_index(&self, source_id: &str) -> Result<Option<DiscoveryIndexRecord>> {
-        read_json(
-            &self.paths.discovery_index(source_id),
-            super::MAX_DISCOVERY_INDEX_BYTES,
-        )
+        read_json(&self.paths.discovery_index(source_id))
     }
 
     pub fn save_discovery_index(
@@ -312,11 +292,7 @@ impl SourceStore {
         source_id: &str,
         record: &DiscoveryIndexRecord,
     ) -> Result<()> {
-        write_json(
-            &self.paths.discovery_index(source_id),
-            record,
-            super::MAX_DISCOVERY_INDEX_BYTES,
-        )
+        write_json(&self.paths.discovery_index(source_id), record)
     }
 
     // --- internals --------------------------------------------------------
@@ -360,13 +336,10 @@ fn default_settings() -> SettingsFile {
 
 // ---- atomic primitives (design §4.2) -------------------------------------
 
-/// Writes `bytes` to `path` atomically: `> max` → `file_too_large`, parent chain
-/// link-checked, same-directory `create_new` tmp + `sync_all` + `rename`, bounded
+/// Writes `bytes` to `path` atomically: parent chain link-checked,
+/// same-directory `create_new` tmp + `sync_all` + `rename`, bounded
 /// Windows-overwrite retry → `source_state_busy` (never remove-then-write).
-pub fn write_atomic(path: &Path, bytes: &[u8], max: u64) -> Result<()> {
-    if bytes.len() as u64 > max {
-        return Err(invalid("file_too_large"));
-    }
+pub fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     let parent = path
         .parent()
         .ok_or_else(|| invalid("linked_source_state"))?;
@@ -412,19 +385,18 @@ pub fn write_atomic(path: &Path, bytes: &[u8], max: u64) -> Result<()> {
     }
 }
 
-/// Reads at most `max` bytes; missing → `None`, linked/non-regular →
-/// `linked_source_state`, too large → `file_too_large`.
-pub fn read_bounded(path: &Path, max: u64) -> Result<Option<Vec<u8>>> {
-    crate::detection::read_bounded(path, max).map_err(|error| match error.to_string().as_str() {
+/// Reads a state file; missing → `None`, linked/non-regular →
+/// `linked_source_state`, other IO errors propagate.
+pub fn read_bounded(path: &Path) -> Result<Option<Vec<u8>>> {
+    crate::detection::read_bounded(path).map_err(|error| match error.to_string().as_str() {
         "evidence_linked_path" | "evidence_not_regular_file" => invalid("linked_source_state"),
-        "evidence_size_limit" => invalid("file_too_large"),
         "evidence_changed" => invalid("source_state_changed"),
         _ => error,
     })
 }
 
-fn read_json<T: DeserializeOwned>(path: &Path, max: u64) -> Result<Option<T>> {
-    match read_bounded(path, max)? {
+fn read_json<T: DeserializeOwned>(path: &Path) -> Result<Option<T>> {
+    match read_bounded(path)? {
         Some(bytes) => serde_json::from_slice(&bytes)
             .map(Some)
             .map_err(|error| invalid(error.to_string())),
@@ -432,9 +404,9 @@ fn read_json<T: DeserializeOwned>(path: &Path, max: u64) -> Result<Option<T>> {
     }
 }
 
-fn write_json<T: Serialize>(path: &Path, value: &T, max: u64) -> Result<()> {
+fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<()> {
     let bytes = serde_json::to_vec_pretty(value).map_err(|error| invalid(error.to_string()))?;
-    write_atomic(path, &bytes, max)
+    write_atomic(path, &bytes)
 }
 
 fn linked(metadata: &fs::Metadata) -> bool {
@@ -506,13 +478,13 @@ mod tests {
     fn settings_round_trips_and_revision_is_persistent() {
         let temp = tempfile::tempdir().unwrap();
         let store = SourceStore::open(temp.path()).unwrap();
-        assert_eq!(store.revision(), 1);
+        assert_eq!(store.revision().unwrap(), 1);
         let bumped = store.bump_revision().unwrap();
         assert_eq!(bumped, 2);
         drop(store);
 
         let reopened = SourceStore::open(temp.path()).unwrap();
-        assert_eq!(reopened.revision(), 2);
+        assert_eq!(reopened.revision().unwrap(), 2);
         assert_eq!(reopened.load_settings().unwrap().revision, 2);
     }
 
@@ -520,7 +492,7 @@ mod tests {
     fn first_open_initializes_rust_default_state() {
         let temp = tempfile::tempdir().unwrap();
         let store = SourceStore::open(temp.path()).unwrap();
-        assert_eq!(store.revision(), 1);
+        assert_eq!(store.revision().unwrap(), 1);
         assert!(store.paths().schema().exists());
         assert!(store.paths().settings().exists());
         let settings = store.load_settings().unwrap();
@@ -533,7 +505,7 @@ mod tests {
 
         // Reopen reads the persisted settings (schema marker is present).
         let reopened = SourceStore::open(temp.path()).unwrap();
-        assert_eq!(reopened.revision(), 1);
+        assert_eq!(reopened.revision().unwrap(), 1);
         assert_eq!(reopened.load_settings().unwrap(), settings);
     }
 
@@ -578,6 +550,38 @@ mod tests {
     }
 
     #[test]
+    fn lock_error_propagates_instead_of_default_settings() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = Arc::new(SourceStore::open(temp.path()).unwrap());
+        let before = fs::read(store.paths().settings()).unwrap();
+
+        // Poison the settings mutex: a thread panics while holding the guard.
+        let poisoned = Arc::clone(&store);
+        let _ = std::thread::spawn(move || {
+            let _guard = poisoned.settings.lock().unwrap();
+            panic!("poison the settings mutex");
+        })
+        .join();
+
+        // A poisoned lock must surface the real error, not a fake version 0 or
+        // a default settings snapshot.
+        assert_eq!(
+            store.revision().unwrap_err().to_string(),
+            "source_state_busy"
+        );
+        assert_eq!(
+            store.settings().unwrap_err().to_string(),
+            "source_state_busy"
+        );
+        // Saving must not write the default settings over the intact file.
+        assert_eq!(
+            store.save_settings().unwrap_err().to_string(),
+            "source_state_busy"
+        );
+        assert_eq!(fs::read(store.paths().settings()).unwrap(), before);
+    }
+
+    #[test]
     fn legacy_python_state_is_not_read_on_open() {
         let temp = tempfile::tempdir().unwrap();
         let python = temp.path().join("sources");
@@ -605,7 +609,7 @@ mod tests {
         .unwrap();
 
         let store = SourceStore::open(temp.path()).unwrap();
-        let settings = store.settings();
+        let settings = store.settings().unwrap();
         assert_eq!(settings.revision, 1);
         assert!(
             settings.added.is_empty(),
@@ -631,21 +635,20 @@ mod tests {
     fn atomic_replace_existing_file() {
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("value.json");
-        write_atomic(&path, b"first", 1024).unwrap();
-        write_atomic(&path, b"second", 1024).unwrap();
+        write_atomic(&path, b"first").unwrap();
+        write_atomic(&path, b"second").unwrap();
         assert_eq!(fs::read(&path).unwrap(), b"second".to_vec());
     }
 
     #[test]
-    fn atomic_recovery_on_crash_leaves_original_and_no_tmp() {
+    fn atomic_replace_writes_full_bytes_and_leaves_no_tmp() {
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("value.json");
-        write_atomic(&path, b"original", 1024).unwrap();
-        assert_eq!(
-            write_atomic(&path, &[0u8; 32], 8).unwrap_err().to_string(),
-            "file_too_large"
-        );
-        assert_eq!(fs::read(&path).unwrap(), b"original".to_vec());
+        write_atomic(&path, b"original").unwrap();
+        // No fixed byte cap: a large state file is written in full.
+        let large = vec![0u8; 8 * 1024 * 1024];
+        write_atomic(&path, &large).unwrap();
+        assert_eq!(fs::read(&path).unwrap(), large);
         let leftovers: Vec<_> = fs::read_dir(temp.path())
             .unwrap()
             .flatten()
@@ -661,13 +664,11 @@ mod tests {
         let dir_target = temp.path().join("state.json");
         fs::create_dir(&dir_target).unwrap();
         assert_eq!(
-            write_atomic(&dir_target, b"x", 1024)
-                .unwrap_err()
-                .to_string(),
+            write_atomic(&dir_target, b"x").unwrap_err().to_string(),
             "linked_source_state"
         );
         assert_eq!(
-            read_bounded(&dir_target, 1024).unwrap_err().to_string(),
+            read_bounded(&dir_target).unwrap_err().to_string(),
             "linked_source_state"
         );
 
@@ -679,29 +680,21 @@ mod tests {
             let link = temp.path().join("link.json");
             symlink(&real, &link).unwrap();
             assert_eq!(
-                read_bounded(&link, 1024).unwrap_err().to_string(),
+                read_bounded(&link).unwrap_err().to_string(),
                 "linked_source_state"
             );
             assert_eq!(
-                write_atomic(&link, b"new", 1024).unwrap_err().to_string(),
+                write_atomic(&link, b"new").unwrap_err().to_string(),
                 "linked_source_state"
             );
         }
     }
 
     #[test]
-    fn enforce_size_and_entry_caps() {
-        let temp = tempfile::tempdir().unwrap();
-        let path = temp.path().join("big.json");
-        assert_eq!(
-            write_atomic(&path, &vec![0u8; 300], 256)
-                .unwrap_err()
-                .to_string(),
-            "file_too_large"
-        );
+    fn validate_entries_accepts_large_lists_and_rejects_empty() {
         let rule = builtins().into_iter().find(|r| r.id == "patchmoe").unwrap();
-        // Entry count is no longer a separate ceiling (design D08): a large but
-        // otherwise valid entry list is accepted, bounded by the byte/parse budget.
+        // No entry-count ceiling and no byte cap: a large but otherwise valid
+        // entry list is accepted.
         let entries = vec![entry("G", "https://download.patch.moe/G.zip", Some(1)); 4097];
         assert_eq!(
             validate::validate_entries(&rule, &entries).unwrap().len(),
@@ -719,7 +712,7 @@ mod tests {
     fn short_lock_serializes_revision_bumps() {
         let temp = tempfile::tempdir().unwrap();
         let store = Arc::new(SourceStore::open(temp.path()).unwrap());
-        let start = store.revision();
+        let start = store.revision().unwrap();
         let mut handles = Vec::new();
         for _ in 0..4 {
             let store = Arc::clone(&store);
@@ -728,7 +721,7 @@ mod tests {
         for handle in handles {
             handle.join().unwrap();
         }
-        assert_eq!(store.revision(), start + 4);
+        assert_eq!(store.revision().unwrap(), start + 4);
     }
 
     #[test]

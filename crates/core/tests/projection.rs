@@ -1329,3 +1329,11 @@ fn manual_unknown_candidate_binds_download_and_instance_without_faking_metadata(
         assert!(manual_selection::resolve(source.registry(), &query, &id, format).is_err());
     }
 }
+
+#[test]
+fn domain_error_detail_is_not_truncated() {
+    let detail = "测".repeat(3000);
+    let error = DomainError::new("exe_manifest_invalid", detail.clone());
+    assert_eq!(error.detail.as_deref(), Some(detail.as_str()));
+    assert!(error.to_string().ends_with(&detail));
+}

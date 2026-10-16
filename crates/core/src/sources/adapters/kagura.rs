@@ -130,19 +130,7 @@ fn official(
                 let (html, final_url) = match fetch_page(ctx, &url, &rule.page_hosts) {
                     Ok(value) => value,
                     Err(error) => {
-                        let message = error.to_string();
-                        diagnostics.push(message.clone());
-                        if adapter == "kagura_en_html"
-                            && url == entry_url
-                            && message.contains("html_too_large")
-                        {
-                            if let Some(alternative) =
-                                super::join_relative(&entry_url, "/product-category/patches/patch/")
-                            {
-                                pages.insert(0, alternative);
-                            }
-                            continue;
-                        }
+                        diagnostics.push(error.to_string());
                         pages.insert(0, url);
                         break;
                     }
@@ -246,16 +234,6 @@ fn official(
                             merged.push(record);
                         }
                     }
-                }
-                // Full index data is stored separately from a per-game result.
-                // Never silently truncate the record containing a later DLC.
-                if serde_json::to_vec(&merged).map_or(true, |v| {
-                    v.len() as u64 > super::super::MAX_DISCOVERY_INDEX_BYTES
-                }) {
-                    diagnostics.push("discovery_index_resource_limit_incomplete".into());
-                    // Preserve the last bounded index and the unvisited page.
-                    pages.push(url.clone());
-                    break;
                 }
                 records = merged;
 

@@ -125,7 +125,6 @@ export function reason(code: string): string {
     discovery_retry_exhausted: "来源仍暂不可用，显示上次成功结果。",
     discovery_challenge: "来源网页需要验证码或访问确认，可在浏览器中打开。",
     discovery_compressed_response: "来源网页的压缩格式暂不支持，保留上次查询结果。",
-    discovery_html_too_large: "来源网页超过查询大小限制，显示已取得的结果。",
     discovery_pagination_cycle: "来源网页的分页链接重复，查询已停止。",
     discovery_request_cycle: "来源网页的跳转链接重复，查询已停止。",
     discovery_search_structure_changed: "来源搜索页面结构已变化，保留上次查询结果。",
@@ -180,10 +179,6 @@ export function reason(code: string): string {
     exe_manifest_unavailable: "无法读取游戏版本信息，请检查 Steam 游戏安装。",
     exe_manifest_invalid: "游戏版本信息无效，请检查 Steam 游戏安装。",
     exe_manifest_duplicate: "游戏版本信息冲突，请重新扫描。",
-    discovery_output_resource_limit: "来源结果超过当前元数据预算，旧结果已保留。",
-    discovery_index_resource_limit: "来源索引超过当前元数据预算，旧索引已保留。",
-    discovery_index_resource_limit_incomplete: "来源索引尚未查完，已保留已有结果。",
-    exe_manifest_limit: "游戏版本信息超出安全限制。",
     exe_baseline_invalid: "已审核的游戏文件条件无效，暂不能安装。",
     exe_game_file_changed: "游戏原文件已变化，请重新准备安装。",
     exe_game_facts_changed: "游戏状态已变化，请重新准备安装。",
@@ -261,7 +256,6 @@ export function reason(code: string): string {
      ,request_transaction_missing: "安装结果记录缺失，请重新扫描。"
      ,unsupported_protocol: "核心版本与客户端协议不一致，请更新客户端。"
      ,invalid_request: "安装请求格式无效。"
-     ,request_too_large: "安装请求过大。"
      ,core_process_failed: "核心进程未能完成操作，请重试。"
      ,core_binary_missing: "缺少核心程序，请重新安装客户端。"
      ,state_dir_required: "状态目录不可用，请检查应用数据目录。"
@@ -277,7 +271,6 @@ export function reason(code: string): string {
      ,local_archive_signed_only: "此来源不支持导入本地 ZIP，请使用来源自动安装。"
      ,selection_or_release_required: "缺少补丁选择或发行版本，请重新选择。"
      ,archive_not_allowed_for_selection: "动态来源补丁不能导入本地 ZIP，请从来源直接安装。"
-     ,archive_too_large: "所选 ZIP 超过大小限制，无法安装。"
      ,zip_download_unavailable: "此来源未提供可下载的 ZIP，请查看来源说明。"
      ,zip_download_ambiguous: "来源提供了多个 ZIP 下载，无法唯一确定，请查看来源说明。"
      ,exe_candidate_variant_unsupported: "此补丁的版本类型暂不支持自动安装，请查看来源说明。"

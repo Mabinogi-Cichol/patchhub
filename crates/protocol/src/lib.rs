@@ -19,9 +19,6 @@ pub use steam_patch_core::{
 };
 use ts_rs::TS;
 pub const PROTOCOL_VERSION: u32 = 4;
-pub const MAX_REQUEST_BYTES: usize = 64 * 1024;
-pub const MAX_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
-pub const MAX_DETAIL_BYTES: usize = 2048;
 pub const MAX_REQUEST_ID_BYTES: usize = 128;
 pub const MAX_ID_BYTES: usize = 256;
 pub const MAX_INSTANCE_ID_BYTES: usize =
@@ -62,13 +59,6 @@ impl From<DomainError> for ProtocolError {
             request_id: None,
         }
     }
-}
-pub fn truncate_detail(s: &str) -> String {
-    let mut end = s.len().min(MAX_DETAIL_BYTES);
-    while !s.is_char_boundary(end) {
-        end -= 1;
-    }
-    s[..end].to_owned()
 }
 pub fn validate_id(s: &str, max: usize) -> bool {
     !s.is_empty() && s.len() <= max && !s.chars().any(char::is_control)
@@ -252,9 +242,6 @@ pub struct Request {
 }
 
 pub fn decode_request(bytes: &[u8], task_channel: bool) -> Result<ValidatedRequest, ProtocolError> {
-    if bytes.len() + usize::from(!bytes.ends_with(b"\n")) > MAX_REQUEST_BYTES {
-        return Err(ProtocolError::code("request_too_large"));
-    }
     let value: Value = serde_json::from_slice::<StrictValue>(bytes)
         .map_err(|_| ProtocolError::code("invalid_request"))?
         .0;
@@ -620,7 +607,6 @@ pub fn validate_response(
     if v["request_id"].as_str() != Some(request_id) || !validate_id(request_id, 128) {
         return Err(ProtocolError::code("invalid_core_response"));
     }
-    bounded_json_line(v)?;
     validate_bounds(v)?;
     let obj = v
         .as_object()
@@ -833,37 +819,12 @@ fn validate_projection(v: &Value) -> Result<(), ProtocolError> {
     }
     Ok(())
 }
-pub fn bounded_json_line(v: &Value) -> Result<Vec<u8>, ProtocolError> {
-    struct Capped {
-        bytes: Vec<u8>,
-        overflow: bool,
-    }
-    impl std::io::Write for Capped {
-        fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
-            if b.len() > MAX_RESPONSE_BYTES - 1 - self.bytes.len() {
-                self.overflow = true;
-                return Err(std::io::Error::other("response_too_large"));
-            }
-            self.bytes.extend_from_slice(b);
-            Ok(b.len())
-        }
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-    let mut writer = Capped {
-        bytes: Vec::new(),
-        overflow: false,
-    };
-    if serde_json::to_writer(&mut writer, v).is_err() {
-        return Err(ProtocolError::code(if writer.overflow {
-            "response_too_large"
-        } else {
-            "invalid_core_response"
-        }));
-    }
-    writer.bytes.push(b'\n');
-    Ok(writer.bytes)
+/// Encodes one JSON Lines frame: the value followed by a single LF. JSON Lines
+/// framing has no size limit; callers own their transport framing.
+pub fn json_line(v: &Value) -> Vec<u8> {
+    let mut bytes = serde_json::to_vec(v).expect("a serde_json::Value always serializes");
+    bytes.push(b'\n');
+    bytes
 }
 fn validate_bounds(v: &Value) -> Result<(), ProtocolError> {
     match v {
@@ -883,11 +844,6 @@ fn validate_bounds(v: &Value) -> Result<(), ProtocolError> {
         }
         Value::Object(o) => {
             for (k, v) in o {
-                if ["detail", "message"].contains(&k.as_str())
-                    && v.as_str().is_some_and(|s| s.len() > MAX_DETAIL_BYTES)
-                {
-                    return Err(ProtocolError::code("invalid_core_response"));
-                }
                 if k == "code"
                     && v.as_str().is_some_and(|s| {
                         s.is_empty()
@@ -1077,7 +1033,6 @@ pub fn validate_event(v: &Value, request_id: &str) -> Result<Event, ProtocolErro
     if v["request_id"].as_str() != Some(request_id) || !validate_id(request_id, 128) {
         return Err(ProtocolError::code("invalid_core_response"));
     }
-    bounded_json_line(v)?;
     validate_bounds(v)?;
     let required = match v["event"].as_str() {
         Some("install_progress") => &[
@@ -1273,8 +1228,6 @@ pub fn schema() -> Value {
     defs.get_mut("WireLinkCapability").unwrap()["oneOf"] = serde_json::json!([{"properties":{"available":{"const":true},"blockers":{"maxItems":0}}},{"properties":{"available":{"const":false},"blockers":{"minItems":1}}}]);
     defs.get_mut("PreviewReport").unwrap()["properties"]["executable"] =
         serde_json::json!({"const":false});
-    defs.get_mut("InstallerOutcome").unwrap()["properties"]["error"]["x-max-utf8-bytes"] =
-        serde_json::json!(MAX_DETAIL_BYTES);
     let variants: Vec<Value> = ALL_METHODS.iter().map(|method| {
         let name = match method {
             Method::GetCapabilities | Method::Scan | Method::ListTransactions | Method::Recover

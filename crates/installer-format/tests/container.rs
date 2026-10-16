@@ -34,6 +34,23 @@ fn packed(bytes: &[u8]) -> Vec<u8> {
     result
 }
 fn record(name: &str, directory: &str, data: &[u8], version: &str) -> (Vec<u8>, Vec<u8>) {
+    record_declaring_packages(
+        name,
+        directory,
+        data,
+        version,
+        1,
+        &[String::from("expansion")],
+    )
+}
+fn record_declaring_packages(
+    name: &str,
+    directory: &str,
+    data: &[u8],
+    version: &str,
+    declared_packages: u16,
+    packages: &[String],
+) -> (Vec<u8>, Vec<u8>) {
     let payload = packed(data);
     let mut out = Vec::new();
     for s in [
@@ -70,8 +87,10 @@ fn record(name: &str, directory: &str, data: &[u8], version: &str) -> (Vec<u8>, 
     out.extend([0; 2]);
     out.extend(string(""));
     out.extend(string(""));
-    out.extend(1u16.to_le_bytes());
-    out.extend(string("expansion"));
+    out.extend(declared_packages.to_le_bytes());
+    for value in packages {
+        out.extend(string(value));
+    }
     out.extend(string("notes"));
     out.extend((payload.len() as i64).to_le_bytes());
     out.extend(crc(data).to_le_bytes());
@@ -126,14 +145,7 @@ fn put16(data: &mut [u8], at: usize, n: u16) {
 fn put32(data: &mut [u8], at: usize, n: u32) {
     data[at..at + 4].copy_from_slice(&n.to_le_bytes());
 }
-fn sample(
-    records: &[(Vec<u8>, Vec<u8>)],
-    version: &str,
-    certificate: bool,
-    xml: Option<&str>,
-) -> Vec<u8> {
-    let default=format!("<assembly><assemblyIdentity version=\"{version}.1.0\"/><description>Setup Factory Run-time</description><dependency><assemblyIdentity version=\"6.0.0.0\"/></dependency></assembly>");
-    let manifest = xml.unwrap_or(&default).as_bytes();
+fn manifest_resource(manifest: &[u8]) -> Vec<u8> {
     let resource_size = 1024usize.max(128 + manifest.len());
     let mut resource = vec![0; resource_size];
     for (at, id, child) in [(0, 24, 0x80000020), (32, 1, 0x80000040), (64, 1033, 96)] {
@@ -144,6 +156,10 @@ fn sample(
     put32(&mut resource, 96, 0x1080);
     put32(&mut resource, 100, manifest.len() as u32);
     resource[128..128 + manifest.len()].copy_from_slice(manifest);
+    resource
+}
+fn container(records: &[(Vec<u8>, Vec<u8>)], resource: &[u8]) -> Vec<u8> {
+    let resource_size = resource.len() as u32;
     let mut headers = vec![0; 512];
     headers[..2].copy_from_slice(b"MZ");
     put32(&mut headers, 60, 64);
@@ -154,25 +170,36 @@ fn sample(
     put32(&mut headers, 148, 512);
     put32(&mut headers, 180, 16);
     put32(&mut headers, 200, 0x1000);
-    put32(&mut headers, 204, resource_size as u32);
+    put32(&mut headers, 204, resource_size);
     for (at, n) in [
-        (320, resource_size as u32),
+        (320, resource_size),
         (324, 0x1000),
-        (328, resource_size as u32),
+        (328, resource_size),
         (332, 512),
     ] {
         put32(&mut headers, at, n);
     }
-    let mut out = headers.clone();
-    out.extend(resource);
+    let mut out = headers;
+    out.extend_from_slice(resource);
     out.extend(overlay(records));
+    out
+}
+fn sample(
+    records: &[(Vec<u8>, Vec<u8>)],
+    version: &str,
+    certificate: bool,
+    xml: Option<&str>,
+) -> Vec<u8> {
+    let default=format!("<assembly><assemblyIdentity version=\"{version}.1.0\"/><description>Setup Factory Run-time</description><dependency><assemblyIdentity version=\"6.0.0.0\"/></dependency></assembly>");
+    let manifest = xml.unwrap_or(&default).as_bytes();
+    let mut out = container(records, &manifest_resource(manifest));
     if certificate {
         while !out.len().is_multiple_of(8) {
             out.push(0);
         }
-        put32(&mut headers, 216, out.len() as u32);
-        put32(&mut headers, 220, 16);
-        out[..512].copy_from_slice(&headers);
+        let total = out.len() as u32;
+        put32(&mut out, 216, total);
+        put32(&mut out, 220, 16);
         out.extend(12u32.to_le_bytes());
         out.extend(0x200u16.to_le_bytes());
         out.extend(2u16.to_le_bytes());
@@ -516,6 +543,76 @@ fn xml_expanded_attribute_names_and_namespace_depth_are_bounded() {
             rejects(result, "manifest_depth_limit");
         }
     }
+}
+
+#[test]
+fn declared_package_and_resource_counts_are_read_in_full() {
+    // The SF file table stores the package reference count as a genuine u16; the
+    // record's own serialized bytes bound how many references actually exist.
+    let packages: Vec<String> = (0..300).map(|index| format!("pkg{index}")).collect();
+    let (bytes, payload) =
+        record_declaring_packages("x", "%AppFolder%", b"x", "9.5", 300, &packages);
+    let (rows, _) = file_table(&metadata(&[(bytes, payload)]), "9.5").unwrap();
+    assert_eq!(rows[0]["packages"].as_array().unwrap().len(), 300);
+    assert_eq!(rows[0]["packages"][299], json!("pkg299"));
+    // A reference list the record's bytes cannot fill is still truncation. Keep
+    // the declared count and the first partial reference, drop the fields after
+    // the list so only the actual buffer bounds the read.
+    let (mut bytes, payload) =
+        record_declaring_packages("x", "%AppFolder%", b"x", "9.5", 300, &packages);
+    let block: usize = packages.iter().map(|package| package.len() + 1).sum();
+    bytes.truncate(bytes.len() - (1 + 8 + 4 + 8) - block + 3);
+    rejects(
+        file_table(&metadata(&[(bytes, payload)]), "9.5"),
+        "truncated_record",
+    );
+}
+
+fn wide_resource(manifest: &[u8], entries: usize) -> Vec<u8> {
+    let name_dir = 16 + entries * 8;
+    let language_dir = name_dir + 24;
+    let leaf = language_dir + 24;
+    let manifest_at = leaf + 16;
+    let mut resource = vec![0; manifest_at + manifest.len()];
+    put16(&mut resource, 14, entries as u16);
+    for index in 0..entries {
+        let at = 16 + index * 8;
+        if index + 1 == entries {
+            put32(&mut resource, at, 24);
+            put32(&mut resource, at + 4, 0x8000_0000 | name_dir as u32);
+        } else {
+            put32(&mut resource, at, 1000 + index as u32);
+        }
+    }
+    put16(&mut resource, name_dir + 14, 1);
+    put32(&mut resource, name_dir + 16, 1);
+    put32(
+        &mut resource,
+        name_dir + 20,
+        0x8000_0000 | language_dir as u32,
+    );
+    put16(&mut resource, language_dir + 14, 1);
+    put32(&mut resource, language_dir + 16, 1033);
+    put32(&mut resource, language_dir + 20, leaf as u32);
+    put32(&mut resource, leaf, 0x1000 + manifest_at as u32);
+    put32(&mut resource, leaf + 4, manifest.len() as u32);
+    resource[manifest_at..manifest_at + manifest.len()].copy_from_slice(manifest);
+    resource
+}
+
+#[test]
+fn resource_directory_beyond_256_entries_still_finds_manifest() {
+    let rows = [record("x", "%AppFolder%", b"hello", "9.5")];
+    let manifest=b"<assembly><assemblyIdentity version=\"9.5.1.0\"/><description>Setup Factory Run-time</description></assembly>";
+    for entries in [257usize, 300] {
+        let raw = container(&rows, &wide_resource(manifest, entries));
+        let (_, _, info, _) = pe_overlay(&raw).unwrap();
+        assert_eq!(info["version"], "9.5.1.0");
+    }
+    // The declared directory count is still bounded by the actual resource area.
+    let mut resource = wide_resource(manifest, 257);
+    put16(&mut resource, 14, u16::MAX);
+    rejects(pe_overlay(&container(&rows, &resource)), "truncated_record");
 }
 
 #[test]

@@ -307,25 +307,15 @@ impl MirrorKind {
         }
     }
 
-    /// Validates one raw mirror under the profile `acquire` enforces: ZIP uses
-    /// `allowed_url(.., download = true)` (which requires a `.zip` path), EXE
-    /// uses `download = false` plus an explicit `.exe` path suffix check
-    /// (see `acquire.rs` `ArchiveKind::url`). Returns `None` when illegal.
+    /// Validates one raw mirror under the profile `acquire` enforces: both
+    /// kinds use `allowed_url` for the host/HTTPS/port contract and differ only
+    /// in whether a fragment is rejected (see `acquire.rs` `ArchiveKind::url`).
+    /// Returns `None` when illegal.
     fn validate(self, url: &str, hosts: &[String]) -> Option<String> {
-        let valid = match self {
-            Self::Zip => validate::allowed_url(url, hosts, true).ok()?,
-            Self::Exe => validate::allowed_url(url, hosts, false).ok()?,
-        };
-        if matches!(self, Self::Exe)
-            && !url::Url::parse(&valid)
-                .ok()?
-                .path()
-                .to_ascii_lowercase()
-                .ends_with(".exe")
-        {
-            return None;
+        match self {
+            Self::Zip => validate::allowed_url(url, hosts, true).ok(),
+            Self::Exe => validate::allowed_url(url, hosts, false).ok(),
         }
-        Some(valid)
     }
 }
 

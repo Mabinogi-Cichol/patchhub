@@ -700,9 +700,6 @@ fn dlc_fact(state: &BTreeMap<String, Value>, expectation: &FactsExpectation) -> 
 fn compute_dlc(state: &BTreeMap<String, Value>) -> std::result::Result<BTreeSet<u32>, FactFailure> {
     let mut dlc = BTreeSet::new();
     if let Some(depots) = nested(state, "installeddepots")? {
-        if depots.len() > 4096 {
-            return Err(FactFailure::new("exe_manifest_limit", "too many depots"));
-        }
         for (depot, detail) in depots {
             if parse_number(Some(depot)).is_none() {
                 return Err(FactFailure::new(
@@ -730,14 +727,7 @@ fn compute_dlc(state: &BTreeMap<String, Value>) -> std::result::Result<BTreeSet<
         .or_else(|| field_text(state, "installdlc"))
         .unwrap_or("");
     if !installed_dlc.is_empty() {
-        let parts: Vec<&str> = installed_dlc.split(',').collect();
-        if parts.len() > 128 {
-            return Err(FactFailure::new(
-                "exe_manifest_limit",
-                "too many installed DLC",
-            ));
-        }
-        for value in parts {
+        for value in installed_dlc.split(',') {
             match parse_number(Some(value.trim())) {
                 Some(appid) => {
                     dlc.insert(appid as u32);
@@ -1236,6 +1226,55 @@ mod tests {
             vec![2303802]
         );
         assert_eq!(facts.manifest.evidence.as_ref().unwrap().sha256.len(), 64);
+    }
+
+    #[test]
+    fn compute_dlc_accepts_more_than_the_former_depot_and_dlc_limits() {
+        let mut depots = BTreeMap::new();
+        for index in 0..4097u32 {
+            let appid = 3_000_000 + index;
+            depots.insert(
+                (appid - 1).to_string(),
+                Value::Object(BTreeMap::from([(
+                    "dlcappid".to_string(),
+                    Value::Text(appid.to_string()),
+                )])),
+            );
+        }
+        let installed_dlc = (0..129u32)
+            .map(|index| (4_000_000 + index).to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+        let state = BTreeMap::from([
+            ("installeddepots".to_string(), Value::Object(depots)),
+            ("installeddlc".to_string(), Value::Text(installed_dlc)),
+        ]);
+        let installed = compute_dlc(&state).unwrap();
+        assert_eq!(installed.len(), 4097 + 129);
+        assert!(installed.contains(&3_000_000));
+        assert!(installed.contains(&4_000_128));
+    }
+
+    #[test]
+    fn game_facts_accepts_installed_dlc_beyond_the_former_limit() {
+        let temp = tempfile::tempdir().unwrap();
+        let installed_dlc = (0..129u32)
+            .map(|index| (4_000_000 + index).to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+        let (game, _) = instance(
+            temp.path(),
+            &manifest(
+                "schinese",
+                "4",
+                "12345",
+                &format!(r#""installeddlc" "{installed_dlc}""#),
+            ),
+        );
+        // This is exactly the gate `signed::require_facts` applies.
+        let facts = game_facts(&game, &expectation(Vec::new()), &AtomicBool::new(false));
+        assert!(facts.is_valid(), "{:?}", facts.failures());
+        assert_eq!(facts.dlc.evidence.as_ref().unwrap().installed.len(), 130);
     }
 
     #[test]

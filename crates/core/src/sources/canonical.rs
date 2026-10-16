@@ -239,11 +239,6 @@ fn sha256_hex(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sources::model::{
-        ArtifactFormat, CacheStatus, Capability, MatchBasis, SourceCandidate, SourceRole,
-        SourceRule, Variant,
-    };
-    use crate::sources::{validate, MAX_DISCOVERY_OUTPUT};
     use serde_json::Value;
 
     fn fixture() -> Value {
@@ -363,83 +358,6 @@ mod tests {
         let nfc_key = canonical_bytes(&serde_json::json!({"\u{00e9}": 1})).unwrap();
         let nfd_key = canonical_bytes(&serde_json::json!({"e\u{0301}": 1})).unwrap();
         assert_ne!(nfc_key, nfd_key);
-    }
-
-    #[test]
-    fn oversized_discovery_candidates_are_rejected() {
-        assert_eq!(MAX_DISCOVERY_OUTPUT, 512 * 1024);
-
-        let rule = oversized_rule();
-        let candidate = oversized_candidate();
-        // The deterministic encoding of the candidate list is what the gate
-        // measures; make sure the fixture is genuinely over the bound.
-        let bytes = canonical_bytes(std::slice::from_ref(&candidate)).unwrap();
-        assert!(bytes.len() as u64 > MAX_DISCOVERY_OUTPUT);
-
-        let error =
-            validate::validate_candidates(&rule, 42, std::slice::from_ref(&candidate)).unwrap_err();
-        assert_eq!(error.to_string(), "oversized_discovery_candidates");
-    }
-
-    /// Minimal valid rule; only used as a type carrier for the size gate.
-    fn oversized_rule() -> SourceRule {
-        SourceRule {
-            id: "oversized".to_string(),
-            name: "Oversized".to_string(),
-            adapter: "table_html".to_string(),
-            role: SourceRole::Publisher,
-            discovery_only: true,
-            priority: 100,
-            enabled: true,
-            pages: vec!["https://example.com/".to_string()],
-            page_hosts: vec!["example.com".to_string()],
-            download_hosts: Vec::new(),
-            root_layout: None,
-            columns: None,
-            table_id: None,
-            language: None,
-            url: None,
-        }
-    }
-
-    /// One candidate whose encoded size exceeds `MAX_DISCOVERY_OUTPUT`; the size
-    /// gate runs before any per-field validation.
-    fn oversized_candidate() -> SourceCandidate {
-        SourceCandidate {
-            candidate_id: "candidate-000000000000000000000000".to_string(),
-            source_id: "oversized".to_string(),
-            source_record_id: "https://example.com/game/".to_string(),
-            game_appid: Some(42),
-            parent_appid: None,
-            aliases: Vec::new(),
-            game_title: "Game".to_string(),
-            patch_title: "Game".to_string(),
-            variant: Variant::Base,
-            requires_dlc: None,
-            excludes_dlc: None,
-            platforms: Vec::new(),
-            patch_kind: "adult_content".to_string(),
-            languages: Vec::new(),
-            version_raw: None,
-            version_evidence: Vec::new(),
-            version_identity: "page-unknown".to_string(),
-            published_at: None,
-            patch_updated_at: None,
-            source_page: "https://example.com/game/".to_string(),
-            upstream_page: None,
-            mirrors: Vec::new(),
-            format_reported: ArtifactFormat::Unknown,
-            format_observed: ArtifactFormat::Unknown,
-            capability: Capability::DiscoverOnly,
-            identity_evidence: Vec::new(),
-            provenance: Vec::new(),
-            match_basis: MatchBasis::None,
-            observed_at: "2026-01-01T00:00:00+00:00".to_string(),
-            cache_status: CacheStatus::Fresh,
-            warnings: vec!["x".repeat(MAX_DISCOVERY_OUTPUT as usize + 1)],
-            fingerprint: "fp".to_string(),
-            related_index_pages: Vec::new(),
-        }
     }
 
     #[test]

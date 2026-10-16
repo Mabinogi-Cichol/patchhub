@@ -54,16 +54,10 @@ fn artifacts() -> BTreeMap<PathBuf, Vec<u8>> {
         ts.push('\n');
     }
     ts.push_str("export type WireEvent = Event;\nexport type DiscoveryResult = DiscoverGameResult;\nexport type InstallPreview = PreviewReport;\nexport type SourceGameUpdateEvent = GameSourceUpdateEvent;\nexport type SourceRefreshUpdateEvent = RefreshSourceUpdateEvent;\n");
-    ts.push_str(&format!("export const PROTOCOL_VERSION = {PROTOCOL_VERSION} as const;\nexport const METHODS = {} as const;\nexport const INSTALL_STAGES = {} as const;\nexport const MAX_REQUEST_BYTES = {MAX_REQUEST_BYTES};\nexport const MAX_RESPONSE_BYTES = {MAX_RESPONSE_BYTES};\nexport const MAX_DETAIL_BYTES = {MAX_DETAIL_BYTES};\nexport const MAX_REQUEST_ID_BYTES = {MAX_REQUEST_ID_BYTES};\nexport const MAX_ID_BYTES = {MAX_ID_BYTES};\nexport const MAX_INSTANCE_ID_BYTES = {MAX_INSTANCE_ID_BYTES};\nexport const MAX_SAFE_INTEGER = {MAX_SAFE_INTEGER};\n",json!(METHODS),json!(INSTALL_STAGES)));
+    ts.push_str(&format!("export const PROTOCOL_VERSION = {PROTOCOL_VERSION} as const;\nexport const METHODS = {} as const;\nexport const INSTALL_STAGES = {} as const;\nexport const MAX_REQUEST_ID_BYTES = {MAX_REQUEST_ID_BYTES};\nexport const MAX_ID_BYTES = {MAX_ID_BYTES};\nexport const MAX_INSTANCE_ID_BYTES = {MAX_INSTANCE_ID_BYTES};\nexport const MAX_SAFE_INTEGER = {MAX_SAFE_INTEGER};\n",json!(METHODS),json!(INSTALL_STAGES)));
     ts.push_str(&format!("export const SOURCE_METHODS = {} as const;\nexport const CONTRACTS = {} as const;\nexport const SCHEMA = {};\n",json!(SOURCE_METHODS),json!(ContractVersions::default()),schema));
     ts.push_str(r#"export function validId(value: unknown, maxBytes = MAX_ID_BYTES): value is string {
   return typeof value === "string" && value.length > 0 && new TextEncoder().encode(value).length <= maxBytes && !/\p{Cc}/u.test(value) && !/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u.test(value);
-}
-export function truncateDetail(value: string): string {
-  let result = "";
-  let bytes = 0;
-  for (const ch of value) { const size = new TextEncoder().encode(ch).length; if (bytes + size > MAX_DETAIL_BYTES) break; result += ch; bytes += size; }
-  return result;
 }
 export function makeRequest(request_id: string, call: RequestParams): Request {
   return { protocol_version: PROTOCOL_VERSION, request_id, ...call };
@@ -93,9 +87,6 @@ export function makeRequest(request_id: string, call: RequestParams): Request {
         ),
         ("SOURCE_EVENTS", json!(["source_progress", "source_update"])),
         ("INSTALL_STAGES", json!(INSTALL_STAGES)),
-        ("MAX_REQUEST_BYTES", json!(MAX_REQUEST_BYTES)),
-        ("MAX_RESPONSE_BYTES", json!(MAX_RESPONSE_BYTES)),
-        ("MAX_DETAIL_BYTES", json!(MAX_DETAIL_BYTES)),
         ("MAX_REQUEST_ID_BYTES", json!(MAX_REQUEST_ID_BYTES)),
         ("MAX_ID_BYTES", json!(MAX_ID_BYTES)),
         ("MAX_INSTANCE_ID_BYTES", json!(MAX_INSTANCE_ID_BYTES)),
