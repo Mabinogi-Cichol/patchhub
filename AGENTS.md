@@ -8,7 +8,7 @@
 
 ## 项目技能
 
-- 开发计划、设计方案、修复方案及开发完成后的代码过度设计审阅使用 [steam-patch-overengineering-review](.agents/skills/steam-patch-overengineering-review/SKILL.md)（可显式调用 `$steam-patch-overengineering-review`）。以本文件规则为准，审查防御策略及其他设计复杂度的实际依据与必要性，并沿代码实际执行路径核对原则落地，默认输出审阅意见。
+- 开发计划、设计方案、修复方案及开发完成后的代码过度设计审阅使用 [overengineering-review](.agents/skills/overengineering-review/SKILL.md)（可显式调用 `$overengineering-review`）。以本文件规则为准，审查防御策略及其他设计复杂度的实际依据与必要性，并沿代码实际执行路径核对原则落地，默认输出审阅意见。
 
 - 本项目版本发布、Release 维护与发行附件核验使用 [steam-patch-release](.agents/skills/steam-patch-release/SKILL.md)（可显式调用 `$steam-patch-release`）。Release 标题必须与版本 Tag 完全一致，例如 `v0.1.0`，不附加项目名、首发说明或其他后缀。
 - 用户明确要求提交本项目 Git 改动时，使用 [steam-patch-git-commit](.agents/skills/steam-patch-git-commit/SKILL.md)（可显式调用 `$steam-patch-git-commit`）。项目版本已从个人记忆迁入并纳入 Git，后续以仓库文件为准。
