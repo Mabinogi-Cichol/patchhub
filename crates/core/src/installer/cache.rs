@@ -32,7 +32,7 @@ impl<'a> CacheService<'a> {
         let roots = self.roots()?;
         let mut state = Walk::default();
         for root in roots {
-            inspect_tree(&root, &mut state);
+            inspect_tree(root, &mut state);
         }
         Ok(CacheInventory {
             total_bytes: state.bytes,
@@ -343,42 +343,69 @@ impl Walk {
         Ok(())
     }
 }
-/// Read-only inventory. Nested directories are drained with a local stack so the
-/// walk depth is not limited by the OS thread stack.
-fn inspect_tree(root: &Node, state: &mut Walk) {
-    let mut dirs: Vec<Node> = Vec::new();
-    inspect_children(root, &mut dirs, state);
-    while let Some(dir) = dirs.pop() {
-        inspect_children(&dir, &mut dirs, state);
-    }
+/// Read-only inventory. Directories are walked depth-first with a local stack of
+/// in-progress frames: each frame keeps one open directory handle plus its
+/// enumeration cursor, so a directory's whole subtree is drained before its next
+/// sibling is opened. Open handles therefore stay bounded by the current depth
+/// (not by the number of sibling directories), and the OS thread stack is unused.
+struct InspectFrame {
+    node: Node,
+    names: Vec<OsString>,
+    index: usize,
+    loaded: bool,
 }
-fn inspect_children(parent: &Node, dirs: &mut Vec<Node>, state: &mut Walk) {
-    match parent.names() {
-        Ok(names) => {
-            for name in names {
-                inspect_entry(parent, &name, dirs, state);
+fn inspect_tree(root: Node, state: &mut Walk) {
+    let mut stack = vec![InspectFrame {
+        node: root,
+        names: Vec::new(),
+        index: 0,
+        loaded: false,
+    }];
+    while let Some(last) = stack.len().checked_sub(1) {
+        if !stack[last].loaded {
+            stack[last].loaded = true;
+            match stack[last].node.names() {
+                Ok(names) => stack[last].names = names,
+                Err(e) => {
+                    let frame = stack.pop().unwrap();
+                    state.fail(failure(&frame.node.path, &e));
+                    continue;
+                }
             }
         }
-        Err(e) => state.fail(failure(&parent.path, &e)),
-    }
-}
-fn inspect_entry(parent: &Node, name: &OsStr, dirs: &mut Vec<Node>, state: &mut Walk) {
-    let result = (|| {
-        state.visit()?;
-        if protected(name) {
-            return Err(unknown());
+        if stack[last].index >= stack[last].names.len() {
+            stack.pop();
+            continue;
         }
-        let node = parent.child(name, false)?;
-        let meta = node.file.metadata()?;
-        if meta.is_dir() {
-            dirs.push(node);
-        } else {
-            state.record(meta.len())?;
+        let name = stack[last].names[stack[last].index].clone();
+        stack[last].index += 1;
+        let result = (|| -> io::Result<Option<Node>> {
+            state.visit()?;
+            if protected(&name) {
+                return Err(unknown());
+            }
+            let node = stack[last].node.child(&name, false)?;
+            let meta = node.file.metadata()?;
+            if meta.is_dir() {
+                Ok(Some(node))
+            } else {
+                state.record(meta.len())?;
+                Ok(None)
+            }
+        })();
+        match result {
+            Ok(Some(node)) => stack.push(InspectFrame {
+                node,
+                names: Vec::new(),
+                index: 0,
+                loaded: false,
+            }),
+            Ok(None) => {}
+            Err(e) => {
+                let path = stack[last].node.path.join(&name);
+                state.fail(failure(&path, &e));
+            }
         }
-        Ok(())
-    })();
-    if let Err(e) = result {
-        state.fail(failure(&parent.path.join(name), &e));
     }
 }
 /// Deletes every child of a root directory (the root itself is retained).
@@ -835,17 +862,26 @@ mod native {
                     }
                 }
             }
-            let captured = q.child(item, false)?;
-            if !same(&self.file, &captured.file)? {
-                restore(&q, parent, name);
-                let _ = unlink(&parent.file, OsStr::new(&quarantine), true);
-                return Err(unsafe_path());
+            let captured = q.child(item, false).and_then(|captured| {
+                if !same(&self.file, &captured.file)? {
+                    return Err(unsafe_path());
+                }
+                Ok(captured)
+            });
+            match captured {
+                Ok(item) => Ok(Captured {
+                    q,
+                    item,
+                    quarantine: OsString::from(quarantine),
+                }),
+                Err(error) => {
+                    // Any failure after the rename restores the original name and
+                    // removes the quarantine, matching the pre-rewrite recursion.
+                    restore(&q, parent, name);
+                    let _ = unlink(&parent.file, OsStr::new(&quarantine), true);
+                    Err(error)
+                }
             }
-            Ok(Captured {
-                q,
-                item: captured,
-                quarantine: OsString::from(quarantine),
-            })
         }
     }
     /// No-replace restore keeps racing new cache entries untouched (Linux only).
@@ -1396,6 +1432,33 @@ mod tests {
         assert_eq!(result.deleted, 161);
         assert!(!paths.content_dir().join("d").exists());
         assert_eq!(CacheService::new(&host).inspect().unwrap().entries, 0);
+    }
+    #[test]
+    fn wide_and_deep_cache_tree_is_fully_inventoried() {
+        let (_dir, host) = fixture();
+        let paths = host.installer_paths();
+        // More sibling directories than a typical low fd/handle limit: the walk
+        // must open one directory at a time, not every sibling up front.
+        for index in 0..300 {
+            let dir = paths.content_dir().join(format!("wide-{index}"));
+            fs::create_dir(&dir).unwrap();
+            fs::write(dir.join("payload"), b"w").unwrap();
+        }
+        // A nested chain keeps the deep case covered alongside the wide level.
+        let mut deep = paths.content_dir().join("chain");
+        for _ in 0..150 {
+            deep.push("d");
+        }
+        fs::create_dir_all(&deep).unwrap();
+        fs::write(deep.join("payload"), b"z").unwrap();
+        let inventory = CacheService::new(&host).inspect().unwrap();
+        assert_eq!(inventory.entries, 300 + 300 + 1 + 150 + 1);
+        assert_eq!(inventory.total_bytes, 300 + 1);
+        assert!(
+            inventory.diagnostics.is_empty(),
+            "{:?}",
+            inventory.diagnostics
+        );
     }
     #[test]
     #[ignore = "creates and clears >100k real entries; run explicitly with --ignored"]
