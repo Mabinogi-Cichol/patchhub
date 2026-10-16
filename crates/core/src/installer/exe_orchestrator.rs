@@ -153,7 +153,9 @@ fn run(
     {
         return Err(Error::code("insufficient_space"));
     }
-    operation::stage("analyzing_installer", Some(acquired.size), None);
+    // The sandboxed worker streams no incremental progress, so keep this stage
+    // indeterminate instead of a determinate bar stuck at 0%.
+    operation::stage("analyzing_installer", None, None);
     let descriptor =
         json!({"action":"analyze_behavior","exe_sha256":acquired.sha256,"exe_size":acquired.size});
     let analysis = deps
@@ -245,11 +247,9 @@ fn run(
         report_bytes.len() as u64,
     )
     .map_err(error)?;
-    operation::stage(
-        "extracting",
-        Some(report.payload_bytes().map_err(error)?),
-        Some(report.payload().len()),
-    );
+    // Conversion also runs inside the worker without progress events; keep the
+    // stage indeterminate rather than a fake 0%.
+    operation::stage("extracting", None, None);
     let b = report.binding();
     let conversion = json!({"action":"convert_behavior","exe_sha256":b.exe_sha256,"exe_size":b.exe_size,
         "metadata_sha256":b.metadata_sha256,"behavior_sha256":b.behavior_sha256,"payload":report.payload()});
