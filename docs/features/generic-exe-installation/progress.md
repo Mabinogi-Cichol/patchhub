@@ -261,3 +261,14 @@
 ## 2026-10-15：Git 归档
 
 - 用户要求提交目前为止的改动。安装器修复与必要测试已独立提交 `439408d`（fix(installer): 移除安装器默认值准入并修复夏日补丁解析）；本功能设计/取证/施工与部署验收另作独立文档提交，备份全清计划属于另一功能。沿用本 session 已通过验证，没有新增产品代码或重复测试。
+
+## 2026-10-17：分析与提取阶段进度显示修复（Deck 实机反馈）
+
+- 背景：用户在新版 CLI 的实机 EXE 安装中反馈"分析""提取"阶段进度恒为 0%（进入"核对"后恢复）。核对部署前后多轮实机记录（10-08~10-10、10-16 同一 3.79 GB 包）与本次：两阶段 `bytes_done` 全程为 0，属实现以来的既有显示行为，非本轮部署引入。这两个阶段的工作（安装包行为分析、载荷转换）在沙箱 worker 内一次性执行；worker 协议只返回最终结果、没有增量进度通道，核心此前仅上报阶段名与总量，UI 按"已处理/总量"得到恒 0% 的确定进度条。
+- 修复：按既有"未知 total 不伪造百分比"约定，`exe_orchestrator.rs` 的 `analyzing_installer` 与 `extracting` 阶段不再上报 total（`operation::stage(name, None, None)`）；Decky/Windows 前端对未知 total 显示不确定进度动画（与 planning/cleanup 一致）。真实百分比仍不可得（worker 无进度通道），本修复只消除假 0%。
+- 验证（Windows）：`cargo fmt --all --check` 通过；`cargo test -p steam-patch-core --lib` 407 passed / 0 failed / 6 ignored；`cargo test -p steam-patch-cli` 全部通过（含集成套件）。
+- 验证（Linux，WSL `scripts/build-linux.sh`）：core 415 passed / 0 failed / 6 ignored；CLI 47+1+2 passed；release 产物 `steam-patch` 14,306,728 B `dc0c6d95…`（`sf-worker` 未变 `28b64f4d…`）。
+- 打包：`package:plugin` + `package-artifacts.py --platform decky`；ZIP 7,231,185 B sha256 `bcd725d7…`，24 成员；ZIP 内两个 ELF 哈希/755 权限与 runtime.json 摘要核对通过；与线上清单相比仅 `bin/steam-patch` 与 `bin/runtime.json` 变化（`dist/index.js` 保持 `996223c2…`）。
+- 部署：远端暂存 `/home/deck/steam-patch-validation/exe-progress-stage-fix-20261017/`（上传哈希一致）→ Loader `utilities/install_plugin` + `confirm_plugin_install`（prompt 参数 `steam-patch-manager` / `dev` / 本轮 hash / type 1 核对一致）；正式目录 24/24 与包内清单全等、`bin/*` 权限保持、`plugin_loader` active、实例 1 / 版本 0.1.0；HTTP bundle（URL 编码插件名路由）200、115,789 B、sha `996223c2…`；RPC `list_tasks` 31 全终态、`list_transactions` 18、`scan(false)` 28 实例 / 4 来源；Loader pluginOrder/disabled/frozen/hidden 前后一致；远端暂存已清理、隧道已关闭。
+- 关联实机证据：修复部署前，用户在新版 CLI 上完成一单 3.53 GiB EXE 安装（task `8d0c735d-…`，终态 completed/cleanup），分析→提取→核对→写入→清理全流程实机跑通。
+- 待验证：修复后的不确定进度显示待下一次实机 EXE 安装确认（用户操作）；Windows 宿主同项。证据在忽略目录 `.artifacts/defensive-logic-deck-20261017/`（stagefix 相关文件与本轮 ZIP 副本、`verify-zip-stagefix.py`、`compare-stagefix.py`）。
