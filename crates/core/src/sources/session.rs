@@ -11,9 +11,7 @@ use super::model::{
     QueryContext, SourceCandidate, SourceRole, SourceRule, Variant,
 };
 use super::registry::{self, SourceRegistry};
-use super::{
-    invalid, Result, PARSER_VERSION, QUERY_VERSION, SOURCES_ENCODING_VERSION,
-};
+use super::{invalid, Result, PARSER_VERSION, QUERY_VERSION, SOURCES_ENCODING_VERSION};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};

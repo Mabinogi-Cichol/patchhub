@@ -1651,7 +1651,10 @@ fn external_local_zip_is_adopted_into_managed_plan_archive() {
     let plan = archive_task_plan(&f, "external-copy").unwrap();
     adopt_external_plan_archive_at(&f.state, &plan.plan_id).unwrap();
     let journal = f.journal(&plan.plan_id);
-    assert_eq!(journal["archive_source"]["managed"], serde_json::json!(true));
+    assert_eq!(
+        journal["archive_source"]["managed"],
+        serde_json::json!(true)
+    );
     let recorded = PathBuf::from(journal["archive_source"]["path"].as_str().unwrap());
     assert_eq!(recorded.file_name().unwrap(), "payload.zip");
     let managed = f.job_file(&plan.plan_id, "payload.zip");
@@ -1729,7 +1732,7 @@ fn cache_cleanup_retains_unfinished_archive_source_and_releases_terminal_cache()
     let host =
         ValidatedHostContext::new(&f.state, std::slice::from_ref(&f.library), platform).unwrap();
     let paths = host.installer_paths();
-    installer::init_atomic(&paths).unwrap();
+    installer::init_atomic(paths).unwrap();
     let archive = paths.downloads_dir().join("retained.zip");
     fs::copy(&f.archive, &archive).unwrap();
     let game = steam::scan(std::slice::from_ref(&f.library))

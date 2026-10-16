@@ -369,8 +369,9 @@ fn run_internal(
         thread::spawn(move || read_bounded(stdout, None, OVERFLOW_STDOUT, stdout_flag));
     let stderr = child.stderr.take().expect("stderr piped");
     let stderr_flag = Arc::clone(&overflow);
-    let stderr_join =
-        thread::spawn(move || read_bounded(stderr, Some(MAX_STDERR_BYTES), OVERFLOW_STDERR, stderr_flag));
+    let stderr_join = thread::spawn(move || {
+        read_bounded(stderr, Some(MAX_STDERR_BYTES), OVERFLOW_STDERR, stderr_flag)
+    });
 
     let end = loop {
         if cancel.is_some_and(|c| c.load(Ordering::Acquire)) {

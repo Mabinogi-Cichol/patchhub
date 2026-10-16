@@ -16,7 +16,7 @@ SHORT_URL = "https://ba.sh/tz4y"
 
 
 def read_command(path):
-    commands = re.findall(r"```bash\n(curl [^\n]+)\n```", path.read_text(encoding="utf-8"))
+    commands = re.findall(r"```bash[ \t]*\n[ \t]*(curl [^\n]+?)[ \t]*\n[ \t]*```", path.read_text(encoding="utf-8"))
     return next(command for command in commands if command == f"curl -fsSL {SHORT_URL} | bash")
 
 

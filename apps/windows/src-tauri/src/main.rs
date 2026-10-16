@@ -707,10 +707,7 @@ fn cancel_job(stdin: &StdinHandle, cancelled: &AtomicBool) -> Result<(), HostErr
 
 /// Wire rejection cancels the task and closes the control pipe; it never
 /// terminates the writer process while it may be applying or rolling back.
-fn cancel_and_close<W: Write>(
-    stdin: &Arc<Mutex<ClosableWriter<W>>>,
-    cancelled: &AtomicBool,
-) {
+fn cancel_and_close<W: Write>(stdin: &Arc<Mutex<ClosableWriter<W>>>, cancelled: &AtomicBool) {
     cancelled.store(true, Ordering::SeqCst);
     if let Ok(mut control) = stdin.lock() {
         let _ = write_control_line(&mut *control, b"cancel\n");

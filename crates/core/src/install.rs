@@ -1655,7 +1655,11 @@ fn copy_external_archive(
     if bytes != expected_size || actual_size != expected_size || digest != expected_hash {
         return Err(fail(invalid("archive_source_changed")));
     }
-    sync_dir(destination.parent().ok_or_else(|| invalid("missing_parent"))?)?;
+    sync_dir(
+        destination
+            .parent()
+            .ok_or_else(|| invalid("missing_parent"))?,
+    )?;
     Ok(())
 }
 

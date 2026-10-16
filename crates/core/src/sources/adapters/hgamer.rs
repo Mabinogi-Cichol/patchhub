@@ -556,7 +556,10 @@ mod tests {
     #[test]
     fn detail_requests_are_not_capped() {
         let fake = Arc::new(FakeFetcher::new());
-        fake.push(response(SEARCH_MANY, "https://hgamer.tw/zh-CN/search?q=Game"));
+        fake.push(response(
+            SEARCH_MANY,
+            "https://hgamer.tw/zh-CN/search?q=Game",
+        ));
         for index in 1..=7 {
             fake.push(response(
                 "<html><body></body></html>",

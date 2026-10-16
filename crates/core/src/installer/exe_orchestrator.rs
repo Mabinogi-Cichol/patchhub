@@ -101,11 +101,9 @@ pub(crate) fn execute_exe(
         &inputs.selection.selection_id,
     )
     .map_err(error)?;
-    control.run_with_cause(
-        deps.cancel,
-        deps.cancel_reason,
-        || run(&inputs, &deps, &control, &binding).map(super::InstallExecution::fresh),
-    )
+    control.run_with_cause(deps.cancel, deps.cancel_reason, || {
+        run(&inputs, &deps, &control, &binding).map(super::InstallExecution::fresh)
+    })
 }
 fn boundary(deps: &ExeInstallDeps<'_>, control: &TaskControl) -> Result<()> {
     if let Some(cause) = (deps.cancel_reason)() {
@@ -226,9 +224,12 @@ fn run(
     drop(analysis);
     let sizes =
         space::original_sizes(&inputs.game.install_path, report.payload()).map_err(error)?;
-    let budget =
-        space::SpaceBudget::for_conversion(acquired.size, report.payload_bytes().map_err(error)?, &sizes)
-            .map_err(error)?;
+    let budget = space::SpaceBudget::for_conversion(
+        acquired.size,
+        report.payload_bytes().map_err(error)?,
+        &sizes,
+    )
+    .map_err(error)?;
     let evidence = budget
         .inspect(deps.paths.root(), &inputs.game.install_path)
         .map_err(error)?;

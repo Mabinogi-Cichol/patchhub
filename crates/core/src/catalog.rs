@@ -341,8 +341,7 @@ pub fn detect_with_diagnostics(
     let files: Vec<_> = rules
         .into_iter()
         .map(|(path, expected)| {
-            let evidence =
-                crate::detection::inspect_file(install, path, expected, None, cancel);
+            let evidence = crate::detection::inspect_file(install, path, expected, None, cancel);
             let result = FileEvidence {
                 path: path.clone(),
                 status: evidence.status.as_str().into(),

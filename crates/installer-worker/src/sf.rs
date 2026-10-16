@@ -380,8 +380,8 @@ fn write_end_records(w: &mut impl Write, count: u64, size: u64, start: u64) -> R
         u16le(w, 45)?;
         u32le(w, 0)?;
         u32le(w, 0)?;
-        u64le(w, count as u64)?;
-        u64le(w, count as u64)?;
+        u64le(w, count)?;
+        u64le(w, count)?;
         u64le(w, size)?;
         u64le(w, start)?;
         u32le(w, 0x07064b50)?;
@@ -426,8 +426,8 @@ fn write_zip(w: &mut File, data: &[u8], report: &Value, selected: &[Payload]) ->
         require(name.len() <= u16::MAX as usize, "normalized_zip_path_limit")?;
         let flags = if name.is_ascii() { 0 } else { 0x800 };
         let size = number(row, "unpacked_size")?;
-        let crc = u32::try_from(number(row, "crc32")?)
-            .map_err(|_| Error("invalid_report".into()))?;
+        let crc =
+            u32::try_from(number(row, "crc32")?).map_err(|_| Error("invalid_report".into()))?;
         let start = w.stream_position()?;
 
         u32le(w, 0x04034b50)?;
@@ -607,7 +607,10 @@ mod tests {
         // The classic EOCD count is saturated (not truncated) and sits last.
         let eocd = &at[at.len() - 22..];
         assert_eq!(&eocd[..4], &0x06054b50u32.to_le_bytes());
-        assert_eq!(u16::from_le_bytes(eocd[8..10].try_into().unwrap()), u16::MAX);
+        assert_eq!(
+            u16::from_le_bytes(eocd[8..10].try_into().unwrap()),
+            u16::MAX
+        );
         assert_eq!(at.len(), 98);
     }
 

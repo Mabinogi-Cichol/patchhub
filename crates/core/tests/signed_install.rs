@@ -956,74 +956,44 @@ fn recovery_revalidates_committed_uninstall_intent_against_trusted_steam_instanc
 #[test]
 fn typed_cancel_with_rollback_cleanup_failure_remains_cancelled_on_replay() {
     use std::sync::atomic::AtomicBool;
-    for (signal, kind, code) in [(1, FailureKind::UserCancelled, "cancelled")] {
-        let f = Fixture::new();
-        let p = f.provider();
-        let lease = Arc::new(Lease::default());
-        let changed_lease = lease.clone();
-        let paths = steam_patch_core::installer::InstallerPaths::new(&f.state);
-        let request = format!("cleanup-cancel-{signal}");
-        let result = steam_patch_core::operation::run(
-            Arc::new(AtomicBool::new(false)),
-            move |progress| {
-                if progress.stage == "writing" && progress.files_done == 1 {
-                    let job = fs::read_dir(paths.jobs_dir())
-                        .unwrap()
-                        .map(Result::unwrap)
-                        .find(|entry| entry.file_type().unwrap().is_dir())
-                        .unwrap()
-                        .path();
-                    let stage = job.join("0.stage");
-                    if stage.exists() {
-                        fs::remove_file(&stage).unwrap();
-                    }
-                    fs::create_dir(&stage).unwrap();
-                    changed_lease.0.store(signal, Ordering::Release);
-                    // Wait for the actual task monitor to acknowledge this signal.
-                    // This fixture exercises cancellation before commit, not late cancellation.
-                    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
-                    while !job.join("revoked").is_file() && std::time::Instant::now() < deadline {
-                        std::thread::sleep(std::time::Duration::from_millis(1));
-                    }
-                    assert!(
-                        job.join("revoked").is_file(),
-                        "task monitor must acknowledge cancellation"
-                    );
-                    std::thread::sleep(std::time::Duration::from_millis(20));
+    let (signal, kind, code) = (1, FailureKind::UserCancelled, "cancelled");
+    let f = Fixture::new();
+    let p = f.provider();
+    let lease = Arc::new(Lease::default());
+    let changed_lease = lease.clone();
+    let paths = steam_patch_core::installer::InstallerPaths::new(&f.state);
+    let request = format!("cleanup-cancel-{signal}");
+    let result = steam_patch_core::operation::run(
+        Arc::new(AtomicBool::new(false)),
+        move |progress| {
+            if progress.stage == "writing" && progress.files_done == 1 {
+                let job = fs::read_dir(paths.jobs_dir())
+                    .unwrap()
+                    .map(Result::unwrap)
+                    .find(|entry| entry.file_type().unwrap().is_dir())
+                    .unwrap()
+                    .path();
+                let stage = job.join("0.stage");
+                if stage.exists() {
+                    fs::remove_file(&stage).unwrap();
                 }
-            },
-            || {
-                f.run(
-                    &p,
-                    &lease,
-                    &Offline,
-                    &request,
-                    true,
-                    InstallOperation::Overwrite,
-                )
-            },
-        )
-        .unwrap();
-        assert_eq!(result.state, "rolled_back");
-        assert_eq!(result.disposition, Disposition::Cancelled);
-        assert_eq!(result.cause.as_ref().unwrap().kind, kind);
-        assert_eq!(result.cause.as_ref().unwrap().code, code);
-        assert!(result
-            .error
-            .as_deref()
-            .unwrap()
-            .contains("; cleanup_pending:"));
-        assert!(result
-            .cause
-            .as_ref()
-            .unwrap()
-            .detail
-            .as_deref()
-            .unwrap()
-            .starts_with("cleanup_pending:"));
-        f.unchanged();
-        let replay = f
-            .run(
+                fs::create_dir(&stage).unwrap();
+                changed_lease.0.store(signal, Ordering::Release);
+                // Wait for the actual task monitor to acknowledge this signal.
+                // This fixture exercises cancellation before commit, not late cancellation.
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+                while !job.join("revoked").is_file() && std::time::Instant::now() < deadline {
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                }
+                assert!(
+                    job.join("revoked").is_file(),
+                    "task monitor must acknowledge cancellation"
+                );
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+        },
+        || {
+            f.run(
                 &p,
                 &lease,
                 &Offline,
@@ -1031,11 +1001,40 @@ fn typed_cancel_with_rollback_cleanup_failure_remains_cancelled_on_replay() {
                 true,
                 InstallOperation::Overwrite,
             )
-            .unwrap();
-        assert_eq!(replay.transaction_id, result.transaction_id);
-        assert_eq!(replay.cause, result.cause);
-        assert_eq!(replay.disposition, Disposition::Cancelled);
-    }
+        },
+    )
+    .unwrap();
+    assert_eq!(result.state, "rolled_back");
+    assert_eq!(result.disposition, Disposition::Cancelled);
+    assert_eq!(result.cause.as_ref().unwrap().kind, kind);
+    assert_eq!(result.cause.as_ref().unwrap().code, code);
+    assert!(result
+        .error
+        .as_deref()
+        .unwrap()
+        .contains("; cleanup_pending:"));
+    assert!(result
+        .cause
+        .as_ref()
+        .unwrap()
+        .detail
+        .as_deref()
+        .unwrap()
+        .starts_with("cleanup_pending:"));
+    f.unchanged();
+    let replay = f
+        .run(
+            &p,
+            &lease,
+            &Offline,
+            &request,
+            true,
+            InstallOperation::Overwrite,
+        )
+        .unwrap();
+    assert_eq!(replay.transaction_id, result.transaction_id);
+    assert_eq!(replay.cause, result.cause);
+    assert_eq!(replay.disposition, Disposition::Cancelled);
 }
 
 #[test]

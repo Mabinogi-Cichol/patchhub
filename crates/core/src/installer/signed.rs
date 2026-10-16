@@ -337,9 +337,8 @@ fn install_signed_inner(
             ),
         };
         boundary(deps, control)?;
-        authorization::validate(&authorization, &current).map_err(|e| {
-            DomainError::new(e.code.clone(), e.to_string())
-        })?;
+        authorization::validate(&authorization, &current)
+            .map_err(|e| DomainError::new(e.code.clone(), e.to_string()))?;
         boundary(deps, control)?;
         // §4.3: an external local ZIP must not leave the journal pointing at a
         // user-controlled path. Adopt it into the owned plan archive before apply.

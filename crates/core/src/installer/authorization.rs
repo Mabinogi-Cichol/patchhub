@@ -653,15 +653,9 @@ mod tests {
         let rule = "1".repeat(64);
         let conditions = "2".repeat(64);
         assert_eq!(
-            authorize(input(
-                facts(),
-                "not-a-uuid",
-                &candidate,
-                &rule,
-                &conditions
-            ))
-            .unwrap_err()
-            .code,
+            authorize(input(facts(), "not-a-uuid", &candidate, &rule, &conditions))
+                .unwrap_err()
+                .code,
             "authorization_plan_invalid"
         );
 
@@ -669,14 +663,7 @@ mod tests {
         // action preconditions are evaluated at the install boundary instead.
         let mut failed_facts = facts();
         failed_facts.build = Fact::failed_code("build_not_verified", "x");
-        authorize(input(
-            failed_facts,
-            PLAN,
-            &candidate,
-            &rule,
-            &conditions,
-        ))
-        .unwrap();
+        authorize(input(failed_facts, PLAN, &candidate, &rule, &conditions)).unwrap();
     }
 
     #[test]

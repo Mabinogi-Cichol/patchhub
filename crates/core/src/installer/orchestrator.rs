@@ -302,8 +302,12 @@ pub(crate) fn map_download_error(error: io::Error) -> ZipTaskError {
     if code.starts_with("insufficient_space:") {
         return ZipTaskError::new("insufficient_space", code);
     }
-    if ["download_cancelled", "download_hash_mismatch", "download_size_overflow"]
-        .contains(&code.as_str())
+    if [
+        "download_cancelled",
+        "download_hash_mismatch",
+        "download_size_overflow",
+    ]
+    .contains(&code.as_str())
     {
         ZipTaskError::code(code)
     } else {
@@ -551,17 +555,13 @@ pub(crate) fn execute_zip(
     )
     .map_err(internal)?;
     let requested = deps.cancel;
-    control.run_with_cause(
-        requested,
-        deps.cancel_reason,
-        || {
-            let deps = ZipInstallDeps {
-                cancel: &control.cancel,
-                ..deps
-            };
-            install_zip_inner(inputs, deps, &control, requested)
-        },
-    )
+    control.run_with_cause(requested, deps.cancel_reason, || {
+        let deps = ZipInstallDeps {
+            cancel: &control.cancel,
+            ..deps
+        };
+        install_zip_inner(inputs, deps, &control, requested)
+    })
 }
 
 fn install_zip_inner(

@@ -47,17 +47,18 @@ impl<'a> CacheService<'a> {
         let roots = self.roots()?;
         let tasks = self.task_root()?;
         lock.validate()?;
-        let mut state = Walk::default();
-        state.retained_archives =
-            crate::install::protected_archive_sources_at(self.host.installer_paths().root())
-                .map_err(|e| {
-                    DomainError::new("cleanup_failed", format!("archive retention: {e}"))
-                })?;
+        let mut state = Walk {
+            retained_archives: crate::install::protected_archive_sources_at(
+                self.host.installer_paths().root(),
+            )
+            .map_err(|e| DomainError::new("cleanup_failed", format!("archive retention: {e}")))?,
+            ..Walk::default()
+        };
         for root in roots {
             if !validate_lock(Some(&lock), &mut state) {
                 break;
             }
-            walk(&root, true, 0, &mut state);
+            remove_children(&root, false, &mut state);
         }
         self.reclaim_tasks(Some(&lock), tasks.as_ref(), &mut state);
         let status = if state.failure_count == 0 {

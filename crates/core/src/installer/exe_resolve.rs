@@ -257,12 +257,9 @@ mod tests {
 
         let mut query = super::super::orchestrator::tests::query();
         query.instance_id = Some("instance".to_string());
-        let selection = super::super::manual_selection::selection_id(
-            &candidate,
-            &query,
-            &candidate.mirrors[0],
-        )
-        .unwrap();
+        let selection =
+            super::super::manual_selection::selection_id(&candidate, &query, &candidate.mirrors[0])
+                .unwrap();
         let resolved = resolve_exe(sources.registry(), &query, &selection).unwrap();
         assert_eq!(resolved.source_id, "custom-exe");
         assert_eq!(resolved.download_url, "https://dl.mirror.example/a.exe");

@@ -259,8 +259,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let paths = InstallerPaths::new(dir.path());
         super::super::init_atomic(&paths).unwrap();
-        let control =
-            TaskControl::new(&paths, "failure", "instance", "selection").unwrap();
+        let control = TaskControl::new(&paths, "failure", "instance", "selection").unwrap();
         fs::create_dir(control.job.join("revoked")).unwrap();
         assert!(control.revoke().is_err());
         assert!(control.cancel.load(Ordering::Acquire));
@@ -311,14 +310,10 @@ mod tests {
             let paths = InstallerPaths::new(dir.path());
             super::super::init_atomic(&paths).unwrap();
             let control = TaskControl::new(&paths, "typed", "instance", "selection").unwrap();
-            control.run_with_cause(
-                &AtomicBool::new(requested),
-                &|| external,
-                || {
-                    assert_eq!(control.check().unwrap_err().to_string(), expected.code());
-                    assert!(control.job.join("revoked").exists());
-                },
-            );
+            control.run_with_cause(&AtomicBool::new(requested), &|| external, || {
+                assert_eq!(control.check().unwrap_err().to_string(), expected.code());
+                assert!(control.job.join("revoked").exists());
+            });
             assert_eq!(control.cancellation_cause(), Some(expected));
             assert!(!control.job.exists());
         }

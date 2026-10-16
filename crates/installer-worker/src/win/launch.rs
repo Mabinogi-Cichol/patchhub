@@ -338,8 +338,7 @@ fn run_internal(
     let stdout_flag = Arc::clone(&overflow);
     let mut stdout_file =
         unsafe { File::from_raw_handle(take_handle(&mut stdout_pipe.read).0 as RawHandle) };
-    let stdout_join =
-        thread::spawn(move || read_bounded(&mut stdout_file, None, stdout_flag));
+    let stdout_join = thread::spawn(move || read_bounded(&mut stdout_file, None, stdout_flag));
 
     let stderr_flag = Arc::clone(&overflow);
     let mut stderr_file =
