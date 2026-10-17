@@ -68,7 +68,10 @@ pub struct PlannedChange {
     pub path: String,
     pub action: String,
     pub original_sha256: Option<String>,
-    pub installed_sha256: String,
+    /// Digest of the installed bytes. `None` before a direct extraction has
+    /// produced them; archive-backed plans always set it during preparation.
+    #[serde(default)]
+    pub installed_sha256: Option<String>,
     pub size: u64,
     /// Archive member this change was extracted from (`None` for journals written
     /// before the field existed, or for non-recipe callers). It lets the
@@ -137,6 +140,10 @@ pub struct Transaction {
     /// signed transactions, and for journals written before the field existed.
     #[serde(default)]
     pub content_id: Option<String>,
+    /// Direct EXE extraction: an unfinished journal is reported as incomplete
+    /// and never blocks a fresh install. Legacy rows omit this field.
+    #[serde(default)]
+    pub direct: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -316,6 +323,15 @@ fn regular_file(path: &Path) -> io::Result<File> {
     if !m.is_file() || linked(&m) {
         return Err(invalid("not_regular_file"));
     }
+    ensure_single_link(&file, &m)?;
+    Ok(file)
+}
+
+fn ensure_single_link(file: &File, m: &fs::Metadata) -> io::Result<()> {
+    #[cfg(unix)]
+    let _ = file;
+    #[cfg(windows)]
+    let _ = m;
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
@@ -352,7 +368,7 @@ fn regular_file(path: &Path) -> io::Result<File> {
             return Err(invalid("hard_link_rejected"));
         }
     }
-    Ok(file)
+    Ok(())
 }
 
 fn digest_reader(reader: &mut impl Read, limit: u64) -> io::Result<(String, u64)> {
@@ -448,6 +464,78 @@ fn sync_dir(path: &Path) -> io::Result<()> {
         let _ = path;
     }
     Ok(())
+}
+
+pub(crate) fn sync_directory(path: &Path) -> io::Result<()> {
+    sync_dir(path)
+}
+
+/// Open a direct-extraction target for overwrite, or create it after making its
+/// parents. Existing permissions are preserved by opening the existing inode;
+/// links and non-regular files are rejected before any truncation.
+pub(crate) fn open_direct_target(path: &Path) -> io::Result<File> {
+    safe_path(path)?;
+    match fs::symlink_metadata(path) {
+        Ok(m) if m.is_file() && !linked(&m) => {
+            let mut opts = OpenOptions::new();
+            opts.write(true).truncate(true);
+            #[cfg(windows)]
+            {
+                use std::os::windows::fs::OpenOptionsExt;
+                opts.custom_flags(0x0020_0000);
+            }
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                opts.custom_flags(0x2_0000);
+            }
+            let file = opts.open(path)?;
+            if linked(&fs::symlink_metadata(path)?) {
+                return Err(invalid("target_not_file"));
+            }
+            let m = file.metadata()?;
+            if !m.is_file() || linked(&m) {
+                return Err(invalid("target_not_file"));
+            }
+            ensure_single_link(&file, &m)?;
+            Ok(file)
+        }
+        Ok(_) => Err(invalid("target_not_file")),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {
+            let parent = path
+                .parent()
+                .ok_or_else(|| invalid("unsafe_path_component"))?;
+            safe_path(parent)?;
+            let mut missing = Vec::new();
+            let mut current = parent;
+            while !current.exists() {
+                missing.push(current.to_path_buf());
+                current = current
+                    .parent()
+                    .ok_or_else(|| invalid("unsafe_path_component"))?;
+            }
+            for dir in missing.iter().rev() {
+                fs::create_dir(dir)?;
+            }
+            if let Some(top) = missing.last().and_then(|p| p.parent()) {
+                sync_dir(top)?;
+            }
+            let mut opts = OpenOptions::new();
+            opts.write(true).create_new(true);
+            #[cfg(windows)]
+            {
+                use std::os::windows::fs::OpenOptionsExt;
+                opts.custom_flags(0x0020_0000);
+            }
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                opts.custom_flags(0x2_0000);
+            }
+            Ok(opts.open(path)?)
+        }
+        Err(e) => Err(e),
+    }
 }
 
 /// Legacy/default transactional root for a state dir: the state dir itself.
@@ -766,6 +854,7 @@ fn validate_job(job: &Job, id: &str) -> io::Result<()> {
         "rolled_back",
         "uninstalled",
         "needs_recovery",
+        "failed",
     ]
     .contains(&job.transaction.state.as_str())
         || job.progress.iter().any(|state| {
@@ -799,7 +888,10 @@ fn validate_job(job: &Job, id: &str) -> io::Result<()> {
     for change in &p.changes {
         relative(&change.path)?;
         if !names.insert(change.path.to_lowercase())
-            || !valid_hash(&change.installed_sha256)
+            || change
+                .installed_sha256
+                .as_ref()
+                .is_some_and(|h| !valid_hash(h))
             || change
                 .original_sha256
                 .as_ref()
@@ -886,8 +978,24 @@ fn ensure_no_active(
         }
         if Some(id.as_str()) != except
             && job.plan.instance_id == instance
-            && !["planned", "rolled_back", "uninstalled", "superseded"]
-                .contains(&job.transaction.state.as_str())
+            && job.transaction.direct
+            && job.transaction.state == "applying"
+        {
+            // A direct install has no recoverable original image. An interrupted
+            // run is reported as incomplete by recovery but must not block a
+            // fresh install.
+            continue;
+        }
+        if Some(id.as_str()) != except
+            && job.plan.instance_id == instance
+            && ![
+                "planned",
+                "rolled_back",
+                "uninstalled",
+                "superseded",
+                "failed",
+            ]
+            .contains(&job.transaction.state.as_str())
             && !(reinstall && job.transaction.state == "committed" && !job.uninstall_requested)
         {
             return Err(invalid("managed_install_exists_or_needs_recovery"));
@@ -1078,7 +1186,8 @@ pub(crate) fn prepare_for_request_at(
                     .iter()
                     .zip(&recipe.files)
                     .all(|(c, m)| {
-                        c.path == m.destination && c.installed_sha256 == m.installed_sha256
+                        c.path == m.destination
+                            && c.installed_sha256.as_deref() == Some(m.installed_sha256.as_str())
                     });
             if previous.uninstall_requested
                 || previous.plan.release_id != release.release_id
@@ -1289,7 +1398,7 @@ pub(crate) fn prepare_for_request_at(
                 path: mapping.destination.clone(),
                 action: if actual.is_some() { "replace" } else { "add" }.into(),
                 original_sha256: actual,
-                installed_sha256: mapping.installed_sha256.clone(),
+                installed_sha256: Some(mapping.installed_sha256.clone()),
                 size: copied,
                 source: Some(mapping.source.clone()),
             });
@@ -1348,6 +1457,7 @@ pub(crate) fn prepare_for_request_at(
         has_replacements: plan.changes.iter().any(|change| change.action != "add"),
         selection_id: selection_id.map(str::to_string),
         content_id: content_id.map(str::to_string),
+        direct: false,
     };
     let mut job = Job {
         progress: vec!["pending".into(); plan.changes.len()],
@@ -1512,50 +1622,10 @@ pub(crate) fn protected_archive_sources_at(root: &Path) -> io::Result<Vec<PathBu
     Ok(sources)
 }
 
-/// Transfer an EXE output from temporary worker ownership to its journal.
-/// The caller validates authorization before this handoff and holds CacheLock.
-pub(crate) fn retain_plan_archive_at(root: &Path, id: &str) -> io::Result<()> {
-    let store = Store::open_at(root)?;
-    let mut job = store.load(id)?;
-    if job.transaction.state != "planned" {
-        return Err(invalid("plan_already_consumed"));
-    }
-    let Some(source) = job.archive_source.as_mut() else {
-        return Ok(());
-    };
-    let destination = store.directory(id)?.join("payload.zip");
-    if source.path == destination {
-        return Ok(());
-    }
-    safe_path(&destination)?;
-    if destination.try_exists()? {
-        return Err(invalid("archive_handoff_exists"));
-    }
-    let mut input = regular_file(&source.path)?;
-    if input.metadata()?.len() != source.size
-        || digest_reader(&mut input, source.size)?.0 != source.sha256
-    {
-        return Err(invalid("archive_source_changed"));
-    }
-    drop(input);
-    // Worker staging and jobs live on the same installer volume. An unexpected
-    // cross-volume move fails before game mutation instead of making a huge copy.
-    fs::rename(&source.path, &destination)?;
-    sync_dir(
-        destination
-            .parent()
-            .ok_or_else(|| invalid("missing_parent"))?,
-    )?;
-    source.path = destination;
-    source.managed = true;
-    store.save(&mut job)
-}
-
 /// Adopt an external (non-managed) local source archive into the journal-owned
-/// plan-archive path (`jobs/<plan_id>/payload.zip`). Unlike
-/// [`retain_plan_archive_at`] the user's own file is **copied**, never renamed,
-/// and the copy is re-verified for exact size and full SHA-256 before the
-/// journal adopts it (design §4.3). A task plan must never keep depending on a
+/// plan-archive path (`jobs/<plan_id>/payload.zip`). The user's own file is
+/// **copied**, never renamed, and the copy is re-verified for exact size and
+/// full SHA-256 before the journal adopts it (design §4.3). A task plan must never keep depending on a
 /// user-controlled absolute path that a later move/delete/rename can invalidate.
 pub(crate) fn adopt_external_plan_archive_at(root: &Path, id: &str) -> io::Result<()> {
     let store = Store::open_at(root)?;
@@ -1727,7 +1797,7 @@ fn write_archive_member(
     let copied = operation::copy(&mut member.by_ref().take(limit), &mut output)?;
     output.sync_all()?;
     drop(output);
-    if copied != change.size || hash_at(temp)?.as_deref() != Some(&change.installed_sha256) {
+    if copied != change.size || hash_at(temp)?.as_deref() != change.installed_sha256.as_deref() {
         return Err(invalid("installed_hash_or_size_mismatch"));
     }
     sync_dir(temp.parent().ok_or_else(|| invalid("missing_parent"))?)
@@ -1775,7 +1845,10 @@ fn verified_archive_prefix(
         }
         hash.update(&buffer[..count]);
     }
-    if total != change.size || format!("{:x}", hash.finalize()) != change.installed_sha256 {
+    if total != change.size
+        || format!("{:x}", hash.finalize())
+            != change.installed_sha256.as_deref().unwrap_or_default()
+    {
         return Err(invalid("temporary_source_changed"));
     }
     Ok(matched && partial.read(&mut compare[..1])? == 0)
@@ -1855,7 +1928,7 @@ fn verify_all(job: &Job, installed: bool) -> io::Result<()> {
     for change in &job.plan.changes {
         let actual = hash_at(&target(&job.plan.install.install_path, &change.path)?)?;
         let expected = if installed {
-            Some(change.installed_sha256.as_str())
+            change.installed_sha256.as_deref()
         } else {
             change.original_sha256.as_deref()
         };
@@ -1928,7 +2001,7 @@ pub(crate) fn apply_at(root: &Path, plan_id: &str) -> io::Result<Transaction> {
         }
         for change in &job.plan.changes {
             if hash_at(&target(&job.plan.install.install_path, &change.path)?)?.as_deref()
-                != Some(change.installed_sha256.as_str())
+                != change.installed_sha256.as_deref()
             {
                 return Err(invalid("reinstall_unowned_or_incomplete"));
             }
@@ -1973,6 +2046,215 @@ pub(crate) fn apply_at(root: &Path, plan_id: &str) -> io::Result<Transaction> {
     Ok(job.transaction)
 }
 
+/// One resolved direct-extraction target, already checked to be inside the game.
+#[derive(Debug)]
+pub(crate) struct DirectTarget {
+    pub path: String,
+    pub file: PathBuf,
+}
+
+/// Held while the worker streams members into the game directory.
+#[derive(Debug)]
+pub(crate) struct DirectPlan {
+    pub plan_id: String,
+    pub targets: Vec<DirectTarget>,
+    pub _lock: File,
+}
+
+/// Record a direct EXE install before any game file is changed. No backup,
+/// staging image, archive reference or per-file override is created.
+pub(crate) fn begin_direct_at(
+    root: &Path,
+    install: &GameInstall,
+    release_id: &str,
+    selection_id: Option<&str>,
+    content_id: Option<&str>,
+    operation: InstallOperation,
+    files: &[(String, u64)],
+) -> io::Result<DirectPlan> {
+    let store = Store::open_at(root)?;
+    validate_install(install, &store.root)?;
+    ensure_no_active(
+        &store,
+        &install.instance_id,
+        None,
+        operation != InstallOperation::Install,
+    )?;
+    if files.is_empty() {
+        return Err(invalid("exe_manifest_invalid"));
+    }
+    let mut changes = Vec::with_capacity(files.len());
+    let mut targets = Vec::with_capacity(files.len());
+    let mut seen = HashSet::new();
+    let mut disk = 0u64;
+    for (path, size) in files {
+        relative(path)?;
+        if !seen.insert(path.to_lowercase()) {
+            return Err(invalid("journal_invalid"));
+        }
+        let dest = target(&install.install_path, path)?;
+        let action = match fs::symlink_metadata(&dest) {
+            Ok(m) if m.is_file() && !linked(&m) => "replace",
+            Ok(_) => return Err(invalid("target_not_file")),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => "add",
+            Err(e) => return Err(e),
+        };
+        disk = disk
+            .checked_add(*size)
+            .ok_or_else(|| invalid("size_overflow"))?;
+        changes.push(PlannedChange {
+            path: path.clone(),
+            action: action.into(),
+            original_sha256: None,
+            installed_sha256: None,
+            size: *size,
+            source: None,
+        });
+        targets.push(DirectTarget {
+            path: path.clone(),
+            file: dest,
+        });
+    }
+    let lock = game_lock(install)?;
+    let id = Uuid::new_v4().to_string();
+    let directory = store.directory(&id)?;
+    fs::create_dir(&directory)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&directory, fs::Permissions::from_mode(0o700))?;
+    }
+    if let Some(parent) = directory.parent() {
+        sync_dir(parent)?;
+    }
+    let plan = InstallPlan {
+        operation,
+        recipe_sha256: None,
+        plan_id: id.clone(),
+        instance_id: install.instance_id.clone(),
+        release_id: release_id.to_owned(),
+        catalog_revision: 0,
+        created_at: now(),
+        expires_at: None,
+        install: serde_json::from_value(
+            serde_json::to_value(install).map_err(|e| invalid(e.to_string()))?,
+        )
+        .map_err(|e| invalid(e.to_string()))?,
+        changes,
+        disk_requirement: disk,
+        space_budget: None,
+        blockers: Vec::new(),
+        preconditions: Vec::new(),
+    };
+    let transaction = Transaction {
+        transaction_id: id.clone(),
+        plan_id: id.clone(),
+        instance_id: plan.instance_id.clone(),
+        release_id: plan.release_id.clone(),
+        state: "applying".into(),
+        error: None,
+        created_at: now(),
+        updated_at: now(),
+        has_replacements: plan.changes.iter().any(|change| change.action != "add"),
+        selection_id: selection_id.map(str::to_string),
+        content_id: content_id.map(str::to_string),
+        direct: true,
+    };
+    let mut job = Job {
+        progress: vec!["pending".into(); plan.changes.len()],
+        plan,
+        transaction,
+        created_dirs: Vec::new(),
+        uninstall_requested: false,
+        transient_recovery: false,
+        progress_format: 1,
+        archive_source: None,
+    };
+    store.save(&mut job)?;
+    Ok(DirectPlan {
+        plan_id: id,
+        targets,
+        _lock: lock,
+    })
+}
+
+/// Persist the digests observed while streaming and commit atomically.
+pub(crate) fn commit_direct_at(
+    root: &Path,
+    plan_id: &str,
+    installed: &[(String, String)],
+) -> io::Result<Transaction> {
+    let store = Store::open_at(root)?;
+    let mut job = store.load(plan_id)?;
+    if job.transaction.state == "committed" {
+        return Ok(job.transaction);
+    }
+    if job.transaction.state != "applying" {
+        return Err(invalid("plan_already_consumed"));
+    }
+    let observed: std::collections::HashMap<&str, &str> = installed
+        .iter()
+        .map(|(path, sha)| (path.as_str(), sha.as_str()))
+        .collect();
+    if observed.len() != job.plan.changes.len() {
+        return Err(invalid("journal_invalid"));
+    }
+    for change in &mut job.plan.changes {
+        let sha = observed
+            .get(change.path.as_str())
+            .ok_or_else(|| invalid("journal_invalid"))?;
+        if !valid_hash(sha) {
+            return Err(invalid("journal_invalid"));
+        }
+        change.installed_sha256 = Some((*sha).to_owned());
+    }
+    job.progress = vec!["installed".into(); job.plan.changes.len()];
+    job.transaction.state = "committed".into();
+    job.transaction.error = None;
+    job.transaction.updated_at = now();
+    sql(store.conn.execute_batch("BEGIN IMMEDIATE"))?;
+    let outcome = (|| {
+        for id in store.ids()? {
+            if id == job.plan.plan_id {
+                continue;
+            }
+            let mut previous = store.load(&id)?;
+            if previous.plan.instance_id == job.plan.instance_id
+                && previous.transaction.state == "committed"
+            {
+                previous.transaction.state = "superseded".into();
+                store.save(&mut previous)?;
+            }
+        }
+        store.save(&mut job)
+    })();
+    if let Err(error) = outcome {
+        let _ = store.conn.execute_batch("ROLLBACK");
+        return Err(error);
+    }
+    if let Err(error) = sql(store.conn.execute_batch("COMMIT")) {
+        let _ = store.conn.execute_batch("ROLLBACK");
+        return Err(error);
+    }
+    operation::committed();
+    Ok(job.transaction)
+}
+
+/// Record an interrupted or failed direct install. Written game files stay as
+/// they are; there is no restore image and no recovery requirement.
+pub(crate) fn fail_direct_at(root: &Path, plan_id: &str, error: &str) -> io::Result<Transaction> {
+    let store = Store::open_at(root)?;
+    let mut job = store.load(plan_id)?;
+    if job.transaction.state == "committed" {
+        return Ok(job.transaction);
+    }
+    job.transaction.state = "failed".into();
+    job.transaction.error = Some(error.to_owned());
+    job.transaction.updated_at = now();
+    store.save(&mut job)?;
+    Ok(job.transaction)
+}
+
 fn apply_files(store: &Store, job: &mut Job) -> io::Result<()> {
     let mut backup_bytes = 0u64;
     for change in &job.plan.changes {
@@ -1998,7 +2280,7 @@ fn apply_files(store: &Store, job: &mut Job) -> io::Result<()> {
         operation::file(i, &change.path);
         if archive.is_none() {
             let stage = store.item(&job.plan.plan_id, i, "stage")?;
-            if hash_at(&stage)?.as_deref() != Some(&change.installed_sha256) {
+            if hash_at(&stage)?.as_deref() != change.installed_sha256.as_deref() {
                 return Err(invalid("staged_file_changed"));
             }
         }
@@ -2037,7 +2319,10 @@ fn apply_files(store: &Store, job: &mut Job) -> io::Result<()> {
             copy_checked(
                 &store.item(&job.plan.plan_id, i, "stage")?,
                 &temp,
-                &change.installed_sha256,
+                change
+                    .installed_sha256
+                    .as_deref()
+                    .ok_or_else(|| invalid("journal_invalid"))?,
             )?;
         }
         if hash_at(&dest)? != change.original_sha256 {
@@ -2053,7 +2338,7 @@ fn apply_files(store: &Store, job: &mut Job) -> io::Result<()> {
         safe_path(&dest)?;
         fs::rename(&temp, &dest)?;
         sync_dir(dest.parent().ok_or_else(|| invalid("missing_parent"))?)?;
-        if hash_at(&dest)?.as_deref() != Some(&change.installed_sha256) {
+        if hash_at(&dest)?.as_deref() != change.installed_sha256.as_deref() {
             return Err(invalid("post_install_hash_mismatch"));
         }
         job.progress[i] = "installed".into();
@@ -2102,7 +2387,9 @@ fn validate_temporary(store: &Store, job: &Job, index: usize) -> io::Result<bool
         return Ok(false);
     };
     let change = &job.plan.changes[index];
-    if hash == change.installed_sha256 || change.original_sha256.as_ref() == Some(&hash) {
+    if Some(&hash) == change.installed_sha256.as_ref()
+        || change.original_sha256.as_ref() == Some(&hash)
+    {
         return Ok(true);
     }
     if job.progress[index] == "writing" && job.archive_source.is_some() {
@@ -2116,7 +2403,10 @@ fn validate_temporary(store: &Store, job: &Job, index: usize) -> io::Result<bool
     let source = match job.progress[index].as_str() {
         "writing" => Some((
             store.item(&job.plan.plan_id, index, "stage")?,
-            change.installed_sha256.as_str(),
+            change
+                .installed_sha256
+                .as_deref()
+                .ok_or_else(|| invalid("journal_invalid"))?,
         )),
         "restoring" => match change.original_sha256.as_deref() {
             Some(expected) => Some((store.item(&job.plan.plan_id, index, "backup")?, expected)),
@@ -2138,7 +2428,7 @@ fn restore(store: &Store, job: &mut Job, uninstalling: bool) -> io::Result<()> {
     // Check the entire set first. Any conflict leaves all remaining live files untouched.
     for (i, change) in job.plan.changes.iter().enumerate() {
         let live = hash_at(&target(&job.plan.install.install_path, &change.path)?)?;
-        if live != change.original_sha256 && live.as_deref() != Some(&change.installed_sha256) {
+        if live != change.original_sha256 && live.as_deref() != change.installed_sha256.as_deref() {
             return Err(invalid(format!("recovery_conflict:{}", change.path)));
         }
         let backup = hash_at(&store.item(&job.plan.plan_id, i, "backup")?)?;
@@ -2148,7 +2438,7 @@ fn restore(store: &Store, job: &mut Job, uninstalling: bool) -> io::Result<()> {
         // A same-content reinstall can have identical original/installed
         // images. Before the first write no backup is needed to preserve it.
         if live != change.original_sha256
-            && live.as_deref() == Some(&change.installed_sha256)
+            && live.as_deref() == change.installed_sha256.as_deref()
             && change.original_sha256.is_some()
             && backup != change.original_sha256
         {
@@ -2178,7 +2468,7 @@ fn restore(store: &Store, job: &mut Job, uninstalling: bool) -> io::Result<()> {
         }
         let live = hash_at(&dest)?;
         if live != change.original_sha256 {
-            if live.as_deref() != Some(&change.installed_sha256) {
+            if live.as_deref() != change.installed_sha256.as_deref() {
                 return Err(invalid("recovery_conflict"));
             }
             job.progress[i] = "restoring".into();
@@ -2186,13 +2476,13 @@ fn restore(store: &Store, job: &mut Job, uninstalling: bool) -> io::Result<()> {
             let change = &job.plan.changes[i];
             if let Some(hash) = &change.original_sha256 {
                 copy_checked(&store.item(&job.plan.plan_id, i, "backup")?, &temp, hash)?;
-                if hash_at(&dest)?.as_deref() != Some(&change.installed_sha256) {
+                if hash_at(&dest)?.as_deref() != change.installed_sha256.as_deref() {
                     return Err(invalid("recovery_conflict"));
                 }
                 safe_path(&dest)?;
                 fs::rename(&temp, &dest)?;
             } else {
-                if hash_at(&dest)?.as_deref() != Some(&change.installed_sha256) {
+                if hash_at(&dest)?.as_deref() != change.installed_sha256.as_deref() {
                     return Err(invalid("recovery_conflict"));
                 }
                 fs::remove_file(&dest)?;
@@ -2266,22 +2556,48 @@ fn recover_selected_at(
             continue;
         }
         let job = store.load(&id)?;
-        if ["planned", "rolled_back", "uninstalled", "superseded"]
-            .contains(&job.transaction.state.as_str())
+        if [
+            "planned",
+            "rolled_back",
+            "uninstalled",
+            "superseded",
+            "failed",
+        ]
+        .contains(&job.transaction.state.as_str())
             || (job.transaction.state == "committed" && !job.uninstall_requested)
         {
             continue;
         }
-        validate(&job.plan)?;
+        if !job.transaction.direct {
+            validate(&job.plan)?;
+        }
         candidates.push(job);
     }
     let mut result = Vec::new();
     for mut job in candidates {
         job.transaction.has_replacements = job.plan.changes.iter().any(|c| c.action != "add");
-        if ["planned", "rolled_back", "uninstalled", "superseded"]
-            .contains(&job.transaction.state.as_str())
+        if [
+            "planned",
+            "rolled_back",
+            "uninstalled",
+            "superseded",
+            "failed",
+        ]
+        .contains(&job.transaction.state.as_str())
             || (job.transaction.state == "committed" && !job.uninstall_requested)
         {
+            continue;
+        }
+        // Direct extraction has no original-byte image. An interrupted write is
+        // reported as an incomplete install and never restored or resumed.
+        if job.transaction.direct {
+            if !["committed", "superseded"].contains(&job.transaction.state.as_str()) {
+                job.transaction.state = "failed".into();
+                job.transaction.error = Some("install_incomplete".into());
+                job.transaction.updated_at = now();
+                store.save(&mut job)?;
+            }
+            result.push(job.transaction);
             continue;
         }
         let uninstalling = job.uninstall_requested;
@@ -2622,6 +2938,7 @@ mod transaction_binding_tests {
             has_replacements: false,
             selection_id: Some("zip-selection-000000000000000000000000-42".into()),
             content_id: Some("exe-content-abc".into()),
+            direct: false,
         };
         let value = serde_json::to_value(&transaction).unwrap();
         assert_eq!(

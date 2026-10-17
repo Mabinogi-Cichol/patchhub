@@ -750,7 +750,7 @@ fn validate_transaction(v: &Value) -> Result<(), ProtocolError> {
     }
     Ok(())
 }
-pub const TRANSACTION_STATES: [&str; 10] = [
+pub const TRANSACTION_STATES: [&str; 11] = [
     "planned",
     "backing_up",
     "applying",
@@ -761,12 +761,14 @@ pub const TRANSACTION_STATES: [&str; 10] = [
     "rolled_back",
     "uninstalled",
     "needs_recovery",
+    "failed",
 ];
 fn validate_outcome(v: &Value) -> Result<(), ProtocolError> {
     let valid = match v["state"].as_str() {
         Some("committed") => v["disposition"] == "completed" && v["recovery"].is_null(),
         Some("needs_recovery") => v["disposition"] == "failed" && v["recovery"]["required"] == true,
         Some("rolled_back") => matches!(v["disposition"].as_str(), Some("cancelled" | "failed")),
+        Some("failed") => matches!(v["disposition"].as_str(), Some("cancelled" | "failed")),
         _ => false,
     };
     if !valid {
@@ -1316,11 +1318,13 @@ pub enum TransactionState {
     RolledBack,
     Uninstalled,
     NeedsRecovery,
+    Failed,
 }
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum OutcomeState {
     Committed,
+    Failed,
     RolledBack,
     NeedsRecovery,
 }

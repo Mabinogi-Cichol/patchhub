@@ -164,11 +164,6 @@
             "notes": "",
             "packages": [],
             "packed_size": 28,
-            "payload": {
-              "crc32": 2919138325,
-              "sha256": "0e2d9c71bc985204d7c8fd81afcdb6c2f4df0c207afe4cb796ff9d1e28e28a60",
-              "size": 15
-            },
             "payload_offset": 3010,
             "runtime_folder": "Archive",
             "serialized_record": {
@@ -728,11 +723,6 @@
             "notes": "",
             "packages": [],
             "packed_size": 28,
-            "payload": {
-              "crc32": 2919138325,
-              "sha256": "0e2d9c71bc985204d7c8fd81afcdb6c2f4df0c207afe4cb796ff9d1e28e28a60",
-              "size": 15
-            },
             "payload_offset": 3020,
             "runtime_folder": "Archive",
             "serialized_record": {
@@ -1292,11 +1282,6 @@
             "notes": "",
             "packages": [],
             "packed_size": 28,
-            "payload": {
-              "crc32": 2919138325,
-              "sha256": "0e2d9c71bc985204d7c8fd81afcdb6c2f4df0c207afe4cb796ff9d1e28e28a60",
-              "size": 15
-            },
             "payload_offset": 3010,
             "runtime_folder": "Archive",
             "serialized_record": {
@@ -1856,11 +1841,6 @@
             "notes": "",
             "packages": [],
             "packed_size": 28,
-            "payload": {
-              "crc32": 2919138325,
-              "sha256": "0e2d9c71bc985204d7c8fd81afcdb6c2f4df0c207afe4cb796ff9d1e28e28a60",
-              "size": 15
-            },
             "payload_offset": 3020,
             "runtime_folder": "Archive",
             "serialized_record": {
@@ -2420,11 +2400,6 @@
             "notes": "",
             "packages": [],
             "packed_size": 28,
-            "payload": {
-              "crc32": 2919138325,
-              "sha256": "0e2d9c71bc985204d7c8fd81afcdb6c2f4df0c207afe4cb796ff9d1e28e28a60",
-              "size": 15
-            },
             "payload_offset": 3010,
             "runtime_folder": "Archive",
             "serialized_record": {
@@ -2984,11 +2959,6 @@
             "notes": "",
             "packages": [],
             "packed_size": 28,
-            "payload": {
-              "crc32": 2919138325,
-              "sha256": "0e2d9c71bc985204d7c8fd81afcdb6c2f4df0c207afe4cb796ff9d1e28e28a60",
-              "size": 15
-            },
             "payload_offset": 3019,
             "runtime_folder": "Archive",
             "serialized_record": {

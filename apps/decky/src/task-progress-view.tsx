@@ -44,9 +44,11 @@ function TaskPanel({ title, onClose, cancelDescription, children }: {
 
 export function TaskResultView({ task, onClose }: { task: TaskSnapshot; onClose: () => void }) {
   const recovery = task.result?.state === "needs_recovery" || task.result?.recovery?.required === true || task.error === "task_interrupted";
+  const failure = task.result?.cause?.code ?? task.result?.recovery?.code;
+  const incomplete = failure === "install_incomplete" || failure === "cancelled_incomplete";
   const message = task.result ? installationResult(task.result) : recovery ? "安装已中断，仍需检查并恢复原文件。" : task.state === "completed" ? "安装已完成。"
     : task.state === "cancelled" ? "已安全取消。" : "安装失败。";
-  const error = task.result?.recovery?.code ?? task.error ?? task.result?.error;
+  const error = incomplete ? undefined : task.result?.recovery?.code ?? task.error ?? task.result?.error;
   return <TaskPanel title="安装结果" onClose={onClose} cancelDescription="关闭">
     <p>{message}</p>
     {error && <p className="patch-task-warning">{reason(error)}{task.result?.recovery?.detail ?? task.error_detail ? ` · ${task.result?.recovery?.detail ?? task.error_detail}` : ""}</p>}
@@ -71,6 +73,6 @@ export function TaskProgressView({ task, game, patch, onClose }: {
       {task?.stage === "downloading" && <span>预计剩余：{task.eta_seconds == null ? "估算中" : duration(task.eta_seconds)}</span>}
     </div>
     {task?.current_file && <p>当前文件：{task.current_file}</p>}
-    <p>关闭将取消安装，并恢复本次修改的文件。</p>
+    <p>关闭将取消安装；取消后请查看安装结果。</p>
   </TaskPanel>;
 }

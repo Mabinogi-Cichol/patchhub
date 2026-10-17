@@ -108,7 +108,7 @@ test("recovery is offered for interrupted writes, but not prepared or completed 
   for (const state of ["backing_up", "backed_up", "applying", "rolling_back", "uninstalling", "needs_recovery"]) {
     assert.equal(needsRecovery({ state } as Transaction), true, state);
   }
-  for (const state of ["planned", "committed", "rolled_back", "uninstalled"]) {
+  for (const state of ["planned", "committed", "rolled_back", "uninstalled", "failed"]) {
     assert.equal(needsRecovery({ state } as Transaction), false, state);
   }
 });

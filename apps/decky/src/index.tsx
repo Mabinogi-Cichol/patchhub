@@ -348,7 +348,9 @@ function GameManager({ item, seg, panel }: { item: Install; seg: string; panel?:
         cleanup ? cacheClearNote(cleanup) : ""].filter(Boolean).join(" ");
       refreshAfterMutation(message, undefined, instance);
     } else if (task.state === "failed") {
-      const error = `${reason(task.error ?? "任务失败，请检查操作记录。")}${task.error_detail ? ` · ${task.error_detail}` : ""}`;
+      const error = task.result
+        ? installationResult(task.result)
+        : `${reason(task.error ?? "任务失败，请检查操作记录。")}${task.error_detail ? ` · ${task.error_detail}` : ""}`;
       session.setFeedback({ error }, instance);
       refreshAfterMutation(undefined, error, instance);
     } else if (task.state === "cancelled") {

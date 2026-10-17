@@ -374,7 +374,6 @@ pub fn install(
                             },
                             super::exe_orchestrator::ExeInstallDeps {
                                 paths,
-                                state_dir: deps.host.state_dir(),
                                 transport: deps.transport,
                                 runtime,
                                 cancel: &cancel,

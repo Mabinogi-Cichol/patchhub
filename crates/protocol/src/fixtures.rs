@@ -29,7 +29,7 @@ pub fn scan() -> Value {
     json!({"catalog_revision":1,"catalog_trust":"signed","catalog_error":null,"platform":"windows","roots":[],"installs":[{"game":{"instance_id":"instance","appid":42,"name":"Fixture","localized_name":null,"name_language":null,"library_path":"fixture/library","install_path":"fixture/library/steamapps/common/game","buildid":null,"availability":"installed","kind":"game"},"match_status":"matched","patches":[{"release_id":"release","name":"Patch","source_page":"https://example.com/game","support_level":"managed_zip","actions":{"automatic":available,"local_archive":available,"reinstall":unavailable,"overwrite":available,"primary":{"operation":"overwrite","label":"install","input":"automatic"}},"compatibility":"verified","blockers":[],"detection":{"status":"not_detected","files":[{"path":"patch.dat","status":"missing","actual_sha256":null}]}}],"discovery":discovery(),"diagnostics":[]}],"diagnostics":[]})
 }
 pub fn transaction(state: &str) -> Value {
-    json!({"transaction_id":"transaction","plan_id":"plan","instance_id":"instance","release_id":"release","state":state,"error":null,"created_at":1,"updated_at":1,"has_replacements":false,"selection_id":null,"content_id":null})
+    json!({"transaction_id":"transaction","plan_id":"plan","instance_id":"instance","release_id":"release","state":state,"error":null,"created_at":1,"updated_at":1,"has_replacements":false,"selection_id":null,"content_id":null,"direct":false})
 }
 pub fn outcome(state: &str, disposition: &str) -> Value {
     let mut v = transaction(state);

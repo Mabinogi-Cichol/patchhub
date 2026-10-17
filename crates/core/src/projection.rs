@@ -740,11 +740,10 @@ fn signed_reinstall_blocker(
     };
     let identity = install::recipe_identity(release).ok();
     let same_targets = plan.changes.len() == recipe.files.len()
-        && plan
-            .changes
-            .iter()
-            .zip(&recipe.files)
-            .all(|(c, m)| c.path == m.destination && c.installed_sha256 == m.installed_sha256);
+        && plan.changes.iter().zip(&recipe.files).all(|(c, m)| {
+            c.path == m.destination
+                && c.installed_sha256.as_deref() == Some(m.installed_sha256.as_str())
+        });
     if plan.install.buildid != game.buildid
         || !same_targets
         || plan
@@ -880,7 +879,7 @@ fn dynamic_detection(
         let file = detection::inspect_file(
             game,
             &change.path,
-            &change.installed_sha256,
+            change.installed_sha256.as_deref().unwrap_or_default(),
             None,
             inputs.cancel,
         );

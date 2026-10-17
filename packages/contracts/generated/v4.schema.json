@@ -1515,6 +1515,11 @@
           "minimum": 0,
           "type": "integer"
         },
+        "direct": {
+          "default": false,
+          "description": "Direct EXE extraction: incomplete runs leave written files in place.",
+          "type": "boolean"
+        },
         "disposition": {
           "$ref": "#/$defs/Disposition"
         },
@@ -1570,6 +1575,7 @@
         "cleanup",
         "content_id",
         "created_at",
+        "direct",
         "disposition",
         "error",
         "has_replacements",
@@ -3789,6 +3795,11 @@
           "minimum": 0,
           "type": "integer"
         },
+        "direct": {
+          "default": false,
+          "description": "Direct EXE extraction: an unfinished journal is reported as incomplete\nand never blocks a fresh install. Legacy rows omit this field.",
+          "type": "boolean"
+        },
         "error": {
           "type": [
             "string",
@@ -3829,7 +3840,8 @@
             "rolling_back",
             "rolled_back",
             "uninstalled",
-            "needs_recovery"
+            "needs_recovery",
+            "failed"
           ]
         },
         "transaction_id": {

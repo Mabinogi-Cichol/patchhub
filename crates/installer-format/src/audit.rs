@@ -966,7 +966,19 @@ fn python_json(value: &Value) -> Result<String> {
 pub fn behavior_digest(value: &Value) -> Result<String> {
     Ok(sha(python_json(value)?.as_bytes()))
 }
+/// Full audit used by the frozen golden corpus: decodes every member payload
+/// and records its digest in `files[].payload`.
 pub fn audit(data: &[u8], behavior: bool) -> Result<Value> {
+    audit_inner(data, behavior, true)
+}
+/// Analysis used by the install route: builds the member table and behaviour
+/// without decoding payload bytes. Member offsets, sizes and CRC32 come from
+/// the installer metadata; the extract phase validates each member while
+/// streaming it to the host.
+pub fn audit_metadata(data: &[u8], behavior: bool) -> Result<Value> {
+    audit_inner(data, behavior, false)
+}
+fn audit_inner(data: &[u8], behavior: bool, decode_payloads: bool) -> Result<Value> {
     require(!data.is_empty(), "exe_size_limit")?;
     let (overlay, overlay_end, manifest, certificate) = pe_overlay(data)?;
     let version = manifest["version"]
@@ -1063,21 +1075,36 @@ pub fn audit(data: &[u8], behavior: bool) -> Result<Value> {
         payload_end.checked_add(padding) == Some(r.end as u64),
         "overlay_size_or_tail_mismatch",
     )?;
+    let mut declared_total = 0u64;
     for record in &mut records {
         let packed = record["packed_size"].as_u64().unwrap();
         record["payload_offset"] = json!(r.pos);
-        let (info, _) = decoder.decode(
-            data,
-            r.pos,
-            packed,
-            Some(record["unpacked_size"].as_u64().unwrap()),
-            Some(record["crc32"].as_u64().unwrap() as u32),
-            false,
-            record["compressed"].as_bool().unwrap(),
-            None,
-        )?;
-        record["payload"] = info;
+        if decode_payloads {
+            let (info, _) = decoder.decode(
+                data,
+                r.pos,
+                packed,
+                Some(record["unpacked_size"].as_u64().unwrap()),
+                Some(record["crc32"].as_u64().unwrap() as u32),
+                false,
+                record["compressed"].as_bool().unwrap(),
+                None,
+            )?;
+            record["payload"] = info;
+        } else {
+            // The advertised unpacked sizes are exact: the decode path rejects
+            // any stream whose real length differs. Count them without a read.
+            declared_total = declared_total
+                .checked_add(record["unpacked_size"].as_u64().unwrap())
+                .ok_or_else(|| Error("payload_size_overflow".into()))?;
+        }
         r.read(packed as usize)?;
+    }
+    if !decode_payloads {
+        decoder.total = decoder
+            .total
+            .checked_add(declared_total)
+            .ok_or_else(|| Error("payload_size_overflow".into()))?;
     }
     require(
         r.read(padding as usize)?.iter().all(|b| *b == 0) && r.pos == overlay_end,

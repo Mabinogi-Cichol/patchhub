@@ -1,5 +1,5 @@
 //! Host-owned fixed SF launcher. Paths, arguments and environment never come from a frontend.
-use crate::{sf, IsolationError, SandboxConfig, TerminationReason};
+use crate::{sf, IsolationError, LaunchOutcome, SandboxConfig, TerminationReason};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -22,17 +22,19 @@ pub struct WorkerRuntime {
     staging_root: PathBuf,
     run_as: Option<(u32, u32)>,
 }
-/// Owns private staging until the caller finishes validation and apply.
+/// One completed buffered worker invocation.
 #[derive(Debug)]
 pub struct WorkerExecution {
     pub response: Value,
-    artifact: Option<PathBuf>,
-    _directory: InvocationDirectory,
 }
-impl WorkerExecution {
-    pub fn artifact_path(&self) -> Option<&Path> {
-        self.artifact.as_deref()
-    }
+/// One sandbox session over a single staged EXE. Analysis and extraction reuse
+/// the same input copy; the directory is released when the session drops.
+pub struct WorkerSession {
+    #[cfg(windows)]
+    _profile: ProfileGuard,
+    _input_lock: File,
+    cfg: SandboxConfig,
+    _directory: InvocationDirectory,
 }
 fn err(stage: &str, message: impl Into<String>) -> IsolationError {
     IsolationError::new(stage, None, message)
@@ -99,15 +101,23 @@ impl WorkerRuntime {
                 "exe_sha256":format!("{:x}",Sha256::digest(sample))}),
             )
             .map_err(|e| err("probe", e.to_string()))?;
-            let execution = self.execute_inner(&archive, &raw, &AtomicBool::new(false), true)?;
-            if execution.response.as_object().is_some_and(|o| {
+            let session = self.session_in(
+                dir,
+                &archive,
+                &format!("{:x}", Sha256::digest(sample)),
+                sample.len() as u64,
+                &AtomicBool::new(false),
+            )?;
+            let outcome = session.run(&raw, &AtomicBool::new(false), true)?;
+            let response = parse_response(&outcome)?;
+            if response.as_object().is_some_and(|o| {
                 o.len() == 1 && o.get("error").and_then(Value::as_str) == Some("not_pe")
             }) {
                 Ok(())
             } else {
                 Err(err(
                     "probe",
-                    format!("unexpected inert parser response: {}", execution.response),
+                    format!("unexpected inert parser response: {response}"),
                 ))
             }
         })();
@@ -122,13 +132,43 @@ impl WorkerRuntime {
             },
         }
     }
+    /// Buffered analysis used by probe/diagnostic callers and tests.
     pub fn execute(
         &self,
         archive: &Path,
         descriptor: &[u8],
         cancel: &AtomicBool,
     ) -> Result<WorkerExecution, IsolationError> {
-        self.execute_inner(archive, descriptor, cancel, false)
+        cancelled(cancel)?;
+        let parsed = sf::parse_descriptor(descriptor).map_err(|e| err("descriptor", e.0))?;
+        let (hash, size) = match &parsed {
+            sf::Descriptor::Analyze {
+                exe_sha256,
+                exe_size,
+            }
+            | sf::Descriptor::AnalyzeBehavior {
+                exe_sha256,
+                exe_size,
+            } => (exe_sha256, *exe_size),
+            sf::Descriptor::ExtractBehavior { .. } => {
+                return Err(err("descriptor", "extraction requires a streaming session"))
+            }
+        };
+        let directory = self.directory()?;
+        let session = self.session_in(directory, archive, hash, size, cancel)?;
+        session.analyze(descriptor, cancel)
+    }
+    /// Open one staging session over `archive`, copying the sandbox input once.
+    pub fn open_session(
+        &self,
+        archive: &Path,
+        exe_sha256: &str,
+        exe_size: u64,
+        cancel: &AtomicBool,
+    ) -> Result<WorkerSession, IsolationError> {
+        cancelled(cancel)?;
+        let directory = self.directory()?;
+        self.session_in(directory, archive, exe_sha256, exe_size, cancel)
     }
     fn directory(&self) -> Result<InvocationDirectory, IsolationError> {
         no_links(&self.staging_root)?;
@@ -181,33 +221,16 @@ impl WorkerRuntime {
             _lock: lock,
         })
     }
-    fn execute_inner(
+    fn session_in(
         &self,
+        directory: InvocationDirectory,
         archive: &Path,
-        raw: &[u8],
+        exe_sha256: &str,
+        exe_size: u64,
         cancel: &AtomicBool,
-        probe: bool,
-    ) -> Result<WorkerExecution, IsolationError> {
-        cancelled(cancel)?;
-        let descriptor = sf::parse_descriptor(raw).map_err(|e| err("descriptor", e.0))?;
-        let (hash, size, convert) = match &descriptor {
-            sf::Descriptor::Analyze {
-                exe_sha256,
-                exe_size,
-            } => (exe_sha256, *exe_size, false),
-            sf::Descriptor::AnalyzeBehavior {
-                exe_sha256,
-                exe_size,
-            } => (exe_sha256, *exe_size, false),
-            sf::Descriptor::ConvertBehavior {
-                exe_sha256,
-                exe_size,
-                ..
-            } => (exe_sha256, *exe_size, true),
-        };
+    ) -> Result<WorkerSession, IsolationError> {
         no_links(archive)?;
         no_links(&self.worker_exe)?;
-        let directory = self.directory()?;
         let root = directory.path();
         let runtime = root.join("runtime");
         let input = root.join("input");
@@ -221,7 +244,7 @@ impl WorkerRuntime {
         let exe = runtime.join("sf-worker");
         fs::copy(&self.worker_exe, &exe).map_err(|e| ioerr("runtime", e))?;
         let staged_input = input.join("archive.exe");
-        copy_bound(archive, &staged_input, hash, size, cancel)?;
+        copy_bound(archive, &staged_input, exe_sha256, exe_size, cancel)?;
         let mut cfg = SandboxConfig::new(
             &exe,
             &runtime,
@@ -233,7 +256,6 @@ impl WorkerRuntime {
         cfg.production_strict = true;
         cfg.input_dir = Some(input.clone());
         cfg.output_dir = Some(output.clone());
-        cfg.stdin = raw.to_vec();
         cfg.run_as = self.run_as;
         cfg.environment = Some(Vec::new());
         cfg.limits.process_memory_bytes = Some(3 * 1024 * 1024 * 1024);
@@ -241,25 +263,14 @@ impl WorkerRuntime {
         // File-backed mappings consume address space but are not a whole-file
         // heap allocation. Linux RLIMIT_AS must include the actual input map.
         cfg.limits.address_space_bytes = Some(
-            size.checked_add(3 * 1024 * 1024 * 1024)
+            exe_size
+                .checked_add(3 * 1024 * 1024 * 1024)
                 .ok_or_else(|| err("limits", "input address-space overflow"))?,
         );
         cfg.limits.active_process_limit = Some(1);
-        // Only the probe carries a timeout: it bounds start/no-response of the
-        // capability check. Normal analyze/convert work has no wall-clock or
-        // CPU-time permit (D05); cancellation and real process failure still
-        // terminate it.
-        if probe {
-            cfg.limits.timeout = Some(Duration::from_secs(10));
-        }
-        // No fixed artifact-size permit: the worker writes a STORED ZIP whose
-        // size is bounded by the actual input map (address-space limit), the
-        // real free space of the staging volume, and cancellation. Deriving a
-        // cap from the EXE size would be wrong because STORED members may
-        // expand beyond the compressed input.
         cfg.limits.file_size_bytes = None;
         #[cfg(windows)]
-        let mut profile_guard = ProfileGuard::prepare(&mut cfg, root, &runtime, &input, &output)?;
+        let profile = ProfileGuard::prepare(&mut cfg, root, &runtime, &input, &output)?;
         #[cfg(target_os = "linux")]
         prepare_linux(
             root,
@@ -272,18 +283,98 @@ impl WorkerRuntime {
         )?;
         // Windows denies write/delete opens throughout the invocation. Linux exposes
         // a private copied inode through a read-only bind, never the cache inode.
-        let _input_lock = sf::open_input(&staged_input).map_err(|e| err("input", e.0))?;
+        let input_lock = sf::open_input(&staged_input).map_err(|e| err("input", e.0))?;
         cancelled(cancel)?;
-        #[cfg(windows)]
-        let outcome = {
-            let result = crate::win::launch::run_sandboxed_cancellable(&cfg, cancel);
-            profile_guard.close()?;
-            result?
-        };
-        #[cfg(target_os = "linux")]
-        let outcome = crate::linux::launch::run_sandboxed_cancellable(&cfg, cancel)?;
-        #[cfg(not(any(windows, target_os = "linux")))]
-        let outcome = crate::stub::run_sandboxed(&cfg)?;
+        Ok(WorkerSession {
+            cfg,
+            _input_lock: input_lock,
+            #[cfg(windows)]
+            _profile: profile,
+            _directory: directory,
+        })
+    }
+}
+impl WorkerSession {
+    /// Buffered analysis response. The caller validates report structure.
+    pub fn analyze(
+        &self,
+        descriptor: &[u8],
+        cancel: &AtomicBool,
+    ) -> Result<WorkerExecution, IsolationError> {
+        let outcome = self.run(descriptor, cancel, false)?;
+        let response = parse_response(&outcome)?;
+        if !response.is_object() {
+            return Err(err("response", "worker response must be one JSON object"));
+        }
+        validate_response(&response, descriptor)?;
+        Ok(WorkerExecution { response })
+    }
+    /// Run the extraction descriptor and feed raw stdout chunks to `consume` on
+    /// the calling thread. The callback writes decoded member bytes; framing is
+    /// parsed by the caller. No stdout is retained.
+    pub fn extract(
+        &self,
+        descriptor: &[u8],
+        cancel: &AtomicBool,
+        consume: &mut dyn FnMut(&[u8]) -> Result<(), IsolationError>,
+    ) -> Result<(), IsolationError> {
+        cancelled(cancel)?;
+        let mut cfg = self.cfg.clone();
+        cfg.stdin = descriptor.to_vec();
+        let (tx, rx) = std::sync::mpsc::sync_channel::<Vec<u8>>(8);
+        std::thread::scope(|scope| {
+            let launched = scope.spawn(|| run_stream(&cfg, cancel, tx));
+            let mut consume_error = None;
+            while let Ok(chunk) = rx.recv() {
+                if let Err(e) = consume(&chunk) {
+                    consume_error = Some(e);
+                    break;
+                }
+            }
+            drop(rx);
+            let outcome = launched
+                .join()
+                .map_err(|_| err("worker", "worker supervisor panicked"))?;
+            if let Some(e) = consume_error {
+                return Err(e);
+            }
+            let outcome = outcome?;
+            if outcome.termination != TerminationReason::Completed {
+                return Err(err(
+                    if outcome.termination == TerminationReason::Cancelled {
+                        "cancelled"
+                    } else {
+                        "timeout"
+                    },
+                    "sandbox worker terminated",
+                ));
+            }
+            if outcome.exit_code != 0 {
+                return Err(err(
+                    "extract_worker",
+                    format!(
+                        "sandbox worker failed (exit={}): {}",
+                        outcome.exit_code,
+                        String::from_utf8_lossy(&outcome.stderr).trim()
+                    ),
+                ));
+            }
+            Ok(())
+        })
+    }
+    fn run(
+        &self,
+        descriptor: &[u8],
+        cancel: &AtomicBool,
+        probe: bool,
+    ) -> Result<LaunchOutcome, IsolationError> {
+        cancelled(cancel)?;
+        let mut cfg = self.cfg.clone();
+        cfg.stdin = descriptor.to_vec();
+        if probe {
+            cfg.limits.timeout = Some(Duration::from_secs(10));
+        }
+        let outcome = run_capture(&cfg, cancel)?;
         if outcome.termination != TerminationReason::Completed {
             return Err(err(
                 if outcome.termination == TerminationReason::Cancelled {
@@ -294,23 +385,12 @@ impl WorkerRuntime {
                 "sandbox worker terminated",
             ));
         }
-        cancelled(cancel)?;
-        let response: Value = serde_json::from_slice::<StrictValue>(&outcome.stdout)
-            .map_err(|e| {
-                err(
-                    "response",
-                    format!(
-                        "{e}; exit={}; stderr={}",
-                        outcome.exit_code,
-                        String::from_utf8_lossy(&outcome.stderr)
-                    ),
-                )
-            })?
-            .0;
-        if !response.is_object() {
-            return Err(err("response", "worker response must be one JSON object"));
-        }
-        if outcome.exit_code != 0 && !probe {
+        if probe {
+            if outcome.exit_code != 1 {
+                return Err(err("probe", "inert invalid input must exit 1"));
+            }
+        } else if outcome.exit_code != 0 {
+            let response = parse_response(&outcome)?;
             return Err(err(
                 "worker",
                 response
@@ -319,39 +399,23 @@ impl WorkerRuntime {
                     .unwrap_or("sandbox worker failed"),
             ));
         }
-        if probe && outcome.exit_code != 1 {
-            return Err(err("probe", "inert invalid input must exit 1"));
-        }
-        if !probe {
-            validate_response(&response, &descriptor)?;
-        }
-        let artifact = if convert {
-            let path = output.join("normalized.zip");
-            no_links(&path)?;
-            let size = fs::metadata(&path).map_err(|e| ioerr("artifact", e))?.len();
-            if response["artifact_size"].as_u64() != Some(size) {
-                return Err(err("artifact", "artifact size mismatch"));
-            }
-            let mut f = File::open(&path).map_err(|e| ioerr("artifact", e))?;
-            let hash = hash_reader(&mut f, cancel)?;
-            if response["artifact_sha256"].as_str() != Some(hash.as_str()) {
-                return Err(err("artifact", "artifact hash mismatch"));
-            }
-            Some(path)
-        } else {
-            None
-        };
-        // The sandbox has terminated and its profile/handles are closed. Keep
-        // the output owner alive, but release the duplicate input and runtime.
-        // A cleanup failure must not discard an otherwise verified artifact;
-        // the directory owner retries on drop and free-space checks see reality.
-        directory.release_inputs();
-        Ok(WorkerExecution {
-            response,
-            artifact,
-            _directory: directory,
-        })
+        cancelled(cancel)?;
+        Ok(outcome)
     }
+}
+fn parse_response(outcome: &LaunchOutcome) -> Result<Value, IsolationError> {
+    serde_json::from_slice::<StrictValue>(&outcome.stdout)
+        .map(|value| value.0)
+        .map_err(|e| {
+            err(
+                "response",
+                format!(
+                    "{e}; exit={}; stderr={}",
+                    outcome.exit_code,
+                    String::from_utf8_lossy(&outcome.stderr)
+                ),
+            )
+        })
 }
 fn cancelled(cancel: &AtomicBool) -> Result<(), IsolationError> {
     if cancel.load(Ordering::Acquire) {
@@ -360,19 +424,46 @@ fn cancelled(cancel: &AtomicBool) -> Result<(), IsolationError> {
         Ok(())
     }
 }
-fn hash_reader(f: &mut File, cancel: &AtomicBool) -> Result<String, IsolationError> {
-    let mut hash = Sha256::new();
-    let mut buf = [0u8; 64 * 1024];
-    loop {
-        cancelled(cancel)?;
-        let n = f.read(&mut buf).map_err(|e| ioerr("input", e))?;
-        if n == 0 {
-            break;
-        }
-        hash.update(&buf[..n]);
-    }
-    Ok(format!("{:x}", hash.finalize()))
+#[cfg(windows)]
+fn run_capture(cfg: &SandboxConfig, cancel: &AtomicBool) -> Result<LaunchOutcome, IsolationError> {
+    crate::win::launch::run_sandboxed_cancellable(cfg, cancel)
 }
+#[cfg(windows)]
+fn run_stream(
+    cfg: &SandboxConfig,
+    cancel: &AtomicBool,
+    tx: std::sync::mpsc::SyncSender<Vec<u8>>,
+) -> Result<LaunchOutcome, IsolationError> {
+    crate::win::launch::run_sandboxed_streaming(cfg, cancel, tx)
+}
+#[cfg(target_os = "linux")]
+fn run_capture(cfg: &SandboxConfig, cancel: &AtomicBool) -> Result<LaunchOutcome, IsolationError> {
+    crate::linux::launch::run_sandboxed_cancellable(cfg, cancel)
+}
+#[cfg(target_os = "linux")]
+fn run_stream(
+    cfg: &SandboxConfig,
+    cancel: &AtomicBool,
+    tx: std::sync::mpsc::SyncSender<Vec<u8>>,
+) -> Result<LaunchOutcome, IsolationError> {
+    crate::linux::launch::run_sandboxed_streaming(cfg, cancel, tx)
+}
+#[cfg(not(any(windows, target_os = "linux")))]
+fn run_capture(
+    _cfg: &SandboxConfig,
+    _cancel: &AtomicBool,
+) -> Result<LaunchOutcome, IsolationError> {
+    Err(err("sandbox", "worker platform unsupported"))
+}
+#[cfg(not(any(windows, target_os = "linux")))]
+fn run_stream(
+    _cfg: &SandboxConfig,
+    _cancel: &AtomicBool,
+    _tx: std::sync::mpsc::SyncSender<Vec<u8>>,
+) -> Result<LaunchOutcome, IsolationError> {
+    Err(err("sandbox", "worker platform unsupported"))
+}
+
 fn copy_bound(
     source: &Path,
     dest: &Path,
@@ -514,27 +605,10 @@ fn prepare_linux(
 }
 #[derive(Debug)]
 struct InvocationDirectory {
-    directory: TempDir,
     _lock: File,
+    directory: TempDir,
 }
 impl InvocationDirectory {
-    fn release_inputs(&self) {
-        for name in ["input", "runtime"] {
-            let path = self.path().join(name);
-            if no_links(&path).is_err() {
-                continue;
-            }
-            #[cfg(target_os = "linux")]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                if fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).is_err() {
-                    continue;
-                }
-            }
-            // Fixed host-created directories; no worker-selected cleanup paths.
-            let _ = fs::remove_dir_all(path);
-        }
-    }
     fn path(&self) -> &Path {
         self.directory.path()
     }
@@ -556,68 +630,37 @@ impl Drop for InvocationDirectory {
         }
     }
 }
-fn validate_response(v: &Value, d: &sf::Descriptor) -> Result<(), IsolationError> {
+fn validate_response(v: &Value, raw: &[u8]) -> Result<(), IsolationError> {
     let o = v
         .as_object()
         .ok_or_else(|| err("response", "invalid response object"))?;
-    let (keys, hash) = match d {
-        sf::Descriptor::Analyze { exe_sha256, .. }
-        | sf::Descriptor::AnalyzeBehavior { exe_sha256, .. } => (
-            &[
-                "schema_version",
-                "action",
-                "exe_sha256",
-                "report",
-                "installable",
-            ][..],
-            exe_sha256,
-        ),
-        sf::Descriptor::ConvertBehavior { exe_sha256, .. } => (
-            &[
-                "extractor",
-                "exe_sha256",
-                "metadata_sha256",
-                "artifact_sha256",
-                "artifact_size",
-                "files",
-            ][..],
-            exe_sha256,
-        ),
+    let d = sf::parse_descriptor(raw).map_err(|e| err("descriptor", e.0))?;
+    let (action, hash) = match &d {
+        sf::Descriptor::Analyze { exe_sha256, .. } => ("analyze", exe_sha256),
+        sf::Descriptor::AnalyzeBehavior { exe_sha256, .. } => ("analyze_behavior", exe_sha256),
+        sf::Descriptor::ExtractBehavior { .. } => {
+            return Err(err("response", "extraction has no buffered response"))
+        }
     };
+    let keys = [
+        "schema_version",
+        "action",
+        "exe_sha256",
+        "report",
+        "installable",
+    ];
     if o.len() != keys.len()
         || keys.iter().any(|k| !o.contains_key(*k))
         || v["exe_sha256"].as_str() != Some(hash)
+        || v["schema_version"] != 1
+        || v["action"] != action
+        || v["installable"] != false
+        || !v["report"].is_object()
     {
         return Err(err(
             "response",
             "worker response fields/input binding mismatch",
         ));
-    }
-    match d {
-        sf::Descriptor::Analyze { .. } | sf::Descriptor::AnalyzeBehavior { .. } => {
-            let action = if matches!(d, sf::Descriptor::Analyze { .. }) {
-                "analyze"
-            } else {
-                "analyze_behavior"
-            };
-            if v["schema_version"] != 1
-                || v["action"] != action
-                || v["installable"] != false
-                || !v["report"].is_object()
-            {
-                return Err(err("response", "invalid analysis envelope"));
-            }
-        }
-        sf::Descriptor::ConvertBehavior {
-            metadata_sha256, ..
-        } => {
-            if v["extractor"] != steam_patch_installer_format::audit::VERSION
-                || v["metadata_sha256"].as_str() != Some(metadata_sha256)
-                || !v["files"].is_array()
-            {
-                return Err(err("response", "invalid conversion envelope"));
-            }
-        }
     }
     Ok(())
 }
@@ -832,15 +875,12 @@ mod production_tests {
     }
     #[test]
     fn response_cannot_authorize_or_change_action_and_input_binding() {
-        let d = sf::parse_descriptor(
-            &serde_json::to_vec(
-                &serde_json::json!({"action":"analyze","exe_size":1,"exe_sha256":"a".repeat(64)}),
-            )
-            .unwrap(),
+        let raw = serde_json::to_vec(
+            &serde_json::json!({"action":"analyze","exe_size":1,"exe_sha256":"a".repeat(64)}),
         )
         .unwrap();
         let good = serde_json::json!({"schema_version":1,"action":"analyze","exe_sha256":"a".repeat(64),"report":{},"installable":false});
-        assert!(validate_response(&good, &d).is_ok());
+        assert!(validate_response(&good, &raw).is_ok());
         for (key, value) in [
             ("installable", serde_json::json!(true)),
             ("exe_sha256", serde_json::json!("b".repeat(64))),
@@ -849,7 +889,7 @@ mod production_tests {
         ] {
             let mut changed = good.clone();
             changed[key] = value;
-            assert!(validate_response(&changed, &d).is_err());
+            assert!(validate_response(&changed, &raw).is_err());
         }
     }
 }

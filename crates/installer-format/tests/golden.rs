@@ -101,7 +101,8 @@ fn python_full_behavior_report_golden() {
     let golden: Value =
         serde_json::from_str(include_str!("fixtures/sf/worker-golden.json")).unwrap();
     for case in golden["cases"].as_array().unwrap() {
-        let report = audit::audit(&unhex(case["data_hex"].as_str().unwrap()), true).unwrap();
+        let report =
+            audit::audit_metadata(&unhex(case["data_hex"].as_str().unwrap()), true).unwrap();
         assert!(
             report == case["report"],
             "case {}: {}",

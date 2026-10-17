@@ -136,6 +136,9 @@ pub struct InstallerOutcome {
     pub created_at: u64,
     pub updated_at: u64,
     pub has_replacements: bool,
+    /// Direct EXE extraction: incomplete runs leave written files in place.
+    #[serde(default)]
+    pub direct: bool,
     pub disposition: Disposition,
     pub cause: Option<FailureCause>,
     pub recovery: Option<RecoveryRequirement>,
@@ -156,7 +159,7 @@ impl InstallerOutcome {
             .and_then(CancellationCause::from_transaction_error);
         let disposition = match t.state.as_str() {
             "committed" => Disposition::Completed,
-            "rolled_back" if cancellation.is_some() => Disposition::Cancelled,
+            "rolled_back" | "failed" if cancellation.is_some() => Disposition::Cancelled,
             _ => Disposition::Failed,
         };
         let cause = if disposition == Disposition::Completed {
@@ -228,6 +231,7 @@ impl InstallerOutcome {
             created_at: t.created_at,
             updated_at: t.updated_at,
             has_replacements: t.has_replacements,
+            direct: t.direct,
             disposition,
             cause,
             recovery,

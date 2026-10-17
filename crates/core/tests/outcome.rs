@@ -13,6 +13,7 @@ fn transaction(state: &str, error: Option<&str>) -> Transaction {
         has_replacements: true,
         selection_id: None,
         content_id: None,
+        direct: false,
     }
 }
 #[test]

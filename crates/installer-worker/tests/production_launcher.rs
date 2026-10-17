@@ -26,7 +26,7 @@ fn new_runtime(root: &std::path::Path) -> WorkerRuntime {
     WorkerRuntime::new(PathBuf::from(env!("CARGO_BIN_EXE_sf-worker")), root, run_as).unwrap()
 }
 #[test]
-fn production_probe_and_all_synthetic_behavior_conversion_goldens() {
+fn production_probe_and_all_synthetic_behavior_extractions() {
     let stage = tempfile::tempdir().unwrap();
     let runtime = new_runtime(stage.path());
     let availability = runtime.probe();
@@ -36,41 +36,57 @@ fn production_probe_and_all_synthetic_behavior_conversion_goldens() {
         let input = tempfile::tempdir().unwrap();
         let archive = input.path().join("archive.exe");
         fs::write(&archive, unhex(case["data_hex"].as_str().unwrap())).unwrap();
-        let analyze = json!({"action":"analyze_behavior","exe_sha256":case["descriptor"]["exe_sha256"],"exe_size":case["descriptor"]["exe_size"]});
-        let result = runtime
-            .execute(
-                &archive,
-                &serde_json::to_vec(&analyze).unwrap(),
-                &AtomicBool::new(false),
-            )
+        let cancel = AtomicBool::new(false);
+        let sha = case["descriptor"]["exe_sha256"].as_str().unwrap();
+        let size = case["descriptor"]["exe_size"].as_u64().unwrap();
+        let session = runtime.open_session(&archive, sha, size, &cancel).unwrap();
+        let analyze = json!({"action":"analyze_behavior","exe_sha256":sha,"exe_size":size});
+        let result = session
+            .analyze(&serde_json::to_vec(&analyze).unwrap(), &cancel)
             .unwrap();
         assert_eq!(
             result.response["report"], case["report"],
             "{}",
             case["name"]
         );
-        assert!(result.artifact_path().is_none());
-        drop(result);
-        let result = runtime
-            .execute(
-                &archive,
-                &serde_json::to_vec(&case["descriptor"]).unwrap(),
-                &AtomicBool::new(false),
+        let report = &result.response["report"];
+        let members: Vec<_> = report["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|f| {
+                json!({
+                    "path": f["destination"],
+                    "size": f["unpacked_size"],
+                    "crc32": f["crc32"],
+                    "payload_offset": f["payload_offset"],
+                    "packed_size": f["packed_size"],
+                    "compressed": f["compressed"],
+                })
+            })
+            .collect();
+        let extract =
+            json!({"action":"extract_behavior","exe_sha256":sha,"exe_size":size,"payload":members});
+        let mut collected = Vec::new();
+        session
+            .extract(
+                &serde_json::to_vec(&extract).unwrap(),
+                &cancel,
+                &mut |chunk| {
+                    collected.extend_from_slice(chunk);
+                    Ok(())
+                },
             )
             .unwrap();
-        assert_eq!(result.response, case["conversion"], "{}", case["name"]);
-        let path = result.artifact_path().unwrap().to_path_buf();
-        assert!(path.is_file());
-        let _second_runtime = new_runtime(stage.path()); // live artifact lease must be skipped
-        assert!(
-            path.is_file(),
-            "janitor must retain an artifact still held for apply"
-        );
-        drop(result);
-        assert!(
-            !path.exists(),
-            "owned artifact directory must be reclaimed after apply/drop"
-        );
+        let expected = case["conversion"]["files"].as_array().unwrap();
+        let members = parse_frames(&collected);
+        assert_eq!(members.len(), expected.len(), "{}", case["name"]);
+        for (member, expected) in members.iter().zip(expected) {
+            assert_eq!(member.0, expected["path"].as_str().unwrap());
+            assert_eq!(member.2, expected["sha256"].as_str().unwrap());
+            assert_eq!(member.1.len() as u64, expected["size"].as_u64().unwrap());
+        }
+        drop(session);
         assert_eq!(
             fs::read_dir(stage.path()).unwrap().count(),
             0,
@@ -78,6 +94,35 @@ fn production_probe_and_all_synthetic_behavior_conversion_goldens() {
         );
     }
 }
+fn parse_frames(bytes: &[u8]) -> Vec<(String, Vec<u8>, String)> {
+    fn line<'a>(bytes: &'a [u8], at: &mut usize) -> Value {
+        let end = *at + bytes[*at..].iter().position(|b| *b == b'\n').unwrap();
+        let value = serde_json::from_slice(&bytes[*at..end]).unwrap();
+        *at = end + 1;
+        value
+    }
+    let mut at = 0;
+    let header = line(bytes, &mut at);
+    assert_eq!(header["extract"], 1);
+    let mut members = Vec::new();
+    loop {
+        let frame = line(bytes, &mut at);
+        if frame["done"].as_bool() == Some(true) {
+            break;
+        }
+        let size = frame["size"].as_u64().unwrap() as usize;
+        let raw = bytes[at..at + size].to_vec();
+        at += size;
+        let trailer = line(bytes, &mut at);
+        members.push((
+            frame["path"].as_str().unwrap().into(),
+            raw,
+            trailer["sha256"].as_str().unwrap().into(),
+        ));
+    }
+    members
+}
+
 #[test]
 fn production_rejects_binding_paths_and_precancel_without_output() {
     let stage = tempfile::tempdir().unwrap();

@@ -110,8 +110,10 @@ impl ContentBinding {
         }
     }
 
-    /// EXE dynamic route (p0-contracts §2.2): EXE + metadata/payload + normalized
-    /// artifact + mappings.
+    /// EXE dynamic journals written before the direct-extraction rewrite still
+    /// parse: their EXE/artifact binding fields remain part of the schema and
+    /// are read only as historical evidence. New EXE installs do not create an
+    /// authorization record.
     #[allow(clippy::too_many_arguments)]
     pub fn publisher_exe(
         content_id: &str,

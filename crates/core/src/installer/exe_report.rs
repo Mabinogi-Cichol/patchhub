@@ -3,7 +3,7 @@ use super::{
     facts::{self, FileDigest, GameFacts},
     invalid, Result,
 };
-use crate::{install::Transaction, sources::canonical};
+use crate::sources::canonical;
 use base64::{engine::general_purpose::STANDARD, Engine};
 use caseless::Caseless;
 use serde::{Deserialize, Serialize};
@@ -23,7 +23,10 @@ const MAX_DEPTH: usize = 96;
 pub struct PayloadEntry {
     pub path: String,
     pub size: u64,
-    pub sha256: String,
+    pub crc32: u32,
+    pub payload_offset: u64,
+    pub packed_size: u64,
+    pub compressed: bool,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -76,136 +79,15 @@ impl ConditionSnapshot {
         canonical::canonical_sha256(self)
     }
 }
-/// Construct only from core-loaded successful authorization and committed journal.
-#[derive(Debug, Clone)]
-pub struct ReinstallEvidence {
-    instance_id: String,
-    content_id: String,
-    binding: ReportBinding,
-    owned: BTreeMap<String, String>,
-    original: BTreeMap<String, Option<FileDigest>>,
-}
-impl ReinstallEvidence {
-    pub fn from_committed(
-        transaction: &Transaction,
-        authorization: &super::authorization::Authorization,
-        original: &ConditionSnapshot,
-    ) -> Result<Self> {
-        super::authorization::validate_stored(authorization)?;
-        let content_id = authorization
-            .content
-            .content_id
-            .as_ref()
-            .ok_or_else(|| invalid("exe_reinstall_evidence_invalid"))?;
-        require(
-            transaction.state == "committed"
-                && transaction.error.is_none()
-                && transaction.transaction_id == transaction.plan_id
-                && transaction.plan_id == authorization.plan_id
-                && transaction.instance_id == authorization.instance_id
-                && transaction.release_id == *content_id
-                && authorization.release_id == *content_id
-                && original.instance_id == transaction.instance_id
-                && original.satisfied
-                && !authorization.revoked
-                && authorization.conditions_sha256 == original.sha256(),
-            "exe_reinstall_evidence_invalid",
-        )?;
-        let mut owned = BTreeMap::new();
-        for mapping in &authorization.content.mappings {
-            relative_path(&mapping.destination)?;
-            hash(&mapping.installed_sha256)?;
-            require(
-                owned
-                    .insert(
-                        mapping.destination.clone(),
-                        mapping.installed_sha256.clone(),
-                    )
-                    .is_none(),
-                "exe_reinstall_evidence_invalid",
-            )?;
-        }
-        let mut previous = BTreeMap::new();
-        for fact in &original.evaluation_files {
-            relative_path(&fact.path)?;
-            if let Some(d) = &fact.observed {
-                hash(&d.sha256)?;
-            }
-            require(
-                previous
-                    .insert(fact.path.clone(), fact.observed.clone())
-                    .is_none(),
-                "exe_reinstall_evidence_invalid",
-            )?;
-        }
-        let c = &authorization.content;
-        let binding = ReportBinding {
-            exe_sha256: c
-                .exe_sha256
-                .clone()
-                .ok_or_else(|| invalid("exe_reinstall_evidence_invalid"))?,
-            exe_size: c
-                .exe_size
-                .ok_or_else(|| invalid("exe_reinstall_evidence_invalid"))?,
-            metadata_sha256: c
-                .metadata_sha256
-                .clone()
-                .ok_or_else(|| invalid("exe_reinstall_evidence_invalid"))?,
-            behavior_sha256: original.behavior_sha256.clone(),
-            payload_sha256: c
-                .payload_sha256
-                .clone()
-                .ok_or_else(|| invalid("exe_reinstall_evidence_invalid"))?,
-        };
-        Ok(Self {
-            instance_id: transaction.instance_id.clone(),
-            content_id: content_id.clone(),
-            binding,
-            owned,
-            original: previous,
-        })
-    }
-}
 impl PreparedReport {
     /// Resolve optional members against the same read-only game facts used by
-    /// the installation gate, before content identity and conversion are bound.
+    /// the installation gate, before content identity is bound.
     pub fn select_payload(&mut self, game: &GameFacts, cancel: &AtomicBool) -> Result<()> {
-        self.select_payload_with_evidence(game, cancel, None)
-    }
-    pub fn select_payload_with_evidence(
-        &mut self,
-        game: &GameFacts,
-        cancel: &AtomicBool,
-        evidence: Option<&ReinstallEvidence>,
-    ) -> Result<()> {
         if self.file_conditions.is_empty() {
             return Ok(());
         }
-        if let Some(e) = evidence {
-            require(
-                e.instance_id == game.instance.instance_id
-                    && e.binding.exe_sha256 == self.binding.exe_sha256
-                    && e.binding.exe_size == self.binding.exe_size
-                    && e.binding.metadata_sha256 == self.binding.metadata_sha256,
-                "exe_reinstall_evidence_invalid",
-            )?;
-        }
         let files = self.observe_condition_files(game, cancel)?;
-        let mut effective: BTreeMap<_, _> =
-            files.into_iter().map(|f| (f.path, f.observed)).collect();
-        if let Some(e) = evidence {
-            for (path, sha) in &e.owned {
-                if effective
-                    .get(path)
-                    .and_then(Option::as_ref)
-                    .is_some_and(|d| &d.sha256 == sha)
-                {
-                    if let Some(original) = e.original.get(path) {
-                        effective.insert(path.clone(), original.clone());
-                    }
-                }
-            }
-        }
+        let effective: BTreeMap<_, _> = files.into_iter().map(|f| (f.path, f.observed)).collect();
         let mut excluded = BTreeSet::new();
         for (path, condition) in &self.file_conditions {
             let selected = match condition.eval(&effective) {
@@ -302,63 +184,22 @@ impl PreparedReport {
         ))
     }
     pub fn evaluate(&self, game: &GameFacts, cancel: &AtomicBool) -> Result<ConditionSnapshot> {
-        self.evaluate_with_reinstall(game, cancel, None, None)
-    }
-    pub fn evaluate_with_reinstall(
-        &self,
-        game: &GameFacts,
-        cancel: &AtomicBool,
-        content_id: Option<&str>,
-        evidence: Option<&ReinstallEvidence>,
-    ) -> Result<ConditionSnapshot> {
         if cancel.load(Ordering::Relaxed) {
             return Err(invalid("download_cancelled"));
         }
-        // Unrelated fact-collection failures no longer block wholesale (design
-        // D06). The concrete preconditions below (instance identity/dir, baselines,
-        // payload hashes) are the real gates.
+        // Unrelated fact-collection failures do not block wholesale (design D06).
+        // The concrete preconditions below are the real gates.
         require(
             game.instance.install_path.is_absolute()
                 && super::zip_recipe::no_links(&game.instance.install_path)
                 && game.instance.install_path.is_dir(),
             "exe_game_identity_changed",
         )?;
-        if let Some(e) = evidence {
-            require(
-                e.instance_id == game.instance.instance_id
-                    && content_id == Some(e.content_id.as_str())
-                    && e.binding.exe_sha256 == self.binding.exe_sha256
-                    && e.binding.exe_size == self.binding.exe_size
-                    && e.binding.metadata_sha256 == self.binding.metadata_sha256
-                    && e.binding.payload_sha256 == self.binding.payload_sha256
-                    && e.owned.len() == self.payload.len()
-                    && self
-                        .payload
-                        .iter()
-                        .all(|p| e.owned.get(&p.path) == Some(&p.sha256)),
-                "exe_reinstall_evidence_invalid",
-            )?;
-        }
         let files = self.observe_condition_files(game, cancel)?;
-        let actual: BTreeMap<_, _> = files
+        let effective: BTreeMap<_, _> = files
             .iter()
             .map(|f| (f.path.clone(), f.observed.clone()))
             .collect();
-        let mut effective = actual.clone();
-        if let Some(e) = evidence {
-            for (path, sha) in &e.owned {
-                // External edits never obtain baseline exemptions.
-                if actual
-                    .get(path)
-                    .and_then(Option::as_ref)
-                    .is_some_and(|d| &d.sha256 == sha)
-                {
-                    if let Some(o) = e.original.get(path) {
-                        effective.insert(path.clone(), o.clone());
-                    }
-                }
-            }
-        }
         let selected_paths: BTreeSet<_> = self.payload.iter().map(|p| p.path.as_str()).collect();
         for (path, condition) in &self.file_conditions {
             let selected = match condition.eval(&effective) {
@@ -387,6 +228,7 @@ impl PreparedReport {
         })
     }
 }
+
 impl Condition {
     fn paths(&self, p: &mut BTreeSet<String>) {
         match self {
@@ -786,21 +628,19 @@ pub fn validate_response(
         let path = text(row, "destination")?;
         relative_path(path)?;
         let size = uint(row, "unpacked_size")?;
+        let crc32 = uint(row, "crc32")?;
+        require(crc32 <= u32::MAX as u64, "exe_manifest_invalid")?;
+        let payload_offset = uint(row, "payload_offset")?;
+        let packed_size = uint(row, "packed_size")?;
         require(
-            uint(&row["payload"], "size")? == size
-                && uint(&row["payload"], "crc32")? == uint(row, "crc32")?
-                && uint(row, "crc32")? <= u32::MAX as u64,
-            "exe_manifest_invalid",
-        )?;
-        let sha256 = text(&row["payload"], "sha256")?;
-        hash(sha256)?;
-        exact(&row["payload"], &["size", "crc32", "sha256"])?;
-        require(
-            uint(row, "payload_offset")?
-                .checked_add(uint(row, "packed_size")?)
+            payload_offset
+                .checked_add(packed_size)
                 .is_some_and(|end| end <= exe_size),
             "exe_manifest_invalid",
         )?;
+        let compressed = row["compressed"]
+            .as_bool()
+            .ok_or_else(|| invalid("exe_manifest_invalid"))?;
         total = total
             .checked_add(size)
             .ok_or_else(|| invalid("exe_manifest_invalid"))?;
@@ -823,7 +663,10 @@ pub fn validate_response(
         payload.push(PayloadEntry {
             path: path.into(),
             size,
-            sha256: sha256.into(),
+            crc32: crc32 as u32,
+            payload_offset,
+            packed_size,
+            compressed,
         });
     }
     for p in &paths {
@@ -964,7 +807,6 @@ fn file_policy(row: &Value, _installer: &str) -> Result<()> {
             "notes",
             "packages",
             "packed_size",
-            "payload",
             "payload_offset",
             "runtime_folder",
             "serialized_record",
@@ -1098,66 +940,6 @@ mod tests {
         present.select_payload(&game, &cancel).unwrap();
         assert_eq!(present.payload().len(), 2);
         assert!(present.evaluate(&game, &cancel).unwrap().satisfied);
-    }
-
-    #[test]
-    fn optional_self_reference_reinstall_uses_owned_original_baseline() {
-        let mut r = initial();
-        r["report"]["behavior"]["condition"] = json!(true);
-        let path = r["report"]["files"][0]["destination"]
-            .as_str()
-            .unwrap()
-            .to_owned();
-        let patched = b"patched payload";
-        let sha = format!("{:x}", Sha256::digest(patched));
-        r["report"]["files"][0]["payload"]["sha256"] = json!(sha);
-        r["report"]["behavior"]["file_conditions"] = json!([{"path":path,
-            "condition":["symbol","not",["symbol","exists",path]]}]);
-        r["report"]["behavior_sha256"] =
-            json!(worker_behavior_sha256(&r["report"]["behavior"]).unwrap());
-        let root = tempfile::tempdir().unwrap();
-        let game = facts(root.path());
-        let cancel = AtomicBool::new(false);
-        let mut first = admit(&r).unwrap();
-        first.select_payload(&game, &cancel).unwrap();
-        let content = first
-            .content_id(42, "source", "page", "zh-CN", "base")
-            .unwrap();
-        let original = first.evaluate(&game, &cancel).unwrap();
-        let evidence = ReinstallEvidence {
-            instance_id: game.instance.instance_id.clone(),
-            content_id: content.clone(),
-            binding: first.binding.clone(),
-            owned: BTreeMap::from([(path.clone(), sha)]),
-            original: original
-                .files
-                .iter()
-                .map(|f| (f.path.clone(), f.observed.clone()))
-                .collect(),
-        };
-        fs::write(root.path().join(&path), patched).unwrap();
-        assert!(admit(&r).unwrap().select_payload(&game, &cancel).is_err());
-        let mut second = admit(&r).unwrap();
-        second
-            .select_payload_with_evidence(&game, &cancel, Some(&evidence))
-            .unwrap();
-        assert_eq!(
-            second
-                .content_id(42, "source", "page", "zh-CN", "base")
-                .unwrap(),
-            content
-        );
-        assert!(
-            second
-                .evaluate_with_reinstall(&game, &cancel, Some(&content), Some(&evidence))
-                .unwrap()
-                .satisfied
-        );
-        fs::write(root.path().join(&path), "external edit").unwrap();
-        assert!(admit(&r)
-            .unwrap()
-            .select_payload_with_evidence(&game, &cancel, Some(&evidence))
-            .is_err());
     }
 
     #[test]
@@ -1327,131 +1109,5 @@ mod tests {
             worker_behavior_sha256(&json!({"text":"中文😀"})).unwrap(),
             canonical::canonical_sha256(&json!({"text":"中文😀"}))
         );
-    }
-}
-
-#[cfg(test)]
-mod reinstall_tests {
-    use super::*;
-    use crate::{
-        catalog::FileMapping,
-        installer::authorization::{self, AuthorizeInput, ContentBinding, PolicyVersions},
-    };
-    fn authorization(
-        p: &PreparedReport,
-        g: &GameFacts,
-        s: &ConditionSnapshot,
-        content: &str,
-    ) -> authorization::Authorization {
-        let maps: Vec<_> = p
-            .payload()
-            .iter()
-            .map(|p| FileMapping {
-                source: p.path.clone(),
-                destination: p.path.clone(),
-                original_sha256: None,
-                installed_sha256: p.sha256.clone(),
-            })
-            .collect();
-        let c = ContentBinding::publisher_exe(
-            content,
-            &p.binding.exe_sha256,
-            p.binding.exe_size,
-            &p.binding.metadata_sha256,
-            &p.binding.payload_sha256,
-            &"a".repeat(64),
-            123,
-            Some("sf9-audit-v3"),
-            &maps,
-        );
-        authorization::authorize(AuthorizeInput {
-            release_id: content,
-            selection_id: None,
-            source_id: "source",
-            source_record_id: Some("page"),
-            candidate_sha256: &"a".repeat(64),
-            rule_fingerprint: &"b".repeat(64),
-            settings_revision: 1,
-            conditions_sha256: &s.sha256(),
-            content: c,
-            policy: PolicyVersions::default(),
-            plan_id: "11111111-1111-1111-1111-111111111111",
-            task_id: None,
-            request_id: None,
-            facts: g.clone(),
-            now: 1,
-        })
-        .unwrap()
-    }
-    #[test]
-    fn only_owned_matching_bytes_can_reuse_original_conditions() {
-        let mut r = super::tests::initial();
-        r["report"]["behavior"]["condition"] = json!([
-            "symbol",
-            "==",
-            ["symbol", "crc32", "payload.bin"],
-            0xcbf43926u32
-        ]);
-        r["report"]["behavior_sha256"] =
-            json!(worker_behavior_sha256(&r["report"]["behavior"]).unwrap());
-        let patched = b"patched payload";
-        r["report"]["files"][0]["payload"]["sha256"] =
-            json!(format!("{:x}", Sha256::digest(patched)));
-        let p = super::tests::admit(&r).unwrap();
-        let temp = tempfile::tempdir().unwrap();
-        let game = super::tests::facts(temp.path());
-        let cancel = AtomicBool::new(false);
-        fs::write(temp.path().join("payload.bin"), b"123456789").unwrap();
-        let original = p.evaluate(&game, &cancel).unwrap();
-        assert!(original.satisfied);
-        let content = p.content_id(42, "source", "page", "zh-CN", "base").unwrap();
-        let auth = authorization(&p, &game, &original, &content);
-        let tx = Transaction {
-            transaction_id: auth.plan_id.clone(),
-            plan_id: auth.plan_id.clone(),
-            instance_id: game.instance.instance_id.clone(),
-            release_id: content.clone(),
-            state: "committed".into(),
-            error: None,
-            created_at: 1,
-            updated_at: 2,
-            has_replacements: false,
-            selection_id: None,
-            content_id: None,
-        };
-        let evidence = ReinstallEvidence::from_committed(&tx, &auth, &original).unwrap();
-        fs::write(temp.path().join("payload.bin"), patched).unwrap();
-        assert!(!p.evaluate(&game, &cancel).unwrap().satisfied);
-        let second = p
-            .evaluate_with_reinstall(&game, &cancel, Some(&content), Some(&evidence))
-            .unwrap();
-        assert!(second.satisfied);
-        assert_ne!(second.files, second.evaluation_files);
-        let second_auth = authorization(&p, &game, &second, &content);
-        let second_evidence =
-            ReinstallEvidence::from_committed(&tx, &second_auth, &second).unwrap();
-        assert!(
-            p.evaluate_with_reinstall(&game, &cancel, Some(&content), Some(&second_evidence))
-                .unwrap()
-                .satisfied
-        );
-        fs::write(temp.path().join("payload.bin"), b"external changed").unwrap();
-        assert!(
-            !p.evaluate_with_reinstall(&game, &cancel, Some(&content), Some(&evidence))
-                .unwrap()
-                .satisfied
-        );
-        let mut wrong = tx.clone();
-        wrong.state = "rolled_back".into();
-        assert!(ReinstallEvidence::from_committed(&wrong, &auth, &original).is_err());
-        wrong = tx.clone();
-        wrong.instance_id = "other".into();
-        assert!(ReinstallEvidence::from_committed(&wrong, &auth, &original).is_err());
-        let mut wrong = auth.clone();
-        wrong.conditions_sha256 = "a".repeat(64);
-        assert!(ReinstallEvidence::from_committed(&tx, &wrong, &original).is_err());
-        assert!(p
-            .evaluate_with_reinstall(&game, &cancel, Some("wrong"), Some(&evidence))
-            .is_err());
     }
 }

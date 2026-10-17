@@ -235,7 +235,7 @@ fn append_system_binds(argv: &mut Vec<OsString>) {
 /// installer's file table); only [`MAX_STDERR_BYTES`] of stderr is bounded, and
 /// exceeding it is fail-closed (`output-limit`).
 pub fn run_sandboxed(cfg: &SandboxConfig) -> Result<LaunchOutcome, IsolationError> {
-    run_internal(cfg, None)
+    run_internal(cfg, None, None)
 }
 
 /// Production cancellation is polled while the process is running.
@@ -243,11 +243,22 @@ pub fn run_sandboxed_cancellable(
     cfg: &SandboxConfig,
     cancel: &AtomicBool,
 ) -> Result<LaunchOutcome, IsolationError> {
-    run_internal(cfg, Some(cancel))
+    run_internal(cfg, Some(cancel), None)
+}
+
+/// Stream stdout to `tx` in bounded chunks instead of buffering it. The caller
+/// consumes the channel on its own thread; a dropped receiver terminates the job.
+pub fn run_sandboxed_streaming(
+    cfg: &SandboxConfig,
+    cancel: &AtomicBool,
+    tx: std::sync::mpsc::SyncSender<Vec<u8>>,
+) -> Result<LaunchOutcome, IsolationError> {
+    run_internal(cfg, Some(cancel), Some(tx))
 }
 fn run_internal(
     cfg: &SandboxConfig,
     cancel: Option<&AtomicBool>,
+    mut stdout_tx: Option<std::sync::mpsc::SyncSender<Vec<u8>>>,
 ) -> Result<LaunchOutcome, IsolationError> {
     let mut argv = build_bwrap_command(cfg)?;
     let seccomp = if cfg.production_strict {
@@ -365,12 +376,20 @@ fn run_internal(
     let overflow = Arc::new(AtomicU8::new(OVERFLOW_NONE));
     let stdout = child.stdout.take().expect("stdout piped");
     let stdout_flag = Arc::clone(&overflow);
-    let stdout_join =
-        thread::spawn(move || read_bounded(stdout, None, OVERFLOW_STDOUT, stdout_flag));
+    let stdout_mode = stdout_tx.take();
+    let stdout_join = thread::spawn(move || {
+        read_bounded(stdout, None, OVERFLOW_STDOUT, stdout_flag, stdout_mode)
+    });
     let stderr = child.stderr.take().expect("stderr piped");
     let stderr_flag = Arc::clone(&overflow);
     let stderr_join = thread::spawn(move || {
-        read_bounded(stderr, Some(MAX_STDERR_BYTES), OVERFLOW_STDERR, stderr_flag)
+        read_bounded(
+            stderr,
+            Some(MAX_STDERR_BYTES),
+            OVERFLOW_STDERR,
+            stderr_flag,
+            None,
+        )
     });
 
     let end = loop {
@@ -580,6 +599,7 @@ fn read_bounded(
     limit: Option<usize>,
     kind: u8,
     flag: Arc<AtomicU8>,
+    stream: Option<std::sync::mpsc::SyncSender<Vec<u8>>>,
 ) -> Result<Vec<u8>, ()> {
     let mut out = Vec::new();
     let mut buf = [0u8; 64 * 1024];
@@ -591,7 +611,16 @@ fn read_bounded(
                     flag.store(kind, Ordering::SeqCst);
                     return Err(());
                 }
-                out.extend_from_slice(&buf[..n]);
+                if let Some(tx) = &stream {
+                    if tx.send(buf[..n].to_vec()).is_err() {
+                        // The consumer stopped (write error/cancel); make the
+                        // wait loop terminate the sandbox instead of blocking.
+                        flag.store(kind, Ordering::SeqCst);
+                        return Err(());
+                    }
+                } else {
+                    out.extend_from_slice(&buf[..n]);
+                }
             }
             Err(_) => {
                 flag.store(OVERFLOW_IO, Ordering::SeqCst);

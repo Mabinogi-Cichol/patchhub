@@ -108,6 +108,7 @@ fn is_terminal(state: &str) -> bool {
         "rolled_back",
         "uninstalled",
         "needs_recovery",
+        "failed",
     ]
     .contains(&state)
 }
@@ -218,10 +219,9 @@ pub fn begin_request(
     // No plan yet: an unrelated non-terminal transaction for the same instance
     // means an interrupted write the host must recover first.
     let transactions = install::list_transactions_at(paths.root()).map_err(internal)?;
-    if transactions
-        .iter()
-        .any(|item| item.instance_id == binding.instance_id && !is_terminal(&item.state))
-    {
+    if transactions.iter().any(|item| {
+        item.instance_id == binding.instance_id && !is_terminal(&item.state) && !item.direct
+    }) {
         return Err(ZipTaskError::code(
             "install_request_in_progress_or_interrupted",
         ));
@@ -414,7 +414,7 @@ pub(crate) fn plan_mappings(plan: &install::InstallPlan) -> Vec<FileMapping> {
             source: change.source.clone().unwrap_or_else(|| change.path.clone()),
             destination: change.path.clone(),
             original_sha256: change.original_sha256.clone(),
-            installed_sha256: change.installed_sha256.clone(),
+            installed_sha256: change.installed_sha256.clone().unwrap_or_default(),
         })
         .collect()
 }
@@ -509,7 +509,7 @@ pub(crate) fn finish_failed_plan(paths: &InstallerPaths, id: &str) -> io::Result
         .ok_or_else(|| super::invalid("transaction_missing"))?;
     match current.state.as_str() {
         "planned" => install::discard_plan_at(paths.root(), id),
-        "committed" | "rolled_back" | "needs_recovery" => Ok(current),
+        "committed" | "rolled_back" | "needs_recovery" | "failed" => Ok(current),
         _ => install::recover_plan_at(paths.root(), id)?
             .into_iter()
             .find(|t| t.plan_id == id)

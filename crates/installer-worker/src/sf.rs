@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::fs::{self, File, OpenOptions};
-use std::io::{Read, Seek, Write};
+use std::io::Write;
 use std::path::Path;
 use steam_patch_installer_format::{audit, require, Error, Result};
 
@@ -13,10 +13,13 @@ pub const MAX_MESSAGE: usize = 16 * 1024 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-pub struct Payload {
+pub struct Member {
     pub path: String,
     pub size: u64,
-    pub sha256: String,
+    pub crc32: u32,
+    pub payload_offset: u64,
+    pub packed_size: u64,
+    pub compressed: bool,
 }
 #[derive(Debug, Deserialize)]
 #[serde(tag = "action", deny_unknown_fields)]
@@ -25,13 +28,11 @@ pub enum Descriptor {
     Analyze { exe_sha256: String, exe_size: u64 },
     #[serde(rename = "analyze_behavior")]
     AnalyzeBehavior { exe_sha256: String, exe_size: u64 },
-    #[serde(rename = "convert_behavior")]
-    ConvertBehavior {
+    #[serde(rename = "extract_behavior")]
+    ExtractBehavior {
         exe_sha256: String,
         exe_size: u64,
-        metadata_sha256: String,
-        payload: Vec<Payload>,
-        behavior_sha256: String,
+        payload: Vec<Member>,
     },
 }
 fn is_sha(s: &str) -> bool {
@@ -50,7 +51,7 @@ impl Descriptor {
                 exe_sha256,
                 exe_size,
             }
-            | Self::ConvertBehavior {
+            | Self::ExtractBehavior {
                 exe_sha256,
                 exe_size,
                 ..
@@ -60,26 +61,23 @@ impl Descriptor {
     fn validate(&self) -> Result<()> {
         let (hash, size) = self.binding();
         require(is_sha(hash) && size > 0, "invalid_descriptor")?;
-        if let Self::ConvertBehavior {
-            metadata_sha256,
-            behavior_sha256,
-            payload,
-            ..
-        } = self
-        {
-            require(
-                is_sha(metadata_sha256) && is_sha(behavior_sha256) && !payload.is_empty(),
-                "invalid_descriptor",
-            )?;
+        if let Self::ExtractBehavior { payload, .. } = self {
+            require(!payload.is_empty(), "invalid_descriptor")?;
             // Validate every declared member and keep the running total
-            // overflow-checked; collection to a real artifact is bounded by
-            // the actual input and disk at conversion time.
-            let _total = payload.iter().try_fold(0u64, |total, p| {
-                require(is_sha(&p.sha256), "invalid_descriptor")?;
-                total
+            // overflow-checked. Each payload range must lie inside the input.
+            let mut total = 0u64;
+            for p in payload {
+                require(
+                    !p.path.is_empty()
+                        && p.payload_offset
+                            .checked_add(p.packed_size)
+                            .is_some_and(|end| end <= size),
+                    "invalid_descriptor",
+                )?;
+                total = total
                     .checked_add(p.size)
-                    .ok_or_else(|| Error("invalid_descriptor".into()))
-            })?;
+                    .ok_or_else(|| Error("invalid_descriptor".into()))?;
+            }
         }
         Ok(())
     }
@@ -162,34 +160,17 @@ pub fn encode_response(value: &Value) -> Result<Vec<u8>> {
     out.push(b'\n');
     Ok(out)
 }
-fn manifest(report: &Value) -> Result<Vec<Payload>> {
-    report["files"]
-        .as_array()
-        .ok_or_else(|| Error("invalid_report".into()))?
-        .iter()
-        .map(|f| {
-            Ok(Payload {
-                path: string(f, "destination")?.into(),
-                size: number(f, "unpacked_size")?,
-                sha256: string(&f["payload"], "sha256")?.into(),
-            })
-        })
-        .collect()
-}
-fn string<'a>(value: &'a Value, key: &str) -> Result<&'a str> {
-    value[key]
-        .as_str()
-        .ok_or_else(|| Error("invalid_report".into()))
-}
-fn number(value: &Value, key: &str) -> Result<u64> {
-    value[key]
-        .as_u64()
-        .ok_or_else(|| Error("invalid_report".into()))
-}
-
-/// Read-only analysis or content-bound conversion; the output directory is exclusively owned.
-pub fn process(file: &File, descriptor: &Descriptor, output: &Path) -> Result<Value> {
+/// Read-only analysis. Payload bytes are decoded only by [`extract`] during the
+/// install phase, never here to precompute member digests.
+pub fn process(file: &File, descriptor: &Descriptor) -> Result<Value> {
     descriptor.validate()?;
+    require(
+        matches!(
+            descriptor,
+            Descriptor::Analyze { .. } | Descriptor::AnalyzeBehavior { .. }
+        ),
+        "invalid_descriptor",
+    )?;
     let before = identity(file)?;
     let (exe_sha, exe_size) = descriptor.binding();
     require(before.len == exe_size, "exe_size_mismatch")?;
@@ -197,273 +178,69 @@ pub fn process(file: &File, descriptor: &Descriptor, output: &Path) -> Result<Va
     // write/delete sharing; Linux production binds it read-only. The host must keep
     // the input immutable for this invocation. Identity and digest are rechecked.
     let data = unsafe { MmapOptions::new().map(file)? };
+    let behavior = matches!(descriptor, Descriptor::AnalyzeBehavior { .. });
+    let report = audit::audit_metadata(&data, behavior)?;
+    // The metadata audit hashes the complete input once; reuse that digest
+    // instead of reading the file again just to bind the descriptor.
+    require(report["exe"]["sha256"] == exe_sha, "exe_payload_changed")?;
+    require(identity(file)? == before, "exe_changed_during_analysis")?;
+    let action = if behavior {
+        "analyze_behavior"
+    } else {
+        "analyze"
+    };
+    Ok(
+        json!({"schema_version":1,"action":action,"exe_sha256":exe_sha,"report":report,"installable":false}),
+    )
+}
+
+fn write_line(out: &mut dyn Write, value: Value) -> Result<()> {
+    serde_json::to_writer(&mut *out, &value).map_err(|_| Error("invalid_report".into()))?;
+    out.write_all(b"\n")?;
+    Ok(())
+}
+
+/// Stream selected members to the caller as one JSON header, exactly the
+/// advertised raw bytes, and one JSON trailer per member. The host consumes the
+/// bytes while the worker decodes; no artifact or member image is created.
+pub fn extract(file: &File, descriptor: &Descriptor, out: &mut dyn Write) -> Result<()> {
+    descriptor.validate()?;
+    let Descriptor::ExtractBehavior { payload, .. } = descriptor else {
+        return Err(Error("invalid_descriptor".into()));
+    };
+    let before = identity(file)?;
+    let (exe_sha, exe_size) = descriptor.binding();
+    require(before.len == exe_size, "exe_size_mismatch")?;
+    // SAFETY: see process(): the sandboxed input is immutable for this session.
+    let data = unsafe { MmapOptions::new().map(file)? };
     require(
         format!("{:x}", Sha256::digest(&data[..])) == exe_sha,
         "exe_payload_changed",
     )?;
-    let behavior = !matches!(descriptor, Descriptor::Analyze { .. });
-    let report = audit::audit(&data, behavior)?;
-    require(report["exe"]["sha256"] == exe_sha, "exe_payload_changed")?;
-    require(identity(file)? == before, "exe_changed_during_extraction")?;
-    match descriptor {
-        Descriptor::Analyze { .. } | Descriptor::AnalyzeBehavior { .. } => {
-            let action = if behavior {
-                "analyze_behavior"
-            } else {
-                "analyze"
-            };
-            let response = json!({"schema_version":1,"action":action,"exe_sha256":exe_sha,"report":report,"installable":false});
-            encode_response(&response)?;
-            Ok(response)
-        }
-        Descriptor::ConvertBehavior {
-            metadata_sha256,
-            payload,
-            behavior_sha256,
-            ..
-        } => {
-            require(
-                report["metadata"]["sha256"] == *metadata_sha256,
-                "exe_metadata_changed",
-            )?;
-            require(
-                report["behavior_sha256"] == *behavior_sha256,
-                "exe_behavior_changed",
-            )?;
-            let files = manifest(&report)?;
-            let actual: std::collections::BTreeMap<_, _> =
-                files.iter().map(|p| (p.path.as_str(), p)).collect();
-            let mut wanted = payload.clone();
-            wanted.sort_by(|a, b| a.path.cmp(&b.path));
-            require(
-                wanted.windows(2).all(|v| v[0].path != v[1].path)
-                    && wanted.iter().all(|item| {
-                        actual
-                            .get(item.path.as_str())
-                            .is_some_and(|value| *value == item)
-                    }),
-                "exe_manifest_changed",
-            )?;
-            let files = payload.clone();
-            let parent = output
-                .parent()
-                .ok_or_else(|| Error("worker_output_invalid".into()))?;
-            no_links(parent)?;
-            require(parent.is_dir(), "worker_output_invalid")?;
-            let partial = output.with_file_name("normalized.zip.partial");
-            require(
-                !output.try_exists()? && !partial.try_exists()?,
-                "worker_output_exists",
-            )?;
-            let mut target = OpenOptions::new()
-                .write(true)
-                .read(true)
-                .create_new(true)
-                .open(&partial)?;
-            let outcome = (|| {
-                write_zip(&mut target, &data, &report, &files)?;
-                target.sync_all()?;
-                require(identity(file)? == before, "exe_changed_during_extraction")?;
-                require(
-                    format!("{:x}", Sha256::digest(&data[..])) == exe_sha,
-                    "exe_payload_changed",
-                )?;
-                let size = target.metadata()?.len();
-                target.rewind()?;
-                let mut hash = Sha256::new();
-                let mut buf = [0u8; 64 * 1024];
-                loop {
-                    let count = target.read(&mut buf)?;
-                    if count == 0 {
-                        break;
-                    }
-                    hash.update(&buf[..count]);
-                }
-                let response = json!({"extractor":audit::VERSION,"exe_sha256":exe_sha,"metadata_sha256":metadata_sha256,
-                    "artifact_sha256":format!("{:x}",hash.finalize()),"artifact_size":size,"files":files});
-                encode_response(&response)?;
-                // Atomic no-clobber publication on the same volume. A late competing
-                // output cannot be overwritten, unlike Unix rename().
-                fs::hard_link(&partial, output)?;
-                Ok(response)
-            })();
-            drop(target);
-            let cleanup = fs::remove_file(&partial);
-            match (outcome, cleanup) {
-                (Ok(v), Ok(())) => Ok(v),
-                (Err(e), _) => Err(e),
-                (Ok(_), Err(e)) => {
-                    let _ = fs::remove_file(output);
-                    Err(e.into())
-                }
-            }
-        }
-    }
-}
-
-fn u16le(w: &mut impl Write, n: u16) -> Result<()> {
-    w.write_all(&n.to_le_bytes())?;
-    Ok(())
-}
-fn u32le(w: &mut impl Write, n: u32) -> Result<()> {
-    w.write_all(&n.to_le_bytes())?;
-    Ok(())
-}
-fn u64le(w: &mut impl Write, n: u64) -> Result<()> {
-    w.write_all(&n.to_le_bytes())?;
-    Ok(())
-}
-// CPython starts ZIP64 central-directory/EOCD framing above 2^31-1,
-// even though the classic ZIP fields can represent up to 2^32-1.
-const PY_ZIP64_LIMIT: u64 = (1 << 31) - 1;
-
-fn write_central_record(
-    w: &mut impl Write,
-    name: &[u8],
-    flags: u16,
-    size: u64,
-    crc: u32,
-    start: u64,
-) -> Result<()> {
-    let mut extra = Vec::new();
-    let stored_size = if size > PY_ZIP64_LIMIT {
-        u64le(&mut extra, size)?;
-        u64le(&mut extra, size)?;
-        u32::MAX
-    } else {
-        size as u32
-    };
-    let stored_start = if start > PY_ZIP64_LIMIT {
-        u64le(&mut extra, start)?;
-        u32::MAX
-    } else {
-        start as u32
-    };
-    u32le(w, 0x02014b50)?;
-    u16le(w, 0x32d)?;
-    u16le(w, 45)?;
-    u16le(w, flags)?;
-    u16le(w, 0)?;
-    u16le(w, 0)?;
-    u16le(w, 33)?;
-    u32le(w, crc)?;
-    u32le(w, stored_size)?;
-    u32le(w, stored_size)?;
-    u16le(w, name.len() as u16)?;
-    u16le(
-        w,
-        if extra.is_empty() {
-            0
-        } else {
-            4 + extra.len() as u16
-        },
-    )?;
-    for _ in 0..3 {
-        u16le(w, 0)?;
-    }
-    u32le(w, 0o100644 << 16)?;
-    u32le(w, stored_start)?;
-    w.write_all(name)?;
-    if !extra.is_empty() {
-        u16le(w, 1)?;
-        u16le(w, extra.len() as u16)?;
-        w.write_all(&extra)?;
-    }
-    Ok(())
-}
-
-fn write_end_records(w: &mut impl Write, count: u64, size: u64, start: u64) -> Result<()> {
-    if start > PY_ZIP64_LIMIT || size > PY_ZIP64_LIMIT || count >= u16::MAX as u64 {
-        u32le(w, 0x06064b50)?;
-        u64le(w, 44)?;
-        u16le(w, 45)?;
-        u16le(w, 45)?;
-        u32le(w, 0)?;
-        u32le(w, 0)?;
-        u64le(w, count)?;
-        u64le(w, count)?;
-        u64le(w, size)?;
-        u64le(w, start)?;
-        u32le(w, 0x07064b50)?;
-        u32le(w, 0)?;
-        u64le(
-            w,
-            start
-                .checked_add(size)
-                .ok_or_else(|| Error("normalized_zip_limit".into()))?,
+    write_line(out, json!({"extract":1,"members":payload.len()}))?;
+    for (index, member) in payload.iter().enumerate() {
+        write_line(
+            out,
+            json!({"index":index,"path":member.path,"size":member.size}),
         )?;
-        u32le(w, 1)?;
-    }
-    u32le(w, 0x06054b50)?;
-    u16le(w, 0)?;
-    u16le(w, 0)?;
-    u16le(w, count.min(u16::MAX as u64) as u16)?;
-    u16le(w, count.min(u16::MAX as u64) as u16)?;
-    u32le(w, size.min(u32::MAX as u64) as u32)?;
-    u32le(w, start.min(u32::MAX as u64) as u32)?;
-    u16le(w, 0)?;
-    Ok(())
-}
-
-// Match the frozen CPython 3.12 ZIP_STORED / force_zip64 bytes exactly.
-fn write_zip(w: &mut File, data: &[u8], report: &Value, selected: &[Payload]) -> Result<()> {
-    let selected_paths: std::collections::BTreeSet<_> =
-        selected.iter().map(|p| p.path.as_str()).collect();
-    let mut rows: Vec<&Value> = report["files"]
-        .as_array()
-        .ok_or_else(|| Error("invalid_report".into()))?
-        .iter()
-        .filter(|row| {
-            row["destination"]
-                .as_str()
-                .is_some_and(|p| selected_paths.contains(p))
-        })
-        .collect();
-    rows.sort_by(|a, b| a["destination"].as_str().cmp(&b["destination"].as_str()));
-    let mut central = Vec::new();
-    for row in &rows {
-        let name = string(row, "destination")?.as_bytes();
-        require(name.len() <= u16::MAX as usize, "normalized_zip_path_limit")?;
-        let flags = if name.is_ascii() { 0 } else { 0x800 };
-        let size = number(row, "unpacked_size")?;
-        let crc =
-            u32::try_from(number(row, "crc32")?).map_err(|_| Error("invalid_report".into()))?;
-        let start = w.stream_position()?;
-
-        u32le(w, 0x04034b50)?;
-        u16le(w, 45)?;
-        u16le(w, flags)?;
-        u16le(w, 0)?;
-        u16le(w, 0)?;
-        u16le(w, 33)?;
-        u32le(w, crc)?;
-        u32le(w, u32::MAX)?;
-        u32le(w, u32::MAX)?;
-        u16le(w, name.len() as u16)?;
-        u16le(w, 20)?;
-        w.write_all(name)?;
-        u16le(w, 1)?;
-        u16le(w, 16)?;
-        u64le(w, size)?;
-        u64le(w, size)?;
         let info = audit::decode_payload(
-            data,
-            usize::try_from(number(row, "payload_offset")?)
-                .map_err(|_| Error("invalid_report".into()))?,
-            number(row, "packed_size")?,
-            size,
-            crc,
-            row["compressed"]
-                .as_bool()
-                .ok_or_else(|| Error("invalid_report".into()))?,
-            Some(w),
+            &data,
+            usize::try_from(member.payload_offset)
+                .map_err(|_| Error("invalid_descriptor".into()))?,
+            member.packed_size,
+            member.size,
+            member.crc32,
+            member.compressed,
+            Some(&mut *out),
         )?;
-        require(info == row["payload"], "exe_payload_changed")?;
-        write_central_record(&mut central, name, flags, size, crc, start)?;
+        write_line(
+            out,
+            json!({"index":index,"size":info["size"],"crc32":info["crc32"],"sha256":info["sha256"]}),
+        )?;
     }
-    let start = w.stream_position()?;
-    w.write_all(&central)?;
-    write_end_records(w, rows.len() as u64, central.len() as u64, start)?;
+    write_line(out, json!({"done":true}))?;
+    out.flush()?;
+    require(identity(file)? == before, "exe_changed_during_extraction")?;
     Ok(())
 }
 
@@ -512,43 +289,6 @@ mod tests {
         );
     }
     #[test]
-    fn zip64_boundaries_match_frozen_cpython_headers() {
-        let golden: Value = serde_json::from_str(include_str!(
-            "../../installer-format/tests/fixtures/sf/zip64-boundary-golden.json"
-        ))
-        .unwrap();
-        for case in golden["cases"].as_array().unwrap() {
-            let name = case["name"].as_str().unwrap().as_bytes();
-            let flags = if name.is_ascii() { 0 } else { 0x800 };
-            let mut central = Vec::new();
-            write_central_record(
-                &mut central,
-                name,
-                flags,
-                case["size"].as_u64().unwrap(),
-                0x12345678,
-                case["header_offset"].as_u64().unwrap(),
-            )
-            .unwrap();
-            let mut actual = central.clone();
-            write_end_records(
-                &mut actual,
-                1,
-                central.len() as u64,
-                case["central_offset"].as_u64().unwrap(),
-            )
-            .unwrap();
-            let expected: Vec<u8> = case["expected_hex"]
-                .as_str()
-                .unwrap()
-                .as_bytes()
-                .chunks_exact(2)
-                .map(|pair| u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap())
-                .collect();
-            assert_eq!(actual, expected, "{}", case["id"]);
-        }
-    }
-    #[test]
     fn response_has_no_artificial_size_ceiling() {
         let small = encode_response(&json!({"installable":false})).unwrap();
         assert_eq!(small.last(), Some(&b'\n'));
@@ -558,62 +298,6 @@ mod tests {
         assert!(big.len() > MAX_MESSAGE);
         assert_eq!(big.last(), Some(&b'\n'));
     }
-    #[test]
-    fn zip64_records_keep_full_offsets_sizes_and_member_counts() {
-        let mut central = Vec::new();
-        let size = 5u64 * 1024 * 1024 * 1024;
-        let offset = size + 123;
-        write_central_record(&mut central, b"file.dat", 0, size, 0, offset).unwrap();
-        assert!(central.windows(8).any(|v| v == offset.to_le_bytes()));
-        // Both the classic compressed/uncompressed fields saturate to
-        // u32::MAX and the ZIP64 extra carries the nonzero size twice before
-        // the relative offset (uncompressed, compressed, offset order).
-        assert_eq!(&central[20..28], &[0xff; 8]);
-        let mut extra = Vec::new();
-        u64le(&mut extra, size).unwrap();
-        u64le(&mut extra, size).unwrap();
-        u64le(&mut extra, offset).unwrap();
-        assert!(central.ends_with(&extra), "size twice then offset");
-        let mut footer = Vec::new();
-        write_end_records(&mut footer, 70_000, 1024, offset).unwrap();
-        assert_eq!(&footer[..4], &0x06064b50u32.to_le_bytes());
-        assert_eq!(
-            u64::from_le_bytes(footer[24..32].try_into().unwrap()),
-            70_000
-        );
-        assert_eq!(
-            u64::from_le_bytes(footer[48..56].try_into().unwrap()),
-            offset
-        );
-        assert_eq!(footer.len(), 98);
-    }
-
-    #[test]
-    fn zip64_end_record_triggers_at_member_count_boundary() {
-        // The classic ZIP32 EOCD holds at most u16::MAX - 1 members, so the
-        // writer must emit ZIP64 EOCD + locator as soon as count == u16::MAX.
-        let mut below = Vec::new();
-        write_end_records(&mut below, u16::MAX as u64 - 1, 1024, 0).unwrap();
-        assert_eq!(&below[..4], &0x06054b50u32.to_le_bytes(), "plain EOCD");
-        assert_eq!(below.len(), 22);
-
-        let mut at = Vec::new();
-        write_end_records(&mut at, u16::MAX as u64, 1024, 0).unwrap();
-        assert_eq!(&at[..4], &0x06064b50u32.to_le_bytes(), "ZIP64 EOCD");
-        assert_eq!(
-            u64::from_le_bytes(at[24..32].try_into().unwrap()),
-            u16::MAX as u64
-        );
-        // The classic EOCD count is saturated (not truncated) and sits last.
-        let eocd = &at[at.len() - 22..];
-        assert_eq!(&eocd[..4], &0x06054b50u32.to_le_bytes());
-        assert_eq!(
-            u16::from_le_bytes(eocd[8..10].try_into().unwrap()),
-            u16::MAX
-        );
-        assert_eq!(at.len(), 98);
-    }
-
     #[test]
     fn descriptor_accepts_large_representable_exe_without_allocating_its_contents() {
         let bytes = serde_json::to_vec(&json!({"action":"analyze_behavior",

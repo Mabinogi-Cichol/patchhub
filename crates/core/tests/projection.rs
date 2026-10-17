@@ -166,6 +166,7 @@ fn records(
         has_replacements: false,
         selection_id: Some(selection.into()),
         content_id: Some("exe-content-test".into()),
+        direct: false,
     };
     let p = InstallPlan {
         operation: InstallOperation::Overwrite,
@@ -181,7 +182,7 @@ fn records(
             path: path.into(),
             action: "add".into(),
             original_sha256: None,
-            installed_sha256: format!("{:x}", Sha256::digest(b"patched")),
+            installed_sha256: Some(format!("{:x}", Sha256::digest(b"patched"))),
             size: 7,
             source: None,
         }],

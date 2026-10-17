@@ -11,6 +11,7 @@ pub mod authorization;
 pub mod backup;
 pub mod cache;
 mod cache_lock;
+mod direct;
 pub mod exe_orchestrator;
 pub mod exe_report;
 pub mod exe_resolve;

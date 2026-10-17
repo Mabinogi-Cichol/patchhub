@@ -73,4 +73,12 @@ test("installation RPC result consumes core disposition and recovery", () => {
   assert.match(installationResult(outcome("cancelled")), /安全取消/);
   assert.match(installationResult(outcome("failed")), /安装未完成.*游戏文件已变化/);
   assert.match(installationResult(outcome("failed", true)), /需要修复/);
+  assert.match(
+    installationResult({ disposition: "failed", cause: { code: "install_incomplete" } } as InstallerOutcome),
+    /安装未完成，已写入的文件未恢复/,
+  );
+  assert.match(
+    installationResult({ disposition: "failed", cause: { code: "cancelled_incomplete" } } as InstallerOutcome),
+    /安装已取消，但已写入的文件未恢复/,
+  );
 });

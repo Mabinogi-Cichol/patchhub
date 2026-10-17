@@ -1782,3 +1782,113 @@ fn lossless_cp437_member_names_use_the_same_recipe_and_transaction_policy() {
     let plan = archive_task_plan(&f, "cp437-archive").unwrap();
     assert_eq!(apply(&plan.plan_id, &f.state).unwrap().state, "committed");
 }
+
+#[test]
+fn direct_install_records_no_backup_and_commits_observed_digests() {
+    let f = Fixture::new();
+    let game = steam::scan(std::slice::from_ref(&f.library))
+        .installs
+        .remove(0);
+    let files = vec![
+        ("original.dat".to_string(), 7u64),
+        ("added/new.dat".to_string(), 3),
+    ];
+    let plan = crate::install::begin_direct_at(
+        &f.state,
+        &game,
+        "exe-content-test",
+        Some("exe-selection-test"),
+        Some("exe-content-test"),
+        InstallOperation::Install,
+        &files,
+    )
+    .unwrap();
+    let tx = list_transactions(&f.state).unwrap().remove(0);
+    assert_eq!(tx.state, "applying");
+    let change = crate::install::get_plan_at(&f.state, &plan.plan_id).unwrap();
+    assert!(change.changes.iter().all(|c| c.installed_sha256.is_none()));
+    for (target, data) in plan
+        .targets
+        .iter()
+        .zip([b"patched".as_slice(), b"new".as_slice()])
+    {
+        let mut file = crate::install::open_direct_target(&target.file).unwrap();
+        file.write_all(data).unwrap();
+        file.sync_all().unwrap();
+    }
+    let installed = vec![
+        ("original.dat".to_string(), hash(b"patched")),
+        ("added/new.dat".to_string(), hash(b"new")),
+    ];
+    let tx = crate::install::commit_direct_at(&f.state, &plan.plan_id, &installed).unwrap();
+    assert_eq!(tx.state, "committed");
+    assert_eq!(fs::read(f.game.join("original.dat")).unwrap(), b"patched");
+    assert_eq!(fs::read(f.game.join("added/new.dat")).unwrap(), b"new");
+    assert!(!f.job_file(&plan.plan_id, "0.backup").exists());
+    assert!(!f.job_file(&plan.plan_id, "0.stage").exists());
+    let plan = crate::install::get_plan_at(&f.state, &plan.plan_id).unwrap();
+    assert!(plan.changes.iter().all(|c| c.installed_sha256.is_some()));
+}
+
+#[test]
+fn interrupted_direct_install_is_marked_failed_and_does_not_block_a_retry() {
+    let f = Fixture::new();
+    let game = steam::scan(std::slice::from_ref(&f.library))
+        .installs
+        .remove(0);
+    let plan = crate::install::begin_direct_at(
+        &f.state,
+        &game,
+        "exe-content-test",
+        None,
+        None,
+        InstallOperation::Install,
+        &[("original.dat".to_string(), 7)],
+    )
+    .unwrap();
+    fs::write(f.game.join("original.dat"), b"partial").unwrap();
+    let plan_id = plan.plan_id.clone();
+    drop(plan);
+    let recovered = crate::install::recover_plan_at(&f.state, &plan_id).unwrap();
+    assert_eq!(recovered[0].state, "failed");
+    assert_eq!(recovered[0].error.as_deref(), Some("install_incomplete"));
+    assert_eq!(fs::read(f.game.join("original.dat")).unwrap(), b"partial");
+    // The failed direct run is terminal for the gate: a fresh install can start.
+    let retry = crate::install::begin_direct_at(
+        &f.state,
+        &game,
+        "exe-content-retry",
+        None,
+        None,
+        InstallOperation::Install,
+        &[("original.dat".to_string(), 7)],
+    )
+    .unwrap();
+    assert_eq!(list_transactions(&f.state).unwrap().len(), 2);
+    assert_eq!(
+        crate::install::fail_direct_at(&f.state, &retry.plan_id, "install_incomplete")
+            .unwrap()
+            .state,
+        "failed"
+    );
+}
+
+#[test]
+fn direct_targets_reject_non_file_targets_and_preserve_existing_permissions() {
+    let f = Fixture::new();
+    let game = steam::scan(std::slice::from_ref(&f.library))
+        .installs
+        .remove(0);
+    fs::create_dir(f.game.join("occupied")).unwrap();
+    let error = crate::install::begin_direct_at(
+        &f.state,
+        &game,
+        "exe-content-test",
+        None,
+        None,
+        InstallOperation::Install,
+        &[("occupied".to_string(), 1)],
+    )
+    .unwrap_err();
+    assert_eq!(error.to_string(), "target_not_file");
+}

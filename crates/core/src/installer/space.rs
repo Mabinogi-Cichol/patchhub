@@ -12,12 +12,6 @@ use std::{
 /// and directory metadata. Keep this the one margin; do not restate it as a
 /// second policy ceiling.
 pub const SPACE_MARGIN_BYTES: u64 = 16 * 1024 * 1024;
-/// Predicted EXE normalized ZIP (`Z`) framing overhead above the payload total:
-/// STORED local/central headers, member names, end-of-central-directory and
-/// engine metadata. `Z` is a prediction and never equals the payload `P`, so
-/// the conversion budget reserves it explicitly instead of treating `Z` as `P`.
-/// This is metadata overhead, not a free-space margin.
-const EXE_NORMALIZED_OVERHEAD_BYTES: u64 = 32 * 1024 * 1024;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SpaceBudget {
@@ -42,40 +36,31 @@ pub struct SpaceEvidence {
     pub same_volume: bool,
 }
 impl SpaceBudget {
-    /// EXE conversion/installation budget. `T` (the target-volume peak) is
-    /// supplied by [`ZipSpaceBudget::for_archive`]; `Z` is a prediction.
-    pub fn for_conversion(download: u64, payload: u64, files: &[(u64, u64)]) -> Result<Self> {
+    /// Direct EXE extraction budget. The cached download already exists, so the
+    /// only new state material is the sandbox input copy (`D`); the target
+    /// volume needs the peak net growth produced by writing members in order.
+    /// `T` is supplied by [`ZipSpaceBudget::for_archive`] (same write order).
+    pub fn for_direct(download: u64, files: &[(u64, u64)]) -> Result<Self> {
         let transaction = ZipSpaceBudget::for_archive(files)?;
-        let originals = transaction.original_bytes;
         let target = transaction.target_peak_bytes.unwrap();
         let add = |a: u64, b: u64| {
             a.checked_add(b)
                 .ok_or_else(|| invalid("exe_space_budget_overflow"))
         };
-        // Predicted normalized ZIP `Z` = payload + fixed framing overhead
-        // (STORED headers/names/metadata). `Z` is a prediction, not `P`.
-        let normalized = add(payload, EXE_NORMALIZED_OVERHEAD_BYTES)?;
-        // Conversion coexists with the cached download, the sandbox input copy
-        // of `D` held by the worker, and the growing `Z`: peak `2D + Z`.
-        let conversion = add(add(download, download)?, normalized)?;
-        // After the sandbox input is released, installation adds the cached
-        // download `D` (still retained until the terminal state), the backups
-        // `O` and the target peak `T` on top of `Z`: peak `D + Z + O + T`
-        // (design §5.2 `max(2D+Z, D+Z+O+T)`).
-        let installation = add(add(add(download, normalized)?, originals)?, target)?;
         Ok(Self {
-            // State-volume peak across both phases: conversion holds the cached
-            // `D`, the sandbox copy of `D` and the growing `Z` (`2D+Z`);
-            // installation holds the cached `D`, `Z` and the `O` backups
-            // (`D+Z+O`), which live in `jobs/<plan>/*.backup`. Peak is
-            // `Z + D + max(D, O)`.
-            state_bytes: add(
-                add(add(normalized, download)?, download.max(originals))?,
-                SPACE_MARGIN_BYTES,
-            )?,
+            state_bytes: add(download, SPACE_MARGIN_BYTES)?,
             target_bytes: add(target, SPACE_MARGIN_BYTES)?,
-            same_volume_bytes: Some(add(conversion.max(installation), SPACE_MARGIN_BYTES)?),
+            same_volume_bytes: Some(add(add(download, target)?, SPACE_MARGIN_BYTES)?),
         })
+    }
+    /// Re-check after the session has copied the input into staging: that copy
+    /// already occupies its volume, so only target growth and the margin remain.
+    pub fn after_input_copy(&self) -> Self {
+        Self {
+            state_bytes: SPACE_MARGIN_BYTES,
+            target_bytes: self.target_bytes,
+            same_volume_bytes: Some(self.target_bytes),
+        }
     }
     pub fn check_available(
         &self,
@@ -211,7 +196,7 @@ mod tests {
     use super::*;
     #[test]
     fn combined_volume_budget() {
-        let b = SpaceBudget::for_conversion(100, 200, &[(300, 0)]).unwrap();
+        let b = SpaceBudget::for_direct(100, &[(300, 0)]).unwrap();
         let combined = b.same_volume_bytes.unwrap();
         // Separate volumes satisfy the per-volume budgets.
         b.check_available(b.state_bytes, b.target_bytes, false)
@@ -226,28 +211,19 @@ mod tests {
         assert!(b.check_available(combined, combined - 1, true).is_err());
     }
     #[test]
-    fn conversion_same_volume_peak_covers_sandbox_download_copy() {
+    fn direct_same_volume_peak_covers_sandbox_input_copy() {
         let margin = SPACE_MARGIN_BYTES;
-        let z = |payload: u64| payload + EXE_NORMALIZED_OVERHEAD_BYTES;
-        // A large download dominates: the conversion peak is the cached D plus
-        // the sandbox input copy of D plus the normalized Z, i.e. 2D + Z.
-        let conversion = SpaceBudget::for_conversion(10_000, 100, &[(10, 0)]).unwrap();
-        assert_eq!(
-            conversion.same_volume_bytes,
-            Some(2 * 10_000 + z(100) + margin)
-        );
-        // A large restore dominates: cached D + Z + backups O + target peak T.
-        // With a 50-byte original replaced by a 50-byte member, T = 50 and O = 50.
-        let installation = SpaceBudget::for_conversion(1, 100, &[(50, 50)]).unwrap();
-        assert_eq!(
-            installation.same_volume_bytes,
-            Some(z(100) + 1 + 50 + 50 + margin)
-        );
+        // Replacing three equal files has no net growth; a new 300-byte file
+        // peaks at 300 while it is written.
+        let b = SpaceBudget::for_direct(10_000, &[(50, 50), (50, 50), (300, 0)]).unwrap();
+        assert_eq!(b.state_bytes, 10_000 + margin);
+        assert_eq!(b.target_bytes, 300 + margin);
+        assert_eq!(b.same_volume_bytes, Some(10_000 + 300 + margin));
+        assert!(SpaceBudget::for_direct(u64::MAX, &[(0, 0)]).is_err());
     }
     #[test]
     fn checked_arithmetic() {
-        assert!(SpaceBudget::for_conversion(u64::MAX, 1, &[(0, 0)]).is_err());
-        assert!(SpaceBudget::for_conversion(0, u64::MAX, &[(0, 0)]).is_err());
+        assert!(SpaceBudget::for_direct(u64::MAX, &[(0, 0)]).is_err());
         let b = SpaceBudget {
             state_bytes: u64::MAX,
             target_bytes: 1,

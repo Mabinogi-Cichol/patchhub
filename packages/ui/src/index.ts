@@ -164,7 +164,6 @@ export function reason(code: string): string {
     exe_confirmation_invalid: "安装状态已失效，请重新安装。",
     exe_confirmation_changed: "安装确认已失效，请重新准备安装。",
     exe_conditions_confirmation_required: "当前游戏的安装条件未能自动核验。",
-    exe_backups_required: "此补丁必须保留原文件备份，请启用备份后重试。",
     exe_installer_condition_mismatch: "当前游戏文件不满足安装器的前置条件，请检查游戏版本、语言及 DLC。",
     exe_analysis_required: "需要重新检查官方安装包后才能安装或重装。",
     exe_event_order_unsupported: "安装器事件结构暂未支持。",
@@ -188,6 +187,7 @@ export function reason(code: string): string {
     exe_state_insufficient_space: "插件状态目录空间不足，请清理空间后重试。",
     exe_target_insufficient_space: "游戏所在磁盘空间不足，请清理空间后重试。",
     exe_payload_changed: "安装包内容已变化，请重新查找补丁。",
+    exe_extract_failed: "从安装包提取文件失败，安装未完成。",
     exe_manifest_changed: "安装包文件清单已变化，请重新安装。",
     exe_worker_evidence_changed: "安装包检查结果不一致，请重新安装。",
     exe_policy_identity_changed: "安装计划关联的游戏或补丁已变化，请重新准备。",
@@ -211,7 +211,6 @@ export function reason(code: string): string {
     exe_baseline_mismatch: "游戏版本或原文件与已审核版本不符，请核对游戏版本。",
     exe_dlc_mismatch: "当前 DLC 状态不符合此补丁的适用条件。",
     exe_conditions_required: "请确认游戏语言、版本与 DLC 适用条件。",
-    exe_backup_required: "此补丁必须保留原文件备份，请启用备份后重试。",
     exe_insufficient_space: "检查或安装此补丁所需空间不足，请清理空间后重试。",
     exe_sandbox_unavailable: "安全提取环境不可用，暂不能自动安装此补丁。",
     game_not_ready: "游戏尚未完整安装或库不可访问，请检查 Steam 下载状态。",
@@ -242,6 +241,10 @@ export function reason(code: string): string {
     ,publisher_existing_transaction: "已有安装或待恢复记录，请先卸载或修复。"
     ,publisher_match_changed: "来源中的游戏匹配已变化，请重新扫描。"
     ,cancelled: "安装已取消，没有修改游戏文件。"
+    ,cancelled_incomplete: "安装已取消，但已写入的文件未恢复。可重新安装补丁；如需恢复游戏本体，请使用 Steam 验证游戏文件。"
+    ,install_incomplete: "安装未完成，已写入的文件未恢复。可重新安装补丁；如需恢复游戏本体，请使用 Steam 验证游戏文件。"
+    ,game_write_failed: "写入游戏文件失败，安装未完成。"
+    ,game_sync_failed: "同步游戏文件失败，安装未完成。"
     ,download_cancelled: "已取消获取或校验，没有执行安装。"
     ,download_http_error: "下载服务返回错误，请稍后重试。"
     ,download_network_error: "补丁下载网络连接失败，请检查网络后重试。"
@@ -281,7 +284,6 @@ export function reason(code: string): string {
      ,download_hash_mismatch: "下载文件与来源记录不一致，已停止安装。"
      ,download_failed: "补丁下载失败，请检查网络后重试。"
      ,analysis_failed: "安装包分析失败，请查看来源说明。"
-     ,convert_failed: "安装包转换失败，请查看来源说明。"
      ,plan_failed: "生成安装计划失败，请重试或查看来源说明。"
      ,reinstall_content_identity_changed: "补丁内容已更新，暂不支持直接叠加安装。"
      ,reinstall_unowned_or_incomplete: "无法确认上次安装记录，暂不能直接重装。"
@@ -297,6 +299,7 @@ export function workflowState(value: string): string {
     publisher_zip: "ZIP · 默认解压至游戏根目录", publisher_exe: "自动提取并安装", publisher_default: "按根目录生成计划，效果待验证",
     check_required: "安装时自动检查条件", conditions_checked: "安装条件已核验", verified_metadata: "目录条件已核对", needs_review: "尚待审核", signed: "已验证签名", unsigned_development: "未签名开发目录",
     planned: "已生成计划", backing_up: "正在备份", backed_up: "备份完成", applying: "正在写入", committed: "安装完成",
+    failed: "安装未完成",
     rolling_back: "正在回滚", rolled_back: "已回滚", uninstalling: "正在卸载", uninstalled: "已卸载", needs_recovery: "需要恢复",
     add: "新增", replace: "替换"
   };
@@ -364,6 +367,11 @@ export function installationResult(outcome: InstallerOutcome, overwrite = false)
   if (outcome.disposition === "cancelled") return "任务已安全取消。";
   const failure = outcome.cause?.code ?? outcome.recovery?.code ?? "installation_failed";
   const detail = outcome.cause?.detail ?? outcome.recovery?.detail;
+  // Direct EXE installs leave already-written files in place on failure or
+  // cancellation; the warning itself is the complete message.
+  if (failure === "install_incomplete" || failure === "cancelled_incomplete") {
+    return reason(failure);
+  }
   return `安装未完成：${reason(failure)}${detail ? ` · ${detail}` : ""}`;
 }
 

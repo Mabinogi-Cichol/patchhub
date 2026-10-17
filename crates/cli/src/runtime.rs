@@ -2432,6 +2432,7 @@ mod dynamic_projection_tests {
             has_replacements: true,
             selection_id: None,
             content_id: None,
+            direct: false,
         };
         let value = serde_json::to_value(installer::outcome::InstallerOutcome::from_transaction(
             &transaction,
