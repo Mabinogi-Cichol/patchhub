@@ -217,3 +217,13 @@
 - 用户随后决定取消 EXE 中间 ZIP，按五步直接提取安装。子功能设计已整体重写为 D1–D5，替代先前 P1–P6；涉及的 EXE 空间与恢复约定以[新设计](install-transaction-performance/design.md)为准，尚未实施。
 
 - 用户进一步取消备份：子功能现为无备份直接覆盖，失败/取消保留部分结果、不回滚。设计、空间模型、双端状态及重试验收已同步修订；生产代码与现有备份未改动。
+
+## 2026-10-18：ZIP 独立精简计划
+
+- 按用户要求新增 [ZIP 无备份直接安装设计](zip-direct-installation/design.md)与[施工记录](zip-direct-installation/progress.md)，独立于 EXE 子功能。覆盖普通来源、签名目录及本地 ZIP，复用现有 direct 接口，状态为待实现。
+- 本轮只规划和检查文档链接，未改生产代码、部署或提交。
+
+## 2026-10-18：ZIP 直接安装 Z1–Z4 实施
+
+- 按 [ZIP 子功能施工记录](zip-direct-installation/progress.md) 完成普通、签名与本地 ZIP 的直接覆盖安装；新事务不再创建 backup/stage/authorization，旧备份事务仍按 `recover_checked_at` 恢复。
+- 验证：`cargo test --offline --workspace` 全部通过；`cargo clippy ... -D warnings`、`cargo fmt --all --check`、contract-gen `check` 通过。Windows/Steam Deck 实机、取消/中断与同包性能测量待执行。
