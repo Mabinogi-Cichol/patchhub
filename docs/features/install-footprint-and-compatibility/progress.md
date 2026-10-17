@@ -10,6 +10,7 @@
 | --- | --- |
 | 初稿材料生命周期/兼容性审计 | 历史调研完成，旧决定已按新设计取代 |
 | 增量空间、无stage、格式/手动兼容、任务通道等 | 工作区已有未提交实现；本轮补齐 P1/P3/P4 收敛项（容量模型、外部ZIP受管理化与缺料诊断、ZIP64 checked 转换），实机验收待执行 |
+| EXE 无备份直接提取覆盖（子功能） | D1–D4 已实施并通过本地自动化；D5 双平台实机与性能待验收，详见子功能施工记录 |
 | 删除优先复审及D01–D10范围、保留项、验收标准 | 已写入设计与审计 |
 | D01–D10 直接删除实施 | 已实现；Rust 工作区测试与检查通过，详见文末 |
 | 超大常量绕过（2GiB/512MiB 等）改为真实删除 | 已实现；真实大包/大 EXE 端到端路径待验证 |
@@ -129,6 +130,13 @@
 - D08 保留的字节上限仅补充注释依据；512 KiB/4 MiB 等仍未以真实大来源/大索引复现确认，未宣称兼容性验收完成。
 - 未提交或推送 Git、未发布、未部署设备。
 
+## 2026-10-18：EXE 无备份直接提取覆盖 D1–D4 实施（摘要）
+
+- 子功能按[设计](install-transaction-performance/design.md)完成重写：解析 EXE 元数据后，同一 staging 会话直接流式提取所选成员到游戏目标；不再生成中间 ZIP/stage、不备份、不写逐文件数据库状态，也不做成功前全量复读。
+- 自动化：`cargo check --workspace --all-targets`、`cargo test --workspace`、contract-gen check、`npm run typecheck`、`npm run test:contracts`、Decky 70 项测试通过。Linux release 已在 Deck 的 podman 容器中实际编译并运行。
+- 实机：2026-10-18 在 Steam Deck 部署新插件（Loader 本地 ZIP，实例 1），用 AppID 1011940“冲突的意志”执行 overwrite：任务总 530.3 秒（下载约 428 秒、分析约 51 秒、提取+提交约 51 秒），事务 apply 49 秒完成 12,141 文件 / 3.794 GB；无 backup/stage/payload，下载缓存清理 3.82 GB。详见[子功能施工记录](install-transaction-performance/progress.md)。
+- 未验证：Windows 实机、强杀中断与重试、旧事务恢复实机回归、游戏内生效与手柄/全屏视觉验收。
+
 ## 2026-10-16：P1/P3/P4 未完成项收敛
 
 在设计授权的 P0/D01–D10 之后，继续收敛 P1（容量/材料释放）、P3（无stage 兼容）、P4（大文件/ZIP64）三个此前“已有未提交实现待验收”的方向中可离线完成的具体缺口。
@@ -195,3 +203,17 @@
 - 时间线还原：下载+分析+转换 ~12 分钟；apply 事务 1153s（19.2 分钟）= 校验+全量备份 ~265s + 写盘 815s（67ms/文件）+ 提交/清理 ~70s。与 2026-10-16 记录的 ~1354s 分解一致（写盘两轮均稳定在 ~800s）。
 - 热点（按代价排序）：写循环内逐文件 `steam::scan` 全库扫描（`install.rs:2027`→`:843`）；每文件 2 次 `synchronous=FULL` SQLite 提交 + 4~5 次 fsync；同一文件 3~5 次全量 SHA-256；另有 apply 前全量备份与双次全量校验。Deck 微基准与设备 mtime 证据见报告。
 - 本轮为只读诊断：未修改任何代码、未部署、未提交 Git。完整报告：[perf-analysis-20261017.md](perf-analysis-20261017.md)；证据与脚本归档 `.artifacts/install-perf-diagnosis-20261017/`。修复方向仅列为候选，待另行设计评审后进入施工。
+
+## 2026-10-17：性能报告复核与子功能规划
+
+- 新建[安装事务性能优化设计](install-transaction-performance/design.md)及[施工记录](install-transaction-performance/progress.md)，状态为待实现。先定向校验目标 manifest，再合并权限设置与文件同步；保留逐文件持久化与恢复语义。
+- 报告中的二次同步、哈希重复及收益估计需要按执行路径区分，详见子功能设计 §2。本轮未找到历史取证目录，设备时长仅引用原报告；未修改生产代码或执行设备操作。
+- 后续按用户要求排除安装期间 Steam 更新或外部修改场景，子功能 P1 已改为删除循环内重复实例校验，撤回定向 manifest 接口方案；以子功能当前设计为准。
+
+- 再次按用户授权连接 Steam Deck，重新取得历史安装记录；子功能已将正常路径重复哈希删除/合并纳入 P3，详见[取证记录](install-transaction-performance/evidence-20261017.md)与[当前设计](install-transaction-performance/design.md)。优化仍待实施。
+
+- 全热点复核后，子功能扩展为 P1–P6：同时处理扫描、文件/目录同步、哈希、journal 提交和清理；备份数据、串行及路径检查的保留理由已逐项说明。见[当前设计](install-transaction-performance/design.md)，仍待实现。
+
+- 用户随后决定取消 EXE 中间 ZIP，按五步直接提取安装。子功能设计已整体重写为 D1–D5，替代先前 P1–P6；涉及的 EXE 空间与恢复约定以[新设计](install-transaction-performance/design.md)为准，尚未实施。
+
+- 用户进一步取消备份：子功能现为无备份直接覆盖，失败/取消保留部分结果、不回滚。设计、空间模型、双端状态及重试验收已同步修订；生产代码与现有备份未改动。

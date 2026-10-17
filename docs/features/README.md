@@ -6,6 +6,7 @@
 
 | 功能 | 状态 | 设计文档 | 施工记录 | 附加文档 |
 | --- | --- | --- | --- | --- |
+| 安装事务性能优化（安装磁盘占用与兼容性精简子功能） | D1–D4 已实施并通过本地自动化；Deck 覆盖安装通过（事务 49s/总 530s）；Windows、中断恢复与游戏内生效待验收 | [设计](install-footprint-and-compatibility/install-transaction-performance/design.md) | [施工记录](install-footprint-and-compatibility/install-transaction-performance/progress.md) | [原始性能报告](install-footprint-and-compatibility/perf-analysis-20261017.md) |
 | 防御逻辑精简 | 已实施，S01–S19 本地自动化验证通过；P5 独立过度设计复核完成并收尾；实机、Unix 分支与真实跨端传输待验证 | [设计](defensive-logic-simplification/design.md) | [施工记录](defensive-logic-simplification/progress.md) | [边界核查](defensive-logic-simplification/boundary-review.md) |
 | 安装磁盘占用与兼容性精简 | D01–D10 删除与 P1/P3/P4 收敛已实施并通过 Rust 工作区自动化检查（超大常量改为真实删除、容量模型、外部ZIP受管理化、ZIP64 checked 转换）；真实大包、容量与双平台实机验收待执行 | [设计](install-footprint-and-compatibility/design.md) | [施工记录](install-footprint-and-compatibility/progress.md) | [全项目审计](install-footprint-and-compatibility/audit.md) · [性能分析](install-footprint-and-compatibility/perf-analysis-20261017.md) |
 | Decky 终端安装与更新 | 安装器/README 短链入口/自动恢复/清理及 CI 分发已实现，短链已创建并核对目标；引导/隔离自动化和真实 Release 校验通过，实机验收/禁用态升级/安装器附件发布待完成 | [设计](decky-cli-installation/design.md) | [施工记录](decky-cli-installation/progress.md) | — |
