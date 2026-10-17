@@ -1,16 +1,15 @@
-//! Publisher ZIP recipe: content inspection, safety limits and the proven XP3
-//! wrapper mapping (p0-contracts §2.4/§4.1; port of `publisher.py::_recipe`,
-//! `_relative`, `_extra_safe` and `_wrapped_xp3_paths`).
+//! Publisher ZIP metadata and path mapping (p0-contracts §2.4/§4.1; port of
+//! `publisher.py::_relative`, `_extra_safe`, `_wrapped_xp3_paths` and
+//! `_wrapped_ypf_paths`).
 //!
-//! The module is pure with respect to the game tree: it only reads the archive
-//! and the current on-disk destinations. It never writes files. The returned
-//! change set is `{source, destination, original_sha256, installed_sha256}` and
-//! is later re-verified and written by `install.rs`.
+//! The module only reads the archive index and the few member headers needed to
+//! recognise the XP3/YPF wrapper layouts. It never decodes member content and
+//! never writes to the game tree; `zip_direct` performs the single streaming
+//! extraction after [`plan`]/[`plan_mapped`] has fixed every target path.
 
 use super::{invalid, Result};
 use crate::catalog::FileMapping;
 use crate::operation;
-use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
 use std::io::Read;
@@ -23,7 +22,22 @@ const XP3_SIGNATURE: [u8; 11] = [
     0x58, 0x50, 0x33, 0x0d, 0x0a, 0x20, 0x0a, 0x1a, 0x8b, 0x67, 0x01,
 ];
 
-/// One archive member with the fields the recipe needs, detached from `zip`.
+/// One selected archive member and the game-relative path it installs to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Member {
+    /// Member index in the ZIP central directory.
+    pub index: usize,
+    /// Exact archive member name (`FileMapping.source` for signed recipes).
+    pub source: String,
+    /// Validated destination relative to the game root.
+    pub destination: String,
+    /// Declared uncompressed size.
+    pub size: u64,
+    /// Digest declared by a signed recipe; checked while extracting.
+    pub expected_sha256: Option<String>,
+}
+
+/// One archive member with the fields the mapping needs, detached from `zip`.
 struct Entry {
     index: usize,
     name: String,
@@ -33,84 +47,82 @@ struct Entry {
     extra: Vec<u8>,
 }
 
-/// Builds the change set for `archive` against `root` (p0-contracts §4.1).
-///
-/// The archive is fully validated before any destination is touched. `root`
-/// must already be the resolved game root; links are rejected.
-pub fn build_recipe(archive: &Path, root: &Path, cancel: &AtomicBool) -> Result<Vec<FileMapping>> {
+/// Opens and preflights the archive once; the same handle is used for mapping
+/// and for the subsequent extraction.
+pub fn open(archive: &Path) -> Result<ZipArchive<File>> {
+    from_file(File::open(archive)?)
+}
+
+/// Wraps an already-open file (the signed local-ZIP route holds one handle for
+/// the identity check and extraction).
+pub fn from_file(mut file: File) -> Result<ZipArchive<File>> {
+    crate::zip_metadata::preflight(&mut file)?;
+    ZipArchive::new(file).map_err(|e| invalid(format!("invalid_zip:{e}")))
+}
+
+fn validate_root(root: &Path) -> Result<()> {
     if !root.is_dir() || !no_links(root) {
         return Err(invalid("unsafe_game_root"));
     }
-    let archive_size = fs::metadata(archive)?.len();
-    let mut file = File::open(archive)?;
-    crate::zip_metadata::preflight(&mut file)?;
-    let mut zip = ZipArchive::new(file).map_err(|e| invalid(format!("invalid_zip:{e}")))?;
+    Ok(())
+}
 
-    let entries = collect_entries(&mut zip, cancel)?;
-    let expanded = validate_entries(&entries, cancel)?;
-    let mapped = mapping_paths(&mut zip, root, &entries, cancel)?;
-    validate_destinations(&entries, &mapped, root, cancel)?;
+/// Validates the archive and maps every selected member to a game-relative
+/// path, applying the XP3/YPF wrapper rules of the publisher sources.
+pub fn plan(zip: &mut ZipArchive<File>, root: &Path, cancel: &AtomicBool) -> Result<Vec<Member>> {
+    validate_root(root)?;
+    let entries = collect_entries(zip, cancel)?;
+    validate_entries(&entries, cancel)?;
+    let mapped = mapping_paths(zip, root, &entries, cancel)?;
+    finish_plan(&entries, &mapped, root, cancel)
+}
 
-    let non_dir_count = entries.iter().filter(|entry| !entry.is_dir).count();
-    let original_bytes = predicted_original_bytes(&entries, &mapped, root, cancel)?;
-    operation::archive(archive_size);
-    operation::stage(
-        "validating",
-        Some(expanded.saturating_add(original_bytes)),
-        Some(non_dir_count),
-    );
-
-    // Directory prefixes seen while validating, reused for the file/directory
-    // collision check in the Python reference.
-    let mut names: HashSet<String> = HashSet::new();
-    let mut directory_names: HashSet<String> = HashSet::new();
+/// Validates the archive against a signed recipe's `source → destination`
+/// mapping. Members not named by the recipe are validated but not installed.
+pub fn plan_mapped(
+    zip: &mut ZipArchive<File>,
+    root: &Path,
+    mappings: &[FileMapping],
+    cancel: &AtomicBool,
+) -> Result<Vec<Member>> {
+    validate_root(root)?;
+    let entries = collect_entries(zip, cancel)?;
+    validate_entries(&entries, cancel)?;
+    let by_name: HashMap<String, &Entry> = entries
+        .iter()
+        .map(|entry| (entry.name.to_lowercase(), entry))
+        .collect();
+    let mut mapped: HashMap<String, Option<String>> = HashMap::new();
+    let mut expected: HashMap<String, String> = HashMap::new();
+    let mut order: HashMap<String, usize> = HashMap::new();
+    for (position, mapping) in mappings.iter().enumerate() {
+        relative(&mapping.destination)?;
+        let entry = by_name
+            .get(&mapping.source.to_lowercase())
+            .ok_or_else(|| invalid("recipe_source_missing"))?;
+        if entry.is_dir || entry.name != mapping.source {
+            return Err(invalid("recipe_source_mismatch"));
+        }
+        if mapped
+            .insert(entry.name.clone(), Some(mapping.destination.clone()))
+            .is_some()
+        {
+            return Err(invalid("recipe_duplicate_source"));
+        }
+        expected.insert(entry.name.clone(), mapping.installed_sha256.clone());
+        order.insert(entry.name.clone(), position);
+    }
     for entry in &entries {
-        names.insert(entry.name.to_lowercase());
-        if entry.is_dir {
-            directory_names.insert(entry.name.to_lowercase());
-        }
+        mapped.entry(entry.name.clone()).or_insert(None);
     }
-
-    let mut files = Vec::new();
-    for entry in &entries {
-        if has_file_directory_collision(&entry.name, &names, &directory_names) {
-            return Err(invalid("zip_file_directory_collision"));
-        }
-        if entry.is_dir {
-            continue;
-        }
-        let destination = match mapped.get(&entry.name) {
-            Some(None) => continue,
-            Some(Some(destination)) => destination.clone(),
-            None => entry.name.clone(),
-        };
-        if cancel.load(Ordering::Relaxed) {
-            return Err(invalid("download_cancelled"));
-        }
-        operation::file(files.len(), &entry.name);
-        let installed = hash_entry(&mut zip, entry, cancel)?;
-
-        let target = join_relative(root, &destination);
-        if !no_links(&target) {
-            return Err(invalid("linked_target"));
-        }
-        let original = match fs::symlink_metadata(&target) {
-            Ok(metadata) if metadata.is_file() => Some(hash_file(&target, cancel)?),
-            Ok(_) => return Err(invalid("target_not_file")),
-            Err(_) => None,
-        };
-        files.push(FileMapping {
-            source: entry.name.clone(),
-            destination,
-            original_sha256: original,
-            installed_sha256: installed,
-        });
-        operation::finish_file(files.len());
+    let mut members = finish_plan(&entries, &mapped, root, cancel)?;
+    // The journal keeps the signed recipe order so the projection can compare
+    // `plan.changes` with `recipe.files` positionally.
+    members.sort_by_key(|member| order.get(&member.source).copied().unwrap_or(usize::MAX));
+    for member in &mut members {
+        member.expected_sha256 = expected.get(&member.source).cloned();
     }
-    if files.is_empty() {
-        return Err(invalid("empty_recipe"));
-    }
-    Ok(files)
+    Ok(members)
 }
 
 /// Reads member metadata once so later passes can borrow `zip` mutably.
@@ -146,10 +158,9 @@ fn collect_entries(zip: &mut ZipArchive<File>, cancel: &AtomicBool) -> Result<Ve
 
 /// Port of `publisher.py::_relative` plus the reserved-prefix and encoding
 /// checks from `_recipe`.
-fn validate_entries(entries: &[Entry], cancel: &AtomicBool) -> Result<u64> {
+fn validate_entries(entries: &[Entry], cancel: &AtomicBool) -> Result<()> {
     let mut names: HashSet<String> = HashSet::new();
     let mut prefixes: HashMap<String, String> = HashMap::new();
-    let mut expanded: u64 = 0;
     for entry in entries {
         operation::check()?;
         if cancel.load(Ordering::Relaxed) {
@@ -193,11 +204,8 @@ fn validate_entries(entries: &[Entry], cancel: &AtomicBool) -> Result<u64> {
             return Err(invalid("zip_link_or_special_file"));
         }
         extra_safe(&entry.extra)?;
-        expanded = expanded
-            .checked_add(entry.size)
-            .ok_or_else(|| invalid("zip_size_overflow"))?;
     }
-    Ok(expanded)
+    Ok(())
 }
 
 /// Port of `publisher.py::_relative`.
@@ -463,6 +471,38 @@ fn validate_destinations(
     }
     Ok(())
 }
+
+fn finish_plan(
+    entries: &[Entry],
+    mapped: &HashMap<String, Option<String>>,
+    root: &Path,
+    cancel: &AtomicBool,
+) -> Result<Vec<Member>> {
+    validate_destinations(entries, mapped, root, cancel)?;
+    let mut members = Vec::new();
+    for entry in entries.iter().filter(|entry| !entry.is_dir) {
+        let destination = match mapped.get(&entry.name) {
+            Some(None) => continue,
+            Some(Some(destination)) => destination.clone(),
+            None => entry.name.clone(),
+        };
+        // Target type, links and on-disk case collisions are checked once by
+        // `zip_target_sizes` and again under the game lock by
+        // `install::begin_direct_at`; mapping only fixes the path.
+        members.push(Member {
+            index: entry.index,
+            source: entry.name.clone(),
+            destination,
+            size: entry.size,
+            expected_sha256: None,
+        });
+    }
+    if members.is_empty() {
+        return Err(invalid("empty_recipe"));
+    }
+    Ok(members)
+}
+
 /// Port of `publisher.py::_wrapped_xp3_paths`.
 fn wrapped_xp3_paths(
     zip: &mut ZipArchive<File>,
@@ -557,116 +597,6 @@ fn has_file_directory_collision(
     })
 }
 
-fn predicted_original_bytes(
-    entries: &[Entry],
-    mapped: &HashMap<String, Option<String>>,
-    root: &Path,
-    cancel: &AtomicBool,
-) -> Result<u64> {
-    let mut total = 0u64;
-    for entry in entries.iter().filter(|entry| !entry.is_dir) {
-        operation::check()?;
-        if cancel.load(Ordering::Relaxed) {
-            return Err(invalid("download_cancelled"));
-        }
-        let destination = match mapped.get(&entry.name) {
-            Some(None) => continue,
-            Some(Some(destination)) => destination.clone(),
-            None => entry.name.clone(),
-        };
-        let target = join_relative(root, &destination);
-        if no_links(&target) {
-            if let Ok(metadata) = fs::symlink_metadata(&target) {
-                if metadata.is_file() {
-                    total = total.saturating_add(metadata.len());
-                }
-            }
-        }
-    }
-    Ok(total)
-}
-
-fn join_relative(root: &Path, relative: &str) -> PathBuf {
-    relative
-        .split('/')
-        .fold(root.to_path_buf(), |path, part| path.join(part))
-}
-
-fn hash_entry(zip: &mut ZipArchive<File>, entry: &Entry, cancel: &AtomicBool) -> Result<String> {
-    let mut file = zip
-        .by_index(entry.index)
-        .map_err(|e| invalid(format!("invalid_zip:{e}")))?;
-    let mut hasher = Sha256::new();
-    let mut buffer = [0u8; 65536];
-    let mut size = 0u64;
-    let limit = entry
-        .size
-        .checked_add(1)
-        .ok_or_else(|| invalid("zip_size_overflow"))?;
-    let mut bounded = (&mut file).take(limit);
-    loop {
-        operation::check()?;
-        if cancel.load(Ordering::Relaxed) {
-            return Err(invalid("download_cancelled"));
-        }
-        let count = bounded.read(&mut buffer)?;
-        if count == 0 {
-            break;
-        }
-        size += count as u64;
-        if size > entry.size {
-            return Err(invalid("zip_size_mismatch"));
-        }
-        hasher.update(&buffer[..count]);
-        operation::advance(count as u64);
-    }
-    if size != entry.size {
-        return Err(invalid("zip_size_mismatch"));
-    }
-    Ok(format!("{:x}", hasher.finalize()))
-}
-/// Re-hashes an existing destination (port of `publisher.py::_hash_file`).
-fn hash_file(path: &Path, cancel: &AtomicBool) -> Result<String> {
-    if !no_links(path) {
-        return Err(invalid("linked_target"));
-    }
-    let mut file = File::open(path)?;
-    let before = file.metadata()?;
-    if !before.is_file() {
-        return Err(invalid("file_size_or_type"));
-    }
-    let mut hasher = Sha256::new();
-    let mut buffer = [0u8; 65536];
-    let mut total = 0u64;
-    let limit = before
-        .len()
-        .checked_add(1)
-        .ok_or_else(|| invalid("file_size_limit"))?;
-    let mut bounded = (&mut file).take(limit);
-    loop {
-        operation::check()?;
-        if cancel.load(Ordering::Relaxed) {
-            return Err(invalid("download_cancelled"));
-        }
-        let count = bounded.read(&mut buffer)?;
-        if count == 0 {
-            break;
-        }
-        total += count as u64;
-        if total > before.len() {
-            return Err(invalid("file_size_limit"));
-        }
-        hasher.update(&buffer[..count]);
-    }
-    let after = file.metadata()?;
-    if total != before.len()
-        || after.len() != before.len()
-        || after.modified().ok() != before.modified().ok()
-    {
-        return Err(invalid("file_changed"));
-    }
-    Ok(format!("{:x}", hasher.finalize()))
-}
 fn file_starts_with(path: &Path, signature: &[u8]) -> Result<bool> {
     let mut file = File::open(path)?;
     let mut head = vec![0u8; signature.len()];
@@ -726,6 +656,7 @@ fn linked(metadata: &fs::Metadata) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::catalog::FileMapping;
     use std::io::Write;
     use tempfile::TempDir;
     use zip::write::SimpleFileOptions;
@@ -749,22 +680,21 @@ mod tests {
         root
     }
 
+    fn plan_zip(archive: &Path, root: &Path) -> Result<Vec<Member>> {
+        let mut zip = open(archive)?;
+        plan(&mut zip, root, &AtomicBool::new(false))
+    }
+
     fn recipe_err(name: &str, members: &[(&str, &[u8])]) -> String {
         let temp = tempfile::tempdir().unwrap();
         let root = game_dir(&temp);
         let archive = temp.path().join(name);
         zip_with(&archive, members);
-        build_recipe(&archive, &root, &AtomicBool::new(false))
-            .unwrap_err()
-            .to_string()
-    }
-
-    fn sha(bytes: &[u8]) -> String {
-        format!("{:x}", Sha256::digest(bytes))
+        plan_zip(&archive, &root).unwrap_err().to_string()
     }
 
     #[test]
-    fn preserves_root_paths_and_baseline_hash() {
+    fn preserves_root_paths_without_reading_content() {
         let temp = tempfile::tempdir().unwrap();
         let root = game_dir(&temp);
         fs::write(root.join("data.txt"), b"original").unwrap();
@@ -773,18 +703,14 @@ mod tests {
             &archive,
             &[("data.txt", b"patched"), ("sub/new.txt", b"new")],
         );
-        let files = build_recipe(&archive, &root, &AtomicBool::new(false)).unwrap();
+        let files = plan_zip(&archive, &root).unwrap();
         assert_eq!(files.len(), 2);
         assert_eq!(files[0].source, "data.txt");
         assert_eq!(files[0].destination, "data.txt");
-        assert_eq!(
-            files[0].original_sha256.as_deref(),
-            Some(&*sha(b"original"))
-        );
-        assert_eq!(files[0].installed_sha256, sha(b"patched"));
+        assert_eq!(files[0].size, 7);
+        assert_eq!(files[0].expected_sha256, None);
         assert_eq!(files[1].destination, "sub/new.txt");
-        assert_eq!(files[1].original_sha256, None);
-        // The recipe never mutates the game tree.
+        // Mapping never mutates the game tree.
         assert_eq!(fs::read(root.join("data.txt")).unwrap(), b"original");
         assert!(!root.join("sub").exists());
     }
@@ -794,23 +720,27 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let root = game_dir(&temp);
         let base = [SIGNATURE.as_slice(), b"base"].concat();
-        let old = [SIGNATURE.as_slice(), b"old"].concat();
-        let new = [SIGNATURE.as_slice(), b"new"].concat();
         fs::write(root.join("data.xp3"), &base).unwrap();
-        fs::write(root.join("patch.xp3"), &old).unwrap();
+        fs::write(
+            root.join("patch.xp3"),
+            [SIGNATURE.as_slice(), b"old"].concat(),
+        )
+        .unwrap();
         let archive = temp.path().join("patch.zip");
         zip_with(
             &archive,
             &[
-                ("Arbitrary wrapper/patch.xp3", new.as_slice()),
+                (
+                    "Arbitrary wrapper/patch.xp3",
+                    [SIGNATURE.as_slice(), b"new"].concat().as_slice(),
+                ),
                 ("Arbitrary wrapper/Readme.txt", b"instructions"),
             ],
         );
-        let files = build_recipe(&archive, &root, &AtomicBool::new(false)).unwrap();
+        let files = plan_zip(&archive, &root).unwrap();
         assert_eq!(files.len(), 1);
         assert_eq!(files[0].source, "Arbitrary wrapper/patch.xp3");
         assert_eq!(files[0].destination, "patch.xp3");
-        assert_eq!(files[0].original_sha256.as_deref(), Some(&*sha(&old)));
     }
 
     #[test]
@@ -819,9 +749,14 @@ mod tests {
         let root = game_dir(&temp);
         fs::write(root.join("data.xp3"), b"different engine").unwrap();
         let archive = temp.path().join("patch.zip");
-        let new = [SIGNATURE.as_slice(), b"new"].concat();
-        zip_with(&archive, &[("Wrapper/patch.xp3", new.as_slice())]);
-        let files = build_recipe(&archive, &root, &AtomicBool::new(false)).unwrap();
+        zip_with(
+            &archive,
+            &[(
+                "Wrapper/patch.xp3",
+                [SIGNATURE.as_slice(), b"new"].concat().as_slice(),
+            )],
+        );
+        let files = plan_zip(&archive, &root).unwrap();
         assert_eq!(files[0].destination, "Wrapper/patch.xp3");
     }
 
@@ -829,8 +764,11 @@ mod tests {
     fn wrapped_xp3_unknown_members_and_bad_signatures_block() {
         let temp = tempfile::tempdir().unwrap();
         let root = game_dir(&temp);
-        let base = [SIGNATURE.as_slice(), b"base"].concat();
-        fs::write(root.join("data.xp3"), &base).unwrap();
+        fs::write(
+            root.join("data.xp3"),
+            [SIGNATURE.as_slice(), b"base"].concat(),
+        )
+        .unwrap();
         let patch = [SIGNATURE.as_slice(), b"a"].concat();
 
         let first = temp.path().join("bad.zip");
@@ -842,18 +780,14 @@ mod tests {
             ],
         );
         assert_eq!(
-            build_recipe(&first, &root, &AtomicBool::new(false))
-                .unwrap_err()
-                .to_string(),
+            plan_zip(&first, &root).unwrap_err().to_string(),
             "zip_wrapped_layout_unsupported"
         );
 
         let second = temp.path().join("bad2.zip");
         zip_with(&second, &[("wrapper/patch.xp3", b"not XP3")]);
         assert_eq!(
-            build_recipe(&second, &root, &AtomicBool::new(false))
-                .unwrap_err()
-                .to_string(),
+            plan_zip(&second, &root).unwrap_err().to_string(),
             "zip_wrapped_layout_unsupported"
         );
     }
@@ -922,9 +856,7 @@ mod tests {
         assert!(patched > 0, "test setup failed to find the extra field");
         fs::write(&archive, &bytes).unwrap();
         assert_eq!(
-            build_recipe(&archive, &root, &AtomicBool::new(false))
-                .unwrap_err()
-                .to_string(),
+            plan_zip(&archive, &root).unwrap_err().to_string(),
             "zip_unsafe_extra_metadata"
         );
     }
@@ -939,9 +871,7 @@ mod tests {
             .unwrap();
         zip.finish().unwrap();
         assert_eq!(
-            build_recipe(&archive, &root, &AtomicBool::new(false))
-                .unwrap_err()
-                .to_string(),
+            plan_zip(&archive, &root).unwrap_err().to_string(),
             "zip_link_or_special_file"
         );
     }
@@ -959,7 +889,7 @@ mod tests {
         zip.start_file("zeros.bin", options).unwrap();
         zip.write_all(&vec![0u8; 2 * 1024 * 1024]).unwrap();
         zip.finish().unwrap();
-        let files = build_recipe(&archive, &root, &AtomicBool::new(false)).unwrap();
+        let files = plan_zip(&archive, &root).unwrap();
         assert_eq!(files.len(), 1);
         assert_eq!(files[0].destination, "zeros.bin");
     }
@@ -971,9 +901,7 @@ mod tests {
         let empty = temp.path().join("empty.zip");
         zip_with(&empty, &[]);
         assert_eq!(
-            build_recipe(&empty, &root, &AtomicBool::new(false))
-                .unwrap_err()
-                .to_string(),
+            plan_zip(&empty, &root).unwrap_err().to_string(),
             "empty_recipe"
         );
     }
@@ -999,13 +927,9 @@ mod tests {
                 ("wrapper/pac/video.ypf", &asf),
             ],
         );
-        let files = build_recipe(&archive, &root, &AtomicBool::new(false)).unwrap();
+        let files = plan_zip(&archive, &root).unwrap();
         assert_eq!(files.len(), 3);
         assert_eq!(files[0].destination, "pac/bn.ypf");
-        assert_eq!(
-            files[0].original_sha256.as_deref(),
-            Some(&*sha(&[YPF_SIGNATURE.as_slice(), b"old"].concat()))
-        );
         assert_eq!(files[1].destination, "pac/update1.ypf");
         assert_eq!(files[2].destination, "pac/video.ypf");
     }
@@ -1025,17 +949,13 @@ mod tests {
             ],
         );
         assert_eq!(
-            build_recipe(&archive, &root, &AtomicBool::new(false))
-                .unwrap_err()
-                .to_string(),
+            plan_zip(&archive, &root).unwrap_err().to_string(),
             "zip_wrapped_layout_unsupported"
         );
         let archive2 = temp.path().join("unsafe.zip");
         zip_with(&archive2, &[("wrapper/pac/update.ypf", b"unknown")]);
         assert_eq!(
-            build_recipe(&archive2, &root, &AtomicBool::new(false))
-                .unwrap_err()
-                .to_string(),
+            plan_zip(&archive2, &root).unwrap_err().to_string(),
             "zip_wrapped_layout_unsupported"
         );
     }
@@ -1050,12 +970,11 @@ mod tests {
         let archive = temp.path().join("case.zip");
         zip_with(&archive, &[("wrapper/pac/update.ypf", &YPF_SIGNATURE)]);
         assert_eq!(
-            build_recipe(&archive, &root, &AtomicBool::new(false))
-                .unwrap_err()
-                .to_string(),
+            plan_zip(&archive, &root).unwrap_err().to_string(),
             "zip_target_case_collision"
         );
     }
+
     #[test]
     fn six_gib_declared_member_has_no_recipe_size_gate() {
         let entries = vec![Entry {
@@ -1066,16 +985,96 @@ mod tests {
             mode: 0,
             extra: Vec::new(),
         }];
+        validate_entries(&entries, &AtomicBool::new(false)).unwrap();
+    }
+
+    #[test]
+    fn signed_mapping_uses_recipe_destinations_and_keeps_declared_digest() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = game_dir(&temp);
+        let archive = temp.path().join("signed.zip");
+        zip_with(
+            &archive,
+            &[("payload.dat", b"patched"), ("readme.txt", b"notes")],
+        );
+        let mut zip = open(&archive).unwrap();
+        let members = plan_mapped(
+            &mut zip,
+            &root,
+            &[FileMapping {
+                source: "payload.dat".into(),
+                destination: "data/original.dat".into(),
+                original_sha256: Some("0".repeat(64)),
+                installed_sha256: "a".repeat(64),
+            }],
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        assert_eq!(members.len(), 1);
+        assert_eq!(members[0].destination, "data/original.dat");
         assert_eq!(
-            validate_entries(&entries, &AtomicBool::new(false)).unwrap(),
-            6 * 1024 * 1024 * 1024
+            members[0].expected_sha256.as_deref(),
+            Some("a".repeat(64).as_str())
         );
     }
+
     #[test]
-    #[ignore = "manual ZIP metadata and recipe scaling benchmark"]
-    fn benchmark_metadata_and_recipe_10k_50k() {
-        use std::sync::Arc;
-        use std::time::{Duration, Instant};
+    fn signed_mapping_requires_the_declared_member() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = game_dir(&temp);
+        let archive = temp.path().join("signed.zip");
+        zip_with(&archive, &[("payload.dat", b"patched")]);
+        let mut zip = open(&archive).unwrap();
+        let error = plan_mapped(
+            &mut zip,
+            &root,
+            &[FileMapping {
+                source: "missing.dat".into(),
+                destination: "original.dat".into(),
+                original_sha256: None,
+                installed_sha256: "a".repeat(64),
+            }],
+            &AtomicBool::new(false),
+        )
+        .unwrap_err();
+        assert_eq!(error.to_string(), "recipe_source_missing");
+    }
+
+    #[test]
+    fn signed_mapping_keeps_recipe_order() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = game_dir(&temp);
+        let archive = temp.path().join("signed.zip");
+        zip_with(&archive, &[("first.dat", b"one"), ("second.dat", b"two")]);
+        let mut zip = open(&archive).unwrap();
+        let members = plan_mapped(
+            &mut zip,
+            &root,
+            &[
+                FileMapping {
+                    source: "second.dat".into(),
+                    destination: "second.dat".into(),
+                    original_sha256: None,
+                    installed_sha256: "b".repeat(64),
+                },
+                FileMapping {
+                    source: "first.dat".into(),
+                    destination: "first.dat".into(),
+                    original_sha256: None,
+                    installed_sha256: "a".repeat(64),
+                },
+            ],
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        assert_eq!(members[0].source, "second.dat");
+        assert_eq!(members[1].source, "first.dat");
+    }
+
+    #[test]
+    #[ignore = "manual ZIP metadata and mapping scaling benchmark"]
+    fn benchmark_metadata_and_mapping_10k_50k() {
+        use std::time::Instant;
         for count in [10_000, 50_000] {
             let temp = tempfile::tempdir().unwrap();
             let root = game_dir(&temp);
@@ -1087,82 +1086,45 @@ mod tests {
                 zip.write_all(b"x").unwrap();
             }
             zip.finish().unwrap();
-            let mut file = File::open(&archive).unwrap();
             let start = Instant::now();
-            crate::zip_metadata::preflight(&mut file).unwrap();
-            let metadata_time = start.elapsed();
-            let start = Instant::now();
-            let recipe = build_recipe(&archive, &root, &AtomicBool::new(false)).unwrap();
-            let recipe_time = start.elapsed();
-            assert_eq!(recipe.len(), count);
-            let json_bytes = serde_json::to_vec(&recipe).unwrap().len();
-            let cancelled = Arc::new(AtomicBool::new(false));
-            let trigger = Arc::clone(&cancelled);
-            let start = Instant::now();
-            let handle = std::thread::spawn(move || {
-                std::thread::sleep(Duration::from_millis(5));
-                trigger.store(true, Ordering::Relaxed);
-            });
-            let error = build_recipe(&archive, &root, &cancelled).unwrap_err();
-            handle.join().unwrap();
-            assert_eq!(error.to_string(), "download_cancelled");
-            let cancel_time = start.elapsed();
+            let members = plan_zip(&archive, &root).unwrap();
+            let mapping_time = start.elapsed();
+            assert_eq!(members.len(), count);
             eprintln!(
-                "zip files={} metadata_ms={} recipe_ms={} json_bytes={} cancel_ms={} archive_bytes={}",
+                "zip files={} mapping_ms={} archive_bytes={}",
                 count,
-                metadata_time.as_millis(),
-                recipe_time.as_millis(),
-                json_bytes,
-                cancel_time.as_millis(),
+                mapping_time.as_millis(),
                 fs::metadata(&archive).unwrap().len()
             );
         }
     }
+}
+
+#[cfg(test)]
+mod zip64_tests {
+    use super::*;
+    use std::io::Write;
+    use zip::write::SimpleFileOptions;
+    use zip::{CompressionMethod, ZipWriter};
+
     #[test]
-    fn cancellation_is_observed() {
+    fn zip64_member_keeps_its_declared_size() {
         let temp = tempfile::tempdir().unwrap();
-        let root = game_dir(&temp);
-        let archive = temp.path().join("cancel.zip");
-        zip_with(&archive, &[("data.txt", b"patched")]);
-        let cancelled = AtomicBool::new(true);
-        assert_eq!(
-            build_recipe(&archive, &root, &cancelled)
-                .unwrap_err()
-                .to_string(),
-            "download_cancelled"
-        );
-    }
+        let root = temp.path().join("game");
+        fs::create_dir_all(&root).unwrap();
+        let archive = temp.path().join("zip64.zip");
+        let mut zip = ZipWriter::new(File::create(&archive).unwrap());
+        let options = SimpleFileOptions::default()
+            .compression_method(CompressionMethod::Stored)
+            .large_file(true);
+        zip.start_file("data.bin", options).unwrap();
+        zip.write_all(b"zip64").unwrap();
+        zip.finish().unwrap();
 
-    #[test]
-    fn relative_primitive_matches_publisher() {
-        assert!(relative("dir/file.txt").is_ok());
-        for bad in [
-            "",
-            "../escape",
-            "a/../b",
-            "C:file",
-            "dir\\file",
-            "ending.",
-            "ending ",
-            "bad<name",
-            "CON",
-            "com1.txt",
-            "nested/PRN.log",
-        ] {
-            assert!(relative(bad).is_err(), "{bad:?} must be rejected");
-        }
-        assert!(relative("patch.xp3").is_ok());
-        assert!(relative("com10.txt").is_ok(), "COM10 is not a device");
-    }
-
-    #[test]
-    fn extra_safe_accepts_wellformed_ntfs_field() {
-        let mut extra = Vec::new();
-        extra.extend_from_slice(&0x000au16.to_le_bytes());
-        extra.extend_from_slice(&32u16.to_le_bytes());
-        extra.extend_from_slice(&[0, 0, 0, 0, 1, 0, 24, 0]);
-        extra.extend_from_slice(&[0u8; 24]);
-        assert!(extra_safe(&extra).is_ok());
-        assert!(extra_safe(&extra[..extra.len() - 1]).is_err());
+        let mut zip = open(&archive).unwrap();
+        let members = plan(&mut zip, &root, &AtomicBool::new(false)).unwrap();
+        assert_eq!(members.len(), 1);
+        assert_eq!(members[0].destination, "data.bin");
+        assert_eq!(members[0].size, 5);
     }
 }

@@ -1,6 +1,6 @@
 //! Shared Steam patch domain services: projection, actions, trusted installation,
 //! transaction recovery, cache policy and source discovery. Writing entry points
-//! validate host identity, paths and authorization before mutating game files.
+//! validate host identity, trusted catalog state and paths before mutating game files.
 pub mod actions;
 mod appinfo;
 pub mod catalog;

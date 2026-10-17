@@ -1,10 +1,12 @@
-//! Signed managed-ZIP installation. The public service supplies validated host facts.
+//! Signed managed-ZIP installation. One trusted catalog verification and one
+//! archive-identity check at the entry, then the shared direct-overwrite
+//! extraction used by publisher ZIP installs.
 use super::{
-    authorization, facts, orchestrator, outcome::CancellationCause, task::TaskControl,
-    InstallerPaths, Transport,
+    facts, orchestrator, outcome::CancellationCause, space, task::TaskControl, zip_direct,
+    zip_recipe, InstallerPaths, Transport,
 };
 use crate::{
-    catalog::{Artifact, PatchRelease, Platform, SupportLevel},
+    catalog::{Artifact, Platform, SupportLevel},
     install::{self, InstallOperation, Transaction},
     operation,
     projection::DomainError,
@@ -39,7 +41,6 @@ pub(crate) struct SignedInstallDeps<'a> {
     pub transport: &'a dyn Transport,
     pub cancel: &'a AtomicBool,
     pub cancel_reason: &'a (dyn Fn() -> Option<CancellationCause> + Sync),
-    pub clock: &'a dyn Fn() -> Result<u64, DomainError>,
 }
 
 fn io_error(error: io::Error) -> DomainError {
@@ -133,7 +134,7 @@ fn ready_release<'a>(
     inputs: &SignedInstallInputs<'_>,
     platform: Platform,
     now: u64,
-) -> Result<&'a PatchRelease, DomainError> {
+) -> Result<&'a crate::catalog::PatchRelease, DomainError> {
     verified
         .ensure_active(inputs.release_id, now)
         .map_err(io_error)?;
@@ -164,7 +165,7 @@ fn ready_release<'a>(
 }
 
 fn expectation(
-    release: &PatchRelease,
+    release: &crate::catalog::PatchRelease,
     game: &GameInstall,
     cancel: &AtomicBool,
 ) -> facts::FactsExpectation {
@@ -189,6 +190,13 @@ fn require_facts(facts: &facts::GameFacts) -> Result<(), DomainError> {
     })
 }
 
+fn direct_error(error: io::Error) -> DomainError {
+    if error.to_string() == "cancelled" {
+        return DomainError::code("cancelled");
+    }
+    DomainError::new("zip_extract_failed", error.to_string())
+}
+
 fn install_signed_inner(
     inputs: &SignedInstallInputs<'_>,
     deps: &SignedInstallDeps<'_>,
@@ -207,47 +215,91 @@ fn install_signed_inner(
         return Ok(super::InstallExecution::replay(transaction));
     }
     boundary(deps, control)?;
+    // The catalog state of this request is read once; there is no deferred
+    // apply-time re-check and no cross-request trust cache.
     let catalog = revision::verify_catalog(deps.provider, deps.revision_store, inputs.now)?;
     deps.revision_store.remember_verified_revision(&catalog)?;
     let release = ready_release(&catalog, inputs, deps.platform, inputs.now)?;
-    boundary(deps, control)?;
-    // A caller-supplied local ZIP is external and user-owned: it must be copied
-    // into the managed plan archive before apply (design §4.3). A fetched
-    // artifact already lives in the managed download cache.
-    let external_archive = inputs.archive.is_some();
-    let archive = match inputs.archive {
-        Some(path) => path.to_path_buf(),
-        None => fetch_signed(
-            release
-                .artifact
-                .as_ref()
-                .ok_or_else(|| DomainError::code("artifact_requires_manual_download"))?,
-            deps,
-            control,
-        )?,
-    };
-    boundary(deps, control)?;
     let identity = install::recipe_identity(release).map_err(io_error)?;
     if super::content_conflict(deps.paths, inputs.request_id, &identity).map_err(task_error)? {
         return Err(DomainError::code("request_id_binding_conflict"));
     }
-    let plan = install::prepare_for_request_at(
+    let recipe = release
+        .recipe
+        .as_ref()
+        .ok_or_else(|| DomainError::code("recipe_missing"))?;
+    let mappings = recipe.files.clone();
+    boundary(deps, control)?;
+    // A user-owned local ZIP stays where it is. One handle serves the declared
+    // identity check and the single extraction pass.
+    let local = match inputs.archive {
+        Some(path) => {
+            let file = File::open(path).map_err(io_error)?;
+            operation::archive(file.metadata().map_err(io_error)?.len());
+            let (actual, file) = facts::digest_open_file(file, deps.cancel).map_err(io_error)?;
+            if actual.sha256 != recipe.artifact_sha256 {
+                return Err(DomainError::code("artifact_hash_mismatch"));
+            }
+            if release
+                .artifact
+                .as_ref()
+                .is_some_and(|artifact| artifact.size != actual.size)
+            {
+                return Err(DomainError::code("artifact_size_mismatch"));
+            }
+            Some(file)
+        }
+        None => None,
+    };
+    boundary(deps, control)?;
+
+    let mut zip = match local {
+        Some(file) => zip_recipe::from_file(file).map_err(io_error)?,
+        None => {
+            let archive = fetch_signed(
+                release
+                    .artifact
+                    .as_ref()
+                    .ok_or_else(|| DomainError::code("artifact_requires_manual_download"))?,
+                deps,
+                control,
+            )?;
+            boundary(deps, control)?;
+            zip_recipe::open(&archive).map_err(io_error)?
+        }
+    };
+    let members =
+        zip_recipe::plan_mapped(&mut zip, &inputs.game.install_path, &mappings, deps.cancel)
+            .map_err(io_error)?;
+    let expected = expectation(release, inputs.game, deps.cancel);
+    let game_facts = facts::game_facts(inputs.game, &expected, deps.cancel);
+    require_facts(&game_facts)?;
+    let files: Vec<(String, u64)> = members
+        .iter()
+        .map(|member| (member.destination.clone(), member.size))
+        .collect();
+    let sizes = space::zip_target_sizes(&inputs.game.install_path, &members).map_err(io_error)?;
+    space::ZipSpaceBudget::for_direct_overwrite(&sizes)
+        .and_then(|budget| budget.inspect(deps.paths.root(), &inputs.game.install_path))
+        .map_err(io_error)?;
+    let total = members.iter().try_fold(0u64, |sum, member| {
+        sum.checked_add(member.size)
+            .ok_or_else(|| DomainError::code("zip_size_overflow"))
+    })?;
+    boundary(deps, control)?;
+    let plan = install::begin_direct_at(
         deps.paths.root(),
         inputs.game,
-        release,
-        &archive,
-        catalog.catalog().revision,
+        inputs.release_id,
+        None,
+        None,
         inputs.operation,
-        None,
-        None,
-        Some(inputs.request_id),
+        &files,
+        Some(&identity),
     )
-    .map_err(io_error)
-    .map_err(|e| normalize_cancel(e, deps, control))?;
-
-    // Every error from this point has a real journal transaction. Finish it and
-    // return that fact, including ordinary rollback failures.
-    let result = (|| -> Result<Transaction, DomainError> {
+    .map_err(io_error)?;
+    let mut wrote = false;
+    let outcome = (|| -> Result<Transaction, DomainError> {
         control
             .attach_plan(deps.paths, &plan.plan_id)
             .map_err(io_error)?;
@@ -260,127 +312,40 @@ fn install_signed_inner(
         )
         .map_err(task_error)?;
         boundary(deps, control)?;
-        if !plan.blockers.is_empty() {
-            return Err(DomainError::new(
-                "plan_has_blockers",
-                plan.blockers.join(","),
-            ));
-        }
-        let expected = expectation(release, inputs.game, &control.cancel);
-        let artifact_sha = release
-            .recipe
-            .as_ref()
-            .ok_or_else(|| DomainError::code("recipe_missing"))?
-            .artifact_sha256
-            .clone();
-        let artifact_size = fs::metadata(&archive).map_err(io_error)?.len();
-        let facts = facts::game_facts(inputs.game, &expected, &control.cancel);
-        require_facts(&facts)?;
-        let content = authorization::ContentBinding::publisher_zip(
-            &artifact_sha,
-            artifact_size,
-            &orchestrator::plan_mappings(&plan),
-        );
-        let fingerprint = crate::sources::canonical::canonical_sha256(release);
-        let conditions = crate::sources::canonical::canonical_sha256(&expected);
-        let authorization = authorization::authorize(authorization::AuthorizeInput {
-            release_id: inputs.release_id,
-            selection_id: None,
-            source_id: "signed",
-            source_record_id: Some(&release.source_page),
-            candidate_sha256: &identity,
-            rule_fingerprint: &fingerprint,
-            settings_revision: catalog.catalog().revision,
-            conditions_sha256: &conditions,
-            content,
-            policy: authorization::PolicyVersions::default(),
-            plan_id: &plan.plan_id,
-            task_id: Some(&control.id),
-            request_id: Some(inputs.request_id),
-            facts,
-            now: (deps.clock)()?,
-        })
-        .map_err(|e| DomainError::new(e.code.clone(), e.to_string()))?;
-        authorization::write(deps.paths, &authorization).map_err(io_error)?;
-
+        operation::stage("extracting", Some(total), Some(files.len()));
+        let installed =
+            zip_direct::extract(&mut zip, &members, &plan.targets, deps.cancel, &mut wrote)
+                .map_err(direct_error)?;
         boundary(deps, control)?;
-        // Load keys/envelope again and read the current highest revision. An
-        // old VerifiedCatalog alone cannot observe revocation or rollback.
-        let now = (deps.clock)()?;
-        let current_catalog = revision::verify_catalog(deps.provider, deps.revision_store, now)?;
-        deps.revision_store
-            .remember_verified_revision(&current_catalog)?;
-        boundary(deps, control)?;
-        let current_release = ready_release(&current_catalog, inputs, deps.platform, now)?;
-        let current_expected = expectation(current_release, inputs.game, &control.cancel);
-        let stored_plan =
-            install::get_plan_at(deps.paths.root(), &plan.plan_id).map_err(io_error)?;
-        let current = authorization::CurrentState {
-            now,
-            plan_id: plan.plan_id.clone(),
-            instance_id: inputs.game.instance_id.clone(),
-            revoked: authorization::is_revoked(deps.paths, &plan.plan_id).map_err(io_error)?,
-            facts: facts::game_facts(inputs.game, &current_expected, &control.cancel),
-            settings_revision: current_catalog.catalog().revision,
-            policy: authorization::PolicyVersions::default(),
-            candidate_sha256: install::recipe_identity(current_release).map_err(io_error)?,
-            rule_fingerprint: crate::sources::canonical::canonical_sha256(current_release),
-            conditions_sha256: crate::sources::canonical::canonical_sha256(&current_expected),
-            content: authorization::ContentBinding::publisher_zip(
-                &current_release
-                    .recipe
-                    .as_ref()
-                    .ok_or_else(|| DomainError::code("recipe_missing"))?
-                    .artifact_sha256,
-                artifact_size,
-                &orchestrator::plan_mappings(&stored_plan),
-            ),
-        };
-        boundary(deps, control)?;
-        authorization::validate(&authorization, &current)
-            .map_err(|e| DomainError::new(e.code.clone(), e.to_string()))?;
-        boundary(deps, control)?;
-        // §4.3: an external local ZIP must not leave the journal pointing at a
-        // user-controlled path. Adopt it into the owned plan archive before apply.
-        if external_archive {
-            install::adopt_external_plan_archive_at(deps.paths.root(), &plan.plan_id)
-                .map_err(io_error)?;
-        }
-        boundary(deps, control)?;
-        let transaction = install::apply_at(deps.paths.root(), &plan.plan_id).map_err(io_error)?;
-        if transaction.state == "rolled_back"
-            && transaction
-                .error
-                .as_deref()
-                .is_some_and(|code| CancellationCause::from_transaction_error(code).is_some())
-        {
-            let cause = cancellation(deps, control);
-            return install::set_terminal_error_at(deps.paths.root(), &plan.plan_id, &cause.code)
-                .map_err(io_error);
-        }
-        Ok(transaction)
+        install::commit_direct_at(deps.paths.root(), &plan.plan_id, &installed).map_err(io_error)
     })();
-    let transaction = match result {
+    let transaction = match outcome {
         Ok(transaction) => transaction,
         Err(error) => {
-            // Capture the original cause before revoke marks this task cancelled.
             let error = normalize_cancel(error, deps, control);
-            // Revocation precedes rollback; restoring suppresses cancellation.
-            let _ = control.revoke_for_failure();
-            operation::restoring();
-            let transaction = orchestrator::finish_failed_plan(deps.paths, &plan.plan_id)
-                .map_err(|e| DomainError::new("needs_recovery", e.to_string()))?;
-            if matches!(transaction.state.as_str(), "committed" | "needs_recovery") {
-                transaction
+            let cancelled = error.code == "cancelled";
+            let code = if cancelled {
+                if wrote {
+                    "cancelled_incomplete".to_owned()
+                } else {
+                    "task_cancelled".to_owned()
+                }
+            } else if wrote {
+                format!("install_incomplete: {error}")
             } else {
-                install::set_terminal_error_at(deps.paths.root(), &plan.plan_id, &error.to_string())
-                    .map_err(|e| DomainError::new("needs_recovery", e.to_string()))?
-            }
+                error.to_string()
+            };
+            let _ = control.revoke_for_failure();
+            let failed = install::fail_direct_at(deps.paths.root(), &plan.plan_id, &code)
+                .map_err(io_error)?;
+            let _ =
+                super::record_terminal(deps.paths, inputs.request_id, &binding, &identity, &failed);
+            return Ok(super::InstallExecution::fresh(failed));
         }
     };
+    operation::stage("cleanup", None, None);
     // The journal is the durable authority. A late ledger write failure must
-    // not turn a committed/rolled-back transaction into a synthetic RPC failure.
-    // A recorded plan still lets begin_request replay the journal fact.
+    // not turn a committed transaction into a synthetic RPC failure.
     let _ = super::record_terminal(
         deps.paths,
         inputs.request_id,

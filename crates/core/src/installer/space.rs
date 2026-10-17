@@ -133,14 +133,33 @@ pub fn original_sizes(root: &Path, payload: &[PayloadEntry]) -> Result<Vec<(u64,
     }
     Ok(sizes)
 }
-pub fn original_bytes(root: &Path, payload: &[PayloadEntry]) -> Result<u64> {
-    original_sizes(root, payload)?
-        .iter()
-        .try_fold(0u64, |sum, (_, bytes)| {
-            sum.checked_add(*bytes)
-                .ok_or_else(|| invalid("exe_space_budget_overflow"))
-        })
+/// Existing destination sizes for planned ZIP members, in member order.
+/// Stat-only evidence for the direct-overwrite peak; no content is read.
+pub fn zip_target_sizes(
+    root: &Path,
+    members: &[super::zip_recipe::Member],
+) -> Result<Vec<(u64, u64)>> {
+    if !root.is_absolute() || !root.is_dir() || !super::zip_recipe::no_links(root) {
+        return Err(invalid("zip_game_identity_changed"));
+    }
+    let mut sizes = Vec::with_capacity(members.len());
+    for member in members {
+        let path = root.join(&member.destination);
+        if !super::zip_recipe::no_links(&path) {
+            return Err(invalid("linked_target"));
+        }
+        match fs::symlink_metadata(&path) {
+            Ok(metadata) if metadata.is_file() => sizes.push((member.size, metadata.len())),
+            Ok(_) => return Err(invalid("target_not_file")),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                sizes.push((member.size, 0))
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(sizes)
 }
+
 pub fn inspect_volume(path: &Path) -> Result<VolumeSpace> {
     if !path.is_absolute() || !super::zip_recipe::no_links(path) || !path.is_dir() {
         return Err(invalid("exe_space_path_invalid"));
@@ -259,6 +278,7 @@ pub struct ZipSpaceBudget {
     pub target_peak_bytes: Option<u64>,
 }
 impl ZipSpaceBudget {
+    #[cfg(test)]
     pub fn for_stage(payload_bytes: u64, original_bytes: u64) -> Result<Self> {
         let budget = Self {
             payload_bytes,
@@ -296,6 +316,22 @@ impl ZipSpaceBudget {
         budget.required(false)?;
         Ok(budget)
     }
+
+    /// Direct overwrite: no stage, backup or restore image is created, so only
+    /// the target peak growth and the margin are reserved. The downloaded ZIP
+    /// already exists and is not counted again.
+    pub fn for_direct_overwrite(files: &[(u64, u64)]) -> Result<Self> {
+        let peak = Self::for_archive(files)?
+            .target_peak_bytes
+            .ok_or_else(|| invalid("space_overflow"))?;
+        Ok(Self {
+            payload_bytes: 0,
+            original_bytes: 0,
+            staged: true,
+            target_peak_bytes: Some(peak),
+        })
+    }
+    #[cfg(test)]
     pub fn after_staging(&self) -> Self {
         Self {
             staged: true,
@@ -402,5 +438,16 @@ mod zip_budget_tests {
         let mixed = ZipSpaceBudget::for_archive(&[(5, 20), (30, 10), (15, 0)]).unwrap();
         assert_eq!(mixed.target_peak_bytes, Some(20));
         assert!(ZipSpaceBudget::for_archive(&[(u64::MAX, 0), (1, 0)]).is_err());
+    }
+
+    #[test]
+    fn direct_overwrite_reserves_only_target_growth() {
+        let margin = SPACE_MARGIN_BYTES;
+        // Replacing large existing files has no net growth; the old bytes must
+        // not be charged to either volume.
+        let budget = ZipSpaceBudget::for_direct_overwrite(&[(50, 50), (300, 0)]).unwrap();
+        assert_eq!(budget.required(false).unwrap(), (margin, 300 + margin));
+        assert_eq!(budget.required(true).unwrap(), (300 + margin, 300 + margin));
+        assert!(ZipSpaceBudget::for_direct_overwrite(&[(u64::MAX, 0), (1, 0)]).is_err());
     }
 }

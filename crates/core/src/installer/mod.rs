@@ -2,12 +2,11 @@
 //!
 //! The CLI calls [`service::install`] for signed ZIP, publisher ZIP and publisher
 //! EXE requests. The service validates the host and delegates to the shared
-//! authorization, request ledger and transaction orchestrators. Recovery and
+//! request ledger and direct-install orchestrators. Recovery and
 //! discard also enter through [`service`]; [`cache::CacheService`] owns cache
 //! deletion and coordinates with writers. All routes retain the same state root.
 
 pub mod acquire;
-pub mod authorization;
 pub mod backup;
 pub mod cache;
 mod cache_lock;
@@ -26,16 +25,12 @@ mod signed;
 pub mod space;
 pub mod store;
 pub mod task;
+mod zip_direct;
 pub mod zip_recipe;
 
 pub use acquire::{
     acquire, acquire_with, https_transport, validate_download, AcquiredArchive, Acquisition,
     DownloadRequest, HttpResponse, Transport,
-};
-pub use authorization::{
-    authorization_path, authorize, is_revoked, mapping_digest, validate, write, AuthResult,
-    Authorization, AuthorizeInput, ContentBinding, CurrentState, Invalidation, MappingBinding,
-    PolicyVersions, AUTHORIZATION_SCHEMA_VERSION, MAX_AUTHORIZATION_BYTES,
 };
 pub use facts::{
     digest_file, game_facts, read_file, BaselineExpectation, BaselineFact, BuildFacts, DlcFacts,
@@ -52,7 +47,6 @@ pub use resolve::{
     ResolvedZipCandidate,
 };
 pub use store::{init_atomic, instance_hash, InstallerPaths};
-pub use zip_recipe::build_recipe;
 
 /// `installer/rust-v1/schema.json` version (p0-contracts §0).
 pub const STORE_SCHEMA_VERSION: u32 = 1;

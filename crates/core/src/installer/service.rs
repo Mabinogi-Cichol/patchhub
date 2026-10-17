@@ -81,7 +81,8 @@ pub struct LocalArchive(PathBuf);
 impl LocalArchive {
     pub fn new(path: &Path) -> Result<Self, DomainError> {
         let path = std::path::absolute(path)?;
-        // The recipe reader performs the full streamed digest/ZIP checks again.
+        // The signed entry checks this file's declared digest once before the
+        // single extraction pass; the user keeps ownership of the file.
         let meta = std::fs::symlink_metadata(&path)?;
         if !meta.is_file() || meta.file_type().is_symlink() {
             return Err(DomainError::code("invalid_local_archive"));
@@ -320,7 +321,6 @@ pub fn install(
                             revision_store: deps.revision_store,
                             transport: deps.transport,
                             cancel: &cancel,
-                            clock: &|| deps.clock.now_seconds(),
                             cancel_reason: &reason,
                             platform: deps.host.platform,
                         },
@@ -342,7 +342,6 @@ pub fn install(
                             },
                             super::ZipInstallDeps {
                                 paths,
-                                state_dir: deps.host.state_dir(),
                                 transport: deps.transport,
                                 cancel: &cancel,
                                 cancel_reason: &reason,

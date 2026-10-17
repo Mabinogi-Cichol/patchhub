@@ -1,8 +1,10 @@
-//! Conservative local ZIP installer. Callers must authenticate the catalog before prepare/apply.
+//! Conservative local installer state, recovery and direct-extraction targets.
 //! SQLite journals intent before mutation; recovery is hash guarded, not globally atomic.
+#[cfg(test)]
+use crate::catalog::{Catalog, SupportLevel};
 use crate::operation;
 use crate::{
-    catalog::{self, Catalog, PatchRelease, SupportLevel},
+    catalog::{self, FileMapping, PatchRelease},
     steam::{self, GameInstall},
 };
 use fs2::FileExt;
@@ -46,19 +48,30 @@ pub fn recipe_identity(release: &PatchRelease) -> io::Result<String> {
         .recipe
         .as_ref()
         .ok_or_else(|| invalid("recipe_missing"))?;
-    let mappings: Vec<_> = recipe
-        .files
-        .iter()
-        .map(|m| (&m.source, &m.destination, &m.installed_sha256))
-        .collect();
-    let bytes = serde_json::to_vec(&(
+    mapping_identity(
         release.appid,
         &release.release_id,
         &release.language,
         &recipe.artifact_sha256,
-        mappings,
-    ))
-    .map_err(|e| invalid(e.to_string()))?;
+        &recipe.files,
+    )
+}
+
+/// Same identity shape as [`recipe_identity`] for callers whose mapping is not
+/// a signed catalog recipe (dynamic publisher ZIP).
+pub fn mapping_identity(
+    appid: u32,
+    release_id: &str,
+    language: &str,
+    artifact_sha256: &str,
+    mappings: &[FileMapping],
+) -> io::Result<String> {
+    let mappings: Vec<_> = mappings
+        .iter()
+        .map(|m| (&m.source, &m.destination, &m.installed_sha256))
+        .collect();
+    let bytes = serde_json::to_vec(&(appid, release_id, language, artifact_sha256, mappings))
+        .map_err(|e| invalid(e.to_string()))?;
     Ok(format!("{:x}", Sha256::digest(bytes)))
 }
 
@@ -74,8 +87,7 @@ pub struct PlannedChange {
     pub installed_sha256: Option<String>,
     pub size: u64,
     /// Archive member this change was extracted from (`None` for journals written
-    /// before the field existed, or for non-recipe callers). It lets the
-    /// orchestrator rebuild the authorization `ContentBinding` from the plan.
+    /// before the field existed, or for non-recipe callers).
     ///
     /// The member *name* is the stable locator (design §4.2): prepare rejects
     /// duplicate or case-colliding member names and verifies that the name maps
@@ -392,6 +404,7 @@ fn digest_reader(reader: &mut impl Read, limit: u64) -> io::Result<(String, u64)
     Ok((format!("{:x}", hash.finalize()), total))
 }
 
+#[cfg(test)]
 fn digest_measured(reader: &mut impl Read, limit: u64) -> io::Result<(String, u64)> {
     struct Measured<'a, R>(&'a mut R);
     impl<R: Read> Read for Measured<'_, R> {
@@ -478,7 +491,7 @@ pub(crate) fn open_direct_target(path: &Path) -> io::Result<File> {
     match fs::symlink_metadata(path) {
         Ok(m) if m.is_file() && !linked(&m) => {
             let mut opts = OpenOptions::new();
-            opts.write(true).truncate(true);
+            opts.write(true);
             #[cfg(windows)]
             {
                 use std::os::windows::fs::OpenOptionsExt;
@@ -497,7 +510,10 @@ pub(crate) fn open_direct_target(path: &Path) -> io::Result<File> {
             if !m.is_file() || linked(&m) {
                 return Err(invalid("target_not_file"));
             }
+            // Reject extra links before truncating: a hard-linked game file is
+            // shared with other paths and must not be emptied by a failed run.
             ensure_single_link(&file, &m)?;
+            file.set_len(0)?;
             Ok(file)
         }
         Ok(_) => Err(invalid("target_not_file")),
@@ -694,6 +710,7 @@ impl Store {
         ))?;
         Ok(())
     }
+    #[cfg(test)]
     fn save_directory(&self, job: &mut Job) -> io::Result<()> {
         if job.progress_format == 0 {
             return self.save(job);
@@ -771,6 +788,7 @@ impl Store {
 /// Reserve the largest normal progress/state strings, every possible created
 /// parent and bounded diagnostic slack before accepting a live write. Recovery
 /// must not be the first phase to discover the metadata budget is exhausted.
+#[cfg(test)]
 fn validate_metadata_budget(job: &Job) -> io::Result<()> {
     let mut bytes = serde_json::to_vec(job)
         .map_err(|e| invalid(e.to_string()))?
@@ -1099,6 +1117,9 @@ pub(crate) fn prepare_with_binding_at(
 }
 
 /// Unified tasks reserve a request-derived plan identity in the existing journal.
+/// Retained as the legacy-plan fixture for recovery tests; production ZIP and
+/// EXE routes install directly instead.
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn prepare_for_request_at(
     root: &Path,
@@ -1495,6 +1516,7 @@ pub(crate) fn get_plan(plan_id: &str, state_dir: &Path) -> io::Result<InstallPla
 }
 
 /// Explicit-root variant of [`get_plan`].
+#[cfg(test)]
 pub(crate) fn get_plan_at(root: &Path, plan_id: &str) -> io::Result<InstallPlan> {
     Ok(Store::open_at(root)?.load(plan_id)?.plan)
 }
@@ -1514,6 +1536,7 @@ pub(crate) fn discard_plan(plan_id: &str, state_dir: &Path) -> io::Result<Transa
 }
 
 /// Explicit-root variant of [`discard_plan`].
+#[cfg(test)]
 pub(crate) fn discard_plan_at(root: &Path, plan_id: &str) -> io::Result<Transaction> {
     discard_plan_checked_at(root, plan_id, |_| Ok(()))
 }
@@ -1547,41 +1570,6 @@ pub(crate) fn discard_plan_checked_at(
         Ok(())
     })();
     record_cleanup_result(&store, &mut job, cleanup);
-    Ok(job.transaction)
-}
-
-/// Persist the concrete cause after recovery has confirmed a terminal state.
-/// A committed transaction or outstanding recovery always wins over late failures.
-pub(crate) fn set_terminal_error_at(
-    root: &Path,
-    plan_id: &str,
-    error: &str,
-) -> io::Result<Transaction> {
-    let store = Store::open_at(root)?;
-    let mut job = store.load(plan_id)?;
-    match job.transaction.state.as_str() {
-        "committed" | "needs_recovery" => return Ok(job.transaction),
-        "rolled_back" | "superseded" | "uninstalled" => {}
-        _ => return Err(invalid("transaction_not_terminal")),
-    }
-    // Replacing the cause must not erase an independent cleanup diagnostic.
-    let error = if !error.contains("; cleanup_pending:") {
-        match job
-            .transaction
-            .error
-            .as_deref()
-            .and_then(|raw| raw.split_once("; cleanup_pending:"))
-        {
-            Some((_, detail)) => format!("{error}; cleanup_pending:{detail}"),
-            None => error.to_owned(),
-        }
-    } else {
-        error.to_owned()
-    };
-    if job.transaction.error.as_deref() != Some(error.as_str()) {
-        job.transaction.error = Some(error);
-        store.save(&mut job)?;
-    }
     Ok(job.transaction)
 }
 
@@ -1627,6 +1615,7 @@ pub(crate) fn protected_archive_sources_at(root: &Path) -> io::Result<Vec<PathBu
 /// **copied**, never renamed, and the copy is re-verified for exact size and
 /// full SHA-256 before the journal adopts it (design §4.3). A task plan must never keep depending on a
 /// user-controlled absolute path that a later move/delete/rename can invalidate.
+#[cfg(test)]
 pub(crate) fn adopt_external_plan_archive_at(root: &Path, id: &str) -> io::Result<()> {
     let store = Store::open_at(root)?;
     let mut job = store.load(id)?;
@@ -1662,6 +1651,7 @@ pub(crate) fn adopt_external_plan_archive_at(root: &Path, id: &str) -> io::Resul
 /// Copy an external source archive into its managed location, verifying the
 /// recorded size and full SHA-256 of the copy. On any failure the partial copy
 /// is removed so a retry starts clean.
+#[cfg(test)]
 fn copy_external_archive(
     source: &Path,
     destination: &Path,
@@ -1774,6 +1764,7 @@ fn open_payload_archive(store: &Store, job: &Job) -> io::Result<Option<zip::ZipA
     ))
 }
 
+#[cfg(test)]
 fn write_archive_member(
     zip: &mut zip::ZipArchive<File>,
     change: &PlannedChange,
@@ -1888,6 +1879,7 @@ fn copy_checked(source: &Path, destination: &Path, expected: &str) -> io::Result
     Ok(())
 }
 
+#[cfg(test)]
 fn make_parents(store: &Store, job: &mut Job, index: usize) -> io::Result<()> {
     let name = job.plan.changes[index].path.clone();
     let mut rel = String::new();
@@ -1945,6 +1937,7 @@ pub(crate) fn apply(plan_id: &str, state_dir: &Path) -> io::Result<Transaction> 
 }
 
 /// Explicit-root variant of [`apply`].
+#[cfg(test)]
 pub(crate) fn apply_at(root: &Path, plan_id: &str) -> io::Result<Transaction> {
     let store = Store::open_at(root)?;
     let mut job = store.load(plan_id)?;
@@ -2061,8 +2054,9 @@ pub(crate) struct DirectPlan {
     pub _lock: File,
 }
 
-/// Record a direct EXE install before any game file is changed. No backup,
-/// staging image, archive reference or per-file override is created.
+/// Record a direct install before any game file is changed. No backup, staging
+/// image, archive reference or per-file override is created.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn begin_direct_at(
     root: &Path,
     install: &GameInstall,
@@ -2071,6 +2065,7 @@ pub(crate) fn begin_direct_at(
     content_id: Option<&str>,
     operation: InstallOperation,
     files: &[(String, u64)],
+    recipe_sha256: Option<&str>,
 ) -> io::Result<DirectPlan> {
     let store = Store::open_at(root)?;
     validate_install(install, &store.root)?;
@@ -2129,7 +2124,7 @@ pub(crate) fn begin_direct_at(
     }
     let plan = InstallPlan {
         operation,
-        recipe_sha256: None,
+        recipe_sha256: recipe_sha256.map(str::to_owned),
         plan_id: id.clone(),
         instance_id: install.instance_id.clone(),
         release_id: release_id.to_owned(),
@@ -2255,6 +2250,7 @@ pub(crate) fn fail_direct_at(root: &Path, plan_id: &str, error: &str) -> io::Res
     Ok(job.transaction)
 }
 
+#[cfg(test)]
 fn apply_files(store: &Store, job: &mut Job) -> io::Result<()> {
     let mut backup_bytes = 0u64;
     for change in &job.plan.changes {
@@ -2530,6 +2526,7 @@ pub(crate) fn recover_checked_at(
     recover_selected_at(root, None, validate)
 }
 
+#[cfg(test)]
 pub(crate) fn recover_plan_at(root: &Path, plan_id: &str) -> io::Result<Vec<Transaction>> {
     recover_selected_at(root, Some(plan_id), |_| Ok(()))
 }
@@ -2592,6 +2589,13 @@ fn recover_selected_at(
         // reported as an incomplete install and never restored or resumed.
         if job.transaction.direct {
             if !["committed", "superseded"].contains(&job.transaction.state.as_str()) {
+                // A live install holds the exclusive game lock for the whole
+                // write. Do not rewrite its journal from a concurrent recovery.
+                match game_lock(&job.plan.install) {
+                    Ok(lock) => drop(lock),
+                    Err(error) if error.to_string() == "game_busy" => continue,
+                    Err(_) => {}
+                }
                 job.transaction.state = "failed".into();
                 job.transaction.error = Some("install_incomplete".into());
                 job.transaction.updated_at = now();
@@ -2812,6 +2816,7 @@ pub fn list_transactions_at(root: &Path) -> io::Result<Vec<Transaction>> {
     Ok(result)
 }
 
+#[cfg(test)]
 fn check_revoked(store: &Store, id: &str) -> io::Result<()> {
     let marker = store.directory(id)?.join("revoked");
     safe_path(&marker)?;

@@ -1745,11 +1745,13 @@ mod install_flow_tests {
         let mut damaged = copy_params(&params);
         damaged.request_id = Some("request-damaged".into());
         damaged.operation = install::InstallOperation::Reinstall;
+        // Direct overwrite semantics: the explicit reinstall writes the selected
+        // release; the projection keeps the reinstall action unavailable in the UI.
         assert_eq!(
-            execute("install_patch", damaged).unwrap_err().code,
-            "reinstall_unowned_or_incomplete"
+            execute("install_patch", damaged).unwrap()["state"],
+            "committed"
         );
-        assert_eq!(fs::read(game.join("patch.dat")).unwrap(), b"damaged");
+        assert_eq!(fs::read(game.join("patch.dat")).unwrap(), b"patch content");
         let mut overwrite = copy_params(&params);
         overwrite.request_id = Some("request-overwrite".into());
         overwrite.operation = install::InstallOperation::Overwrite;
@@ -2072,8 +2074,27 @@ mod dynamic_projection_tests {
     ) -> String {
         let paths = installer::InstallerPaths::new(state);
         installer::init_atomic(&paths).unwrap();
-        let cancel = AtomicBool::new(false);
-        let mappings = installer::build_recipe(archive, &game.install_path, &cancel).unwrap();
+        let mappings = {
+            let mut zip = zip::ZipArchive::new(fs::File::open(archive).unwrap()).unwrap();
+            let mut mappings = Vec::new();
+            for index in 0..zip.len() {
+                let mut member = zip.by_index(index).unwrap();
+                let source = member.name().to_string();
+                let mut hasher = Sha256::new();
+                std::io::copy(&mut member, &mut hasher).unwrap();
+                let destination = source.clone();
+                let original_sha256 = fs::read(game.install_path.join(&destination))
+                    .ok()
+                    .map(|bytes| format!("{:x}", Sha256::digest(&bytes)));
+                mappings.push(catalog::FileMapping {
+                    source,
+                    destination,
+                    original_sha256,
+                    installed_sha256: format!("{:x}", hasher.finalize()),
+                });
+            }
+            mappings
+        };
         let release = dynamic_release(release_id, archive, &mappings);
         use base64::{engine::general_purpose::STANDARD, Engine};
         use ed25519_dalek::{Signer, SigningKey};

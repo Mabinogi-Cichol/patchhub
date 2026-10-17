@@ -221,6 +221,7 @@ impl Catalog {
         self.validate_with_build_evidence(true)
     }
     /// Dynamic candidates carry observed facts, never reviewed build IDs.
+    #[cfg(test)]
     pub(crate) fn validate_dynamic(&self) -> io::Result<()> {
         self.validate_with_build_evidence(false)
     }

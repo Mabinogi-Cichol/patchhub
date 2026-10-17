@@ -4,8 +4,7 @@
 //! Everything here runs **outside** the sandboxed worker and never writes to the
 //! game tree. Each observed item carries its own evidence and, when a check
 //! fails, a [`FactFailure`] with a stable code. The resulting [`GameFacts`] is a
-//! deterministic snapshot used both to evaluate conditions and to re-verify an
-//! [`super::authorization::Authorization`] before apply.
+//! deterministic snapshot evaluated once at the install entry.
 //!
 //! File identity is checked before/after every read, as in the Python reference:
 //! the descriptor is compared to itself and to a fresh path stat, with the
@@ -19,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};
-use std::io::Read;
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -171,7 +170,7 @@ pub struct GameFacts {
 }
 
 impl GameFacts {
-    /// All failures in snapshot order, for diagnostics and authorization gating.
+    /// All failures in snapshot order, for diagnostics and entry gating.
     pub fn failures(&self) -> Vec<&FactFailure> {
         let mut failures = Vec::new();
         for fact in [
@@ -249,6 +248,47 @@ pub struct BaselineExpectation {
 /// the file's own length and identity checks bound the work.
 pub fn digest_file(path: &Path, cancel: &AtomicBool) -> Result<FileDigest> {
     read_bounded(path, None, cancel, false).map(|(digest, _)| digest)
+}
+
+/// Digest an already-open archive and rewind it for the ZIP reader. The signed
+/// local-ZIP route uses one handle for both the declared-identity check and the
+/// single extraction pass instead of reopening the path.
+pub fn digest_open_file(mut file: File, cancel: &AtomicBool) -> Result<(FileDigest, File)> {
+    let before = file.metadata()?;
+    if !before.is_file() {
+        return Err(invalid("exe_game_file_limit"));
+    }
+    let mut hasher = Sha256::new();
+    let mut crc: u32 = !0;
+    let mut size: u64 = 0;
+    let mut buffer = vec![0u8; CHUNK_BYTES];
+    loop {
+        if cancel.load(Ordering::Relaxed) {
+            return Err(invalid("download_cancelled"));
+        }
+        let count = file.read(&mut buffer)?;
+        if count == 0 {
+            break;
+        }
+        size = size
+            .checked_add(count as u64)
+            .ok_or_else(|| invalid("exe_game_file_limit"))?;
+        hasher.update(&buffer[..count]);
+        crc = crc32_update(crc, &buffer[..count]);
+    }
+    let after = file.metadata()?;
+    if after.len() != size || after.modified().ok() != before.modified().ok() {
+        return Err(invalid("exe_game_file_changed"));
+    }
+    file.seek(SeekFrom::Start(0))?;
+    Ok((
+        FileDigest {
+            sha256: format!("{:x}", hasher.finalize()),
+            crc32: !crc,
+            size,
+        },
+        file,
+    ))
 }
 
 /// Like [`digest_file`] but also returns the bytes (`contents=True`). `limit` is

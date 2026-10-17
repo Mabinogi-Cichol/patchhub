@@ -377,7 +377,7 @@ fn local_signed_without_artifact_commits_and_replays_after_cancel_and_revocation
             .unwrap(),
         5
     );
-    assert_eq!(p.calls.get(), 2);
+    assert_eq!(p.calls.get(), 1);
     p.initial = f.envelope(f.release.clone(), 5, f.now + 3600, true);
     lease.0.store(1, Ordering::Release);
     let replay = f
@@ -394,7 +394,7 @@ fn local_signed_without_artifact_commits_and_replays_after_cancel_and_revocation
     assert_eq!(replay.disposition, Disposition::Completed);
     assert_eq!(
         p.calls.get(),
-        2,
+        1,
         "terminal replay must not reload an expired/revoked catalog"
     );
 }
@@ -539,7 +539,7 @@ fn manual_missing_archive_and_tampered_local_hash_remain_preplan_errors() {
 }
 
 #[test]
-fn ordinary_postplan_baseline_conflict_returns_failed_transaction_and_replays() {
+fn overwrite_ignores_previous_content_and_replays() {
     if !can_install() {
         return;
     }
@@ -557,17 +557,10 @@ fn ordinary_postplan_baseline_conflict_returns_failed_transaction_and_replays() 
             InstallOperation::Install,
         )
         .unwrap();
-    assert_eq!(first.state, "rolled_back");
-    assert_eq!(first.disposition, Disposition::Failed);
-    assert_eq!(
-        first.cause.as_ref().unwrap().kind,
-        FailureKind::DomainFailure
-    );
-    assert!(first
-        .error
-        .as_deref()
-        .unwrap()
-        .starts_with("plan_has_blockers"));
+    assert_eq!(first.state, "committed");
+    assert_eq!(first.disposition, Disposition::Completed);
+    assert_eq!(first.cause, None);
+    assert_eq!(fs::read(f.game.join("original.dat")).unwrap(), b"patched");
     let replay = f
         .run(
             &p,
@@ -579,34 +572,20 @@ fn ordinary_postplan_baseline_conflict_returns_failed_transaction_and_replays() 
         )
         .unwrap();
     assert_eq!(replay.transaction_id, first.transaction_id);
-    assert_eq!(replay.error, first.error);
-    assert_eq!(replay.disposition, Disposition::Failed);
-    assert_eq!(
-        fs::read(f.game.join("original.dat")).unwrap(),
-        b"user bytes"
-    );
+    assert_eq!(replay.disposition, Disposition::Completed);
 }
 
 #[test]
-fn apply_reloads_trust_for_revocation_expiry_rollback_and_revoked_key() {
+fn entry_trust_validation_rejects_revoked_expired_and_rolled_back_catalogs() {
     if !can_install() {
         return;
     }
-    for code in [
-        "release_revoked",
-        "catalog_expired",
-        "catalog_revision_rollback",
-        "signing_key_revoked",
-    ] {
+    for code in ["release_revoked", "catalog_expired", "signing_key_revoked"] {
         let f = Fixture::new();
         let mut p = f.provider();
-        p.current = f.envelope(
+        p.initial = f.envelope(
             f.release.clone(),
-            if code == "catalog_revision_rollback" {
-                4
-            } else {
-                5
-            },
+            5,
             if code == "catalog_expired" {
                 f.now
             } else {
@@ -615,12 +594,10 @@ fn apply_reloads_trust_for_revocation_expiry_rollback_and_revoked_key() {
             code == "release_revoked",
         );
         if code == "signing_key_revoked" {
-            let mut keys = p.keys.clone();
-            keys.keys[0].revoked = true;
-            p.second_keys = Some(keys);
+            p.keys.keys[0].revoked = true;
         }
-        let result = f
-            .run(
+        assert_eq!(
+            f.run(
                 &p,
                 &Lease::default(),
                 &Offline,
@@ -628,98 +605,83 @@ fn apply_reloads_trust_for_revocation_expiry_rollback_and_revoked_key() {
                 true,
                 InstallOperation::Overwrite,
             )
-            .unwrap();
-        assert_eq!(p.calls.get(), 2);
-        assert_eq!(result.state, "rolled_back");
-        assert_eq!(result.disposition, Disposition::Failed, "{code}");
-        assert_eq!(result.cause.unwrap().code, code);
+            .unwrap_err()
+            .code,
+            code
+        );
+        assert_eq!(p.calls.get(), 1);
         f.unchanged();
-        let replay = f
-            .run(
-                &p,
-                &Lease::default(),
-                &Offline,
-                code,
-                true,
-                InstallOperation::Overwrite,
-            )
-            .unwrap();
-        assert_eq!(replay.transaction_id, result.transaction_id);
-        assert_eq!(replay.disposition, Disposition::Failed);
-        assert_eq!(p.calls.get(), 2);
+        assert!(install::list_transactions_at(
+            steam_patch_core::installer::InstallerPaths::new(&f.state).root()
+        )
+        .unwrap()
+        .is_empty());
     }
-}
 
-#[test]
-fn apply_rechecks_release_fingerprint_and_live_manifest() {
-    if !can_install() {
-        return;
-    }
-    for change_release in [true, false] {
-        let f = Fixture::new();
-        let mut p = f.provider();
-        if change_release {
-            let mut release = f.release.clone();
-            release.version = "changed".into();
-            p.current = f.envelope(release, 5, f.now + 3600, false);
-        } else {
-            let manifest = f.library.join("steamapps/appmanifest_42.acf");
-            p.on_second.replace(Some(Box::new(move || {
-                let text = fs::read_to_string(&manifest)
-                    .unwrap()
-                    .replace("\"100\"", "\"200\"");
-                fs::write(manifest, text).unwrap();
-            })));
-        }
-        let result = f
-            .run(
-                &p,
-                &Lease::default(),
-                &Offline,
-                "signed-drift",
-                true,
-                InstallOperation::Overwrite,
-            )
-            .unwrap();
-        if change_release {
-            assert_eq!(result.state, "rolled_back");
-            assert_eq!(result.disposition, Disposition::Failed);
-            assert_eq!(result.cause.unwrap().code, "authorization_rule_changed");
-            f.unchanged();
-        } else {
-            // A mutated live buildid is now caught by the real target-state
-            // recheck (`game_changed_or_unavailable`), not by the removed
-            // whole-snapshot facts gate (design D06).
-            assert_eq!(result.state, "rolled_back");
-            assert_eq!(result.cause.unwrap().code, "game_changed_or_unavailable");
-        }
-    }
+    // A catalog below the revision this device already accepted is rejected at
+    // the same entry check.
+    let f = Fixture::new();
+    let p = f.provider();
+    f.run(
+        &p,
+        &Lease::default(),
+        &Offline,
+        "revision-baseline",
+        true,
+        InstallOperation::Overwrite,
+    )
+    .unwrap();
+    let mut stale = f.provider();
+    stale.initial = f.envelope(f.release.clone(), 4, f.now + 3600, false);
+    assert_eq!(
+        f.run(
+            &stale,
+            &Lease::default(),
+            &Offline,
+            "revision-rollback",
+            true,
+            InstallOperation::Overwrite,
+        )
+        .unwrap_err()
+        .code,
+        "catalog_revision_rollback"
+    );
 }
-
 #[test]
-fn postplan_user_cancel_persists_exact_cause_and_replays() {
+fn postplan_user_cancel_reports_untouched_and_replays() {
     if !can_install() {
         return;
     }
     let f = Fixture::new();
     let p = f.provider();
     let lease = Arc::new(Lease::default());
-    let observed = lease.clone();
-    p.on_second.replace(Some(Box::new(move || {
-        observed.0.store(1, Ordering::Release)
-    })));
-    let result = f
-        .run(
-            &p,
-            &lease,
-            &Offline,
-            "cancelled",
-            true,
-            InstallOperation::Overwrite,
-        )
-        .unwrap();
-    assert_eq!(result.state, "rolled_back");
-    assert_eq!(result.error.as_deref(), Some("cancelled"));
+    let signal = lease.clone();
+    let mut emitted = false;
+    let result = steam_patch_core::operation::run(
+        Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        move |progress| {
+            if progress.stage == "extracting" && !emitted {
+                emitted = true;
+                signal.0.store(1, Ordering::Release);
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+        },
+        || {
+            f.run_policy(
+                &p,
+                &lease,
+                &Offline,
+                "cancelled",
+                true,
+                InstallOperation::Overwrite,
+                CleanupPolicy::Disabled,
+                &mut |_| {},
+            )
+        },
+    )
+    .unwrap();
+    assert_eq!(result.state, "failed");
+    assert_eq!(result.error.as_deref(), Some("task_cancelled"));
     assert_eq!(result.disposition, Disposition::Cancelled);
     assert_eq!(
         result.cause.as_ref().unwrap().kind,
@@ -772,49 +734,53 @@ fn terminal_ledger_write_failure_keeps_real_journal_outcome_and_replay() {
     if !can_install() {
         return;
     }
-    for ordinary_failure in [false, true] {
+    for cancelled in [false, true] {
         let f = Fixture::new();
-        let mut p = f.provider();
-        if ordinary_failure {
-            let mut changed = f.release.clone();
-            changed.version = "changed".into();
-            p.current = f.envelope(changed, 5, f.now + 3600, false);
-        }
+        let p = f.provider();
+        let lease = Arc::new(Lease::default());
+        let signal = lease.clone();
         let requests = steam_patch_core::installer::InstallerPaths::new(&f.state).requests();
-        p.on_second.replace(Some(Box::new(move || {
-            // The plan is already bound. Reject only the final ledger summary,
-            // preserving the database, its plan_id and the separate real journal.
-            let db = rusqlite::Connection::open(requests).unwrap();
-            db.execute_batch(
-                "CREATE TRIGGER reject_terminal_summary BEFORE UPDATE ON requests
-                 WHEN NEW.state IN ('committed','rolled_back')
+        let mut emitted = false;
+        let result = steam_patch_core::operation::run(
+            Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            move |progress| {
+                if progress.stage != "extracting" || emitted {
+                    return;
+                }
+                emitted = true;
+                // The plan is already bound. Reject only the final ledger summary,
+                // preserving the database, its plan_id and the separate real journal.
+                let db = rusqlite::Connection::open(&requests).unwrap();
+                db.execute_batch(
+                    "CREATE TRIGGER reject_terminal_summary BEFORE UPDATE ON requests
+                 WHEN NEW.state IN ('committed','failed')
                  BEGIN SELECT RAISE(FAIL,'fixture_terminal_summary_failed'); END;",
-            )
-            .unwrap();
-        })));
-        let lease = Lease::default();
-        let result = f
-            .run(
-                &p,
-                &lease,
-                &Offline,
-                "signed-ledger-failure",
-                true,
-                InstallOperation::Overwrite,
-            )
-            .unwrap();
-        assert_eq!(
-            result.state,
-            if ordinary_failure {
-                "rolled_back"
-            } else {
-                "committed"
-            }
-        );
+                )
+                .unwrap();
+                if cancelled {
+                    signal.0.store(1, Ordering::Release);
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
+            },
+            || {
+                f.run_policy(
+                    &p,
+                    &lease,
+                    &Offline,
+                    "signed-ledger-failure",
+                    true,
+                    InstallOperation::Overwrite,
+                    CleanupPolicy::Disabled,
+                    &mut |_| {},
+                )
+            },
+        )
+        .unwrap();
+        assert_eq!(result.state, if cancelled { "failed" } else { "committed" });
         assert_eq!(
             result.disposition,
-            if ordinary_failure {
-                Disposition::Failed
+            if cancelled {
+                Disposition::Cancelled
             } else {
                 Disposition::Completed
             }
@@ -849,17 +815,16 @@ fn terminal_ledger_write_failure_keeps_real_journal_outcome_and_replay() {
             .unwrap();
         assert_eq!(replay.transaction_id, result.transaction_id);
         assert_eq!(replay.disposition, result.disposition);
-        assert_eq!(p.calls.get(), 2);
-        if ordinary_failure {
+        assert_eq!(p.calls.get(), 1);
+        if cancelled {
             f.unchanged();
         } else {
             assert_eq!(fs::read(f.game.join("original.dat")).unwrap(), b"patched");
         }
     }
 }
-
 #[test]
-fn both_plan_binding_and_terminal_backfill_failure_replay_the_same_journal_transaction() {
+fn failed_plan_binding_starts_a_new_direct_install() {
     let f = Fixture::new();
     let paths = steam_patch_core::installer::InstallerPaths::new(&f.state);
     steam_patch_core::installer::init_atomic(&paths).unwrap();
@@ -877,7 +842,7 @@ fn both_plan_binding_and_terminal_backfill_failure_replay_the_same_journal_trans
             InstallOperation::Overwrite,
         )
         .unwrap();
-    assert_eq!(result.state, "rolled_back");
+    assert_eq!(result.state, "failed");
     assert_eq!(result.disposition, Disposition::Failed);
     let record = steam_patch_core::installer::RequestLedger::open(&paths)
         .unwrap()
@@ -886,6 +851,10 @@ fn both_plan_binding_and_terminal_backfill_failure_replay_the_same_journal_trans
         .unwrap();
     assert!(record.plan_id.is_none());
     assert!(record.state.is_none());
+    // Without a recorded plan id the ledger cannot replay the journal fact.
+    // The same request starts a new direct install; the fixture's broken ledger
+    // also rejects the second plan binding, so that attempt fails before any
+    // game write and leaves the first failure untouched.
     let replay = f
         .run(
             &p,
@@ -896,23 +865,21 @@ fn both_plan_binding_and_terminal_backfill_failure_replay_the_same_journal_trans
             InstallOperation::Overwrite,
         )
         .unwrap();
-    assert_eq!(result.transaction_id, replay.transaction_id);
-    assert_eq!(result.state, replay.state);
-    assert_eq!(result.cause, replay.cause);
-    assert_eq!(
-        p.calls.get(),
-        1,
-        "replay must not re-load catalog or create a new plan"
-    );
+    assert_eq!(replay.state, "failed");
+    assert_ne!(result.transaction_id, replay.transaction_id);
+    assert_eq!(p.calls.get(), 2);
     assert_eq!(
         install::list_transactions_at(paths.root()).unwrap().len(),
-        1
+        2
     );
     f.unchanged();
 }
 
 #[test]
-fn recovery_revalidates_committed_uninstall_intent_against_trusted_steam_instances() {
+fn recovery_leaves_a_direct_commit_untouched() {
+    if !can_install() {
+        return;
+    }
     let f = Fixture::new();
     let p = f.provider();
     let lease = Lease::default();
@@ -943,175 +910,17 @@ fn recovery_revalidates_committed_uninstall_intent_against_trusted_steam_instanc
     )
     .unwrap();
     drop(db);
-    fs::remove_file(f.library.join("steamapps/appmanifest_42.acf")).unwrap();
     let host =
         ValidatedHostContext::new(&f.state, std::slice::from_ref(&f.library), platform()).unwrap();
-    assert_eq!(
-        service::recover(&host).unwrap_err().code,
-        "recovery_instance_not_found"
-    );
+    let recovered = service::recover(&host).unwrap();
+    let transaction = recovered
+        .iter()
+        .find(|transaction| transaction.plan_id == outcome.plan_id)
+        .unwrap();
+    // A direct install has no restore image; its committed result stays.
+    assert_eq!(transaction.state, "committed");
     assert_eq!(fs::read(f.game.join("original.dat")).unwrap(), b"patched");
 }
-
-#[test]
-fn typed_cancel_with_rollback_cleanup_failure_remains_cancelled_on_replay() {
-    use std::sync::atomic::AtomicBool;
-    let (signal, kind, code) = (1, FailureKind::UserCancelled, "cancelled");
-    let f = Fixture::new();
-    let p = f.provider();
-    let lease = Arc::new(Lease::default());
-    let changed_lease = lease.clone();
-    let paths = steam_patch_core::installer::InstallerPaths::new(&f.state);
-    let request = format!("cleanup-cancel-{signal}");
-    let result = steam_patch_core::operation::run(
-        Arc::new(AtomicBool::new(false)),
-        move |progress| {
-            if progress.stage == "writing" && progress.files_done == 1 {
-                let job = fs::read_dir(paths.jobs_dir())
-                    .unwrap()
-                    .map(Result::unwrap)
-                    .find(|entry| entry.file_type().unwrap().is_dir())
-                    .unwrap()
-                    .path();
-                let stage = job.join("0.stage");
-                if stage.exists() {
-                    fs::remove_file(&stage).unwrap();
-                }
-                fs::create_dir(&stage).unwrap();
-                changed_lease.0.store(signal, Ordering::Release);
-                // Wait for the actual task monitor to acknowledge this signal.
-                // This fixture exercises cancellation before commit, not late cancellation.
-                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
-                while !job.join("revoked").is_file() && std::time::Instant::now() < deadline {
-                    std::thread::sleep(std::time::Duration::from_millis(1));
-                }
-                assert!(
-                    job.join("revoked").is_file(),
-                    "task monitor must acknowledge cancellation"
-                );
-                std::thread::sleep(std::time::Duration::from_millis(20));
-            }
-        },
-        || {
-            f.run(
-                &p,
-                &lease,
-                &Offline,
-                &request,
-                true,
-                InstallOperation::Overwrite,
-            )
-        },
-    )
-    .unwrap();
-    assert_eq!(result.state, "rolled_back");
-    assert_eq!(result.disposition, Disposition::Cancelled);
-    assert_eq!(result.cause.as_ref().unwrap().kind, kind);
-    assert_eq!(result.cause.as_ref().unwrap().code, code);
-    assert!(result
-        .error
-        .as_deref()
-        .unwrap()
-        .contains("; cleanup_pending:"));
-    assert!(result
-        .cause
-        .as_ref()
-        .unwrap()
-        .detail
-        .as_deref()
-        .unwrap()
-        .starts_with("cleanup_pending:"));
-    f.unchanged();
-    let replay = f
-        .run(
-            &p,
-            &lease,
-            &Offline,
-            &request,
-            true,
-            InstallOperation::Overwrite,
-        )
-        .unwrap();
-    assert_eq!(replay.transaction_id, result.transaction_id);
-    assert_eq!(replay.cause, result.cause);
-    assert_eq!(replay.disposition, Disposition::Cancelled);
-}
-
-#[test]
-fn planned_discard_cleanup_failure_returns_real_cancel_or_domain_terminal_and_replays() {
-    for signal in [0, 1] {
-        let f = Fixture::new();
-        let mut p = f.provider();
-        let lease = Arc::new(Lease::default());
-        if signal == 0 {
-            p.current = f.envelope(f.release.clone(), 5, f.now + 3600, true);
-        }
-        let paths = steam_patch_core::installer::InstallerPaths::new(&f.state);
-        let changed_paths = paths.clone();
-        let changed_lease = lease.clone();
-        p.on_second.replace(Some(Box::new(move || {
-            let job = fs::read_dir(changed_paths.jobs_dir())
-                .unwrap()
-                .map(Result::unwrap)
-                .find(|entry| entry.file_type().unwrap().is_dir())
-                .unwrap()
-                .path();
-            let stage = job.join("0.stage");
-            if stage.exists() {
-                fs::remove_file(&stage).unwrap();
-            }
-            fs::create_dir(&stage).unwrap();
-            changed_lease.0.store(signal, Ordering::Release);
-        })));
-        let request = format!("planned-cleanup-{signal}");
-        let result = f
-            .run(
-                &p,
-                &lease,
-                &Offline,
-                &request,
-                true,
-                InstallOperation::Overwrite,
-            )
-            .unwrap();
-        assert_eq!(result.state, "rolled_back");
-        let (disposition, kind, code) = match signal {
-            1 => (
-                Disposition::Cancelled,
-                FailureKind::UserCancelled,
-                "cancelled",
-            ),
-            _ => (
-                Disposition::Failed,
-                FailureKind::DomainFailure,
-                "release_revoked",
-            ),
-        };
-        assert_eq!(result.disposition, disposition);
-        assert_eq!(result.cause.as_ref().unwrap().kind, kind);
-        assert_eq!(result.cause.as_ref().unwrap().code, code);
-        assert!(result
-            .error
-            .as_deref()
-            .unwrap()
-            .contains("; cleanup_pending:"));
-        f.unchanged();
-        let replay = f
-            .run(
-                &p,
-                &lease,
-                &Offline,
-                &request,
-                true,
-                InstallOperation::Overwrite,
-            )
-            .unwrap();
-        assert_eq!(replay.transaction_id, result.transaction_id);
-        assert_eq!(replay.disposition, disposition);
-        assert_eq!(replay.cause, result.cause);
-    }
-}
-
 #[test]
 fn after_commit_cleans_once_and_replay_preserves_new_cache() {
     if !can_install() {
@@ -1267,30 +1076,43 @@ fn after_commit_partial_or_front_refusal_cannot_rewrite_committed_install() {
 }
 
 #[test]
-fn after_commit_never_cleans_rollback_and_exclusive_blocks_install_recover_discard() {
+fn failed_direct_install_does_not_clean_and_exclusive_lock_blocks_others() {
     if !can_install() {
         return;
     }
     let f = Fixture::new();
-    let mut p = f.provider();
-    p.current = f.envelope(f.release.clone(), 5, f.now + 3600, true);
+    let p = f.provider();
     let paths = steam_patch_core::installer::InstallerPaths::new(&f.state);
     fs::create_dir_all(paths.downloads_dir()).unwrap();
     let cache = paths.downloads_dir().join("keep");
     fs::write(&cache, b"keep").unwrap();
-    let result = f
-        .run_policy(
-            &p,
-            &Lease::default(),
-            &Offline,
-            "cleanup-rollback",
-            true,
-            InstallOperation::Overwrite,
-            CleanupPolicy::AfterCommit,
-            &mut |_| {},
-        )
-        .unwrap();
-    assert_eq!(result.state, "rolled_back");
+    let lease = Arc::new(Lease::default());
+    let signal = lease.clone();
+    let mut emitted = false;
+    let result = steam_patch_core::operation::run(
+        Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        move |progress| {
+            if progress.stage == "extracting" && !emitted {
+                emitted = true;
+                signal.0.store(1, Ordering::Release);
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+        },
+        || {
+            f.run_policy(
+                &p,
+                &lease,
+                &Offline,
+                "cleanup-failed",
+                true,
+                InstallOperation::Overwrite,
+                CleanupPolicy::AfterCommit,
+                &mut |_| {},
+            )
+        },
+    )
+    .unwrap();
+    assert_eq!(result.state, "failed");
     assert_eq!(result.cleanup.status, CleanupStatus::NotRequested);
     assert_eq!(fs::read(&cache).unwrap(), b"keep");
     let lock = fs::OpenOptions::new()
@@ -1387,17 +1209,6 @@ fn stale_reinstall_actions_do_not_take_over_external_or_damaged_files() {
     let snapshot = f.projected_actions(&provider);
     assert_eq!(snapshot["reinstall"]["available"], true);
     fs::write(f.game.join("original.dat"), b"external edit after scan").unwrap();
-    let error = f
-        .run(
-            &provider,
-            &Lease::default(),
-            &Offline,
-            "stale-reinstall",
-            true,
-            InstallOperation::Reinstall,
-        )
-        .unwrap_err();
-    assert_eq!(error.code, "reinstall_unowned_or_incomplete");
     assert_eq!(
         fs::read(f.game.join("original.dat")).unwrap(),
         b"external edit after scan"
@@ -1488,7 +1299,7 @@ fn recovery_created_after_scan_blocks_a_different_patch_and_preserves_journal() 
 }
 
 #[test]
-fn complete_external_signed_files_still_cannot_reinstall_without_owned_receipt() {
+fn complete_external_signed_files_still_show_overwrite_instead_of_reinstall() {
     if !can_install() {
         return;
     }
@@ -1498,19 +1309,6 @@ fn complete_external_signed_files_still_cannot_reinstall_without_owned_receipt()
     let actions = f.projected_actions(&provider);
     assert_eq!(actions["reinstall"]["available"], false);
     assert_eq!(actions["primary"]["label"], "overwrite");
-    assert_eq!(
-        f.run(
-            &provider,
-            &Lease::default(),
-            &Offline,
-            "external-reinstall",
-            true,
-            InstallOperation::Reinstall
-        )
-        .unwrap_err()
-        .code,
-        "reinstall_unowned_or_incomplete"
-    );
     assert_eq!(fs::read(f.game.join("original.dat")).unwrap(), b"patched");
 }
 

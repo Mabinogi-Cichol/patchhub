@@ -15,7 +15,7 @@ use std::io::{self, Read, Seek, SeekFrom};
 /// with the explicit `zip_metadata_limit` error; members are never silently
 /// truncated or dropped.
 pub const MAX_METADATA_BYTES: u64 = 64 * 1024 * 1024;
-/// Conservative per-member estimate for the plan/authorization bookkeeping that
+/// Conservative per-member estimate for the mapping/bookkeeping that
 /// accompanies each central-directory record, used only inside
 /// `exceeds_budget` to convert a member count into budgeted bytes.
 const RECORD_ESTIMATE: u64 = 1024;

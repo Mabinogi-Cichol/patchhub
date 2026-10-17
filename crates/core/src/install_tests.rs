@@ -1801,6 +1801,7 @@ fn direct_install_records_no_backup_and_commits_observed_digests() {
         Some("exe-content-test"),
         InstallOperation::Install,
         &files,
+        None,
     )
     .unwrap();
     let tx = list_transactions(&f.state).unwrap().remove(0);
@@ -1844,6 +1845,7 @@ fn interrupted_direct_install_is_marked_failed_and_does_not_block_a_retry() {
         None,
         InstallOperation::Install,
         &[("original.dat".to_string(), 7)],
+        None,
     )
     .unwrap();
     fs::write(f.game.join("original.dat"), b"partial").unwrap();
@@ -1862,6 +1864,7 @@ fn interrupted_direct_install_is_marked_failed_and_does_not_block_a_retry() {
         None,
         InstallOperation::Install,
         &[("original.dat".to_string(), 7)],
+        None,
     )
     .unwrap();
     assert_eq!(list_transactions(&f.state).unwrap().len(), 2);
@@ -1888,7 +1891,112 @@ fn direct_targets_reject_non_file_targets_and_preserve_existing_permissions() {
         None,
         InstallOperation::Install,
         &[("occupied".to_string(), 1)],
+        None,
     )
     .unwrap_err();
     assert_eq!(error.to_string(), "target_not_file");
+}
+
+#[cfg(unix)]
+#[test]
+fn direct_overwrite_keeps_existing_permissions() {
+    use std::io::Write;
+    use std::os::unix::fs::PermissionsExt;
+
+    let f = Fixture::new();
+    let game = steam::scan(std::slice::from_ref(&f.library))
+        .installs
+        .remove(0);
+    fs::set_permissions(
+        f.game.join("original.dat"),
+        fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    let plan = crate::install::begin_direct_at(
+        &f.state,
+        &game,
+        "exe-content-test",
+        None,
+        None,
+        InstallOperation::Install,
+        &[("original.dat".to_string(), 7)],
+        None,
+    )
+    .unwrap();
+    let mut file = crate::install::open_direct_target(&plan.targets[0].file).unwrap();
+    file.write_all(b"patched").unwrap();
+    file.sync_all().unwrap();
+    drop(file);
+    let mode = fs::metadata(f.game.join("original.dat"))
+        .unwrap()
+        .permissions()
+        .mode()
+        & 0o777;
+    assert_eq!(mode, 0o755);
+}
+
+#[test]
+fn direct_target_rejects_hard_links_without_truncating() {
+    let f = Fixture::new();
+    let game = steam::scan(std::slice::from_ref(&f.library))
+        .installs
+        .remove(0);
+    fs::hard_link(f.game.join("original.dat"), f.game.join("linked.dat")).unwrap();
+    let plan = crate::install::begin_direct_at(
+        &f.state,
+        &game,
+        "exe-content-test",
+        None,
+        None,
+        InstallOperation::Install,
+        &[("original.dat".to_string(), 14)],
+        None,
+    )
+    .unwrap();
+    let error = crate::install::open_direct_target(&plan.targets[0].file).unwrap_err();
+    assert_eq!(error.to_string(), "hard_link_rejected");
+    // Validation happens before truncation, so both links keep their bytes.
+    assert_eq!(
+        fs::read(f.game.join("original.dat")).unwrap(),
+        b"original bytes"
+    );
+    assert_eq!(
+        fs::read(f.game.join("linked.dat")).unwrap(),
+        b"original bytes"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn recovery_skips_a_live_direct_install_and_reports_it_after_exit() {
+    let f = Fixture::new();
+    let game = steam::scan(std::slice::from_ref(&f.library))
+        .installs
+        .remove(0);
+    let plan = crate::install::begin_direct_at(
+        &f.state,
+        &game,
+        "exe-content-test",
+        None,
+        None,
+        InstallOperation::Install,
+        &[("original.dat".to_string(), 7)],
+        None,
+    )
+    .unwrap();
+    // The begin handle holds the exclusive game lock for the whole write.
+    let plan_id = plan.plan_id.clone();
+    assert!(crate::install::recover_plan_at(&f.state, &plan_id)
+        .unwrap()
+        .is_empty());
+    let current = list_transactions(&f.state)
+        .unwrap()
+        .into_iter()
+        .find(|transaction| transaction.plan_id == plan_id)
+        .unwrap();
+    assert_eq!(current.state, "applying");
+    drop(plan);
+    let recovered = crate::install::recover_plan_at(&f.state, &plan_id).unwrap();
+    assert_eq!(recovered[0].state, "failed");
+    assert_eq!(recovered[0].error.as_deref(), Some("install_incomplete"));
 }

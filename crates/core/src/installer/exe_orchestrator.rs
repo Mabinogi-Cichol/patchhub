@@ -1,4 +1,4 @@
-//! P3 production EXE install: sandbox reports, trusted facts, authorization and apply.
+//! P3 production EXE install: sandbox reports, trusted facts and direct extraction.
 use super::{
     acquire, exe_report, exe_resolve, facts, orchestrator as common, outcome::CancellationCause,
     space, store, task::TaskControl, InstallerPaths,
@@ -253,6 +253,7 @@ fn run(
         Some(&content),
         inputs.operation,
         &files,
+        None,
     )
     .map_err(common::map_plan_error)?;
     let mut writer = super::direct::DirectWriter::new(report.payload(), &plan.targets);
