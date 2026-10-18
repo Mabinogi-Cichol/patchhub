@@ -14,6 +14,11 @@
 - 用户明确要求提交本项目 Git 改动时，使用 [steam-patch-git-commit](.agents/skills/steam-patch-git-commit/SKILL.md)（可显式调用 `$steam-patch-git-commit`）。项目版本已从个人记忆迁入并纳入 Git，后续以仓库文件为准。
 - Steam Deck 远程连接、Decky 插件部署、重载与实机验证使用 [decky-deploy-verify](.agents/skills/decky-deploy-verify/SKILL.md)（可显式调用 `$decky-deploy-verify`）。仅创建技能或编写方案时不操作设备；实际部署沿用用户当前授权范围。
 
+## 功能分支
+
+- 需要新增 `docs/features/<feature-name>/` 文档的功能开发，先从 `main` 创建 `feature/<feature-name>` 分支，分支名与功能目录名一致。
+- 设计文档、施工记录、功能代码及对应验证都在功能分支上完成；开发完毕并完成 `progress.md` 记录的验证后，再合并回 `main`，不直接在 `main` 上开发新功能。
+
 ## 功能文档归类
 
 - 所有新功能必须先在 `docs/features/` 下创建独立的功能根目录：`docs/features/<feature-name>/`。目录名采用小写英文与连字符（kebab-case），例如 `cache-cleanup`。
