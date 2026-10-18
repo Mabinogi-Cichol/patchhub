@@ -2,7 +2,7 @@ use serde_json::{json, Value};
 use steam_patch_protocol::*;
 fn corpus() -> Value {
     serde_json::from_str(include_str!(
-        "../../../packages/contracts/fixtures/v4/cases.json"
+        "../../../packages/contracts/fixtures/v5/cases.json"
     ))
     .unwrap()
 }
@@ -75,19 +75,19 @@ fn fixed_cross_language_corpus() {
 #[test]
 fn large_request_and_response_payloads_are_not_size_rejected() {
     // A valid request beyond the removed 64 KiB line cap still parses.
-    let mut request = fixtures::request(Method::DiscoverGame);
+    let mut request = fixtures::request(Method::MatchGames);
     request["params"]["name_hints"] = json!((0..40)
         .map(|i| format!("{i}-{}", "hint".repeat(2000)))
         .collect::<Vec<_>>());
     let bytes = serde_json::to_vec(&request).unwrap();
     assert!(bytes.len() > 64 * 1024);
-    assert!(decode_request(&bytes, false).is_ok());
+    assert!(decode_request(&bytes, true).is_ok());
     // A long error detail is preserved instead of rejected or truncated.
     let detail = "界".repeat(5000);
-    let response = json!({"protocol_version":4,"request_id":"fixture","ok":false,"error":{"code":"io_error","detail":detail}});
+    let response = json!({"protocol_version":5,"request_id":"fixture","ok":false,"error":{"code":"io_error","detail":detail}});
     validate_response(&response, "fixture", Some(Method::Scan)).unwrap();
     // A wrong field type still fails.
-    let wrong_type = json!({"protocol_version":4,"request_id":"fixture","ok":false,"error":{"code":"io_error","detail":7}});
+    let wrong_type = json!({"protocol_version":5,"request_id":"fixture","ok":false,"error":{"code":"io_error","detail":7}});
     assert_eq!(
         validate_response(&wrong_type, "fixture", Some(Method::Scan))
             .unwrap_err()

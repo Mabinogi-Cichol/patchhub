@@ -1,16 +1,24 @@
 //! Persistent `rust-v1` store: atomic writes, short lock + monotonic revision,
-//! cache/status/discovery/index persistence (design §4.1–§4.6, §5, R6/R9/R12).
+//! schema-2 index/detail/match persistence and the one-time schema 1 → 2
+//! migration (design §4.1–§4.6, §5, R6/R9/R12; p1-contract §2, §8).
 //!
 //! First open initializes the Rust default state directly; the legacy Python
 //! `<state_dir>/sources/` namespace is never read (p0-contracts §1.3, §7.3).
 
+use super::index::{from_cache, from_discovery_index, normalize_entries};
 use super::model::{
-    DiscoveryIndexRecord, DiscoveryRecord, Overrides, SettingsFile, SourceCache, SourceStatus,
+    DetailRecord, Diagnostic, DiscoveryIndexRecord, DiscoveryRecord, FallbackMatchRecord,
+    FallbackMatchStatus, GameMatchRecord, GameMatchStatus, Overrides, RulesConfig, SettingsFile,
+    SourceCache, SourceIndex, SourceMatchRecord, SourceMatchStatus, SourceRole, SourceStatus,
 };
-use super::{invalid, Result, STORE_SCHEMA_VERSION};
+use super::r#match::{candidate_is_credible, derive_game_status};
+use super::{
+    canonical, invalid, Result, DEFAULT_RULES_JSON, GAME_MATCH_SCHEMA_VERSION, STORE_SCHEMA_VERSION,
+};
 use fs2::FileExt;
 use serde::{de::DeserializeOwned, Serialize};
-use std::collections::BTreeMap;
+use sha2::{Digest, Sha256};
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -70,6 +78,41 @@ impl StorePaths {
             .join("discovery-index")
             .join(format!("{source_id}.json"))
     }
+
+    /// Published per-source index snapshot (schema 2).
+    pub fn index(&self, source_id: &str) -> PathBuf {
+        self.root.join("index").join(format!("{source_id}.json"))
+    }
+
+    /// Unpublished update progress for a source (same shape as [`Self::index`]);
+    /// removed after a complete update publishes the official snapshot.
+    pub fn index_progress(&self, source_id: &str) -> PathBuf {
+        self.root
+            .join("index-progress")
+            .join(format!("{source_id}.json"))
+    }
+
+    /// Per-source detail cache directory.
+    pub fn details(&self, source_id: &str) -> PathBuf {
+        self.root.join("details").join(source_id)
+    }
+
+    /// Shared detail record for one canonical page (schema 2).
+    pub fn detail(&self, source_id: &str, key: &str) -> PathBuf {
+        self.details(source_id).join(format!("{key}.json"))
+    }
+
+    /// Persisted match record for one AppID (schema 2).
+    pub fn matches(&self, appid: u32) -> PathBuf {
+        self.root.join("matches").join(format!("{appid}.json"))
+    }
+}
+
+/// `sha256(canonical_page)` truncated to 32 lowercase hex characters
+/// (p1-contract §2). The page is expected to already be `canonical_url()`.
+pub fn detail_key(canonical_page: &str) -> String {
+    let digest = format!("{:x}", Sha256::digest(canonical_page.as_bytes()));
+    digest[..32].to_string()
 }
 
 /// RAII guard releasing the advisory `settings.lock`.
@@ -87,48 +130,64 @@ pub struct SourceStore {
     settings: Mutex<SettingsFile>,
     /// In-process serialization; the file lock covers cross-process.
     lock: Mutex<()>,
+    /// Diagnostics raised while migrating a v1 namespace (kept with the store so
+    /// later stages can surface them; the conflict case must not be silent).
+    migration_diagnostics: Vec<Diagnostic>,
 }
 
 impl SourceStore {
-    /// Opens the store, initializing the Rust default state directly on first
-    /// use. The legacy Python `sources/` namespace is never read.
+    /// Opens the store, migrating a schema-1 namespace to schema 2 on first use.
+    /// The legacy Python `sources/` namespace is never read.
     pub fn open(state_dir: &Path) -> Result<Self> {
         let paths = StorePaths::new(state_dir);
         ensure_directory(paths.root())?;
-        let store = Self {
+        let settings_present = paths.settings().exists();
+        let mut store = Self {
             paths,
             settings: Mutex::new(default_settings()),
             lock: Mutex::new(()),
+            migration_diagnostics: Vec::new(),
         };
         // The completion marker is not the source of truth for user state: a
         // missing/corrupt `schema.json` must never discard an intact
-        // `settings.json` (F7). Reuse persisted settings whenever they exist and
-        // only write the Rust defaults when the whole namespace is empty.
-        if store.paths.settings().exists() {
-            let settings = store.load_settings()?;
-            *store.settings_guard()? = settings;
-            if !store.paths.schema().exists() {
-                store.write_schema_marker()?;
+        // `settings.json` (F7). Reuse persisted settings whenever they exist.
+        let mut upgrade_settings = false;
+        if settings_present {
+            let mut settings = store.load_settings()?;
+            if !(1..=STORE_SCHEMA_VERSION).contains(&settings.schema_version) {
+                return Err(invalid("invalid_source_schema"));
             }
-        } else if store.paths.schema().exists() {
-            // Marker without settings: keep the in-memory defaults; do not write
-            // a fresh settings file over an ambiguous namespace.
-            let settings = default_settings();
+            if settings.schema_version != STORE_SCHEMA_VERSION {
+                // v1 -> v2: revision/enabled/added/games are preserved and
+                // `intervals` starts out empty (via `#[serde(default)]`).
+                settings.schema_version = STORE_SCHEMA_VERSION;
+                upgrade_settings = true;
+            }
             *store.settings_guard()? = settings;
         } else {
-            // First start: persist the default settings and write the
-            // `schema.json` completion marker last, so a crash mid-init simply
-            // re-runs on the next open (idempotent).
-            let settings = default_settings();
-            write_json(&store.paths.settings(), &settings)?;
+            *store.settings_guard()? = default_settings();
+        }
+        let schema_current = store.schema_is_current()?;
+        // The schema-2 marker is written last, after the migrated index/match
+        // files and the settings upgrade, so a crash anywhere is re-runnable.
+        if !schema_current {
+            store.migrate_legacy()?;
+        }
+        if upgrade_settings || (!settings_present && !schema_current) {
+            // First start also persists the defaults before the marker.
+            store.save_settings()?;
+        }
+        if !schema_current {
             store.write_schema_marker()?;
-            *store.settings_guard()? = settings;
         }
         Ok(store)
     }
 
     /// Opens an existing source namespace without creating, repairing, or writing files.
     /// A wholly absent namespace is handled by `SourceSnapshot::load` before this call.
+    ///
+    /// Schema 1 is accepted for projection before the first writing open runs the
+    /// migration; corrupt, linked and unknown-version state is still rejected.
     pub(crate) fn open_readonly(state_dir: &Path) -> Result<Self> {
         let paths = StorePaths::new(state_dir);
         let metadata = fs::symlink_metadata(paths.root())?;
@@ -143,11 +202,10 @@ impl SourceStore {
         if let Some(bytes) = schema_bytes {
             let marker: serde_json::Value =
                 serde_json::from_slice(&bytes).map_err(|error| invalid(error.to_string()))?;
-            if marker
+            let version = marker
                 .get("schema_version")
-                .and_then(serde_json::Value::as_u64)
-                != Some(STORE_SCHEMA_VERSION as u64)
-            {
+                .and_then(serde_json::Value::as_u64);
+            if version != Some(1) && version != Some(STORE_SCHEMA_VERSION as u64) {
                 return Err(invalid("invalid_source_schema"));
             }
         }
@@ -156,15 +214,158 @@ impl SourceStore {
         } else {
             default_settings()
         };
-        if settings.schema_version != STORE_SCHEMA_VERSION || settings.revision == 0 {
+        // v1 settings have no `intervals`; `#[serde(default)]` leaves them off.
+        if (settings.schema_version != 1 && settings.schema_version != STORE_SCHEMA_VERSION)
+            || settings.revision == 0
+        {
             return Err(invalid("invalid_source_state"));
         }
         Ok(Self {
             paths,
             settings: Mutex::new(settings),
             lock: Mutex::new(()),
+            migration_diagnostics: Vec::new(),
         })
     }
+
+    /// `schema.json` is current when its version is 2; a missing/corrupt marker
+    /// re-runs the (idempotent) migration, a newer version is rejected.
+    fn schema_is_current(&self) -> Result<bool> {
+        let version = match read_bounded(&self.paths.schema())? {
+            Some(bytes) => serde_json::from_slice::<serde_json::Value>(&bytes)
+                .ok()
+                .and_then(|marker| {
+                    marker
+                        .get("schema_version")
+                        .and_then(serde_json::Value::as_u64)
+                }),
+            None => None,
+        };
+        match version {
+            Some(version) if version > STORE_SCHEMA_VERSION as u64 => {
+                Err(invalid("invalid_source_schema"))
+            }
+            Some(version) => Ok(version == STORE_SCHEMA_VERSION as u64),
+            None => Ok(false),
+        }
+    }
+
+    /// Diagnostics raised by the v1 → v2 migration (empty when nothing conflicted).
+    pub fn migration_diagnostics(&self) -> &[Diagnostic] {
+        &self.migration_diagnostics
+    }
+
+    /// One-time v1 → v2 migration of the legacy `cache/`, `discovery-index/` and
+    /// `discovery/` trees. Old files are only read and never modified/deleted;
+    /// every failure returns `source_migration_failed` and leaves them intact.
+    fn migrate_legacy(&mut self) -> Result<()> {
+        self.migrate_indexes()?;
+        self.migrate_matches()?;
+        Ok(())
+    }
+
+    /// `cache/<source>.json` and `discovery-index/<source>.json` → `index/<source>.json`.
+    fn migrate_indexes(&mut self) -> Result<()> {
+        let cache_files =
+            json_files(&self.paths.root().join("cache")).map_err(|_| migration_failed())?;
+        let mut cache_sources = BTreeSet::new();
+        for path in &cache_files {
+            let source_id = json_stem(path)?;
+            let cache: SourceCache = migration(read_json(path))?.ok_or_else(migration_failed)?;
+            let index = from_cache(&source_id, &cache);
+            migration(self.save_index(&index))?;
+            cache_sources.insert(source_id);
+        }
+        let discovery_index_files = json_files(&self.paths.root().join("discovery-index"))
+            .map_err(|_| migration_failed())?;
+        for path in &discovery_index_files {
+            let source_id = json_stem(path)?;
+            let record: DiscoveryIndexRecord =
+                migration(read_json(path))?.ok_or_else(migration_failed)?;
+            let discovered = from_discovery_index(&source_id, &record);
+            let index = match migration(self.load_index(&source_id))? {
+                Some(existing) => {
+                    if cache_sources.contains(&source_id) {
+                        // Both v1 representations exist for one source: keep the
+                        // cache snapshot (complete coverage) and keep the
+                        // discovery entries/pending instead of dropping them.
+                        self.migration_diagnostics.push(Diagnostic {
+                            source_id: Some(source_id.clone()),
+                            code: "source_index_migration_conflict".to_string(),
+                            detail: Some(
+                                "cache and discovery-index both present; cache snapshot kept"
+                                    .to_string(),
+                            ),
+                        });
+                    }
+                    combine_indexes(existing, discovered)
+                }
+                None => discovered,
+            };
+            migration(self.save_index(&index))?;
+        }
+        Ok(())
+    }
+
+    /// `discovery/<source>/<appid>.json` → `matches/<appid>.json`.
+    ///
+    /// The old per-game cache cannot claim full-source coverage: a source match
+    /// without a matching index snapshot is `no_index` with revision 0.
+    fn migrate_matches(&mut self) -> Result<()> {
+        let fallback_sources = fallback_source_ids(&self.settings()?);
+        let discovery_root = self.paths.root().join("discovery");
+        let mut games: BTreeMap<u32, GameMatchRecord> = BTreeMap::new();
+        let mut indexes: BTreeMap<String, Option<SourceIndex>> = BTreeMap::new();
+        for (source_id, directory) in
+            subdirectories(&discovery_root).map_err(|_| migration_failed())?
+        {
+            let index = match indexes.get(&source_id) {
+                Some(index) => index.clone(),
+                None => {
+                    let index = migration(self.load_index(&source_id))?;
+                    indexes.insert(source_id.clone(), index.clone());
+                    index
+                }
+            };
+            for path in json_files(&directory).map_err(|_| migration_failed())? {
+                let appid = json_stem(&path)?
+                    .parse::<u32>()
+                    .map_err(|_| migration_failed())?;
+                let legacy: DiscoveryRecord =
+                    migration(read_json(&path))?.ok_or_else(migration_failed)?;
+                if legacy.source_id != source_id || legacy.appid != appid {
+                    return Err(migration_failed());
+                }
+                let game = games.entry(appid).or_insert_with(|| GameMatchRecord {
+                    schema_version: GAME_MATCH_SCHEMA_VERSION,
+                    appid,
+                    name: String::new(),
+                    localized_name: None,
+                    // The v1 record has no name/localized-name/subscription
+                    // snapshot, so a faithful key cannot be rebuilt; the empty
+                    // key forces the next match pass to recompute it.
+                    input_key: String::new(),
+                    status: GameMatchStatus::Pending,
+                    sources: BTreeMap::new(),
+                    fallback: None,
+                    updated_at: 0,
+                });
+                let is_fallback = fallback_sources.contains(&source_id);
+                let checked_at =
+                    merge_legacy_discovery(game, &source_id, &legacy, index.as_ref(), is_fallback);
+                game.updated_at = game.updated_at.max(checked_at);
+            }
+        }
+        for (appid, mut game) in games {
+            if game.name.is_empty() {
+                game.name = legacy_game_name(&game).unwrap_or_else(|| appid.to_string());
+            }
+            game.status = derive_game_status(&game);
+            migration(self.save_match(&game))?;
+        }
+        Ok(())
+    }
+
     /// Writes the `schema.json` completion marker (idempotent; never touches
     /// `settings.json`).
     fn write_schema_marker(&self) -> Result<()> {
@@ -215,6 +416,18 @@ impl SourceStore {
         Ok(())
     }
 
+    /// Sets one source's automatic update interval (hours, `0` = off) in the
+    /// in-memory settings (persisted by the next [`Self::bump_revision`]).
+    pub fn set_interval(&self, source_id: &str, interval_hours: u64) -> Result<()> {
+        self.with_short_lock(|| {
+            let mut guard = self.settings_guard()?;
+            guard
+                .intervals
+                .insert(source_id.to_string(), interval_hours);
+            Ok(())
+        })
+    }
+
     /// Runs `f` while holding the independent `rust-v1/settings.lock`.
     ///
     /// Never uses `journal.lock` (design §4.1). `try_lock` with a 2s bound →
@@ -240,27 +453,7 @@ impl SourceStore {
         Ok(revision)
     }
 
-    /// Publish-check primitive (design §4.3): runs `f` only if the captured
-    /// revision is still current. Returns whether the write happened.
-    pub fn run_if_revision(&self, captured: u64, f: impl FnOnce() -> Result<()>) -> Result<bool> {
-        self.with_short_lock(|| {
-            if self.revision()? != captured {
-                return Ok(false);
-            }
-            f()?;
-            Ok(true)
-        })
-    }
-
-    // --- cache / status / discovery / index -------------------------------
-
-    pub fn load_cache(&self, source_id: &str) -> Result<Option<SourceCache>> {
-        read_json(&self.paths.cache(source_id))
-    }
-
-    pub fn save_cache(&self, source_id: &str, cache: &SourceCache) -> Result<()> {
-        write_json(&self.paths.cache(source_id), cache)
-    }
+    // --- status / index / detail / match (p1-contract §4–§7) --------------
 
     pub fn load_status(&self, source_id: &str) -> Result<Option<SourceStatus>> {
         read_json(&self.paths.status(source_id))
@@ -270,29 +463,54 @@ impl SourceStore {
         write_json(&self.paths.status(source_id), status)
     }
 
-    pub fn load_discovery(&self, source_id: &str, appid: u32) -> Result<Option<DiscoveryRecord>> {
-        read_json(&self.paths.discovery(source_id, appid))
+    pub fn load_index(&self, source_id: &str) -> Result<Option<SourceIndex>> {
+        read_json(&self.paths.index(source_id))
     }
 
-    pub fn save_discovery(
-        &self,
-        source_id: &str,
-        appid: u32,
-        record: &DiscoveryRecord,
-    ) -> Result<()> {
-        write_json(&self.paths.discovery(source_id, appid), record)
+    pub fn save_index(&self, index: &SourceIndex) -> Result<()> {
+        write_json(&self.paths.index(&index.source_id), index)
     }
 
-    pub fn load_discovery_index(&self, source_id: &str) -> Result<Option<DiscoveryIndexRecord>> {
-        read_json(&self.paths.discovery_index(source_id))
+    /// Reads the unpublished update progress for a source (if an earlier
+    /// attempt failed or was cancelled before completing).
+    pub fn load_index_progress(&self, source_id: &str) -> Result<Option<SourceIndex>> {
+        read_json(&self.paths.index_progress(source_id))
     }
 
-    pub fn save_discovery_index(
-        &self,
-        source_id: &str,
-        record: &DiscoveryIndexRecord,
-    ) -> Result<()> {
-        write_json(&self.paths.discovery_index(source_id), record)
+    /// Atomically saves partial update progress. The official `index/<source>.json`
+    /// is never touched here.
+    pub fn save_index_progress(&self, index: &SourceIndex) -> Result<()> {
+        write_json(&self.paths.index_progress(&index.source_id), index)
+    }
+
+    /// Removes the progress file after the official snapshot is published.
+    /// A missing file is not an error.
+    pub fn clear_index_progress(&self, source_id: &str) -> Result<()> {
+        match fs::remove_file(self.paths.index_progress(source_id)) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error),
+        }
+    }
+
+    /// Reads the shared detail record for a source page, keyed by
+    /// `detail_key(canonical_url(page))` so every game reuses one file.
+    pub fn load_detail(&self, source_id: &str, page: &str) -> Result<Option<DetailRecord>> {
+        let key = detail_key(&canonical::canonical_url(page));
+        read_json(&self.paths.detail(source_id, &key))
+    }
+
+    pub fn save_detail(&self, record: &DetailRecord) -> Result<()> {
+        let key = detail_key(&canonical::canonical_url(&record.page));
+        write_json(&self.paths.detail(&record.source_id, &key), record)
+    }
+
+    pub fn load_match(&self, appid: u32) -> Result<Option<GameMatchRecord>> {
+        read_json(&self.paths.matches(appid))
+    }
+
+    pub fn save_match(&self, record: &GameMatchRecord) -> Result<()> {
+        write_json(&self.paths.matches(record.appid), record)
     }
 
     // --- internals --------------------------------------------------------
@@ -331,7 +549,267 @@ fn default_settings() -> SettingsFile {
         enabled: BTreeMap::new(),
         added: Vec::new(),
         games: BTreeMap::new(),
+        intervals: BTreeMap::new(),
     }
+}
+
+// ---- schema 1 -> 2 migration helpers (p1-contract §8) --------------------
+
+fn migration_failed() -> std::io::Error {
+    invalid("source_migration_failed")
+}
+
+/// Every migration step reports the same specific code; old files stay intact.
+fn migration<T>(result: Result<T>) -> Result<T> {
+    result.map_err(|_| migration_failed())
+}
+
+fn json_stem(path: &Path) -> Result<String> {
+    path.file_stem()
+        .and_then(|stem| stem.to_str())
+        .map(str::to_string)
+        .ok_or_else(migration_failed)
+}
+
+/// Sorted `*.json` files directly inside `directory`; missing means empty.
+fn json_files(directory: &Path) -> Result<Vec<PathBuf>> {
+    let mut paths = Vec::new();
+    match fs::read_dir(directory) {
+        Ok(entries) => {
+            for entry in entries {
+                let path = entry?.path();
+                if path.extension().and_then(|extension| extension.to_str()) == Some("json") {
+                    paths.push(path);
+                }
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
+    paths.sort();
+    Ok(paths)
+}
+
+/// Sorted `(name, path)` for the immediate subdirectories of `directory`.
+fn subdirectories(directory: &Path) -> Result<Vec<(String, PathBuf)>> {
+    let mut found = Vec::new();
+    match fs::read_dir(directory) {
+        Ok(entries) => {
+            for entry in entries {
+                let path = entry?.path();
+                if path.is_dir() {
+                    let name = path
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .ok_or_else(migration_failed)?
+                        .to_string();
+                    found.push((name, path));
+                }
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
+    found.sort_by(|left, right| left.0.cmp(&right.0));
+    Ok(found)
+}
+
+/// Merges a discovery-index view into an already-migrated cache view: the cache
+/// snapshot keeps its coverage/time/validators, while discovery entries and the
+/// continuation queue are preserved rather than dropped.
+fn combine_indexes(mut cache: SourceIndex, discovered: SourceIndex) -> SourceIndex {
+    for entry in discovered.entries {
+        if !cache.entries.contains(&entry) {
+            cache.entries.push(entry);
+        }
+    }
+    cache.entries = normalize_entries(cache.entries);
+    for page in discovered.pending {
+        if !cache.pending.contains(&page) {
+            cache.pending.push(page);
+        }
+    }
+    cache.complete &= cache.pending.is_empty();
+    cache.revision = 1;
+    cache
+}
+
+/// Source ids whose configured rule is a fallback indexer (builtin + user added).
+fn fallback_source_ids(settings: &SettingsFile) -> BTreeSet<String> {
+    let mut ids = BTreeSet::new();
+    if let Ok(config) = serde_json::from_str::<RulesConfig>(DEFAULT_RULES_JSON) {
+        for rule in config.sources {
+            if rule.role.as_deref() == Some("fallback_indexer") {
+                ids.insert(rule.id);
+            }
+        }
+    }
+    for rule in &settings.added {
+        if rule.role == SourceRole::FallbackIndexer {
+            ids.insert(rule.id.clone());
+        }
+    }
+    ids
+}
+
+/// Folds one v1 per-game discovery record into the migrated game record and
+/// returns the record's `checked_at` (for `updated_at`).
+fn merge_legacy_discovery(
+    game: &mut GameMatchRecord,
+    source_id: &str,
+    legacy: &DiscoveryRecord,
+    index: Option<&SourceIndex>,
+    is_fallback: bool,
+) -> u64 {
+    if is_fallback {
+        let Some((checked_at, fallback)) = migrated_fallback(legacy) else {
+            return 0;
+        };
+        if game
+            .fallback
+            .as_ref()
+            .is_none_or(|existing| checked_at > existing.checked_at)
+        {
+            game.fallback = Some(fallback);
+        }
+        checked_at
+    } else {
+        let Some((checked_at, source)) = migrated_source_match(legacy, index) else {
+            return 0;
+        };
+        game.sources.insert(source_id.to_string(), source);
+        checked_at
+    }
+}
+
+/// v1 discovery result → schema-2 source match. Candidates and fingerprints are
+/// copied verbatim; the status only claims what the old data actually covered.
+fn migrated_source_match(
+    legacy: &DiscoveryRecord,
+    index: Option<&SourceIndex>,
+) -> Option<(u64, SourceMatchRecord)> {
+    let success = legacy.success.as_ref();
+    let attempt = legacy.attempt.as_ref();
+    if success.is_none() && attempt.is_none() {
+        return None;
+    }
+    let candidates = success
+        .map(|success| success.candidates.clone())
+        .or_else(|| attempt.map(|attempt| attempt.candidates.clone()))
+        .unwrap_or_default();
+    let diagnostics = success
+        .map(|success| success.diagnostics.clone())
+        .or_else(|| attempt.map(|attempt| attempt.diagnostics.clone()))
+        .unwrap_or_default();
+    let checked_at = success
+        .map(|success| success.checked_at)
+        .or_else(|| attempt.map(|attempt| attempt.checked_at))
+        .unwrap_or(0);
+    let status = match (success, index) {
+        // No published index: the per-game cache cannot claim full coverage.
+        (Some(_), None) => SourceMatchStatus::NoIndex,
+        (Some(success), Some(index)) => {
+            if candidates.iter().any(candidate_is_credible) {
+                SourceMatchStatus::Matched
+            } else if success.status == "complete" && index.complete {
+                SourceMatchStatus::NoCandidate
+            } else {
+                SourceMatchStatus::DetailIncomplete
+            }
+        }
+        (None, _) => match attempt.map(|attempt| attempt.status.as_str()) {
+            Some("failed") => SourceMatchStatus::DetailFailed,
+            _ => SourceMatchStatus::DetailIncomplete,
+        },
+    };
+    let detail_pages = if success.is_some() {
+        let mut pages: Vec<String> = Vec::new();
+        for candidate in &candidates {
+            let page = canonical::canonical_url(&candidate.source_page);
+            if !pages.contains(&page) {
+                pages.push(page);
+            }
+        }
+        pages
+    } else {
+        Vec::new()
+    };
+    Some((
+        checked_at,
+        SourceMatchRecord {
+            index_revision: index.map(|index| index.revision).unwrap_or(0),
+            status,
+            candidates,
+            detail_pages,
+            checked_at,
+            diagnostics,
+        },
+    ))
+}
+
+/// v1 HGamer result → schema-2 fallback record (positive, completed-empty and
+/// failed outcomes keep their meaning).
+fn migrated_fallback(legacy: &DiscoveryRecord) -> Option<(u64, FallbackMatchRecord)> {
+    let success = legacy.success.as_ref();
+    let attempt = legacy.attempt.as_ref();
+    let (query_key, candidates, diagnostics, checked_at, outcome) = match (success, attempt) {
+        (Some(success), _) => (
+            success.query_key.clone(),
+            success.candidates.clone(),
+            success.diagnostics.clone(),
+            success.checked_at,
+            success.status.as_str(),
+        ),
+        (None, Some(attempt)) => (
+            attempt.query_key.clone(),
+            attempt.candidates.clone(),
+            attempt.diagnostics.clone(),
+            attempt.checked_at,
+            attempt.status.as_str(),
+        ),
+        (None, None) => return None,
+    };
+    let status = if candidates.iter().any(candidate_is_credible) {
+        FallbackMatchStatus::Matched
+    } else if outcome == "complete" {
+        FallbackMatchStatus::NoMatch
+    } else if outcome == "failed" {
+        FallbackMatchStatus::Failed
+    } else {
+        FallbackMatchStatus::Incomplete
+    };
+    Some((
+        checked_at,
+        FallbackMatchRecord {
+            query_key,
+            status,
+            candidates,
+            checked_at,
+            diagnostics,
+        },
+    ))
+}
+
+/// Best name evidence left by v1: a credible candidate's game title, else any
+/// candidate's, else the AppID.
+fn legacy_game_name(game: &GameMatchRecord) -> Option<String> {
+    let mut fallback_title = None;
+    let candidates = game
+        .sources
+        .values()
+        .flat_map(|source| source.candidates.iter())
+        .chain(
+            game.fallback
+                .iter()
+                .flat_map(|fallback| fallback.candidates.iter()),
+        );
+    for candidate in candidates {
+        if candidate_is_credible(candidate) {
+            return Some(candidate.game_title.clone());
+        }
+        fallback_title = fallback_title.or_else(|| Some(candidate.game_title.clone()));
+    }
+    fallback_title
 }
 
 // ---- atomic primitives (design §4.2) -------------------------------------
@@ -625,10 +1103,12 @@ mod tests {
         );
         // The Rust namespace is initialized independently of the legacy files.
         assert!(store.paths().schema().exists());
-        assert!(store.load_cache("patchmoe").unwrap().is_none());
         assert!(store.load_status("patchmoe").unwrap().is_none());
-        assert!(store.load_discovery("patchmoe", 42).unwrap().is_none());
-        assert!(store.load_discovery_index("patchmoe").unwrap().is_none());
+        assert!(store.load_index("patchmoe").unwrap().is_none());
+        assert!(store.load_match(42).unwrap().is_none());
+        // Legacy read paths are not created in the Rust namespace either.
+        assert!(!store.paths().cache("patchmoe").exists());
+        assert!(!store.paths().discovery("patchmoe", 42).exists());
     }
 
     #[test]
@@ -722,21 +1202,5 @@ mod tests {
             handle.join().unwrap();
         }
         assert_eq!(store.revision().unwrap(), start + 4);
-    }
-
-    #[test]
-    fn source_cache_round_trips() {
-        let temp = tempfile::tempdir().unwrap();
-        let store = SourceStore::open(temp.path()).unwrap();
-        let cache = SourceCache {
-            entries: vec![entry("Game", "https://download.patch.moe/g.zip", Some(42))],
-            etag: Some("etag".to_string()),
-            modified: None,
-            cached_at: Some(100),
-            checked_at: Some(100),
-        };
-        store.save_cache("patchmoe", &cache).unwrap();
-        assert_eq!(store.load_cache("patchmoe").unwrap(), Some(cache));
-        assert!(store.load_cache("missing").unwrap().is_none());
     }
 }

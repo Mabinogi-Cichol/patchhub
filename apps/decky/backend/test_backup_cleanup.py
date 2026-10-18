@@ -2,7 +2,7 @@
 import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
-from test_discovery_rpc import module
+from test_source_tasks import module
 from protocol_validation import validate_request, validate_response
 
 class BackupCleanupTests(unittest.IsolatedAsyncioTestCase):

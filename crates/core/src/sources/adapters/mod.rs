@@ -1,21 +1,24 @@
-//! Adapter trait/registry plus the ZIP-index collectors (P2 first slice).
+//! Adapter trait/registry plus the per-source index collectors.
 //!
-//! An adapter may support a ZIP-index `collect` (patchmoe/table) and/or a
-//! discovery `discover` (kagura/hgamer, later). Both default to
-//! `unsupported_source_adapter`. HTML parsing lives here and in the concrete
-//! adapters; the identity/validation logic is reused from `identity`/`validate`.
+//! An adapter may support a ZIP-index `collect` (patchmoe/table, feeding
+//! [`Adapter::collect_index`]) and/or a per-game `discover` used by the HGamer
+//! fallback. Both default to `unsupported_source_adapter`. HTML parsing lives
+//! here and in the concrete adapters; the identity/validation logic is reused
+//! from `identity`/`validate`.
 
 use super::canonical;
 use super::http::{FetchResponse, RequestContext};
 use super::identity::{self, Identity};
 use super::model::{
-    Columns, Diagnostic, DiscoveryIndex, QueryContext, SourceCache, SourceCandidate, SourceEntry,
-    SourceRule,
+    Columns, Diagnostic, QueryContext, SourceCache, SourceCandidate, SourceEntry, SourceIndex,
+    SourceIndexEntry, SourceRule,
 };
 use super::validate;
 use super::{invalid, Result};
 use scraper::{ElementRef, Html, Selector};
 use std::collections::HashSet;
+use std::sync::atomic::AtomicBool;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 pub mod dom;
 pub mod hgamer;
@@ -33,27 +36,39 @@ pub struct CollectOutcome {
     pub not_modified: bool,
 }
 
-/// Result of a discovery pass (used by the later kagura/hgamer slice).
+/// Result of one per-source index update pass (P2, non-wire).
+///
+/// A `304` sets `not_modified`; the published snapshot then only changes its
+/// `checked_at`/validators. `complete` is only true when every list page was
+/// fetched and parsed, so the caller may replace the official snapshot.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct IndexOutcome {
+    pub entries: Vec<SourceIndexEntry>,
+    /// List pages still to fetch; a non-empty queue implies `complete = false`.
+    pub pending: Vec<String>,
+    pub complete: bool,
+    pub etag: Option<String>,
+    pub modified: Option<String>,
+    /// `304`: keep the previous snapshot, only update `checked_at`.
+    pub not_modified: bool,
+    pub checked_at: u64,
+    pub diagnostics: Vec<Diagnostic>,
+}
+
+/// Result of one per-game fallback (HGamer) discovery pass.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct DiscoverOutcome {
     pub status: String,
     pub candidates: Vec<SourceCandidate>,
     pub diagnostics: Vec<Diagnostic>,
-    pub index: Option<DiscoveryIndex>,
-    pub checkpoint: Option<serde_json::Value>,
     pub identities: Vec<Identity>,
 }
 
-/// Previous discovery state supplied to `discover`: the shared index plus any
-/// direct upstream pages from the fallback pass (Python `previous["index"]` and
-/// `query["upstream_pages"]`).
+/// Inputs supplied to the per-game fallback `discover`: candidates from earlier
+/// passes that seed DLC/lead relevance.
 #[derive(Debug, Clone, Default)]
 pub struct DiscoverPrevious {
-    pub index: Option<DiscoveryIndex>,
-    pub upstream_pages: Vec<String>,
     pub known_candidates: Vec<SourceCandidate>,
-    pub checkpoint: Option<serde_json::Value>,
-    pub related_pages: Vec<String>,
 }
 
 /// A maintained source adapter. `previous` is required for conditional requests
@@ -75,6 +90,20 @@ pub trait Adapter {
         _ctx: &mut RequestContext,
         _previous: &DiscoverPrevious,
     ) -> Result<DiscoverOutcome> {
+        Err(invalid("unsupported_source_adapter"))
+    }
+
+    /// Collects the source's own list/catalog index without fetching detail
+    /// pages. `previous` is the official snapshot when no update progress is
+    /// pending (conditional validators live there), or the saved progress when
+    /// an earlier attempt was left unfinished.
+    fn collect_index(
+        &self,
+        _rule: &SourceRule,
+        _previous: Option<&SourceIndex>,
+        _ctx: &mut RequestContext,
+        _cancel: &AtomicBool,
+    ) -> Result<IndexOutcome> {
         Err(invalid("unsupported_source_adapter"))
     }
 }
@@ -161,6 +190,78 @@ pub fn discover(
     }
     .to_string();
     Ok(outcome)
+}
+
+/// Current Unix time for index `checked_at` values.
+pub(crate) fn now_unix() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs())
+        .unwrap_or(0)
+}
+
+/// A cancelled-before-start outcome for collectors that cannot expose per-page
+/// progress: every configured list page stays queued.
+pub(crate) fn cancelled_index_outcome(rule: &SourceRule) -> IndexOutcome {
+    let mut pending: Vec<String> = rule
+        .pages
+        .iter()
+        .map(|page| canonical::canonical_url(page))
+        .collect();
+    pending.sort();
+    pending.dedup();
+    IndexOutcome {
+        entries: Vec::new(),
+        pending,
+        complete: false,
+        etag: None,
+        modified: None,
+        not_modified: false,
+        checked_at: now_unix(),
+        diagnostics: Vec::new(),
+    }
+}
+
+/// Maps one validated table/patch.moe row to its index entry. The list page is
+/// all the index can point at; the artifact URL lives in `url`.
+pub(crate) fn index_entry_from_source(entry: &SourceEntry) -> SourceIndexEntry {
+    SourceIndexEntry {
+        title: entry.title.clone(),
+        aliases: entry.aliases.clone(),
+        page: canonical::canonical_url(&entry.source_page),
+        kind: "entry".to_string(),
+        appid: entry.appid,
+        url: Some(entry.url.clone()),
+        language: Some(entry.language.clone()),
+        date: entry.date.clone(),
+    }
+}
+
+/// Projects a published index back to the legacy `SourceCache` shape so the
+/// table/patch.moe collectors can issue their existing conditional requests.
+pub(crate) fn source_cache_from_index(index: Option<&SourceIndex>) -> SourceCache {
+    let Some(index) = index else {
+        return SourceCache::default();
+    };
+    SourceCache {
+        entries: index
+            .entries
+            .iter()
+            .map(|entry| SourceEntry {
+                title: entry.title.clone(),
+                aliases: entry.aliases.clone(),
+                url: entry.url.clone().unwrap_or_default(),
+                source_page: entry.page.clone(),
+                language: entry.language.clone().unwrap_or_default(),
+                date: entry.date.clone(),
+                appid: entry.appid,
+            })
+            .collect(),
+        etag: index.etag.clone(),
+        modified: index.modified.clone(),
+        cached_at: index.complete.then_some(index.updated_at),
+        checked_at: Some(index.checked_at),
+    }
 }
 
 /// Fetches a discovery page through the gated `fetch_html` and returns the

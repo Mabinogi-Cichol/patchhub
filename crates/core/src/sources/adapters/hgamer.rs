@@ -31,8 +31,6 @@ impl Adapter for HgamerAdapter {
                     detail: None,
                 })
                 .collect(),
-            index: None,
-            checkpoint: None,
             identities,
         })
     }
@@ -72,18 +70,10 @@ fn hgamer(
         };
         let document = dom::document(&html);
         let root = dom::root(&document);
-        let header = dom::first(&root, |node| dom::tag(node) == "h1");
-        let summary = header
-            .as_ref()
-            .and_then(dom::parent)
-            .map(|parent| dom::text(&parent))
-            .unwrap_or_default();
-        let count = result_count(&summary);
-        if !summary.contains(term.as_str()) || count.is_none() {
+        let Some(count) = result_summary(&root, &term) else {
             diagnostics.push("discovery_search_structure_changed".to_string());
             continue;
-        }
-        let count = count.unwrap_or(0);
+        };
 
         let mut identified = 0_u32;
         for heading in dom::walk(&root) {
@@ -294,6 +284,32 @@ fn matches_detail_path(path: &str, kind: &str) -> bool {
     !rest.is_empty() && !rest.contains('/')
 }
 
+/// Locates the numeric result count on a server-rendered search page.
+///
+/// The current site renders `<p>「term」找到 N 筆結果</p>` in a section after the
+/// header `<h1>` instead of next to it, so paragraph text is scanned before the
+/// whole document text. The candidate text must also carry the query term, which
+/// keeps unrelated numbers on the page from being read as a result count.
+fn result_summary(root: &ElementRef<'_>, term: &str) -> Option<u32> {
+    for node in dom::walk(root) {
+        if dom::tag(&node) != "p" {
+            continue;
+        }
+        let text = dom::text(&node);
+        if text.contains(term) {
+            if let Some(count) = result_count(&text) {
+                return Some(count);
+            }
+        }
+    }
+    let text = dom::text(root);
+    if text.contains(term) {
+        result_count(&text)
+    } else {
+        None
+    }
+}
+
 /// `(?:找到|found)\s*(\d+)\s*(?:笔|筆|results?)`
 fn result_count(summary: &str) -> Option<u32> {
     for marker in ["找到", "found"] {
@@ -466,6 +482,76 @@ mod tests {
             candidate.upstream_page.as_deref(),
             Some("https://mirror.example/patch.zip")
         );
+    }
+
+    /// Current site layout: the header `<h1>` and the result-count paragraph are
+    /// siblings in different sections, so the old `h1.parent()` scan sees an
+    /// empty summary.
+    const SEARCH_SIBLING_SUMMARY: &str = r#"<html><body>
+<header class="search-header"><h1>搜尋結果</h1></header>
+<section class="results"><p>「Game」找到 1 筆結果</p></section>
+<section><h2>補丁</h2><ul><li><a href="/zh-CN/patches/patch-1">Game patch</a></li></ul></section>
+</body></html>"#;
+
+    #[test]
+    fn result_summary_in_a_sibling_section_is_parsed() {
+        let fake = Arc::new(FakeFetcher::new());
+        fake.push(response(
+            SEARCH_SIBLING_SUMMARY,
+            "https://hgamer.tw/zh-CN/search?q=Game",
+        ));
+        fake.push(response(PATCH, "https://hgamer.tw/zh-CN/patches/patch-1"));
+        let mut ctx = context(&fake);
+        let adapter = builtin_adapter("hgamer_html").unwrap();
+        let outcome = adapter
+            .discover(
+                &rule(),
+                &query(42, "Game"),
+                &mut ctx,
+                &DiscoverPrevious::default(),
+            )
+            .unwrap();
+        assert_eq!(outcome.candidates.len(), 1);
+        assert!(
+            !outcome
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == "discovery_search_structure_changed"),
+            "sibling-section summary must not be treated as a structure change"
+        );
+        assert_eq!(fake.call_count(), 2);
+    }
+
+    /// No `<p>` carries the summary at all: the document-text fallback applies.
+    const SEARCH_ROOT_TEXT_SUMMARY: &str = r#"<html><body>
+<header><h1>搜尋結果</h1></header>
+<section><span>「Game」找到 1 筆結果</span></section>
+<section><h2>補丁</h2><ul><li><a href="/zh-CN/patches/patch-1">Game patch</a></li></ul></section>
+</body></html>"#;
+
+    #[test]
+    fn result_summary_falls_back_to_the_document_text() {
+        let fake = Arc::new(FakeFetcher::new());
+        fake.push(response(
+            SEARCH_ROOT_TEXT_SUMMARY,
+            "https://hgamer.tw/zh-CN/search?q=Game",
+        ));
+        fake.push(response(PATCH, "https://hgamer.tw/zh-CN/patches/patch-1"));
+        let mut ctx = context(&fake);
+        let adapter = builtin_adapter("hgamer_html").unwrap();
+        let outcome = adapter
+            .discover(
+                &rule(),
+                &query(42, "Game"),
+                &mut ctx,
+                &DiscoverPrevious::default(),
+            )
+            .unwrap();
+        assert_eq!(outcome.candidates.len(), 1);
+        assert!(!outcome
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "discovery_search_structure_changed"));
     }
 
     const SEARCH_WITH_DESCRIPTION_PATCH: &str = r#"<html><body>

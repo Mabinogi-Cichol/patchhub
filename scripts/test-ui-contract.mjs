@@ -8,7 +8,7 @@ async function load(path) {
 }
 const ui = await load("../packages/ui/src/index.ts");
 const protocol = await load("../packages/contracts/generated/protocol.ts");
-const cases = JSON.parse(await readFile(new URL("../packages/contracts/fixtures/v4/cases.json", import.meta.url), "utf8"));
+const cases = JSON.parse(await readFile(new URL("../packages/contracts/fixtures/v5/cases.json", import.meta.url), "utf8"));
 const success = method => cases.responses.find(c => c.name === `${method}-success`).response.result;
 assert.deepEqual(success("get_capabilities").methods, [...protocol.METHODS]);
 for (const id of ["", "a".repeat(129), "\u0001", "界".repeat(43)]) assert.equal(protocol.validId(id, protocol.MAX_REQUEST_ID_BYTES), false);
@@ -32,4 +32,4 @@ for (const c of cases.events.filter(c => !c.error && c.event.event === "install_
 for (const url of ["http://example.com", "https://user@example.com", "https://127.0.0.1", "https://foo.local", "https://example.com:444", "https://localhost./", "https://foo.localhost./", "https://foo.local./", "https://example.com./"]) assert.equal(ui.safeSourceUrl(url), false);
 assert.equal(ui.safeSourceUrl("https://example.com/source"), true);
 for (const code of ["fresh", "source_refreshed", "source_not_modified"]) assert.equal(ui.sourceRefreshSucceeded(code), true);
-console.log("Shared v4 generated DTO, UTF-8 bounds, action refusal, terminal, progress and URL fixtures passed");
+console.log("Shared v5 generated DTO, UTF-8 bounds, action refusal, terminal, progress and URL fixtures passed");

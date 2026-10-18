@@ -1,7 +1,8 @@
-//! Authoritative version 4 JSONL wire contract. Core is deliberately independent.
+//! Authoritative version 5 JSONL wire contract. Core is deliberately independent.
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 pub use steam_patch_core::{
     catalog::{PatchMatch, Platform, SupportLevel},
@@ -13,12 +14,12 @@ pub use steam_patch_core::{
     },
     projection::{DomainError, InstanceProjection, PreviewReport, ScanReport},
     sources::{
-        GameDiscovery, GameSourceSummary, RawSourceRule, SourceCandidate, SourceRule, SourceStatus,
+        GameMatch, GameSourceSummary, RawSourceRule, SourceCandidate, SourceRule, SourceStatus,
         SourceSummary,
     },
 };
 use ts_rs::TS;
-pub const PROTOCOL_VERSION: u32 = 4;
+pub const PROTOCOL_VERSION: u32 = 5;
 pub const MAX_REQUEST_ID_BYTES: usize = 128;
 pub const MAX_ID_BYTES: usize = 256;
 pub const MAX_INSTANCE_ID_BYTES: usize =
@@ -68,6 +69,7 @@ pub fn validate_id(s: &str, max: usize) -> bool {
 pub enum Method {
     GetCapabilities,
     Scan,
+    ProjectInstances,
     Preview,
     InstallPatch,
     ListTransactions,
@@ -81,13 +83,15 @@ pub enum Method {
     SetSourceEnabled,
     SetGameSource,
     AddSource,
-    RefreshSources,
-    ScanSources,
-    DiscoverGame,
+    SetSourceUpdateInterval,
+    UpdateSource,
+    MatchGames,
+    RematchGame,
 }
-pub const ALL_METHODS: [Method; 18] = [
+pub const ALL_METHODS: [Method; 20] = [
     Method::GetCapabilities,
     Method::Scan,
+    Method::ProjectInstances,
     Method::Preview,
     Method::InstallPatch,
     Method::ListTransactions,
@@ -101,13 +105,15 @@ pub const ALL_METHODS: [Method; 18] = [
     Method::SetSourceEnabled,
     Method::SetGameSource,
     Method::AddSource,
-    Method::RefreshSources,
-    Method::ScanSources,
-    Method::DiscoverGame,
+    Method::SetSourceUpdateInterval,
+    Method::UpdateSource,
+    Method::MatchGames,
+    Method::RematchGame,
 ];
-pub const METHODS: [&str; 18] = [
+pub const METHODS: [&str; 20] = [
     "get_capabilities",
     "scan",
+    "project_instances",
     "preview",
     "install_patch",
     "list_transactions",
@@ -121,19 +127,21 @@ pub const METHODS: [&str; 18] = [
     "set_source_enabled",
     "set_game_source",
     "add_source",
-    "refresh_sources",
-    "scan_sources",
-    "discover_game",
+    "set_source_update_interval",
+    "update_source",
+    "match_games",
+    "rematch_game",
 ];
-pub const SOURCE_METHODS: [&str; 8] = [
+pub const SOURCE_METHODS: [&str; 9] = [
     "list_sources",
     "list_game_sources",
     "set_source_enabled",
     "set_game_source",
     "add_source",
-    "refresh_sources",
-    "scan_sources",
-    "discover_game",
+    "set_source_update_interval",
+    "update_source",
+    "match_games",
+    "rematch_game",
 ];
 impl Method {
     pub fn as_str(self) -> &'static str {
@@ -142,7 +150,7 @@ impl Method {
     pub fn is_task(self) -> bool {
         matches!(
             self,
-            Self::InstallPatch | Self::RefreshSources | Self::ScanSources
+            Self::InstallPatch | Self::UpdateSource | Self::MatchGames | Self::RematchGame
         )
     }
 }
@@ -158,6 +166,7 @@ pub struct HostInputs {
 }
 macro_rules! params { ($name:ident {$($fields:tt)*}) => { #[derive(Debug,Clone,Serialize,Deserialize,JsonSchema,TS)] #[serde(deny_unknown_fields)] pub struct $name { pub host:HostInputs,$($fields)* } }; }
 params!(HostParams {});
+params!(ProjectInstancesParams{pub instance_ids:Vec<String>,});
 params!(PreviewParams{pub instance_id:String,#[ts(optional = nullable)]pub release_id:Option<String>,#[ts(optional = nullable)]pub selection_id:Option<String>,});
 params!(InstallPatchParams{pub instance_id:String,#[ts(optional = nullable)]pub release_id:Option<String>,#[ts(optional = nullable)]pub selection_id:Option<String>,#[ts(optional = nullable)]pub archive:Option<PathBuf>,pub operation:InstallOperation,pub cleanup_policy:CleanupPolicy,});
 params!(DiscardPlanParams{pub plan_id:String,});
@@ -165,14 +174,16 @@ params!(ListGameSourcesParams{#[ts(optional = nullable)]pub instance_id:Option<S
 params!(SetSourceEnabledParams{pub source_id:String,pub enabled:bool,});
 params!(SetGameSourceParams{pub source_id:String,pub subscribed:bool,#[ts(optional = nullable)]pub instance_id:Option<String>,#[ts(optional = nullable)]pub appid:Option<u32>,});
 params!(AddSourceParams{pub rule:RawSourceRule,});
-params!(ScanSourcesParams{#[ts(optional = nullable)]pub instance_id:Option<String>,#[serde(default)]#[ts(as="Option<Vec<String>>", optional)]pub name_hints:Vec<String>,#[ts(optional = nullable)]pub preferred_language:Option<String>,#[serde(default)]#[ts(as="Option<bool>", optional)]pub force:bool,});
-params!(SourceTaskParams{#[serde(default)]#[ts(as="Option<bool>", optional)]pub force:bool,});
-params!(DiscoverGameParams{pub instance_id:String,#[serde(default)]#[ts(as="Option<Vec<String>>", optional)]pub name_hints:Vec<String>,#[ts(optional = nullable)]pub preferred_language:Option<String>,#[serde(default)]#[ts(as="Option<bool>", optional)]pub force:bool,#[ts(type="number | null")]#[ts(optional = nullable)]pub generation:Option<u64>,});
+params!(SetSourceUpdateIntervalParams{pub source_id:String,#[ts(type="number")]pub interval_hours:u64,});
+params!(UpdateSourceParams{pub source_id:String,#[serde(default)]#[ts(as="Option<bool>", optional)]pub force:bool,});
+params!(MatchGamesParams{#[serde(default)]#[ts(as="Option<Vec<String>>", optional)]pub instances:Vec<String>,#[serde(default)]#[ts(as="Option<Vec<String>>", optional)]pub name_hints:Vec<String>,#[ts(optional = nullable)]pub preferred_language:Option<String>,#[serde(default)]#[ts(as="Option<bool>", optional)]pub force_details:bool,});
+params!(RematchGameParams{#[ts(optional = nullable)]pub instance_id:Option<String>,#[ts(optional = nullable)]pub appid:Option<u32>,#[serde(default)]#[ts(as="Option<Vec<String>>", optional)]pub name_hints:Vec<String>,#[ts(optional = nullable)]pub preferred_language:Option<String>,});
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(tag = "method", content = "params", rename_all = "snake_case")]
 pub enum RequestParams {
     GetCapabilities(HostParams),
     Scan(HostParams),
+    ProjectInstances(ProjectInstancesParams),
     Preview(PreviewParams),
     InstallPatch(InstallPatchParams),
     ListTransactions(HostParams),
@@ -186,9 +197,10 @@ pub enum RequestParams {
     SetSourceEnabled(SetSourceEnabledParams),
     SetGameSource(SetGameSourceParams),
     AddSource(AddSourceParams),
-    RefreshSources(SourceTaskParams),
-    ScanSources(ScanSourcesParams),
-    DiscoverGame(DiscoverGameParams),
+    SetSourceUpdateInterval(SetSourceUpdateIntervalParams),
+    UpdateSource(UpdateSourceParams),
+    MatchGames(MatchGamesParams),
+    RematchGame(RematchGameParams),
 }
 impl RequestParams {
     pub fn host(&self) -> &HostInputs {
@@ -201,6 +213,7 @@ impl RequestParams {
             | Self::BackupStatus(p)
             | Self::CleanupBackups(p)
             | Self::ListSources(p) => &p.host,
+            Self::ProjectInstances(p) => &p.host,
             Self::Preview(p) => &p.host,
             Self::InstallPatch(p) => &p.host,
             Self::DiscardPlan(p) => &p.host,
@@ -208,9 +221,10 @@ impl RequestParams {
             Self::SetSourceEnabled(p) => &p.host,
             Self::SetGameSource(p) => &p.host,
             Self::AddSource(p) => &p.host,
-            Self::RefreshSources(p) => &p.host,
-            Self::ScanSources(p) => &p.host,
-            Self::DiscoverGame(p) => &p.host,
+            Self::SetSourceUpdateInterval(p) => &p.host,
+            Self::UpdateSource(p) => &p.host,
+            Self::MatchGames(p) => &p.host,
+            Self::RematchGame(p) => &p.host,
         }
     }
     pub fn params_value(&self) -> Value {
@@ -234,7 +248,7 @@ impl ValidatedRequest {
 #[derive(Debug, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(deny_unknown_fields)]
 pub struct Request {
-    #[ts(type = "4")]
+    #[ts(type = "5")]
     pub protocol_version: u32,
     pub request_id: String,
     #[serde(flatten)]
@@ -357,11 +371,25 @@ pub fn validate_request(
                 }
             }
         }
-        if matches!(method, Method::ListGameSources | Method::SetGameSource)
-            && p.get("instance_id").and_then(Value::as_str).is_none()
+        if matches!(
+            method,
+            Method::ListGameSources | Method::SetGameSource | Method::RematchGame
+        ) && p.get("instance_id").and_then(Value::as_str).is_none()
             && p.get("appid").and_then(Value::as_u64).is_none()
         {
             return Err(ProtocolError::code("instance_required"));
+        }
+        for key in ["instance_ids", "instances"] {
+            let Some(values) = p.get(key).and_then(Value::as_array) else {
+                continue;
+            };
+            if values.iter().any(|value| {
+                !value
+                    .as_str()
+                    .is_some_and(|s| validate_id(s, MAX_INSTANCE_ID_BYTES))
+            }) {
+                return Err(ProtocolError::code("invalid_id"));
+            }
         }
         Ok(ValidatedRequest {
             request_id: id.clone(),
@@ -427,16 +455,19 @@ pub struct InstallerCapabilities {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(deny_unknown_fields)]
 pub struct SourceCapabilities {
-    pub discovery_schema_version: u32,
+    pub index_schema_version: u32,
+    pub detail_schema_version: u32,
+    pub match_schema_version: u32,
+    pub schedule_schema_version: u32,
     pub adapter_version: u32,
     pub parser_version: u32,
-    pub query_version: u32,
+    pub encoding_version: u32,
     pub methods: Vec<Method>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(deny_unknown_fields)]
 pub struct Capabilities {
-    #[ts(type = "4")]
+    #[ts(type = "5")]
     pub protocol_version: u32,
     pub methods: Vec<Method>,
     pub installer: InstallerCapabilities,
@@ -444,7 +475,7 @@ pub struct Capabilities {
     pub contracts: ContractVersions,
 }
 pub fn validate_capabilities(v: &Value) -> Result<Capabilities, ProtocolError> {
-    if v["protocol_version"].as_u64() != Some(4) {
+    if v["protocol_version"].as_u64() != Some(PROTOCOL_VERSION as u64) {
         return Err(ProtocolError::code("unsupported_protocol"));
     }
     let c: Capabilities = serde_json::from_value(v.clone())
@@ -468,9 +499,12 @@ pub fn validate_capabilities(v: &Value) -> Result<Capabilities, ProtocolError> {
         c.installer.adapter_version,
         c.installer.policy_schema_version,
         c.installer.report_schema_version,
-        c.sources.discovery_schema_version,
+        c.sources.index_schema_version,
+        c.sources.detail_schema_version,
+        c.sources.match_schema_version,
+        c.sources.schedule_schema_version,
         c.sources.adapter_version,
-        c.sources.query_version,
+        c.sources.encoding_version,
     ]
     .iter()
     .any(|v| *v != 1)
@@ -517,36 +551,47 @@ pub struct AddSourceResult {
 }
 #[derive(Debug, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(deny_unknown_fields)]
-pub struct RefreshSourcesResult {
+pub struct SetSourceIntervalResult {
     #[ts(type = "number")]
     pub settings_revision: u64,
-    pub statuses: Vec<SourceStatus>,
+    pub source_id: String,
+    #[ts(type = "number")]
+    pub interval_hours: u64,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(deny_unknown_fields)]
+pub struct SourceUpdateResult {
+    pub source_id: String,
+    #[ts(type = "number")]
+    pub settings_revision: u64,
+    pub status: SourceStatus,
+    #[ts(type = "number")]
+    pub revision: u64,
+    pub complete: bool,
+    pub affected_appids: Vec<u32>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(deny_unknown_fields)]
+pub struct MatchGamesResult {
+    #[ts(type = "number")]
+    pub settings_revision: u64,
+    #[ts(type = "Record<string, number>")]
+    pub source_revisions: BTreeMap<String, u64>,
+    pub results: Vec<GameMatch>,
 }
 #[derive(Debug, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(deny_unknown_fields)]
-pub struct ScanSourcesResult {
-    #[ts(type = "number")]
-    pub settings_revision: u64,
-    pub results: Vec<ScanSourceItem>,
-}
-#[derive(Debug, Serialize, Deserialize, JsonSchema, TS)]
-#[serde(deny_unknown_fields)]
-pub struct DiscoverGameResult {
-    pub instance_id: String,
-    pub appid: u32,
+pub struct ProjectInstancesResult {
     #[ts(type = "number | null")]
-    pub generation: Option<u64>,
-    #[ts(type = "number")]
-    pub settings_revision: u64,
-    pub status: String,
-    pub candidates: Vec<SourceCandidate>,
-    pub diagnostics: Vec<steam_patch_core::sources::Diagnostic>,
+    pub settings_revision: Option<u64>,
+    pub instances: Vec<InstanceProjection>,
 }
 #[derive(Debug, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(untagged)]
 pub enum MethodResult {
     Capabilities(Capabilities),
     Scan(ScanReport),
+    ProjectInstances(ProjectInstancesResult),
     Preview(PreviewReport),
     Install(InstallerOutcome),
     Transactions(Vec<Transaction>),
@@ -559,14 +604,14 @@ pub enum MethodResult {
     Enabled(SourceEnabledResult),
     GameSource(GameSourceResult),
     Added(AddSourceResult),
-    Refreshed(RefreshSourcesResult),
-    Scanned(ScanSourcesResult),
-    Discovered(DiscoverGameResult),
+    SetInterval(SetSourceIntervalResult),
+    SourceUpdated(SourceUpdateResult),
+    Matched(MatchGamesResult),
 }
 #[derive(Debug, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(deny_unknown_fields)]
 pub struct SuccessResponse {
-    #[ts(type = "4")]
+    #[ts(type = "5")]
     pub protocol_version: u32,
     pub request_id: String,
     #[ts(type = "true")]
@@ -576,7 +621,7 @@ pub struct SuccessResponse {
 #[derive(Debug, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(deny_unknown_fields)]
 pub struct ErrorResponse {
-    #[ts(type = "4")]
+    #[ts(type = "5")]
     pub protocol_version: u32,
     #[serde(deserialize_with = "deserialize_required_request_id")]
     pub request_id: Option<String>,
@@ -601,7 +646,7 @@ pub fn validate_response(
     request_id: &str,
     method: Option<Method>,
 ) -> Result<(), ProtocolError> {
-    if v["protocol_version"].as_u64() != Some(4) {
+    if v["protocol_version"].as_u64() != Some(PROTOCOL_VERSION as u64) {
         return Err(ProtocolError::code("unsupported_protocol"));
     }
     if v["request_id"].as_str() != Some(request_id) || !validate_id(request_id, 128) {
@@ -644,6 +689,9 @@ pub fn validate_response(
         Some(Method::Scan) => {
             check!(ScanReport);
             validate_projection(r)?;
+        }
+        Some(Method::ProjectInstances) => {
+            check!(ProjectInstancesResult);
         }
         Some(Method::Preview) => {
             required_fields(
@@ -720,14 +768,14 @@ pub fn validate_response(
         Some(Method::AddSource) => {
             check!(AddSourceResult);
         }
-        Some(Method::RefreshSources) => {
-            check!(RefreshSourcesResult);
+        Some(Method::SetSourceUpdateInterval) => {
+            check!(SetSourceIntervalResult);
         }
-        Some(Method::ScanSources) => {
-            check!(ScanSourcesResult);
+        Some(Method::UpdateSource) => {
+            check!(SourceUpdateResult);
         }
-        Some(Method::DiscoverGame) => {
-            check!(DiscoverGameResult);
+        Some(Method::MatchGames | Method::RematchGame) => {
+            check!(MatchGamesResult);
         }
         None => {
             check!(MethodResult);
@@ -936,11 +984,13 @@ macro_rules! event_kind {
 event_kind!(InstallProgressKind, InstallProgress);
 event_kind!(SourceProgressKind, SourceProgress);
 event_kind!(SourceUpdateKind, SourceUpdate);
+event_kind!(MatchProgressKind, MatchProgress);
+event_kind!(MatchUpdateKind, MatchUpdate);
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(deny_unknown_fields)]
 pub struct InstallProgressEvent {
     pub event: InstallProgressKind,
-    #[ts(type = "4")]
+    #[ts(type = "5")]
     pub protocol_version: u32,
     pub request_id: String,
     #[ts(type = "number")]
@@ -965,11 +1015,14 @@ pub struct InstallProgressEvent {
 #[serde(deny_unknown_fields)]
 pub struct SourceProgressEvent {
     pub event: SourceProgressKind,
-    #[ts(type = "4")]
+    #[ts(type = "5")]
     pub protocol_version: u32,
     pub request_id: String,
     #[ts(type = "number")]
     pub sequence: u64,
+    pub source_id: String,
+    /// `"index" | "details" | "matched"`.
+    pub phase: String,
     #[ts(type = "number")]
     pub completed: u64,
     #[ts(type = "number")]
@@ -980,26 +1033,9 @@ pub struct SourceProgressEvent {
 }
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(deny_unknown_fields)]
-pub struct GameSourceUpdateEvent {
+pub struct SourceUpdateEvent {
     pub event: SourceUpdateKind,
-    #[ts(type = "4")]
-    pub protocol_version: u32,
-    pub request_id: String,
-    #[ts(type = "number")]
-    pub sequence: u64,
-    pub appid: u32,
-    #[ts(type = "number")]
-    pub index: u64,
-    pub instance_id: Option<String>,
-    #[ts(type = "number")]
-    pub settings_revision: u64,
-    pub discovery: GameDiscovery,
-}
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
-#[serde(deny_unknown_fields)]
-pub struct RefreshSourceUpdateEvent {
-    pub event: SourceUpdateKind,
-    #[ts(type = "4")]
+    #[ts(type = "5")]
     pub protocol_version: u32,
     pub request_id: String,
     #[ts(type = "number")]
@@ -1010,12 +1046,50 @@ pub struct RefreshSourceUpdateEvent {
     pub status: SourceStatus,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(deny_unknown_fields)]
+pub struct MatchProgressEvent {
+    pub event: MatchProgressKind,
+    #[ts(type = "5")]
+    pub protocol_version: u32,
+    pub request_id: String,
+    #[ts(type = "number")]
+    pub sequence: u64,
+    /// `"inventory" | "index" | "details" | "fallback"`.
+    pub phase: String,
+    #[ts(type = "number")]
+    pub completed: u64,
+    #[ts(type = "number")]
+    pub total: u64,
+    pub running: bool,
+    #[ts(type = "number")]
+    pub settings_revision: u64,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(deny_unknown_fields)]
+pub struct MatchUpdateEvent {
+    pub event: MatchUpdateKind,
+    #[ts(type = "5")]
+    pub protocol_version: u32,
+    pub request_id: String,
+    #[ts(type = "number")]
+    pub sequence: u64,
+    pub instance_id: Option<String>,
+    pub appid: u32,
+    /// One of the six `GameMatchStatus` values (snake_case).
+    pub status: String,
+    pub candidates: Vec<SourceCandidate>,
+    pub diagnostics: Vec<steam_patch_core::sources::Diagnostic>,
+    #[ts(type = "number")]
+    pub settings_revision: u64,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(untagged)]
 pub enum Event {
     Install(InstallProgressEvent),
     Progress(SourceProgressEvent),
-    GameUpdate(GameSourceUpdateEvent),
-    SourceUpdate(RefreshSourceUpdateEvent),
+    SourceUpdate(SourceUpdateEvent),
+    MatchProgress(MatchProgressEvent),
+    MatchUpdate(MatchUpdateEvent),
 }
 pub type WireEvent = Event;
 impl Event {
@@ -1023,13 +1097,14 @@ impl Event {
         match self {
             Self::Install(e) => e.sequence,
             Self::Progress(e) => e.sequence,
-            Self::GameUpdate(e) => e.sequence,
             Self::SourceUpdate(e) => e.sequence,
+            Self::MatchProgress(e) => e.sequence,
+            Self::MatchUpdate(e) => e.sequence,
         }
     }
 }
 pub fn validate_event(v: &Value, request_id: &str) -> Result<Event, ProtocolError> {
-    if v["protocol_version"].as_u64() != Some(4) {
+    if v["protocol_version"].as_u64() != Some(PROTOCOL_VERSION as u64) {
         return Err(ProtocolError::code("unsupported_protocol"));
     }
     if v["request_id"].as_str() != Some(request_id) || !validate_id(request_id, 128) {
@@ -1058,12 +1133,14 @@ pub fn validate_event(v: &Value, request_id: &str) -> Result<Event, ProtocolErro
             "protocol_version",
             "request_id",
             "sequence",
+            "source_id",
+            "phase",
             "completed",
             "total",
             "running",
             "settings_revision",
         ][..],
-        Some("source_update") if v.get("source_id").is_some() => &[
+        Some("source_update") => &[
             "event",
             "protocol_version",
             "request_id",
@@ -1072,16 +1149,28 @@ pub fn validate_event(v: &Value, request_id: &str) -> Result<Event, ProtocolErro
             "settings_revision",
             "status",
         ][..],
-        Some("source_update") => &[
+        Some("match_progress") => &[
             "event",
             "protocol_version",
             "request_id",
             "sequence",
-            "appid",
-            "index",
-            "instance_id",
+            "phase",
+            "completed",
+            "total",
+            "running",
             "settings_revision",
-            "discovery",
+        ][..],
+        Some("match_update") => &[
+            "event",
+            "protocol_version",
+            "request_id",
+            "sequence",
+            "instance_id",
+            "appid",
+            "status",
+            "candidates",
+            "diagnostics",
+            "settings_revision",
         ][..],
         _ => return Err(ProtocolError::code("invalid_core_response")),
     };
@@ -1162,8 +1251,9 @@ pub fn schema() -> Value {
         "Capabilities",
         "InstallProgressEvent",
         "SourceProgressEvent",
-        "GameSourceUpdateEvent",
-        "RefreshSourceUpdateEvent",
+        "SourceUpdateEvent",
+        "MatchProgressEvent",
+        "MatchUpdateEvent",
     ] {
         if let Some(d) = defs.get_mut(name) {
             d["properties"]["protocol_version"] = serde_json::json!({"const":PROTOCOL_VERSION});
@@ -1182,7 +1272,11 @@ pub fn schema() -> Value {
             d["allOf"] = serde_json::json!([{"anyOf":[{"properties":{"selection_id":{"type":"null"}}},{"properties":{"archive":{"type":"null"}}}]}]);
         }
     }
-    for name in ["ListGameSourcesParams", "SetGameSourceParams"] {
+    for name in [
+        "ListGameSourcesParams",
+        "SetGameSourceParams",
+        "RematchGameParams",
+    ] {
         defs.get_mut(name).unwrap()["anyOf"] = serde_json::json!([{"required":["instance_id"],"properties":{"instance_id":{"type":"string"}}},{"required":["appid"],"properties":{"appid":{"type":"integer","minimum":0}}}]);
     }
     // Strict event and outcome wire DTOs require their nullable facts explicitly.
@@ -1190,8 +1284,9 @@ pub fn schema() -> Value {
         "ErrorResponse",
         "InstallProgressEvent",
         "SourceProgressEvent",
-        "GameSourceUpdateEvent",
-        "RefreshSourceUpdateEvent",
+        "SourceUpdateEvent",
+        "MatchProgressEvent",
+        "MatchUpdateEvent",
         "InstallerOutcome",
         "ProposedChange",
         "PreviewReport",
@@ -1237,13 +1332,15 @@ pub fn schema() -> Value {
             Method::Preview => "PreviewParams",
             Method::InstallPatch => "InstallPatchParams",
             Method::DiscardPlan => "DiscardPlanParams",
+            Method::ProjectInstances => "ProjectInstancesParams",
             Method::ListGameSources => "ListGameSourcesParams",
             Method::SetSourceEnabled => "SetSourceEnabledParams",
             Method::SetGameSource => "SetGameSourceParams",
             Method::AddSource => "AddSourceParams",
-            Method::RefreshSources => "SourceTaskParams",
-            Method::ScanSources => "ScanSourcesParams",
-            Method::DiscoverGame => "DiscoverGameParams",
+            Method::SetSourceUpdateInterval => "SetSourceUpdateIntervalParams",
+            Method::UpdateSource => "UpdateSourceParams",
+            Method::MatchGames => "MatchGamesParams",
+            Method::RematchGame => "RematchGameParams",
         };
         serde_json::json!({"type":"object","additionalProperties":false,"required":["protocol_version","request_id","method","params"],"properties":{"protocol_version":{"const":PROTOCOL_VERSION},"request_id":{"type":"string"},"method":{"const":method.as_str()},"params":{"$ref":format!("#/$defs/{name}")}}})
     }).collect();
@@ -1270,16 +1367,6 @@ pub fn schema() -> Value {
 }
 
 pub mod fixtures;
-
-#[derive(Debug, Serialize, Deserialize, JsonSchema, TS)]
-#[serde(deny_unknown_fields)]
-pub struct ScanSourceItem {
-    pub instance_id: Option<String>,
-    pub appid: Option<u32>,
-    pub status: String,
-    pub candidates: Vec<SourceCandidate>,
-    pub diagnostics: Vec<steam_patch_core::sources::Diagnostic>,
-}
 
 fn required_fields(v: &Value, fields: &[&str]) -> Result<(), ProtocolError> {
     if !fields.iter().all(|k| v.get(*k).is_some()) {
@@ -1419,6 +1506,7 @@ pub fn result_schema_name(method: Method) -> &'static str {
     match method {
         Method::GetCapabilities => "Capabilities",
         Method::Scan => "ScanReport",
+        Method::ProjectInstances => "ProjectInstancesResult",
         Method::Preview => "PreviewReport",
         Method::InstallPatch => "InstallerOutcome",
         Method::ListTransactions | Method::Recover => "Transactions",
@@ -1431,9 +1519,9 @@ pub fn result_schema_name(method: Method) -> &'static str {
         Method::SetSourceEnabled => "SourceEnabledResult",
         Method::SetGameSource => "GameSourceResult",
         Method::AddSource => "AddSourceResult",
-        Method::RefreshSources => "RefreshSourcesResult",
-        Method::ScanSources => "ScanSourcesResult",
-        Method::DiscoverGame => "DiscoverGameResult",
+        Method::SetSourceUpdateInterval => "SetSourceIntervalResult",
+        Method::UpdateSource => "SourceUpdateResult",
+        Method::MatchGames | Method::RematchGame => "MatchGamesResult",
     }
 }
 fn output_schema() -> &'static Value {
@@ -1543,7 +1631,7 @@ mod early_error_tests {
     #[test]
     fn early_errors_have_schema_valid_required_nullable_envelopes() {
         let cases: Value = serde_json::from_str(include_str!(
-            "../../../packages/contracts/fixtures/v4/cases.json"
+            "../../../packages/contracts/fixtures/v5/cases.json"
         ))
         .unwrap();
         let schema = schema();
@@ -1588,7 +1676,7 @@ mod early_error_tests {
             ));
             assert!(serde_json::from_value::<ErrorResponse>(missing).is_err());
         }
-        let mut success = serde_json::json!({"protocol_version":4,"request_id":null,"ok":true,"result":fixtures::scan()});
+        let mut success = serde_json::json!({"protocol_version":5,"request_id":null,"ok":true,"result":fixtures::scan()});
         assert!(!matches_schema(
             &success,
             &schema["$defs"]["Response"],

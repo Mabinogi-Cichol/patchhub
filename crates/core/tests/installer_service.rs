@@ -157,7 +157,7 @@ fn publisher_download_cancel_is_standard_cancel_before_any_transaction() {
     use steam_patch_core::{
         install,
         sources::{
-            model::{GameQuery, SourceCache, SourceEntry},
+            model::{GameQuery, SourceIndex, SourceIndexEntry},
             Sources,
         },
         trust::revision::SqliteTrustRevisionStore,
@@ -188,24 +188,27 @@ fn publisher_download_cancel_is_standard_cancel_before_any_transaction() {
         let sources = Sources::open(&state).unwrap();
         sources
             .store()
-            .save_cache(
-                "patchmoe",
-                &SourceCache {
-                    entries: vec![SourceEntry {
-                        title: "Fixture".into(),
-                        aliases: vec![],
-                        url: "https://download.patch.moe/fixture.zip".into(),
-                        source_page: "https://www.patch.moe/".into(),
-                        language: "zh-CN".into(),
-                        date: None,
-                        appid: Some(42),
-                    }],
-                    etag: None,
-                    modified: None,
-                    cached_at: Some(now),
-                    checked_at: Some(now),
-                },
-            )
+            .save_index(&SourceIndex {
+                schema_version: 1,
+                source_id: "patchmoe".into(),
+                revision: 1,
+                complete: true,
+                checked_at: now,
+                updated_at: now,
+                etag: None,
+                modified: None,
+                entries: vec![SourceIndexEntry {
+                    title: "Fixture".into(),
+                    aliases: vec![],
+                    page: "https://www.patch.moe/".into(),
+                    kind: "entry".into(),
+                    appid: Some(42),
+                    url: Some("https://download.patch.moe/fixture.zip".into()),
+                    language: Some("zh-CN".into()),
+                    date: None,
+                }],
+                pending: Vec::new(),
+            })
             .unwrap();
         drop(sources);
         let sources = Sources::open(&state).unwrap();

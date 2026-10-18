@@ -2,7 +2,7 @@
 from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock
-from test_discovery_rpc import module
+from test_source_tasks import module
 
 
 class CacheCleanupTests(unittest.IsolatedAsyncioTestCase):

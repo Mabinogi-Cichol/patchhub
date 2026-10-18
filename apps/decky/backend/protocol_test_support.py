@@ -3,7 +3,7 @@ import copy
 import json
 from pathlib import Path
 
-CASES = json.loads((Path(__file__).resolve().parents[3] / "packages/contracts/fixtures/v4/cases.json").read_text(encoding="utf-8"))
+CASES = json.loads((Path(__file__).resolve().parents[3] / "packages/contracts/fixtures/v5/cases.json").read_text(encoding="utf-8"))
 
 def response(method, request_id="fixture", updates=None):
     row = copy.deepcopy(next(case["response"] for case in CASES["responses"] if case["name"] == method + "-success"))

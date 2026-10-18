@@ -22,7 +22,7 @@ SPEC.loader.exec_module(m)
 def create_package(path, version="0.2.0", changes=None):
     elf = b"\x7fELF\x02\x01\x01" + b"\0" * 11 + struct.pack("<H", 62) + b"fixture"
     files = {name: b"fixture" for name in (
-        "main.py", "dist/index.js", "backend/bridge.py", "backend/tasks.py", "backend/protocol.py", "backend/v4.schema.json",
+        "main.py", "dist/index.js", "backend/bridge.py", "backend/tasks.py", "backend/protocol.py", "backend/v5.schema.json",
         "bin/catalog.json", "bin/signed-catalog.json", "bin/trust-keys.json", "LICENSE", "licenses/sfextract-MIT.txt", "dependencies.cdx.json")}
     files["plugin.json"] = json.dumps({"name": m.NAME, "api_version": 1, "flags": []}).encode()
     files["package.json"] = json.dumps({"name": "steam-patch-decky", "version": version, "type": "module"}).encode()
@@ -30,7 +30,7 @@ def create_package(path, version="0.2.0", changes=None):
     for name in ("bin/steam-patch", "bin/sf-worker"):
         files[name] = elf
         entries.append({"path": name, "size": len(elf), "sha256": m.hashlib.sha256(elf).hexdigest()})
-    files["bin/runtime.json"] = json.dumps({"protocol_version": 4, "worker_protocol": 1, "files": entries}).encode()
+    files["bin/runtime.json"] = json.dumps({"protocol_version": 5, "worker_protocol": 1, "files": entries}).encode()
     files.update(changes or {})
     with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as bundle:
         for name, data in files.items():

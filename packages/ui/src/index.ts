@@ -1,6 +1,6 @@
 // Wire DTOs are generated from the Rust protocol/core types.
-import type { ActionBlocker, InstallerOutcome, PatchMatch, InstanceProjection, ScanReport, SourceCandidate } from "../../contracts/generated/protocol";
-export type { ActionBlockerCode, ActionBlocker, ActionAvailability, PatchActions, SourceCandidate, DiscoveryDiagnostic, GameDiscovery, DiscoveryResult, Transaction, InstallerOutcome, BackupInventory, BackupCleanupResult, CleanupResult, InstallStage, DomainError } from "../../contracts/generated/protocol";
+import type { ActionBlocker, InstallerOutcome, PatchMatch, InstanceProjection, ScanReport, SourceCandidate, SourceSummary } from "../../contracts/generated/protocol";
+export type { ActionBlockerCode, ActionBlocker, ActionAvailability, PatchActions, SourceCandidate, DiscoveryDiagnostic, GameDiscovery, DiscoveryResult, GameMatch, GameMatchStatus, MatchGamesResult, MatchProgressEvent, MatchUpdateEvent, ProjectInstancesResult, SetSourceIntervalResult, SourceMatch, SourceProgressEvent, SourceRole, SourceStatus, SourceUpdateEvent, SourceUpdateResult, Transaction, InstallerOutcome, BackupInventory, BackupCleanupResult, CleanupResult, InstallStage, DomainError } from "../../contracts/generated/protocol";
 export type { PatchMatch as Patch, InstanceProjection as Install, SourceSummary as SourceSubscription, GameSourceSummary as GameSourceSubscription, PreviewReport as Preview, ProposedChange as Change } from "../../contracts/generated/protocol";
 type Patch = PatchMatch;
 type Install = InstanceProjection;
@@ -12,7 +12,11 @@ export function candidateMatched(candidate: SourceCandidate): boolean {
   return ["appid", "verified_alias", "official_title"].includes(candidate.match_basis ?? "");
 }
 export function displayPatches(row: Install, preferredLanguage: string | null = null): DisplayPatch[] {
-  const discovery: DisplayPatch[] = [...(row.discovery?.candidates ?? [])]
+  // A trusted publisher match is the display basis; the fallback indexer's
+  // candidates must not be shown next to it (p1-contract §7.1 rule 1).
+  const candidates = (row.discovery?.candidates ?? [])
+    .filter(candidate => row.discovery?.status !== "publisher_match" || candidate.source_id !== "hgamer");
+  const discovery: DisplayPatch[] = [...candidates]
     .filter(candidate => !row.patches.some(patch => patch.candidate_id === candidate.candidate_id))
     .sort((a, b) => Number(a.source_id === "hgamer") - Number(b.source_id === "hgamer")
       || Number(!!preferredLanguage && !a.languages?.includes(preferredLanguage)) - Number(!!preferredLanguage && !b.languages?.includes(preferredLanguage)))
@@ -46,11 +50,15 @@ export function installSummary(row: Install, scanning = false): string {
   if (row.patches.some(p => p.actions.automatic.available && p.compatibility !== "manual_selection_required")) return "有可用补丁";
   if (row.patches.some(p => p.actions.automatic.available && p.compatibility === "manual_selection_required")) return "可手动选择补丁";
   if (row.patches.length || row.discovery?.candidates.some(candidateMatched)) return "找到补丁来源";
-  if (["failed", "source_refresh_failed", "source_offline_cached"].includes(row.discovery?.status ?? "")) return "来源查询失败";
-  if (scanning && !["complete", "empty", "cache_complete"].includes(row.discovery?.status ?? "")) return "正在查找补丁";
-  if (["partial", "cache_partial", "source_partial"].includes(row.discovery?.status ?? "")) return "来源查询不完整";
-  if (row.discovery && ["not_queried", "queued", "stale"].includes(row.discovery.status)) return "正在查找补丁";
-  return "暂未找到补丁";
+  // `discovery.status` is the persisted six-state match (p1-contract §7.1).
+  const status = row.discovery?.status;
+  if (status === "publisher_match") return "找到补丁来源";
+  if (status === "fallback_match") return "补丁索引（HGamer）找到来源";
+  if (status === "no_match") return "已启用来源中未找到补丁";
+  if (status === "incomplete") return "来源覆盖不完整，尚需更新来源";
+  if (status === "failed") return "来源查询失败";
+  if (scanning) return "正在匹配补丁";
+  return "尚未匹配，请重新匹配";
 }
 
 export type Filter = "all" | "matched" | "installed" | "attention";
@@ -107,9 +115,23 @@ export function reason(code: string): string {
     not_queried: "尚未查询，选择游戏后查找",
     partial: "查询尚未完整完成",
     empty: "已查询的来源未找到补丁",
-    failed: "来源暂不可用，显示上次结果",
+    failed: "来源查询失败，显示上次结果",
     stale: "显示上次结果，等待重新查询",
     queued: "等待查询来源",
+    // v5 six-state game match (p1-contract §7.1) plus per-source match records.
+    pending: "尚未匹配，请重新匹配",
+    publisher_match: "发行商来源找到补丁",
+    fallback_match: "补丁索引（HGamer）找到补丁",
+    no_match: "已启用来源中未找到补丁",
+    incomplete: "来源覆盖不完整，尚需更新来源",
+    matched: "已匹配",
+    no_index: "来源尚无可用索引，请先更新来源",
+    index_incomplete: "来源索引覆盖不完整，请先更新来源",
+    no_candidate: "来源索引中未找到候选",
+    detail_incomplete: "来源详情尚未查完",
+    detail_failed: "来源详情查询失败",
+    disabled: "补查来源已关闭",
+    not_needed: "无需补查",
     artifact_format_conflict: "索引标示与上游文件格式不一致，当前仅提供来源引导。",
     version_conflict: "来源中的补丁版本描述不一致，请核对原始说明。",
     dlc_unknown: "DLC 拥有和安装状态待确认，请按实际版本选择。",
@@ -358,7 +380,7 @@ export function sourceRefreshFailed(status: string | null | undefined): boolean 
   return ["failed", "source_refresh_failed", "source_offline_cached"].includes(status ?? "") || /^discovery_http_\d{3}$/.test(status ?? "");
 }
 export function sourceQueryComplete(status: string | null | undefined): boolean {
-  return ["complete", "empty", "cache_complete"].includes(status ?? "");
+  return ["complete", "empty", "cache_complete", "publisher_match", "fallback_match", "no_match"].includes(status ?? "");
 }
 /** New invocation outcomes use core disposition; historical transaction display is separate. */
 export function installationResult(outcome: InstallerOutcome, overwrite = false): string {
@@ -385,4 +407,114 @@ export function downloadFileName(value: string): string {
     const raw = new URL(value).pathname.split("/").pop() || value;
     try { return decodeURIComponent(raw); } catch { return raw; }
   } catch { return value; }
+}
+
+// -- v5 game match / source schedule display (shared by both host UIs) ------
+
+export type MatchStatusTone = "ok" | "fallback" | "warning" | "error" | "pending";
+
+export function gameMatchStatusTone(status: string | null | undefined): MatchStatusTone {
+  switch (status) {
+    case "publisher_match": return "ok";
+    case "fallback_match": return "fallback";
+    case "no_match": return "warning";
+    case "incomplete": return "warning";
+    case "failed": return "error";
+    default: return "pending";
+  }
+}
+
+export function gameMatchStatusLabel(status: string | null | undefined): string {
+  switch (status) {
+    case "publisher_match": return "发行商来源命中";
+    case "fallback_match": return "补丁索引（HGamer）命中";
+    case "no_match": return "已启用来源中未找到补丁";
+    case "incomplete": return "来源覆盖不完整";
+    case "failed": return "来源查询失败";
+    case "pending": return "尚未匹配";
+    default: return "尚未匹配";
+  }
+}
+
+/** Extra explanation for statuses that still need user action or cache updates. */
+export function gameMatchStatusHint(status: string | null | undefined): string | null {
+  switch (status) {
+    case "pending": return "请点击重新匹配；尚未查询的来源不会显示为无补丁。";
+    case "incomplete": return "普通来源覆盖不完整，尚需更新来源；HGamer 不会在来源不完整时补查。";
+    case "no_match": return "已启用的普通来源覆盖完整且未找到补丁。";
+    case "failed": return "本次来源查询失败，显示上次成功结果。";
+    case "fallback_match": return "普通来源未命中，显示 HGamer 补查结果。";
+    default: return null;
+  }
+}
+
+export function sourceCoverageComplete(source: Pick<SourceSummary, "complete"> | null | undefined): boolean {
+  return source?.complete === true;
+}
+
+export function sourceCoverageText(source: Pick<SourceSummary, "complete" | "status"> | null | undefined): string {
+  if (!source) return "来源状态未知";
+  if (source.complete) return "索引覆盖完整";
+  return "索引覆盖不完整，尚需更新来源";
+}
+
+export function fallbackDisplayStatus(matchStatus: string | null | undefined): string | null {
+  if (matchStatus === "publisher_match") return null;
+  if (matchStatus === "fallback_match") return "补丁索引（HGamer）命中";
+  if (matchStatus === "no_match") return "已启用来源中未找到补丁";
+  if (matchStatus === "incomplete") return "来源覆盖不完整，暂不补查 HGamer";
+  return null;
+}
+
+export const SOURCE_INTERVAL_PRESETS: { hours: number; label: string }[] = [
+  { hours: 0, label: "关闭" },
+  { hours: 6, label: "6 小时" },
+  { hours: 12, label: "12 小时" },
+  { hours: 24, label: "24 小时" },
+  { hours: 72, label: "3 天" },
+  { hours: 168, label: "7 天" },
+  { hours: 336, label: "14 天" },
+];
+
+export function sourceIntervalOptions(): { data: number; label: string }[] {
+  return SOURCE_INTERVAL_PRESETS.map(({ hours, label }) => ({ data: hours, label }));
+}
+
+export function sourceIntervalLabel(hours: number | null | undefined): string {
+  const value = hours ?? 0;
+  return SOURCE_INTERVAL_PRESETS.find(preset => preset.hours === value)?.label ?? `${value} 小时`;
+}
+
+export function formatUnixSeconds(value: number | null | undefined): string {
+  return value == null ? "—" : new Date(value * 1000).toLocaleString();
+}
+
+export function sourceLastSuccessText(source: { cached_at?: number | null }): string {
+  return source.cached_at == null ? "尚未成功更新" : formatUnixSeconds(source.cached_at);
+}
+
+export function sourceLastAttemptText(source: { checked_at?: number | null; status?: string | null }): string {
+  if (source.checked_at == null) return "尚未尝试";
+  return `${formatUnixSeconds(source.checked_at)} · ${reason(source.status ?? "")}`;
+}
+
+export function sourceNextDueText(
+  source: { interval_hours?: number | null; next_due_at?: number | null },
+  now = Date.now(),
+): string {
+  const hours = source.interval_hours ?? 0;
+  if (!hours) return "自动更新已关闭";
+  if (source.next_due_at == null) return `每 ${sourceIntervalLabel(hours)}；等待首次成功更新`;
+  return source.next_due_at * 1000 <= now
+    ? `已到更新周期（每 ${sourceIntervalLabel(hours)}）`
+    : `下次 ${formatUnixSeconds(source.next_due_at)}（每 ${sourceIntervalLabel(hours)}）`;
+}
+
+/** Task phase for `source_progress` and `match_progress` events. */
+export function sourcePhaseLabel(phase: string | null | undefined): string {
+  const labels: Record<string, string> = {
+    inventory: "扫描游戏库", index: "更新来源索引", details: "获取补丁详情",
+    matched: "匹配游戏", fallback: "补查补丁索引",
+  };
+  return labels[phase ?? ""] ?? "准备中";
 }

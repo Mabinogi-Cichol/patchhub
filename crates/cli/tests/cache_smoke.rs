@@ -73,7 +73,7 @@ fn call(method: &str, id: &str, params: Value) -> Value {
     writeln!(
         input,
         "{}",
-        json!({"protocol_version":4,"request_id":id,"method":method,"params":wire_params(method, params)})
+        json!({"protocol_version":5,"request_id":id,"method":method,"params":wire_params(method, params)})
     )
     .unwrap();
     let mut stdout = BufReader::new(child.stdout.take().unwrap());

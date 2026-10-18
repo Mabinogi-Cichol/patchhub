@@ -1,117 +1,192 @@
 import {
   candidateMatched,
+  gameMatchStatusLabel,
+  gameMatchStatusTone,
   installSummary,
   isExternal,
   isManaged,
   reason,
-  sourceRefreshFailed,
-  sourceRefreshSucceeded,
-  sourceQueryComplete,
-  type GameSourceSubscription,
+  sourcePhaseLabel,
   type Install,
   type SourceCandidate,
 } from "@steam-patch/ui";
 
 /**
- * Shared source-discovery helpers for the Windows host.
+ * Windows projection of the shared source/match presentation.
  *
- * The Rust core owns identity, cache and status semantics; this module only
- * projects the host/CLI DTOs into short, grounded Chinese labels and tonal
- * categories. The small candidate copy mirrors the Decky presentation layer so
- * both clients describe the same states the same way.
+ * All six-state labels, interval presets, coverage text, schedule text and
+ * phase names come from `@steam-patch/ui` so both hosts describe the same
+ * states the same way. Only the Windows-specific chip/tone adaptation and the
+ * layout wording live here.
  */
 
 export type Tone = "ok" | "warn" | "fail" | "busy" | "idle";
 
 export { primaryInstallAction, actionBlockers, safeSourceUrl } from "@steam-patch/ui";
 
+// Shared presentation helpers (single source of Chinese copy).
+export {
+  fallbackDisplayStatus,
+  gameMatchStatusHint,
+  gameMatchStatusLabel,
+  gameMatchStatusTone,
+  sourceCoverageComplete,
+  sourceCoverageText,
+  sourceIntervalLabel,
+  sourceIntervalOptions,
+  sourceLastAttemptText,
+  sourceLastSuccessText,
+  sourceNextDueText,
+  sourcePhaseLabel,
+  SOURCE_INTERVAL_PRESETS,
+} from "@steam-patch/ui";
+
 // ---- host command results -------------------------------------------------
 
 export type { Capabilities, SourceSummary } from "../../../packages/contracts/generated/protocol";
-import type { SourceSummary, ScanSourcesResult, SourceProgressEvent, GameSourceUpdateEvent, RefreshSourceUpdateEvent } from "../../../packages/contracts/generated/protocol";
-export type SourceScanResult = ScanSourcesResult;
-export type SourceScanItem = ScanSourcesResult["results"][number];
+import type {
+  GameMatch,
+  GameSourceSummary,
+  MatchGamesResult,
+  MatchProgressEvent,
+  MatchUpdateEvent,
+  ProjectInstancesResult,
+  SetSourceIntervalResult,
+  SourceProgressEvent,
+  SourceSummary,
+  SourceUpdateEvent,
+  SourceUpdateResult,
+} from "../../../packages/contracts/generated/protocol";
 
-export type SourceScanStatus = {
+export type {
+  GameMatch,
+  MatchGamesResult,
+  MatchProgressEvent,
+  MatchUpdateEvent,
+  ProjectInstancesResult,
+  SetSourceIntervalResult,
+  SourceProgressEvent,
+  SourceUpdateEvent,
+  SourceUpdateResult,
+};
+export type GameSourceSubscription = GameSourceSummary;
+
+// ---- source task registry (host snapshot) --------------------------------
+
+export type SourceTaskKind = "update_source" | "match_games" | "rematch_game";
+export type SourceTaskProgress = SourceProgressEvent | MatchProgressEvent;
+export type SourceTaskEvent =
+  | SourceProgressEvent
+  | SourceUpdateEvent
+  | MatchProgressEvent
+  | MatchUpdateEvent;
+export type SourceTaskResult = SourceUpdateResult | MatchGamesResult;
+export type SourceTaskStatus = {
+  task_id: string;
+  kind: SourceTaskKind;
+  key: string;
   running: boolean;
   cancelled: boolean;
-  progress: { completed: number; total: number; running: boolean; settings_revision?: number } | null;
-  results: SourceScanResult | null;
+  progress: SourceTaskProgress | null;
+  last_event: SourceTaskEvent | null;
+  result: SourceTaskResult | null;
+  error: { code: string; detail?: string | null } | null;
 };
 
-export type SourceEvent = SourceProgressEvent | GameSourceUpdateEvent | RefreshSourceUpdateEvent;
-
-// ---- status -> tone / label ----------------------------------------------
-
-const IDLE_CODES = new Set(["empty", "not_queried", "not_refreshed", "queued", "source_not_enabled"]);
-
-/** Tonal category used for the status chips. */
-export function statusTone(code?: string | null): Tone {
-  const value = code ?? "not_refreshed";
-  if (/^discovery_http_\d{3}$/.test(value)) return "fail";
-  if (sourceRefreshFailed(value)) return "fail";
-  if (sourceQueryComplete(value) || sourceRefreshSucceeded(value)) return "ok";
-  if (IDLE_CODES.has(value)) return "idle";
-  return "warn";
+export function taskKindLabel(kind: SourceTaskKind): string {
+  const labels: Record<SourceTaskKind, string> = {
+    update_source: "更新来源",
+    match_games: "匹配补丁",
+    rematch_game: "重新匹配",
+  };
+  return labels[kind] ?? kind;
 }
 
-/** Short chip text for the game list and source cards. */
-export function chipLabel(code?: string | null, running = false): string {
-  if (running) return "查源中";
-  switch (code ?? "not_queried") {
-    case "failed":
-    case "source_refresh_failed":
-      return "来源失败";
-    case "source_offline_cached":
-      return "失败·用缓存";
-    case "partial":
-    case "cache_partial":
-    case "source_partial":
-    case "discovery_index_incomplete":
-      return "部分来源";
-    case "stale":
-    case "cached":
-    case "source_not_modified":
-      return "缓存结果";
-    case "empty":
-      return "来源无补丁";
-    case "complete":
-    case "cache_complete":
-    case "source_refreshed":
-    case "fresh":
-      return "来源已查询";
-    case "not_queried":
-    case "queued":
-    case "not_refreshed":
-      return "未查询";
-    case "source_not_enabled":
-      return "来源已停用";
-    default:
-      return "待核对";
+export function taskProgressText(task: SourceTaskStatus): string {
+  const progress = task.progress;
+  if (!progress) return "正在准备";
+  const label = sourcePhaseLabel(progress.phase);
+  return progress.total > 0
+    ? `${label} · ${progress.completed} / ${progress.total}`
+    : label;
+}
+
+export function taskForSource(tasks: SourceTaskStatus[], sourceId: string): SourceTaskStatus | undefined {
+  return tasks.find(task => task.kind === "update_source" && task.key === sourceId);
+}
+
+export function taskForInstance(tasks: SourceTaskStatus[], instanceId: string): SourceTaskStatus | undefined {
+  return tasks.find(task => task.kind === "rematch_game" && task.key === `instance:${instanceId}`);
+}
+
+export function runningTasks(tasks: SourceTaskStatus[]): SourceTaskStatus[] {
+  return tasks.filter(task => task.running);
+}
+
+// ---- game match status -> Windows tone / chip ----------------------------
+
+/** Map the shared six-state tone vocabulary onto the Windows chip tones. */
+export function statusTone(code?: string | null): Tone {
+  switch (gameMatchStatusTone(code)) {
+    case "ok": return "ok";
+    case "error": return "fail";
+    case "pending": return "idle";
+    default: return "warn";
   }
 }
 
-/** Full sentence for a discovery/source status code. */
-export function statusLabel(code?: string | null, running = false): string {
-  if (running) return "正在查找补丁来源…";
-  return reason(code ?? "not_queried");
+/** Compact chip text for the game list; idle copy comes from the shared map. */
+export function chipLabel(code?: string | null, running = false): string {
+  if (running) return "匹配中";
+  return gameMatchStatusLabel(code);
 }
 
+/** Full sentence for a game match status (shared six-state label). */
+export function statusLabel(code?: string | null, running = false): string {
+  if (running) return "正在匹配补丁来源…";
+  return gameMatchStatusLabel(code);
+}
+
+// ---- per-source update status -> Windows tone / chip ---------------------
+
+/** Tone for the source card; the status copy comes from the shared `reason`. */
+export function sourceStatusTone(code?: string | null): Tone {
+  switch (code) {
+    case "source_refreshed":
+    case "source_not_modified":
+      return "ok";
+    case "source_partial":
+    case "source_offline_cached":
+      return "warn";
+    case "source_refresh_failed":
+      return "fail";
+    default:
+      return "idle";
+  }
+}
+
+export function sourceChipLabel(code?: string | null, running = false): string {
+  if (running) return "更新中";
+  return reason(code ?? "not_refreshed");
+}
+
+export function sourceStatusLabel(code?: string | null, running = false): string {
+  if (running) return "正在更新来源…";
+  return reason(code ?? "not_refreshed");
+}
+
+// ---- game row summaries --------------------------------------------------
+
 /**
- * Decky's list summary says "正在查找补丁" for `not_queried`/`stale` rows even
- * when nothing is running. Make the idle case explicit so a stale row never
- * looks like a permanent in-progress state.
+ * Statement row summary for the game list; the six-state discovery status only
+ * applies once no installable patch is present.
  */
-export function rowSummary(row: Install, scanning: boolean): string {
-  const summary = installSummary(row, scanning);
-  if (summary !== "正在查找补丁" || scanning) return summary;
-  const status = row.discovery?.status;
-  if (status === "stale" || status === "cached") return "显示上次来源结果";
-  return "未查询补丁来源";
+export function rowSummary(row: Install, matching: boolean): string {
+  return installSummary(row, matching);
 }
 
 /** Primary list status describes the patch, independently of source lookup. */
-export function patchChip(row: Install, scanning: boolean): { tone: Tone; label: string } {
+export function patchChip(row: Install, running: boolean): { tone: Tone; label: string } {
   if (row.patches.some(patch => isManaged(patch.detection.status) || isExternal(patch.detection.status))) {
     return { tone: "ok", label: "已安装补丁" };
   }
@@ -123,27 +198,17 @@ export function patchChip(row: Install, scanning: boolean): { tone: Tone; label:
     return { tone: "warn", label: "补丁待核对" };
   }
   const status = row.discovery?.status;
-  if (scanning && (!status || ["not_queried", "queued", "stale"].includes(status))) {
-    return { tone: "busy", label: "正在查找补丁" };
-  }
-  if (!status || ["not_queried", "queued", "stale"].includes(status)) {
-    return { tone: "idle", label: "补丁待查询" };
-  }
-  if (["empty", "complete", "cache_complete"].includes(status)) {
-    return { tone: "idle", label: "未找到补丁" };
-  }
-  return { tone: "warn", label: "补丁查询未完成" };
+  return { tone: statusTone(status), label: chipLabel(status, running) };
 }
 
 /** Compact source affordance for a game list row, or null when nothing to add. */
 export function sourceChip(row: Install, running: boolean): { tone: Tone; label: string } | null {
   if (!row.discovery && !running) return null;
   const candidates = row.discovery?.candidates ?? [];
-  if (candidates.some(candidateMatched)) return { tone: "ok", label: "已找到来源" };
+  if (candidates.some(candidateMatched)) return { tone: "ok", label: gameMatchStatusLabel("publisher_match") };
   if (row.patches.length) return null; // the summary already conveys installable patches
   const status = row.discovery?.status;
-  if (running && (!status || status === "not_queried" || status === "queued")) return { tone: "busy", label: "查源中" };
-  return { tone: statusTone(status), label: chipLabel(status) };
+  return { tone: statusTone(status), label: chipLabel(status, running) };
 }
 
 export function matchedCandidateCount(row: Install): number {
@@ -153,7 +218,27 @@ export function matchedCandidateCount(row: Install): number {
 export function unqueriedCount(rows: Install[]): number {
   return rows.filter(row => !row.patches.length
     && !(row.discovery?.candidates ?? []).some(candidateMatched)
-    && (!row.discovery || row.discovery.status === "not_queried")).length;
+    && (!row.discovery || row.discovery.status === "pending")).length;
+}
+
+/**
+ * Instances a scan should hand to an automatic incremental `match_games` run:
+ * installed games that have no match record yet. Auto-matching needs an enabled
+ * publisher source (HGamer is only queried per game during matching) and does
+ * not stack behind a library-wide match task that is already running.
+ */
+export function pendingMatchInstances(
+  rows: Install[],
+  sources: SourceSummary[] | null | undefined,
+  tasks: SourceTaskStatus[],
+): string[] {
+  const hasPublisher = (sources ?? []).some(source => source.enabled && sourceRoleOf(source) === "publisher");
+  if (!hasPublisher) return [];
+  if (tasks.some(task => task.kind === "match_games" && task.key === "match" && task.running)) return [];
+  return rows
+    .filter(row => row.game.availability === "installed")
+    .filter(row => !row.discovery || row.discovery.status === "pending")
+    .map(row => row.game.instance_id);
 }
 
 // ---- candidate presentation ----------------------------------------------
@@ -222,13 +307,6 @@ export function versionEvidence(candidate: SourceCandidate): string[] {
   return (candidate.version_evidence ?? []).filter((value): value is string => typeof value === "string" && value.trim().length > 0);
 }
 
-export function formatTime(value?: number | null): string {
-  if (!value) return "—";
-  return new Date(value * 1000).toLocaleString();
-}
-
 export function sourceRoleOf(source: SourceSummary): "publisher" | "fallback_indexer" {
   return source.role === "fallback_indexer" || source.id === "hgamer" ? "fallback_indexer" : "publisher";
 }
-
-export type { GameSourceSubscription };

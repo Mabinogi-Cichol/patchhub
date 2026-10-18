@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { candidateMatched, displayPatches, filterInstalls, needsAttention, type Install, type SourceCandidate } from "@steam-patch/ui";
-import { candidateConditions, candidateSource, discoveryStatus, discoverySummary, safeSourceUrl, unqueriedCount } from "../src/discovery.ts";
+import { candidateMatched, displayPatches, fallbackDisplayStatus, filterInstalls, gameMatchStatusLabel, gameMatchStatusTone, needsAttention, sourceCoverageText, sourceIntervalLabel, sourceIntervalOptions, sourceLastAttemptText, sourceNextDueText, sourcePhaseLabel, type Install, type SourceCandidate } from "@steam-patch/ui";
+import { candidateConditions, candidateSource, discoveryNotice, discoveryStatus, discoverySummary, safeSourceUrl, unqueriedCount } from "../src/discovery.ts";
 
 const candidate = (fields: Partial<SourceCandidate> = {}): SourceCandidate => ({ candidate_id: "candidate-1", source_id: "kagura-cn", game_appid: 1227890, game_title: "Summer Memories", patch_title: "夏日狂想曲补丁", source_page: "https://kagurafan.com/patch/", capability: "discover_only", match_basis: "appid", ...fields });
 const row = (candidates: SourceCandidate[] = []): Install => ({ game: { instance_id: "library-a", appid: 1227890, name: "Summer Memories", library_path: "/a", install_path: "/a/game", buildid: null, availability: "installed", kind: "game" }, match_status: "no_catalog_match", patches: [], discovery: { status: "complete", candidates, diagnostics: [] } });
@@ -30,11 +30,13 @@ test("display union keeps candidate identities out of installation IDs and order
 });
 
 test("cold cache games remain countable and DLC conditions stay explicit", () => {
-  const cold = row(); cold.discovery = { status: "not_queried", candidates: [], diagnostics: [] };
-  const queriedEmpty = row(); queriedEmpty.discovery!.status = "empty";
+  const cold = row(); cold.discovery = { status: "pending", candidates: [], diagnostics: [] };
+  const queriedEmpty = row(); queriedEmpty.discovery!.status = "no_match";
   assert.equal(unqueriedCount([cold, queriedEmpty, row([candidate()])]), 1);
-  assert.match(discoveryStatus("empty"), /已查询的来源未找到/);
+  assert.match(discoveryStatus("no_match"), /已启用来源中未找到/);
+  assert.match(discoveryStatus("incomplete"), /尚需更新来源/);
   assert.match(discoveryStatus("source_offline_cached"), /显示上次结果/);
+  assert.match(discoveryStatus("fallback_match"), /HGamer/);
   assert.match(candidateConditions(candidate({ variant: "dlc", requires_dlc: [1390150] })), /1390150.*待确认/);
   assert.match(candidateConditions(candidate({ variant: "base", excludes_dlc: [1390150] })), /未使用 DLC 1390150/);
 });
@@ -51,15 +53,43 @@ test("external navigation accepts public HTTPS pages and rejects local addresses
   for (const url of ["http://example.com", "https://localhost/", "https://localhost./", "https://foo.localhost./", "https://example.local./", "https://127.0.0.1/", "https://10.0.0.1/", "https://[::1]/", "https://example.local/", "https://name:secret@example.com/", "javascript:alert(1)", "https://example.com:8443/"]) assert.equal(safeSourceUrl(url), false, url);
 });
 
-test("only a complete empty query says no patch was found", () => {
-  for (const status of ["complete", "cache_complete", "empty"]) {
+test("only a completed no_match says the enabled sources found no patch", () => {
+  for (const status of ["no_match"]) {
     const game = row(); game.discovery!.status = status;
-    assert.match(discoverySummary(game), /已查询的来源未找到/);
+    assert.match(discoverySummary(game), /已启用来源中未找到/);
   }
-  for (const status of ["not_queried", "partial", "failed", "source_refresh_failed"]) {
+  for (const status of ["pending", "publisher_match", "fallback_match", "incomplete", "failed"]) {
     const game = row(); game.discovery!.status = status;
     assert.doesNotMatch(discoverySummary(game), /未找到/);
   }
+  const incomplete = row(); incomplete.discovery!.status = "incomplete";
+  assert.match(discoveryNotice(incomplete)!, /尚需更新来源/);
+  const publisher = row(); publisher.discovery!.status = "publisher_match";
+  assert.equal(discoveryNotice(publisher), null);
+});
+
+test("shared six-state, interval and fallback helpers stay in the UI package", () => {
+  assert.equal(gameMatchStatusLabel("publisher_match"), "发行商来源命中");
+  assert.equal(gameMatchStatusLabel("no_match"), "已启用来源中未找到补丁");
+  assert.equal(gameMatchStatusLabel("fallback_match"), "补丁索引（HGamer）命中");
+  assert.equal(gameMatchStatusLabel("incomplete"), "来源覆盖不完整");
+  assert.deepEqual(["pending", "publisher_match", "fallback_match", "no_match", "incomplete", "failed"].map(gameMatchStatusTone),
+    ["pending", "ok", "fallback", "warning", "warning", "error"]);
+  assert.equal(sourceIntervalLabel(0), "关闭");
+  assert.equal(sourceIntervalLabel(6), "6 小时");
+  assert.equal(sourceIntervalLabel(72), "3 天");
+  assert.equal(sourceIntervalLabel(336), "14 天");
+  assert.deepEqual(sourceIntervalOptions().map(option => option.data), [0, 6, 12, 24, 72, 168, 336]);
+  assert.equal(sourceCoverageText({ complete: true, status: "source_refreshed" }), "索引覆盖完整");
+  assert.match(sourceCoverageText({ complete: false, status: "source_partial" }), /尚需更新来源/);
+  assert.equal(fallbackDisplayStatus("publisher_match"), null);
+  assert.match(fallbackDisplayStatus("fallback_match")!, /HGamer/);
+  assert.match(fallbackDisplayStatus("no_match")!, /已启用来源中未找到/);
+  assert.match(sourceNextDueText({ interval_hours: 0 }), /已关闭/);
+  assert.match(sourceNextDueText({ interval_hours: 24, next_due_at: 100 }, Date.parse("2026-10-11T00:00:00Z")), /已到更新周期/);
+  assert.match(sourceNextDueText({ interval_hours: 24, next_due_at: Date.parse("2026-10-12T00:00:00Z") / 1000 }, Date.parse("2026-10-11T00:00:00Z")), /下次/);
+  assert.match(sourceLastAttemptText({ checked_at: 100, status: "source_refreshed" }), /已实时查询/);
+  assert.match(sourcePhaseLabel("details"), /补丁详情/);
 });
 
 

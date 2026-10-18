@@ -1,4 +1,4 @@
-"""Generated v4 fixtures exercised through the actual Decky JSONL reader."""
+"""Generated v5 fixtures exercised through the actual Decky JSONL reader."""
 import asyncio
 import copy
 import json
@@ -162,9 +162,9 @@ class BridgeStreamTests(unittest.IsolatedAsyncioTestCase):
         def factory(request_id, request):
             first = event("source_progress", request_id, sequence=0)
             second = event("source_progress", request_id, sequence=1)
-            return [first, first, second, first, response("scan_sources", request_id)], {"event": "source_progress"}
+            return [first, first, second, first, response("update_source", request_id)], {"event": "source_progress"}
         with patch("bridge.asyncio.create_subprocess_exec", return_value=_FakeProcess(factory)):
-            await self.bridge._call("scan_sources", {}, on_event=seen.append)
+            await self.bridge._call("update_source", {"source_id": "fixture"}, on_event=seen.append)
         self.assertEqual([row["sequence"] for row in seen], [0, 1])
 
     async def test_terminal_receipt_seals_before_malformed_or_oversized_raw_tail(self):
@@ -241,10 +241,10 @@ class BridgeStreamTests(unittest.IsolatedAsyncioTestCase):
             def factory(request_id, request):
                 row = event("source_progress", request_id)
                 mutate(row)
-                return [row], response("scan_sources", request_id)
+                return [row], response("update_source", request_id)
             with patch("bridge.asyncio.create_subprocess_exec", return_value=_FakeProcess(factory)):
                 with self.assertRaisesRegex(RuntimeError, "contract_mismatch|unsupported_protocol"):
-                    await self.bridge._call("scan_sources", {})
+                    await self.bridge._call("update_source", {"source_id": "fixture"})
 
     async def test_actions_missing_unknown_response_or_invalid_error_are_refused(self):
         for mutate in (lambda row: row.update(extra=True), lambda row: row["result"].pop("installs"),
@@ -257,7 +257,7 @@ class BridgeStreamTests(unittest.IsolatedAsyncioTestCase):
                 with self.assertRaisesRegex(RuntimeError, "contract_mismatch"):
                     await self.bridge.scan()
         def factory(request_id, request):
-            return [], {"protocol_version": 4, "request_id": request_id, "ok": False,
+            return [], {"protocol_version": 5, "request_id": request_id, "ok": False,
                         "error": {"code": "bad; human text", "detail": None}}
         with patch("bridge.asyncio.create_subprocess_exec", return_value=_FakeProcess(factory)):
             with self.assertRaisesRegex(RuntimeError, "contract_mismatch"):
@@ -309,7 +309,7 @@ class BridgeStreamTests(unittest.IsolatedAsyncioTestCase):
 
 
 class BridgeIntegrationTests(unittest.IsolatedAsyncioTestCase):
-    async def test_real_core_v4_scan_and_error(self):
+    async def test_real_core_v5_scan_and_error(self):
         root = Path(__file__).resolve().parents[3]
         binary = root / "target/debug" / ("steam-patch.exe" if os.name == "nt" else "steam-patch")
         if not binary.exists(): self.skipTest("core binary not built")
@@ -352,7 +352,7 @@ class BridgeJournalReadTests(unittest.IsolatedAsyncioTestCase):
                 # Source events can project rows by calling scan/list_transactions;
                 # source network work must never own this read queue.
                 await second.call_sync("list_sources", {})
-                await second._call("scan_sources", {})
+                await second._call("update_source", {"source_id": "fixture"})
                 self.assertEqual(second._exchange_call.await_count, 2)
                 await other.list_transactions()
                 other._exchange_call.assert_awaited_once()

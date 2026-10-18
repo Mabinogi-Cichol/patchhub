@@ -150,6 +150,10 @@ pub struct SettingsFile {
     pub enabled: BTreeMap<String, bool>,
     pub added: Vec<SourceRule>,
     pub games: BTreeMap<String, BTreeMap<String, bool>>,
+    /// `source_id -> automatic update interval in hours` (schema 2). Missing or
+    /// `0` means automatic updates are off for that source.
+    #[serde(default)]
+    pub intervals: BTreeMap<String, u64>,
 }
 
 /// Output-only summary; injected with a flattened [`SourceRule`].
@@ -164,6 +168,18 @@ pub struct SourceSummary {
     pub entry_count: u64,
     pub cached_at: Option<u64>,
     pub checked_at: Option<u64>,
+    /// Current published index revision (0 when no index snapshot exists).
+    #[ts(type = "number")]
+    pub revision: u64,
+    /// Whether the current published index snapshot covers the whole source.
+    pub complete: bool,
+    /// Configured automatic update interval in hours (`0` = off).
+    #[ts(type = "number")]
+    pub interval_hours: u64,
+    /// Next scheduled attempt derived from `checked_at + interval_hours * 3600`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional = nullable)]
+    pub next_due_at: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, schemars::JsonSchema, ts_rs::TS, serde::Deserialize)]
@@ -204,7 +220,11 @@ pub struct SourceMatch {
     pub root_layout: Option<RootLayout>,
 }
 
-// ---- §2.3 source cache / status ------------------------------------------
+// ---- §2.3 legacy cache / status ------------------------------------------
+//
+// `SourceEntry`/`SourceCache` are the v1 table-row shapes: the ZIP collectors
+// still produce/consume them internally and the one-time v1 → v2 migration reads
+// them. Nothing else reads the old `cache/` tree at runtime.
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -397,7 +417,11 @@ pub struct Diagnostic {
     pub detail: Option<String>,
 }
 
-// ---- §2.5 discovery records / index envelopes ----------------------------
+// ---- §2.5 legacy discovery records (migration-only) ----------------------
+//
+// These types are never written by the v5 flow; they exist only so the one-time
+// v1 → v2 migration can read `discovery/` and `discovery-index/` and build
+// `matches/` + `index/`. Old files stay on disk but are not read afterwards.
 
 /// `success` and `attempt` carry different field sets (design §2.5).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -526,4 +550,216 @@ pub struct QueryContext {
     pub settings_revision: u64,
     #[serde(default)]
     pub generation: Option<u64>,
+}
+
+// ---- schema-2 persistent records (store schema 2, p1-contract §5–§7) ------
+//
+// These are on-disk only: no `ts_rs`/`schemars` derives, so the wire contract
+// (protocol v4) is untouched.
+
+/// Status of a persisted game match, derived by [`super::r#match::derive_game_status`].
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema, ts_rs::TS,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum GameMatchStatus {
+    Pending,
+    PublisherMatch,
+    FallbackMatch,
+    NoMatch,
+    Incomplete,
+    Failed,
+}
+
+/// Per-source match state inside [`GameMatchRecord`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SourceMatchStatus {
+    NoIndex,
+    IndexIncomplete,
+    Matched,
+    NoCandidate,
+    DetailIncomplete,
+    DetailFailed,
+}
+
+/// HGamer (fallback indexer) query state inside [`GameMatchRecord`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FallbackMatchStatus {
+    NotQueried,
+    Matched,
+    NoMatch,
+    Incomplete,
+    Failed,
+    Disabled,
+    NotNeeded,
+}
+
+/// One list-page entry of a [`SourceIndex`] (no detail-page scraping).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SourceIndexEntry {
+    pub title: String,
+    #[serde(default)]
+    pub aliases: Vec<String>,
+    /// Normalized detail/product/article/category URL; for table sources the
+    /// entry's source page.
+    pub page: String,
+    /// `product|article|category|entry`; kept as a string so an adapter or a
+    /// migrated v1 record never loses an unrecognized kind.
+    pub kind: String,
+    #[serde(default)]
+    pub appid: Option<u32>,
+    #[serde(default)]
+    pub url: Option<String>,
+    #[serde(default)]
+    pub language: Option<String>,
+    #[serde(default)]
+    pub date: Option<String>,
+}
+
+/// Published per-source index snapshot (`index/<source_id>.json`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SourceIndex {
+    pub schema_version: u32,
+    pub source_id: String,
+    /// Content revision: only real `entries`/`complete`/`pending` changes bump it.
+    pub revision: u64,
+    pub complete: bool,
+    pub checked_at: u64,
+    pub updated_at: u64,
+    #[serde(default)]
+    pub etag: Option<String>,
+    #[serde(default)]
+    pub modified: Option<String>,
+    #[serde(default)]
+    pub entries: Vec<SourceIndexEntry>,
+    /// Unfinished pagination queue; non-empty implies `complete = false`.
+    #[serde(default)]
+    pub pending: Vec<String>,
+}
+
+/// A link from a category listing to an article/detail page (P3 facts).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FactLink {
+    pub title: String,
+    pub page: String,
+}
+
+/// Query-independent facts parsed from one source page (design §4.1, §9).
+///
+/// Built by [`super::adapters::kagura::resolve_page`] during a game match task,
+/// never during a source index update, and persisted inside [`DetailRecord`].
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct PageFact {
+    pub title: String,
+    pub page: String,
+    /// `article|product|category`.
+    pub kind: String,
+    #[serde(default)]
+    pub steam_ids: Vec<u32>,
+    #[serde(default)]
+    pub aliases: Vec<String>,
+    #[serde(default)]
+    pub mirrors: Vec<Mirror>,
+    /// Body text, used by `identity::build_candidates`.
+    #[serde(default)]
+    pub text: String,
+    #[serde(default)]
+    pub published_at: Option<String>,
+    /// Absolute URLs inside the body.
+    #[serde(default)]
+    pub body_links: Vec<String>,
+    /// Category pages: inline article list.
+    #[serde(default)]
+    pub article_links: Vec<FactLink>,
+    /// Category pages whose articles are rendered in full.
+    #[serde(default)]
+    pub article_facts: Vec<PageFact>,
+    #[serde(default)]
+    pub next_page: Option<String>,
+}
+
+/// Detail cache for one source page, shared across games
+/// (`details/<source_id>/<key>.json`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DetailRecord {
+    pub schema_version: u32,
+    pub source_id: String,
+    pub page: String,
+    pub index_revision: u64,
+    pub checked_at: u64,
+    pub complete: bool,
+    #[serde(default)]
+    pub fact: Option<PageFact>,
+    #[serde(default)]
+    pub diagnostics: Vec<Diagnostic>,
+}
+
+/// Per-source match result inside [`GameMatchRecord`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SourceMatchRecord {
+    pub index_revision: u64,
+    pub status: SourceMatchStatus,
+    #[serde(default)]
+    pub candidates: Vec<SourceCandidate>,
+    #[serde(default)]
+    pub detail_pages: Vec<String>,
+    pub checked_at: u64,
+    #[serde(default)]
+    pub diagnostics: Vec<Diagnostic>,
+}
+
+/// HGamer fallback result inside [`GameMatchRecord`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FallbackMatchRecord {
+    pub query_key: String,
+    pub status: FallbackMatchStatus,
+    #[serde(default)]
+    pub candidates: Vec<SourceCandidate>,
+    pub checked_at: u64,
+    #[serde(default)]
+    pub diagnostics: Vec<Diagnostic>,
+}
+
+/// Persisted match state for one AppID (`matches/<appid>.json`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GameMatchRecord {
+    pub schema_version: u32,
+    pub appid: u32,
+    pub name: String,
+    #[serde(default)]
+    pub localized_name: Option<String>,
+    /// Matching-input digest (see [`super::r#match::input_key`]); empty when the
+    /// migration could not reconstruct it (forces a rematch).
+    pub input_key: String,
+    pub status: GameMatchStatus,
+    #[serde(default)]
+    pub sources: BTreeMap<String, SourceMatchRecord>,
+    #[serde(default)]
+    pub fallback: Option<FallbackMatchRecord>,
+    pub updated_at: u64,
+}
+
+/// Wire-ready game match result (protocol v5 `GameMatch`, p1-contract §9).
+///
+/// P3 produces this shape; the protocol envelope only references it from P4 on,
+/// so adding the derives here does not change the generated v4 contracts.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema, ts_rs::TS)]
+#[serde(deny_unknown_fields)]
+pub struct GameMatch {
+    pub appid: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional = nullable)]
+    pub instance_id: Option<String>,
+    pub status: GameMatchStatus,
+    pub candidates: Vec<SourceCandidate>,
+    pub diagnostics: Vec<Diagnostic>,
+    pub source_revisions: BTreeMap<String, u64>,
 }

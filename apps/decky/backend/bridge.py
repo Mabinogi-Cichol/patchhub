@@ -20,6 +20,9 @@ TERMINAL_DRAIN_BYTES = 8 * 1024 * 1024
 TERMINAL_DRAIN_CHUNK_BYTES = 64 * 1024
 PROGRESS_FIELDS = {"stage", "substage", "bytes_done", "total_bytes", "files_done",
                    "total_files", "current_file", "archive_bytes"}
+# Every controlled method streams its own event family; install_patch emits
+# install_progress while the three source tasks emit the four source events.
+SOURCE_TASK_METHODS = CONTROLLED_METHODS - frozenset({"install_patch"})
 
 
 def _unique_object(pairs):
@@ -182,7 +185,7 @@ class CoreBridge:
                    "params": {"host": host, **params}}
         validate_request(request, method in CONTROLLED_METHODS if controlled is None else controlled)
         payload = json.dumps(request, ensure_ascii=False).encode("utf-8") + b"\n"
-        if method not in {"get_capabilities", "scan", "preview", "list_transactions", "list_sources", "list_game_sources", "discover_game"}:
+        if method not in {"get_capabilities", "scan", "preview", "list_transactions", "list_sources", "list_game_sources", "project_instances"}:
             await self.preflight()
         task = current_task.get()
         if controlled is None:
@@ -248,7 +251,7 @@ class CoreBridge:
                             raise RuntimeError("contract_mismatch")
                         if task:
                             task.update(**{key: value for key, value in row.items() if key in PROGRESS_FIELDS})
-                    elif method not in {"scan_sources", "refresh_sources"}:
+                    elif method not in SOURCE_TASK_METHODS:
                         raise RuntimeError("contract_mismatch")
                     if on_event is not None:
                         emitted = on_event(row)

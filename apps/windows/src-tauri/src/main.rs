@@ -2,6 +2,7 @@
 
 use serde_json::{json, Value};
 use std::{
+    collections::HashMap,
     io::{BufRead, BufReader, Read, Write},
     path::{Path, PathBuf},
     process::{Child, ChildStdin, Command, Stdio},
@@ -30,8 +31,8 @@ enum Operation {
     SetSourceEnabled,
     SetGameSource,
     AddSource,
-    RefreshSources,
-    DiscoverGame,
+    SetSourceUpdateInterval,
+    ProjectInstances,
 }
 
 impl Operation {
@@ -47,8 +48,8 @@ impl Operation {
             Self::SetSourceEnabled => "set_source_enabled",
             Self::SetGameSource => "set_game_source",
             Self::AddSource => "add_source",
-            Self::RefreshSources => "refresh_sources",
-            Self::DiscoverGame => "discover_game",
+            Self::SetSourceUpdateInterval => "set_source_update_interval",
+            Self::ProjectInstances => "project_instances",
         }
     }
 }
@@ -127,11 +128,16 @@ fn config_file(app: &AppHandle, name: &str) -> Option<PathBuf> {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct CallArguments {
     instance_id: Option<String>,
+    instance_ids: Option<Vec<String>>,
     release_id: Option<String>,
     selection_id: Option<String>,
+    appid: Option<u32>,
     source_id: Option<String>,
     enabled: Option<bool>,
     subscribed: Option<bool>,
+    interval_hours: Option<u64>,
+    instances: Option<Vec<String>>,
+    force_details: Option<bool>,
     rule: Option<Value>,
     force: Option<bool>,
     name_hints: Option<Vec<String>>,
@@ -169,27 +175,60 @@ struct ActiveJob {
 #[derive(Clone, Default)]
 struct Jobs(Arc<Mutex<Option<ActiveJob>>>);
 
-/// Latest validated event, retained for host progress snapshots.
-type SourceProgress = Option<protocol::SourceProgressEvent>;
+/// Latest validated progress event, retained for host task snapshots.
+type TaskProgress = Option<Value>;
 
-#[derive(Clone)]
-struct SourceScanJob {
-    child: ChildHandle,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SourceTaskKind {
+    UpdateSource,
+    MatchGames,
+    RematchGame,
+}
+
+impl SourceTaskKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::UpdateSource => "update_source",
+            Self::MatchGames => "match_games",
+            Self::RematchGame => "rematch_game",
+        }
+    }
+}
+
+/// Run state shared by the task launch, the stream reader and the snapshot /
+/// cancel commands. Process handles live separately so status snapshots never
+/// depend on holding the child mutex.
+struct SourceTaskState {
+    task_id: String,
+    kind: SourceTaskKind,
+    key: String,
+    running: AtomicBool,
+    cancelled: AtomicBool,
+    /// Latest `source_progress`/`match_progress` event.
+    progress: Mutex<TaskProgress>,
+    /// Latest event of any of the four source event kinds.
+    last_event: Mutex<Option<Value>>,
+    result: Mutex<Option<Value>>,
+    error: Mutex<Option<HostError>>,
+}
+
+struct SourceTaskProcess {
     stdin: StdinHandle,
-    progress: Arc<Mutex<SourceProgress>>,
-    cancelled: Arc<AtomicBool>,
 }
 
 #[derive(Default)]
-struct SourceScan {
-    active: Option<SourceScanJob>,
-    /// Final `scan_sources` result, retained after the task finishes so the
-    /// frontend can snapshot it through `source_scan_status`.
-    results: Option<Value>,
+struct SourceTaskRegistry {
+    states: HashMap<String, Arc<SourceTaskState>>,
+    processes: HashMap<String, SourceTaskProcess>,
 }
 
 #[derive(Clone, Default)]
-struct SourceScans(Arc<Mutex<SourceScan>>);
+struct SourceTasks(Arc<Mutex<SourceTaskRegistry>>);
+
+/// Source tasks retained after completion: `match_games` results carry full
+/// candidate lists, so only the most recent finished snapshots are kept for
+/// frontend reconnect; running tasks are never pruned.
+const RETAINED_FINISHED_TASKS: usize = 16;
 
 #[derive(Clone, Default)]
 struct Closing(Arc<AtomicBool>);
@@ -280,11 +319,16 @@ fn read_all(mut reader: impl Read) -> Result<Vec<u8>, HostError> {
 fn build_params(method: &str, args: CallArguments, common: Value) -> Result<Value, HostError> {
     let CallArguments {
         instance_id,
+        instance_ids,
         release_id,
         selection_id,
+        appid,
         source_id,
         enabled,
         subscribed,
+        interval_hours,
+        instances,
+        force_details,
         rule,
         force,
         name_hints,
@@ -304,6 +348,11 @@ fn build_params(method: &str, args: CallArguments, common: Value) -> Result<Valu
             return Err("invalid_id".into());
         }
     }
+    for value in instance_ids.iter().chain(instances.iter()).flatten() {
+        if !protocol::validate_id(value, protocol::MAX_INSTANCE_ID_BYTES) {
+            return Err("invalid_id".into());
+        }
+    }
     if method == "preview" {
         if instance_id.is_none() {
             return Err("instance_required".into());
@@ -316,12 +365,21 @@ fn build_params(method: &str, args: CallArguments, common: Value) -> Result<Valu
             _ => {}
         }
     }
-    if ["list_game_sources", "set_game_source", "discover_game"].contains(&method)
+    if ["list_game_sources", "set_game_source", "rematch_game"].contains(&method)
         && instance_id.is_none()
+        && appid.is_none()
     {
         return Err("instance_required".into());
     }
-    if ["set_source_enabled", "set_game_source"].contains(&method) && source_id.is_none() {
+    if [
+        "set_source_enabled",
+        "set_game_source",
+        "set_source_update_interval",
+        "update_source",
+    ]
+    .contains(&method)
+        && source_id.is_none()
+    {
         return Err("source_id_required".into());
     }
     if method == "set_source_enabled" && enabled.is_none() {
@@ -329,6 +387,12 @@ fn build_params(method: &str, args: CallArguments, common: Value) -> Result<Valu
     }
     if method == "set_game_source" && subscribed.is_none() {
         return Err("subscribed_required".into());
+    }
+    if method == "set_source_update_interval" && interval_hours.is_none() {
+        return Err("interval_hours_required".into());
+    }
+    if method == "project_instances" && instance_ids.is_none() {
+        return Err("instance_ids_required".into());
     }
     if method == "add_source" && rule.is_none() {
         return Err("rule_required".into());
@@ -338,11 +402,17 @@ fn build_params(method: &str, args: CallArguments, common: Value) -> Result<Valu
     if let Some(value) = instance_id {
         params["instance_id"] = json!(value);
     }
+    if let Some(value) = instance_ids {
+        params["instance_ids"] = json!(value);
+    }
     if let Some(value) = release_id {
         params["release_id"] = json!(value);
     }
     if let Some(value) = selection_id {
         params["selection_id"] = json!(value);
+    }
+    if let Some(value) = appid {
+        params["appid"] = json!(value);
     }
     if let Some(value) = source_id {
         params["source_id"] = json!(value);
@@ -352,6 +422,15 @@ fn build_params(method: &str, args: CallArguments, common: Value) -> Result<Valu
     }
     if let Some(value) = subscribed {
         params["subscribed"] = json!(value);
+    }
+    if let Some(value) = interval_hours {
+        params["interval_hours"] = json!(value);
+    }
+    if let Some(value) = instances {
+        params["instances"] = json!(value);
+    }
+    if let Some(value) = force_details {
+        params["force_details"] = json!(value);
     }
     if let Some(value) = rule {
         params["rule"] = value;
@@ -368,8 +447,17 @@ fn build_params(method: &str, args: CallArguments, common: Value) -> Result<Valu
     let probe = json!({"protocol_version":PROTOCOL_VERSION,"request_id":"host-validation","method":method,"params":params});
     let mut bytes = serde_json::to_vec(&probe).map_err(|_| "request_encoding_failed")?;
     bytes.push(b'\n');
-    protocol::decode_request(&bytes, false).map_err(protocol_error)?;
+    protocol::decode_request(&bytes, method_is_task(method)).map_err(protocol_error)?;
     Ok(params)
+}
+
+/// Task methods require the `serve-task` control channel; one-shot `serve`
+/// rejects them with `task_required`.
+fn method_is_task(method: &str) -> bool {
+    matches!(
+        method,
+        "install_patch" | "update_source" | "match_games" | "rematch_game"
+    )
 }
 
 fn execute_core_call(
@@ -410,9 +498,7 @@ fn run_one_shot(app: &AppHandle, request: Value, id: &str) -> Result<Value, Host
     request_line.push(b'\n');
     protocol::decode_request(
         &request_line,
-        request["method"]
-            .as_str()
-            .is_some_and(|m| matches!(m, "install_patch" | "scan_sources" | "refresh_sources")),
+        request["method"].as_str().is_some_and(method_is_task),
     )
     .map_err(protocol_error)?;
     let mut child = core_command(&binary(app)?)
@@ -516,131 +602,158 @@ async fn set_game_source(
 }
 
 #[tauri::command]
-async fn discover_game(
+async fn set_source_update_interval(
     app: AppHandle,
-    instance_id: String,
-    force: Option<bool>,
-    name_hints: Option<Vec<String>>,
-    preferred_language: Option<String>,
+    source_id: String,
+    interval_hours: u64,
 ) -> Result<Value, HostError> {
     let args = CallArguments {
-        instance_id: Some(instance_id),
-        force: Some(force.unwrap_or(false)),
-        name_hints,
-        preferred_language,
+        source_id: Some(source_id),
+        interval_hours: Some(interval_hours),
         ..Default::default()
     };
-    one_shot_operation(app, Operation::DiscoverGame, args).await
+    one_shot_operation(app, Operation::SetSourceUpdateInterval, args).await
 }
 
 #[tauri::command]
-async fn refresh_sources(
+async fn project_instances(app: AppHandle, instance_ids: Vec<String>) -> Result<Value, HostError> {
+    let args = CallArguments {
+        instance_ids: Some(instance_ids),
+        ..Default::default()
+    };
+    one_shot_operation(app, Operation::ProjectInstances, args).await
+}
+
+#[tauri::command]
+async fn start_source_update(
     app: AppHandle,
-    scans: State<'_, SourceScans>,
+    tasks: State<'_, SourceTasks>,
+    source_id: String,
     force: Option<bool>,
 ) -> Result<Value, HostError> {
-    // `refresh_sources` is a task-channel method (p1-host-contract §1.1 B): it
-    // must run on the `serve-task` control channel (cancel/EOF) exactly
-    // like `scan_sources`. The one-shot `serve` face is rejected by the core
-    // with `task_required`, which is the failure this command previously hit.
-    require_capabilities(&app)?;
-    let id = request_id();
-    let request = source_refresh_request(&id, common_params(&app)?, force.unwrap_or(false))?;
-    let payload = serde_json::to_vec(&request).map_err(|_| "request_encoding_failed")?;
-    let mut request_line = payload.clone();
-    request_line.push(b'\n');
-    protocol::decode_request(
-        &request_line,
-        request["method"]
-            .as_str()
-            .is_some_and(|m| matches!(m, "install_patch" | "scan_sources" | "refresh_sources")),
-    )
-    .map_err(protocol_error)?;
+    let tasks = tasks.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        require_capabilities(&app)?;
+        let params = build_params(
+            "update_source",
+            CallArguments {
+                source_id: Some(source_id.clone()),
+                force,
+                ..Default::default()
+            },
+            common_params(&app)?,
+        )?;
+        launch_source_task(
+            &app,
+            &tasks,
+            Method::UpdateSource,
+            SourceTaskKind::UpdateSource,
+            source_id,
+            params,
+        )
+    })
+    .await
+    .map_err(|_| HostError::from("core_task_failed"))?
+}
 
-    let scans = scans.inner().clone();
-    let closing = app.state::<Closing>().inner().clone();
-    let jobs = app.state::<Jobs>().inner().clone();
-    // Keep the mutex guard inside this block so no non-Send guard is held across the `.await` below.
-    let (child_handle, progress, stdout) = {
-        let mut slot = scans.0.lock().map_err(|_| "job_state_unavailable")?;
-        // A refresh shares the single source-task slot with `scan_sources`: the
-        // core permits one task per `serve-task` child and both methods stream
-        // over the same channel, so serializing them prevents two concurrent
-        // source tasks mutating the same state directory.
-        if slot.active.is_some() {
-            return Err("source_scan_in_progress".into());
+#[tauri::command]
+async fn start_match_games(
+    app: AppHandle,
+    tasks: State<'_, SourceTasks>,
+    instances: Option<Vec<String>>,
+    name_hints: Option<Vec<String>>,
+    preferred_language: Option<String>,
+    force_details: Option<bool>,
+) -> Result<Value, HostError> {
+    let tasks = tasks.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        require_capabilities(&app)?;
+        let params = build_params(
+            "match_games",
+            CallArguments {
+                instances,
+                name_hints,
+                preferred_language,
+                force_details,
+                ..Default::default()
+            },
+            common_params(&app)?,
+        )?;
+        launch_source_task(
+            &app,
+            &tasks,
+            Method::MatchGames,
+            SourceTaskKind::MatchGames,
+            "match".to_string(),
+            params,
+        )
+    })
+    .await
+    .map_err(|_| HostError::from("core_task_failed"))?
+}
+
+#[tauri::command]
+async fn start_rematch_game(
+    app: AppHandle,
+    tasks: State<'_, SourceTasks>,
+    instance_id: Option<String>,
+    appid: Option<u32>,
+    name_hints: Option<Vec<String>>,
+    preferred_language: Option<String>,
+) -> Result<Value, HostError> {
+    let tasks = tasks.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        require_capabilities(&app)?;
+        let key = rematch_task_key(instance_id.as_deref(), appid)?;
+        let params = build_params(
+            "rematch_game",
+            CallArguments {
+                instance_id,
+                appid,
+                name_hints,
+                preferred_language,
+                ..Default::default()
+            },
+            common_params(&app)?,
+        )?;
+        launch_source_task(
+            &app,
+            &tasks,
+            Method::RematchGame,
+            SourceTaskKind::RematchGame,
+            key,
+            params,
+        )
+    })
+    .await
+    .map_err(|_| HostError::from("core_task_failed"))?
+}
+
+#[tauri::command]
+fn source_task_status(
+    tasks: State<'_, SourceTasks>,
+    task_id: Option<String>,
+) -> Result<Value, HostError> {
+    let registry = tasks.0.lock().map_err(|_| "job_state_unavailable")?;
+    let Some(task_id) = task_id else {
+        let mut ids: Vec<&String> = registry.states.keys().collect();
+        ids.sort();
+        let mut snapshots = Vec::with_capacity(ids.len());
+        for id in ids {
+            snapshots.push(task_snapshot(&registry.states[id])?);
         }
-        let mut child = core_command(&binary(&app)?)
-            .arg("serve-task")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()
-            .map_err(|_| "core_process_failed")?;
-        let mut stdin = child.stdin.take().ok_or("core_process_failed")?;
-        let stdout = child.stdout.take().ok_or("core_process_failed")?;
-        stdin
-            .write_all(&payload)
-            .and_then(|_| stdin.write_all(b"\n"))
-            .map_err(|_| "core_process_failed")?;
-        stdin.flush().map_err(|_| "core_process_failed")?;
-
-        let stdin_handle = Arc::new(Mutex::new(ClosableWriter(Some(stdin))));
-        let cancelled = Arc::new(AtomicBool::new(false));
-        let active = SourceScanJob {
-            child: Arc::new(Mutex::new(child)),
-            stdin: stdin_handle,
-            progress: Arc::new(Mutex::new(SourceProgress::default())),
-            cancelled,
-        };
-        let child_handle = active.child.clone();
-        let progress = active.progress.clone();
-        slot.active = Some(active);
-        (child_handle, progress, stdout)
+        return Ok(Value::Array(snapshots));
     };
+    registry
+        .states
+        .get(&task_id)
+        .ok_or_else(|| HostError::from("task_not_found"))
+        .and_then(|state| task_snapshot(state))
+}
 
-    let app_for_task = app.clone();
-    let app_for_reader = app.clone();
-    let scans_for_task = scans.clone();
-    let response_id = id.clone();
-    let task = tauri::async_runtime::spawn_blocking(move || {
-        let rejection_child = child_handle.clone();
-        let reader = thread::spawn(move || {
-            let result = read_refresh_task_output(stdout, response_id, app_for_reader, progress);
-            if result.is_err() {
-                // This source lookup child owns no installer game writes or
-                // rollback. Installer rejection uses cancel/EOF instead.
-                if let Ok(mut child) = rejection_child.lock() {
-                    let _ = child.kill();
-                }
-            }
-            result
-        });
-        let status = wait_core_child(&child_handle);
-        let response = match reader.join() {
-            Ok(response) => response,
-            Err(_) => Err(HostError::from("core_process_failed")),
-        };
-        // A validated terminal is authoritative even if the process fails
-        // during teardown. Incomplete or corrupt streams already return Err.
-        let result = task_terminal_result(response, status);
-        if let Ok(mut slot) = scans_for_task.0.lock() {
-            slot.active = None;
-            // `refresh_sources` returns `{settings_revision, statuses}`, a
-            // different shape than `scan_sources` `results`; it must not
-            // overwrite the retained scan snapshot read by `source_scan_status`.
-        }
-        if closing.0.load(Ordering::SeqCst) {
-            // Do not exit out from under a committed install rollback path.
-            let install_active = jobs.0.lock().map(|slot| slot.is_some()).unwrap_or(true);
-            if !install_active {
-                app_for_task.exit(0);
-            }
-        }
-        result
-    });
-    task.await
-        .map_err(|_| HostError::from("core_task_failed"))?
+#[tauri::command]
+fn cancel_source_task(tasks: State<'_, SourceTasks>, task_id: String) -> Result<bool, HostError> {
+    cancel_source_task_impl(&tasks, &task_id)
 }
 
 #[tauri::command]
@@ -817,21 +930,6 @@ fn request_cancel(job: &ActiveJob) -> Result<(), HostError> {
     cancel_job(&job.stdin, &job.cancelled)
 }
 
-fn request_source_cancel(job: &SourceScanJob) -> Result<(), HostError> {
-    cancel_job(&job.stdin, &job.cancelled)
-}
-
-/// Recognizes the streaming source events the CLI sends before the single final
-/// response; anything else is treated as the terminal response.
-#[cfg(test)]
-fn source_event_name(value: &Value) -> Option<&'static str> {
-    match value.get("event").and_then(Value::as_str) {
-        Some("source_progress") => Some("source_progress"),
-        Some("source_update") => Some("source_update"),
-        _ => None,
-    }
-}
-
 /// One LF-terminated line for the normal task stream. JSON Lines framing has no
 /// line-size limit; each accepted line is still schema-checked downstream.
 fn read_line(reader: &mut impl BufRead) -> std::io::Result<Option<Vec<u8>>> {
@@ -898,11 +996,17 @@ fn read_core_stream(
                 .to_owned();
             let allowed = match method.as_str() {
                 "install_patch" => event == "install_progress",
-                "scan_sources" => {
-                    event == "source_progress"
-                        || (event == "source_update" && value.get("discovery").is_some())
+                // `update_source` updates the index and then re-derives matches
+                // for subscribed games, so it streams all four source events.
+                "update_source" => {
+                    matches!(
+                        event.as_str(),
+                        "source_progress" | "source_update" | "match_progress" | "match_update"
+                    )
                 }
-                "refresh_sources" => event == "source_update" && value.get("source_id").is_some(),
+                "match_games" | "rematch_game" => {
+                    event == "match_progress" || event == "match_update"
+                }
                 _ => false,
             };
             if !allowed {
@@ -938,63 +1042,291 @@ fn read_task_output(
     )
 }
 
-fn read_source_task_output(
-    stdout: impl Read,
-    request_id: String,
-    app: AppHandle,
-    progress: Arc<Mutex<SourceProgress>>,
-) -> Result<Value, HostError> {
-    read_core_stream(
-        &mut BufReader::new(stdout),
-        &request_id,
-        Method::ScanSources,
-        |name, value| {
-            if name == "source_progress" {
-                let parsed = serde_json::from_value::<SourceProgress>(value.clone())
-                    .map_err(|_| "invalid_core_response")?;
-                *progress.lock().map_err(|_| "job_state_unavailable")? = parsed;
-            }
-            let _ = app.emit(name, value);
-            Ok(())
-        },
-    )
+/// Applies one accepted event to the retained task snapshot. Only progress
+/// events update `progress`; every accepted event updates `last_event`.
+fn update_task_state(state: &SourceTaskState, name: &str, value: &Value) -> Result<(), HostError> {
+    if name == "source_progress" || name == "match_progress" {
+        *state.progress.lock().map_err(|_| "job_state_unavailable")? = Some(value.clone());
+    }
+    *state
+        .last_event
+        .lock()
+        .map_err(|_| "job_state_unavailable")? = Some(value.clone());
+    Ok(())
 }
 
-fn read_refresh_stream(
+/// Reads one `serve-task` stream, validates the method-specific event set and
+/// forwards every accepted event. Accepted events are mirrored into the shared
+/// task state before `emit` so polling sees the same snapshot as the events.
+fn read_source_task_output(
     stdout: impl Read,
     request_id: &str,
-    mut emit: impl FnMut(&'static str, Value),
-    _progress: &Arc<Mutex<SourceProgress>>,
+    method: Method,
+    state: &SourceTaskState,
+    mut emit: impl FnMut(&str, Value),
 ) -> Result<Value, HostError> {
     read_core_stream(
         &mut BufReader::new(stdout),
         request_id,
-        Method::RefreshSources,
-        |_, value| {
-            emit("source_update", value);
+        method,
+        |name, value| {
+            update_task_state(state, name, &value)?;
+            emit(name, value);
             Ok(())
         },
     )
 }
 
-/// Reads a `serve-task` `refresh_sources` stream and forwards each accepted
-/// event to the frontend. The mirror is kept for parity with the shared source
-/// task slot even though `refresh_sources` emits no `source_progress`.
-fn read_refresh_task_output(
-    stdout: impl Read,
-    request_id: String,
-    app: AppHandle,
-    progress: Arc<Mutex<SourceProgress>>,
+/// Returns the id of a still-running task with the same kind/key, so repeated
+/// starts do not stack. Finished snapshots are retained for polling but never
+/// block a new task.
+fn active_task_id(
+    states: &HashMap<String, Arc<SourceTaskState>>,
+    kind: SourceTaskKind,
+    key: &str,
+) -> Option<String> {
+    states
+        .values()
+        .find(|state| {
+            state.kind == kind && state.key == key && state.running.load(Ordering::SeqCst)
+        })
+        .map(|state| state.task_id.clone())
+}
+
+/// Keeps retained finished snapshots bounded; results may carry full candidate
+/// lists. Running tasks are never pruned and ordering here is not contractual.
+fn prune_finished_tasks(states: &mut HashMap<String, Arc<SourceTaskState>>) {
+    let mut finished: Vec<String> = states
+        .iter()
+        .filter(|(_, state)| !state.running.load(Ordering::SeqCst))
+        .map(|(id, _)| id.clone())
+        .collect();
+    finished.sort();
+    let excess = finished
+        .len()
+        .saturating_add(1)
+        .saturating_sub(RETAINED_FINISHED_TASKS);
+    for id in finished.into_iter().take(excess) {
+        states.remove(&id);
+    }
+}
+
+fn task_snapshot(state: &SourceTaskState) -> Result<Value, HostError> {
+    let progress = state
+        .progress
+        .lock()
+        .map_err(|_| "job_state_unavailable")?
+        .clone();
+    let last_event = state
+        .last_event
+        .lock()
+        .map_err(|_| "job_state_unavailable")?
+        .clone();
+    let result = state
+        .result
+        .lock()
+        .map_err(|_| "job_state_unavailable")?
+        .clone();
+    let error = state
+        .error
+        .lock()
+        .map_err(|_| "job_state_unavailable")?
+        .clone();
+    Ok(json!({
+        "task_id": state.task_id,
+        "kind": state.kind.as_str(),
+        "key": state.key,
+        "running": state.running.load(Ordering::SeqCst),
+        "cancelled": state.cancelled.load(Ordering::SeqCst),
+        "progress": progress,
+        "last_event": last_event,
+        "result": result,
+        "error": error,
+    }))
+}
+
+/// `rematch_game` de-duplicates per game, not per task kind: the same instance
+/// and the same AppID address the same game.
+fn rematch_task_key(instance_id: Option<&str>, appid: Option<u32>) -> Result<String, HostError> {
+    match (instance_id, appid) {
+        (Some(id), _) => Ok(format!("instance:{id}")),
+        (None, Some(appid)) => Ok(format!("appid:{appid}")),
+        (None, None) => Err("instance_required".into()),
+    }
+}
+
+fn build_task_request(method: Method, id: &str, params: Value) -> Result<Value, HostError> {
+    let request = json!({
+        "protocol_version": PROTOCOL_VERSION,
+        "request_id": id,
+        "method": method.as_str(),
+        "params": params,
+    });
+    let payload = serde_json::to_vec(&request).map_err(|_| "request_encoding_failed")?;
+    let mut line = payload;
+    line.push(b'\n');
+    protocol::decode_request(&line, true).map_err(protocol_error)?;
+    Ok(request)
+}
+
+fn cancel_source_task_impl(tasks: &SourceTasks, task_id: &str) -> Result<bool, HostError> {
+    let registry = tasks.0.lock().map_err(|_| "job_state_unavailable")?;
+    let Some(state) = registry.states.get(task_id) else {
+        return Err("task_not_found".into());
+    };
+    if !state.running.load(Ordering::SeqCst) {
+        return Ok(false);
+    }
+    let process = registry
+        .processes
+        .get(task_id)
+        .ok_or_else(|| HostError::from("job_state_unavailable"))?;
+    cancel_job(&process.stdin, &state.cancelled)?;
+    Ok(true)
+}
+
+fn any_running_source_task(tasks: &SourceTasks) -> bool {
+    tasks
+        .0
+        .lock()
+        .map(|registry| {
+            registry
+                .states
+                .values()
+                .any(|state| state.running.load(Ordering::SeqCst))
+        })
+        // A poisoned registry must not let the app exit under a running task.
+        .unwrap_or(true)
+}
+
+/// Spawns one `serve-task` child for a source task and starts its reader. The
+/// returned snapshot is immediate; progress, result and error are updated on
+/// the shared task state and read through `source_task_status`.
+fn launch_source_task(
+    app: &AppHandle,
+    tasks: &SourceTasks,
+    method: Method,
+    kind: SourceTaskKind,
+    key: String,
+    params: Value,
 ) -> Result<Value, HostError> {
-    read_refresh_stream(
-        stdout,
-        &request_id,
-        move |name, value| {
-            // A closed event pipe must not abort the task reader.
-            let _ = app.emit(name, value);
-        },
-        &progress,
-    )
+    let task_id = request_id();
+    let request = build_task_request(method, &task_id, params)?;
+    let mut payload = serde_json::to_vec(&request).map_err(|_| "request_encoding_failed")?;
+    payload.push(b'\n');
+
+    // Spawn inside the registry lock so two concurrent same-key starts cannot
+    // both pass the de-duplication check, and a spawn failure leaves no slot.
+    let (state, child_handle, stdout) = {
+        let mut registry = tasks.0.lock().map_err(|_| "job_state_unavailable")?;
+        if let Some(existing) = active_task_id(&registry.states, kind, &key) {
+            let state = registry.states[&existing].clone();
+            return task_snapshot(&state);
+        }
+        prune_finished_tasks(&mut registry.states);
+        let mut child = core_command(&binary(app)?)
+            .arg("serve-task")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .map_err(|_| "core_process_failed")?;
+        let mut stdin = child.stdin.take().ok_or("core_process_failed")?;
+        let stdout = child.stdout.take().ok_or("core_process_failed")?;
+        if stdin
+            .write_all(&payload)
+            .and_then(|_| stdin.flush())
+            .is_err()
+        {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err("core_process_failed".into());
+        }
+        let state = Arc::new(SourceTaskState {
+            task_id: task_id.clone(),
+            kind,
+            key,
+            running: AtomicBool::new(true),
+            cancelled: AtomicBool::new(false),
+            progress: Mutex::new(None),
+            last_event: Mutex::new(None),
+            result: Mutex::new(None),
+            error: Mutex::new(None),
+        });
+        let child_handle = Arc::new(Mutex::new(child));
+        let stdin = Arc::new(Mutex::new(ClosableWriter(Some(stdin))));
+        registry.states.insert(task_id.clone(), state.clone());
+        registry
+            .processes
+            .insert(task_id.clone(), SourceTaskProcess { stdin });
+        (state, child_handle, stdout)
+    };
+
+    let app_for_task = app.clone();
+    let tasks_for_task = tasks.clone();
+    let state_for_reader = state.clone();
+    let reader_request_id = task_id.clone();
+    thread::spawn(move || {
+        let result = read_source_task_output(
+            stdout,
+            &reader_request_id,
+            method,
+            &state_for_reader,
+            |name, value| {
+                // A closed event pipe must not abort the task reader.
+                let _ = app_for_task.emit(name, value);
+            },
+        );
+        if result.is_err() {
+            // Source tasks own no installer writes; stopping the child cannot
+            // interrupt a rollback. Installer rejection uses cancel/EOF.
+            if let Ok(mut child) = child_handle.lock() {
+                let _ = child.kill();
+            }
+        }
+        let status = wait_core_child(&child_handle);
+        let result = task_terminal_result(result, status);
+        if let Ok(mut slot) = state_for_reader.result.lock() {
+            if let Ok(value) = &result {
+                *slot = Some(value.clone());
+            }
+        }
+        if let Err(error) = &result {
+            if let Ok(mut slot) = state_for_reader.error.lock() {
+                *slot = Some(error.clone());
+            }
+        }
+        state_for_reader.running.store(false, Ordering::SeqCst);
+        if let Ok(mut registry) = tasks_for_task.0.lock() {
+            registry.processes.remove(&reader_request_id);
+        }
+        exit_if_closing(&app_for_task);
+    });
+
+    task_snapshot(&state)
+}
+
+/// A close request waits for active install and source tasks; exit once the
+/// last one ends. Installers may still be applying or rolling back, source
+/// tasks own no game writes.
+fn exit_if_closing(app: &AppHandle) {
+    let closing = app.state::<Closing>().inner().clone();
+    if !closing.0.load(Ordering::SeqCst) {
+        return;
+    }
+    let install_active = app
+        .state::<Jobs>()
+        .0
+        .lock()
+        .map(|slot| slot.is_some())
+        .unwrap_or(true);
+    if install_active {
+        return;
+    }
+    let tasks = app.state::<SourceTasks>().inner().clone();
+    if !any_running_source_task(&tasks) {
+        app.exit(0);
+    }
 }
 
 /// Validates the `start_install` arguments and builds the `install_patch`
@@ -1060,9 +1392,7 @@ fn build_install_request(
     request_line.push(b'\n');
     protocol::decode_request(
         &request_line,
-        request["method"]
-            .as_str()
-            .is_some_and(|m| matches!(m, "install_patch" | "scan_sources" | "refresh_sources")),
+        request["method"].as_str().is_some_and(method_is_task),
     )
     .map_err(protocol_error)?;
     Ok(request)
@@ -1096,14 +1426,11 @@ async fn start_install(
     request_line.push(b'\n');
     protocol::decode_request(
         &request_line,
-        request["method"]
-            .as_str()
-            .is_some_and(|m| matches!(m, "install_patch" | "scan_sources" | "refresh_sources")),
+        request["method"].as_str().is_some_and(method_is_task),
     )
     .map_err(protocol_error)?;
 
     let jobs = jobs.inner().clone();
-    let closing = app.state::<Closing>().inner().clone();
     // Keep the mutex guard inside this block so no non-Send guard is held across the `.await` below.
     let (child_handle, control_stdin, cancelled, progress, stdout) = {
         let mut slot = jobs.0.lock().map_err(|_| "job_state_unavailable")?;
@@ -1215,9 +1542,7 @@ async fn start_install(
             if let Ok(mut current) = jobs.0.lock() {
                 current.take();
             }
-            if closing.0.load(Ordering::SeqCst) {
-                app_for_task.exit(0);
-            }
+            exit_if_closing(&app_for_task);
         } else {
             // Keep the active slot occupied until the writer really exits. A
             // timeout is diagnostic, never permission to start a second write.
@@ -1226,9 +1551,7 @@ async fn start_install(
                     if let Ok(mut current) = jobs.0.lock() {
                         current.take();
                     }
-                    if closing.0.load(Ordering::SeqCst) {
-                        app_for_task.exit(0);
-                    }
+                    exit_if_closing(&app_for_task);
                 } else {
                     eprintln!("core_process_shutdown_pending");
                 }
@@ -1269,209 +1592,128 @@ fn cancel_install(jobs: State<'_, Jobs>) -> Result<bool, HostError> {
     }
 }
 
-/// Builds the `serve-task` `scan_sources` request and enforces the request-size
-/// bound. Pure so tests can assert the wire shape without spawning the core.
-fn source_scan_request(id: &str, common: Value, force: bool) -> Result<Value, HostError> {
-    let mut params = common;
-    params["force"] = json!(force);
-    let request = json!({
-        "protocol_version": PROTOCOL_VERSION,
-        "request_id": id,
-        "method": "scan_sources",
-        "params": params,
-    });
-    let payload = serde_json::to_vec(&request).map_err(|_| "request_encoding_failed")?;
-    let mut request_line = payload.clone();
-    request_line.push(b'\n');
-    protocol::decode_request(
-        &request_line,
-        request["method"]
-            .as_str()
-            .is_some_and(|m| matches!(m, "install_patch" | "scan_sources" | "refresh_sources")),
-    )
-    .map_err(protocol_error)?;
-    Ok(request)
+fn now_unix() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_secs())
 }
 
-/// Builds the `serve-task` `refresh_sources` request and enforces the
-/// request-size bound. `refresh_sources` is a task-channel method
-/// (p1-host-contract §1.1 B), so it must reuse the `serve-task` control channel
-/// exactly like [`source_scan_request`]; routing it through one-shot `serve` is
-/// rejected by the core with `task_required`. Pure so tests can assert the wire
-/// shape without spawning the core.
-fn source_refresh_request(id: &str, common: Value, force: bool) -> Result<Value, HostError> {
-    let mut params = common;
-    params["force"] = json!(force);
-    let request = json!({
-        "protocol_version": PROTOCOL_VERSION,
-        "request_id": id,
-        "method": "refresh_sources",
-        "params": params,
-    });
-    let payload = serde_json::to_vec(&request).map_err(|_| "request_encoding_failed")?;
-    let mut request_line = payload.clone();
-    request_line.push(b'\n');
-    protocol::decode_request(
-        &request_line,
-        request["method"]
-            .as_str()
-            .is_some_and(|m| matches!(m, "install_patch" | "scan_sources" | "refresh_sources")),
-    )
-    .map_err(protocol_error)?;
-    Ok(request)
+/// Pure due-source selection for the automatic updater (p1-contract §10): only
+/// enabled publisher sources with a configured interval whose `next_due_at`
+/// has passed and that have no active update task are due. Every due source is
+/// selected at most once per tick; missed cycles are not replayed because the
+/// next due time is derived from the attempt itself.
+fn select_due_sources(
+    sources: &[Value],
+    now: u64,
+    has_active_update: impl Fn(&str) -> bool,
+) -> Vec<String> {
+    sources
+        .iter()
+        .filter(|source| source["enabled"].as_bool() == Some(true))
+        .filter(|source| source["role"].as_str() == Some("publisher"))
+        .filter(|source| {
+            source["interval_hours"]
+                .as_u64()
+                .is_some_and(|hours| hours > 0)
+        })
+        .filter(|source| source["next_due_at"].as_u64().is_some_and(|due| due <= now))
+        .filter_map(|source| source["id"].as_str())
+        .filter(|source_id| !has_active_update(source_id))
+        .map(str::to_owned)
+        .collect()
 }
 
-#[tauri::command]
-async fn start_source_scan(
-    app: AppHandle,
-    scans: State<'_, SourceScans>,
-    force: Option<bool>,
-    instance_id: Option<String>,
-    name_hints: Option<Vec<String>>,
-    preferred_language: Option<String>,
-) -> Result<Value, HostError> {
-    require_capabilities(&app)?;
-    let id = request_id();
-    let mut common = common_params(&app)?;
-    if let Some(instance) = instance_id {
-        common["instance_id"] = json!(instance);
-    }
-    if let Some(hints) = name_hints {
-        common["name_hints"] = json!(hints);
-    }
-    if let Some(language) = preferred_language {
-        common["preferred_language"] = json!(language);
-    }
-    let request = source_scan_request(&id, common, force.unwrap_or(false))?;
-    let payload = serde_json::to_vec(&request).map_err(|_| "request_encoding_failed")?;
-    let mut request_line = payload.clone();
-    request_line.push(b'\n');
-    protocol::decode_request(
-        &request_line,
-        request["method"]
-            .as_str()
-            .is_some_and(|m| matches!(m, "install_patch" | "scan_sources" | "refresh_sources")),
-    )
-    .map_err(protocol_error)?;
+const SOURCE_SCHEDULER_TICK: Duration = Duration::from_secs(60);
 
-    let scans = scans.inner().clone();
-    let closing = app.state::<Closing>().inner().clone();
-    let jobs = app.state::<Jobs>().inner().clone();
-    // Keep the mutex guard inside this block so no non-Send guard is held across the `.await` below.
-    let (child_handle, progress, stdout) = {
-        let mut slot = scans.0.lock().map_err(|_| "job_state_unavailable")?;
-        if slot.active.is_some() {
-            return Err("source_scan_in_progress".into());
-        }
-        slot.results = None;
-        let mut child = core_command(&binary(&app)?)
-            .arg("serve-task")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()
-            .map_err(|_| "core_process_failed")?;
-        let mut stdin = child.stdin.take().ok_or("core_process_failed")?;
-        let stdout = child.stdout.take().ok_or("core_process_failed")?;
-        stdin
-            .write_all(&payload)
-            .and_then(|_| stdin.write_all(b"\n"))
-            .map_err(|_| "core_process_failed")?;
-        stdin.flush().map_err(|_| "core_process_failed")?;
-
-        let stdin_handle = Arc::new(Mutex::new(ClosableWriter(Some(stdin))));
-        let cancelled = Arc::new(AtomicBool::new(false));
-        let active = SourceScanJob {
-            child: Arc::new(Mutex::new(child)),
-            stdin: stdin_handle,
-            progress: Arc::new(Mutex::new(SourceProgress::default())),
-            cancelled,
-        };
-        let child_handle = active.child.clone();
-        let progress = active.progress.clone();
-        slot.active = Some(active);
-        (child_handle, progress, stdout)
+/// Runs the automatic update pass once: `list_sources` is the only source of
+/// schedule state, and due updates start as ordinary source tasks (same-key
+/// de-duplication and cancellation semantics identical to manual updates).
+fn source_scheduler_tick(app: &AppHandle, tasks: &SourceTasks, closing: &Closing) {
+    if closing.0.load(Ordering::SeqCst) {
+        return;
+    }
+    let common = match common_params(app) {
+        Ok(common) => common,
+        Err(_) => return,
     };
-
-    let app_for_task = app.clone();
-    let app_for_reader = app.clone();
-    let scans_for_task = scans.clone();
-    let response_id = id.clone();
-    let task = tauri::async_runtime::spawn_blocking(move || {
-        let rejection_child = child_handle.clone();
-        let reader = thread::spawn(move || {
-            let result = read_source_task_output(stdout, response_id, app_for_reader, progress);
-            if result.is_err() {
-                // This source lookup child owns no installer game writes or
-                // rollback. Installer rejection uses cancel/EOF instead.
-                if let Ok(mut child) = rejection_child.lock() {
-                    let _ = child.kill();
-                }
-            }
-            result
-        });
-        let status = wait_core_child(&child_handle);
-        let response = match reader.join() {
-            Ok(response) => response,
-            Err(_) => Err(HostError::from("core_process_failed")),
-        };
-        // A validated terminal is authoritative even if the process fails
-        // during teardown. Incomplete or corrupt streams already return Err.
-        let result = task_terminal_result(response, status);
-        if let Ok(mut slot) = scans_for_task.0.lock() {
-            slot.active = None;
-            if let Ok(value) = &result {
-                slot.results = Some(value.clone());
-            }
-        }
-        if closing.0.load(Ordering::SeqCst) {
-            // Do not exit out from under a committed install rollback path.
-            let install_active = jobs.0.lock().map(|slot| slot.is_some()).unwrap_or(true);
-            if !install_active {
-                app_for_task.exit(0);
-            }
-        }
-        result
+    let id = request_id();
+    let request = json!({
+        "protocol_version": PROTOCOL_VERSION,
+        "request_id": id,
+        "method": "list_sources",
+        "params": common.clone(),
     });
-    task.await
-        .map_err(|_| HostError::from("core_task_failed"))?
-}
-
-#[tauri::command]
-fn source_scan_status(scans: State<'_, SourceScans>) -> Result<Value, HostError> {
-    let slot = scans.0.lock().map_err(|_| "job_state_unavailable")?;
-    let results = slot.results.clone();
-    if let Some(job) = slot.active.as_ref() {
-        let progress = job
-            .progress
-            .lock()
-            .map_err(|_| "job_state_unavailable")?
-            .clone();
-        Ok(json!({
-            "running": true,
-            "cancelled": job.cancelled.load(Ordering::SeqCst),
-            "progress": progress,
-            "results": results,
-        }))
-    } else {
-        Ok(json!({
-            "running": false,
-            "cancelled": false,
-            "progress": null,
-            "results": results,
-        }))
+    let sources = match run_one_shot(app, request, &id) {
+        Ok(value) => value.as_array().cloned().unwrap_or_default(),
+        Err(_) => return,
+    };
+    let active: Vec<String> = tasks
+        .0
+        .lock()
+        .map(|registry| {
+            registry
+                .states
+                .values()
+                .filter(|state| {
+                    state.kind == SourceTaskKind::UpdateSource
+                        && state.running.load(Ordering::SeqCst)
+                })
+                .map(|state| state.key.clone())
+                .collect()
+        })
+        .unwrap_or_default();
+    let due = select_due_sources(&sources, now_unix(), |source_id| {
+        active.iter().any(|key| key == source_id)
+    });
+    if due.is_empty() || require_capabilities(app).is_err() {
+        return;
+    }
+    for source_id in due {
+        let params = match build_params(
+            "update_source",
+            CallArguments {
+                source_id: Some(source_id.clone()),
+                ..Default::default()
+            },
+            common.clone(),
+        ) {
+            Ok(params) => params,
+            Err(_) => continue,
+        };
+        if let Err(error) = launch_source_task(
+            app,
+            tasks,
+            Method::UpdateSource,
+            SourceTaskKind::UpdateSource,
+            source_id,
+            params,
+        ) {
+            eprintln!("source_schedule_failed:{}", error.code);
+        }
     }
 }
 
-#[tauri::command]
-fn cancel_source_scan(scans: State<'_, SourceScans>) -> Result<bool, HostError> {
-    let slot = scans.0.lock().map_err(|_| "job_state_unavailable")?;
-    if let Some(job) = slot.active.as_ref() {
-        request_source_cancel(job)?;
-        Ok(true)
-    } else {
-        Ok(false)
-    }
+/// Automatic updates only run while the app runs (no system service, no
+/// persisted timers). The first pass happens at startup, then every minute;
+/// shutting down observes `Closing` within half a second.
+fn spawn_source_scheduler(app: AppHandle) {
+    let tasks = app.state::<SourceTasks>().inner().clone();
+    let closing = app.state::<Closing>().inner().clone();
+    thread::spawn(move || loop {
+        if closing.0.load(Ordering::SeqCst) {
+            return;
+        }
+        source_scheduler_tick(&app, &tasks, &closing);
+        let mut waited = Duration::ZERO;
+        while waited < SOURCE_SCHEDULER_TICK {
+            if closing.0.load(Ordering::SeqCst) {
+                return;
+            }
+            thread::sleep(Duration::from_millis(500));
+            waited += Duration::from_millis(500);
+        }
+    });
 }
 
 #[tauri::command]
@@ -1513,25 +1755,37 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .manage(Jobs::default())
-        .manage(SourceScans::default())
+        .manage(SourceTasks::default())
         .manage(Closing::default())
         .setup(|app| {
             let jobs = app.state::<Jobs>().inner().clone();
-            let scans = app.state::<SourceScans>().inner().clone();
+            let tasks = app.state::<SourceTasks>().inner().clone();
             let closing = app.state::<Closing>().inner().clone();
+            spawn_source_scheduler(app.handle().clone());
             if let Some(window) = app.get_webview_window("main") {
                 window.on_window_event(move |event| {
                     if let WindowEvent::CloseRequested { api, .. } = event {
                         let active = jobs.0.lock().ok().and_then(|slot| slot.clone());
-                        let scan = scans.0.lock().ok().and_then(|slot| slot.active.clone());
-                        if active.is_some() || scan.is_some() {
+                        if active.is_some() || any_running_source_task(&tasks) {
                             api.prevent_close();
                             closing.0.store(true, Ordering::SeqCst);
                             if let Some(job) = active {
                                 let _ = request_cancel(&job);
                             }
-                            if let Some(job) = scan {
-                                let _ = request_source_cancel(&job);
+                            let running: Vec<String> = tasks
+                                .0
+                                .lock()
+                                .map(|registry| {
+                                    registry
+                                        .states
+                                        .values()
+                                        .filter(|state| state.running.load(Ordering::SeqCst))
+                                        .map(|state| state.task_id.clone())
+                                        .collect()
+                                })
+                                .unwrap_or_default();
+                            for task_id in running {
+                                let _ = cancel_source_task_impl(&tasks, &task_id);
                             }
                         }
                     }
@@ -1551,12 +1805,14 @@ fn main() {
             list_game_sources,
             set_source_enabled,
             set_game_source,
-            discover_game,
-            refresh_sources,
-            add_source,
-            start_source_scan,
-            source_scan_status,
-            cancel_source_scan
+            set_source_update_interval,
+            project_instances,
+            start_source_update,
+            start_match_games,
+            start_rematch_game,
+            source_task_status,
+            cancel_source_task,
+            add_source
         ])
         .run(tauri::generate_context!())
         .expect("failed to start Steam Patch Manager");
@@ -1583,8 +1839,8 @@ mod tests {
             Operation::SetSourceEnabled.method(),
             Operation::SetGameSource.method(),
             Operation::AddSource.method(),
-            Operation::RefreshSources.method(),
-            Operation::DiscoverGame.method(),
+            Operation::SetSourceUpdateInterval.method(),
+            Operation::ProjectInstances.method(),
         ];
         let expected = [
             "scan",
@@ -1597,16 +1853,23 @@ mod tests {
             "set_source_enabled",
             "set_game_source",
             "add_source",
-            "refresh_sources",
-            "discover_game",
+            "set_source_update_interval",
+            "project_instances",
         ];
         assert_eq!(methods, expected);
-        // Deleted v2 operations must not deserialize or be advertised.
+        // Deleted and task-channel methods are not one-shot operations: task
+        // methods run only on dedicated commands over `serve-task`.
         for deleted in [
             "migrate_state",
             "get_source_policy",
             "resolve_source_record",
             "list_source_matches",
+            "refresh_sources",
+            "scan_sources",
+            "discover_game",
+            "update_source",
+            "match_games",
+            "rematch_game",
         ] {
             assert!(!methods.contains(&deleted));
             assert!(serde_json::from_str::<Operation>(&format!("\"{deleted}\"")).is_err());
@@ -1654,12 +1917,41 @@ mod tests {
     }
 
     #[test]
-    fn discover_game_passes_hints_language_and_force() {
+    fn match_games_merges_instances_hints_language_and_force_details() {
         let params = build_params(
-            "discover_game",
+            "match_games",
+            CallArguments {
+                instances: Some(vec!["inst-1".into()]),
+                name_hints: Some(vec!["别名".into()]),
+                preferred_language: Some("zh-CN".into()),
+                force_details: Some(true),
+                ..Default::default()
+            },
+            common(),
+        )
+        .unwrap();
+        assert_eq!(params["instances"][0], "inst-1");
+        assert_eq!(params["name_hints"][0], "别名");
+        assert_eq!(params["preferred_language"], "zh-CN");
+        assert_eq!(params["force_details"], true);
+        // The library-wide match carries no filters at all.
+        let all = build_params("match_games", CallArguments::default(), common()).unwrap();
+        for absent in [
+            "instances",
+            "name_hints",
+            "preferred_language",
+            "force_details",
+        ] {
+            assert!(all.get(absent).is_none(), "{absent}");
+        }
+    }
+
+    #[test]
+    fn rematch_game_accepts_instance_or_appid_and_derives_a_per_game_key() {
+        let by_instance = build_params(
+            "rematch_game",
             CallArguments {
                 instance_id: Some("inst-1".into()),
-                force: Some(false),
                 name_hints: Some(vec!["别名".into()]),
                 preferred_language: Some("zh-CN".into()),
                 ..Default::default()
@@ -1667,10 +1959,34 @@ mod tests {
             common(),
         )
         .unwrap();
-        assert_eq!(params["instance_id"], "inst-1");
-        assert_eq!(params["force"], false);
-        assert_eq!(params["name_hints"][0], "别名");
-        assert_eq!(params["preferred_language"], "zh-CN");
+        assert_eq!(by_instance["instance_id"], "inst-1");
+        assert!(by_instance.get("appid").is_none());
+        assert_eq!(by_instance["preferred_language"], "zh-CN");
+        assert_eq!(
+            rematch_task_key(Some("inst-1"), None).unwrap(),
+            "instance:inst-1"
+        );
+
+        let by_appid = build_params(
+            "rematch_game",
+            CallArguments {
+                appid: Some(42),
+                ..Default::default()
+            },
+            common(),
+        )
+        .unwrap();
+        assert_eq!(by_appid["appid"], 42);
+        assert!(by_appid.get("instance_id").is_none());
+        assert_eq!(rematch_task_key(None, Some(42)).unwrap(), "appid:42");
+        assert_eq!(
+            rematch_task_key(None, None).unwrap_err(),
+            "instance_required"
+        );
+        assert_eq!(
+            build_params("rematch_game", CallArguments::default(), common()).unwrap_err(),
+            "instance_required"
+        );
     }
 
     #[test]
@@ -1895,6 +2211,26 @@ mod tests {
             build_params("add_source", CallArguments::default(), common()).unwrap_err(),
             "rule_required"
         );
+        assert_eq!(
+            build_params(
+                "set_source_update_interval",
+                CallArguments {
+                    source_id: Some("kagura-cn".into()),
+                    ..Default::default()
+                },
+                common(),
+            )
+            .unwrap_err(),
+            "interval_hours_required"
+        );
+        assert_eq!(
+            build_params("update_source", CallArguments::default(), common()).unwrap_err(),
+            "source_id_required"
+        );
+        assert_eq!(
+            build_params("project_instances", CallArguments::default(), common()).unwrap_err(),
+            "instance_ids_required"
+        );
     }
 
     #[test]
@@ -1927,148 +2263,245 @@ mod tests {
         );
     }
 
-    #[test]
-    fn source_scan_request_shape_and_force() {
-        let request = source_scan_request("host-1-2", common(), false).unwrap();
-        assert_eq!(request["protocol_version"], PROTOCOL_VERSION);
-        assert_eq!(request["request_id"], "host-1-2");
-        assert_eq!(request["method"], "scan_sources");
-        assert_eq!(request["params"]["host"]["state_dir"], "C:/state");
-        assert_eq!(request["params"]["force"], false);
+    fn task_request(method: &str, params: Value) -> Value {
+        build_task_request(
+            serde_json::from_value::<Method>(json!(method)).unwrap(),
+            "host-1-2",
+            params,
+        )
+        .unwrap()
     }
 
     #[test]
-    fn source_refresh_request_shape_is_serve_task_and_carries_force() {
-        let request = source_refresh_request("host-9-1", common(), true).unwrap();
-        // Mirrors `source_scan_request`: same v4 envelope, same host-injected
-        // params, task-channel method name, and the `force` flag.
-        assert_eq!(request["protocol_version"], PROTOCOL_VERSION);
-        assert_eq!(request["request_id"], "host-9-1");
-        assert_eq!(request["method"], "refresh_sources");
-        assert_eq!(request["params"]["host"]["state_dir"], "C:/state");
-        assert_eq!(request["params"]["host"]["platform"], "windows");
-        assert_eq!(request["params"]["force"], true);
-        // The command must not be assembled as a one-shot `serve` method; that
-        // route is what the core rejected with `task_required`.
-        assert_ne!(request["method"], "scan_sources");
-    }
+    fn source_task_requests_use_the_task_channel_and_carry_their_arguments() {
+        let update = task_request(
+            "update_source",
+            build_params(
+                "update_source",
+                CallArguments {
+                    source_id: Some("kagura-cn".into()),
+                    force: Some(true),
+                    ..Default::default()
+                },
+                common(),
+            )
+            .unwrap(),
+        );
+        assert_eq!(update["params"]["host"]["state_dir"], "C:/state");
+        assert_eq!(update["params"]["host"]["platform"], "windows");
+        assert_eq!(update["params"]["source_id"], "kagura-cn");
+        assert_eq!(update["params"]["force"], true);
 
-    #[test]
-    fn refresh_stream_deduplicates_and_returns_statuses() {
-        fn update(request_id: &str, sequence: u64, source_id: &str) -> Value {
-            json!({
-                "protocol_version": PROTOCOL_VERSION,
-                "request_id": request_id,
-                "sequence": sequence,
-                "event": "source_update",
-                "source_id": source_id,
-                "status": {"code":"source_refreshed","checked_at":0,"cached_at":null,"entry_count":0},
-                "settings_revision": 7,
-            })
+        let matched = task_request(
+            "match_games",
+            build_params(
+                "match_games",
+                CallArguments {
+                    instances: Some(vec!["inst-1".into()]),
+                    force_details: Some(true),
+                    ..Default::default()
+                },
+                common(),
+            )
+            .unwrap(),
+        );
+        assert_eq!(matched["params"]["instances"][0], "inst-1");
+        assert_eq!(matched["params"]["force_details"], true);
+
+        let rematch = task_request(
+            "rematch_game",
+            build_params(
+                "rematch_game",
+                CallArguments {
+                    instance_id: Some("inst-1".into()),
+                    preferred_language: Some("zh-CN".into()),
+                    ..Default::default()
+                },
+                common(),
+            )
+            .unwrap(),
+        );
+        assert_eq!(rematch["params"]["instance_id"], "inst-1");
+        assert_eq!(rematch["params"]["preferred_language"], "zh-CN");
+
+        for (method, request) in [
+            ("update_source", &update),
+            ("match_games", &matched),
+            ("rematch_game", &rematch),
+        ] {
+            assert_eq!(request["protocol_version"], PROTOCOL_VERSION);
+            assert_eq!(request["request_id"], "host-1-2");
+            assert_eq!(request["method"], method);
+            // Task methods are rejected by the one-shot `serve` face.
+            let mut line = serde_json::to_vec(request).unwrap();
+            line.push(b'\n');
+            assert_eq!(
+                protocol::decode_request(&line, false).unwrap_err().code,
+                "task_required",
+                "{method}"
+            );
+            assert!(protocol::decode_request(&line, true).is_ok(), "{method}");
         }
-        let terminal = json!({
-            "protocol_version": PROTOCOL_VERSION,
-            "request_id": "r",
-            "ok": true,
-            "result": {"settings_revision": 7, "statuses": [{"code":"source_refreshed","checked_at":0,"cached_at":null,"entry_count":0}]},
-        });
-        protocol::validate_event(&update("r", 0, "kagura"), "r").unwrap();
-        protocol::validate_response(&terminal, "r", Some(Method::RefreshSources)).unwrap();
-        protocol::validate_response(&terminal, "r", None).unwrap();
-        let input = task_stream(&[
-            update("r", 0, "kagura"),
-            // Duplicate sequence for the same task: dropped.
-            update("r", 0, "kagura"),
-            update("r", 1, "moe"),
-            terminal,
-            // Events after the terminal line are ignored.
-            update("r", 2, "late"),
-        ]);
-        let progress = Arc::new(Mutex::new(SourceProgress::default()));
-        let mut forwarded: Vec<Value> = Vec::new();
-        let result = read_refresh_stream(
-            std::io::Cursor::new(input),
-            "r",
-            |_name, value| forwarded.push(value),
-            &progress,
+    }
+
+    #[test]
+    fn one_shot_source_operations_keep_their_arguments_one_shot() {
+        let interval = build_params(
+            "set_source_update_interval",
+            CallArguments {
+                source_id: Some("kagura-cn".into()),
+                interval_hours: Some(24),
+                ..Default::default()
+            },
+            common(),
         )
         .unwrap();
-        assert_eq!(result["settings_revision"], 7);
-        assert_eq!(result["statuses"][0]["code"], "source_refreshed");
-        assert_eq!(forwarded.len(), 2);
-        assert_eq!(forwarded[0]["source_id"], "kagura");
-        assert_eq!(forwarded[1]["source_id"], "moe");
+        assert_eq!(interval["source_id"], "kagura-cn");
+        assert_eq!(interval["interval_hours"], 24);
+        assert!(!method_is_task("set_source_update_interval"));
+
+        let projected = build_params(
+            "project_instances",
+            CallArguments {
+                instance_ids: Some(vec!["inst-1".into(), "inst-2".into()]),
+                ..Default::default()
+            },
+            common(),
+        )
+        .unwrap();
+        assert_eq!(projected["instance_ids"][1], "inst-2");
+        assert!(!method_is_task("project_instances"));
+
+        // No type confusion between the two list arguments.
+        assert_eq!(
+            build_params(
+                "project_instances",
+                CallArguments {
+                    instances: Some(vec!["inst-1".into()]),
+                    ..Default::default()
+                },
+                common(),
+            )
+            .unwrap_err(),
+            "instance_ids_required"
+        );
     }
 
     #[test]
-    fn refresh_stream_rejects_malformed_sequence() {
-        fn update(request_id: &str, sequence: u64) -> Value {
-            json!({
-                "protocol_version": PROTOCOL_VERSION,
-                "request_id": request_id,
-                "sequence": sequence,
-                "event": "source_update",
-                "source_id": "kagura",
-                "status": {"code":"source_refreshed","checked_at":0,"cached_at":null,"entry_count":0},
-                "settings_revision": 7,
-            })
-        }
-        let mut malformed = update("r", 0);
-        malformed.as_object_mut().unwrap().remove("sequence");
-        let terminal = json!({
-            "protocol_version": PROTOCOL_VERSION,
-            "request_id": "r",
-            "ok": true,
-            "result": {"settings_revision": 7, "statuses": []},
-        });
-        let input = task_stream(&[malformed, terminal]);
-        let progress = Arc::new(Mutex::new(SourceProgress::default()));
+    fn update_source_stream_accepts_all_four_events_and_snapshots_progress() {
+        let fixtures = shared_fixtures();
+        let terminal = fixture_response(&fixtures, "update_source-success", "r");
+        let input = task_stream(&[
+            fixture_event(&fixtures, "source_progress", "r", 0),
+            fixture_event(&fixtures, "source_update", "r", 1),
+            fixture_event(&fixtures, "match_progress", "r", 2),
+            fixture_event(&fixtures, "match_update", "r", 3),
+            terminal,
+        ]);
+        let state = synthetic_task_state(SourceTaskKind::UpdateSource, "kagura-cn");
+        let mut forwarded: Vec<String> = Vec::new();
+        let result = read_source_task_output(
+            std::io::Cursor::new(input),
+            "r",
+            Method::UpdateSource,
+            &state,
+            |name, _| forwarded.push(name.to_string()),
+        )
+        .unwrap();
         assert_eq!(
-            read_refresh_stream(std::io::Cursor::new(input), "r", |_, _| {}, &progress)
-                .unwrap_err(),
+            forwarded,
+            [
+                "source_progress",
+                "source_update",
+                "match_progress",
+                "match_update"
+            ]
+        );
+        assert_eq!(result["source_id"], "fixture");
+        // Polling snapshots expose the latest progress event and latest event.
+        assert_eq!(
+            state.progress.lock().unwrap().as_ref().unwrap()["event"],
+            "match_progress"
+        );
+        assert_eq!(
+            state.last_event.lock().unwrap().as_ref().unwrap()["event"],
+            "match_update"
+        );
+        // The stream reader only reports; the coordinator stores the result.
+        assert!(state.result.lock().unwrap().is_none());
+    }
+
+    #[test]
+    fn match_streams_accept_only_match_events() {
+        let fixtures = shared_fixtures();
+        let terminal = fixture_response(&fixtures, "match_games-success", "r");
+        let accepted = task_stream(&[
+            fixture_event(&fixtures, "match_progress", "r", 0),
+            fixture_event(&fixtures, "match_update", "r", 1),
+            terminal,
+        ]);
+        let state = synthetic_task_state(SourceTaskKind::MatchGames, "match");
+        let mut forwarded: Vec<String> = Vec::new();
+        read_source_task_output(
+            std::io::Cursor::new(accepted),
+            "r",
+            Method::MatchGames,
+            &state,
+            |name, _| forwarded.push(name.to_string()),
+        )
+        .unwrap();
+        assert_eq!(forwarded, ["match_progress", "match_update"]);
+
+        // A source event on the match channel is a contract violation.
+        let rejected = task_stream(&[
+            fixture_event(&fixtures, "source_progress", "r", 0),
+            fixture_response(&fixtures, "match_games-success", "r"),
+        ]);
+        assert_eq!(
+            read_source_task_output(
+                std::io::Cursor::new(rejected),
+                "r",
+                Method::MatchGames,
+                &synthetic_task_state(SourceTaskKind::MatchGames, "match"),
+                |_, _| {},
+            )
+            .unwrap_err(),
             "invalid_core_response"
         );
     }
 
     #[test]
-    fn source_stream_separates_events_from_final_response() {
-        let progress = json!({
-            "protocol_version": PROTOCOL_VERSION,
-            "request_id": "r",
-            "sequence": 0,
-            "event": "source_progress",
-            "completed": 1,
-            "total": 2,
-            "running": true,
-            "settings_revision": 5,
-        });
-        let update = json!({
-            "protocol_version": PROTOCOL_VERSION,
-            "request_id": "r",
-            "sequence": 1,
-            "event": "source_update",
-            "appid": 42,
-            "index": 0,
-            "settings_revision": 5,
-            "discovery": {},
-        });
-        let terminal = json!({
-            "protocol_version": PROTOCOL_VERSION,
-            "request_id": "r",
-            "ok": true,
-            "result": {"settings_revision": 5, "results": []},
-        });
-        assert_eq!(source_event_name(&progress), Some("source_progress"));
-        assert_eq!(source_event_name(&update), Some("source_update"));
-        assert_eq!(source_event_name(&terminal), None);
+    fn source_stream_rejects_malformed_or_unknown_events() {
+        let fixtures = shared_fixtures();
+        let terminal = fixture_response(&fixtures, "update_source-success", "r");
 
-        let parsed = serde_json::from_value::<SourceProgress>(progress)
-            .unwrap()
-            .unwrap();
-        assert_eq!(parsed.completed, 1);
-        assert_eq!(parsed.total, 2);
-        assert!(parsed.running);
-        assert_eq!(parsed.settings_revision, 5);
+        let mut malformed = fixture_event(&fixtures, "source_progress", "r", 0);
+        malformed.as_object_mut().unwrap().remove("sequence");
+        assert_eq!(
+            read_source_task_output(
+                std::io::Cursor::new(task_stream(&[malformed, terminal.clone()])),
+                "r",
+                Method::UpdateSource,
+                &synthetic_task_state(SourceTaskKind::UpdateSource, "kagura-cn"),
+                |_, _| {},
+            )
+            .unwrap_err(),
+            "invalid_core_response"
+        );
+
+        let mut unknown = fixture_event(&fixtures, "source_progress", "r", 0);
+        unknown["event"] = json!("graph_progress");
+        assert_eq!(
+            read_source_task_output(
+                std::io::Cursor::new(task_stream(&[unknown, terminal])),
+                "r",
+                Method::UpdateSource,
+                &synthetic_task_state(SourceTaskKind::UpdateSource, "kagura-cn"),
+                |_, _| {},
+            )
+            .unwrap_err(),
+            "invalid_core_response"
+        );
     }
 
     #[test]
@@ -2189,7 +2622,7 @@ mod tests {
         serde_json::from_str(
             &std::fs::read_to_string(concat!(
                 env!("CARGO_MANIFEST_DIR"),
-                "/../../../packages/contracts/fixtures/v4/cases.json"
+                "/../../../packages/contracts/fixtures/v5/cases.json"
             ))
             .unwrap(),
         )
@@ -2206,6 +2639,45 @@ mod tests {
             .clone();
         response["request_id"] = json!(request_id);
         response
+    }
+
+    fn fixture_event(cases: &Value, name: &str, request_id: &str, sequence: u64) -> Value {
+        let mut event = cases["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|case| case["name"] == name)
+            .unwrap()["event"]
+            .clone();
+        event["request_id"] = json!(request_id);
+        event["sequence"] = json!(sequence);
+        event
+    }
+
+    fn fixture_response(cases: &Value, name: &str, request_id: &str) -> Value {
+        let mut response = cases["responses"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|case| case["name"] == name)
+            .unwrap()["response"]
+            .clone();
+        response["request_id"] = json!(request_id);
+        response
+    }
+
+    fn synthetic_task_state(kind: SourceTaskKind, key: &str) -> SourceTaskState {
+        SourceTaskState {
+            task_id: format!("task-{key}"),
+            kind,
+            key: key.to_string(),
+            running: AtomicBool::new(true),
+            cancelled: AtomicBool::new(false),
+            progress: Mutex::new(None),
+            last_event: Mutex::new(None),
+            result: Mutex::new(None),
+            error: Mutex::new(None),
+        }
     }
 
     #[test]
@@ -2290,59 +2762,172 @@ mod tests {
     }
 
     #[test]
-    fn source_scan_stream_shares_event_sequence_and_ignores_late_events() {
+    fn update_source_stream_shares_event_sequence_and_ignores_late_events() {
         let cases = shared_fixtures();
-        let event = |name: &str| {
-            cases["events"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .find(|item| item["name"] == name)
-                .unwrap()["event"]
-                .clone()
-        };
-        let first = event("source_progress");
-        let mut second = event("source_update-game");
-        second["sequence"] = json!(1);
-        let mut late = event("source_progress");
-        late["sequence"] = json!(2);
-        let terminal = cases["responses"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|item| item["name"] == "scan_sources-success")
-            .unwrap()["response"]
-            .clone();
+        let first = fixture_event(&cases, "source_progress", "fixture", 0);
+        let second = fixture_event(&cases, "source_update", "fixture", 1);
+        let late = fixture_event(&cases, "match_progress", "fixture", 2);
+        let terminal = fixture_response(&cases, "update_source-success", "fixture");
+        let state = synthetic_task_state(SourceTaskKind::UpdateSource, "kagura-cn");
         let mut forwarded = Vec::new();
-        read_core_stream(
-            &mut std::io::Cursor::new(task_stream(&[
+        read_source_task_output(
+            std::io::Cursor::new(task_stream(&[
                 first.clone(),
-                second.clone(),
+                second,
+                // Duplicate sequence for the same task: dropped.
                 first,
                 terminal,
+                // Events after the terminal line are ignored.
                 late,
             ])),
             "fixture",
-            Method::ScanSources,
-            |name, _| {
-                forwarded.push(name.to_string());
-                Ok(())
-            },
+            Method::UpdateSource,
+            &state,
+            |name, _| forwarded.push(name.to_string()),
         )
         .unwrap();
         assert_eq!(forwarded, ["source_progress", "source_update"]);
-        second["sequence"] = json!(0);
-        second["request_id"] = json!("other");
+
+        // A request-id mismatch is a contract violation even for a valid event.
+        let mut mismatched = fixture_event(&cases, "source_update", "other", 0);
+        mismatched["request_id"] = json!("other");
         assert_eq!(
-            read_core_stream(
-                &mut std::io::Cursor::new(task_stream(&[second])),
+            read_source_task_output(
+                std::io::Cursor::new(task_stream(&[mismatched])),
                 "fixture",
-                Method::ScanSources,
-                |_, _| Ok(())
+                Method::UpdateSource,
+                &synthetic_task_state(SourceTaskKind::UpdateSource, "kagura-cn"),
+                |_, _| {},
             )
             .unwrap_err(),
             "invalid_core_response"
         );
+    }
+
+    #[test]
+    fn due_source_selection_uses_only_enabled_publisher_schedules() {
+        let now = 2_000_000;
+        let source = |id: &str, enabled: bool, role: &str, interval: u64, next_due: Option<u64>| {
+            let mut value = json!({
+                "id": id,
+                "enabled": enabled,
+                "role": role,
+                "interval_hours": interval,
+            });
+            if let Some(due) = next_due {
+                value["next_due_at"] = json!(due);
+            }
+            value
+        };
+        let sources = vec![
+            source("due-a", true, "publisher", 24, Some(now - 1)),
+            source("not-due", true, "publisher", 24, Some(now + 1)),
+            source("disabled", false, "publisher", 24, Some(now - 5)),
+            source("fallback", true, "fallback_indexer", 24, Some(now - 5)),
+            source("off", true, "publisher", 0, Some(now - 5)),
+            source("never-success", true, "publisher", 24, None),
+            source("already-running", true, "publisher", 24, Some(now - 5)),
+            source("due-b", true, "publisher", 6, Some(now)),
+        ];
+        let active = ["already-running"];
+        let selected = select_due_sources(&sources, now, |source_id| active.contains(&source_id));
+        assert_eq!(selected, ["due-a", "due-b"]);
+    }
+
+    #[test]
+    fn due_source_selection_never_replays_missed_cycles() {
+        // The scheduler only compares the next due time reported after the
+        // attempt (checked_at + interval); it keeps no timer of its own.
+        let source = json!({"id":"kagura-cn","enabled":true,"role":"publisher","interval_hours":6,"next_due_at":1000});
+        assert!(select_due_sources(std::slice::from_ref(&source), 999, |_| false).is_empty());
+        assert_eq!(
+            select_due_sources(std::slice::from_ref(&source), 1000, |_| false),
+            ["kagura-cn"]
+        );
+        let attempted = json!({"id":"kagura-cn","enabled":true,"role":"publisher","interval_hours":6,"next_due_at":22600});
+        assert!(select_due_sources(std::slice::from_ref(&attempted), 2000, |_| false).is_empty());
+    }
+
+    #[test]
+    fn same_kind_and_key_deduplicates_only_while_running() {
+        let mut states = HashMap::new();
+        for (task_id, kind, key) in [
+            ("a", SourceTaskKind::UpdateSource, "kagura-cn"),
+            ("b", SourceTaskKind::UpdateSource, "moe"),
+            ("c", SourceTaskKind::MatchGames, "match"),
+        ] {
+            let state = Arc::new(synthetic_task_state(kind, key));
+            states.insert(task_id.to_string(), state);
+        }
+        assert_eq!(
+            active_task_id(&states, SourceTaskKind::UpdateSource, "kagura-cn").as_deref(),
+            Some("task-kagura-cn")
+        );
+        assert_eq!(
+            active_task_id(&states, SourceTaskKind::UpdateSource, "other"),
+            None
+        );
+        // The same key under a different kind is a different task.
+        assert_eq!(
+            active_task_id(&states, SourceTaskKind::MatchGames, "match").as_deref(),
+            Some("task-match")
+        );
+        assert_eq!(
+            active_task_id(&states, SourceTaskKind::MatchGames, "kagura-cn"),
+            None
+        );
+        // Finished tasks do not block a new run.
+        states["a"].running.store(false, Ordering::SeqCst);
+        assert_eq!(
+            active_task_id(&states, SourceTaskKind::UpdateSource, "kagura-cn"),
+            None
+        );
+    }
+
+    #[test]
+    fn task_snapshot_exposes_running_progress_and_result_fields() {
+        let state = synthetic_task_state(SourceTaskKind::UpdateSource, "kagura-cn");
+        let snapshot = task_snapshot(&state).unwrap();
+        assert_eq!(snapshot["kind"], "update_source");
+        assert_eq!(snapshot["key"], "kagura-cn");
+        assert_eq!(snapshot["running"], true);
+        assert_eq!(snapshot["progress"], Value::Null);
+        assert_eq!(snapshot["last_event"], Value::Null);
+        assert_eq!(snapshot["result"], Value::Null);
+        assert_eq!(snapshot["error"], Value::Null);
+        update_task_state(
+            &state,
+            "source_progress",
+            &json!({"event":"source_progress"}),
+        )
+        .unwrap();
+        state.running.store(false, Ordering::SeqCst);
+        *state.result.lock().unwrap() = Some(json!({"source_id":"kagura-cn"}));
+        let snapshot = task_snapshot(&state).unwrap();
+        assert_eq!(snapshot["running"], false);
+        assert_eq!(snapshot["progress"]["event"], "source_progress");
+        assert_eq!(snapshot["result"]["source_id"], "kagura-cn");
+    }
+
+    #[test]
+    fn finished_task_retention_stays_bounded() {
+        let mut states = HashMap::new();
+        for index in 0..(RETAINED_FINISHED_TASKS + 4) {
+            let state =
+                synthetic_task_state(SourceTaskKind::RematchGame, &format!("instance:{index}"));
+            state.running.store(false, Ordering::SeqCst);
+            states.insert(state.task_id.clone(), Arc::new(state));
+        }
+        states.insert(
+            "running".into(),
+            Arc::new(synthetic_task_state(
+                SourceTaskKind::UpdateSource,
+                "kagura-cn",
+            )),
+        );
+        prune_finished_tasks(&mut states);
+        assert_eq!(states.len(), RETAINED_FINISHED_TASKS);
+        assert!(states.contains_key("running"));
     }
 
     #[test]
@@ -2613,9 +3198,12 @@ mod tests {
                 request_id()
             ));
             let literal = |text: String| format!("'{}'", text.replace('\'', "''"));
+            let response = format!(
+                r#"{{"protocol_version":{PROTOCOL_VERSION},"request_id":"req-1","ok":true,"result":{{}}}}"#
+            );
             let script = format!("[Console]::WriteLine({}); [Console]::WriteLine('{}'); $control=[Console]::ReadLine(); if($control -ne 'cancel') {{ exit 3 }}; $eof=[Console]::ReadLine(); if($null -ne $eof) {{ exit 4 }}; [System.IO.File]::WriteAllText({},{}); [Console]::WriteLine({}); exit 0",
                 literal(install_progress_event("req-1",0,"applying").to_string()),
-                r#"{"protocol_version":4,"request_id":"req-1","ok":true,"result":{}}"#,
+                response,
                 literal(marker.display().to_string()),literal(receipt.to_string()),literal(receipt.to_string()));
             let mut child = core_command(Path::new("powershell.exe"))
                 .args([

@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { downloadFileName, candidateMatched, displayPatches, filterInstalls, gameDisplayName, isExternal, isManaged, patchState, reason, installationResult, progressStageLabel, progressPercent, workflowState, type DiscoveryResult, type Filter, type GameSourceSubscription, type Install, type Preview, type ScanResult, type SourceCandidate, type Transaction, type InstallerOutcome } from "@steam-patch/ui";
+import { downloadFileName, candidateMatched, displayPatches, filterInstalls, gameDisplayName, isExternal, patchState, reason, installationResult, progressStageLabel, progressPercent, workflowState, type Filter, type Install, type Preview, type ScanResult, type SourceCandidate, type Transaction, type InstallerOutcome } from "@steam-patch/ui";
 import {
   actionBlockers,
   primaryInstallAction,
@@ -11,20 +11,34 @@ import {
   candidateLanguage,
   candidateSourceLabel,
   chipLabel,
+  fallbackDisplayStatus,
+  gameMatchStatusHint,
   matchBasisLabel,
   patchChip,
+  pendingMatchInstances,
   rowSummary,
   safeSourceUrl,
   sourceChip,
+  sourceIntervalLabel,
   statusLabel,
   statusTone,
+  taskForInstance,
+  taskKindLabel,
+  taskProgressText,
   unqueriedCount,
   versionEvidence,
   type Capabilities,
-  type SourceEvent,
-  type SourceScanItem,
-  type SourceScanResult,
+  type GameMatch,
+  type GameSourceSubscription,
+  type MatchGamesResult,
+  type MatchProgressEvent,
+  type MatchUpdateEvent,
+  type ProjectInstancesResult,
+  type SourceProgressEvent,
   type SourceSummary,
+  type SourceTaskStatus,
+  type SourceUpdateEvent,
+  type SourceUpdateResult,
 } from "./sources";
 import { SourcePanel } from "./SourcePanel";
 import "./style.css";
@@ -34,15 +48,6 @@ type InstallStatus = {
   running: boolean;
   cancelled: boolean;
   progress: Omit<import("../../../packages/contracts/generated/protocol").InstallProgressEvent, "event" | "protocol_version" | "request_id" | "sequence" | "instance_id" | "selection_id"> | null;
-};
-
-type SourceScanState = {
-  started: boolean;
-  running: boolean;
-  cancelled: boolean;
-  completed: number;
-  total: number;
-  settingsRevision: number | null;
 };
 
 function call<T>(operation: CoreOperation, args: { instanceId?: string; releaseId?: string; selectionId?: string } = {}): Promise<T> {
@@ -57,9 +62,6 @@ function describeError(value: unknown): string {
   }
   return typeof value === "string" ? value : String(value);
 }
-
-
-const EMPTY_SOURCE_SCAN: SourceScanState = { started: false, running: false, cancelled: false, completed: 0, total: 0, settingsRevision: null };
 
 function Chip({ tone, label }: { tone: string; label: string }) {
   return <span className={`chip ${tone}`}>{label}</span>;
@@ -112,25 +114,20 @@ function App() {
   const [notice, setNotice] = useState<string | null>(null);
   const [job, setJob] = useState<InstallStatus | null>(null);
   const [installing, setInstalling] = useState(false);
-  const [sourceScan, setSourceScan] = useState<SourceScanState>(EMPTY_SOURCE_SCAN);
+  const [sourceTasks, setSourceTasks] = useState<SourceTaskStatus[]>([]);
   const [sourceNotice, setSourceNotice] = useState<string | null>(null);
-  const [capabilities, setCapabilities] = useState<Capabilities | null>(null);
   const [sourcesOpen, setSourcesOpen] = useState(false);
   const [globalSources, setGlobalSources] = useState<SourceSummary[] | null>(null);
   const [gameSources, setGameSources] = useState<GameSourceSubscription[] | null>(null);
   const [sourcesLoading, setSourcesLoading] = useState(false);
-  const [discoveryBusy, setDiscoveryBusy] = useState<string | null>(null);
 
   const requestIds = useRef(new Map<string, string>());
   const scanRef = useRef<ScanResult | null>(null);
   const selectedRef = useRef<string | null>(null);
   const capabilitiesPromise = useRef<Promise<Capabilities | null> | null>(null);
   const capabilityErrorRef = useRef<string | null>(null);
-  const sourceRunningRef = useRef(false);
-  const sourceProjectionSequenceRef = useRef(0);
-  const cancelledRef = useRef(false);
-  const scanTokenRef = useRef(0);
-  const activeEventRef = useRef<{ token: number; id: string | null; seq: number }>({ token: 0, id: null, seq: -1 });
+  const finishedTasksRef = useRef(new Set<string>());
+  const sourcesOpenRef = useRef(false);
 
   const game = scan?.installs.find(x => x.game.instance_id === selected) ?? null;
   const entries = useMemo(() => (game ? displayPatches(game, preferredLanguage) : []), [game, preferredLanguage]);
@@ -139,9 +136,15 @@ function App() {
   const shown = useMemo(() => filterInstalls(scan?.installs ?? [], filter, query), [scan, filter, query]);
   const owned = transactions.filter(x => x.instance_id === selected);
   const scanBusy = busy?.includes("扫描") ?? false;
-  const settling = scanBusy || sourceScan.running;
+  const tasksRunning = sourceTasks.some(task => task.running);
   const unqueried = useMemo(() => unqueriedCount(scan?.installs ?? []), [scan]);
-  const settingsRevision = sourceScan.settingsRevision ?? scan?.settings_revision ?? null;
+  const settingsRevision = scan?.settings_revision ?? null;
+
+  function instanceMatching(instanceId: string): boolean {
+    return sourceTasks.some(task => task.running
+      && ((task.kind === "match_games" && task.key === "match")
+        || (task.kind === "rematch_game" && task.key === `instance:${instanceId}`)));
+  }
 
   useEffect(() => { scanRef.current = scan; }, [scan]);
   useEffect(() => { selectedRef.current = selected; }, [selected]);
@@ -150,16 +153,12 @@ function App() {
     setSelectedKey(entries[0]?.key ?? null);
   }, [entries, selectedKey]);
 
-  function supportsSourceScan(caps: Capabilities | null): boolean {
-    return !!caps && Array.isArray(caps.methods) && caps.methods.includes("scan_sources");
-  }
-
   // Capability negotiation is the single version/availability gate. A failure
   // is a real contract error: show the host diagnostic instead of falling back.
   function loadCapabilities(): Promise<Capabilities | null> {
     if (!capabilitiesPromise.current) {
       capabilitiesPromise.current = invoke<Capabilities>("get_capabilities")
-        .then(caps => { setCapabilities(caps); capabilityErrorRef.current = null; return caps; })
+        .then(caps => { capabilityErrorRef.current = null; return caps; })
         .catch(e => { const message = describeError(e); capabilityErrorRef.current = message; return null; });
     }
     return capabilitiesPromise.current;
@@ -172,154 +171,188 @@ function App() {
     finally { setBusy(null); }
   }
 
-  // ---- source discovery: live scan events --------------------------------
-  function handleSourceEvent(payload: SourceEvent) {
-    if (!payload || typeof payload.request_id !== "string" || typeof payload.sequence !== "number") return;
-    const active = activeEventRef.current;
-    if (active.token === 0) return;
-    if (active.id === null) { active.id = payload.request_id; active.seq = payload.sequence; }
-    else if (active.id !== payload.request_id || payload.sequence <= active.seq) return;
-    else active.seq = payload.sequence;
+  // ---- source tasks: polling, live match rows and result merging ---------
+  function upsertTask(snapshot: SourceTaskStatus) {
+    setSourceTasks(prev => [snapshot, ...prev.filter(task => task.task_id !== snapshot.task_id)]);
+  }
 
-    if (payload.event === "source_progress") {
-      setSourceScan(prev => ({
-        ...prev,
-        running: payload.running ?? prev.running,
-        completed: payload.completed ?? prev.completed,
-        total: payload.total ?? prev.total,
-        settingsRevision: payload.settings_revision ?? prev.settingsRevision,
-      }));
+  function applyGameMatches(matches: GameMatch[]) {
+    if (!matches.length) return;
+    setScan(prev => {
+      if (!prev) return prev;
+      const byInstance = new Map<string, GameMatch>();
+      const byAppid = new Map<number, GameMatch>();
+      for (const match of matches) {
+        if (match.instance_id) byInstance.set(match.instance_id, match);
+        byAppid.set(match.appid, match);
+      }
+      const installs = prev.installs.map(row => {
+        const match = byInstance.get(row.game.instance_id) ?? byAppid.get(row.game.appid);
+        if (!match) return row;
+        return { ...row, discovery: { status: match.status, candidates: match.candidates ?? [], diagnostics: match.diagnostics ?? [] } };
+      });
+      return { ...prev, installs };
+    });
+  }
+
+  function applyProjectedInstances(result: ProjectInstancesResult) {
+    setScan(prev => {
+      if (!prev) return prev;
+      const byInstance = new Map(result.instances.map(row => [row.game.instance_id, row]));
+      const installs = prev.installs.map(row => byInstance.get(row.game.instance_id) ?? row);
+      return { ...prev, installs, settings_revision: result.settings_revision ?? prev.settings_revision };
+    });
+  }
+
+  /** Refresh install actions for affected games without a library-wide scan. */
+  async function refreshProjectedMatches(appids: number[]) {
+    const current = scanRef.current;
+    if (!current || !appids.length) return;
+    const appidSet = new Set(appids);
+    const instanceIds = current.installs.filter(row => appidSet.has(row.game.appid)).map(row => row.game.instance_id);
+    if (!instanceIds.length) return;
+    const projected = await invoke<ProjectInstancesResult>("project_instances", { instanceIds });
+    applyProjectedInstances(projected);
+  }
+
+  async function completeTask(task: SourceTaskStatus) {
+    if (finishedTasksRef.current.has(task.task_id)) return;
+    finishedTasksRef.current.add(task.task_id);
+    if (task.error) {
+      const code = task.error.code;
+      setSourceNotice(code === "cancelled" || code === "task_cancelled" || code === "download_cancelled"
+        ? "已取消来源任务，已保留取得的结果。"
+        : `来源任务未完成：${describeError(task.error)}`);
       return;
     }
-    if (payload.event === "source_update" && "discovery" in payload) {
-      // Refresh install actions as candidates arrive, so a long lookup needn't
-      // finish before its already discovered patches can be selected.
-      const requestId = payload.request_id;
-      const projectionSequence = ++sourceProjectionSequenceRef.current;
-      void call<ScanResult>("scan").then(fresh => {
-        if (activeEventRef.current.id !== requestId || sourceProjectionSequenceRef.current !== projectionSequence) return;
-        const rows = new Map(fresh.installs.map(row => [row.game.instance_id, row]));
-        setScan(prev => prev ? { ...prev, installs: prev.installs.map(row => {
-          const projected = rows.get(row.game.instance_id);
-          return projected ? { ...row, patches: projected.patches } : row;
-        }) } : prev);
-      }).catch(() => setSourceNotice("已保留查询结果，安装操作刷新失败，可重新扫描后重试。"));
-      const discovery = payload.discovery;
-      const instanceId = payload.instance_id ?? null;
-      const appid = payload.appid ?? null;
-      setScan(prev => {
-        if (!prev) return prev;
-        let changed = false;
-        const installs = prev.installs.map(row => {
-          const match = instanceId ? row.game.instance_id === instanceId : appid != null && row.game.appid === appid;
-          if (!match) return row;
-          changed = true;
-          return { ...row, discovery };
-        });
-        return changed ? { ...prev, installs } : prev;
-      });
+    const result = task.result;
+    if (!result) return;
+    if (task.kind === "update_source") {
+      const update = result as SourceUpdateResult;
+      setSourceNotice(`来源 ${update.source_id} 已更新${update.complete ? "" : "（索引未完整）"}，影响 ${update.affected_appids?.length ?? 0} 款游戏。`);
+      await refreshProjectedMatches(update.affected_appids ?? []);
+      if (sourcesOpenRef.current) await loadSources(false);
+      return;
+    }
+    const matched = result as MatchGamesResult;
+    applyGameMatches(matched.results ?? []);
+    setScan(prev => prev ? { ...prev, settings_revision: matched.settings_revision ?? prev.settings_revision } : prev);
+    await refreshProjectedMatches((matched.results ?? []).map(match => match.appid));
+  }
+
+  async function pollTasks() {
+    try {
+      const list = await invoke<SourceTaskStatus[]>("source_task_status");
+      setSourceTasks(list);
+      for (const task of list) {
+        if (!task.running) await completeTask(task);
+      }
+    } catch (e) {
+      setSourceNotice(describeError(e));
+    }
+  }
+
+  async function startSourceTask(command: string, args: Record<string, unknown>) {
+    try {
+      const snapshot = await invoke<SourceTaskStatus>(command, args);
+      upsertTask(snapshot);
+      setSourceNotice(null);
+      return snapshot;
+    } catch (e) {
+      setError(describeError(e));
+      return null;
+    }
+  }
+
+  function updateSource(sourceId: string) {
+    void startSourceTask("start_source_update", { sourceId, force: false });
+  }
+
+  function matchAllGames() {
+    void startSourceTask("start_match_games", { preferredLanguage: preferredLanguage ?? undefined });
+  }
+
+  function rematchGame(instanceId: string) {
+    void startSourceTask("start_rematch_game", { instanceId, preferredLanguage: preferredLanguage ?? undefined });
+  }
+
+  async function cancelTask(taskId: string) {
+    try {
+      await invoke<boolean>("cancel_source_task", { taskId });
+      await pollTasks();
+    } catch (e) {
+      setError(describeError(e));
+    }
+  }
+
+  /**
+   * Newly discovered games enter an incremental library match automatically;
+   * the scan result has already rendered, so this never blocks or re-scans.
+   */
+  async function maybeAutoMatch(rows: Install[]) {
+    try {
+      const sources = await invoke<SourceSummary[]>("list_sources");
+      setGlobalSources(sources);
+      const tasks = await invoke<SourceTaskStatus[]>("source_task_status");
+      setSourceTasks(tasks);
+      // Reconcile tasks the automatic scheduler already finished while the
+      // window was still starting, without waiting for another scan.
+      for (const task of tasks) {
+        if (!task.running) await completeTask(task);
+      }
+      const instances = pendingMatchInstances(rows, sources, tasks);
+      if (!instances.length) return;
+      const snapshot = await invoke<SourceTaskStatus>("start_match_games", { instances });
+      upsertTask(snapshot);
+    } catch (e) {
+      setSourceNotice(describeError(e));
     }
   }
 
   useEffect(() => {
+    sourcesOpenRef.current = sourcesOpen;
+  }, [sourcesOpen]);
+
+  useEffect(() => {
+    if (!tasksRunning) return;
+    let active = true;
+    const poll = async () => { if (active) await pollTasks(); };
+    void poll();
+    const timer = window.setInterval(() => { void poll(); }, 500);
+    return () => { active = false; window.clearInterval(timer); };
+  }, [tasksRunning]);
+
+  // Host events keep the UI in sync with tasks started elsewhere (for example
+  // the automatic update scheduler) without re-scanning the library.
+  useEffect(() => {
     let disposed = false;
     const unlisten: Array<() => void> = [];
+    const schedulePoll = () => { void pollTasks(); };
     void (async () => {
-      const progress = await listen<SourceEvent>("source_progress", event => handleSourceEvent(event.payload));
-      const update = await listen<SourceEvent>("source_update", event => handleSourceEvent(event.payload));
-      if (disposed) { progress(); update(); } else { unlisten.push(progress, update); }
+      const handlers = await Promise.all([
+        listen<MatchUpdateEvent>("match_update", event => {
+          const payload = event.payload;
+          applyGameMatches([{
+            appid: payload.appid,
+            instance_id: payload.instance_id,
+            status: payload.status as GameMatch["status"],
+            candidates: payload.candidates,
+            diagnostics: payload.diagnostics,
+            source_revisions: {},
+          }]);
+          schedulePoll();
+        }),
+        listen<SourceUpdateEvent>("source_update", () => {
+          if (sourcesOpenRef.current) void loadSources(false);
+          schedulePoll();
+        }),
+        listen<SourceProgressEvent>("source_progress", schedulePoll),
+        listen<MatchProgressEvent>("match_progress", schedulePoll),
+      ]);
+      if (disposed) handlers.forEach(off => off()); else unlisten.push(...handlers);
     })();
     return () => { disposed = true; unlisten.forEach(off => off()); };
   }, []);
-
-  function applyScanResults(result: SourceScanResult) {
-    setScan(prev => {
-      if (!prev) return prev;
-      const byInstance = new Map<string, SourceScanItem>();
-      for (const item of result.results ?? []) if (item.instance_id) byInstance.set(item.instance_id, item);
-      const installs = prev.installs.map(row => {
-        const item = byInstance.get(row.game.instance_id);
-        if (!item) return row;
-        return { ...row, discovery: { status: item.status, candidates: item.candidates ?? [], diagnostics: item.diagnostics ?? [] } };
-      });
-      return { ...prev, installs, settings_revision: result.settings_revision ?? prev.settings_revision };
-    });
-    if (result.settings_revision != null) setSourceScan(prev => ({ ...prev, settingsRevision: result.settings_revision ?? prev.settingsRevision }));
-  }
-
-  async function startSourceScan(force: boolean, instanceId?: string) {
-    if (sourceRunningRef.current) return;
-    const token = ++scanTokenRef.current;
-    activeEventRef.current = { token, id: null, seq: -1 };
-    cancelledRef.current = false;
-    sourceRunningRef.current = true;
-    setSourceNotice(null);
-    setSourceScan({ started: true, running: true, cancelled: false, completed: 0, total: 0, settingsRevision: null });
-    try {
-      const result = await invoke<SourceScanResult>("start_source_scan", { force, instanceId, preferredLanguage: instanceId ? preferredLanguage : undefined });
-      if (scanTokenRef.current === token) {
-        applyScanResults(result);
-        // Reproject newly found candidates into install actions after the task.
-        const fresh = await call<ScanResult>("scan");
-        if (scanTokenRef.current === token) {
-          setScan(fresh);
-          applyScanResults(result);
-        }
-      }
-      if (cancelledRef.current) setSourceNotice("已取消查找，已保留取得的结果；可稍后重新查找。");
-    } catch (e) {
-      if (!(e && typeof e === "object" && "code" in e && e.code === "source_scan_in_progress")) setSourceNotice(describeError(e));
-    } finally {
-      if (scanTokenRef.current === token) {
-        activeEventRef.current = { token: 0, id: null, seq: -1 };
-        sourceRunningRef.current = false;
-        setSourceScan(prev => ({ ...prev, running: false, cancelled: cancelledRef.current }));
-      }
-    }
-  }
-
-  async function cancelSourceScan() {
-    cancelledRef.current = true;
-    setSourceScan(prev => ({ ...prev, cancelled: true }));
-    try {
-      const accepted = await invoke<boolean>("cancel_source_scan");
-      // The task may have finished between the click and the request; only keep
-      // the cancelled state when something was actually still running.
-      if (!accepted && !sourceRunningRef.current) {
-        cancelledRef.current = false;
-        setSourceScan(prev => ({ ...prev, cancelled: false }));
-      }
-    } catch (e) {
-      setError(describeError(e));
-    }
-  }
-
-  async function findGame(instanceId: string, force: boolean) {
-    if (discoveryBusy) return;
-    setDiscoveryBusy(instanceId); setError(null); setNotice(null);
-    try {
-      await startSourceScan(force, instanceId);
-    } catch (e) {
-      setError(describeError(e));
-    } finally {
-      setDiscoveryBusy(null);
-    }
-  }
-
-  function mergeDiscoveryResult(instanceId: string, result: DiscoveryResult) {
-    const current = scanRef.current;
-    const row = current?.installs.find(item => item.game.instance_id === instanceId);
-    if (!current || !row) return;
-    if (result.instance_id && result.instance_id !== instanceId) return;
-    if (result.appid != null && result.appid !== row.game.appid) return;
-    if (result.status === "stale") { setNotice("来源设置已变化，结果可能已过期，请重新查找。"); return; }
-    if (current.settings_revision != null && result.settings_revision != null && current.settings_revision !== result.settings_revision) {
-      setNotice("来源设置已变化，请重新查找。");
-      return;
-    }
-    const discovery = { status: result.status, candidates: result.candidates ?? [], diagnostics: result.diagnostics ?? [] };
-    setScan(prev => prev ? { ...prev, installs: prev.installs.map(item => item.game.instance_id === instanceId ? { ...item, discovery } : item) } : prev);
-  }
 
   async function refresh() {
     const caps = await loadCapabilities();
@@ -335,12 +368,12 @@ function App() {
       scanRef.current = value;
       setScan(value);
       setTransactions(nextTransactions);
-      if (value.sources) setGlobalSources(value.sources);
       if (!value.installs.some(x => x.game.instance_id === selectedRef.current)) { setSelected(null); setSelectedKey(null); }
     });
     if (capabilityErrorRef.current) setError(capabilityErrorRef.current);
-    const hasInstalled = nextScan ? (nextScan as ScanResult).installs.some(row => row.game.availability === "installed") : false;
-    if (supportsSourceScan(caps) && hasInstalled) void startSourceScan(false);
+    // The scan result is already rendered. Newly found games enter an
+    // incremental match task; this never re-scans and never blocks the UI.
+    if (nextScan) void maybeAutoMatch((nextScan as ScanResult).installs);
   }
 
   useEffect(() => { void refresh(); }, []);
@@ -367,61 +400,64 @@ function App() {
   }, [installing]);
 
   // ---- source management -------------------------------------------------
-  async function loadSources() {
-    setSourcesLoading(true);
+  async function loadSources(showLoading = true) {
+    if (showLoading) setSourcesLoading(true);
     try {
+      // The source drawer reads the authoritative list explicitly; `scan.sources`
+      // is not used for schedule/revision fields.
       const list = await invoke<SourceSummary[]>("list_sources");
       setGlobalSources(list);
-      if (selected) setGameSources(await invoke<GameSourceSubscription[]>("list_game_sources", { instanceId: selected }));
+      const instanceId = selectedRef.current;
+      if (instanceId) setGameSources(await invoke<GameSourceSubscription[]>("list_game_sources", { instanceId }));
       else setGameSources(null);
+      setSourceTasks(await invoke<SourceTaskStatus[]>("source_task_status"));
     } catch (e) {
       setError(describeError(e));
     } finally {
-      setSourcesLoading(false);
+      if (showLoading) setSourcesLoading(false);
     }
   }
 
   function reloadSources() {
-    void run("正在读取来源列表…", async () => {
-      const list = await invoke<SourceSummary[]>("list_sources");
-      const games = selected ? await invoke<GameSourceSubscription[]>("list_game_sources", { instanceId: selected }) : null;
-      return { list, games };
-    }, ({ list, games }) => { setGlobalSources(list); setGameSources(games); });
+    void loadSources();
+  }
+
+  /** Settings writes return the new revision; keep the drawer header accurate. */
+  function applySettingsRevision(result: { settings_revision?: number | null }) {
+    if (result.settings_revision != null) {
+      setScan(prev => prev ? { ...prev, settings_revision: result.settings_revision ?? prev.settings_revision } : prev);
+    }
   }
 
   function toggleSource(sourceId: string, enabled: boolean) {
     void run(enabled ? "正在启用来源…" : "正在停用来源…", async () => {
-      await invoke("set_source_enabled", { sourceId, enabled });
-      const list = await invoke<SourceSummary[]>("list_sources");
-      const games = selected ? await invoke<GameSourceSubscription[]>("list_game_sources", { instanceId: selected }) : null;
-      return { list, games };
-    }, ({ list, games }) => { setGlobalSources(list); setGameSources(games); setNotice(`已${enabled ? "启用" : "停用"}来源。`); });
+      applySettingsRevision(await invoke<{ settings_revision: number }>("set_source_enabled", { sourceId, enabled }));
+      await loadSources(false);
+    }, () => setNotice(`已${enabled ? "启用" : "停用"}来源。`));
   }
 
   function toggleGameSource(sourceId: string, subscribed: boolean) {
     if (!selected) return;
     void run("正在更新此游戏的订阅…", async () => {
-      await invoke("set_game_source", { instanceId: selected, sourceId, subscribed });
-      const list = await invoke<SourceSummary[]>("list_sources");
-      const games = await invoke<GameSourceSubscription[]>("list_game_sources", { instanceId: selected });
-      return { list, games };
-    }, ({ list, games }) => { setGlobalSources(list); setGameSources(games); setNotice("此游戏的订阅已更新，可点击“重新查找”生效。"); });
+      applySettingsRevision(await invoke<{ settings_revision: number }>("set_game_source", { instanceId: selected, sourceId, subscribed }));
+      await loadSources(false);
+    }, () => setNotice("此游戏的订阅已更新，可点击“重新匹配”生效。"));
   }
 
-  function refreshSources(force: boolean) {
-    void run(force ? "正在强制刷新来源索引…" : "正在刷新来源索引…", async () => {
-      await invoke("refresh_sources", { force });
-      return invoke<SourceSummary[]>("list_sources");
-    }, list => { setGlobalSources(list); setNotice(force ? "已强制刷新来源索引。" : "已刷新来源索引。"); });
+  function setSourceInterval(sourceId: string, intervalHours: number) {
+    void run("正在保存自动更新间隔…", async () => {
+      applySettingsRevision(await invoke<{ settings_revision: number }>("set_source_update_interval", { sourceId, intervalHours }));
+      await loadSources(false);
+    }, () => setNotice(`自动更新间隔已设置为：${sourceIntervalLabel(intervalHours)}。`));
   }
 
   function addSource(rule: string) {
     let parsed: unknown;
     try { parsed = JSON.parse(rule); } catch { setError("来源规则不是有效的 JSON，请检查后重试。"); return; }
     void run("正在添加来源…", async () => {
-      await invoke("add_source", { rule: parsed });
-      return invoke<SourceSummary[]>("list_sources");
-    }, list => { setGlobalSources(list); setNotice("已添加来源。"); });
+      applySettingsRevision(await invoke<{ settings_revision: number }>("add_source", { rule: parsed }));
+      await loadSources(false);
+    }, () => setNotice("已添加来源。"));
   }
 
   function openUrl(url: string) {
@@ -508,26 +544,30 @@ function App() {
   const progress = job?.progress;
   const progressWidth = progress ? progressPercent(progress.bytes_done, progress.total_bytes) : null;
   const progressIndeterminate = progressWidth == null;
-  const detailChip = game ? sourceChip(game, sourceScan.running) : null;
+  const detailChip = game ? sourceChip(game, instanceMatching(game.game.instance_id)) : null;
 
   return <div className="shell">
     <header><div><h1>Steam 补丁管理</h1><p>本地游戏 · 已审核来源 · 文件变更先预览</p></div><div className="header-actions"><button onClick={() => setSourcesOpen(true)}>来源管理</button><button onClick={recover} disabled={!!busy}>尝试恢复未完成操作</button><button className="primary" onClick={() => void refresh()} disabled={!!busy}>重新扫描</button></div></header>
     {busy && !installing && <div role="status" className="status">{busy} 任务完成后会显示结果；当前没有百分比进度。</div>}
     {error && <div role="alert" className="error">{error}</div>}{notice && <div role="status" className="notice">{notice}</div>}
     {installing && <section className="progress" aria-live="polite"><h3>{progress ? progressStageLabel(progress.stage, progress.substage) : "正在准备安装"}</h3><div className={`progress-bar${progressIndeterminate ? " indeterminate" : ""}`}><div className="progress-fill" style={progressIndeterminate ? undefined : { width: `${progressWidth}%` }} /></div>{progress && <div className="progress-meta"><span>{progress.total_bytes ? `${progress.bytes_done} / ${progress.total_bytes} bytes` : "正在处理"}</span>{progress.total_files != null && <span>{progress.files_done} / {progress.total_files} 个文件</span>}</div>}{progress?.current_file && <p className="path">{progress.current_file}</p>}<button className="cancel" onClick={() => void invoke("cancel_install")} disabled={job?.cancelled === true}>{job?.cancelled ? "正在取消…" : "取消安装"}</button></section>}
-    {sourceScan.running && <section className="progress source-progress" aria-live="polite"><h3>正在查找补丁来源</h3><div className={`progress-bar${sourceScan.total > 0 ? "" : " indeterminate"}`}><div className="progress-fill" style={sourceScan.total > 0 ? { width: `${(progressPercent(sourceScan.completed, sourceScan.total) ?? 0)}%` } : undefined} /></div><div className="progress-meta"><span>{sourceScan.total > 0 ? `已查询 ${sourceScan.completed} / ${sourceScan.total} 款游戏` : "正在准备查询已安装游戏"}</span>{settingsRevision != null && <span>来源设置版本 {settingsRevision}</span>}</div><button className="cancel" onClick={() => void cancelSourceScan()} disabled={sourceScan.cancelled}>{sourceScan.cancelled ? "正在取消…" : "取消查找"}</button></section>}
-    {!sourceScan.running && sourceNotice && <div role="status" className="status">{sourceNotice}</div>}
+    {tasksRunning && <section className="progress source-progress" aria-live="polite"><h3>正在处理补丁来源</h3>{sourceTasks.filter(task => task.running).map(task => {
+      const width = task.progress && task.progress.total > 0 ? Math.min(100, task.progress.completed / task.progress.total * 100) : null;
+      return <div className="task-progress" key={task.task_id}><h4>{taskKindLabel(task.kind)}{task.kind === "update_source" ? ` · ${task.key}` : task.kind === "match_games" ? " · 全部游戏" : ""}</h4><div className={`progress-bar${width == null ? " indeterminate" : ""}`}><div className="progress-fill" style={width == null ? undefined : { width: `${width}%` }} /></div><div className="progress-meta"><span>{taskProgressText(task)}</span>{settingsRevision != null && <span>来源设置版本 {settingsRevision}</span>}<button type="button" className="link" onClick={() => void cancelTask(task.task_id)} disabled={task.cancelled}>{task.cancelled ? "正在取消…" : "取消"}</button></div></div>;
+    })}</section>}
+    {!tasksRunning && sourceNotice && <div role="status" className="status">{sourceNotice}</div>}
     <div className="workspace"><aside><div className="search"><input aria-label="搜索游戏" placeholder="搜索游戏或 AppID" value={query} onChange={e => setQuery(e.target.value)} /></div>
       <div className="filters">{(["all", "matched", "installed", "attention"] as Filter[]).map((key, i) => <button key={key} className={filter === key ? "active" : ""} onClick={() => setFilter(key)}>{["全部", "有补丁", "已安装", "需处理"][i]}</button>)}</div>
       <div className="count">{shown.length} 个安装实例</div>
-      {filter === "matched" && unqueried > 0 && <div className="count hint-row">还有 {unqueried} 款游戏未查询来源。<button type="button" className="link" onClick={() => { setFilter("all"); setQuery(""); }}>查看全部</button></div>}
+      {filter === "matched" && unqueried > 0 && <div className="count hint-row">还有 {unqueried} 款游戏尚未匹配来源。<button type="button" className="link" onClick={() => { setFilter("all"); setQuery(""); }}>查看全部</button></div>}
       <div className="game-list">{shown.map(row => {
-        const chip = patchChip(row, settling);
-        return <button key={row.game.instance_id} className={`game ${selected === row.game.instance_id ? "selected" : ""}`} onClick={() => detail(row)} disabled={!!busy}><span className="game-head"><strong>{gameDisplayName(row.game)}</strong>{chip && <Chip tone={chip.tone} label={chip.label} />}</span><small>AppID {row.game.appid} · {rowSummary(row, settling)}</small><small>{row.game.availability === "installed" ? row.game.library_path : `不可用：${row.game.availability}`}</small></button>;
+        const rowBusy = scanBusy || instanceMatching(row.game.instance_id);
+        const chip = patchChip(row, rowBusy);
+        return <button key={row.game.instance_id} className={`game ${selected === row.game.instance_id ? "selected" : ""}`} onClick={() => detail(row)} disabled={!!busy}><span className="game-head"><strong>{gameDisplayName(row.game)}</strong>{chip && <Chip tone={chip.tone} label={chip.label} />}</span><small>AppID {row.game.appid} · {rowSummary(row, rowBusy)}</small><small>{row.game.availability === "installed" ? row.game.library_path : `不可用：${row.game.availability}`}</small></button>;
       })}</div>
       {scan && !scan.installs.length && <p className="empty">未找到已安装游戏。检查 Steam 是否安装，或确认库磁盘已挂载。</p>}
     </aside><main>{!game ? <section className="welcome"><h2>选择一个游戏</h2><p>扫描会列出可访问 Steam 库中的所有安装实例，目录未收录的游戏也会显示。</p><p>目录版本：{scan?.catalog_revision ?? "—"} · 信任状态：{workflowState(scan?.catalog_trust ?? "未加载")}</p>{scan?.diagnostics.map((d, i) => <p key={i} className="warning">{reason(d.code)} {d.path}</p>)}</section> : <>
-      <div className="detail-head"><div><h2>{gameDisplayName(game.game)}</h2><p>AppID {game.game.appid} · build {game.game.buildid ?? "未知版本"}</p><p className="path">{game.game.install_path}</p></div><div className="detail-badges"><span className="badge">{rowSummary(game, settling)}</span>{detailChip && <Chip tone={detailChip.tone} label={detailChip.label} />}</div></div>
+      <div className="detail-head"><div><h2>{gameDisplayName(game.game)}</h2><p>AppID {game.game.appid} · build {game.game.buildid ?? "未知版本"}</p><p className="path">{game.game.install_path}</p></div><div className="detail-badges"><span className="badge">{rowSummary(game, scanBusy || instanceMatching(game.game.instance_id))}</span>{detailChip && <Chip tone={detailChip.tone} label={detailChip.label} />}</div></div>
       {!entries.length ? <section className="card"><h3>暂无可用补丁</h3><p>当前目录没有这款游戏的匹配条目，也没有已核实身份的来源候选。这不代表游戏不需要补丁，也不说明其补丁安装状态。</p></section> : <>
         <div className="tabs">{entries.map(item => <button key={item.key} className={`${selectedKey === item.key ? "active" : ""}${item.kind === "discovery" ? " tab-source" : ""}`} onClick={() => {setSelectedKey(item.key); setSelectedDownload(null);setManualConfirmation(null);setPreview(null);setArchive(null);}} disabled={!!busy}>{item.kind === "installable" ? item.patch.name : item.candidate.patch_title}{item.kind === "discovery" && <span className="tab-tag">来源</span>}</button>)}</div>
         {entry?.kind === "installable" && (() => {
@@ -542,7 +582,25 @@ function App() {
         })()}
         {entry?.kind === "discovery" && <CandidateCard candidate={entry.candidate} onOpen={openUrl} />}
       </>}
-      <section className="card"><div className="card-head"><h3>查找来源</h3><Chip tone={statusTone(game.discovery?.status)} label={chipLabel(game.discovery?.status, sourceScan.running)} /></div><p>{statusLabel(game.discovery?.status, sourceScan.running)}{game.discovery?.candidates?.length ? ` · 共 ${game.discovery.candidates.length} 条候选，其中 ${game.discovery.candidates.filter(candidateMatched).length} 条身份已核实` : ""}</p><div className="actions"><label className="field-label">偏好的补丁语言<select value={preferredLanguage ?? ""} onChange={e => setPreferredLanguage(e.target.value || null)} disabled={!!busy}><option value="">未指定</option><option value="zh-CN">简体中文</option><option value="zh-TW">繁体中文</option><option value="en">英文</option><option value="ja">日文</option></select></label><button onClick={() => void findGame(game.game.instance_id, true)} disabled={!!busy || discoveryBusy === game.game.instance_id}>{discoveryBusy === game.game.instance_id ? "正在查找…" : "重新查找"}</button></div><p className="hint">语言偏好用于向来源查询时优先核对，不改变游戏身份；游戏实际语言与 DLC 状态仍需确认。</p>{game.discovery?.diagnostics.map((d, i) => <p className="warning" key={i}>{d.source_id ? `（${d.source_id}）` : ""}{reason(d.code)}{d.detail && d.detail !== d.code ? ` · ${reason(d.detail)}` : ""}</p>)}</section>
+      {(() => {
+        const rematch = taskForInstance(sourceTasks, game.game.instance_id);
+        const libraryMatch = sourceTasks.find(task => task.kind === "match_games" && task.key === "match");
+        const active = rematch?.running ? rematch : libraryMatch?.running ? libraryMatch : undefined;
+        const status = game.discovery?.status;
+        const matchHint = gameMatchStatusHint(status);
+        const fallbackText = fallbackDisplayStatus(status);
+        const width = active?.progress && active.progress.total > 0 ? Math.min(100, active.progress.completed / active.progress.total * 100) : null;
+        return <section className="card">
+          <div className="card-head"><h3>来源匹配</h3><Chip tone={statusTone(status)} label={chipLabel(status, active != null)} /></div>
+          <p>{statusLabel(status, active != null)}{game.discovery?.candidates?.length ? ` · 共 ${game.discovery.candidates.length} 条候选，其中 ${game.discovery.candidates.filter(candidateMatched).length} 条身份已核实` : ""}</p>
+          {matchHint && <p className={status === "incomplete" ? "warning" : "hint"}>{matchHint}</p>}
+          {fallbackText && status !== "no_match" && <p className="hint">{fallbackText}</p>}
+          {active && <div className="source-progress-detail"><div className={`progress-bar${width == null ? " indeterminate" : ""}`}><div className="progress-fill" style={width == null ? undefined : { width: `${width}%` }} /></div><p className="hint">{taskProgressText(active)}</p></div>}
+          <div className="actions"><label className="field-label">偏好的补丁语言<select value={preferredLanguage ?? ""} onChange={e => setPreferredLanguage(e.target.value || null)} disabled={!!busy}><option value="">未指定</option><option value="zh-CN">简体中文</option><option value="zh-TW">繁体中文</option><option value="en">英文</option><option value="ja">日文</option></select></label><button onClick={() => rematchGame(game.game.instance_id)} disabled={!!busy || active != null}>{active ? "正在重新匹配…" : "重新匹配"}</button>{active && <button className="cancel" onClick={() => void cancelTask(active.task_id)} disabled={active.cancelled}>{active.cancelled ? "正在取消…" : "取消匹配"}</button>}</div>
+          <p className="hint">重新匹配只使用已缓存的普通来源索引，不会刷新来源；语言偏好用于优先核对，不改变游戏身份。</p>
+          {game.discovery?.diagnostics.map((d, i) => <p className="warning" key={i}>{d.source_id ? `（${d.source_id}）` : ""}{reason(d.code)}{d.detail && d.detail !== d.code ? ` · ${reason(d.detail)}` : ""}</p>)}
+        </section>;
+      })()}
       <section className="card"><h3>本工具事务</h3>{owned.length ? owned.map(tx => <div className="transaction" key={tx.transaction_id}><span>{tx.release_id || tx.selection_id || tx.content_id || tx.transaction_id} · {workflowState(tx.state)}{tx.error && ` · ${reason(tx.error)}`}</span></div>) : <p>没有托管安装记录。外部安装不能由本工具卸载。</p>}</section>
     </>}</main></div>
     <SourcePanel
@@ -551,18 +609,24 @@ function App() {
       globalSources={globalSources}
       gameSources={gameSources}
       gameName={game ? gameDisplayName(game.game) : null}
+      gameInstanceId={game ? game.game.instance_id : null}
+      preferredLanguage={preferredLanguage}
       settingsRevision={settingsRevision}
       loading={sourcesLoading}
       busy={busy}
       error={error}
       notice={notice}
-      scan={{ running: sourceScan.running, cancelled: sourceScan.cancelled, completed: sourceScan.completed, total: sourceScan.total }}
+      tasks={sourceTasks}
       onReload={reloadSources}
-      onRefreshSources={refreshSources}
+      onMatchAllGames={matchAllGames}
+      onUpdateSource={updateSource}
+      onSetInterval={setSourceInterval}
+      onCancelTask={taskId => void cancelTask(taskId)}
+      onRematchGame={() => { if (game) rematchGame(game.game.instance_id); }}
+      onLanguageChange={setPreferredLanguage}
       onToggleSource={toggleSource}
       onToggleGameSource={toggleGameSource}
       onAddSource={addSource}
-      onCancelScan={() => void cancelSourceScan()}
       onOpenUrl={openUrl}
     />
   </div>;

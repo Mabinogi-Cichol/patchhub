@@ -334,8 +334,9 @@ mod tests {
         orchestrator::tests as fixture,
     };
     use crate::sources::{
-        model::{ArtifactFormat, DiscoveryRecord},
-        registry::DiscoveryOutcome,
+        model::{
+            ArtifactFormat, GameMatchRecord, GameMatchStatus, SourceMatchRecord, SourceMatchStatus,
+        },
         Sources,
     };
     use serde_json::Value;
@@ -365,27 +366,31 @@ mod tests {
         candidate.format_reported = ArtifactFormat::Exe;
         candidate.format_observed = ArtifactFormat::Exe;
         let selection = exe_resolve::exe_selection_id(&candidate).unwrap();
-        let mut sources = Sources::open(state).unwrap();
-        let rule = sources
-            .registry()
-            .rules()
-            .iter()
-            .find(|r| r.id == "kagura-cn")
-            .unwrap()
-            .clone();
+        let sources = Sources::open(state).unwrap();
+        let source_id = candidate.source_id.clone();
         sources
-            .registry_mut()
-            .commit(
-                &rule,
-                candidate.game_appid.unwrap(),
-                DiscoveryOutcome {
-                    status: "complete".into(),
-                    candidates: vec![candidate],
-                    ..Default::default()
-                },
-                &DiscoveryRecord::default(),
-                "test",
-            )
+            .store()
+            .save_match(&GameMatchRecord {
+                schema_version: 1,
+                appid: candidate.game_appid.unwrap(),
+                name: "Game".to_string(),
+                localized_name: None,
+                input_key: "key".to_string(),
+                status: GameMatchStatus::PublisherMatch,
+                sources: std::collections::BTreeMap::from([(
+                    source_id,
+                    SourceMatchRecord {
+                        index_revision: 1,
+                        status: SourceMatchStatus::Matched,
+                        candidates: vec![candidate],
+                        detail_pages: Vec::new(),
+                        checked_at: 100,
+                        diagnostics: Vec::new(),
+                    },
+                )]),
+                fallback: None,
+                updated_at: 100,
+            })
             .unwrap();
         exe_resolve::resolve_exe(sources.registry(), &fixture::query(), &selection).unwrap()
     }

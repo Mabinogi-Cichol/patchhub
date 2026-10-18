@@ -58,3 +58,11 @@ textarea{width:100%;min-height:96px;resize:vertical;font:12px/1.5 ui-monospace,C
 @keyframes fade-in{from{opacity:0}to{opacity:1}}
 @keyframes drawer-in{from{transform:translateX(26px);opacity:.55}to{transform:translateX(0);opacity:1}}
 @media (max-width:920px){.facts{grid-template-columns:repeat(2,minmax(0,1fr))}.workspace{grid-template-columns:280px minmax(0,1fr)}}
+
+/* ---- v5 source tasks and per-source progress ---- */
+.source-progress-detail{margin-top:10px}
+.source-progress-detail .progress-bar{margin-top:6px}
+.source-progress-detail .hint{margin:6px 0 0}
+.task-progress{margin-top:12px}
+.task-progress h4{margin:0 0 6px;font-size:13px;color:#cfe0ef}
+.task-progress .progress-meta{align-items:center}

@@ -115,6 +115,41 @@ pub fn resolve_exe(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sources::model::{
+        GameMatchRecord, GameMatchStatus, SourceMatchRecord, SourceMatchStatus,
+    };
+    use crate::sources::Sources;
+
+    /// Persists a matched publisher source for AppID 42, the v5 read-model
+    /// equivalent of the old per-game discovery record.
+    fn save_match(sources: &Sources, appid: u32, candidate: SourceCandidate) {
+        let source_id = candidate.source_id.clone();
+        sources
+            .store()
+            .save_match(&GameMatchRecord {
+                schema_version: 1,
+                appid,
+                name: "Game".to_string(),
+                localized_name: None,
+                input_key: "key".to_string(),
+                status: GameMatchStatus::PublisherMatch,
+                sources: std::collections::BTreeMap::from([(
+                    source_id,
+                    SourceMatchRecord {
+                        index_revision: 1,
+                        status: SourceMatchStatus::Matched,
+                        candidates: vec![candidate],
+                        detail_pages: Vec::new(),
+                        checked_at: 100,
+                        diagnostics: Vec::new(),
+                    },
+                )]),
+                fallback: None,
+                updated_at: 100,
+            })
+            .unwrap();
+    }
+
     #[test]
     fn selection_binds_all_mirrors_and_conditions_but_not_observation() {
         let mut c = super::super::orchestrator::tests::candidate();
@@ -151,9 +186,7 @@ mod tests {
     }
     #[test]
     fn demo_and_unknown_variants_are_blocked_at_resolution() {
-        use crate::sources::model::{ArtifactFormat, DiscoveryRecord};
-        use crate::sources::registry::DiscoveryOutcome;
-        use crate::sources::Sources;
+        use crate::sources::model::ArtifactFormat;
         for variant in [Variant::Demo, Variant::Unknown] {
             let temp = tempfile::tempdir().unwrap();
             let mut candidate = super::super::orchestrator::tests::candidate();
@@ -165,28 +198,8 @@ mod tests {
             // Projection identity is still generated for demo/unknown candidates;
             // only resolution rejects them, so the CLI can emit a clean blocker.
             let selection = exe_selection_id(&candidate).expect("projection id");
-            let mut sources = Sources::open(temp.path()).unwrap();
-            let rule = sources
-                .registry()
-                .rules()
-                .iter()
-                .find(|rule| rule.id == "kagura-cn")
-                .unwrap()
-                .clone();
-            sources
-                .registry_mut()
-                .commit(
-                    &rule,
-                    candidate.game_appid.unwrap(),
-                    DiscoveryOutcome {
-                        status: "complete".into(),
-                        candidates: vec![candidate],
-                        ..Default::default()
-                    },
-                    &DiscoveryRecord::default(),
-                    "test",
-                )
-                .unwrap();
+            let sources = Sources::open(temp.path()).unwrap();
+            save_match(&sources, candidate.game_appid.unwrap(), candidate);
             assert_eq!(
                 resolve_exe(
                     sources.registry(),
@@ -203,9 +216,7 @@ mod tests {
 
     #[test]
     fn supported_exe_from_an_added_non_builtin_source_is_admitted_manually() {
-        use crate::sources::model::{ArtifactFormat, DiscoveryRecord, RawSourceRule};
-        use crate::sources::registry::DiscoveryOutcome;
-        use crate::sources::Sources;
+        use crate::sources::model::{ArtifactFormat, RawSourceRule};
 
         let temp = tempfile::tempdir().unwrap();
         let mut candidate = super::super::orchestrator::tests::candidate();
@@ -240,20 +251,7 @@ mod tests {
             })
             .unwrap();
         assert_eq!(sources.registry().source_origin(&rule.id), Some("added"));
-        sources
-            .registry_mut()
-            .commit(
-                &rule,
-                appid,
-                DiscoveryOutcome {
-                    status: "complete".into(),
-                    candidates: vec![candidate.clone()],
-                    ..Default::default()
-                },
-                &DiscoveryRecord::default(),
-                "test",
-            )
-            .unwrap();
+        save_match(&sources, appid, candidate.clone());
 
         let mut query = super::super::orchestrator::tests::query();
         query.instance_id = Some("instance".to_string());
@@ -267,9 +265,7 @@ mod tests {
 
     #[test]
     fn resolve_exe_selects_first_of_homogeneous_mirrors() {
-        use crate::sources::model::{ArtifactFormat, DiscoveryRecord};
-        use crate::sources::registry::DiscoveryOutcome;
-        use crate::sources::Sources;
+        use crate::sources::model::ArtifactFormat;
         let temp = tempfile::tempdir().unwrap();
         let mut candidate = super::super::orchestrator::tests::candidate();
         candidate.mirrors[0].format = "exe".into();
@@ -280,28 +276,8 @@ mod tests {
         candidate.format_reported = ArtifactFormat::Exe;
         candidate.format_observed = ArtifactFormat::Exe;
         let selection = exe_selection_id(&candidate).unwrap();
-        let mut sources = Sources::open(temp.path()).unwrap();
-        let rule = sources
-            .registry()
-            .rules()
-            .iter()
-            .find(|rule| rule.id == "kagura-cn")
-            .unwrap()
-            .clone();
-        sources
-            .registry_mut()
-            .commit(
-                &rule,
-                candidate.game_appid.unwrap(),
-                DiscoveryOutcome {
-                    status: "complete".into(),
-                    candidates: vec![candidate],
-                    ..Default::default()
-                },
-                &DiscoveryRecord::default(),
-                "test",
-            )
-            .unwrap();
+        let sources = Sources::open(temp.path()).unwrap();
+        save_match(&sources, candidate.game_appid.unwrap(), candidate);
         let resolved = resolve_exe(
             sources.registry(),
             &super::super::orchestrator::tests::query(),
@@ -315,9 +291,7 @@ mod tests {
 
     #[test]
     fn resolve_exe_blocks_heterogeneous_mirrors() {
-        use crate::sources::model::{ArtifactFormat, DiscoveryRecord};
-        use crate::sources::registry::DiscoveryOutcome;
-        use crate::sources::Sources;
+        use crate::sources::model::ArtifactFormat;
         let temp = tempfile::tempdir().unwrap();
         let mut candidate = super::super::orchestrator::tests::candidate();
         candidate.mirrors[0].format = "exe".into();
@@ -328,28 +302,8 @@ mod tests {
         candidate.format_reported = ArtifactFormat::Exe;
         candidate.format_observed = ArtifactFormat::Exe;
         let selection = exe_selection_id(&candidate).unwrap();
-        let mut sources = Sources::open(temp.path()).unwrap();
-        let rule = sources
-            .registry()
-            .rules()
-            .iter()
-            .find(|rule| rule.id == "kagura-cn")
-            .unwrap()
-            .clone();
-        sources
-            .registry_mut()
-            .commit(
-                &rule,
-                candidate.game_appid.unwrap(),
-                DiscoveryOutcome {
-                    status: "complete".into(),
-                    candidates: vec![candidate],
-                    ..Default::default()
-                },
-                &DiscoveryRecord::default(),
-                "test",
-            )
-            .unwrap();
+        let sources = Sources::open(temp.path()).unwrap();
+        save_match(&sources, candidate.game_appid.unwrap(), candidate);
         assert_eq!(
             resolve_exe(
                 sources.registry(),

@@ -504,9 +504,7 @@ pub fn resolve_zip(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sources::model::{
-        ArtifactFormat, Capability, MatchBasis, Mirror, SourceCandidate, SourceRule,
-    };
+    use crate::sources::model::{ArtifactFormat, Capability, MatchBasis, Mirror, SourceCandidate};
 
     fn mirror(url: &str, format: &str) -> Mirror {
         Mirror {
@@ -692,29 +690,34 @@ mod tests {
     }
 
     fn seed(state: &std::path::Path, candidate: SourceCandidate) {
-        use crate::sources::model::DiscoveryRecord;
-        use crate::sources::registry::DiscoveryOutcome;
-        let mut handle = crate::sources::Sources::open(state).unwrap();
-        let rule = handle
-            .registry()
-            .rules()
-            .iter()
-            .find(|rule| rule.id == "kagura-cn")
-            .cloned()
-            .unwrap();
+        use crate::sources::model::{
+            GameMatchRecord, GameMatchStatus, SourceMatchRecord, SourceMatchStatus,
+        };
+        let handle = crate::sources::Sources::open(state).unwrap();
+        let source_id = candidate.source_id.clone();
         handle
-            .registry_mut()
-            .commit(
-                &rule,
-                42,
-                DiscoveryOutcome {
-                    status: "complete".to_string(),
-                    candidates: vec![candidate],
-                    ..DiscoveryOutcome::default()
-                },
-                &DiscoveryRecord::default(),
-                "key",
-            )
+            .store()
+            .save_match(&GameMatchRecord {
+                schema_version: 1,
+                appid: 42,
+                name: "Game".to_string(),
+                localized_name: None,
+                input_key: "key".to_string(),
+                status: GameMatchStatus::PublisherMatch,
+                sources: std::collections::BTreeMap::from([(
+                    source_id,
+                    SourceMatchRecord {
+                        index_revision: 1,
+                        status: SourceMatchStatus::Matched,
+                        candidates: vec![candidate],
+                        detail_pages: Vec::new(),
+                        checked_at: 100,
+                        diagnostics: Vec::new(),
+                    },
+                )]),
+                fallback: None,
+                updated_at: 100,
+            })
             .unwrap();
     }
 
@@ -842,28 +845,31 @@ mod tests {
     #[test]
     fn resolve_zip_projects_patchmoe_index_candidate() {
         let temp = tempfile::tempdir().unwrap();
-        // Seed the patchmoe index cache, then reopen so the registry loads it.
+        // Seed the patchmoe index snapshot, then reopen so the registry loads it.
         let handle = crate::sources::Sources::open(temp.path()).unwrap();
         handle
             .store()
-            .save_cache(
-                "patchmoe",
-                &crate::sources::model::SourceCache {
-                    entries: vec![crate::sources::model::SourceEntry {
-                        title: "Kudo's Kuppa".to_string(),
-                        aliases: Vec::new(),
-                        url: "https://download.patch.moe/Kudos_Kuppa_patch.zip".to_string(),
-                        source_page: "https://www.patch.moe/Kudos-Kuppa".to_string(),
-                        language: "zh-CN".to_string(),
-                        date: Some("2026/6/23".to_string()),
-                        appid: Some(42),
-                    }],
-                    etag: None,
-                    modified: None,
-                    cached_at: Some(1000),
-                    checked_at: Some(1000),
-                },
-            )
+            .save_index(&crate::sources::model::SourceIndex {
+                schema_version: 1,
+                source_id: "patchmoe".to_string(),
+                revision: 1,
+                complete: true,
+                checked_at: 1000,
+                updated_at: 1000,
+                etag: None,
+                modified: None,
+                entries: vec![crate::sources::model::SourceIndexEntry {
+                    title: "Kudo's Kuppa".to_string(),
+                    aliases: Vec::new(),
+                    page: "https://www.patch.moe/Kudos-Kuppa".to_string(),
+                    kind: "entry".to_string(),
+                    appid: Some(42),
+                    url: Some("https://download.patch.moe/Kudos_Kuppa_patch.zip".to_string()),
+                    language: Some("zh-CN".to_string()),
+                    date: Some("2026/6/23".to_string()),
+                }],
+                pending: Vec::new(),
+            })
             .unwrap();
         drop(handle);
 
@@ -888,60 +894,14 @@ mod tests {
     }
 
     #[test]
-    fn discovery_remains_installable_after_30_days() {
-        use crate::sources::model::{DiscoveryRecord, RulesConfig};
-        use crate::sources::registry::{DiscoveryOutcome, SourceRegistry};
-        use crate::sources::store::SourceStore;
-        use crate::sources::{validate, Clock, DEFAULT_RULES_JSON};
-        use std::sync::atomic::{AtomicU64, Ordering};
-        use std::sync::Arc;
-
-        struct SharedClock(Arc<AtomicU64>);
-        impl Clock for SharedClock {
-            fn now_unix(&self) -> u64 {
-                self.0.load(Ordering::SeqCst)
-            }
-        }
-
+    fn persisted_match_remains_installable_without_ttl_reevaluation() {
         let temp = tempfile::tempdir().unwrap();
-        let now = Arc::new(AtomicU64::new(1_000));
-        let config: RulesConfig = serde_json::from_str(DEFAULT_RULES_JSON).unwrap();
-        let builtins: Vec<SourceRule> = config
-            .sources
-            .iter()
-            .map(|raw| validate::validate_rule(raw).unwrap())
-            .collect();
-        let store = SourceStore::open(temp.path()).unwrap();
-        let mut registry = SourceRegistry::load_with_clock(
-            store,
-            builtins,
-            Box::new(SharedClock(Arc::clone(&now))),
-        )
-        .unwrap();
-        let rule = registry
-            .rules()
-            .iter()
-            .find(|rule| rule.id == "kagura-cn")
-            .cloned()
-            .unwrap();
         let candidate = seedable("1");
         let selection_id = zip_selection_id(&candidate).unwrap();
-        registry
-            .commit(
-                &rule,
-                42,
-                DiscoveryOutcome {
-                    status: "complete".to_string(),
-                    candidates: vec![candidate],
-                    ..DiscoveryOutcome::default()
-                },
-                &DiscoveryRecord::default(),
-                "key",
-            )
-            .unwrap();
-        // Advance far past the old 6h source TTL: time no longer expires the
-        // shared discovery, so the selection stays resolvable without re-publishing.
-        now.store(1_000 + 30 * 24 * 3_600, Ordering::SeqCst);
-        assert!(resolve_zip(&registry, &game(), &selection_id).is_ok());
+        seed(temp.path(), candidate);
+        // Reopening the read model later still resolves the persisted match:
+        // nothing re-evaluates cache age or freshness.
+        let sources = crate::sources::Sources::open(temp.path()).unwrap();
+        assert!(resolve_zip(sources.registry(), &game(), &selection_id).is_ok());
     }
 }

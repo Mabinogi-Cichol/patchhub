@@ -613,10 +613,10 @@ pub(crate) mod tests {
     use crate::installer::acquire::{FakeTransport, HttpResponse};
     use crate::installer::zip_selection_id;
     use crate::sources::model::{
-        ArtifactFormat, CacheStatus, Capability, DiscoveryRecord, MatchBasis, Mirror,
-        SourceCandidate, SourceRole, SourceRule,
+        ArtifactFormat, CacheStatus, Capability, GameMatchRecord, GameMatchStatus, MatchBasis,
+        Mirror, SourceCandidate, SourceIndex, SourceIndexEntry, SourceMatchRecord,
+        SourceMatchStatus, SourceRole, SourceRule,
     };
-    use crate::sources::registry::DiscoveryOutcome;
     use crate::sources::{GameQuery, Sources};
     use sha2::Digest;
     use std::fs;
@@ -713,6 +713,36 @@ pub(crate) mod tests {
         }
     }
 
+    /// Persists a matched publisher source, the v5 replacement for the old
+    /// per-game discovery record seeded by these tests.
+    pub(crate) fn save_match(sources: &Sources, appid: u32, candidate: SourceCandidate) {
+        let source_id = candidate.source_id.clone();
+        sources
+            .store()
+            .save_match(&GameMatchRecord {
+                schema_version: 1,
+                appid,
+                name: "Game".to_string(),
+                localized_name: None,
+                input_key: "key".to_string(),
+                status: GameMatchStatus::PublisherMatch,
+                sources: std::collections::BTreeMap::from([(
+                    source_id,
+                    SourceMatchRecord {
+                        index_revision: 1,
+                        status: SourceMatchStatus::Matched,
+                        candidates: vec![candidate],
+                        detail_pages: Vec::new(),
+                        checked_at: 100,
+                        diagnostics: Vec::new(),
+                    },
+                )]),
+                fallback: None,
+                updated_at: 100,
+            })
+            .unwrap();
+    }
+
     pub(crate) fn query() -> GameQuery {
         GameQuery {
             appid: APPID,
@@ -771,30 +801,33 @@ pub(crate) mod tests {
         }
     }
 
-    /// Seeds the patchmoe index cache and resolves an index-source candidate
+    /// Seeds the patchmoe index snapshot and resolves an index-source candidate
     /// (`rule.discovery_only == false`, language recorded as evidence only).
     fn seed_and_resolve_patchmoe(state: &Path) -> crate::installer::ResolvedZipCandidate {
         let handle = Sources::open(state).unwrap();
         handle
             .store()
-            .save_cache(
-                "patchmoe",
-                &crate::sources::model::SourceCache {
-                    entries: vec![crate::sources::model::SourceEntry {
-                        title: "Kudos Kuppa".to_string(),
-                        aliases: Vec::new(),
-                        url: "https://download.patch.moe/Kudos_Kuppa_patch.zip".to_string(),
-                        source_page: "https://www.patch.moe/Kudos-Kuppa".to_string(),
-                        language: "zh-CN".to_string(),
-                        date: Some("2026/6/23".to_string()),
-                        appid: Some(APPID),
-                    }],
-                    etag: None,
-                    modified: None,
-                    cached_at: Some(1000),
-                    checked_at: Some(1000),
-                },
-            )
+            .save_index(&SourceIndex {
+                schema_version: 1,
+                source_id: "patchmoe".to_string(),
+                revision: 1,
+                complete: true,
+                checked_at: 1000,
+                updated_at: 1000,
+                etag: None,
+                modified: None,
+                entries: vec![SourceIndexEntry {
+                    title: "Kudos Kuppa".to_string(),
+                    aliases: Vec::new(),
+                    page: "https://www.patch.moe/Kudos-Kuppa".to_string(),
+                    kind: "entry".to_string(),
+                    appid: Some(APPID),
+                    url: Some("https://download.patch.moe/Kudos_Kuppa_patch.zip".to_string()),
+                    language: Some("zh-CN".to_string()),
+                    date: Some("2026/6/23".to_string()),
+                }],
+                pending: Vec::new(),
+            })
             .unwrap();
         drop(handle);
         let sources = Sources::open(state).unwrap();
@@ -875,37 +908,15 @@ pub(crate) mod tests {
         (state, paths)
     }
 
-    /// Seeds a fresh kagura-cn discovery record and returns the resolved
-    /// candidate from the same registry.
+    /// Seeds a fresh kagura-cn match record and returns the resolved candidate
+    /// from the same registry.
     fn seed_and_resolve(
         state: &Path,
         selection_id: &str,
     ) -> crate::installer::ResolvedZipCandidate {
-        let mut handle = Sources::open(state).unwrap();
-        let rule = handle
-            .registry()
-            .rules()
-            .iter()
-            .find(|rule| rule.id == "kagura-cn")
-            .cloned()
-            .unwrap();
-        handle
-            .registry_mut()
-            .commit(
-                &rule,
-                APPID,
-                DiscoveryOutcome {
-                    status: "complete".to_string(),
-                    candidates: vec![candidate()],
-                    ..DiscoveryOutcome::default()
-                },
-                &DiscoveryRecord::default(),
-                "key",
-            )
-            .unwrap();
-        let selection =
-            crate::installer::resolve_zip(handle.registry(), &query(), selection_id).unwrap();
-        selection
+        let handle = Sources::open(state).unwrap();
+        save_match(&handle, APPID, candidate());
+        crate::installer::resolve_zip(handle.registry(), &query(), selection_id).unwrap()
     }
 
     fn transport(archive: Vec<u8>) -> FakeTransport {
@@ -951,28 +962,8 @@ pub(crate) mod tests {
         let id =
             super::super::manual_selection::selection_id(&candidate, &query, &candidate.mirrors[0])
                 .unwrap();
-        let mut handle = Sources::open(&state).unwrap();
-        let rule = handle
-            .registry()
-            .rules()
-            .iter()
-            .find(|r| r.id == "kagura-cn")
-            .unwrap()
-            .clone();
-        handle
-            .registry_mut()
-            .commit(
-                &rule,
-                APPID,
-                DiscoveryOutcome {
-                    status: "complete".into(),
-                    candidates: vec![candidate],
-                    ..Default::default()
-                },
-                &DiscoveryRecord::default(),
-                "manual-test",
-            )
-            .unwrap();
+        let handle = Sources::open(&state).unwrap();
+        save_match(&handle, APPID, candidate);
         let selection = crate::installer::resolve_zip(handle.registry(), &query, &id).unwrap();
         let transport = transport(archive);
         let cancel = AtomicBool::new(false);

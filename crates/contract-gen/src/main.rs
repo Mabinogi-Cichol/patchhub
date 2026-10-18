@@ -30,7 +30,7 @@ fn bytes(v: &Value) -> Vec<u8> {
 fn artifacts() -> BTreeMap<PathBuf, Vec<u8>> {
     let mut out = BTreeMap::new();
     let schema = schema();
-    out.insert("generated/v4.schema.json".into(), bytes(&schema));
+    out.insert("generated/v5.schema.json".into(), bytes(&schema));
     let mut d = Declarations {
         cfg: Config::default().with_large_int("number"),
         seen: HashSet::new(),
@@ -53,7 +53,7 @@ fn artifacts() -> BTreeMap<PathBuf, Vec<u8>> {
         ts.push_str(decl);
         ts.push('\n');
     }
-    ts.push_str("export type WireEvent = Event;\nexport type DiscoveryResult = DiscoverGameResult;\nexport type InstallPreview = PreviewReport;\nexport type SourceGameUpdateEvent = GameSourceUpdateEvent;\nexport type SourceRefreshUpdateEvent = RefreshSourceUpdateEvent;\n");
+    ts.push_str("export type WireEvent = Event;\nexport type DiscoveryResult = GameMatch;\nexport type InstallPreview = PreviewReport;\n");
     ts.push_str(&format!("export const PROTOCOL_VERSION = {PROTOCOL_VERSION} as const;\nexport const METHODS = {} as const;\nexport const INSTALL_STAGES = {} as const;\nexport const MAX_REQUEST_ID_BYTES = {MAX_REQUEST_ID_BYTES};\nexport const MAX_ID_BYTES = {MAX_ID_BYTES};\nexport const MAX_INSTANCE_ID_BYTES = {MAX_INSTANCE_ID_BYTES};\nexport const MAX_SAFE_INTEGER = {MAX_SAFE_INTEGER};\n",json!(METHODS),json!(INSTALL_STAGES)));
     ts.push_str(&format!("export const SOURCE_METHODS = {} as const;\nexport const CONTRACTS = {} as const;\nexport const SCHEMA = {};\n",json!(SOURCE_METHODS),json!(ContractVersions::default()),schema));
     ts.push_str(r#"export function validId(value: unknown, maxBytes = MAX_ID_BYTES): value is string {
@@ -85,7 +85,15 @@ export function makeRequest(request_id: string, call: RequestParams): Request {
                 .filter(|m| m.is_task())
                 .collect::<Vec<_>>()),
         ),
-        ("SOURCE_EVENTS", json!(["source_progress", "source_update"])),
+        (
+            "SOURCE_EVENTS",
+            json!([
+                "source_progress",
+                "source_update",
+                "match_progress",
+                "match_update"
+            ]),
+        ),
         ("INSTALL_STAGES", json!(INSTALL_STAGES)),
         ("MAX_REQUEST_ID_BYTES", json!(MAX_REQUEST_ID_BYTES)),
         ("MAX_ID_BYTES", json!(MAX_ID_BYTES)),
@@ -98,7 +106,7 @@ export function makeRequest(request_id: string, call: RequestParams): Request {
         ),
         (
             "SOURCE_VERSIONS",
-            json!({"discovery_schema_version":1,"adapter_version":1,"parser_version":steam_patch_core::sources::PARSER_VERSION,"query_version":steam_patch_core::sources::QUERY_VERSION}),
+            json!({"index_schema_version":1,"detail_schema_version":1,"match_schema_version":1,"schedule_schema_version":1,"adapter_version":1,"parser_version":steam_patch_core::sources::PARSER_VERSION,"encoding_version":1}),
         ),
         ("RESULT_TYPES", json!(result_types)),
         ("SCHEMA", schema),
@@ -111,7 +119,7 @@ export function makeRequest(request_id: string, call: RequestParams): Request {
         py.push('\n');
     }
     out.insert("generated/protocol.py".into(), py.into_bytes());
-    out.insert("fixtures/v4/cases.json".into(), bytes(&fixtures::cases()));
+    out.insert("fixtures/v5/cases.json".into(), bytes(&fixtures::cases()));
     out
 }
 fn python(v: &Value) -> String {
@@ -154,5 +162,5 @@ fn main() {
     if drift {
         std::process::exit(1);
     }
-    println!("v4 contracts {mode}: ok");
+    println!("v5 contracts {mode}: ok");
 }

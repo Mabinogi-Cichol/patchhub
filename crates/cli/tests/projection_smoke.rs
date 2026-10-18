@@ -61,7 +61,7 @@ fn call(method: &str, params: Value) -> Value {
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
-    let request = json!({"protocol_version":4,"request_id":"projection-smoke","method":method,"params":wire_params(method, params)});
+    let request = json!({"protocol_version":5,"request_id":"projection-smoke","method":method,"params":wire_params(method, params)});
     writeln!(process.stdin.take().unwrap(), "{request}").unwrap();
     let output = process.wait_with_output().unwrap();
     assert!(

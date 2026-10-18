@@ -1,4 +1,4 @@
-"""Host-side validation of the Rust-generated v4 contract (no business rules)."""
+"""Host-side validation of the Rust-generated v5 contract (no business rules)."""
 import importlib.util
 import json
 from pathlib import Path
@@ -128,6 +128,15 @@ def _bytes_valid(value):
                     validate_id(item, generated.MAX_REQUEST_ID_BYTES if key == "request_id" else generated.MAX_INSTANCE_ID_BYTES if key == "instance_id" else generated.MAX_ID_BYTES)
                 except ValueError:
                     return False
+            if key in {"instance_ids", "instances"} and isinstance(item, list):
+                # Batched projections and matches carry instance ids as values;
+                # the JSON schema only constrains their item type.
+                for entry in item:
+                    if isinstance(entry, str):
+                        try:
+                            validate_id(entry, generated.MAX_INSTANCE_ID_BYTES)
+                        except ValueError:
+                            return False
             if key == "code" and item is not None and (not isinstance(item, str) or not re.fullmatch(r"[a-z0-9_]{1,128}", item)):
                 return False
             if not _bytes_valid(item):

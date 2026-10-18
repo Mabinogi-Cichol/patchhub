@@ -222,7 +222,7 @@
           "type": "array"
         },
         "protocol_version": {
-          "const": 4
+          "const": 5
         },
         "sources": {
           "$ref": "#/$defs/SourceCapabilities"
@@ -475,99 +475,6 @@
       ],
       "type": "object"
     },
-    "DiscoverGameParams": {
-      "additionalProperties": false,
-      "properties": {
-        "force": {
-          "default": false,
-          "type": "boolean"
-        },
-        "generation": {
-          "format": "uint64",
-          "minimum": 0,
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
-        "host": {
-          "$ref": "#/$defs/HostInputs"
-        },
-        "instance_id": {
-          "type": "string",
-          "x-max-utf8-bytes": 16384
-        },
-        "name_hints": {
-          "default": [],
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "preferred_language": {
-          "type": [
-            "string",
-            "null"
-          ]
-        }
-      },
-      "required": [
-        "host",
-        "instance_id"
-      ],
-      "type": "object"
-    },
-    "DiscoverGameResult": {
-      "additionalProperties": false,
-      "properties": {
-        "appid": {
-          "format": "uint32",
-          "minimum": 0,
-          "type": "integer"
-        },
-        "candidates": {
-          "items": {
-            "$ref": "#/$defs/SourceCandidate"
-          },
-          "type": "array"
-        },
-        "diagnostics": {
-          "items": {
-            "$ref": "#/$defs/Diagnostic"
-          },
-          "type": "array"
-        },
-        "generation": {
-          "format": "uint64",
-          "minimum": 0,
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
-        "instance_id": {
-          "type": "string",
-          "x-max-utf8-bytes": 16384
-        },
-        "settings_revision": {
-          "format": "uint64",
-          "minimum": 0,
-          "type": "integer"
-        },
-        "status": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "instance_id",
-        "appid",
-        "settings_revision",
-        "status",
-        "candidates",
-        "diagnostics"
-      ],
-      "type": "object"
-    },
     "Disposition": {
       "enum": [
         "completed",
@@ -607,7 +514,7 @@
           "const": false
         },
         "protocol_version": {
-          "const": 4
+          "const": 5
         },
         "request_id": {
           "type": [
@@ -633,10 +540,13 @@
           "$ref": "#/$defs/SourceProgressEvent"
         },
         {
-          "$ref": "#/$defs/GameSourceUpdateEvent"
+          "$ref": "#/$defs/SourceUpdateEvent"
         },
         {
-          "$ref": "#/$defs/RefreshSourceUpdateEvent"
+          "$ref": "#/$defs/MatchProgressEvent"
+        },
+        {
+          "$ref": "#/$defs/MatchUpdateEvent"
         }
       ]
     },
@@ -782,6 +692,67 @@
       ],
       "type": "object"
     },
+    "GameMatch": {
+      "additionalProperties": false,
+      "description": "Wire-ready game match result (protocol v5 `GameMatch`, p1-contract §9).\n\nP3 produces this shape; the protocol envelope only references it from P4 on,\nso adding the derives here does not change the generated v4 contracts.",
+      "properties": {
+        "appid": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "candidates": {
+          "items": {
+            "$ref": "#/$defs/SourceCandidate"
+          },
+          "type": "array"
+        },
+        "diagnostics": {
+          "items": {
+            "$ref": "#/$defs/Diagnostic"
+          },
+          "type": "array"
+        },
+        "instance_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-max-utf8-bytes": 16384
+        },
+        "source_revisions": {
+          "additionalProperties": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": "object"
+        },
+        "status": {
+          "$ref": "#/$defs/GameMatchStatus"
+        }
+      },
+      "required": [
+        "appid",
+        "status",
+        "candidates",
+        "diagnostics",
+        "source_revisions"
+      ],
+      "type": "object"
+    },
+    "GameMatchStatus": {
+      "description": "Status of a persisted game match, derived by [`super::r#match::derive_game_status`].",
+      "enum": [
+        "pending",
+        "publisher_match",
+        "fallback_match",
+        "no_match",
+        "incomplete",
+        "failed"
+      ],
+      "type": "string"
+    },
     "GameSourceResult": {
       "additionalProperties": false,
       "properties": {
@@ -837,6 +808,10 @@
             }
           ]
         },
+        "complete": {
+          "description": "Whether the current published index snapshot covers the whole source.",
+          "type": "boolean"
+        },
         "discovery_only": {
           "default": false,
           "type": "boolean"
@@ -859,6 +834,12 @@
         "id": {
           "type": "string"
         },
+        "interval_hours": {
+          "description": "Configured automatic update interval in hours (`0` = off).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
         "language": {
           "type": [
             "string",
@@ -870,6 +851,15 @@
         },
         "name": {
           "type": "string"
+        },
+        "next_due_at": {
+          "description": "Next scheduled attempt derived from `checked_at + interval_hours * 3600`.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
         },
         "origin": {
           "description": "`\"builtin\"` (compiled default) or `\"added\"` (user rule, including one that\nshadows a builtin id).",
@@ -891,6 +881,12 @@
           "default": 100,
           "format": "uint16",
           "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "revision": {
+          "description": "Current published index revision (0 when no index snapshot exists).",
+          "format": "uint64",
           "minimum": 0,
           "type": "integer"
         },
@@ -938,64 +934,11 @@
         "origin",
         "status",
         "entry_count",
+        "revision",
+        "complete",
+        "interval_hours",
         "subscribed",
         "matched"
-      ],
-      "type": "object"
-    },
-    "GameSourceUpdateEvent": {
-      "additionalProperties": false,
-      "properties": {
-        "appid": {
-          "format": "uint32",
-          "minimum": 0,
-          "type": "integer"
-        },
-        "discovery": {
-          "$ref": "#/$defs/GameDiscovery"
-        },
-        "event": {
-          "$ref": "#/$defs/SourceUpdateKind"
-        },
-        "index": {
-          "format": "uint64",
-          "minimum": 0,
-          "type": "integer"
-        },
-        "instance_id": {
-          "type": [
-            "string",
-            "null"
-          ],
-          "x-max-utf8-bytes": 16384
-        },
-        "protocol_version": {
-          "const": 4
-        },
-        "request_id": {
-          "type": "string"
-        },
-        "sequence": {
-          "format": "uint64",
-          "minimum": 0,
-          "type": "integer"
-        },
-        "settings_revision": {
-          "format": "uint64",
-          "minimum": 0,
-          "type": "integer"
-        }
-      },
-      "required": [
-        "appid",
-        "discovery",
-        "event",
-        "index",
-        "instance_id",
-        "protocol_version",
-        "request_id",
-        "sequence",
-        "settings_revision"
       ],
       "type": "object"
     },
@@ -1255,7 +1198,7 @@
           "x-max-utf8-bytes": 16384
         },
         "protocol_version": {
-          "const": 4
+          "const": 5
         },
         "request_id": {
           "type": "string"
@@ -1708,6 +1651,131 @@
       ],
       "type": "string"
     },
+    "MatchGamesParams": {
+      "additionalProperties": false,
+      "properties": {
+        "force_details": {
+          "default": false,
+          "type": "boolean"
+        },
+        "host": {
+          "$ref": "#/$defs/HostInputs"
+        },
+        "instances": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "name_hints": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "preferred_language": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "host"
+      ],
+      "type": "object"
+    },
+    "MatchGamesResult": {
+      "additionalProperties": false,
+      "properties": {
+        "results": {
+          "items": {
+            "$ref": "#/$defs/GameMatch"
+          },
+          "type": "array"
+        },
+        "settings_revision": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "source_revisions": {
+          "additionalProperties": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": "object"
+        }
+      },
+      "required": [
+        "settings_revision",
+        "source_revisions",
+        "results"
+      ],
+      "type": "object"
+    },
+    "MatchProgressEvent": {
+      "additionalProperties": false,
+      "properties": {
+        "completed": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "event": {
+          "$ref": "#/$defs/MatchProgressKind"
+        },
+        "phase": {
+          "description": "`\"inventory\" | \"index\" | \"details\" | \"fallback\"`.",
+          "type": "string"
+        },
+        "protocol_version": {
+          "const": 5
+        },
+        "request_id": {
+          "type": "string"
+        },
+        "running": {
+          "type": "boolean"
+        },
+        "sequence": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "settings_revision": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "total": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "completed",
+        "event",
+        "phase",
+        "protocol_version",
+        "request_id",
+        "running",
+        "sequence",
+        "settings_revision",
+        "total"
+      ],
+      "type": "object"
+    },
+    "MatchProgressKind": {
+      "enum": [
+        "match_progress"
+      ],
+      "type": "string"
+    },
     "MatchStatus": {
       "enum": [
         "matched",
@@ -1715,10 +1783,82 @@
       ],
       "type": "string"
     },
+    "MatchUpdateEvent": {
+      "additionalProperties": false,
+      "properties": {
+        "appid": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "candidates": {
+          "items": {
+            "$ref": "#/$defs/SourceCandidate"
+          },
+          "type": "array"
+        },
+        "diagnostics": {
+          "items": {
+            "$ref": "#/$defs/Diagnostic"
+          },
+          "type": "array"
+        },
+        "event": {
+          "$ref": "#/$defs/MatchUpdateKind"
+        },
+        "instance_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-max-utf8-bytes": 16384
+        },
+        "protocol_version": {
+          "const": 5
+        },
+        "request_id": {
+          "type": "string"
+        },
+        "sequence": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "settings_revision": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "status": {
+          "description": "One of the six `GameMatchStatus` values (snake_case).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "appid",
+        "candidates",
+        "diagnostics",
+        "event",
+        "instance_id",
+        "protocol_version",
+        "request_id",
+        "sequence",
+        "settings_revision",
+        "status"
+      ],
+      "type": "object"
+    },
+    "MatchUpdateKind": {
+      "enum": [
+        "match_update"
+      ],
+      "type": "string"
+    },
     "Method": {
       "enum": [
         "get_capabilities",
         "scan",
+        "project_instances",
         "preview",
         "install_patch",
         "list_transactions",
@@ -1732,9 +1872,10 @@
         "set_source_enabled",
         "set_game_source",
         "add_source",
-        "refresh_sources",
-        "scan_sources",
-        "discover_game"
+        "set_source_update_interval",
+        "update_source",
+        "match_games",
+        "rematch_game"
       ],
       "type": "string"
     },
@@ -1745,6 +1886,9 @@
         },
         {
           "$ref": "#/$defs/ScanReport"
+        },
+        {
+          "$ref": "#/$defs/ProjectInstancesResult"
         },
         {
           "$ref": "#/$defs/PreviewReport"
@@ -1792,13 +1936,13 @@
           "$ref": "#/$defs/AddSourceResult"
         },
         {
-          "$ref": "#/$defs/RefreshSourcesResult"
+          "$ref": "#/$defs/SetSourceIntervalResult"
         },
         {
-          "$ref": "#/$defs/ScanSourcesResult"
+          "$ref": "#/$defs/SourceUpdateResult"
         },
         {
-          "$ref": "#/$defs/DiscoverGameResult"
+          "$ref": "#/$defs/MatchGamesResult"
         }
       ]
     },
@@ -2079,6 +2223,48 @@
       ],
       "type": "string"
     },
+    "ProjectInstancesParams": {
+      "additionalProperties": false,
+      "properties": {
+        "host": {
+          "$ref": "#/$defs/HostInputs"
+        },
+        "instance_ids": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "host",
+        "instance_ids"
+      ],
+      "type": "object"
+    },
+    "ProjectInstancesResult": {
+      "additionalProperties": false,
+      "properties": {
+        "instances": {
+          "items": {
+            "$ref": "#/$defs/InstanceProjection"
+          },
+          "type": "array"
+        },
+        "settings_revision": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "instances"
+      ],
+      "type": "object"
+    },
     "ProjectionDiagnostic": {
       "additionalProperties": false,
       "properties": {
@@ -2288,64 +2474,66 @@
       ],
       "type": "object"
     },
-    "RefreshSourceUpdateEvent": {
+    "RematchGameParams": {
       "additionalProperties": false,
-      "properties": {
-        "event": {
-          "$ref": "#/$defs/SourceUpdateKind"
+      "anyOf": [
+        {
+          "properties": {
+            "instance_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "instance_id"
+          ]
         },
-        "protocol_version": {
-          "const": 4
-        },
-        "request_id": {
-          "type": "string"
-        },
-        "sequence": {
-          "format": "uint64",
-          "minimum": 0,
-          "type": "integer"
-        },
-        "settings_revision": {
-          "format": "uint64",
-          "minimum": 0,
-          "type": "integer"
-        },
-        "source_id": {
-          "type": "string"
-        },
-        "status": {
-          "$ref": "#/$defs/SourceStatus"
+        {
+          "properties": {
+            "appid": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "appid"
+          ]
         }
-      },
-      "required": [
-        "event",
-        "protocol_version",
-        "request_id",
-        "sequence",
-        "settings_revision",
-        "source_id",
-        "status"
       ],
-      "type": "object"
-    },
-    "RefreshSourcesResult": {
-      "additionalProperties": false,
       "properties": {
-        "settings_revision": {
-          "format": "uint64",
+        "appid": {
+          "format": "uint32",
           "minimum": 0,
-          "type": "integer"
+          "type": [
+            "integer",
+            "null"
+          ]
         },
-        "statuses": {
+        "host": {
+          "$ref": "#/$defs/HostInputs"
+        },
+        "instance_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-max-utf8-bytes": 16384
+        },
+        "name_hints": {
+          "default": [],
           "items": {
-            "$ref": "#/$defs/SourceStatus"
+            "type": "string"
           },
           "type": "array"
+        },
+        "preferred_language": {
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [
-        "settings_revision",
-        "statuses"
+        "host"
       ],
       "type": "object"
     },
@@ -2361,7 +2549,7 @@
               "$ref": "#/$defs/HostParams"
             },
             "protocol_version": {
-              "const": 4
+              "const": 5
             },
             "request_id": {
               "type": "string"
@@ -2385,7 +2573,31 @@
               "$ref": "#/$defs/HostParams"
             },
             "protocol_version": {
-              "const": 4
+              "const": 5
+            },
+            "request_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "protocol_version",
+            "request_id",
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "method": {
+              "const": "project_instances"
+            },
+            "params": {
+              "$ref": "#/$defs/ProjectInstancesParams"
+            },
+            "protocol_version": {
+              "const": 5
             },
             "request_id": {
               "type": "string"
@@ -2409,7 +2621,7 @@
               "$ref": "#/$defs/PreviewParams"
             },
             "protocol_version": {
-              "const": 4
+              "const": 5
             },
             "request_id": {
               "type": "string"
@@ -2433,7 +2645,7 @@
               "$ref": "#/$defs/InstallPatchParams"
             },
             "protocol_version": {
-              "const": 4
+              "const": 5
             },
             "request_id": {
               "type": "string"
@@ -2457,7 +2669,7 @@
               "$ref": "#/$defs/HostParams"
             },
             "protocol_version": {
-              "const": 4
+              "const": 5
             },
             "request_id": {
               "type": "string"
@@ -2481,7 +2693,7 @@
               "$ref": "#/$defs/HostParams"
             },
             "protocol_version": {
-              "const": 4
+              "const": 5
             },
             "request_id": {
               "type": "string"
@@ -2505,7 +2717,7 @@
               "$ref": "#/$defs/DiscardPlanParams"
             },
             "protocol_version": {
-              "const": 4
+              "const": 5
             },
             "request_id": {
               "type": "string"
@@ -2529,7 +2741,7 @@
               "$ref": "#/$defs/HostParams"
             },
             "protocol_version": {
-              "const": 4
+              "const": 5
             },
             "request_id": {
               "type": "string"
@@ -2553,7 +2765,7 @@
               "$ref": "#/$defs/HostParams"
             },
             "protocol_version": {
-              "const": 4
+              "const": 5
             },
             "request_id": {
               "type": "string"
@@ -2577,7 +2789,7 @@
               "$ref": "#/$defs/HostParams"
             },
             "protocol_version": {
-              "const": 4
+              "const": 5
             },
             "request_id": {
               "type": "string"
@@ -2601,7 +2813,7 @@
               "$ref": "#/$defs/HostParams"
             },
             "protocol_version": {
-              "const": 4
+              "const": 5
             },
             "request_id": {
               "type": "string"
@@ -2625,7 +2837,7 @@
               "$ref": "#/$defs/ListGameSourcesParams"
             },
             "protocol_version": {
-              "const": 4
+              "const": 5
             },
             "request_id": {
               "type": "string"
@@ -2649,7 +2861,7 @@
               "$ref": "#/$defs/SetSourceEnabledParams"
             },
             "protocol_version": {
-              "const": 4
+              "const": 5
             },
             "request_id": {
               "type": "string"
@@ -2673,7 +2885,7 @@
               "$ref": "#/$defs/SetGameSourceParams"
             },
             "protocol_version": {
-              "const": 4
+              "const": 5
             },
             "request_id": {
               "type": "string"
@@ -2697,7 +2909,7 @@
               "$ref": "#/$defs/AddSourceParams"
             },
             "protocol_version": {
-              "const": 4
+              "const": 5
             },
             "request_id": {
               "type": "string"
@@ -2715,13 +2927,13 @@
           "additionalProperties": false,
           "properties": {
             "method": {
-              "const": "refresh_sources"
+              "const": "set_source_update_interval"
             },
             "params": {
-              "$ref": "#/$defs/SourceTaskParams"
+              "$ref": "#/$defs/SetSourceUpdateIntervalParams"
             },
             "protocol_version": {
-              "const": 4
+              "const": 5
             },
             "request_id": {
               "type": "string"
@@ -2739,13 +2951,13 @@
           "additionalProperties": false,
           "properties": {
             "method": {
-              "const": "scan_sources"
+              "const": "update_source"
             },
             "params": {
-              "$ref": "#/$defs/ScanSourcesParams"
+              "$ref": "#/$defs/UpdateSourceParams"
             },
             "protocol_version": {
-              "const": 4
+              "const": 5
             },
             "request_id": {
               "type": "string"
@@ -2763,13 +2975,37 @@
           "additionalProperties": false,
           "properties": {
             "method": {
-              "const": "discover_game"
+              "const": "match_games"
             },
             "params": {
-              "$ref": "#/$defs/DiscoverGameParams"
+              "$ref": "#/$defs/MatchGamesParams"
             },
             "protocol_version": {
-              "const": 4
+              "const": 5
+            },
+            "request_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "protocol_version",
+            "request_id",
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "method": {
+              "const": "rematch_game"
+            },
+            "params": {
+              "$ref": "#/$defs/RematchGameParams"
+            },
+            "protocol_version": {
+              "const": 5
             },
             "request_id": {
               "type": "string"
@@ -2871,104 +3107,6 @@
       ],
       "type": "object"
     },
-    "ScanSourceItem": {
-      "additionalProperties": false,
-      "properties": {
-        "appid": {
-          "format": "uint32",
-          "minimum": 0,
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
-        "candidates": {
-          "items": {
-            "$ref": "#/$defs/SourceCandidate"
-          },
-          "type": "array"
-        },
-        "diagnostics": {
-          "items": {
-            "$ref": "#/$defs/Diagnostic"
-          },
-          "type": "array"
-        },
-        "instance_id": {
-          "type": [
-            "string",
-            "null"
-          ],
-          "x-max-utf8-bytes": 16384
-        },
-        "status": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "status",
-        "candidates",
-        "diagnostics"
-      ],
-      "type": "object"
-    },
-    "ScanSourcesParams": {
-      "additionalProperties": false,
-      "properties": {
-        "force": {
-          "default": false,
-          "type": "boolean"
-        },
-        "host": {
-          "$ref": "#/$defs/HostInputs"
-        },
-        "instance_id": {
-          "type": [
-            "string",
-            "null"
-          ],
-          "x-max-utf8-bytes": 16384
-        },
-        "name_hints": {
-          "default": [],
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "preferred_language": {
-          "type": [
-            "string",
-            "null"
-          ]
-        }
-      },
-      "required": [
-        "host"
-      ],
-      "type": "object"
-    },
-    "ScanSourcesResult": {
-      "additionalProperties": false,
-      "properties": {
-        "results": {
-          "items": {
-            "$ref": "#/$defs/ScanSourceItem"
-          },
-          "type": "array"
-        },
-        "settings_revision": {
-          "format": "uint64",
-          "minimum": 0,
-          "type": "integer"
-        }
-      },
-      "required": [
-        "settings_revision",
-        "results"
-      ],
-      "type": "object"
-    },
     "SetGameSourceParams": {
       "additionalProperties": false,
       "anyOf": [
@@ -3044,6 +3182,52 @@
         "host",
         "source_id",
         "enabled"
+      ],
+      "type": "object"
+    },
+    "SetSourceIntervalResult": {
+      "additionalProperties": false,
+      "properties": {
+        "interval_hours": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "settings_revision": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "source_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "settings_revision",
+        "source_id",
+        "interval_hours"
+      ],
+      "type": "object"
+    },
+    "SetSourceUpdateIntervalParams": {
+      "additionalProperties": false,
+      "properties": {
+        "host": {
+          "$ref": "#/$defs/HostInputs"
+        },
+        "interval_hours": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "source_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "host",
+        "source_id",
+        "interval_hours"
       ],
       "type": "object"
     },
@@ -3260,7 +3444,22 @@
           "minimum": 0,
           "type": "integer"
         },
-        "discovery_schema_version": {
+        "detail_schema_version": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "encoding_version": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "index_schema_version": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "match_schema_version": {
           "format": "uint32",
           "minimum": 0,
           "type": "integer"
@@ -3276,17 +3475,20 @@
           "minimum": 0,
           "type": "integer"
         },
-        "query_version": {
+        "schedule_schema_version": {
           "format": "uint32",
           "minimum": 0,
           "type": "integer"
         }
       },
       "required": [
-        "discovery_schema_version",
+        "index_schema_version",
+        "detail_schema_version",
+        "match_schema_version",
+        "schedule_schema_version",
         "adapter_version",
         "parser_version",
-        "query_version",
+        "encoding_version",
         "methods"
       ],
       "type": "object"
@@ -3390,8 +3592,12 @@
         "event": {
           "$ref": "#/$defs/SourceProgressKind"
         },
+        "phase": {
+          "description": "`\"index\" | \"details\" | \"matched\"`.",
+          "type": "string"
+        },
         "protocol_version": {
-          "const": 4
+          "const": 5
         },
         "request_id": {
           "type": "string"
@@ -3409,6 +3615,9 @@
           "minimum": 0,
           "type": "integer"
         },
+        "source_id": {
+          "type": "string"
+        },
         "total": {
           "format": "uint64",
           "minimum": 0,
@@ -3418,11 +3627,13 @@
       "required": [
         "completed",
         "event",
+        "phase",
         "protocol_version",
         "request_id",
         "running",
         "sequence",
         "settings_revision",
+        "source_id",
         "total"
       ],
       "type": "object"
@@ -3606,6 +3817,10 @@
             }
           ]
         },
+        "complete": {
+          "description": "Whether the current published index snapshot covers the whole source.",
+          "type": "boolean"
+        },
         "discovery_only": {
           "default": false,
           "type": "boolean"
@@ -3628,6 +3843,12 @@
         "id": {
           "type": "string"
         },
+        "interval_hours": {
+          "description": "Configured automatic update interval in hours (`0` = off).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
         "language": {
           "type": [
             "string",
@@ -3636,6 +3857,15 @@
         },
         "name": {
           "type": "string"
+        },
+        "next_due_at": {
+          "description": "Next scheduled attempt derived from `checked_at + interval_hours * 3600`.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
         },
         "origin": {
           "description": "`\"builtin\"` (compiled default) or `\"added\"` (user rule, including one that\nshadows a builtin id).",
@@ -3657,6 +3887,12 @@
           "default": 100,
           "format": "uint16",
           "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "revision": {
+          "description": "Current published index revision (0 when no index snapshot exists).",
+          "format": "uint64",
           "minimum": 0,
           "type": "integer"
         },
@@ -3700,23 +3936,50 @@
         "page_hosts",
         "origin",
         "status",
-        "entry_count"
+        "entry_count",
+        "revision",
+        "complete",
+        "interval_hours"
       ],
       "type": "object"
     },
-    "SourceTaskParams": {
+    "SourceUpdateEvent": {
       "additionalProperties": false,
       "properties": {
-        "force": {
-          "default": false,
-          "type": "boolean"
+        "event": {
+          "$ref": "#/$defs/SourceUpdateKind"
         },
-        "host": {
-          "$ref": "#/$defs/HostInputs"
+        "protocol_version": {
+          "const": 5
+        },
+        "request_id": {
+          "type": "string"
+        },
+        "sequence": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "settings_revision": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "source_id": {
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/SourceStatus"
         }
       },
       "required": [
-        "host"
+        "event",
+        "protocol_version",
+        "request_id",
+        "sequence",
+        "settings_revision",
+        "source_id",
+        "status"
       ],
       "type": "object"
     },
@@ -3725,6 +3988,47 @@
         "source_update"
       ],
       "type": "string"
+    },
+    "SourceUpdateResult": {
+      "additionalProperties": false,
+      "properties": {
+        "affected_appids": {
+          "items": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": "array"
+        },
+        "complete": {
+          "type": "boolean"
+        },
+        "revision": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "settings_revision": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "source_id": {
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/SourceStatus"
+        }
+      },
+      "required": [
+        "source_id",
+        "settings_revision",
+        "status",
+        "revision",
+        "complete",
+        "affected_appids"
+      ],
+      "type": "object"
     },
     "Sources": {
       "items": {
@@ -3739,7 +4043,7 @@
           "const": true
         },
         "protocol_version": {
-          "const": 4
+          "const": 5
         },
         "request_id": {
           "type": "string"
@@ -3869,6 +4173,26 @@
         "$ref": "#/$defs/Transaction"
       },
       "type": "array"
+    },
+    "UpdateSourceParams": {
+      "additionalProperties": false,
+      "properties": {
+        "force": {
+          "default": false,
+          "type": "boolean"
+        },
+        "host": {
+          "$ref": "#/$defs/HostInputs"
+        },
+        "source_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "host",
+        "source_id"
+      ],
+      "type": "object"
     },
     "Variant": {
       "enum": [
