@@ -6,6 +6,7 @@
 
 | 功能 | 状态 | 设计文档 | 施工记录 | 附加文档 |
 | --- | --- | --- | --- | --- |
+| 来源缓存与游戏匹配重构 | 计划已制定，P0–P6 待实现及验证 | [设计](source-cache-matching-refactor/design.md) | [施工记录](source-cache-matching-refactor/progress.md) | — |
 | ZIP 无备份直接安装（安装磁盘占用与兼容性精简子功能） | Z1–Z4 已实现，本地自动化通过；Steam Deck 部署与一次 ZIP 直接安装通过，UI/中断/性能对比待验证 | [设计](install-footprint-and-compatibility/zip-direct-installation/design.md) | [施工记录](install-footprint-and-compatibility/zip-direct-installation/progress.md) | — |
 | 安装事务性能优化（安装磁盘占用与兼容性精简子功能） | D1–D4 已实施并通过本地自动化；Deck 覆盖安装通过（事务 49s/总 530s）；Windows、中断恢复与游戏内生效待验收 | [设计](install-footprint-and-compatibility/install-transaction-performance/design.md) | [施工记录](install-footprint-and-compatibility/install-transaction-performance/progress.md) | [原始性能报告](install-footprint-and-compatibility/perf-analysis-20261017.md) |
 | 防御逻辑精简 | 已实施，S01–S19 本地自动化验证通过；P5 独立过度设计复核完成并收尾；实机、Unix 分支与真实跨端传输待验证 | [设计](defensive-logic-simplification/design.md) | [施工记录](defensive-logic-simplification/progress.md) | [边界核查](defensive-logic-simplification/boundary-review.md) |
