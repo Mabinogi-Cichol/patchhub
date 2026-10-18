@@ -2,7 +2,7 @@
 
 日期：2026-10-18（Asia/Shanghai）。关联：[设计规划](design.md) · [父功能施工记录](../progress.md) · [EXE 直接安装记录](../install-transaction-performance/progress.md)。
 
-当前状态：**Z1–Z4 已实现；Z5 自动化完成，Windows/Steam Deck 实机与性能测量待执行。**
+当前状态：**Z1–Z4 已实现；Z5 自动化完成，Steam Deck 部署与一次 ZIP 直接安装通过，用户反馈自行验证无问题；界面截图、中断与性能对比未逐项归档。**
 
 | 阶段 | 状态 |
 | --- | --- |
@@ -10,7 +10,7 @@
 | Z2 普通 ZIP 直接安装 | 已实现（自动化通过） |
 | Z3 签名目录和本地 ZIP | 已实现（自动化通过） |
 | Z4 状态及删除收尾 | 已实现（授权链删除、旧事务夹具保留） |
-| Z5 自动化/实机/性能验收 | 自动化通过；Windows/Deck 实机及同包性能测量待验证 |
+| Z5 自动化/实机/性能验收 | 自动化通过；Deck 部署与一次 ZIP 直接安装通过；用户反馈自行验证无问题；界面截图、中断及性能对比未逐项归档 |
 
 ## 2026-10-18：独立精简计划
 
@@ -71,3 +71,14 @@
 - 随审阅简化：映射不再重复 stat 目标（由 `zip_target_sizes` 与游戏锁内的 `begin_direct_at` 各负责一次），删除 `validate_entries` 已无消费者的累计字节检查，删除已无调用的 `space::original_bytes`，`for_stage`/`after_staging` 仅保留给历史事务测试；移除自算 CRC 与 `crc32fast` 依赖，改由 zip 库在成员 EOF 校验。
 - 独立实现审阅（oracle，静态逐路径，未实机）发现并修复：空间预算错误计入旧文件（新增 `for_direct_overwrite`）；签名成员计划按归档顺序写入导致 projection 重装比较失配（改为 recipe 顺序）；`open_direct_target` 先截断后拒绝硬链接（改为校验后清空）；本地 ZIP 校验后按路径重开（改为同一句柄）；并发 `recover` 可能改写运行中 direct 事务（增加游戏锁探测）。
 - 结论：未发现需要新增防御分支或新框架的问题；未将自动化通过视为实机或性能验收。
+
+## 2026-10-18：Steam Deck 部署与 ZIP 直接安装
+
+- 设备：`deck@192.168.31.186`（Devkit 当前配对，独立 `known_hosts`）。通过 Loader `utilities/install_plugin` 安装本轮 ZIP：`7d2a0bfc…`（23 个文件），安装 prompt 的 name/version/hash/type 与实际 ZIP 一致。
+- 安装后逐文件 SHA-256 核对 23/23 一致；`bin/steam-patch` 为新 Linux 构建 `fdfb0823e5fbd4f86cfcdb26513b424f9b6cd5ced90f2ad37c7b3af500b0db92`，`sf-worker` 未变；插件实例 1、前端 bundle SHA-256 `ae1cac…` 与本地构建一致，后端进程已由 Loader 重启。
+- 前两次安装任务分别在下载 68%（`4238766b…`）和 208 MB（`60dbc151…`）时取消，均在预计划阶段，未写入游戏文件；日志保留。
+- 随后从本机下载同一 HTTPS ZIP（813,370,375 B）并按内容寻址放入设备缓存，补 `Last-Modified` 使条件请求返回 304。一次 ZIP 直接安装在约 15 秒内完成：plan `da4fd30e-4dc4-4617-ba94-f94c4194b6bd`，request `90812614…`，transaction `committed`、`direct=true`，2 个文件（`pac/update1.ypf` 2,116,101,941 B、`readme.txt` 2,248 B）。
+- 该 plan `installed_hashes=2`、`original_hashes=0`、`sources=0`、`archive_source=null`，job 目录为空，无 `.backup`/`.stage`/`authorization.json`/`payload.zip`；`content_id` 与 `recipe_sha256` 相同。两个安装态 SHA-256 与同补丁的旧事务收据完全一致，游戏内容未改变，仅 mtime 更新，无需回滚。
+- 证据：本地 `.artifacts/zip-direct-deck-20261018/`；设备 `/home/deck/steam-patch-validation/zip-direct-20261018/`（旧插件备份、manifest、脚本与日志）。
+- 用户反馈已自行验证无问题；本轮未逐项采集其界面/中断操作证据，未归档项仍不标记为自动化或本轮实测通过。
+- 仍待归档：QAM/全屏真实界面截图、提取中取消/断电中断、Windows 实机、同包同初始状态的旧路径与新路径性能对比（当前 15 秒仅为单次 journal 时间戳，不作为正式基准）。

@@ -1,6 +1,6 @@
 # ZIP 无备份直接安装精简计划
 
-日期：2026-10-18（Asia/Shanghai）。状态：**Z1–Z4 已实现并通过本地自动化；Z5 自动化完成，Windows/Steam Deck 实机与性能测量待执行。** 关联：[施工记录](progress.md) · [父功能设计](../design.md) · [EXE 直接安装](../install-transaction-performance/design.md)。
+日期：2026-10-18（Asia/Shanghai）。状态：**Z1–Z4 已实现并通过本地自动化；Z5 自动化完成，Steam Deck 部署与一次 ZIP 直接安装通过；Windows/Deck UI 交互、取消/中断及同包性能对比待验证。** 关联：[施工记录](progress.md) · [父功能设计](../design.md) · [EXE 直接安装](../install-transaction-performance/design.md)。
 
 ## 1. 目标与范围
 

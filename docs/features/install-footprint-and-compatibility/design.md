@@ -1,6 +1,6 @@
 # 安装磁盘占用与兼容性精简设计
 
-2026-10-18 ZIP 子功能：[无备份直接安装设计](zip-direct-installation/design.md) · [施工记录](zip-direct-installation/progress.md)。普通来源、签名目录及本地 ZIP 已改为直接覆盖路线（Z1–Z4 实现，本地自动化通过）；实施后取代本文新 ZIP 的备份事务与空间模型，旧事务按旧约定恢复；Windows/Deck 实机与性能测量待验证。
+2026-10-18 ZIP 子功能：[无备份直接安装设计](zip-direct-installation/design.md) · [施工记录](zip-direct-installation/progress.md)。普通来源、签名目录及本地 ZIP 已改为直接覆盖路线（Z1–Z4 实现，本地自动化通过）；Steam Deck 已部署并完成一次 ZIP 直接安装，UI 交互、取消/中断与性能对比待验证；实施后取代本文新 ZIP 的备份事务与空间模型，旧事务按旧约定恢复。
 
 2026-10-17 子功能规划：[安装事务性能优化设计](install-transaction-performance/design.md) · [施工记录](install-transaction-performance/progress.md)。按用户最新决定改为 EXE 无备份直接提取覆盖；该子功能取代本文 EXE 转 ZIP、备份/回滚路线及相应空间模型，D1–D4 已实施并通过本地自动化验证，D5 双平台实机待验收；普通 ZIP 与旧事务约定保持原范围。
 
