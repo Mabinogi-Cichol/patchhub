@@ -1,7 +1,7 @@
 # 来源缓存与游戏匹配子系统重构
 
-- 状态：重构计划，待实现；不代表自动化或实机验收完成。
-- 施工记录：[progress.md](progress.md)。
+- 状态：P1–P5 已实现并通过自动化门禁；P6 自动化验收与过度设计复核完成，真实网站关键链路（HGamer live、Kagura 列表结构与 EN 多入口）已修复并通过；双端实机与安装链真实回归未执行；不代表可合并 main。P6 证据：[p6-acceptance.md](p6-acceptance.md)。
+- 施工记录：[progress.md](progress.md)；P0 实测证据：[p0-baseline.md](p0-baseline.md)；P0/P1 冻结契约：[p1-contract.md](p1-contract.md)；P4 双端改动测绘：[p4-host-map.md](p4-host-map.md)。
 - 分支：`feature/source-cache-matching-refactor`，规划基线：`main` / `0721338`。
 - 关联：[持久缓存](../persistent-source-cache/design.md)、[共享来源发现](../shared-source-discovery/design.md)、[Kagura 与 HGamer](../kagura-hgamer-fallback/design.md)、[Rust 核心](../rust-core-consolidation/design.md)。
 
@@ -9,18 +9,18 @@
 
 整体重构来源更新、元数据缓存、游戏匹配及 Windows/Decky 调度和交互。核心目标是按来源更新一次、供所有游戏复用；游戏增量匹配不再触发普通源网站遍历，只按索引命中项获取相关详情。不是全项目重写：保留 Rust 核心、现有来源解析器中有效的解析逻辑、下载器、ZIP/EXE 安装与事务恢复、收据及人工选择能力。
 
-本轮仅交付计划和施工记录。实现、提交、部署及实际安装均不是本轮完成事实。
+本功能在功能分支内分阶段实施；各阶段的实际修改、测试与证据以 [progress.md](progress.md) 为准。未执行的检查（真实网站、双端实机、游戏内生效）必须明确标为待验证，不以构建通过代替验收。
 
 ## 2. 当前问题与证据
 
-- [Decky main.py](../../../apps/decky/main.py)：scan 首次读取报告，刷新列表型来源后、逐游戏查询后分别再次整库投影；_project_row 也通过全库 scan 提取单行。
+- [Decky main.py](../../../apps/decky/main.py)：scan 首次读取报告，刷新列表型来源后、逐游戏查询后分别再次整库投影；_project_row 也通过全库 scan 提取单行。P0 实测一次刷新周期 3 次整库 `bridge.scan()`，单游戏查询另 2 次。
 - [来源 session.rs](../../../crates/core/src/sources/session.rs)：逐 AppID 串行 discover_game，普通源发现和 HGamer fallback 混合在单游戏流程中。
-- [Kagura 适配器](../../../crates/core/src/sources/adapters/kagura.rs)：已有共享索引，但 force 会按游戏重新加入入口；详情工作队列仍与游戏查询绑定。
-- [HTTP 上下文](../../../crates/core/src/sources/http.rs)：响应缓存按游戏隔离；不同游戏访问同一页面无法共享本轮响应。
+- [Kagura 适配器](../../../crates/core/src/sources/adapters/kagura.rs)：已有共享索引，但 force 会按游戏重新加入入口；详情工作队列仍与游戏查询绑定。P0 实测强制扫描时每款游戏重翻全部列表页。
+- [HTTP 上下文](../../../crates/core/src/sources/http.rs)：响应缓存按游戏隔离；不同游戏访问同一页面无法共享本轮响应（P0 S4：同批两款游戏同详情页请求 2 次）。
 - [Decky session.ts](../../../apps/decky/src/session.ts)：整库与单游戏查询共用扫描快照轮询；后端 start_game_discovery 会关闭原扫描会话。
 - [持久缓存旧设计](../persistent-source-cache/design.md)曾决定不增加定时更新。本需求明确替代该产品决策，但保留“不因缓存年龄禁止展示或安装”的原则。旧施工记录保留历史事实。
 
-以上为代码静态核对，不是耗时测量。P0 需记录基线请求数、扫描次数、哈希读取及耗时。
+以上为代码静态核对与 fixture 驱动基线，不是真实网络或耗时测量。P0 证据（2026-10-19）修正了一处原表述：普通首次扫描的普通源索引只构建一次、后续游戏复用持久化索引；“逐游戏重新触发普通源全站遍历”只在 force 刷新路径可复现。普通首扫的线性请求来自每命中游戏的详情获取和每未命中游戏的 HGamer 补查；详情不跨游戏共享。整库重复投影与哈希仍是宿主侧真实成本（Decky 一次周期 3 次整库 scan）。完整数字、口径与代码行号见 [p0-baseline.md](p0-baseline.md)。
 
 ## 3. 产品契约
 
@@ -149,8 +149,42 @@ Rust 是来源缓存、匹配规则和 fallback 判定的唯一业务实现。�
 
 不引入通用爬虫平台、额外数据库、系统级后台服务、无限重试、默认全站并发框架或缓存年龄安装禁令。先改变工作单位和数据流，再依据 P0/P2 实测决定是否需要并发。
 
-待验证：Kagura 列表索引覆盖与首次更新成本、站点是否提供可靠变更信号、命中项详情及游戏分类能否保留完整身份和 DLC 关系、旧数据迁移的实际样本、安装与来源写入的现有锁边界。P0/P2 必须提供证据并修订设计，不以这些未知项为由预加硬限制或悄悄恢复逐游戏普通源全站遍历。
+待验证：Kagura 列表索引覆盖与首次更新成本、站点是否提供可靠变更信号、命中项详情及游戏分类能否保留完整身份和 DLC 关系、旧数据迁移的实际样本、安装与来源写入的现有锁边界。P0/P2 必须提供证据并修订设计，不以这些未知项为由预加硬限制或悄悄恢复逐游戏普通源全站遍历。P6 已核验 Kagura 列表结构、条件请求（304）与 EN 双入口；真实全量更新的页数/耗时/流量与身份/DLC 全量覆盖仍未测。
 
 ## 9. 2026-10-19 方案修订：索引与详情分层
 
 用户明确要求来源先只保存游戏清单，匹配命中后由该游戏任务获取详情。采纳此要求，取消原稿的全源详情预取与整条匹配纯离线目标。职责边界调整为：来源更新拥有共享索引，游戏匹配拥有候选筛选和按需详情获取，详情结果仍写入按源共享缓存。联网范围限定到命中游戏相关页面；首次更新成本不再包含全站详情。
+
+## 10. 2026-10-19 P5/P6 实现收口与偏差
+
+### 10.1 实际实现落点（与 §4/§6 对应）
+
+- **按源更新**：`sources::update::update_source`（`crates/core/src/sources/update.rs`）无游戏参数；完整成功才写 `index/<source>.json`，部分/取消/失败写 `index-progress/<source>.json`；patch.moe/table 复用列表收集，Kagura 只读列表/目录分页（`IndexOutcome`/`collect_index`），不抓详情。
+- **按需详情**：`sources::matching` 在本地索引筛选命中项后才发现详情；`resolve_page` 产出 query 无关的 `PageFact` 并按来源+规范 URL 写入 `details/`，跨游戏/跨轮次复用；详情失败保留既有正结果并报未完成。
+- **匹配与六态**：`GameMatchRecord` 持久化到 `matches/<appid>.json`；`input_key` 只包含名称/本地化名/提示/语言/订阅快照；六态由 `match::derive_game_status` 推导；HGamer 的 `disabled/not_queried/not_needed` 语义按 §3.2 落实现。
+- **协议 v5 与宿主**：`PROTOCOL_VERSION=5`、20 方法、4 类事件；Decky 与 Windows 均改为“按源/按匹配键”的任务注册表（同键去重、可取消），scan 只做一次只读整库投影，不再触发来源刷新或逐游戏发现；自动更新由宿主运行期间的 60s 到期检查驱动（`next_due_at` 由核心派生）。
+- **迁移**：schema 1 → 2 一次性迁移 settings/cache/discovery-index/discovery/status；迁移诊断经 `registry.diagnostics()` 进入投影诊断；失败保留旧文件并报 `source_migration_failed`。
+- **矩阵 8 提交绑定**：P6 新增最小绑定（见 [p6-acceptance.md](p6-acceptance.md) §1）：更新在发布索引前重读持久化 settings，源已停用则只保存 progress 并返回 `source_not_enabled`；匹配在写 `matches/` 前比较 settings 修订与重算的 `input_key`，变化则丢弃本次尝试并保留上次记录。
+
+### 10.2 与冻结契约的实现偏差（保留原契约，差异记录于 p1-contract §13）
+
+1. `failed` 在实时匹配中不可达：普通源详情失败 + HGamer 失败显示 `incomplete`（带诊断），`failed` 只由迁移记录产生；需要产品决定修订契约或后续单列修复。
+2. `SourceStatus` 落盘不含 `revision/complete`；两者由 `SourceIndex` 得出并经 `SourceSummary`/`update_source` 结果暴露。
+3. `DetailRecord` 存 `PageFact` 而非候选列表；候选在匹配时按游戏生成（§9 分层决策）。
+4. Kagura 海外多入口：原实现只读 `pages.first()`；修复后 `collect_index` 无 progress 时从 `rule.url` + `rule.pages` 全部入口起爬（canonical 去重），每个入口各自分页；fixture `kagura_en_crawls_every_configured_entry_root` 通过。真实全量更新与两入口合并后的最终条目数仍未跑。
+5. 矩阵 8 绑定新增 `source_not_enabled` 错误码（UI 已有文案，非协议字段）。
+6. HGamer 真实站点：原 DOM 契约（h1 父节点摘要）与当前站点（`<p>「term」找到 N 筆結果</p>` 在 h1 兄弟 section）不符；修复后 `result_summary` 先扫描含查询词且可解析计数的 `<p>`，再回退整页文本，不解析 RSC。`hgamer_live` 真实网络测试通过（3/5 逻辑请求、complete、identities=1、空 diagnostics）。
+
+### 10.3 真实网站核验结论（2026-10-19，详见 p6-acceptance §5）
+
+- Kagura CN 首页 10 条 article、253 个分类链接、分页到第 24 页（`class=next` → `/page/2/`）；提供 `Last-Modified` 且条件 GET 返回 304；列表不提供 AppID。
+- Kagura EN `/patch/` 228 个产品卡、单页无分页；提供 `Last-Modified` + 304；列表不提供 AppID；补充分类目录 11 页，修复后已被 `collect_index` 作为独立入口起爬（fixture 验证；真实全量未跑）。
+- patch.moe 无 ETag/Last-Modified（`no-store`），3 个语言表单、114 个 ZIP 链接；无 AppID；每次更新需完整重读。
+- HGamer 搜索页 308 跳转后为 Next.js 客户端渲染，摘要 `<p>「term」找到 N 筆結果</p>` 位于 h1 兄弟 section。适配器已按此最小修复（扫描含查询词的 `<p>`，回退整页文本），不解析 RSC；`hgamer_live` 真实网络测试通过：1250180 为 3 逻辑请求/complete/candidates=0/identities=1（完整无结果），1227890 为 5 逻辑请求/complete/candidates=2/identities=1、两候选 appid 匹配且镜像为 kagurafan（web）。**HGamer 搜索→身份→补丁详情真实链路已通过。**
+
+### 10.4 P6 状态与合并判断
+
+- 自动化矩阵 §7.1–§7.9 已由 `crates/core/tests/source_acceptance.rs`（11 项）+ CLI 只读/移除游戏测试覆盖；双端宿主单元/组件测试通过；Overengineering review 删除 2 项未使用代码并保留有依据机制（见 p6-acceptance §6）。
+- 真实网站关键链路已通过：HGamer `hgamer_live`（搜索→身份→补丁详情，真实网络）+ Kagura 列表结构与 EN 双入口 fixture；真实 Kagura 全量更新耗时/流量未跑。
+- P6 未完成：Deck/Windows 实机矩阵、安装链真实回归、真实旧状态迁移样本。HGamer 与 Kagura 多入口两个真实网站阻塞项已闭环。
+- 结论：**自动化完成、实机验收前不合并 main（除非用户明确要求）**；下一步在 Deck + Windows 实机执行 §7.10 与真实网络任务，补真实 Kagura 成本与迁移样本后再评估合并。

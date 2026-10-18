@@ -63,13 +63,13 @@ Linux：`sh scripts/build-linux.sh` 使用仓库内隔离工具链，测试核�
 
 `steam-patch sign-catalog CATALOG PRIVATE KEY_ID OUTPUT LIFETIME_SECONDS [REVOCATIONS_JSON]` 对严格校验的目录生成签名，最长有效期 90 天。签名覆盖原始 payload 字节。可选的撤销文件是 release_id 字符串数组，例如 `["withdrawn-release"]`，写入签名 payload 的 revoked_release_ids；拒绝重复或空 ID。撤销密钥通过升级受信公钥文件实施。生产维护需离线密钥、密钥轮换和审核流程。revision 4 使用维护密钥 alpha-local-2026-10，公钥目录同时保留 alpha-local-2026；私钥不提交或打包。
 
-`steam-patch schema OUTPUT` 导出 payload JSON Schema。现役 IPC 仅支持 v4，必需 host 六字段和显式 operation/cleanup_policy；旧版本混装在写入前拒绝。跨语言类型、校验和夹具详见 [共享契约](../packages/contracts/README.md)。修改配方必须递增 revision；同一 state 拒绝目录版本回退。客户端签名到期后禁用安装，仍可显示开发目录中的官方来源引导。
+`steam-patch schema OUTPUT` 导出 payload JSON Schema。现役 IPC 仅支持 v5，必需 host 六字段和显式 operation/cleanup_policy；旧版本混装在写入前拒绝。跨语言类型、校验和夹具详见 [共享契约](../packages/contracts/README.md)。修改配方必须递增 revision；同一 state 拒绝目录版本回退。客户端签名到期后禁用安装，仍可显示开发目录中的官方来源引导。
 
 ## 验证边界
 
-旧 `scripts/smoke-transaction.py` 已在跨平台安装器迁移收口（2026-10-11）删除；其协议 v1 安装/卸载与强杀恢复结果仅为历史基线。现役 v4 子进程检查位于 [projection_smoke.rs](../crates/cli/tests/projection_smoke.rs)、[cache_smoke.rs](../crates/cli/tests/cache_smoke.rs) 与 [CLI 协议测试](../crates/cli/src/main.rs)及宿主测试，覆盖真实 JSONL、版本写前拒绝、签名 ZIP、长实例身份和首终态消费。
+旧 `scripts/smoke-transaction.py` 已在跨平台安装器迁移收口（2026-10-11）删除；其协议 v1 安装/卸载与强杀恢复结果仅为历史基线。现役 v5 子进程检查位于 [projection_smoke.rs](../crates/cli/tests/projection_smoke.rs)、[cache_smoke.rs](../crates/cli/tests/cache_smoke.rs) 与 [CLI 协议测试](../crates/cli/src/main.rs)及宿主测试，覆盖真实 JSONL、版本写前拒绝、签名 ZIP、长实例身份和首终态消费。
 
-`python scripts/benchmark-projection.py --binary target/release/steam-patch.exe --output .artifacts/projection.json` 使用 v4 release CLI 测量四组隔离夹具，包含真实签名 ZIP 安装后动态收据投影；省略 `--binary` 则在临时源码副本构建 plain/counted，并核对哈希次数与响应等价，`--profile release` 可测发行构建。Linux 应显式提供本机 `--cargo` 或 `--binary`。`benchmark-scan.py CORE_BINARY FIXTURE_PARENT` 使用 v4 测量两库 500 清单，空目录 catalog 避免读取内嵌补丁。基准均不写用户游戏，不代表冷缓存或实机验收；真实样本检查继续使用 `scripts/run-windows-check.ps1` 和自动化套件。两端游戏内生效与 Deck 实体手柄须单独确认。
+`python scripts/benchmark-projection.py --binary target/release/steam-patch.exe --output .artifacts/projection.json` 使用 v5 release CLI 测量四组隔离夹具，包含真实签名 ZIP 安装后动态收据投影；省略 `--binary` 则在临时源码副本构建 plain/counted，并核对哈希次数与响应等价，`--profile release` 可测发行构建。Linux 应显式提供本机 `--cargo` 或 `--binary`。`benchmark-scan.py CORE_BINARY FIXTURE_PARENT` 使用 v5 测量两库 500 清单，空目录 catalog 避免读取内嵌补丁。基准均不写用户游戏，不代表冷缓存或实机验收；真实样本检查继续使用 `scripts/run-windows-check.ps1` 和自动化套件。两端游戏内生效与 Deck 实体手柄须单独确认。
 
 默认不上传游戏库，不设置遥测。诊断与状态保存在本机；分享日志前应删除用户名、库路径与下载 URL 参数。安全安装拒绝链接、路径越界、危险 ZIP 成员、哈希错误和未知 build；同账户篡改完整 journal 与父目录 TOCTOU 的剩余风险见 install-design.md。
 
