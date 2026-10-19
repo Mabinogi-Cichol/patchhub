@@ -1,6 +1,6 @@
 # 来源缓存与游戏匹配子系统重构
 
-- 状态：P1–P5 已实现并通过自动化门禁；P6 自动化验收与过度设计复核完成，真实网站关键链路（HGamer live、Kagura 列表结构与 EN 多入口）已修复并通过；双端实机与安装链真实回归未执行；不代表可合并 main。P6 证据：[p6-acceptance.md](p6-acceptance.md)。
+- 状态：P1–P5 已实现并通过自动化门禁；P6 自动化验收与过度设计复核完成，真实网站关键链路（HGamer live、Kagura 列表结构与 EN 多入口）已修复并通过；双端实机与安装链真实回归未执行；用户已明确要求合并 main 并发布 v0.2.0，保留未验收范围。P6 证据：[p6-acceptance.md](p6-acceptance.md)。
 - 施工记录：[progress.md](progress.md)；P0 实测证据：[p0-baseline.md](p0-baseline.md)；P0/P1 冻结契约：[p1-contract.md](p1-contract.md)；P4 双端改动测绘：[p4-host-map.md](p4-host-map.md)。
 - 分支：`feature/source-cache-matching-refactor`，规划基线：`main` / `0721338`。
 - 关联：[持久缓存](../persistent-source-cache/design.md)、[共享来源发现](../shared-source-discovery/design.md)、[Kagura 与 HGamer](../kagura-hgamer-fallback/design.md)、[Rust 核心](../rust-core-consolidation/design.md)。
