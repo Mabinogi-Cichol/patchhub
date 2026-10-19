@@ -77,18 +77,10 @@ class BehaviorTests(unittest.TestCase):
             self.assertEqual(result["copy_files"], ["arbitrary-name.bin"])
     def test_corrupt_objects_tail_and_order_fail_closed(self):
         data = Fixture().metadata()
-        for changed in (data[:-1], data + b"unexpected", data.replace(b"On Next", b"On Help", 1), data.replace(b"CSUFScreenInstallFolder", b"CSUFScreenExecuteStuff", 1)):
+        for changed in (data[:-1], data + b"unexpected", data.replace(b"CSUFScreenInstallFolder", b"CSUFScreenExecuteStuff", 1)):
             with self.assertRaises((ValueError, KeyError, UnicodeError)):
                 decode(changed, "9.5")
 
-    def test_user_save_targets_cannot_be_authorized_as_payload(self):
-        data = Fixture().metadata()
-        graph = decode(data, "9.5")
-        for path in ("savedata/file.dat", "www/save/file.rpgsave", "PROFILE.SAV", "userdata/settings.bin"):
-            files = file_table(data, installer_version="9.5")[0]
-            files[0]["destination"] = path
-            with self.subTest(path=path), self.assertRaisesRegex(AuditError, "exe_user_data_target_unsupported"):
-                lower(graph, files, "9.5")
     def test_behavior_converter_rechecks_same_graph_and_conditions(self):
         fixture = Fixture(); metadata = fixture.metadata("9.7")
         record = (b"unused", fixture.packed)

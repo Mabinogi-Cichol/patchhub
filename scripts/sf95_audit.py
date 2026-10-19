@@ -372,7 +372,7 @@ class Decoder:
         return {"size": size, "crc32": checksum, "sha256": digest.hexdigest()}, b"".join(parts)
 
 
-def audit(data, *, supported_versions=("9.5",), metadata_inspector=None):
+def audit(data, *, supported_versions=("9.5",), metadata_inspector=None, decode_payloads=True):
     require(0 < len(data) <= MAX_EXE, "exe_size_limit")
     overlay, overlay_end, manifest, certificate = pe_overlay(data, supported_versions=supported_versions)
     installer_version = ".".join(manifest["version"].split(".")[:2])
@@ -413,9 +413,13 @@ def audit(data, *, supported_versions=("9.5",), metadata_inspector=None):
     require(decoder.total + sum(row["unpacked_size"] for row in records) <= MAX_TOTAL, "expanded_size_limit")
     for record in records:
         record["payload_offset"] = r.pos
-        info, _ = decoder.decode(r, record["packed_size"], record["unpacked_size"],
-                                 record["crc32"], compressed=record["compressed"])
-        record["payload"] = info
+        if decode_payloads:
+            info, _ = decoder.decode(r, record["packed_size"], record["unpacked_size"],
+                                     record["crc32"], compressed=record["compressed"])
+            record["payload"] = info
+        else:
+            r.read(record["packed_size"])
+            decoder.total += record["unpacked_size"]
     require(r.read(padding) == bytes(padding) and r.pos == overlay_end, "trailing_overlay_data")
     result = {"schema_version": 1, "auditor": VERSION, "exe": evidence(data), "installer": "Setup Factory " + installer_version,
             "overlay_offset": overlay, "overlay_header_base64": base64.b64encode(overlay_header).decode(),

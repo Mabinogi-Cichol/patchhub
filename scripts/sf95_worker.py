@@ -24,13 +24,13 @@ def behavior_digest(value):
         separators=(",", ":")).encode()).hexdigest()
 
 
-def audit_behavior(data):
+def audit_behavior(data, *, decode_payloads=True):
     from sf9_graph import decode
     from sf9_behavior import lower
     _, _, manifest, _ = sf.pe_overlay(data, supported_versions=("9.5", "9.6", "9.7"))
     version = ".".join(manifest["version"].split(".")[:2])
     report = sf.audit(data, supported_versions=("9.5", "9.6", "9.7"),
-        metadata_inspector=lambda metadata: decode(metadata, version))
+        metadata_inspector=lambda metadata: decode(metadata, version), decode_payloads=decode_payloads)
     report["behavior"] = lower(report["script_inventory"], report["files"], version)
     report["behavior_sha256"] = behavior_digest(report["behavior"])
     report["capability"] = "behavior_supported"
@@ -55,7 +55,7 @@ def analyze(stream, descriptor):
     from sf9_metadata import inventory
     with mmap.mmap(stream.fileno(), 0, access=mmap.ACCESS_READ) as data:
         sf.require(hashlib.sha256(data).hexdigest() == descriptor["exe_sha256"], "exe_payload_changed")
-        report = audit_behavior(data) if descriptor["action"] == "analyze_behavior" else sf.audit(data, supported_versions=("9.5", "9.6", "9.7"), metadata_inspector=inventory)
+        report = audit_behavior(data, decode_payloads=False) if descriptor["action"] == "analyze_behavior" else sf.audit(data, supported_versions=("9.5", "9.6", "9.7"), metadata_inspector=inventory)
         sf.require(report["exe"]["sha256"] == descriptor["exe_sha256"], "exe_payload_changed")
     after = os.fstat(stream.fileno())
     identity = lambda s: (s.st_dev, s.st_ino, s.st_size, s.st_mtime_ns, s.st_ctime_ns)
