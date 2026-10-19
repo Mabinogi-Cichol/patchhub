@@ -16,6 +16,7 @@ type SessionState = {
   errorInstance: string | null;
   noteInstance: string | null;
   sourceTasks: Record<string, SourceTaskSnapshot>;
+  expandedSources: Record<string, boolean>;
 };
 
 const ACTIVE_POLL_MS = 1000;
@@ -48,7 +49,7 @@ export function feedbackFor(state: Pick<SessionState, "error" | "note" | "errorI
 // in-flight operation in the plugin session, rather than in a mounted panel.
 export function createManagerSession(readSnapshot: () => Promise<Snapshot>, sourceApi?: SourceTaskApi) {
   let state: SessionState = { report: null, transactions: [], busy: null, busySince: null,
-    error: null, note: null, errorInstance: null, noteInstance: null, sourceTasks: {} };
+    error: null, note: null, errorInstance: null, noteInstance: null, sourceTasks: {}, expandedSources: {} };
   let attemptedInitialScan = false;
   let pollTimer: ReturnType<typeof setTimeout> | null = null;
   let pollSubscribers = 0;
@@ -112,7 +113,12 @@ export function createManagerSession(readSnapshot: () => Promise<Snapshot>, sour
     const instance = task.instances[0] ?? null;
     if (task.state === "failed") {
       const detail = task.error_detail ? ` · ${task.error_detail}` : "";
-      setFeedback({ error: `${reason(task.error ?? "source_refresh_failed")}${detail}` }, instance);
+      let message = `${reason(task.error ?? "source_refresh_failed")}${detail}`;
+      if (task.kind === "update_source") {
+        try { await refreshSources(); }
+        catch (error) { message += ` · 来源状态读取失败：${reason(String(error))}`; }
+      }
+      setFeedback({ error: message }, instance);
       return;
     }
     if (task.state !== "completed") return;
@@ -239,6 +245,9 @@ export function createManagerSession(readSnapshot: () => Promise<Snapshot>, sour
       return () => { listeners.delete(listener); };
     },
     update,
+    toggleSourceExpanded(sourceId: string) {
+      update({ expandedSources: { ...state.expandedSources, [sourceId]: !state.expandedSources[sourceId] } });
+    },
     setFeedback,
     acceptSnapshot,
     work,

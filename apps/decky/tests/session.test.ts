@@ -283,3 +283,71 @@ test("game operation failures are scoped while scan and settings feedback remain
   assert.equal(feedbackFor(session.getSnapshot(), "cult").note, "已开启自动清理。");
   assert.equal(feedbackFor(session.getSnapshot()).note, "已开启自动清理。");
 });
+
+test("source cards keep independent expansion through navigation, snapshots and source changes", async () => {
+  const { api, calls } = fakeApi([]);
+  let scans = 0;
+  const session = createManagerSession(async () => { scans++; return { report, transactions: [] }; }, api);
+  assert.deepEqual(session.getSnapshot().expandedSources, {});
+  const initial = session.getSnapshot();
+  session.toggleSourceExpanded("patchmoe");
+  session.toggleSourceExpanded("hgamer");
+  assert.deepEqual(initial.expandedSources, {});
+  assert.deepEqual(session.getSnapshot().expandedSources, { patchmoe: true, hgamer: true });
+  const unmount = session.subscribe(() => {});
+  unmount();
+  let notifications = 0;
+  const remount = session.subscribe(() => { notifications++; });
+  session.acceptSnapshot({ report, transactions: [] });
+  session.commitSources([{ id: "patchmoe", name: "Renamed source", enabled: false }, { id: "new-source" }] as SourceSubscription[]);
+  session.toggleSourceExpanded("patchmoe");
+  assert.deepEqual(session.getSnapshot().expandedSources, { patchmoe: false, hgamer: true });
+  assert.equal(session.getSnapshot().expandedSources["new-source"], undefined);
+  assert.ok(notifications > 0);
+  assert.equal(scans, 0);
+  assert.deepEqual(calls, { rematchGame: [], updateSource: [], cancelTask: [], projectInstances: [], listSources: 0, setInterval: [] });
+  remount();
+  assert.deepEqual(createManagerSession(async () => ({ report, transactions: [] })).getSnapshot().expandedSources, {});
+});
+
+test("collapsing an updating source neither cancels nor restarts its task", async () => {
+  const running = task({ kind: "update_source", key: "patchmoe", instances: [], appid: null });
+  const { api, calls } = fakeApi([[running]]);
+  const session = createManagerSession(async () => ({ report, transactions: [] }), api);
+  session.acceptSnapshot({ report, transactions: [] });
+  await session.updateSource("patchmoe");
+  session.toggleSourceExpanded("patchmoe");
+  session.toggleSourceExpanded("patchmoe");
+  await session.pollSourceTasks();
+  assert.equal(session.getSnapshot().expandedSources.patchmoe, false);
+  assert.equal(session.getSnapshot().sourceTasks["task-1"].state, "running");
+  assert.deepEqual(calls.updateSource, [["patchmoe", false]]);
+  assert.deepEqual(calls.cancelTask, []);
+  assert.equal(calls.listSources, 0);
+});
+
+test("failed source updates refresh the latest attempt without opening the card or losing error details", async () => {
+  const failed = task({ kind: "update_source", key: "patchmoe", instances: [], appid: null,
+    state: "failed", error: "source_refresh_failed", error_detail: "HTTP 503" });
+  const summaries = [{ id: "patchmoe", role: "publisher", status: "source_offline_cached" }] as SourceSubscription[];
+  const { api, calls } = fakeApi([[failed]], { listSources: async () => { calls.listSources++; return summaries; } });
+  const session = createManagerSession(async () => ({ report, transactions: [] }), api);
+  session.acceptSnapshot({ report, transactions: [] });
+  await session.pollSourceTasks();
+  assert.equal(session.getSnapshot().report!.sources, summaries);
+  assert.equal(calls.listSources, 1);
+  assert.deepEqual(session.getSnapshot().expandedSources, {});
+  assert.match(session.getSnapshot().error!, /HTTP 503/);
+  assert.deepEqual(session.getSnapshot().sourceTasks, {});
+  await session.pollSourceTasks();
+  assert.equal(calls.listSources, 1);
+});
+
+test("a failed attempt and a failed status read are both visible", async () => {
+  const { api } = fakeApi([[task({ kind: "update_source", instances: [], state: "failed", error_detail: "HTTP 503" })]],
+    { listSources: async () => { throw Error("status unavailable"); } });
+  const session = createManagerSession(async () => ({ report, transactions: [] }), api);
+  await session.pollSourceTasks();
+  assert.match(session.getSnapshot().error!, /HTTP 503/);
+  assert.match(session.getSnapshot().error!, /来源状态读取失败.*status unavailable/);
+});

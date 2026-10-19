@@ -1,4 +1,4 @@
-import { sourcePhaseLabel } from "@steam-patch/ui";
+import { sourcePhaseLabel, sourceRefreshFailed } from "@steam-patch/ui";
 import type { MatchGamesResult, MatchUpdateEvent, ProjectInstancesResult, SourceSubscription, SourceUpdateResult } from "@steam-patch/ui";
 
 // Host snapshots for the three v5 source task methods (update_source /
@@ -79,4 +79,15 @@ export function sourceTaskTargets(task: SourceTaskSnapshot, instanceId: string, 
   if (task.kind === "update_source") return false;
   if (task.instances.includes(instanceId)) return true;
   return task.appid != null && task.appid === appid;
+}
+
+/** Summary stays visible when a source card's controls are collapsed. */
+export function sourceCardSummary(source: Pick<SourceSubscription, "role" | "status">, task?: SourceTaskSnapshot): { text: string; warning: boolean } | null {
+  if (task && !sourceTaskTerminal(task.state)) {
+    return { text: task.state === "cancelling" ? "正在取消更新…" : sourceTaskStatusText(task), warning: false };
+  }
+  if (sourceRefreshFailed(source.status)) {
+    return { text: source.role === "fallback_indexer" ? "最近补查失败" : "最近更新失败", warning: true };
+  }
+  return null;
 }

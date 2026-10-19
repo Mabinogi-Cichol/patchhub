@@ -1,14 +1,14 @@
 import { callable, definePlugin, routerHook } from "@decky/api";
 import { Button, ButtonItem, DropdownItem, Field, Focusable, Navigation, PanelSection, PanelSectionRow, SidebarNavigation, TextField, ToggleField, showModal, useParams } from "@decky/ui";
 import { FaGamepad, FaPuzzlePiece } from "react-icons/fa";
-import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ComponentProps, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ComponentProps, type ReactNode } from "react";
 import { downloadFileName, candidateMatched, displayPatches, filterInstalls, gameDisplayName, gameMatchStatusLabel, gameMatchStatusTone, installSummary, patchState, reason, sourceCoverageText, sourceIntervalOptions, sourceLastAttemptText, sourceLastSuccessText, sourceNextDueText, workflowState, type Filter, type Install, type Patch, type Preview, type ProjectInstancesResult, type ScanResult, type SourceCandidate, type SourceSubscription, type Transaction } from "@steam-patch/ui";
 import { getListPreferences, setListPreferences, subscribeListPreferences } from "./preferences";
 import { gamePresentation, matchesGameQuery, transactionGameName } from "./steam";
 import { installationResult } from "@steam-patch/ui";
 import { installInput, primaryActionBlockers, primaryInstallAction } from "./actions";
 import { createManagerSession, feedbackFor, needsRecovery } from "./session";
-import { sourceTaskStatusText, sourceTaskTargets, sourceTaskTerminal, type SourceTaskApi, type SourceTaskSnapshot } from "./source-tasks";
+import { sourceCardSummary, sourceTaskStatusText, sourceTaskTargets, sourceTaskTerminal, type SourceTaskApi, type SourceTaskSnapshot } from "./source-tasks";
 import { decodeInstance, encodeInstance, settingsPage, settingsRoutes } from "./route";
 import { backupSummary, backupClearNote, type BackupInventory, type BackupCleanupResult, autoCleanupNote, cacheClearNote, cacheSummary, type CacheStatus, type CleanupResult, type Settings } from "./cache";
 import { tasks, taskIsTerminal, type TaskSnapshot } from "./tasks";
@@ -135,6 +135,17 @@ const css = `
   .patch-patch-name { font-weight:600; }
   .patch-patch-source { font-size:12px; opacity:.8; overflow-wrap:anywhere; }
   .patch-kv-value { overflow-wrap:anywhere; }
+  .patch-source-card { margin:0 0 16px; border:1px solid #627387; border-radius:8px; background:#202c39; min-width:0; }
+  .patch-source-card .patch-source-heading { box-sizing:border-box; width:100%; min-width:0; height:auto; margin:0; padding:14px 16px; border-radius:7px; border:0; background:#2b3b4d; color:#f3f6f8; box-shadow:none; font-size:16px; line-height:1.35; text-align:left; white-space:normal; }
+  .patch-source-card .patch-source-heading:hover { background:#344a60; }
+  .patch-source-card .patch-source-heading:focus-visible, .patch-source-card .patch-source-heading.gpfocus { background:#3b536b; outline:3px solid #fff; outline-offset:2px; }
+  .patch-source-heading-main { display:flex; align-items:center; gap:12px; min-width:0; }
+  .patch-source-heading-name { flex:1; min-width:0; font-weight:700; overflow-wrap:anywhere; }
+  .patch-source-heading-arrow { flex:none; }
+  .patch-source-heading-state, .patch-source-heading-task { display:block; margin-top:6px; font-size:13px; line-height:1.4; overflow-wrap:anywhere; }
+  .patch-source-heading-state { opacity:.8; }
+  .patch-source-body { padding:4px 12px 12px; border-top:1px solid #627387; min-width:0; }
+
   @media (max-width:600px) { .patch-page { padding:0 12px 40px; } }
 `;
 
@@ -535,24 +546,47 @@ function GameManager({ item, seg, panel }: { item: Install; seg: string; panel?:
   return <SidebarNavigation {...navigation} />;
 }
 
-function SourceCard({ source, busy, changeSources }: {
-  source: SourceSubscription; busy: boolean;
+function SourceCard({ source, busy, expanded, onToggle, task, changeSources, onUpdateSource, onCancelTask, onInterval }: {
+  source: SourceSubscription; busy: boolean; expanded: boolean; onToggle: () => void; task?: SourceTaskSnapshot;
   changeSources: (action: () => Promise<SourceSubscription[]>) => void;
+  onUpdateSource: (sourceId: string, force: boolean) => void;
+  onCancelTask: (taskId: string) => void;
+  onInterval: (sourceId: string, hours: number) => void;
 }) {
-  return <Fragment>
-    <InfoRow label="名称">{source.name}</InfoRow>
-    <InfoRow label="站点" below>{source.pages.join(" · ")}</InfoRow>
-    <InfoRow label="启用状态">{source.enabled ? "已启用" : "已停用"}</InfoRow>
-    <InfoRow label="索引条目">{source.entry_count} 条 · 修订 {source.revision}</InfoRow>
-    <InfoRow label="索引覆盖">{sourceCoverageText(source)}</InfoRow>
-    <InfoRow label="最近成功">{sourceLastSuccessText(source)}</InfoRow>
-    <InfoRow label="最近尝试">{sourceLastAttemptText(source)}</InfoRow>
-    <InfoRow label="自动更新">{sourceNextDueText(source)}</InfoRow>
-    <Row><ToggleField label={`启用 ${source.name}`} checked={source.enabled} disabled={busy} onChange={enabled => changeSources(() => setSourceEnabled(source.id, enabled))} /></Row>
-  </Fragment>;
+  const publisher = source.role !== "fallback_indexer";
+  const summary = sourceCardSummary(source, task);
+  const contentId = `patch-source-${encodeURIComponent(source.id)}`;
+  return <div className="patch-source-card">
+    <Button className="patch-source-heading" aria-expanded={expanded} aria-controls={contentId} onClick={onToggle}>
+      <span className="patch-source-heading-main"><span className="patch-source-heading-name">{source.name}</span>
+        <span className="patch-source-heading-arrow" aria-hidden="true">{expanded ? "▾" : "▸"}</span></span>
+      <span className="patch-source-heading-state">{source.enabled ? "已启用" : "已停用"}</span>
+      {summary && <span className={`patch-source-heading-task${summary.warning ? " patch-warning" : ""}`}>{summary.text}</span>}
+    </Button>
+    {expanded && <div id={contentId} className="patch-source-body" role="group" aria-label={source.name}>
+      <InfoRow label="站点" below>{source.pages.join(" · ")}</InfoRow>
+      {publisher && <>
+        <InfoRow label="索引条目">{source.entry_count} 条 · 修订 {source.revision}</InfoRow>
+        <InfoRow label="索引覆盖">{sourceCoverageText(source)}</InfoRow>
+        <InfoRow label="最近成功">{sourceLastSuccessText(source)}</InfoRow>
+        <InfoRow label="自动更新">{sourceNextDueText(source)}</InfoRow>
+      </>}
+      <InfoRow label="最近尝试">{sourceLastAttemptText(source)}</InfoRow>
+      <Row><ToggleField label={`启用 ${source.name}`} checked={source.enabled} disabled={busy}
+        onChange={enabled => changeSources(() => setSourceEnabled(source.id, enabled))} /></Row>
+      {publisher ? <>
+        <Row><DropdownItem label="自动更新间隔" layout="below" rgOptions={sourceIntervalOptions()}
+          selectedOption={source.interval_hours} onChange={option => onInterval(source.id, option.data)} /></Row>
+        {task && !sourceTaskTerminal(task.state)
+          ? <Row><Status>{sourceTaskStatusText(task)}</Status><Action onClick={() => onCancelTask(task.task_id)}>取消更新</Action></Row>
+          : <Row><Action disabled={busy} onClick={() => onUpdateSource(source.id, false)}>手动更新</Action></Row>}
+      </> : <Row><Status>补查来源：仅对单个游戏查询，不参与定时更新，也没有更新间隔。</Status></Row>}
+    </div>}
+  </div>;
 }
 
-function SourcesPage({ report, busy, tasks, rule, setRule, changeSources, onUpdateSource, onCancelTask, onInterval, onMatchGames }: {
+function SourcesPage({ report, busy, tasks, expandedSources, onToggleSource, rule, setRule, changeSources, onUpdateSource, onCancelTask, onInterval, onMatchGames }: {
+  expandedSources: Record<string, boolean>; onToggleSource: (sourceId: string) => void;
   report: ScanResult | null; busy: boolean; tasks: SourceTaskSnapshot[]; rule: string; setRule: (value: string) => void;
   changeSources: (action: () => Promise<SourceSubscription[]>) => void;
   onUpdateSource: (sourceId: string, force: boolean) => void;
@@ -572,26 +606,15 @@ function SourcesPage({ report, busy, tasks, rule, setRule, changeSources, onUpda
       <Status>{sourceTaskStatusText(task)}</Status><Action onClick={() => onCancelTask(task.task_id)}>取消</Action>
     </Row>)}</PanelSection>}
     <PanelSection title="发行商补丁源">
-      {publishers.map(source => {
-        const task = taskFor(source.id);
-        return <Fragment key={source.id}>
-          <SourceCard source={source} busy={busy} changeSources={changeSources} />
-          <Row><DropdownItem label="自动更新间隔" layout="below" rgOptions={sourceIntervalOptions()}
-            selectedOption={source.interval_hours} onChange={option => onInterval(source.id, option.data)} /></Row>
-          {task ? <Row><Status>{sourceTaskStatusText(task)}</Status><Action onClick={() => onCancelTask(task.task_id)}>取消更新</Action></Row>
-            : <Row><Action disabled={busy} onClick={() => onUpdateSource(source.id, false)}>手动更新</Action></Row>}
-        </Fragment>;
-      })}
+      {publishers.map(source => <SourceCard key={source.id} source={source} busy={busy}
+        expanded={expandedSources[source.id] === true} onToggle={() => onToggleSource(source.id)} task={taskFor(source.id)}
+        changeSources={changeSources} onUpdateSource={onUpdateSource} onCancelTask={onCancelTask} onInterval={onInterval} />)}
       {!publishers.length && <Row><Status>尚未配置发行商补丁源。</Status></Row>}
     </PanelSection>
     <PanelSection title="补丁索引（补查来源）">
-      {fallbacks.map(source => <Fragment key={source.id}>
-        <InfoRow label="名称">{source.name}</InfoRow>
-        <InfoRow label="站点" below>{source.pages.join(" · ")}</InfoRow>
-        <Row><ToggleField label={`启用 ${source.name}`} checked={source.enabled} disabled={busy}
-          onChange={enabled => changeSources(() => setSourceEnabled(source.id, enabled))} /></Row>
-        <Row><Status>补查来源：仅对单个游戏查询，不参与定时更新，也没有更新间隔。</Status></Row>
-      </Fragment>)}
+      {fallbacks.map(source => <SourceCard key={source.id} source={source} busy={busy}
+        expanded={expandedSources[source.id] === true} onToggle={() => onToggleSource(source.id)}
+        changeSources={changeSources} onUpdateSource={onUpdateSource} onCancelTask={onCancelTask} onInterval={onInterval} />)}
       {!fallbacks.length && <Row><Status>尚未配置补查来源。</Status></Row>}
     </PanelSection>
     <PanelSection title="添加源"><Row><TextField label="源规则 JSON（高级）" value={rule} onChange={e => setRule(e.target.value)} /></Row>
@@ -677,7 +700,7 @@ function GlobalSources() {
     return sources;
   }, () => setRule(""));
   return <><div>{busy && <Status>{busy}</Status>}{error && <Status warning>{error}</Status>}{note && <Status>{note}</Status>}</div>
-    <SourcesPage report={report} busy={!!busy} tasks={tasks} rule={rule} setRule={setRule} changeSources={changeSources}
+    <SourcesPage report={report} busy={!!busy} tasks={tasks} expandedSources={state.expandedSources} onToggleSource={session.toggleSourceExpanded} rule={rule} setRule={setRule} changeSources={changeSources}
       onUpdateSource={(sourceId, force) => void session.updateSource(sourceId, force)}
       onCancelTask={taskId => void session.cancelSourceTask(taskId)}
       onInterval={(sourceId, hours) => void session.setSourceInterval(sourceId, hours)}
