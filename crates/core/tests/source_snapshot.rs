@@ -94,13 +94,15 @@ fn directory_link(target: &std::path::Path, link: &std::path::Path) {
 }
 
 #[test]
-fn linked_internal_cache_status_discovery_and_index_are_never_read() {
+fn linked_legacy_directories_are_ignored_and_new_state_directories_rejected() {
     let temp = tempfile::tempdir().unwrap();
     let state = temp.path().join("state");
     let store = SourceStore::open(&state).unwrap();
     let root = store.paths().root().to_owned();
     drop(store);
-    for subdirectory in ["cache", "status", "discovery", "discovery-index"] {
+    // Legacy v1 trees are only read by the one-time migration; a read-only
+    // snapshot no longer reads (or therefore rejects) them.
+    for subdirectory in ["cache", "discovery", "discovery-index"] {
         let outside = tempfile::tempdir().unwrap();
         std::fs::write(outside.path().join("record.json"), b"{}").unwrap();
         let link = root.join(subdirectory);
@@ -108,20 +110,25 @@ fn linked_internal_cache_status_discovery_and_index_are_never_read() {
         let error =
             steam_patch_core::sources::store::read_bounded(&link.join("record.json")).unwrap_err();
         assert_eq!(error.to_string(), "linked_source_state");
-        // Snapshot also checks absent expected filenames under a linked ancestor.
-        let result = SourceSnapshot::load(&state, &[game(42)], 1234);
-        if subdirectory == "cache" {
-            let snapshot = result.unwrap().unwrap();
-            assert!(
-                !snapshot.diagnostics().is_empty(),
-                "linked cache must be discarded and diagnosed"
-            );
-        } else {
-            assert!(
-                result.is_err(),
-                "snapshot must reject linked {subdirectory}"
-            );
-        }
+        assert!(
+            SourceSnapshot::load(&state, &[game(42)], 1234).is_ok(),
+            "snapshot must ignore legacy {subdirectory}"
+        );
+        #[cfg(unix)]
+        std::fs::remove_file(&link).unwrap();
+        #[cfg(windows)]
+        std::fs::remove_dir(&link).unwrap();
+    }
+    // The schema-2 read model must still reject linked state directories.
+    for subdirectory in ["status", "index", "matches"] {
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("record.json"), b"{}").unwrap();
+        let link = root.join(subdirectory);
+        directory_link(outside.path(), &link);
+        assert!(
+            SourceSnapshot::load(&state, &[game(42)], 1234).is_err(),
+            "snapshot must reject linked {subdirectory}"
+        );
         #[cfg(unix)]
         std::fs::remove_file(&link).unwrap();
         #[cfg(windows)]

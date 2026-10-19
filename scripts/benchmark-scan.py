@@ -41,7 +41,7 @@ def main():
             (library / f'steamapps/appmanifest_{appid}.acf').write_text(manifest, encoding='utf-8')
         catalog = fixture / 'catalog.json'
         catalog.write_text(json.dumps({'schema_version': 1, 'revision': 1, 'releases': []}), encoding='utf-8')
-        request = {'protocol_version': 4, 'request_id': 'benchmark', 'method': 'scan',
+        request = {'protocol_version': 5, 'request_id': 'benchmark', 'method': 'scan',
                    'params': {'host': {'roots': [str(libraries[0])], 'catalog': str(catalog),
                                        'signed_catalog': None, 'trust_keys': None, 'state_dir': None,
                                        'platform': 'windows' if os.name == 'nt' else 'steamos'}}}
@@ -52,13 +52,13 @@ def main():
                                      capture_output=True, check=True, timeout=120)
             durations.append(time.perf_counter() - started)
             response = json.loads(process.stdout)
-            assert response['protocol_version'] == 4 and response['request_id'] == 'benchmark', response
+            assert response['protocol_version'] == 5 and response['request_id'] == 'benchmark', response
             assert response['ok'], response
             result = response['result']
             assert not result['diagnostics'], result['diagnostics']
             assert sorted(row['game']['appid'] for row in result['installs']) == list(range(1000000, 1000000+count))
             assert len({row['game']['library_path'] for row in result['installs']}) == 2
-        print(json.dumps({'protocol_version': 4, 'manifests': count, 'libraries': 2, 'matched_patches': 0,
+        print(json.dumps({'protocol_version': 5, 'manifests': count, 'libraries': 2, 'matched_patches': 0,
                           'platform': sys.platform, 'first_run_seconds': durations[0],
                           'warm_median_seconds': statistics.median(durations[1:]),
                           'warm_max_seconds': max(durations[1:]),

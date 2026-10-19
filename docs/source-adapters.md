@@ -2,15 +2,48 @@
 
 来源能力已迁入共享 Rust 核心并作为单一来源引擎（P0–P5 已在 Windows 与 Decky 实机验证，P6 收口）：[设计](features/shared-source-discovery/design.md)、[施工记录](features/shared-source-discovery/progress.md)、[P0 基线](features/shared-source-discovery/p0-baseline.md)、[P5 契约](features/shared-source-discovery/p5-decky-design.md)。下文描述现行 Rust 入口与用户可见行为。
 
-工具订阅网站，不订阅固定的游戏清单。Decky 扫描先读取成功缓存，选择游戏后按需查询启用的网站。只有具备 ZIP 安装能力的记录能进入共同的根目录安装流程；发现候选单独提供来源引导。
+工具订阅网站，不订阅固定的游戏清单。工作单位是“来源”而不是“游戏”：每次来源更新只遍历该来源自己的列表/目录页并发布共享索引；游戏匹配先读本地索引，命中后才按需获取相关详情。普通源索引不会因为新增游戏、重启或手动重匹配而重新遍历。只有具备 ZIP/EXE 安装能力的匹配结果进入安装流程；仅相似标题的候选仍需人工选择。
 
 ## 配置和状态
 
-默认订阅由核心内置 `crates/core/resources/sources.json`（编译进 CLI，单一来源）。用户启用状态、新增源与逐游戏订阅写入核心命名空间 `~/.local/share/steam-patch-manager/sources/rust-v1/`（`settings.json`）；成功查询结果缓存到其 `cache/`。P1 已删除 Python 状态导入，首次初始化直接写入 Rust 默认状态；旧 `sources/overrides.json` 存在、损坏或缺失均不被读取（见[跨平台安装器迁移](features/cross-platform-installer-migration/design.md) §7.3）。缓存只来自运行时成功查询，不附带当前游戏列表。显式刷新更新旧 ZIP 来源，游戏详情中的“重新查找 / 查看更多来源”更新该游戏发现记录；查询失败保留上次成功缓存并标明状态，结构失效不会覆盖有效缓存。停用源不会删除安装事务、备份或卸载能力。
+默认订阅由核心内置 `crates/core/resources/sources.json`（编译进 CLI，单一来源）。用户启用状态、新增源、逐游戏订阅与每源自动更新间隔写入核心命名空间 `~/.local/share/steam-patch-manager/sources/rust-v1/`：
 
-patch.moe 专用适配器在已确认年龄的官方入口获取页面，读取官网语言表单的实际参数并提交，然后解析标题、日期、下载链接。只用完整标题、明确双语标题或实际相同 ZIP 地址关联的别名匹配；不按排列位置猜测，也不由英文文件名拼接中文链接。`+` 与普通版有区别。已公布但尚未发行的条目不能准备安装。非 ZIP 需要另行适配，当前不会执行网页或包内安装程序。
+```text
+sources/rust-v1/
+  schema.json                 存储 schema 2 完成标记
+  settings.json               启用/新增/逐游戏订阅/intervals
+  status/<source>.json        最近尝试结果与最近成功时间
+  index/<source>.json         正式按源索引快照
+  index-progress/<source>.json 未完成更新的续跑进度（成功后删除）
+  details/<source>/<key>.json 按规范 URL 共享的页面事实缓存
+  matches/<appid>.json        按游戏身份保存的匹配结果
+```
 
-游戏详情中的“订阅源管理”选择此游戏使用哪些已配置的网站，不跳转全局设置。默认允许所有源，由全局启用状态决定是否参与匹配；每个游戏可单独关闭或重新打开某源。选择按 AppID 存储在 `overrides.json` 的 `games` 对象（例如 `{"games":{"42":{"patchmoe":false}}}`），同游戏在不同 Steam 库中共享选择，其他游戏不受影响。扫描返回各安装实例的 `sources` 列表，包含 `subscribed`（此游戏是否选择）和 `matched`（缓存中是否有无歧义匹配），即使未选择仍能看到和重新选择该源。准备安装也遵守源选择。网站的全局启用状态和新增规则从主面板“全局设置”修改。
+首次初始化直接写入 Rust 默认状态；旧 `sources/overrides.json` 与旧 `cache/`、`discovery/`、`discovery-index/` 只在版本升级时读取一次并迁移，之后不再读写（旧文件保留，不删除）。迁移失败保留原数据并报告，不会静默变成空结果。缓存年龄不阻止匹配、人工选择或安装。
+
+## 来源索引更新
+
+- `update_source(source_id, force?)` 只更新指定来源，不接受游戏列表；请求数与已安装游戏数无关。界面手动更新与宿主自动更新共用该入口。
+- 只有完整成功的结果才替换 `index/<source>.json`；失败、部分成功或取消保留旧正式快照，并把已抓条目与剩余分页写入 `index-progress/<source>.json`，下次更新从该队列续跑。
+- `force` 忽略条件请求；非 force 且存在正式快照时，patch.moe/通用表格源可携带 `If-None-Match`/`If-Modified-Since`，304 只更新检查时间、不改内容修订。
+- 内容修订 `revision` 只在条目、完整性或续跑队列实际变化时递增；仅更新时间或校验器变化不触发游戏重匹配。
+- Kagura 来源更新只遍历列表/目录分页，保存文章/产品/分类链接，不抓取详情或分类页内容；分页失败页留在进度队列中，由取消/续跑控制，不设任意页数截断。
+- HGamer 是补查来源，不做全站更新；`update_source` 对 fallback 源返回 `source_not_indexable`。
+
+## 增量匹配与 HGamer 补查
+
+- `match_games`（可指定实例/AppID、`force_details?`）与 `rematch_game` 复用已发布索引和持久化详情：本地按 AppID 优先、完整标题/别名其次筛选；只对命中条目获取详情，详情按来源+规范 URL 跨游戏共享。
+- 匹配输入（游戏名、本地化名、名称提示、语言偏好、相关源订阅）未变且来源修订未变时直接读取 `matches/<appid>.json`，不联网。
+- 结果状态为六态：待匹配、普通源命中、HGamer 命中、完整无结果、未完成/失败；索引或详情不完整时不冒充“确认无补丁”。
+- HGamer 仅在无普通源可信命中且所有启用的普通源覆盖完整时按游戏查询（查询结果复用）；普通源命中优先显示并隐藏 HGamer；普通源未初始化/不完整时显示“未完成”，不声称 HGamer 查无结果。
+- 手动重匹配（含已命中、无补丁、失败游戏）只重算该游戏：复用普通源索引、刷新命中详情，必要时重新查询 HGamer；普通源索引更新后只重算受影响来源与当前库游戏，不更新未安装游戏的详情。
+
+## 自动更新调度
+
+- `set_source_update_interval(source_id, interval_hours)` 设置每源间隔（0 = 关闭；控件预设关闭/6h/12h/24h/3d/7d/14d，协议接受任意小时数）。默认全部关闭。
+- 自动更新只在宿主运行期间执行：Decky 插件运行期间、Windows 应用运行期间；不安装系统服务，也不持久化计时器。启动/恢复后检查到期项，每源最多补一次，不补跑每个错过周期。
+- `next_due_at = status.checked_at + interval_hours * 3600`；失败后下一次到期从本次尝试结束时间起算，不立即重试。禁用源不参与自动更新；HGamer 不参与全站自动更新。
+- 同源手动与自动更新并发时宿主返回现有任务，不叠加重复工作；不同源可以并行/排队。
 
 ## 添加表格网站
 
@@ -31,24 +64,23 @@ patch.moe 专用适配器在已确认年龄的官方入口获取页面，读取�
 }
 ```
 
-列编号从 0 开始。标题与下载列必填；AppID、发布日期和语言列可选。没有语言列可使用规则的 `language`，默认为 en。只查询指定 HTTPS 页面、只下载指定域名的 ZIP；重定向也受该源的域名列表约束。明确 AppID 优先于名字；没有 AppID 才使用完整标题与明确别名。单个源匹配多个不同 ZIP 且无法消歧时不自动选择。不同源的结果分开呈现，不共享允许下载的域名。
+列编号从 0 开始。标题与下载列必填；AppID、发布日期和语言列可选。没有语言列可使用规则的 `language`，默认为 en。只查询指定 HTTPS 页面、只下载指定域名的 ZIP；重定向也受该源域名列表约束。明确 AppID 优先于名字；没有 AppID 才使用完整标题与明确别名。单个源匹配多个不同 ZIP 且无法消歧时不自动选择。不同源的结果分开呈现，不共享允许下载的域名。
 
 ## 网站专用适配器
 
-表格配置不能替代所有网站逻辑。分页、搜索 API、产品详情页、语言表单等网站需要自己的适配器。适配器由核心以受维护的 Rust 实现注册（`crates/core/src/sources/adapters/patchmoe.rs`、`table.rs`、`kagura.rs`、`hgamer.rs`）；规则只引用适配器名称，不下载或执行远端解析代码，核心不依赖 Python 运行时。
+表格配置不能替代所有网站逻辑。分页、语言表单、产品/分类详情等需要自己的适配器。适配器由核心以受维护的 Rust 实现注册（`crates/core/src/sources/adapters/` 的 `patchmoe.rs`、`table.rs`、`kagura.rs`、`hgamer.rs`）；规则只引用适配器名称，不下载或执行远端解析代码，核心不依赖 Python 运行时。
 
-ZIP 采集器读取规则与上次缓存（含条件请求），返回条目集合与 `etag`/`last_modified`/`unchanged` 语义。每条记录包含 `title`、`aliases`、`url`、`language`、`date`、`source_page`，可包含明确 `appid`。核心统一验证记录及下载域名，执行源隔离的匹配，并产生 `release_id`：patch.moe 保留 `patchmoe-<appid>`，其他源使用 `source-<source-id>-<appid>`。新适配器需用真实页面结构及新增游戏、重复名称、失败缓存、语言、域名跳转等测试验证，随后在默认源配置中引用。
+- **列表索引采集器**：patch.moe 与通用表格适配器读取列表页（支持条件请求），产出 `SourceIndexEntry`（title/aliases/page/kind/appid/url/language/date）；条目源为 `kind="entry"`。Kagura 适配器把列表分页解析为 `article/product/category` 链接。
+- **详情解析**：Kagura 命中项由匹配任务调用 `resolve_page` 解析单页，生成 query 无关的 `PageFact`（标题、Steam AppID、镜像、正文、发布时间、分类内联文章等），写入按来源+规范 URL 共享的详情缓存。
+- **HGamer 补查**：按游戏查询词搜索，使用 Steam AppID/有出处别名核实身份，返回候选与上游链接。
+- **release_id**：patch.moe 使用 `patchmoe-<appid>`，其他源使用 `source-<source-id>-<appid>`。索引声明 ZIP 而官方链接为 EXE 时显示冲突，两者均不得扩展下载白名单。
 
-目前已实现 patch.moe 专用规则、通用表格规则、Kagura 国内 WordPress、海外 WooCommerce 和 HGamer 索引适配器。后面三者使用独立的 `SourceCandidate` / `discover_only` 路径，位于 `crates/core/src/sources/adapters/`（`kagura.rs`/`hgamer.rs`），不遵循 ZIP 采集器返回格式。v2 规则区分 `publisher` 与 `fallback_indexer`，升级保留旧启停、逐游戏订阅和自定义规则。其他网站仍需各自配置或开发专用适配器，不能仅粘贴任意网址就自动适配。
-
-Kagura 双站分别保留语言、本体 / DLC、原始版本、镜像和格式；未知条件不自动选择。匹配不足时 HGamer 接收选中游戏的检索名称，Steam AppID / 有出处别名用于核实身份，标题线索仍待确认。索引声明 ZIP 而官方链接为 EXE 时显示冲突，两者均不得扩展下载白名单或成为安装 release ID。
-
-发现缓存按来源和 AppID 分片，保存成功结果与最近尝试：官方索引 24 小时、详情 6 小时、HGamer 正结果 24 小时、完整零结果 6 小时；失败 / partial 不写无补丁负缓存。解析版本、名称、来源选择影响缓存键；强制查询绕过新鲜期，停用来源既不查询也不显示普通候选。单游戏预算 30 秒，归档分页可部分完成并保留检查点。具体契约和验收见 [功能设计](features/kagura-hgamer-fallback/design.md)及[施工记录](features/kagura-hgamer-fallback/progress.md)。
+新增适配器需用真实页面结构及新增游戏、重复名称、失败缓存、语言、域名跳转、分页续跑等测试验证，随后在默认源配置中引用。
 
 ## 安装与验证范围
 
-安装默认保留包内相对路径到游戏根目录。获取时核对本地缓存哈希并向服务器重新校验：有 ETag / Last-Modified 时使用条件 GET，服务器返回 304 才复用已验证包；没有验证器则重新获取。之后固定 ZIP 哈希、当前 build 和原文件哈希，生成本机签名计划，由既有核心完成安全预检、确认、备份、提交与卸载。不同源、不同 Steam 库实例的计划与事务隔离；已有其他源的活跃安装阻止再次覆盖，以保留原始备份。
+安装默认保留包内相对路径到游戏根目录。获取时核对本地缓存哈希并向服务器重新校验：有 ETag / Last-Modified 时使用条件 GET，服务器返回 304 才复用已验证包；没有验证器则重新获取。之后固定 ZIP/EXE 哈希、当前 build 和原文件哈希，生成本机签名计划，由既有核心完成安全预检、确认、备份、提交与卸载。不同源、不同 Steam 库实例的计划与事务隔离；已有其他源的活跃安装阻止再次覆盖，以保留原始备份。
 
-运行时查询遵守网站的实际可访问性。403、登录、验证码或网站结构变化需要相应处理，会显示查询失败而不会伪造匹配。真实网络验收与本地模拟页面测试需要分别报告。
+运行时查询遵守网站的实际可访问性。403、登录、验证码或网站结构变化显示查询失败或索引不完整，不会伪造匹配。真实网络验收与本地模拟页面测试分别报告。
 
 网页解析由核心 Rust CLI 完成（随插件打包为 `bin/steam-patch`），插件运行时不再包含 Python HTML 解析模块，也不需要 `/usr/bin/python3` 解析工作进程。下载仍验证 HTTPS 证书，使用系统证书库。

@@ -2,7 +2,7 @@
 from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock
-from test_discovery_rpc import module
+from test_source_tasks import module
 
 
 class CacheCleanupTests(unittest.IsolatedAsyncioTestCase):
@@ -72,3 +72,21 @@ class CacheCleanupTests(unittest.IsolatedAsyncioTestCase):
         result = await plugin.clear_cache()
         self.assertEqual(result["removed_bytes"], 12)
         plugin.bridge.cleanup_cache.assert_awaited_once()
+
+    async def test_inventory_uses_readonly_core_rpc_and_preserves_diagnostics(self):
+        plugin = self.make_plugin()
+        inventory = {"total_bytes": 1536, "entries": 2,
+                     "diagnostics": [{"code": "permission_denied", "detail": "access denied"}]}
+        plugin.bridge.cache_status = AsyncMock(return_value=inventory)
+        self.assertEqual(await plugin.cache_status(), inventory)
+        plugin.bridge.cleanup_cache.assert_not_awaited()
+        bridge = object.__new__(module.CoreBridge)
+        bridge._call = AsyncMock(return_value=inventory)
+        self.assertEqual(await bridge.cache_status(), inventory)
+        bridge._call.assert_awaited_once_with("cache_status", {})
+
+    async def test_inventory_failure_is_propagated(self):
+        plugin = self.make_plugin()
+        plugin.bridge.cache_status = AsyncMock(side_effect=RuntimeError("disk_unavailable"))
+        with self.assertRaisesRegex(RuntimeError, "disk_unavailable"):
+            await plugin.cache_status()

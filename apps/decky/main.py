@@ -1,10 +1,11 @@
-"""Decky host for the bundled protocol-v4 Rust installer and sf-worker."""
+"""Decky host for the bundled protocol-v5 Rust installer and sf-worker."""
 from pathlib import Path
 import sys
 import os
 import asyncio
 import json
-import re
+import logging
+import time
 import uuid
 import decky
 
@@ -12,19 +13,13 @@ sys.path.insert(0, str(Path(__file__).parent / "backend"))
 from bridge import CoreBridge
 from protocol_validation import validate_id, MAX_INSTANCE_ID_BYTES
 from plugin_settings import Settings, _no_links
-from source_service import SourceService
+from source_service import SourceService, due_source_ids
 from state_host import prepare_host_state
 from tasks import TaskManager
-from scan_session import ScanSession
 
-
-def _merge_diagnostics(*groups):
-    result = []
-    for group in groups:
-        for item in group if isinstance(group, list) else []:
-            if item not in result:
-                result.append(item)
-    return result
+# Runtime-only automatic update check. The core persists intervals and derives
+# next_due_at; the host never stores its own timers (p1-contract §10).
+SCHEDULER_INTERVAL_SECONDS = 60
 
 
 class Plugin:
@@ -60,158 +55,89 @@ class Plugin:
         self.settings = Settings(state_dir)
         self.sources = await SourceService(self.bridge, state_dir).initialize()
         self._scan_generation = 0
-        self._scan_games = {}
-        self._scan_session = None
         self._cache_result = None
         # Old recovery is a deployment gate; this RPC reads the new schema only.
         await self.bridge.recover()
+        self._scheduler = asyncio.create_task(self._scheduler_loop())
+        # First-seen local games must enter matching without a user action
+        # (design §3.3). The check itself is off the startup critical path.
+        self._startup_check = asyncio.create_task(self._startup_match_check())
 
     async def get_capabilities(self):
         return await self.bridge.call_sync("get_capabilities", {})
 
-    async def _project_row(self, row, transactions=None):
-        # Events carry discoveries only. Rust projects selections and receipts.
-        report = await self.bridge.scan()
-        self.sources.prime(report)
-        found = next((item for item in report.get("installs", [])
-                      if item["game"]["instance_id"] == row["game"]["instance_id"]), None)
-        if found is not None:
-            row.clear()
-            row.update(found)
-
-    async def _refresh_rows(self, report):
-        # Reproject once for the complete snapshot. Per-row scans would rehash
-        # every installed payload for each source event.
-        fresh = await self.bridge.scan()
-        self.sources.prime(fresh)
-        by_instance = {item["game"]["instance_id"]: item for item in fresh.get("installs", [])}
-        for row in report["installs"]:
-            found = by_instance.get(row["game"]["instance_id"])
-            if found is not None:
-                row.clear()
-                row.update(found)
-        report["sources"] = fresh.get("sources", [])
-        report["diagnostics"] = _merge_diagnostics(report.get("diagnostics"), fresh.get("diagnostics"))
-
     async def _read_report(self):
+        # A scan is one read-only whole-library projection; source work never
+        # triggers extra scans or a second projection.
         report = await self.bridge.scan()
         self.sources.prime(report)
-        report["generation"] = getattr(self, "_scan_generation", 0)
+        self._scan_generation = getattr(self, "_scan_generation", 0) + 1
+        report["generation"] = self._scan_generation
         report["settings_revision"] = self.sources.settings_revision
         return report
 
-    async def scan(self, refresh_sources: bool = False):
-        self._require_idle()
-        self._scan_generation = getattr(self, "_scan_generation", 0) + 1
-        generation = self._scan_generation
-        previous = getattr(self, "_scan_session", None)
-        if previous:
-            await previous.close()
+    def _pending_match_instances(self, report):
+        instances = []
+        for row in report.get("installs", []):
+            game = row.get("game") or {}
+            if game.get("availability") != "installed":
+                continue
+            discovery = row.get("discovery")
+            if discovery is not None and discovery.get("status") != "pending":
+                continue
+            instance = game.get("instance_id")
+            if isinstance(instance, str):
+                instances.append(instance)
+        return instances
+
+    def _start_pending_match(self, report):
+        """Queue one incremental match for first-seen local games (design §3.3).
+
+        The task runs in the background and is deduplicated by the source
+        service key, so repeated scans while it is active do not stack. Sources
+        without an index still go through matching and report `incomplete`.
+        """
+        instances = self._pending_match_instances(report)
+        if not instances:
+            return None
+        if not any(source.get("enabled") is True and source.get("role") == "publisher"
+                   for source in self.sources.list_sources()):
+            return None
+        return self.sources.start_match_games(instances, force_details=False)
+
+    async def _startup_match_check(self):
+        try:
+            report = await self._read_report()
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:
+            logging.getLogger(__name__).warning("startup_match_check_failed: %s",
+                                                type(error).__name__)
+            return
+        self._start_pending_match(report)
+
+    async def scan(self):
         report = await self._read_report()
-        self._scan_games = {row["game"]["instance_id"]: dict(row["game"]) for row in report["installs"]}
-        revision = self.sources.settings_revision
+        self._start_pending_match(report)
+        return report
 
-        def current():
-            return self._scan_generation == generation and self.sources.settings_revision == revision
-
-        async def refresh(on_event, cancel):
-            diagnostics = await self.sources.refresh(force=refresh_sources, on_event=on_event, cancel=cancel)
-            if current():
-                session.report["sources"] = self.sources.list_sources()
-                session.report["diagnostics"] = _merge_diagnostics(session.report.get("diagnostics"), diagnostics)
-                await self._refresh_rows(session.report)
-            return diagnostics
-
-        async def scan_sources(on_event, cancel):
-            result = await self.sources.scan_sources(force=refresh_sources, on_event=on_event, cancel=cancel)
-            if current() and not cancel.is_set():
-                await self._refresh_rows(session.report)
-            return result
-
-        session = ScanSession(report, refresh, scan_sources, self._project_row, current, project_on_update=False)
-        self._scan_session = session
-        return session.snapshot()
-
-    async def scan_status(self, generation: int):
-        session = getattr(self, "_scan_session", None)
-        if type(generation) is not int or not session or generation != self._scan_generation:
-            raise ValueError("scan_stale")
-        if session.report["settings_revision"] != self.sources.settings_revision:
-            raise ValueError("scan_stale")
-        return session.snapshot()
-
-    def _discovery_game(self, instance_id, name_hints, preferred_language, force):
-        validate_id(instance_id, MAX_INSTANCE_ID_BYTES)
-        if name_hints is None:
-            name_hints = []
-        if (not isinstance(name_hints, list) or len(name_hints) > 3
-                or any(not isinstance(name, str) or not name.strip() or len(name) > 256 for name in name_hints)):
-            raise ValueError("invalid_discovery_query")
-        if (preferred_language is not None and (not isinstance(preferred_language, str)
-                or not re.fullmatch(r"[A-Za-z]{2,3}(?:-[A-Za-z]{2,4})?", preferred_language))):
-            raise ValueError("invalid_discovery_query")
-        if type(force) is not bool:
-            raise ValueError("invalid_discovery_query")
-        games = getattr(self, "_scan_games", {})
-        game = games.get(instance_id)
-        if game is None:
-            raise ValueError("instance_not_found")
-        return game
-
-    async def start_game_discovery(self, instance_id: str, name_hints=None,
-                                   preferred_language=None, force: bool = False):
-        self._discovery_game(instance_id, name_hints, preferred_language, force)
-        query = (instance_id, tuple(name_hints or []), preferred_language, force)
-        previous = getattr(self, "_scan_session", None)
-        if (previous and not previous.worker.done()
-                and getattr(self, "_discovery_query", None) == query):
-            return previous.snapshot()
-        if previous:
-            await previous.close()
-        self._scan_generation = getattr(self, "_scan_generation", 0) + 1
-        generation = self._scan_generation
-        report = await self._read_report()
-        revision = self.sources.settings_revision
-        self._discovery_query = query
-        def current():
-            return self._scan_generation == generation and self.sources.settings_revision == revision
-        async def no_refresh(on_event, cancel):
-            return []
-        async def lookup(on_event, cancel):
-            return await self.sources.scan_sources(force=force, on_event=on_event, cancel=cancel,
-                instance_id=instance_id, name_hints=name_hints, preferred_language=preferred_language)
-        self._scan_session = ScanSession(report, no_refresh, lookup, self._project_row, current, target_instance=instance_id)
-        return self._scan_session.snapshot()
-
-    async def cancel_source_query(self):
-        session = getattr(self, "_scan_session", None)
-        if not session or session.worker.done():
-            return False
-        await session.close()
-        return True
-
-    async def discover_game(self, instance_id: str, name_hints=None, preferred_language=None, force: bool = False):
-        """Discover metadata for a trusted local instance without occupying the installer."""
-        game = self._discovery_game(instance_id, name_hints, preferred_language, force)
-        name_hints = name_hints or []
-        generation = self._scan_generation
-        revision = self.sources.settings_revision
-        result = await self.sources.discover_game(game, name_hints, preferred_language, force, generation,
-            is_current=lambda: self._scan_generation == generation and self.sources.settings_revision == revision)
-        result.update(instance_id=instance_id, generation=generation, settings_revision=revision)
-        if generation != self._scan_generation or revision != self.sources.settings_revision:
-            result.update(status="stale", candidates=[])
-        row = {"game": game, "discovery": result}
-        if result.get("status") != "stale":
-            await self._project_row(row)
-        result["patches"] = row.get("patches", [])
+    async def project_instances(self, instance_ids):
+        if not isinstance(instance_ids, list):
+            raise ValueError("invalid_request")
+        for instance_id in instance_ids:
+            validate_id(instance_id, MAX_INSTANCE_ID_BYTES)
+        result = await self.bridge.call_sync("project_instances",
+                                             {"instance_ids": list(instance_ids)})
+        revision = result.get("settings_revision")
+        if type(revision) is int:
+            self.sources.settings_revision = revision
         return result
 
     async def preview(self, instance_id, release_id=None, selection_id=None):
         return await self.bridge.preview(instance_id, release_id, selection_id)
 
     async def list_sources(self):
-        return self.sources.list_sources()
+        return await self.sources.reload_sources()
 
     def _require_idle(self):
         if self.tasks.busy():
@@ -238,12 +164,62 @@ class Plugin:
         await self.sources.set_game_source(appid, source_id, subscribed)
         return {"appid": appid}
 
+    async def set_source_update_interval(self, source_id, interval_hours):
+        self._require_idle()
+        return await self.sources.set_update_interval(source_id, interval_hours)
+
+    # -- source tasks (parallel to installation, keyed by source/match) ----
+    async def update_source(self, source_id, force=False):
+        return self.sources.start_update_source(source_id, force)
+
+    async def match_games(self, instances=None, name_hints=None, preferred_language=None,
+                          force_details=False):
+        return self.sources.start_match_games(instances, name_hints, preferred_language,
+                                              force_details)
+
+    async def rematch_game(self, instance_id=None, appid=None, name_hints=None,
+                           preferred_language=None):
+        return self.sources.start_rematch_game(instance_id, appid, name_hints, preferred_language)
+
+    async def source_task_status(self, task_id=None):
+        return self.sources.task_status(task_id)
+
+    async def cancel_source_task(self, task_id):
+        return self.sources.cancel_task(task_id)
+
+    # -- automatic update schedule ----------------------------------------
+    async def _scheduler_loop(self):
+        while True:
+            try:
+                await self._check_due_sources()
+            except asyncio.CancelledError:
+                raise
+            except Exception as error:
+                # A transient core failure must not stop future due checks.
+                logging.getLogger(__name__).warning("source_schedule_check_failed: %s",
+                                                    type(error).__name__)
+            await asyncio.sleep(SCHEDULER_INTERVAL_SECONDS)
+
+    async def _check_due_sources(self, now=None):
+        summaries = await self.sources.reload_sources()
+        moment = int(time.time()) if now is None else now
+        started = []
+        for source_id in due_source_ids(summaries, moment):
+            if self.sources.has_active_source_task(source_id):
+                continue
+            self.sources.start_update_source(source_id)
+            started.append(source_id)
+        return started
+
     async def get_settings(self):
         return {**self.settings.snapshot(), "cache": getattr(self, "_cache_result", None)}
 
     async def set_auto_cleanup(self, enabled):
         self.settings.set_auto_cleanup(enabled)
         return await self.get_settings()
+
+    async def cache_status(self):
+        return await self.bridge.cache_status()
 
     async def backup_status(self):
         return await self.bridge.backup_status()
@@ -298,9 +274,6 @@ class Plugin:
         cleanup_policy = "after_commit" if self.settings.auto_cleanup else "disabled"
 
         async def work(task):
-            session = getattr(self, "_scan_session", None)
-            if session:
-                await session.close()
             task.check()
             result = await self.bridge.install_patch(instance_id, release_id, selection_id,
                 local, operation, request_id, cleanup_policy)
@@ -329,13 +302,15 @@ class Plugin:
         return [task.snapshot() for task in self.tasks.tasks.values()]
 
     async def _unload(self):
-        session = getattr(self, "_scan_session", None)
-        if session:
-            await session.close()
-        if hasattr(self, "tasks"):
-            await self.tasks.shutdown()
+        for name in ("_startup_check", "_scheduler"):
+            background = getattr(self, name, None)
+            if background is not None:
+                background.cancel()
+                await asyncio.gather(background, return_exceptions=True)
         if hasattr(self, "sources"):
             await self.sources.close()
+        if hasattr(self, "tasks"):
+            await self.tasks.shutdown()
 
 
 def _await_startup(method):

@@ -1,4 +1,4 @@
-"""Protocol-v4 transport, identity and terminal-outcome regression tests."""
+"""Protocol-v5 transport, identity and terminal-outcome regression tests."""
 import asyncio
 import json
 from pathlib import Path
@@ -45,7 +45,7 @@ class Peer:
         self.finished.set()
 
 
-class V4BridgeTests(unittest.IsolatedAsyncioTestCase):
+class V5BridgeTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
@@ -192,7 +192,8 @@ class V4BridgeTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_removed_methods_and_host_path_injection_are_rejected_before_spawn(self):
         with patch("bridge.asyncio.create_subprocess_exec", new_callable=AsyncMock) as spawn:
-            for method in ("migrate_state", "plan_install", "start_install", "get_source_state", "fetch_artifact"):
+            for method in ("migrate_state", "plan_install", "get_source_state", "fetch_artifact",
+                       "refresh_sources", "scan_sources", "discover_game"):
                 self.assertNotIn(method, METHODS)
                 with self.assertRaisesRegex(ValueError, "unsupported_method"):
                     await self.bridge._call(method, {})
@@ -202,7 +203,7 @@ class V4BridgeTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_core_error_detail_survives_task_failure(self):
         def factory(request_id, request):
-            return [], {"protocol_version": 4, "request_id": request_id, "ok": False,
+            return [], {"protocol_version": 5, "request_id": request_id, "ok": False,
                         "error": {"code": "analysis_failed", "detail": "bounded diagnostic"}}
         manager = TaskManager()
         with patch("bridge.asyncio.create_subprocess_exec", return_value=_FakeProcess(factory)):
@@ -240,12 +241,12 @@ class V4BridgeTests(unittest.IsolatedAsyncioTestCase):
         def oversized(request_id, request):
             result = response("scan")["result"]
             result["diagnostics"] = [{"code": "note", "message": "x" * (9 * 1024 * 1024)}]
-            return [], {"protocol_version": 4, "request_id": request_id, "ok": True, "result": result}
+            return [], {"protocol_version": 5, "request_id": request_id, "ok": True, "result": result}
         with patch("bridge.asyncio.create_subprocess_exec", return_value=Process(oversized)):
             result = await self.bridge.scan()
         self.assertEqual(result["diagnostics"][0]["message"], "x" * (9 * 1024 * 1024))
         def normal(request_id, request):
-            return [], {"protocol_version": 4, "request_id": request_id, "ok": True,
+            return [], {"protocol_version": 5, "request_id": request_id, "ok": True,
                         "result": response("scan")["result"]}
         with patch("bridge.asyncio.create_subprocess_exec", return_value=Process(normal)):
             self.assertEqual((await self.bridge.scan())["installs"], response("scan")["result"]["installs"])

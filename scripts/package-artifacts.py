@@ -14,7 +14,7 @@ INSTALLER_FILES = (
     ('scripts/licenses/sfextract-MIT.txt', 'licenses/sfextract-MIT.txt', 'reference-license'),
 )
 SFEXTRACT_COMMIT = '21f5c5595a70e9284fff83476c0e307d5b92f573'
-PRODUCTION_BACKEND = {'bridge.py', 'source_service.py', 'tasks.py', 'scan_session.py', 'plugin_settings.py', 'state_host.py', 'protocol.py', 'protocol_validation.py', 'v4.schema.json'}
+PRODUCTION_BACKEND = {'bridge.py', 'source_service.py', 'tasks.py', 'plugin_settings.py', 'state_host.py', 'protocol.py', 'protocol_validation.py', 'v5.schema.json'}
 
 
 def validate_sbom(sbom, plugin, decky):
@@ -50,13 +50,13 @@ def validate_decky(plugin):
     actual = {path.name for path in (plugin / 'backend').iterdir()}
     if actual != PRODUCTION_BACKEND:
         raise ValueError('Rebuild Decky plugin: unexpected or missing production backend modules')
-    for name in ('protocol.py', 'v4.schema.json'):
+    for name in ('protocol.py', 'v5.schema.json'):
         source = ROOT / 'packages/contracts/generated' / name
         bundled = plugin / 'backend' / name
         if source.read_bytes() != bundled.read_bytes():
             raise ValueError('Rebuild Decky plugin: generated contract mismatch')
     runtime = json.loads((plugin / 'bin/runtime.json').read_text(encoding='utf-8'))
-    if runtime.get('protocol_version') != 4 or runtime.get('worker_protocol') != 1:
+    if runtime.get('protocol_version') != 5 or runtime.get('worker_protocol') != 1:
         raise ValueError('Rebuild Decky plugin: invalid runtime manifest')
     files = runtime.get('files', [])
     if {item.get('path') for item in files} != {'bin/steam-patch', 'bin/sf-worker'} or len(files) != 2:

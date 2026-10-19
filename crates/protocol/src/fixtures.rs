@@ -2,7 +2,7 @@
 use crate::*;
 use serde_json::{json, Value};
 pub fn capabilities() -> Value {
-    json!({"protocol_version":4,"methods":METHODS,"contracts":ContractVersions::default(),"installer":{"schema_version":1,"selection_version":1,"content_version":1,"adapter_version":1,"policy_schema_version":1,"report_schema_version":1,"formats":{"zip":"supported","exe":"supported"},"strategies":["managed_zip","publisher_zip","publisher_exe"],"links":{"zip":{"available":true,"blockers":[]},"exe":{"available":false,"blockers":[{"code":"exe_sandbox_unavailable"}]}}},"sources":{"discovery_schema_version":1,"adapter_version":1,"parser_version":steam_patch_core::sources::PARSER_VERSION,"query_version":steam_patch_core::sources::QUERY_VERSION,"methods":SOURCE_METHODS}})
+    json!({"protocol_version":5,"methods":METHODS,"contracts":ContractVersions::default(),"installer":{"schema_version":1,"selection_version":1,"content_version":1,"adapter_version":1,"policy_schema_version":1,"report_schema_version":1,"formats":{"zip":"supported","exe":"supported"},"strategies":["managed_zip","publisher_zip","publisher_exe"],"links":{"zip":{"available":true,"blockers":[]},"exe":{"available":false,"blockers":[{"code":"exe_sandbox_unavailable"}]}}},"sources":{"index_schema_version":1,"detail_schema_version":1,"match_schema_version":1,"schedule_schema_version":1,"adapter_version":1,"parser_version":steam_patch_core::sources::PARSER_VERSION,"encoding_version":1,"methods":SOURCE_METHODS}})
 }
 pub fn host() -> Value {
     json!({"roots":[],"catalog":null,"signed_catalog":null,"trust_keys":null,"state_dir":null,"platform":"windows"})
@@ -11,16 +11,10 @@ pub fn candidate() -> Value {
     json!({"candidate_id":"candidate-0123456789abcdef01234567","source_id":"fixture","source_record_id":"https://example.com/game","game_appid":42,"parent_appid":null,"aliases":[],"game_title":"Fixture","patch_title":"Patch","variant":"base","requires_dlc":null,"excludes_dlc":null,"platforms":["windows"],"patch_kind":"adult_content","languages":["zh_cn"],"version_raw":null,"version_evidence":[],"version_identity":"fixture","published_at":null,"patch_updated_at":null,"source_page":"https://example.com/game","upstream_page":null,"mirrors":[],"format_reported":"zip","format_observed":"unknown","capability":"discover_only","identity_evidence":[],"provenance":[],"match_basis":"appid","observed_at":"2026-10-11T00:00:00Z","cache_status":"fresh","warnings":[],"fingerprint":"fixture"})
 }
 pub fn discovery() -> Value {
-    json!({"status":"complete","candidates":[candidate()],"diagnostics":[]})
+    json!({"status":"pending","candidates":[],"diagnostics":[]})
 }
-pub fn source_summary() -> Value {
-    let mut v = rule();
-    v["origin"] = json!("builtin");
-    v["status"] = json!("source_refreshed");
-    v["entry_count"] = json!(1);
-    v["cached_at"] = Value::Null;
-    v["checked_at"] = json!(1);
-    v
+pub fn game_match() -> Value {
+    json!({"appid":42,"instance_id":"instance","status":"publisher_match","candidates":[candidate()],"diagnostics":[],"source_revisions":{"fixture":1}})
 }
 pub fn scan() -> Value {
     let available = json!({"available":true,"blockers":[]});
@@ -52,16 +46,39 @@ pub fn outcome(state: &str, disposition: &str) -> Value {
 pub fn rule() -> Value {
     json!({"id":"fixture","name":"Fixture","adapter":"table_html","enabled":true,"pages":["https://example.com/"],"page_hosts":["example.com"],"download_hosts":[],"role":"publisher","discovery_only":false,"priority":100,"root_layout":null})
 }
+pub fn source_status() -> Value {
+    json!({"checked_at":1,"cached_at":null,"entry_count":0,"code":"source_refreshed"})
+}
+pub fn source_summary() -> Value {
+    let mut v = rule();
+    v["origin"] = json!("builtin");
+    v["status"] = json!("source_refreshed");
+    v["entry_count"] = json!(1);
+    v["cached_at"] = Value::Null;
+    v["checked_at"] = json!(1);
+    v["revision"] = json!(1);
+    v["complete"] = json!(true);
+    v["interval_hours"] = json!(24);
+    v["next_due_at"] = Value::Null;
+    v
+}
+fn source_update_result() -> Value {
+    json!({"source_id":"fixture","settings_revision":1,"status":source_status(),"revision":1,"complete":true,"affected_appids":[42]})
+}
 pub fn success_result(method: Method) -> Value {
     match method {
         Method::GetCapabilities => capabilities(),
         Method::Scan => scan(),
+        Method::ProjectInstances => {
+            json!({"settings_revision":1,"instances":[scan()["installs"][0].clone()]})
+        }
         Method::Preview => {
             json!({"instance_id":"instance","release_id":"release","selection_id":null,"catalog_revision":1,"executable":false,"blockers":[],"changes":[{"path":"patch.dat","action":"replace","baseline_matches":null,"actual_sha256":null}],"diagnostics":[]})
         }
         Method::InstallPatch => outcome("committed", "completed"),
         Method::ListTransactions | Method::Recover => json!([transaction("committed")]),
         Method::DiscardPlan => transaction("rolled_back"),
+        Method::CacheStatus => json!({"total_bytes":0,"entries":0,"diagnostics":[]}),
         Method::BackupStatus => json!({"total_bytes":0,"files":0,"failures":[]}),
         Method::CleanupBackups => {
             json!({"status":"completed","removed_bytes":0,"removed_files":0,"failures":[]})
@@ -83,20 +100,19 @@ pub fn success_result(method: Method) -> Value {
             json!({"settings_revision":1,"source_id":"fixture","subscribed":true})
         }
         Method::AddSource => json!({"settings_revision":1,"rule":rule()}),
-        Method::RefreshSources => {
-            json!({"settings_revision":1,"statuses":[{"checked_at":1,"cached_at":null,"entry_count":0,"code":"source_refreshed"}]})
+        Method::SetSourceUpdateInterval => {
+            json!({"settings_revision":1,"source_id":"fixture","interval_hours":24})
         }
-        Method::ScanSources => {
-            json!({"settings_revision":1,"results":[{"instance_id":"instance","appid":42,"status":"complete","candidates":[candidate()],"diagnostics":[]}]})
-        }
-        Method::DiscoverGame => {
-            json!({"instance_id":"instance","appid":42,"generation":1,"settings_revision":1,"status":"complete","candidates":[candidate()],"diagnostics":[]})
+        Method::UpdateSource => source_update_result(),
+        Method::MatchGames | Method::RematchGame => {
+            json!({"settings_revision":1,"source_revisions":{"fixture":1},"results":[game_match()]})
         }
     }
 }
 pub fn request(method: Method) -> Value {
     let mut p = json!({"host":host()});
     match method {
+        Method::ProjectInstances => p["instance_ids"] = json!(["instance"]),
         Method::Preview => {
             p["instance_id"] = json!("instance");
             p["release_id"] = json!("release");
@@ -119,13 +135,39 @@ pub fn request(method: Method) -> Value {
             p["appid"] = json!(42);
         }
         Method::AddSource => p["rule"] = rule(),
-        Method::DiscoverGame => p["instance_id"] = json!("instance"),
+        Method::SetSourceUpdateInterval => {
+            p["source_id"] = json!("fixture");
+            p["interval_hours"] = json!(24);
+        }
+        Method::UpdateSource => {
+            p["source_id"] = json!("fixture");
+            p["force"] = json!(true);
+        }
+        Method::MatchGames => {
+            p["instances"] = json!(["instance"]);
+            p["name_hints"] = json!(["Hint"]);
+            p["preferred_language"] = json!("zh-CN");
+            p["force_details"] = json!(true);
+        }
+        Method::RematchGame => p["instance_id"] = json!("instance"),
         _ => {}
     }
-    json!({"protocol_version":4,"request_id":"fixture","method":method,"params":p})
+    json!({"protocol_version":5,"request_id":"fixture","method":method,"params":p})
 }
 pub fn install_event() -> Value {
-    json!({"event":"install_progress","protocol_version":4,"request_id":"fixture","sequence":0,"instance_id":"instance","selection_id":null,"stage":"applying","substage":"writing","bytes_done":1,"total_bytes":null,"files_done":0,"total_files":null,"current_file":null,"archive_bytes":1})
+    json!({"event":"install_progress","protocol_version":5,"request_id":"fixture","sequence":0,"instance_id":"instance","selection_id":null,"stage":"applying","substage":"writing","bytes_done":1,"total_bytes":null,"files_done":0,"total_files":null,"current_file":null,"archive_bytes":1})
+}
+pub fn source_progress_event() -> Value {
+    json!({"event":"source_progress","protocol_version":5,"request_id":"fixture","sequence":0,"source_id":"fixture","phase":"index","completed":0,"total":1,"running":true,"settings_revision":1})
+}
+pub fn source_update_event() -> Value {
+    json!({"event":"source_update","protocol_version":5,"request_id":"fixture","sequence":0,"source_id":"fixture","settings_revision":1,"status":source_status()})
+}
+pub fn match_progress_event() -> Value {
+    json!({"event":"match_progress","protocol_version":5,"request_id":"fixture","sequence":0,"phase":"inventory","completed":0,"total":1,"running":true,"settings_revision":1})
+}
+pub fn match_update_event() -> Value {
+    json!({"event":"match_update","protocol_version":5,"request_id":"fixture","sequence":0,"instance_id":"instance","appid":42,"status":"publisher_match","candidates":[candidate()],"diagnostics":[],"settings_revision":1})
 }
 pub fn cases() -> Value {
     let mut requests = Vec::new();
@@ -133,42 +175,55 @@ pub fn cases() -> Value {
     let mut events = Vec::new();
     for method in ALL_METHODS {
         requests.push(json!({"name":format!("{}-request",method.as_str()),"request":request(method),"task_channel":method.is_task()}));
-        let success = json!({"protocol_version":4,"request_id":"fixture","ok":true,"result":success_result(method)});
+        let success = json!({"protocol_version":5,"request_id":"fixture","ok":true,"result":success_result(method)});
         responses.push(json!({"name":format!("{}-success",method.as_str()),"method":method,"response":success}));
-        responses.push(json!({"name":format!("{}-failure",method.as_str()),"method":method,"response":{"protocol_version":4,"request_id":"fixture","ok":false,"error":{"code":"io_error","detail":"固定诊断"}}}));
+        responses.push(json!({"name":format!("{}-failure",method.as_str()),"method":method,"response":{"protocol_version":5,"request_id":"fixture","ok":false,"error":{"code":"io_error","detail":"固定诊断"}}}));
     }
-    let mut bad = |name: &str, mut r: Value, error: &str| {
+    fn bad(requests: &mut Vec<Value>, name: &str, mut r: Value, error: &str) {
         requests.push(json!({"name":name,"request":r.take(),"task_channel":true,"error":error}));
-    };
+    }
     let mut r = request(Method::Scan);
-    r["protocol_version"] = json!(3);
+    r["protocol_version"] = json!(4);
     r["params"] = json!(false);
-    bad("v3-before-params", r, "unsupported_protocol");
+    bad(&mut requests, "v4-before-params", r, "unsupported_protocol");
     let mut r = request(Method::Scan);
     r["method"] = json!("plan_install");
     r["params"] = json!(false);
-    bad("unknown-method-before-params", r, "unsupported_method");
+    bad(
+        &mut requests,
+        "unknown-method-before-params",
+        r,
+        "unsupported_method",
+    );
+    for deleted in ["refresh_sources", "scan_sources", "discover_game"] {
+        requests.push(json!({"name":format!("deleted-{deleted}"),"request":{"protocol_version":5,"request_id":"fixture","method":deleted,"params":{"host":host()}},"task_channel":true,"error":"unsupported_method"}));
+    }
     let mut r = request(Method::Scan);
     r["params"]["operation"] = json!("overwrite");
-    bad("method-specific-unknown", r, "invalid_request");
+    bad(
+        &mut requests,
+        "method-specific-unknown",
+        r,
+        "invalid_request",
+    );
     let mut r = request(Method::Scan);
     r["params"]["host"]
         .as_object_mut()
         .unwrap()
         .remove("catalog");
-    bad("required-null-host", r, "invalid_request");
+    bad(&mut requests, "required-null-host", r, "invalid_request");
     let mut r = request(Method::InstallPatch);
     r["params"].as_object_mut().unwrap().remove("operation");
-    bad("required-operation", r, "invalid_request");
+    bad(&mut requests, "required-operation", r, "invalid_request");
     let mut r = request(Method::InstallPatch);
     r["params"]
         .as_object_mut()
         .unwrap()
         .remove("cleanup_policy");
-    bad("required-policy", r, "invalid_request");
+    bad(&mut requests, "required-policy", r, "invalid_request");
     let mut r = request(Method::InstallPatch);
     r["params"]["request_id"] = json!("inner");
-    bad("outer-id-only", r, "invalid_request");
+    bad(&mut requests, "outer-id-only", r, "invalid_request");
     for (name, id, error) in [
         (
             "id-unicode-limit",
@@ -198,29 +253,59 @@ pub fn cases() -> Value {
     r["params"]["archive"] = json!("local.zip");
     requests.push(json!({"name":"selection-archive","request":r,"task_channel":true,"error":"archive_not_allowed_for_selection"}));
     requests.push(json!({"name":"task-required","request":request(Method::InstallPatch),"task_channel":false,"error":"task_required"}));
+    let mut r = request(Method::RematchGame);
+    r["params"].as_object_mut().unwrap().remove("instance_id");
+    bad(
+        &mut requests,
+        "rematch-game-target-required",
+        r,
+        "instance_required",
+    );
+    let mut r = request(Method::ProjectInstances);
+    r["params"]["instance_ids"] = json!(["bad\u{0085}id"]);
+    bad(
+        &mut requests,
+        "project-instances-invalid-id",
+        r,
+        "invalid_id",
+    );
+    let mut r = request(Method::ProjectInstances);
+    r["params"]["instance_ids"] = json!([MAX_SAFE_INTEGER + 1]);
+    bad(
+        &mut requests,
+        "project-instances-non-string",
+        r,
+        "invalid_request",
+    );
+    let mut r = request(Method::MatchGames);
+    r["params"]["instances"] = json!(["i".repeat(MAX_INSTANCE_ID_BYTES + 1)]);
+    bad(
+        &mut requests,
+        "match-games-instance-over-16k",
+        r,
+        "invalid_id",
+    );
+    let mut r = request(Method::SetSourceUpdateInterval);
+    r["params"]["interval_hours"] = json!(MAX_SAFE_INTEGER + 1);
+    bad(&mut requests, "interval-unsafe", r, "invalid_request");
+    let mut r = request(Method::SetSourceUpdateInterval);
+    r["params"]["interval_hours"] = json!(MAX_SAFE_INTEGER);
+    requests.push(json!({"name":"interval-safe","request":r,"task_channel":false}));
     let event_values = [
         ("install_progress", install_event()),
-        (
-            "source_progress",
-            json!({"event":"source_progress","protocol_version":4,"request_id":"fixture","sequence":0,"completed":0,"total":1,"running":true,"settings_revision":1}),
-        ),
-        (
-            "source_update-game",
-            json!({"event":"source_update","protocol_version":4,"request_id":"fixture","sequence":0,"appid":42,"index":0,"instance_id":"instance","settings_revision":1,"discovery":discovery()}),
-        ),
-        (
-            "source_update-refresh",
-            json!({"event":"source_update","protocol_version":4,"request_id":"fixture","sequence":0,"source_id":"fixture","settings_revision":1,"status":{"checked_at":1,"cached_at":null,"entry_count":0,"code":"source_refreshed"}}),
-        ),
+        ("source_progress", source_progress_event()),
+        ("source_update", source_update_event()),
+        ("match_progress", match_progress_event()),
+        ("match_update", match_update_event()),
     ];
     for (name, event) in event_values {
         events.push(json!({"name":name,"event":event}));
     }
     for (name, field, value, error) in [
         (
-            "v3-event",
+            "v4-event",
             "protocol_version",
-            json!(3),
+            json!(4),
             "unsupported_protocol",
         ),
         (
@@ -255,16 +340,39 @@ pub fn cases() -> Value {
     let mut e = install_event();
     e["stage"] = json!("downloading");
     events.push(json!({"name":"substage-only-applying","event":e,"error":"invalid_core_response"}));
+    for (name, event) in [
+        (
+            "unknown-event",
+            json!({"event":"graph_progress","protocol_version":5,"request_id":"fixture","sequence":0}),
+        ),
+        ("source-progress-missing-source", {
+            let mut e = source_progress_event();
+            e.as_object_mut().unwrap().remove("source_id");
+            e
+        }),
+        ("source-progress-missing-phase", {
+            let mut e = source_progress_event();
+            e.as_object_mut().unwrap().remove("phase");
+            e
+        }),
+        ("match-update-missing-instance", {
+            let mut e = match_update_event();
+            e.as_object_mut().unwrap().remove("instance_id");
+            e
+        }),
+    ] {
+        events.push(json!({"name":name,"event":event,"error":"invalid_core_response"}));
+    }
     for (state, disposition) in [
         ("rolled_back", "cancelled"),
         ("rolled_back", "failed"),
         ("needs_recovery", "failed"),
     ] {
-        responses.push(json!({"name":format!("outcome-{state}-{disposition}"),"method":"install_patch","response":{"protocol_version":4,"request_id":"fixture","ok":true,"result":outcome(state,disposition)}}));
+        responses.push(json!({"name":format!("outcome-{state}-{disposition}"),"method":"install_patch","response":{"protocol_version":5,"request_id":"fixture","ok":true,"result":outcome(state,disposition)}}));
     }
-    let v = json!({"protocol_version":4,"request_id":"fixture","ok":false,"error":{"code":"io_error","detail":"界".repeat(683)}});
+    let v = json!({"protocol_version":5,"request_id":"fixture","ok":false,"error":{"code":"io_error","detail":"界".repeat(683)}});
     responses.push(json!({"name":"detail-beyond-2048-bytes","method":"scan","response":v}));
-    for version in [1, 2, 5, 999] {
+    for version in [1, 2, 4, 999] {
         let mut r = request(Method::Scan);
         r["protocol_version"] = json!(version);
         requests.push(json!({"name":format!("unsupported-version-{version}"),"request":r,"task_channel":false,"error":"unsupported_protocol"}));
@@ -280,29 +388,29 @@ pub fn cases() -> Value {
         json!({"name":"business-id-over","request":r,"task_channel":false,"error":"invalid_id"}),
     );
     for (name, field, value) in [
-        ("v3-response", "protocol_version", json!(3)),
+        ("v4-response", "protocol_version", json!(4)),
         ("wrong-response-id", "request_id", json!("other")),
     ] {
-        let mut v = json!({"protocol_version":4,"request_id":"fixture","ok":true,"result":scan()});
+        let mut v = json!({"protocol_version":5,"request_id":"fixture","ok":true,"result":scan()});
         v[field] = value;
         responses.push(json!({"name":name,"method":"scan","response":v,"error":if field=="protocol_version"{"unsupported_protocol"}else{"invalid_core_response"}}));
     }
     for name in ["cause", "recovery", "cleanup", "selection_id"] {
         let mut v = outcome("committed", "completed");
         v.as_object_mut().unwrap().remove(name);
-        responses.push(json!({"name":format!("missing-outcome-{name}"),"method":"install_patch","response":{"protocol_version":4,"request_id":"fixture","ok":true,"result":v},"error":"invalid_core_response"}));
+        responses.push(json!({"name":format!("missing-outcome-{name}"),"method":"install_patch","response":{"protocol_version":5,"request_id":"fixture","ok":true,"result":v},"error":"invalid_core_response"}));
     }
     let mut v = scan();
     v["installs"][0]["patches"][0]
         .as_object_mut()
         .unwrap()
         .remove("actions");
-    responses.push(json!({"name":"missing-actions","method":"scan","response":{"protocol_version":4,"request_id":"fixture","ok":true,"result":v},"error":"invalid_core_response"}));
+    responses.push(json!({"name":"missing-actions","method":"scan","response":{"protocol_version":5,"request_id":"fixture","ok":true,"result":v},"error":"invalid_core_response"}));
     for (name, state, disposition) in [
         ("commit-cannot-cancel", "committed", "cancelled"),
         ("recovery-cannot-complete", "needs_recovery", "completed"),
     ] {
-        responses.push(json!({"name":name,"method":"install_patch","response":{"protocol_version":4,"request_id":"fixture","ok":true,"result":outcome(state,disposition)},"error":"invalid_core_response"}));
+        responses.push(json!({"name":name,"method":"install_patch","response":{"protocol_version":5,"request_id":"fixture","ok":true,"result":outcome(state,disposition)},"error":"invalid_core_response"}));
     }
     for key in [
         "instance_id",
@@ -317,30 +425,21 @@ pub fn cases() -> Value {
         e.as_object_mut().unwrap().remove(key);
         events.push(json!({"name":format!("missing-event-{key}"),"event":e,"error":"invalid_core_response"}));
     }
-    let mut r = request(Method::DiscoverGame);
-    r["params"]["generation"] = json!(MAX_SAFE_INTEGER + 1);
-    requests.push(json!({"name":"request-generation-unsafe","request":r,"task_channel":false,"error":"invalid_request"}));
-    let mut r = request(Method::DiscoverGame);
-    r["params"]["generation"] = json!(MAX_SAFE_INTEGER);
-    requests.push(json!({"name":"request-generation-safe","request":r,"task_channel":false}));
     for status in [
-        "complete",
-        "partial",
+        "pending",
+        "publisher_match",
+        "fallback_match",
+        "no_match",
+        "incomplete",
         "failed",
-        "skipped",
-        "stale",
-        "cache_complete",
-        "cache_partial",
-        "not_queried",
-        "source_refresh_failed",
-        "source_offline_cached",
-        "empty",
-        "queued",
     ] {
-        let mut result = success_result(Method::DiscoverGame);
-        result["status"] = json!(status);
-        responses.push(json!({"name":format!("discovery-open-status-{status}"),"method":"discover_game","response":{"protocol_version":4,"request_id":"fixture","ok":true,"result":result}}));
+        let mut result = success_result(Method::MatchGames);
+        result["results"][0]["status"] = json!(status);
+        responses.push(json!({"name":format!("match-open-status-{status}"),"method":"match_games","response":{"protocol_version":5,"request_id":"fixture","ok":true,"result":result}}));
     }
+    let mut result = success_result(Method::MatchGames);
+    result["results"][0]["status"] = json!("complete");
+    responses.push(json!({"name":"match-status-unknown","method":"match_games","response":{"protocol_version":5,"request_id":"fixture","ok":true,"result":result},"error":"invalid_core_response"}));
     for status in [
         "cached",
         "not_refreshed",
@@ -352,7 +451,7 @@ pub fn cases() -> Value {
     ] {
         let mut source = source_summary();
         source["status"] = json!(status);
-        responses.push(json!({"name":format!("source-open-status-{status}"),"method":"list_sources","response":{"protocol_version":4,"request_id":"fixture","ok":true,"result":[source]}}));
+        responses.push(json!({"name":format!("source-open-status-{status}"),"method":"list_sources","response":{"protocol_version":5,"request_id":"fixture","ok":true,"result":[source]}}));
     }
     for (name, code, field) in [
         (
@@ -368,11 +467,20 @@ pub fn cases() -> Value {
     ] {
         let mut v = capabilities();
         v.as_object_mut().unwrap().remove(field);
-        responses.push(json!({"name":name,"method":"get_capabilities","response":{"protocol_version":4,"request_id":"fixture","ok":true,"result":v},"error":code}));
+        responses.push(json!({"name":name,"method":"get_capabilities","response":{"protocol_version":5,"request_id":"fixture","ok":true,"result":v},"error":code}));
     }
     let mut v = capabilities();
     v["installer"]["schema_version"] = json!(2);
-    responses.push(json!({"name":"capabilities-installer-schema","method":"get_capabilities","response":{"protocol_version":4,"request_id":"fixture","ok":true,"result":v},"error":"installer_schema_unsupported"}));
+    responses.push(json!({"name":"capabilities-installer-schema","method":"get_capabilities","response":{"protocol_version":5,"request_id":"fixture","ok":true,"result":v},"error":"installer_schema_unsupported"}));
+    let mut v = capabilities();
+    v["sources"]["index_schema_version"] = json!(2);
+    responses.push(json!({"name":"capabilities-source-schema","method":"get_capabilities","response":{"protocol_version":5,"request_id":"fixture","ok":true,"result":v},"error":"installer_schema_unsupported"}));
+    let mut v = capabilities();
+    v["sources"]["parser_version"] = json!(1);
+    responses.push(json!({"name":"capabilities-source-parser","method":"get_capabilities","response":{"protocol_version":5,"request_id":"fixture","ok":true,"result":v},"error":"installer_schema_unsupported"}));
+    let mut v = capabilities();
+    v["sources"]["methods"] = json!(SOURCE_METHODS[..8]);
+    responses.push(json!({"name":"capabilities-source-methods","method":"get_capabilities","response":{"protocol_version":5,"request_id":"fixture","ok":true,"result":v},"error":"capability_mismatch"}));
     for name in [
         "capabilities-format-unsupported",
         "capabilities-strategies-empty",
@@ -386,7 +494,7 @@ pub fn cases() -> Value {
             "capabilities-strategies-empty" => v["installer"]["strategies"] = json!([]),
             _ => v["installer"]["links"]["zip"]["blockers"] = json!([{"code":"installer_busy"}]),
         }
-        responses.push(json!({"name":name,"method":"get_capabilities","response":{"protocol_version":4,"request_id":"fixture","ok":true,"result":v},"error":"capability_mismatch"}));
+        responses.push(json!({"name":name,"method":"get_capabilities","response":{"protocol_version":5,"request_id":"fixture","ok":true,"result":v},"error":"capability_mismatch"}));
     }
     let library = format!("E:/{}", "a".repeat(100));
     let prefix = "E:/steamapps/common/";
@@ -406,19 +514,19 @@ pub fn cases() -> Value {
     v["installs"][0]["game"]["instance_id"] = json!(identity);
     v["installs"][0]["game"]["library_path"] = json!(library);
     v["installs"][0]["game"]["install_path"] = json!(install);
-    responses.push(json!({"name":"long-steam-instance-scan","method":"scan","response":{"protocol_version":4,"request_id":"fixture","ok":true,"result":v}}));
+    responses.push(json!({"name":"long-steam-instance-scan","method":"scan","response":{"protocol_version":5,"request_id":"fixture","ok":true,"result":v}}));
     let mut v = transaction("committed");
     v["instance_id"] = json!(identity);
-    responses.push(json!({"name":"long-steam-instance-history","method":"list_transactions","response":{"protocol_version":4,"request_id":"fixture","ok":true,"result":[v]}}));
+    responses.push(json!({"name":"long-steam-instance-history","method":"list_transactions","response":{"protocol_version":5,"request_id":"fixture","ok":true,"result":[v]}}));
     let mut v = outcome("needs_recovery", "failed");
     v["recovery"] = json!({"required":true,"code":null,"detail":null});
-    responses.push(json!({"name":"recovery-null-code","method":"install_patch","response":{"protocol_version":4,"request_id":"fixture","ok":true,"result":v}}));
+    responses.push(json!({"name":"recovery-null-code","method":"install_patch","response":{"protocol_version":5,"request_id":"fixture","ok":true,"result":v}}));
     let mut v = success_result(Method::Preview);
     v["instance_id"] = json!(identity);
-    responses.push(json!({"name":"long-steam-instance-preview-result","method":"preview","response":{"protocol_version":4,"request_id":"fixture","ok":true,"result":v}}));
+    responses.push(json!({"name":"long-steam-instance-preview-result","method":"preview","response":{"protocol_version":5,"request_id":"fixture","ok":true,"result":v}}));
     let mut v = scan();
     v["installs"][0]["game"]["instance_id"] = json!("i".repeat(MAX_INSTANCE_ID_BYTES + 1));
-    responses.push(json!({"name":"instance-output-over-16k","method":"scan","response":{"protocol_version":4,"request_id":"fixture","ok":true,"result":v},"error":"invalid_core_response"}));
+    responses.push(json!({"name":"instance-output-over-16k","method":"scan","response":{"protocol_version":5,"request_id":"fixture","ok":true,"result":v},"error":"invalid_core_response"}));
     let mut e = install_event();
     e["instance_id"] = json!(identity);
     events.push(json!({"name":"long-steam-instance-event","event":e}));
@@ -426,38 +534,41 @@ pub fn cases() -> Value {
     e["instance_id"] = json!("i".repeat(MAX_INSTANCE_ID_BYTES + 1));
     events
         .push(json!({"name":"instance-event-over-16k","event":e,"error":"invalid_core_response"}));
+    let mut e = match_update_event();
+    e["instance_id"] = json!(identity);
+    events.push(json!({"name":"long-steam-instance-match-event","event":e}));
     let mut v = success_result(Method::Preview);
     v["executable"] = json!(true);
-    responses.push(json!({"name":"preview-never-executable","method":"preview","response":{"protocol_version":4,"request_id":"fixture","ok":true,"result":v},"error":"invalid_core_response"}));
+    responses.push(json!({"name":"preview-never-executable","method":"preview","response":{"protocol_version":5,"request_id":"fixture","ok":true,"result":v},"error":"invalid_core_response"}));
     let result = outcome("rolled_back", "failed");
-    responses.push(json!({"name":"outcome-error-null","method":"install_patch","response":{"protocol_version":4,"request_id":"fixture","ok":true,"result":result}}));
+    responses.push(json!({"name":"outcome-error-null","method":"install_patch","response":{"protocol_version":5,"request_id":"fixture","ok":true,"result":result}}));
     let mut history = transaction("rolled_back");
     history["error"] = json!(format!("journal_error:{}", "界".repeat(1000)));
-    responses.push(json!({"name":"history-error-preserved-over-2048","method":"list_transactions","response":{"protocol_version":4,"request_id":"fixture","ok":true,"result":[history]}}));
-    responses.push(json!({"name":"early-error-null-request-id","method":"scan","response":{"protocol_version":4,"request_id":null,"ok":false,"error":{"code":"invalid_request"}},"schema_valid":true,"error":"invalid_core_response"}));
+    responses.push(json!({"name":"history-error-preserved-over-2048","method":"list_transactions","response":{"protocol_version":5,"request_id":"fixture","ok":true,"result":[history]}}));
+    responses.push(json!({"name":"early-error-null-request-id","method":"scan","response":{"protocol_version":5,"request_id":null,"ok":false,"error":{"code":"invalid_request"}},"schema_valid":true,"error":"invalid_core_response"}));
     let mut early_errors = Vec::new();
     for (name, version, id, code) in [
         (
             "old-version-preserves-valid-id",
-            3,
+            4,
             json!("fixture"),
             "unsupported_protocol",
         ),
         (
             "old-version-null-id",
-            3,
+            4,
             Value::Null,
             "unsupported_protocol",
         ),
         (
             "old-version-invalid-id",
-            3,
+            4,
             json!("bad\u{0085}id"),
             "unsupported_protocol",
         ),
         (
             "current-version-null-id",
-            4,
+            5,
             Value::Null,
             "invalid_request_id",
         ),
@@ -469,17 +580,17 @@ pub fn cases() -> Value {
         } else {
             Value::Null
         };
-        early_errors.push(json!({"name":name,"json":request.to_string(),"task_channel":false,"response":{"protocol_version":4,"request_id":response_id,"ok":false,"error":{"code":code}}}));
+        early_errors.push(json!({"name":name,"json":request.to_string(),"task_channel":false,"response":{"protocol_version":5,"request_id":response_id,"ok":false,"error":{"code":code}}}));
     }
     for (name, raw) in [
         ("malformed-json", "{"),
         (
             "duplicate-key",
-            "{\"protocol_version\":4,\"protocol_version\":3}",
+            "{\"protocol_version\":5,\"protocol_version\":4}",
         ),
         (
             "current-version-missing-id",
-            "{\"protocol_version\":4,\"method\":\"scan\",\"params\":false}",
+            "{\"protocol_version\":5,\"method\":\"scan\",\"params\":false}",
         ),
     ] {
         let code = if name == "current-version-missing-id" {
@@ -487,12 +598,12 @@ pub fn cases() -> Value {
         } else {
             "invalid_request"
         };
-        early_errors.push(json!({"name":name,"json":raw,"task_channel":false,"response":{"protocol_version":4,"request_id":null,"ok":false,"error":{"code":code}}}));
+        early_errors.push(json!({"name":name,"json":raw,"task_channel":false,"response":{"protocol_version":5,"request_id":null,"ok":false,"error":{"code":code}}}));
     }
-    early_errors.push(json!({"name":"invalid-utf8","hex":"ff","task_channel":false,"response":{"protocol_version":4,"request_id":null,"ok":false,"error":{"code":"invalid_request"}}}));
+    early_errors.push(json!({"name":"invalid-utf8","hex":"ff","task_channel":false,"response":{"protocol_version":5,"request_id":null,"ok":false,"error":{"code":"invalid_request"}}}));
     let mut e1 = install_event();
     e1["sequence"] = json!(1);
     let mut e2 = install_event();
     e2["sequence"] = json!(2);
-    json!({"early_errors":early_errors,"raw_requests":[{"name":"duplicate-key","json":"{\"protocol_version\":4,\"protocol_version\":3}","error":"invalid_request"},{"name":"invalid-utf8","hex":"ff","error":"invalid_request"}],"requests":requests,"responses":responses,"events":events,"sequences":[{"name":"shared-monotonic","events":[install_event(),e1.clone(),install_event(),e2],"expected":["accept","accept","drop","accept"]},{"name":"illegal-first","events":[e1],"expected":["error"]},{"name":"after-terminal","events":[install_event(),install_event()],"terminal_after":1,"expected":["accept","drop"]}]})
+    json!({"early_errors":early_errors,"raw_requests":[{"name":"duplicate-key","json":"{\"protocol_version\":5,\"protocol_version\":4}","error":"invalid_request"},{"name":"invalid-utf8","hex":"ff","error":"invalid_request"}],"requests":requests,"responses":responses,"events":events,"sequences":[{"name":"shared-monotonic","events":[install_event(),e1.clone(),install_event(),e2],"expected":["accept","accept","drop","accept"]},{"name":"illegal-first","events":[e1],"expected":["error"]},{"name":"after-terminal","events":[install_event(),install_event()],"terminal_after":1,"expected":["accept","drop"]}]})
 }

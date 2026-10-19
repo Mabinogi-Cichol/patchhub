@@ -9,8 +9,9 @@ use steam_patch_core::{
     projection::*,
     sources::{
         self,
-        model::{DiscoveryRecord, SourceCandidate},
-        registry::DiscoveryOutcome,
+        model::{
+            GameMatchRecord, GameMatchStatus, SourceCandidate, SourceMatchRecord, SourceMatchStatus,
+        },
         snapshot::SourceSnapshot,
     },
     steam,
@@ -55,27 +56,31 @@ fn candidate() -> SourceCandidate {
     serde_json::from_value(serde_json::json!({"candidate_id":"candidate-000000000000000000000000","source_id":"kagura-cn","source_record_id":"https://kagurafan.com/patches/game","game_appid":42,"parent_appid":null,"game_title":"Test","patch_title":"Test patch","variant":"base","requires_dlc":null,"excludes_dlc":null,"platforms":["steam"],"patch_kind":"adult_content","languages":["zh-CN"],"version_raw":"1","version_identity":"1","published_at":null,"patch_updated_at":null,"source_page":"https://kagurafan.com/patches/game","upstream_page":null,"mirrors":[{"url":"https://kaguraserver.com/a.zip","label":null,"format":"zip"}],"format_reported":"zip","format_observed":"zip","capability":"discover_only","match_basis":"appid","observed_at":"2026-01-01T00:00:00+00:00","cache_status":"cached","fingerprint":"f".repeat(64)})).unwrap()
 }
 fn seed(state: &Path, candidate: SourceCandidate) -> u64 {
-    let mut handle = sources::Sources::open(state).unwrap();
-    let rule = handle
-        .registry()
-        .rules()
-        .iter()
-        .find(|r| r.id == "kagura-cn")
-        .unwrap()
-        .clone();
+    let handle = sources::Sources::open(state).unwrap();
+    let source_id = candidate.source_id.clone();
     handle
-        .registry_mut()
-        .commit(
-            &rule,
-            42,
-            DiscoveryOutcome {
-                status: "complete".into(),
-                candidates: vec![candidate],
-                ..Default::default()
-            },
-            &DiscoveryRecord::default(),
-            "key",
-        )
+        .store()
+        .save_match(&GameMatchRecord {
+            schema_version: 1,
+            appid: 42,
+            name: "Test".into(),
+            localized_name: None,
+            input_key: "key".into(),
+            status: GameMatchStatus::PublisherMatch,
+            sources: std::collections::BTreeMap::from([(
+                source_id,
+                SourceMatchRecord {
+                    index_revision: 1,
+                    status: SourceMatchStatus::Matched,
+                    candidates: vec![candidate],
+                    detail_pages: Vec::new(),
+                    checked_at: 100,
+                    diagnostics: Vec::new(),
+                },
+            )]),
+            fallback: None,
+            updated_at: 100,
+        })
         .unwrap();
     sources::Clock::now_unix(&sources::SystemClock)
 }
@@ -1053,14 +1058,14 @@ fn serialized_action_stress_records_actual_jsonl_bytes_without_raising_cap() {
         let mut i = inputs(&steam, &c, None, &tx, &caps, &cancel);
         i.catalog = CatalogView::Verified(&signed);
         let report = scan(i).unwrap();
-        let envelope = serde_json::json!({"protocol_version":4,"request_id":"stress","ok":true,"result":report});
+        let envelope = serde_json::json!({"protocol_version":5,"request_id":"stress","ok":true,"result":report});
         let bytes = serde_json::to_vec(&envelope).unwrap().len() + 1;
         measurements.push(serde_json::json!({"instances":500,"patches_per_instance":patches,"bytes_including_lf":bytes,"limit_bytes":8*1024*1024,"within_limit":bytes <= 8*1024*1024}));
     }
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../.artifacts/rust-core-consolidation/p6/wire-size.json");
     fs::create_dir_all(path.parent().unwrap()).unwrap();
-    fs::write(path, serde_json::to_vec_pretty(&serde_json::json!({"producer":"actual_core_projection","detail_bytes":2048,"protocol_version":4,"measurements":measurements})).unwrap()).unwrap();
+    fs::write(path, serde_json::to_vec_pretty(&serde_json::json!({"producer":"actual_core_projection","detail_bytes":2048,"protocol_version":5,"measurements":measurements})).unwrap()).unwrap();
     assert!(measurements[0]["within_limit"].as_bool().unwrap());
     assert!(!measurements[1]["within_limit"].as_bool().unwrap());
 }

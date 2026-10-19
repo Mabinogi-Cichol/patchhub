@@ -232,3 +232,12 @@ return self._wrap_publisher(result, *owner) if owner else result
 - “安装后保留/删除”之外的更细策略（例如按发行版白名单）。
 - 事务与 `jobs/` 备份的清理策略（与审计需求权衡）。
 - 跨安装复用同一 ZIP 时撤销清理（需引用计数或摘要驻留策略）。
+
+
+## 2026-10-19：恢复当前核心的缓存占用统计
+
+- 全局设置“缓存与备份”的下载缓存“当前占用”显示真实容量，移除固定的“当前版本不提供占用统计”。
+- 沿用 Rust `CacheService::inspect()`，经协议 v5 的只读 `cache_status` 方法、CLI 和 Decky 桥接返回 `CacheInventory { total_bytes, entries, diagnostics }`；不在 Python 重写文件遍历。
+- 统计范围与现有 `cleanable_dirs()` 一致：`content/`、`downloads/`、`reports/`，不含安装备份、事务恢复材料、来源索引及用户 Downloads。`entries` 为遍历目录项数，界面只显示字节容量。
+- 进入页面独立读取统计；手动清理返回后重新统计。读取失败显示错误，部分路径失败显示已统计容量及诊断；不将上次清理释放量当作当前占用，不增加轮询、重试或统计缓存。
+- 验收：真实 RPC 能统计非空缓存、清理后归零并保留事务材料；前端能呈现零/非零/部分统计；桥接保留诊断与异常。实机部署及页面验收单独记录于 [施工记录](progress.md)。

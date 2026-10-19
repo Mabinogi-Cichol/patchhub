@@ -40,7 +40,7 @@ fn extraction_descriptor(report: &Value, sha: &str, size: u64) -> Value {
 }
 /// Parse the framed stream: header, then (member header, raw bytes, trailer)*, done.
 fn parse_frames(bytes: &[u8]) -> Vec<(String, Vec<u8>, String)> {
-    fn line<'a>(bytes: &'a [u8], at: &mut usize) -> Value {
+    fn line(bytes: &[u8], at: &mut usize) -> Value {
         let end = *at + bytes[*at..].iter().position(|b| *b == b'\n').unwrap();
         let value = serde_json::from_slice(&bytes[*at..end]).unwrap();
         *at = end + 1;

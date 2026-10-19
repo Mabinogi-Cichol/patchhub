@@ -1,10 +1,10 @@
-"""Scan projection exposes safe installation capability for real rows."""
+"""Scan and projection RPC boundaries: one core scan, projection without a scan."""
 import importlib.util
 from pathlib import Path
 import sys
 import types
 import unittest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock
 
 sys.modules.setdefault("decky", types.ModuleType("decky"))
 spec = importlib.util.spec_from_file_location("scan_projection_plugin", Path(__file__).parents[1] / "main.py")
@@ -16,46 +16,37 @@ def game(buildid="123"):
     return {"instance_id": "local", "appid": 1, "name": "Game", "availability": "installed", "buildid": buildid}
 
 
-def entry(release="zip-release"):
-    return {"release_id": release, "source_id": "official", "source_page": "https://example.test/patch",
-            "language": "zh-CN"}
-
-
 class ProjectionTests(unittest.IsolatedAsyncioTestCase):
-    async def test_projection_uses_rust_selection_and_receipt_without_python_policy(self):
-        patch_result = {"release_id": "source-official-1", "selection_id": "zip-selection-id-1",
-            "support_level": "publisher_zip", "detection": {"status": "partial"},
-            "blockers": ["source_disabled"], "actions": {"automatic": {"available": False, "blockers": [{"code": "source_not_enabled"}]}, "local_archive": {"available": False, "blockers": [{"code": "local_archive_signed_only"}]}, "reinstall": {"available": False, "blockers": [{"code": "reinstall_unowned_or_incomplete"}]}, "overwrite": {"available": False, "blockers": [{"code": "source_not_enabled"}]}, "primary": {"operation": "overwrite", "label": "overwrite", "input": "unavailable"}}}
-        core_row = {"game": game(), "patches": [patch_result], "discovery": {"status": "cache_complete"}}
+    async def test_scan_reads_the_core_once_and_primes_the_source_snapshot(self):
+        core_row = {"game": game(), "patches": [{"release_id": "zip-release"}],
+                    "discovery": {"status": "publisher_match", "candidates": [], "diagnostics": []}}
         plugin = module.Plugin()
-        plugin.bridge = types.SimpleNamespace(scan=AsyncMock(return_value={"installs": [core_row]}))
-        from unittest.mock import Mock
-        plugin.sources = types.SimpleNamespace(prime=Mock())
-        row = {"game": game(), "patches": [{"release_id": "stale"}]}
-        await plugin._project_row(row)
-        self.assertEqual(row, core_row)
+        plugin._scan_generation = 6
+        plugin.bridge = types.SimpleNamespace(scan=AsyncMock(return_value={
+            "installs": [core_row], "sources": [], "settings_revision": 9,
+            "diagnostics": []}))
+        plugin.sources = types.SimpleNamespace(prime=Mock(), settings_revision=9)
+        result = await plugin.scan()
+        plugin.bridge.scan.assert_awaited_once_with()
         plugin.sources.prime.assert_called_once()
+        self.assertEqual(result["installs"], [core_row])
+        self.assertEqual(result["generation"], 7)
+        self.assertEqual(result["settings_revision"], 9)
 
-    async def test_read_report_preserves_shared_projection(self):
-        report = {"installs": [{"game": game(), "patches": [{"selection_id": "exe-selection-current-1"}]}],
-                  "sources": [], "settings_revision": 4}
+    async def test_project_instances_never_triggers_a_scan(self):
         plugin = module.Plugin()
-        plugin.bridge = types.SimpleNamespace(scan=AsyncMock(return_value=report))
-        from unittest.mock import Mock
-        plugin.sources = types.SimpleNamespace(prime=Mock(), settings_revision=4)
-        plugin._scan_generation = 2
-        result = await plugin._read_report()
-        self.assertEqual(result["installs"], report["installs"])
-        self.assertEqual(result["generation"], 2)
+        plugin.bridge = types.SimpleNamespace(
+            scan=AsyncMock(), call_sync=AsyncMock(return_value={
+                "settings_revision": 9,
+                "instances": [{"game": {"instance_id": "one", "appid": 1}, "patches": []},
+                              {"game": {"instance_id": "two", "appid": 2}, "patches": []}]}))
+        plugin.sources = types.SimpleNamespace(settings_revision=9)
+        result = await plugin.project_instances(["one", "two"])
+        plugin.bridge.scan.assert_not_awaited()
+        plugin.bridge.call_sync.assert_awaited_once_with(
+            "project_instances", {"instance_ids": ["one", "two"]})
+        self.assertEqual([row["game"]["instance_id"] for row in result["instances"]], ["one", "two"])
 
 
-    async def test_source_refresh_batches_all_rows_into_one_core_scan(self):
-        from unittest.mock import Mock
-        rows = [{"game": {**game(), "instance_id": identity}, "patches": []} for identity in ("one", "two")]
-        plugin = module.Plugin()
-        plugin.bridge = types.SimpleNamespace(scan=AsyncMock(return_value={"installs": rows, "sources": []}))
-        plugin.sources = types.SimpleNamespace(prime=Mock())
-        report = {"installs": [{"game": dict(row["game"]), "patches": [{"release_id": "old"}]} for row in rows]}
-        await plugin._refresh_rows(report)
-        plugin.bridge.scan.assert_awaited_once()
-        self.assertEqual(report["installs"], rows)
+if __name__ == "__main__":
+    unittest.main()

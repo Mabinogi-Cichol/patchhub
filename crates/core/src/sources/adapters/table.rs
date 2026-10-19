@@ -1,9 +1,13 @@
 //! Generic HTML-table ZIP-index collector (port of `sources.py::_collect_table`).
 
 use super::super::http::RequestContext;
-use super::super::model::{SourceCache, SourceRule};
+use super::super::model::{SourceCache, SourceIndex, SourceRule};
 use super::super::{invalid, validate, Result};
-use super::{parse_rows, require_ok_text, response_base, row_entry, Adapter, CollectOutcome};
+use super::{
+    index_entry_from_source, now_unix, parse_rows, require_ok_text, response_base, row_entry,
+    source_cache_from_index, Adapter, CollectOutcome, IndexOutcome,
+};
+use std::sync::atomic::AtomicBool;
 
 pub struct TableAdapter;
 
@@ -63,6 +67,52 @@ impl Adapter for TableAdapter {
             etag,
             modified,
             not_modified: false,
+        })
+    }
+
+    fn collect_index(
+        &self,
+        rule: &SourceRule,
+        previous: Option<&SourceIndex>,
+        ctx: &mut RequestContext,
+        cancel: &AtomicBool,
+    ) -> Result<IndexOutcome> {
+        if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+            return Ok(super::cancelled_index_outcome(rule));
+        }
+        let cache = source_cache_from_index(previous);
+        let outcome = self.collect(rule, &cache, ctx)?;
+        let checked_at = now_unix();
+        if outcome.not_modified {
+            return Ok(IndexOutcome {
+                entries: previous
+                    .map(|index| index.entries.clone())
+                    .unwrap_or_default(),
+                pending: previous
+                    .map(|index| index.pending.clone())
+                    .unwrap_or_default(),
+                complete: previous.is_some_and(|index| index.complete),
+                etag: outcome.etag,
+                modified: outcome.modified,
+                not_modified: true,
+                checked_at,
+                diagnostics: Vec::new(),
+            });
+        }
+        // Every configured list page was fetched in this pass.
+        Ok(IndexOutcome {
+            entries: outcome
+                .entries
+                .iter()
+                .map(index_entry_from_source)
+                .collect(),
+            pending: Vec::new(),
+            complete: true,
+            etag: outcome.etag,
+            modified: outcome.modified,
+            not_modified: false,
+            checked_at,
+            diagnostics: Vec::new(),
         })
     }
 }

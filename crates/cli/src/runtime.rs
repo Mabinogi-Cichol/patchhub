@@ -1,7 +1,6 @@
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::{
-    collections::HashSet,
     fs,
     path::{Path, PathBuf},
     sync::atomic::AtomicBool,
@@ -39,12 +38,18 @@ pub struct Params {
     pub source_id: Option<String>,
     pub enabled: Option<bool>,
     pub subscribed: Option<bool>,
+    /// Automatic update interval for `set_source_update_interval` (0 = off).
+    pub interval_hours: Option<u64>,
+    /// `match_games` instance filter (empty = every installed game).
+    pub instances: Vec<String>,
+    /// `project_instances` requested instance ids.
+    pub instance_ids: Vec<String>,
     /// Declarative rule for `add_source` (validated against `RawSourceRule`).
     pub rule: Option<Value>,
     pub name_hints: Vec<String>,
     pub preferred_language: Option<String>,
     pub force: bool,
-    pub generation: Option<u64>,
+    pub force_details: Option<bool>,
 }
 
 impl Params {
@@ -78,30 +83,39 @@ impl Params {
             },
             enabled: v.get("enabled").and_then(Value::as_bool),
             subscribed: v.get("subscribed").and_then(Value::as_bool),
+            interval_hours: v.get("interval_hours").and_then(Value::as_u64),
+            instances: string_list(&v, "instances"),
+            instance_ids: string_list(&v, "instance_ids"),
             rule: v.get("rule").cloned(),
-            name_hints: v
-                .get("name_hints")
-                .and_then(Value::as_array)
-                .map(|a| {
-                    a.iter()
-                        .filter_map(Value::as_str)
-                        .map(str::to_owned)
-                        .collect()
-                })
-                .unwrap_or_default(),
+            name_hints: string_list(&v, "name_hints"),
             preferred_language: text("preferred_language"),
             force: v.get("force").and_then(Value::as_bool).unwrap_or(false),
-            generation: v.get("generation").and_then(Value::as_u64),
+            force_details: v.get("force_details").and_then(Value::as_bool),
         }
     }
+}
+
+fn string_list(value: &Value, key: &str) -> Vec<String> {
+    value
+        .get(key)
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// Formal methods are owned by the protocol crate.
 pub const METHODS: &[&str] = &steam_patch_protocol::METHODS;
 pub const SOURCE_METHODS: &[&str] = &steam_patch_protocol::SOURCE_METHODS;
 
-/// Streaming source-task methods that emit `source_progress`/`source_update`.
-pub const SOURCE_STREAM_METHODS: &[&str] = &["scan_sources", "refresh_sources"];
+/// Streaming source-task methods that emit `source_progress`/`source_update`/
+/// `match_progress`/`match_update` lines before the single terminal response.
+pub const SOURCE_STREAM_METHODS: &[&str] = &["update_source", "match_games", "rematch_game"];
 
 /// Per-task cursor that renders `operation::Progress` into the flat v4
 /// `install_progress` event (p1-host-contract §2.2). The cursor owns the
@@ -162,8 +176,8 @@ impl ProgressCursor {
     }
 }
 
-/// `get_capabilities` v4 payload (p1-host-contract §3.1): installer and source
-/// sub-objects merged with the full 16-method whitelist.
+/// `get_capabilities` v5 payload (p1-host-contract §3.1, p1-contract §9.2):
+/// installer and source sub-objects merged with the full 21-method whitelist.
 fn capabilities(_params: &Params) -> Value {
     let availability = exe_sandbox_availability();
     let mut methods: Vec<&str> = Vec::with_capacity(METHODS.len());
@@ -187,10 +201,13 @@ fn capabilities(_params: &Params) -> Value {
             },
         },
         "sources": {
-            "discovery_schema_version": 1,
+            "index_schema_version": 1,
+            "detail_schema_version": 1,
+            "match_schema_version": 1,
+            "schedule_schema_version": 1,
             "adapter_version": 1,
             "parser_version": sources::PARSER_VERSION,
-            "query_version": sources::QUERY_VERSION,
+            "encoding_version": sources::SOURCES_ENCODING_VERSION,
             "methods": SOURCE_METHODS,
         },
         "methods": methods,
@@ -493,8 +510,13 @@ pub fn execute_controlled(
     if method == "backup_status" || method == "cleanup_backups" {
         return backups(&params, method == "cleanup_backups");
     }
-    if method == "cleanup_cache" {
-        return cleanup_cache(&params);
+    if method == "cache_status" || method == "cleanup_cache" {
+        return cache(&params, method == "cleanup_cache");
+    }
+    // Source tasks stream progress; direct CLI invocations run the same
+    // implementation with no event sink.
+    if SOURCE_STREAM_METHODS.contains(&method) {
+        return execute_streaming(method, params, cancel, &mut |_| {});
     }
     let roots = if params.roots.is_empty() {
         steam::discover_roots()
@@ -505,7 +527,7 @@ pub fn execute_controlled(
     if let Some(state) = &params.state_dir {
         validate_state_boundary(state, &report.installs)?;
     }
-    if SOURCE_METHODS.contains(&method) {
+    if SOURCE_METHODS.contains(&method) && method != "project_instances" {
         return execute_source_method(method, &params, &report);
     }
     if ["discard_plan", "list_transactions", "recover"].contains(&method) {
@@ -624,6 +646,17 @@ pub fn execute_controlled(
         capabilities: &capabilities,
         cancel,
     };
+    if method == "project_instances" {
+        let instances =
+            projection::project_batch(&inputs, &params.instance_ids).map_err(projection_error)?;
+        let instances = attach_match_discovery(instances, params.state_dir.as_deref())?;
+        return Ok(json!({
+            "settings_revision": source_snapshot
+                .as_ref()
+                .map(|snapshot| snapshot.settings_revision()),
+            "instances": instances,
+        }));
+    }
     if method == "preview" {
         if params.selection_id.is_some() && params.state_dir.is_none() {
             return Err(DomainError::code("state_dir_required"));
@@ -654,10 +687,48 @@ pub fn execute_controlled(
             .map_err(projection_error)?,
         );
     }
-    let mut result = value(projection::scan(inputs).map_err(projection_error)?)?;
+    let mut projected = projection::scan(inputs).map_err(projection_error)?;
+    projected.installs = attach_match_discovery(projected.installs, params.state_dir.as_deref())?;
+    let mut result = value(projected)?;
     // Catalog failures remain structured read-only diagnostics.
     result["catalog_error"] = json!(catalog_error);
     Ok(result)
+}
+
+/// Replaces each projection's discovery snapshot with the persisted match
+/// record. This never touches the network or creates source state; a missing
+/// record is `pending` with no candidates.
+fn attach_match_discovery(
+    mut installs: Vec<projection::InstanceProjection>,
+    state_dir: Option<&Path>,
+) -> Result<Vec<projection::InstanceProjection>, DomainError> {
+    let Some(state_dir) = state_dir else {
+        return Ok(installs);
+    };
+    for install in &mut installs {
+        let summary =
+            sources::matching::match_summary_at(state_dir, install.game.appid).map_err(err)?;
+        install.discovery = Some(match summary {
+            Some(match_result) => sources::GameDiscovery {
+                status: match_status(&match_result.status),
+                candidates: match_result.candidates,
+                diagnostics: match_result.diagnostics,
+            },
+            None => sources::GameDiscovery {
+                status: "pending".to_string(),
+                candidates: Vec::new(),
+                diagnostics: Vec::new(),
+            },
+        });
+    }
+    Ok(installs)
+}
+
+fn match_status(status: &sources::GameMatchStatus) -> String {
+    serde_json::to_value(status)
+        .ok()
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .unwrap_or_else(|| "pending".to_string())
 }
 
 fn backups(params: &Params, delete: bool) -> Result<Value, DomainError> {
@@ -681,7 +752,7 @@ fn backups(params: &Params, delete: bool) -> Result<Value, DomainError> {
 }
 
 /// Thin adapter to the validated core cache service.
-fn cleanup_cache(params: &Params) -> Result<Value, DomainError> {
+fn cache(params: &Params, delete: bool) -> Result<Value, DomainError> {
     let state = state(params)?;
     let host = installer::service::ValidatedHostContext::new(
         &state,
@@ -693,11 +764,12 @@ fn cleanup_cache(params: &Params) -> Result<Value, DomainError> {
         }),
     )
     .map_err(projection_error)?;
-    value(
-        installer::cache::CacheService::new(&host)
-            .cleanup()
-            .map_err(projection_error)?,
-    )
+    let service = installer::cache::CacheService::new(&host);
+    if delete {
+        value(service.cleanup().map_err(projection_error)?)
+    } else {
+        value(service.inspect().map_err(projection_error)?)
+    }
 }
 
 fn game_query(install: &steam::GameInstall) -> sources::GameQuery {
@@ -762,21 +834,77 @@ fn open_sources(params: &Params) -> Result<sources::Sources, DomainError> {
     sources::Sources::open(&state).map_err(err)
 }
 
-fn discover_result(
-    install: &steam::GameInstall,
-    generation: Option<u64>,
+fn scan_roots(params: &Params) -> Vec<PathBuf> {
+    if params.roots.is_empty() {
+        steam::discover_roots()
+    } else {
+        params.roots.clone()
+    }
+}
+
+/// Builds a fresh HTTP context for source update/match tasks.
+fn source_http_context() -> Result<sources::http::RequestContext, DomainError> {
+    sources::http::RequestContext::new().map_err(err)
+}
+
+fn match_update_value(result: &sources::GameMatch, revision: u64) -> Value {
+    json!({
+        "event": "match_update",
+        "instance_id": result.instance_id,
+        "appid": result.appid,
+        "status": match_status(&result.status),
+        "candidates": result.candidates,
+        "diagnostics": result.diagnostics,
+        "settings_revision": revision,
+    })
+}
+
+fn source_progress_value(
+    source_id: &str,
+    phase: &str,
+    completed: usize,
+    total: usize,
+    running: bool,
     revision: u64,
-    discovery: sources::GameDiscovery,
 ) -> Value {
     json!({
-        "instance_id": install.instance_id.clone(),
-        "appid": install.appid,
-        "generation": generation,
+        "event": "source_progress",
+        "source_id": source_id,
+        "phase": phase,
+        "completed": completed,
+        "total": total,
+        "running": running,
         "settings_revision": revision,
-        "status": discovery.status,
-        "candidates": discovery.candidates,
-        "diagnostics": discovery.diagnostics,
     })
+}
+
+fn match_progress_value(
+    phase: &str,
+    completed: usize,
+    total: usize,
+    running: bool,
+    revision: u64,
+) -> Value {
+    json!({
+        "event": "match_progress",
+        "phase": phase,
+        "completed": completed,
+        "total": total,
+        "running": running,
+        "settings_revision": revision,
+    })
+}
+
+fn match_games_result(
+    revision: u64,
+    source_revisions: std::collections::BTreeMap<String, u64>,
+    results: Vec<sources::GameMatch>,
+) -> Result<Value, DomainError> {
+    value(json!({
+        "settings_revision": revision,
+        "source_revisions": source_revisions,
+        "results": results,
+    }))
 }
 
 fn execute_source_method(
@@ -842,40 +970,31 @@ fn execute_source_method(
                 "rule": rule,
             }))
         }
-        "refresh_sources" => refresh_sources_impl(params, &AtomicBool::new(false), &mut |_| ()),
-        "discover_game" => {
-            let install = install_for(
-                report,
-                params
-                    .instance_id
-                    .as_deref()
-                    .ok_or_else(|| DomainError::code("instance_required"))?,
-            )?;
+        "set_source_update_interval" => {
+            let source_id = params
+                .source_id
+                .as_deref()
+                .ok_or_else(|| DomainError::code("source_id_required"))?;
+            let interval_hours = params
+                .interval_hours
+                .ok_or_else(|| DomainError::code("interval_hours_required"))?;
             let mut handle = open_sources(params)?;
-            let cancel = AtomicBool::new(false);
-            let discovery = handle
-                .discover_game(
-                    &game_query(install),
-                    &params.name_hints,
-                    params.preferred_language.as_deref(),
-                    params.force,
-                    &cancel,
-                )
+            handle
+                .registry_mut()
+                .set_update_interval(source_id, interval_hours)
                 .map_err(err)?;
-            Ok(discover_result(
-                install,
-                params.generation,
-                handle.settings_revision(),
-                discovery,
-            ))
+            Ok(json!({
+                "settings_revision": handle.settings_revision(),
+                "source_id": source_id,
+                "interval_hours": interval_hours,
+            }))
         }
-        "scan_sources" => scan_sources_impl(params, &AtomicBool::new(false), &mut |_| ()),
         _ => Err(DomainError::code("unsupported_method")),
     }
 }
 
-/// Streaming dispatch for `serve-task`: `scan_sources`/`refresh_sources` emit
-/// source events through `emit` and then return the single final result.
+/// Streaming dispatch for `serve-task`: the source and match tasks emit their
+/// typed events through `emit` and then return the single final result.
 pub fn execute_streaming(
     method: &str,
     params: Params,
@@ -883,138 +1002,244 @@ pub fn execute_streaming(
     emit: &mut dyn FnMut(Value),
 ) -> Result<Value, DomainError> {
     match method {
-        "scan_sources" => scan_sources_impl(&params, cancel, emit),
-        "refresh_sources" => refresh_sources_impl(&params, cancel, emit),
+        "update_source" => update_source_impl(&params, cancel, emit),
+        "match_games" => match_games_impl(&params, cancel, emit),
+        "rematch_game" => rematch_game_impl(&params, cancel, emit),
         _ => execute(method, params),
     }
 }
 
-fn scan_sources_impl(
+/// Installed games requested by `match_games`; an empty filter means every
+/// installed game.
+fn selected_games(
+    params: &Params,
+    report: &steam::ScanReport,
+) -> Result<Vec<sources::GameQuery>, DomainError> {
+    if params.instances.is_empty() {
+        return Ok(report
+            .installs
+            .iter()
+            .filter(|game| game.availability == "installed")
+            .map(game_query)
+            .collect());
+    }
+    params
+        .instances
+        .iter()
+        .map(|instance_id| install_for(report, instance_id).map(game_query))
+        .collect()
+}
+
+fn validate_match_query(games: &[sources::GameQuery], params: &Params) -> Result<(), DomainError> {
+    for game in games {
+        sources::registry::SourceRegistry::validate_query(
+            game,
+            &params.name_hints,
+            params.preferred_language.as_deref(),
+        )
+        .map_err(err)?;
+    }
+    Ok(())
+}
+
+fn update_source_impl(
     params: &Params,
     cancel: &AtomicBool,
     emit: &mut dyn FnMut(Value),
 ) -> Result<Value, DomainError> {
     let state = state(params)?;
     state_safe(&state)?;
-    let roots = if params.roots.is_empty() {
-        steam::discover_roots()
-    } else {
-        params.roots.clone()
-    };
-    let report = steam::scan(&roots);
-    validate_state_boundary(&state, &report.installs)?;
-    if let Some(id) = &params.instance_id {
-        let install = report
+    let source_id = params
+        .source_id
+        .as_deref()
+        .ok_or_else(|| DomainError::code("source_id_required"))?;
+    let handle = sources::Sources::open(&state).map_err(err)?;
+    let rules = handle.registry().rules().to_vec();
+    let rule = rules
+        .iter()
+        .find(|rule| rule.id == source_id)
+        .cloned()
+        .ok_or_else(|| DomainError::code("unknown_source"))?;
+    let overrides = handle.registry().overrides().clone();
+    let revision = handle.settings_revision();
+    let now = handle.registry().now_unix();
+    let store = handle.store();
+    let previous_revision = store
+        .load_index(source_id)
+        .map_err(err)?
+        .map(|index| index.revision)
+        .unwrap_or(0);
+    let mut ctx = source_http_context()?;
+
+    emit(source_progress_value(
+        source_id, "index", 0, 0, true, revision,
+    ));
+    let outcome =
+        sources::update::update_source(store, &rule, params.force, &mut ctx, cancel, |_| {});
+    emit(source_progress_value(
+        source_id, "index", 0, 0, false, revision,
+    ));
+    let outcome = outcome.map_err(err)?;
+    emit(json!({
+        "event": "source_update",
+        "source_id": source_id,
+        "status": outcome.status,
+        "settings_revision": revision,
+    }));
+
+    let mut affected_appids = Vec::new();
+    // No index content change means there is nothing to re-derive.
+    if outcome.revision != previous_revision {
+        let report = steam::scan(&scan_roots(params));
+        let games: Vec<sources::GameQuery> = report
             .installs
             .iter()
-            .find(|g| &g.instance_id == id)
-            .ok_or_else(|| DomainError::code("instance_not_found"))?;
-        sources::registry::SourceRegistry::validate_query(
-            &game_query(install),
-            &params.name_hints,
-            params.preferred_language.as_deref(),
-        )
-        .map_err(err)?;
-    }
-    let mut handle = sources::Sources::open(&state).map_err(err)?;
-    let revision = handle.settings_revision();
-
-    let mut seen = HashSet::new();
-    let mut entries: Vec<(sources::GameQuery, String)> = Vec::new();
-    for install in report.installs.iter().filter(|game| {
-        game.availability == "installed"
-            && params
-                .instance_id
-                .as_ref()
-                .is_none_or(|id| id == &game.instance_id)
-    }) {
-        if seen.insert(install.appid) {
-            entries.push((game_query(install), install.instance_id.clone()));
-        }
-    }
-    let games: Vec<sources::GameQuery> = entries.iter().map(|(query, _)| query.clone()).collect();
-    let discoveries = handle
-        .scan_sources_with_query(
+            .filter(|game| {
+                game.availability == "installed"
+                    && handle.registry().game_subscribed(game.appid, source_id)
+            })
+            .map(game_query)
+            .collect();
+        let total = games.len();
+        emit(source_progress_value(
+            source_id, "details", 0, total, true, revision,
+        ));
+        let mut completed = 0usize;
+        let results = sources::matching::rematch_source(
+            store,
+            &rules,
+            &overrides,
             &games,
-            params.force,
+            source_id,
             &params.name_hints,
             params.preferred_language.as_deref(),
+            &mut ctx,
             cancel,
-            |event| match event {
-                sources::session::ScanEvent::Progress {
-                    completed,
-                    total,
-                    running,
-                } => emit(json!({
-                    "event": "source_progress",
-                    "completed": completed,
-                    "total": total,
-                    "running": running,
-                    "settings_revision": revision,
-                })),
-                sources::session::ScanEvent::Update {
-                    appid,
-                    index,
-                    discovery,
-                } => {
-                    let instance_id = entries
-                        .iter()
-                        .find(|(query, _)| query.appid == *appid)
-                        .map(|(_, id)| id.clone());
-                    emit(json!({
-                        "event": "source_update",
-                        "appid": appid,
-                        "index": index,
-                        "instance_id": instance_id,
-                        "settings_revision": revision,
-                        "discovery": discovery.clone(),
-                    }));
-                }
+            now,
+            |result| {
+                emit(match_update_value(result, revision));
+                completed += 1;
+                emit(source_progress_value(
+                    source_id, "matched", completed, total, true, revision,
+                ));
             },
         )
         .map_err(err)?;
-    let results: Vec<Value> = discoveries
-        .iter()
-        .enumerate()
-        .map(|(index, discovery)| {
-            json!({
-                "instance_id": entries.get(index).map(|(_, id)| id.clone()),
-                "appid": entries.get(index).map(|(query, _)| query.appid),
-                "status": discovery.status,
-                "candidates": discovery.candidates,
-                "diagnostics": discovery.diagnostics,
-            })
-        })
-        .collect();
-    Ok(json!({"settings_revision": revision, "results": results}))
+        emit(source_progress_value(
+            source_id, "matched", completed, total, false, revision,
+        ));
+        affected_appids = results.iter().map(|result| result.appid).collect();
+        affected_appids.sort_unstable();
+        affected_appids.dedup();
+    }
+
+    Ok(json!({
+        "source_id": source_id,
+        "settings_revision": revision,
+        "status": outcome.status,
+        "revision": outcome.revision,
+        "complete": outcome.complete,
+        "affected_appids": affected_appids,
+    }))
 }
 
-fn refresh_sources_impl(
+fn match_games_impl(
     params: &Params,
     cancel: &AtomicBool,
     emit: &mut dyn FnMut(Value),
 ) -> Result<Value, DomainError> {
     let state = state(params)?;
     state_safe(&state)?;
-    let mut handle = sources::Sources::open(&state).map_err(err)?;
+    let report = steam::scan(&scan_roots(params));
+    validate_state_boundary(&state, &report.installs)?;
+    let games = selected_games(params, &report)?;
+    let handle = sources::Sources::open(&state).map_err(err)?;
+    let rules = handle.registry().rules().to_vec();
+    let overrides = handle.registry().overrides().clone();
     let revision = handle.settings_revision();
-    let rule_ids: Vec<String> = handle
-        .registry()
-        .rules()
-        .iter()
-        .filter(|rule| !rule.discovery_only && rule.enabled)
-        .map(|rule| rule.id.clone())
-        .collect();
-    let statuses = handle.refresh_sources(params.force, cancel).map_err(err)?;
-    for (source_id, status) in rule_ids.iter().zip(statuses.iter()) {
-        emit(json!({
-            "event": "source_update",
-            "source_id": source_id,
-            "status": status.clone(),
-            "settings_revision": revision,
-        }));
-    }
-    Ok(json!({"settings_revision": revision, "statuses": statuses}))
+    let now = handle.registry().now_unix();
+    let store = handle.store();
+    validate_match_query(&games, params)?;
+    let mut ctx = source_http_context()?;
+    let total = games.len();
+    emit(match_progress_value("inventory", 0, total, true, revision));
+    let sink = std::cell::RefCell::new(emit);
+    let results = sources::matching::match_games(
+        store,
+        &rules,
+        &overrides,
+        &games,
+        &params.name_hints,
+        params.preferred_language.as_deref(),
+        params.force_details.unwrap_or(false),
+        &mut ctx,
+        cancel,
+        now,
+        |progress| {
+            let mut emit = sink.borrow_mut();
+            emit(match_progress_value(
+                &progress.phase,
+                progress.completed,
+                progress.total,
+                progress.running,
+                revision,
+            ));
+        },
+        |result| {
+            let mut emit = sink.borrow_mut();
+            emit(match_update_value(result, revision));
+        },
+    )
+    .map_err(err)?;
+    match_games_result(
+        revision,
+        sources::matching::source_revisions(store, &rules),
+        results,
+    )
+}
+
+fn rematch_game_impl(
+    params: &Params,
+    cancel: &AtomicBool,
+    emit: &mut dyn FnMut(Value),
+) -> Result<Value, DomainError> {
+    let state = state(params)?;
+    state_safe(&state)?;
+    let report = steam::scan(&scan_roots(params));
+    validate_state_boundary(&state, &report.installs)?;
+    let game = game_from_params(params, &report)?;
+    let handle = sources::Sources::open(&state).map_err(err)?;
+    let rules = handle.registry().rules().to_vec();
+    let overrides = handle.registry().overrides().clone();
+    let revision = handle.settings_revision();
+    let now = handle.registry().now_unix();
+    let store = handle.store();
+    validate_match_query(std::slice::from_ref(&game), params)?;
+    let mut ctx = source_http_context()?;
+    emit(match_progress_value("inventory", 0, 1, true, revision));
+    let sink = std::cell::RefCell::new(emit);
+    let result = sources::matching::rematch_game(
+        store,
+        &rules,
+        &overrides,
+        &game,
+        &params.name_hints,
+        params.preferred_language.as_deref(),
+        &mut ctx,
+        cancel,
+        now,
+        |result| {
+            let mut emit = sink.borrow_mut();
+            emit(match_update_value(result, revision));
+        },
+    )
+    .map_err(err)?;
+    sink.borrow_mut()(match_progress_value("inventory", 1, 1, false, revision));
+    match_games_result(
+        revision,
+        sources::matching::source_revisions(store, &rules),
+        vec![result],
+    )
 }
 
 #[cfg(test)]
@@ -1159,9 +1384,7 @@ fn install_patch(
 #[cfg(test)]
 mod sources_tests {
     use super::*;
-    use steam_patch_core::sources::{
-        canonical, model::DiscoveryRecord, registry::DiscoveryOutcome,
-    };
+    use steam_patch_core::sources::model::{SourceIndex, SourceIndexEntry};
 
     fn fixture_root(temp: &Path) -> PathBuf {
         let root = temp.join("Steam");
@@ -1174,61 +1397,58 @@ mod sources_tests {
         root
     }
 
-    fn key_for_42() -> String {
-        canonical::query_key(&json!({
-            "appid": 42,
-            "name": "Synthetic",
-            "name_hints": [],
-            "preferred_language": null,
-            "legacy_match": false,
-            "source_context": ["kagura-cn"],
-            "parser_version": 2,
-            "query_version": 1,
-            "encoding_version": steam_patch_core::sources::SOURCES_ENCODING_VERSION,
-        }))
+    /// Initializes the v5 source namespace (empty index/match state).
+    fn seed(state: &Path) {
+        sources::Sources::open(state).unwrap();
     }
 
-    /// Seeds a fresh, confirmed-free complete record for AppID 42 and disables
-    /// the other discovery rules so `discover_game` short-circuits offline.
-    fn seed(state: &Path) {
-        let mut handle = sources::Sources::open(state).unwrap();
-        handle
-            .registry_mut()
-            .set_enabled("kagura-en", false)
-            .unwrap();
-        handle.registry_mut().set_enabled("hgamer", false).unwrap();
-        let rule = handle
-            .registry()
-            .rules()
-            .iter()
-            .find(|rule| rule.id == "kagura-cn")
-            .cloned()
-            .unwrap();
-        handle
-            .registry_mut()
-            .commit(
-                &rule,
-                42,
-                DiscoveryOutcome {
-                    status: "complete".to_string(),
-                    ..DiscoveryOutcome::default()
-                },
-                &DiscoveryRecord::default(),
-                &key_for_42(),
-            )
-            .unwrap();
+    /// Recursive path -> bytes snapshot so a test can prove a read wrote nothing.
+    fn state_files(root: &Path) -> std::collections::BTreeMap<String, Vec<u8>> {
+        fn walk(base: &Path, dir: &Path, out: &mut std::collections::BTreeMap<String, Vec<u8>>) {
+            let Ok(entries) = fs::read_dir(dir) else {
+                return;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    walk(base, &path, out);
+                } else {
+                    let relative = path
+                        .strip_prefix(base)
+                        .unwrap_or(&path)
+                        .to_string_lossy()
+                        .into_owned();
+                    out.insert(relative, fs::read(&path).unwrap_or_default());
+                }
+            }
+        }
+        let mut files = std::collections::BTreeMap::new();
+        walk(root, root, &mut files);
+        files
     }
 
     #[test]
     fn capabilities_and_unknown_method() {
         let capabilities = execute("get_capabilities", Params::default()).unwrap();
-        assert!(capabilities["methods"]
+        let methods: Vec<&str> = capabilities["methods"]
             .as_array()
             .unwrap()
             .iter()
-            .any(|method| method == "discover_game"));
+            .map(|method| method.as_str().unwrap())
+            .collect();
+        assert_eq!(methods.len(), 21);
+        assert!(methods.contains(&"match_games"));
+        assert!(methods.contains(&"project_instances"));
+        assert_eq!(capabilities["sources"]["index_schema_version"], 1);
+        assert_eq!(capabilities["sources"]["detail_schema_version"], 1);
+        assert_eq!(capabilities["sources"]["match_schema_version"], 1);
+        assert_eq!(capabilities["sources"]["schedule_schema_version"], 1);
         assert_eq!(capabilities["sources"]["parser_version"], 2);
-        assert_eq!(capabilities["sources"]["query_version"], 1);
+        assert_eq!(capabilities["sources"]["encoding_version"], 1);
+        assert_eq!(
+            capabilities["sources"]["methods"].as_array().unwrap().len(),
+            9
+        );
         assert_eq!(capabilities["installer"]["schema_version"], 1);
         assert_eq!(
             execute("bogus", Params::default()).unwrap_err().code,
@@ -1274,6 +1494,12 @@ mod sources_tests {
         let array = result.as_array().unwrap();
         assert_eq!(array.len(), 4);
         assert!(array.iter().any(|source| source["id"] == "patchmoe"));
+        for source in array {
+            assert_eq!(source["revision"], 0);
+            assert_eq!(source["complete"], false);
+            assert_eq!(source["interval_hours"], 0);
+            assert!(source["next_due_at"].is_null());
+        }
     }
 
     #[test]
@@ -1312,30 +1538,402 @@ mod sources_tests {
         assert_eq!(kagura["enabled"], false);
     }
 
+    fn save_match_record(
+        state: &Path,
+        appid: u32,
+        fallback_status: Option<sources::FallbackMatchStatus>,
+    ) {
+        let store = sources::store::SourceStore::open(state).unwrap();
+        store
+            .save_match(&sources::GameMatchRecord {
+                schema_version: 1,
+                appid,
+                name: "Synthetic".to_string(),
+                localized_name: None,
+                input_key: String::new(),
+                status: sources::GameMatchStatus::Pending,
+                sources: Default::default(),
+                fallback: fallback_status.map(|status| sources::FallbackMatchRecord {
+                    query_key: "fixture".to_string(),
+                    status,
+                    candidates: Vec::new(),
+                    checked_at: 1,
+                    diagnostics: Vec::new(),
+                }),
+                updated_at: 1,
+            })
+            .unwrap();
+    }
+
     #[test]
-    fn discover_game_uses_sealed_cache_offline() {
+    fn scan_reads_the_persisted_match_summary() {
         let temp = tempfile::tempdir().unwrap();
         let state = temp.path().join("state");
-        seed(&state);
+        save_match_record(&state, 42, Some(sources::FallbackMatchStatus::NoMatch));
+        let result = execute(
+            "scan",
+            Params {
+                roots: vec![fixture_root(temp.path())],
+                state_dir: Some(state),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(result["installs"][0]["discovery"]["status"], "no_match");
+        assert!(result["installs"][0]["discovery"]["candidates"].is_array());
+        assert_eq!(result["sources"].as_array().unwrap().len(), 4);
+    }
+
+    #[test]
+    fn scan_without_state_reports_pending_discovery_without_creating_state() {
+        let temp = tempfile::tempdir().unwrap();
+        let state = temp.path().join("absent-state");
+        let result = execute(
+            "scan",
+            Params {
+                roots: vec![fixture_root(temp.path())],
+                state_dir: Some(state.clone()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(result["installs"][0]["discovery"]["status"], "pending");
+        assert!(result["installs"][0]["discovery"]["candidates"]
+            .as_array()
+            .unwrap()
+            .is_empty());
+        assert!(!state.exists(), "scan must stay read-only");
+    }
+
+    #[test]
+    fn match_games_streams_inventory_for_an_empty_library() {
+        let temp = tempfile::tempdir().unwrap();
+        let state = temp.path().join("state");
+        let mut events = Vec::new();
+        let result = execute_streaming(
+            "match_games",
+            Params {
+                roots: vec![temp.path().to_path_buf()],
+                state_dir: Some(state),
+                ..Default::default()
+            },
+            &AtomicBool::new(false),
+            &mut |event| events.push(event),
+        )
+        .unwrap();
+        assert!(events
+            .iter()
+            .any(|event| { event["event"] == "match_progress" && event["phase"] == "inventory" }));
+        assert!(result["settings_revision"].is_number());
+        assert!(result["source_revisions"].is_object());
+        assert!(result["results"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn rematch_game_requires_an_instance_or_appid() {
+        let temp = tempfile::tempdir().unwrap();
+        let state = temp.path().join("state");
+        let error = execute_streaming(
+            "rematch_game",
+            Params {
+                roots: vec![temp.path().to_path_buf()],
+                state_dir: Some(state),
+                ..Default::default()
+            },
+            &AtomicBool::new(false),
+            &mut |_| {},
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "instance_required");
+    }
+
+    #[test]
+    fn project_instances_projects_requested_rows_and_reports_missing_instances() {
+        let temp = tempfile::tempdir().unwrap();
+        let state = temp.path().join("state");
+        save_match_record(&state, 42, Some(sources::FallbackMatchStatus::NoMatch));
         let root = fixture_root(temp.path());
         let instance_id = steam::scan(std::slice::from_ref(&root))
             .installs
             .remove(0)
             .instance_id;
         let result = execute(
-            "discover_game",
+            "project_instances",
             Params {
-                roots: vec![root],
-                state_dir: Some(state),
-                instance_id: Some(instance_id.clone()),
+                roots: vec![root.clone()],
+                state_dir: Some(state.clone()),
+                instance_ids: vec![instance_id.clone()],
                 ..Default::default()
             },
         )
         .unwrap();
-        assert_eq!(result["instance_id"], instance_id);
-        assert_eq!(result["appid"], 42);
-        assert_eq!(result["status"], "cache_complete");
-        assert!(result["candidates"].as_array().unwrap().is_empty());
+        assert!(result["settings_revision"].is_number());
+        assert_eq!(result["instances"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            result["instances"][0]["game"]["instance_id"],
+            instance_id.as_str()
+        );
+        assert_eq!(result["instances"][0]["discovery"]["status"], "no_match");
+
+        let missing = execute(
+            "project_instances",
+            Params {
+                roots: vec![root],
+                state_dir: Some(state),
+                instance_ids: vec!["missing".to_string()],
+                ..Default::default()
+            },
+        )
+        .unwrap_err();
+        assert_eq!(missing.code, "instance_not_found");
+    }
+
+    #[test]
+    fn project_instances_without_source_state_returns_no_settings_revision() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = fixture_root(temp.path());
+        let instance_id = steam::scan(std::slice::from_ref(&root))
+            .installs
+            .remove(0)
+            .instance_id;
+        let result = execute(
+            "project_instances",
+            Params {
+                roots: vec![root],
+                instance_ids: vec![instance_id],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(result["settings_revision"].is_null());
+        assert!(result["instances"][0]["discovery"].is_null());
+    }
+
+    /// P6 matrix 9: `scan` / `project_instances` are read-only projections and
+    /// never create or rewrite source state (and never touch the network).
+    #[test]
+    fn scan_and_project_instances_do_not_modify_existing_source_state() {
+        let temp = tempfile::tempdir().unwrap();
+        let state = temp.path().join("state");
+        seed(&state);
+        let store = sources::store::SourceStore::open(&state).unwrap();
+        store
+            .save_index(&SourceIndex {
+                schema_version: 1,
+                source_id: "patchmoe".to_string(),
+                revision: 3,
+                complete: true,
+                checked_at: 100,
+                updated_at: 100,
+                etag: None,
+                modified: None,
+                entries: vec![SourceIndexEntry {
+                    title: "Synthetic".to_string(),
+                    aliases: Vec::new(),
+                    page: "https://www.patch.moe/zh".to_string(),
+                    kind: "entry".to_string(),
+                    appid: Some(42),
+                    url: Some("https://download.patch.moe/synthetic.zip".to_string()),
+                    language: Some("zh-CN".to_string()),
+                    date: None,
+                }],
+                pending: Vec::new(),
+            })
+            .unwrap();
+        drop(store);
+        let root = fixture_root(temp.path());
+        let instance_id = steam::scan(std::slice::from_ref(&root))
+            .installs
+            .remove(0)
+            .instance_id;
+        let before = state_files(&state);
+
+        let scan = execute(
+            "scan",
+            Params {
+                roots: vec![root.clone()],
+                state_dir: Some(state.clone()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let projected = execute(
+            "project_instances",
+            Params {
+                roots: vec![root],
+                state_dir: Some(state.clone()),
+                instance_ids: vec![instance_id],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(scan["installs"].as_array().unwrap().len(), 1);
+        assert_eq!(projected["instances"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            state_files(&state),
+            before,
+            "scan/project_instances must not write source state"
+        );
+        let patchmoe = scan["sources"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|source| source["id"] == "patchmoe")
+            .unwrap();
+        assert_eq!(patchmoe["revision"], 3);
+    }
+
+    /// P6 matrix 8 (removed game): a persisted match record can never re-add a
+    /// game row; projection is derived from the current Steam inventory.
+    #[test]
+    fn scan_does_not_reintroduce_a_removed_game_from_a_persisted_match() {
+        let temp = tempfile::tempdir().unwrap();
+        let state = temp.path().join("state");
+        let root = fixture_root(temp.path());
+        seed(&state);
+        save_match_record(&state, 42, Some(sources::FallbackMatchStatus::NoMatch));
+
+        let before_removal = execute(
+            "scan",
+            Params {
+                roots: vec![root.clone()],
+                state_dir: Some(state.clone()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(before_removal["installs"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            before_removal["installs"][0]["discovery"]["status"],
+            "no_match"
+        );
+
+        fs::remove_file(root.join("steamapps/appmanifest_42.acf")).unwrap();
+        let after_removal = execute(
+            "scan",
+            Params {
+                roots: vec![root],
+                state_dir: Some(state),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(
+            after_removal["installs"].as_array().unwrap().is_empty(),
+            "a persisted match record must not re-add a removed game row"
+        );
+    }
+
+    #[test]
+    fn set_source_update_interval_persists_and_derives_next_due_at() {
+        let temp = tempfile::tempdir().unwrap();
+        let state = temp.path().join("state");
+        let result = execute(
+            "set_source_update_interval",
+            Params {
+                roots: vec![fixture_root(temp.path())],
+                state_dir: Some(state.clone()),
+                source_id: Some("patchmoe".to_string()),
+                interval_hours: Some(6),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(result["interval_hours"], 6);
+        assert!(result["settings_revision"].as_u64().unwrap() >= 2);
+
+        let store = sources::store::SourceStore::open(&state).unwrap();
+        store
+            .save_status(
+                "patchmoe",
+                &sources::SourceStatus {
+                    checked_at: 1_000,
+                    cached_at: Some(1_000),
+                    entry_count: 1,
+                    code: "source_refreshed".to_string(),
+                },
+            )
+            .unwrap();
+        let list = execute(
+            "list_sources",
+            Params {
+                roots: vec![fixture_root(temp.path())],
+                state_dir: Some(state),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let patchmoe = list
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|source| source["id"] == "patchmoe")
+            .unwrap();
+        assert_eq!(patchmoe["interval_hours"], 6);
+        assert_eq!(patchmoe["next_due_at"], 1_000 + 6 * 3_600);
+    }
+
+    #[test]
+    fn set_source_update_interval_rejects_unknown_and_fallback_sources() {
+        let temp = tempfile::tempdir().unwrap();
+        let state = temp.path().join("state");
+        let unknown = execute(
+            "set_source_update_interval",
+            Params {
+                roots: vec![fixture_root(temp.path())],
+                state_dir: Some(state.clone()),
+                source_id: Some("missing".to_string()),
+                interval_hours: Some(6),
+                ..Default::default()
+            },
+        )
+        .unwrap_err();
+        assert_eq!(unknown.code, "unknown_source");
+        let fallback = execute(
+            "set_source_update_interval",
+            Params {
+                roots: vec![fixture_root(temp.path())],
+                state_dir: Some(state),
+                source_id: Some("hgamer".to_string()),
+                interval_hours: Some(6),
+                ..Default::default()
+            },
+        )
+        .unwrap_err();
+        assert_eq!(fallback.code, "source_not_indexable");
+    }
+
+    #[test]
+    fn update_source_rejects_unknown_and_fallback_sources_without_network() {
+        let temp = tempfile::tempdir().unwrap();
+        let state = temp.path().join("state");
+        let unknown = execute_streaming(
+            "update_source",
+            Params {
+                roots: vec![fixture_root(temp.path())],
+                state_dir: Some(state.clone()),
+                source_id: Some("missing".to_string()),
+                ..Default::default()
+            },
+            &AtomicBool::new(false),
+            &mut |_| {},
+        )
+        .unwrap_err();
+        assert_eq!(unknown.code, "unknown_source");
+        let fallback = execute_streaming(
+            "update_source",
+            Params {
+                roots: vec![fixture_root(temp.path())],
+                state_dir: Some(state),
+                source_id: Some("hgamer".to_string()),
+                ..Default::default()
+            },
+            &AtomicBool::new(false),
+            &mut |_| {},
+        )
+        .unwrap_err();
+        assert_eq!(fallback.code, "source_not_indexable");
     }
 
     #[test]
@@ -1411,39 +2009,45 @@ mod sources_tests {
         assert!(result["settings_revision"].as_u64().unwrap() >= 1);
         assert!(result["sources"].as_array().is_some());
         let install = &result["installs"][0];
-        assert_eq!(install["discovery"]["status"], "cache_complete");
+        assert_eq!(install["discovery"]["status"], "pending");
         assert!(install["sources"].as_array().is_some());
     }
 
-    /// Seeds a patchmoe cache entry that carries AppID 42 so matching is offline.
+    /// Seeds a patchmoe index entry that carries AppID 42 so matching is offline.
     fn seed_patchmoe(state: &Path) {
         let handle = sources::Sources::open(state).unwrap();
         handle
             .store()
-            .save_cache(
-                "patchmoe",
-                &sources::SourceCache {
-                    entries: vec![sources::SourceEntry {
-                        title: "Synthetic".to_string(),
-                        aliases: Vec::new(),
-                        url: "https://download.patch.moe/synthetic.zip".to_string(),
-                        source_page: "https://www.patch.moe/synthetic".to_string(),
-                        language: "en".to_string(),
-                        date: None,
-                        appid: Some(42),
-                    }],
-                    etag: None,
-                    modified: None,
-                    cached_at: Some(1000),
-                    checked_at: Some(1000),
-                },
-            )
+            .save_index(&SourceIndex {
+                schema_version: 1,
+                source_id: "patchmoe".to_string(),
+                revision: 1,
+                complete: true,
+                checked_at: 1000,
+                updated_at: 1000,
+                etag: None,
+                modified: None,
+                entries: vec![SourceIndexEntry {
+                    title: "Synthetic".to_string(),
+                    aliases: Vec::new(),
+                    page: "https://www.patch.moe/synthetic".to_string(),
+                    kind: "entry".to_string(),
+                    appid: Some(42),
+                    url: Some("https://download.patch.moe/synthetic.zip".to_string()),
+                    language: Some("en".to_string()),
+                    date: None,
+                }],
+                pending: Vec::new(),
+            })
             .unwrap();
     }
 
     #[test]
     fn deleted_source_methods_are_not_in_the_whitelist() {
         for method in [
+            "refresh_sources",
+            "scan_sources",
+            "discover_game",
             "list_source_matches",
             "get_source_state",
             "get_source_settings",
@@ -1556,24 +2160,25 @@ mod sources_tests {
     }
 
     #[test]
-    fn scan_sources_streams_progress_for_empty_scan() {
+    fn set_source_update_interval_streams_no_events_and_returns_the_setting() {
         let temp = tempfile::tempdir().unwrap();
         let state = temp.path().join("state");
         let mut events = Vec::new();
         let result = execute_streaming(
-            "scan_sources",
+            "set_source_update_interval",
             Params {
                 roots: vec![temp.path().to_path_buf()],
                 state_dir: Some(state),
+                source_id: Some("patchmoe".to_string()),
+                interval_hours: Some(24),
                 ..Default::default()
             },
             &AtomicBool::new(false),
             &mut |event| events.push(event),
         )
         .unwrap();
-        assert!(events
-            .iter()
-            .any(|event| event["event"] == "source_progress"));
+        assert!(events.is_empty());
+        assert_eq!(result["interval_hours"], 24);
         assert!(result["settings_revision"].is_number());
     }
 }
@@ -1770,7 +2375,7 @@ mod install_flow_tests {
         use std::sync::{Arc, Mutex};
         let (_temp, params, _game) = fixture();
         let request = json!({
-            "protocol_version": 4,
+            "protocol_version": 5,
             "request_id": "request-1",
             "method": "install_patch",
             "params": crate::tests::wire_params("install_patch", serde_json::to_value(&params).unwrap()),
@@ -1798,7 +2403,7 @@ mod install_flow_tests {
         assert_eq!(sequences, (0..sequences.len() as u64).collect::<Vec<_>>());
         // Terminal-once: the task returns a single final response after events.
         assert_eq!(response["ok"], true);
-        assert_eq!(response["protocol_version"], 4);
+        assert_eq!(response["protocol_version"], 5);
         assert_eq!(response["result"]["state"], "committed");
     }
 
@@ -1907,10 +2512,9 @@ mod dynamic_projection_tests {
     use super::*;
     use sha2::{Digest, Sha256};
     use steam_patch_core::sources::model::{
-        ArtifactFormat, CacheStatus, Capability, DiscoveryRecord, MatchBasis, Mirror,
-        SourceCandidate,
+        ArtifactFormat, CacheStatus, Capability, GameMatchRecord, GameMatchStatus, MatchBasis,
+        Mirror, SourceCandidate, SourceMatchRecord, SourceMatchStatus,
     };
-    use steam_patch_core::sources::registry::DiscoveryOutcome;
 
     const APPID: u32 = 42;
 
@@ -1956,29 +2560,37 @@ mod dynamic_projection_tests {
         }
     }
 
+    fn save_dynamic_match(sources: &sources::Sources, candidate: SourceCandidate) {
+        let source_id = candidate.source_id.clone();
+        sources
+            .store()
+            .save_match(&GameMatchRecord {
+                schema_version: 1,
+                appid: APPID,
+                name: "Test".to_string(),
+                localized_name: None,
+                input_key: "key".to_string(),
+                status: GameMatchStatus::PublisherMatch,
+                sources: std::collections::BTreeMap::from([(
+                    source_id,
+                    SourceMatchRecord {
+                        index_revision: 1,
+                        status: SourceMatchStatus::Matched,
+                        candidates: vec![candidate],
+                        detail_pages: Vec::new(),
+                        checked_at: 100,
+                        diagnostics: Vec::new(),
+                    },
+                )]),
+                fallback: None,
+                updated_at: 100,
+            })
+            .unwrap();
+    }
+
     fn seed_dynamic(state: &Path) {
-        let mut handle = sources::Sources::open(state).unwrap();
-        let rule = handle
-            .registry()
-            .rules()
-            .iter()
-            .find(|rule| rule.id == "kagura-cn")
-            .cloned()
-            .unwrap();
-        handle
-            .registry_mut()
-            .commit(
-                &rule,
-                APPID,
-                DiscoveryOutcome {
-                    status: "complete".to_string(),
-                    candidates: vec![dynamic_candidate()],
-                    ..DiscoveryOutcome::default()
-                },
-                &DiscoveryRecord::default(),
-                "key",
-            )
-            .unwrap();
+        let handle = sources::Sources::open(state).unwrap();
+        save_dynamic_match(&handle, dynamic_candidate());
     }
 
     /// Synthetic installed game + seeded source candidate + dynamic archive.
@@ -2245,28 +2857,8 @@ mod dynamic_projection_tests {
         candidate.format_reported = ArtifactFormat::Exe;
         candidate.format_observed = ArtifactFormat::Exe;
         let selection_id = installer::exe_resolve::exe_selection_id(&candidate).unwrap();
-        let mut handle = sources::Sources::open(&state).unwrap();
-        let rule = handle
-            .registry()
-            .rules()
-            .iter()
-            .find(|rule| rule.id == "kagura-cn")
-            .cloned()
-            .unwrap();
-        handle
-            .registry_mut()
-            .commit(
-                &rule,
-                APPID,
-                DiscoveryOutcome {
-                    status: "complete".to_string(),
-                    candidates: vec![candidate],
-                    ..DiscoveryOutcome::default()
-                },
-                &DiscoveryRecord::default(),
-                "key",
-            )
-            .unwrap();
+        let handle = sources::Sources::open(&state).unwrap();
+        save_dynamic_match(&handle, candidate);
         let params = Params {
             roots: vec![library],
             state_dir: Some(state),
@@ -2327,28 +2919,8 @@ mod dynamic_projection_tests {
         // The demo candidate must still be projected (with its own selection id);
         // only resolution rejects it, which the UI surfaces as a clean blocker.
         let selection_id = installer::exe_resolve::exe_selection_id(&candidate).unwrap();
-        let mut handle = sources::Sources::open(&state).unwrap();
-        let rule = handle
-            .registry()
-            .rules()
-            .iter()
-            .find(|rule| rule.id == "kagura-cn")
-            .cloned()
-            .unwrap();
-        handle
-            .registry_mut()
-            .commit(
-                &rule,
-                APPID,
-                DiscoveryOutcome {
-                    status: "complete".to_string(),
-                    candidates: vec![candidate],
-                    ..DiscoveryOutcome::default()
-                },
-                &DiscoveryRecord::default(),
-                "key",
-            )
-            .unwrap();
+        let handle = sources::Sources::open(&state).unwrap();
+        save_dynamic_match(&handle, candidate);
         let params = Params {
             roots: vec![library],
             state_dir: Some(state),

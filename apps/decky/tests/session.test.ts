@@ -1,13 +1,55 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { DiscoveryResult, Install, Patch, ScanResult, Transaction } from "@steam-patch/ui";
+import type { GameMatch, Install, ProjectInstancesResult, ScanResult, SourceSubscription, SourceUpdateResult, Transaction } from "@steam-patch/ui";
 import { createManagerSession, feedbackFor, needsRecovery } from "../src/session.ts";
+import type { SourceTaskApi, SourceTaskSnapshot } from "../src/source-tasks.ts";
 import { setListPreferences } from "../src/preferences.ts";
 
 const report: ScanResult = {
   roots: [], catalog_revision: 1, catalog_trust: "signed", platform: "steamos",
   installs: [], diagnostics: [],
 };
+
+const game = (instance: string, appid = 1227890): Install => ({
+  game: { instance_id: instance, appid, name: "Summer Memories", library_path: instance,
+    install_path: `${instance}/game`, buildid: null, availability: "installed", kind: "game" },
+  patches: [], match_status: "no_catalog_match",
+});
+const rowReport = (): ScanResult => ({ ...report, generation: 3, settings_revision: 4, installs: [game("a")] });
+const match = (fields: Partial<GameMatch> = {}): GameMatch => ({
+  appid: 1227890, instance_id: "a", status: "publisher_match",
+  candidates: [{ candidate_id: "candidate-0123456789abcdef01234567", source_id: "patchmoe",
+    source_page: "https://www.patch.moe/", game_title: "Summer Memories", patch_title: "补丁",
+    variant: "base", patch_kind: "adult_content", version_identity: "v1", format_reported: "zip",
+    format_observed: "zip", capability: "discover_only", match_basis: "appid",
+    observed_at: "2026-10-11T00:00:00Z", cache_status: "fresh", fingerprint: "f" }],
+  diagnostics: [], source_revisions: {}, ...fields,
+});
+const task = (fields: Partial<SourceTaskSnapshot> = {}): SourceTaskSnapshot => ({
+  task_id: "task-1", kind: "rematch_game", key: "a", state: "running",
+  instances: ["a"], appid: 1227890, progress: null, matches: {}, result: null,
+  error: null, ...fields,
+});
+
+function fakeApi(queue: SourceTaskSnapshot[][], overrides: Partial<SourceTaskApi> = {}) {
+  const calls = { rematchGame: [] as unknown[][], updateSource: [] as unknown[][], cancelTask: [] as string[],
+    projectInstances: [] as string[][], listSources: 0, setInterval: [] as unknown[][] };
+  const api: SourceTaskApi = {
+    listSources: async () => { calls.listSources++; return []; },
+    updateSource: async (...args) => { calls.updateSource.push(args); return task({ kind: "update_source", key: "patchmoe", instances: [], appid: null }); },
+    matchGames: async () => task({ kind: "match_games", key: "match" }),
+    rematchGame: async (...args) => {
+      assert.notEqual(args[0] === null, args[1] === null, "backend requires exactly one game selector");
+      calls.rematchGame.push(args); return task();
+    },
+    setInterval: async (...args) => { calls.setInterval.push(args); return {}; },
+    projectInstances: async (ids) => { calls.projectInstances.push(ids); return { settings_revision: 9, instances: [] }; },
+    taskStatus: async () => queue.shift() ?? [],
+    cancelTask: async (id) => { calls.cancelTask.push(id); return task({ state: "cancelling" }); },
+    ...overrides,
+  };
+  return { api, calls };
+}
 
 test("menu remounts and filter changes reuse the snapshot; explicit refresh scans again", async () => {
   let scans = 0;
@@ -28,37 +70,6 @@ test("menu remounts and filter changes reuse the snapshot; explicit refresh scan
   await session.refresh();
   assert.equal(scans, 2);
   remount();
-});
-
-test("scan status updates the same generation without a detail mount", async () => {
-  const initial: ScanResult = { ...report, generation: 7, settings_revision: 2, scan_progress: { completed: 0, total: 1, running: true } };
-  let polls = 0;
-  const session = createManagerSession(async () => ({ report: initial, transactions: [] }), undefined, async generation => {
-    assert.equal(generation, 7);
-    polls++;
-    return { ...initial, scan_progress: { completed: 1, total: 1, running: false } };
-  });
-  await session.ensureSnapshot();
-  await new Promise(resolve => setTimeout(resolve, 1050));
-  assert.equal(polls, 1);
-  assert.equal(session.getSnapshot().report?.scan_progress?.completed, 1);
-});
-
-test("starting a refresh fences errors from the previous scan before its snapshot arrives", async () => {
-  const initial = { ...report, generation: 7, settings_revision: 2, scan_progress: { completed: 0, total: 1, running: true } };
-  let finish!: (value: { report: ScanResult; transactions: Transaction[] }) => void;
-  let calls = 0;
-  const session = createManagerSession(() => ++calls === 1 ? Promise.resolve({ report: initial, transactions: [] })
-    : new Promise(resolve => { finish = resolve; }), undefined, async () => { throw new Error("scan_stale"); });
-  await session.refresh();
-  const refreshing = session.refresh();
-  await new Promise(resolve => setTimeout(resolve, 1050));
-  assert.equal(session.getSnapshot().error, null);
-  assert.equal(session.getSnapshot().busy, "正在扫描…");
-  finish({ report: { ...initial, generation: 8, scan_progress: { completed: 1, total: 1, running: false } }, transactions: [] });
-  await refreshing;
-  assert.equal(session.getSnapshot().error, null);
-  assert.equal(session.getSnapshot().report?.generation, 8);
 });
 
 test("an in-flight scan survives unmount and blocks duplicate scans and operations", async () => {
@@ -113,185 +124,128 @@ test("recovery is offered for interrupted writes, but not prepared or completed 
   }
 });
 
-const game = (instance: string): Install => ({ game: { instance_id: instance, appid: 1227890, name: "Summer Memories", library_path: instance, install_path: `${instance}/game`, buildid: null, availability: "installed", kind: "game" }, patches: [], match_status: "no_catalog_match" });
-const discoveryReport = (): ScanResult => ({ ...report, generation: 3, settings_revision: 4, installs: [game("a"), game("b")] });
-const discovery = (fields: Partial<DiscoveryResult> = {}): DiscoveryResult => ({ instance_id: "a", appid: 1227890, generation: 3, settings_revision: 4, status: "complete", candidates: [{ candidate_id: "candidate", source_id: "kagura-cn", game_title: "Summer Memories", patch_title: "补丁", capability: "discover_only", source_page: "https://kagurafan.com", match_basis: "appid" }], diagnostics: [], ...fields });
-const release = (id: string, support_level: string, source_id = "kagura-cn"): Patch => ({
-  release_id: id, name: id, source_id, source_page: "https://kagurafan.com", support_level, actions: { automatic: { available: false, blockers: [] }, local_archive: { available: false, blockers: [] }, reinstall: { available: false, blockers: [] }, overwrite: { available: false, blockers: [] }, primary: { operation: "overwrite", label: "install", input: "unavailable" } },
-  compatibility: "verified", blockers: [], detection: { status: "not_detected", files: [] },
-  ...(support_level === "publisher_exe" ? { selection_id: `exe-selection-${id}` } : {}),
-});
-
-test("EXE selection discovery adds a release while keeping existing ZIP patches and candidate guidance", async () => {
-  const base = discoveryReport();
-  base.installs[0].patches = [release("zip", "managed_zip")];
-  const session = createManagerSession(async () => ({ report: base, transactions: [] }), async () =>
-    discovery({ patches: [release("exe-reviewed", "publisher_exe")] }));
-  await session.refresh(); await session.discover("a", []);
-  const row = session.getSnapshot().report!.installs[0];
-  assert.deepEqual(row.patches.map(patch => patch.release_id), ["zip", "exe-reviewed"]);
-  assert.equal(row.discovery?.candidates[0].capability, "discover_only");
-  assert.equal(row.patches[1].selection_id, "exe-selection-exe-reviewed");
-});
-
-test("repeated EXE selection IDs appear only once", async () => {
-  const exe = release("exe-reviewed", "publisher_exe");
-  const session = createManagerSession(async () => ({ report: discoveryReport(), transactions: [] }), async () =>
-    discovery({ patches: [exe, { ...exe }] }));
-  await session.refresh(); await session.discover("a", []);
-  assert.deepEqual(session.getSnapshot().report!.installs[0].patches.map(patch => patch.release_id), ["exe-reviewed"]);
-});
-
-test("different dynamic selections sharing a release stay selectable", async () => {
-  const first = release("same-release", "publisher_exe");
-  const second = { ...first, selection_id: "exe-selection-second" };
-  const session = createManagerSession(async () => ({ report: discoveryReport(), transactions: [] }), async () =>
-    discovery({ patches: [first, second] }));
-  await session.refresh(); await session.discover("a", []);
-  assert.deepEqual(session.getSnapshot().report!.installs[0].patches.map(patch => patch.selection_id),
-    ["exe-selection-same-release", "exe-selection-second"]);
-});
-
-test("source subscription revocation removes its EXE selection and preserves other patches", async () => {
-  const base = discoveryReport();
-  base.installs[0].patches = [release("zip", "managed_zip")];
-  const session = createManagerSession(async () => ({ report: base, transactions: [] }), async () =>
-    discovery({ patches: [release("exe-reviewed", "publisher_exe")] }));
-  await session.refresh(); await session.discover("a", []);
-  session.invalidateDiscovery("kagura-cn", 1227890);
-  assert.deepEqual(session.getSnapshot().report!.installs[0].patches.map(patch => patch.release_id), ["zip"]);
-});
-
-test("a stale discovery response clears a previous EXE selection", async () => {
-  let calls = 0;
-  const session = createManagerSession(async () => ({ report: discoveryReport(), transactions: [] }), async () =>
-    ++calls === 1 ? discovery({ patches: [release("exe-reviewed", "publisher_exe")] })
-      : discovery({ status: "stale", patches: [] }));
-  await session.refresh(); await session.discover("a", []);
-  assert.equal(session.getSnapshot().report!.installs[0].patches[0].release_id, "exe-reviewed");
-  await session.discover("a", [], null, true);
-  assert.deepEqual(session.getSnapshot().report!.installs[0].patches, []);
-});
-
-test("failed refresh preserves previous EXE and ZIP selections", async () => {
-  let calls = 0;
-  const base = discoveryReport();
-  base.installs[0].patches = [release("zip", "managed_zip")];
-  const session = createManagerSession(async () => ({ report: base, transactions: [] }), async () => {
-    if (++calls === 1) return discovery({ patches: [release("exe-reviewed", "publisher_exe")] });
-    throw new Error("source_refresh_failed");
+test("rematch task merges live match updates into every row sharing the AppID, then projects the affected row", async () => {
+  const initial = rowReport();
+  initial.installs = [game("a"), game("a-dlc", 1227890), game("b", 500)];
+  const projected = { ...game("a"), patches: [{ release_id: "source-patchmoe-1227890" } as Install["patches"][number]],
+    discovery: { status: "publisher_match", candidates: match().candidates, diagnostics: [] } };
+  const running = task({ matches: { "1227890": {
+    appid: 1227890, instance_id: "a", status: "publisher_match",
+    candidates: match().candidates, diagnostics: [] } } });
+  const completed = task({ state: "completed", result: { settings_revision: 9, source_revisions: {}, results: [match(), match({ instance_id: "a-dlc" })] } });
+  const { api, calls } = fakeApi([[running], [completed], []], {
+    projectInstances: async (ids) => {
+      calls.projectInstances.push(ids);
+      return { settings_revision: 9, instances: [projected] };
+    },
   });
-  await session.refresh(); await session.discover("a", []);
-  assert.deepEqual(session.getSnapshot().report!.installs[0].patches.map(patch => patch.release_id), ["zip", "exe-reviewed"]);
-  await session.discover("a", [], null, true);
-  assert.deepEqual(session.getSnapshot().report!.installs[0].patches.map(patch => patch.release_id), ["zip", "exe-reviewed"]);
-  assert.match(session.getSnapshot().discoveries.a.error!, /查询失败/);
-});
-
-test("a failed request from an older generation cannot revoke the newer scan's EXE", async () => {
-  let rejectOld!: (error: Error) => void;
-  const first = discoveryReport();
-  first.installs[0].patches = [release("old-exe", "publisher_exe")];
-  const newer = { ...discoveryReport(), generation: 5, installs: [game("a"), game("b")] };
-  newer.installs[0].patches = [release("new-exe", "publisher_exe")];
-  let scans = 0;
-  const session = createManagerSession(async () => ({ report: ++scans === 1 ? first : newer, transactions: [] }),
-    () => new Promise((_resolve, reject) => { rejectOld = reject; }));
+  const session = createManagerSession(async () => ({ report: initial, transactions: [] }), api);
   await session.refresh();
-  const pending = session.discover("a", []);
-  await session.refresh();
-  rejectOld(new Error("source_refresh_failed"));
-  await pending;
-  assert.equal(session.getSnapshot().report?.generation, 5);
-  assert.deepEqual(session.getSnapshot().report!.installs[0].patches.map(patch => patch.release_id), ["new-exe"]);
-});
-
-test("single-game discovery survives remount, is deduplicated and preserves transactions and installation work", async () => {
-  let finish!: (result: DiscoveryResult) => void;
-  let calls = 0;
-  let names: string[] = [];
-  let language: string | null = "unexpected";
-  const session = createManagerSession(async () => ({ report: discoveryReport(), transactions: [] }), async (_instance, hints, preference) => {
-    calls++; names = hints; language = preference;
-    return new Promise(resolve => { finish = resolve; });
-  });
-  await session.refresh();
-  const tx = { transaction_id: "receipt", instance_id: "b", release_id: "release", state: "committed" };
-  session.update({ busy: "正在安装…", transactions: [tx] });
-  const originalOther = session.getSnapshot().report!.installs[1];
-  const first = session.discover("a", ["夏日狂想曲", "Summer Memories", "夏日狂想曲", "あまえんぼ", "ignored"]);
-  const unsubscribe = session.subscribe(() => {}); unsubscribe();
-  const second = session.discover("a", ["Summer Memories"]);
-  assert.equal(first, second);
-  assert.equal(calls, 1);
-  assert.deepEqual(names, ["夏日狂想曲", "Summer Memories", "あまえんぼ"]);
-  assert.equal(language, null);
-  finish(discovery()); await first;
-  assert.equal(session.getSnapshot().busy, "正在安装…");
-  assert.deepEqual(session.getSnapshot().transactions, [tx]);
-  assert.equal(session.getSnapshot().report!.installs[1], originalOther);
-  assert.equal(session.getSnapshot().report!.installs[0].discovery!.candidates[0].candidate_id, "candidate");
-  await session.discover("a", []); assert.equal(calls, 1);
-});
-
-test("generation, subscription revision, instance and AppID fencing reject stale discovery responses", async () => {
-  for (const response of [discovery({ generation: 2 }), discovery({ settings_revision: 3 }), discovery({ instance_id: "b" }), discovery({ appid: 100 })]) {
-    const session = createManagerSession(async () => ({ report: discoveryReport(), transactions: [] }), async () => response);
-    await session.refresh(); await session.discover("a", []);
-    assert.equal(session.getSnapshot().report!.installs[0].discovery, undefined);
+  assert.equal(await session.rematchGame("a", 1227890, ["Summer Memories"], "zh-CN"), "task-1");
+  assert.deepEqual(calls.rematchGame[0], ["a", null, ["Summer Memories"], "zh-CN"]);
+  await session.pollSourceTasks();
+  for (const instance of ["a", "a-dlc"]) {
+    assert.equal(session.getSnapshot().report!.installs.find(row => row.game.instance_id === instance)!.discovery!.status, "publisher_match");
   }
-  let finish!: (result: DiscoveryResult) => void;
-  const session = createManagerSession(async () => ({ report: discoveryReport(), transactions: [] }), () => new Promise(resolve => { finish = resolve; }));
+  assert.equal(session.getSnapshot().report!.installs.find(row => row.game.instance_id === "b")!.discovery, undefined);
+  await session.pollSourceTasks();
+  assert.deepEqual(calls.projectInstances, [["a", "a-dlc"]]);
+  assert.equal(session.getSnapshot().report!.installs[0].patches[0].release_id, "source-patchmoe-1227890");
+  assert.equal(session.getSnapshot().report!.settings_revision, 9);
+  assert.deepEqual(session.getSnapshot().sourceTasks, {});
+  await session.pollSourceTasks();
+  assert.deepEqual(calls.projectInstances, [["a", "a-dlc"]]);
+});
+
+test("update_source completion refreshes sources and projects the affected instances", async () => {
+  const initial = rowReport();
+  initial.installs = [game("a", 1), game("b", 2)];
+  const summaries = [{ id: "patchmoe", name: "patch.moe", enabled: true, interval_hours: 6 }] as unknown as SourceSubscription[];
+  const running = task({ task_id: "update", kind: "update_source", key: "patchmoe", instances: [], appid: null });
+  const result: SourceUpdateResult = {
+    source_id: "patchmoe", settings_revision: 9,
+    status: { checked_at: 20, cached_at: 20, entry_count: 2, code: "source_refreshed" },
+    revision: 2, complete: true, affected_appids: [1],
+  };
+  const completed = { ...running, state: "completed" as const, result };
+  let sources = 0;
+  const { api, calls } = fakeApi([[running], [completed], []], {
+    listSources: async () => { sources++; return summaries; },
+    projectInstances: async (ids) => { calls.projectInstances.push(ids); return { settings_revision: 9, instances: [game("a", 1)] }; },
+  });
+  const session = createManagerSession(async () => ({ report: initial, transactions: [] }), api);
   await session.refresh();
-  const pending = session.discover("a", []);
-  session.update({ report: { ...session.getSnapshot().report!, generation: 5 } });
-  finish(discovery()); await pending;
-  assert.equal(session.getSnapshot().report!.installs[0].discovery, undefined);
+  await session.updateSource("patchmoe");
+  await session.pollSourceTasks();
+  await session.pollSourceTasks();
+  assert.deepEqual(calls.projectInstances, [["a"]]);
+  assert.equal(sources, 1);
+  assert.equal(session.getSnapshot().report!.sources, summaries);
+  assert.equal(session.getSnapshot().sourceTasks.update, undefined);
 });
 
-test("disabling a source clears its candidate projection and blocks in-flight results without removing receipts", async () => {
-  let finish!: (result: DiscoveryResult) => void;
-  const session = createManagerSession(async () => ({ report: discoveryReport(), transactions: [] }), () => new Promise(resolve => { finish = resolve; }));
+test("a failed source task reports its domain error on the owning game and projects nothing", async () => {
+  const initial = rowReport();
+  const failed = task({ state: "failed", error: "source_refresh_failed", error_detail: "offline" });
+  const { api, calls } = fakeApi([[failed], []]);
+  const session = createManagerSession(async () => ({ report: initial, transactions: [] }), api);
   await session.refresh();
-  const tx = { transaction_id: "receipt", instance_id: "a", release_id: "old", state: "committed" };
-  session.update({ transactions: [tx] });
-  const pending = session.discover("a", []);
-  session.invalidateDiscovery("kagura-cn", 1227890);
-  finish(discovery()); await pending;
-  assert.deepEqual(session.getSnapshot().report!.installs[0].discovery!.candidates, []);
-  assert.deepEqual(session.getSnapshot().transactions, [tx]);
-  assert.deepEqual(session.getSnapshot().discoveries, {});
+  await session.rematchGame("a", 1227890);
+  await session.pollSourceTasks();
+  assert.match(feedbackFor(session.getSnapshot(), "a").error!, /查询失败/);
+  assert.match(feedbackFor(session.getSnapshot(), "a").error!, /offline/);
+  assert.equal(feedbackFor(session.getSnapshot(), "other").error, null);
+  assert.deepEqual(calls.projectInstances, []);
 });
 
-test("discovery failure keeps cached metadata and can be explicitly retried without changing installation state", async () => {
-  let calls = 0;
-  const cachedReport = discoveryReport();
-  cachedReport.installs[0].discovery = { status: "cache_complete", candidates: discovery().candidates, diagnostics: [] };
-  const session = createManagerSession(async () => ({ report: cachedReport, transactions: [] }), async () => { if (++calls === 1) throw new Error("source_refresh_failed"); return discovery(); });
+test("match_games tasks update rows for every reported AppID", async () => {
+  const initial = rowReport();
+  initial.installs = [game("a", 1), game("b", 1), game("c", 2)];
+  const running = task({ kind: "match_games", key: "match", instances: [], appid: null,
+    matches: { "1": { appid: 1, instance_id: null, status: "no_match", candidates: [], diagnostics: [] } } });
+  const { api } = fakeApi([[running], []]);
+  const session = createManagerSession(async () => ({ report: initial, transactions: [] }), api);
   await session.refresh();
-  session.update({ busy: "正在安装…", note: "安装已准备" });
-  await session.discover("a", []);
-  assert.equal(session.getSnapshot().report!.installs[0].discovery!.candidates.length, 1);
-  assert.match(session.getSnapshot().discoveries.a.error!, /查询失败/);
-  assert.equal(session.getSnapshot().busy, "正在安装…");
-  assert.equal(session.getSnapshot().note, "安装已准备");
-  await session.discover("a", [], null, true);
-  assert.equal(calls, 2);
-  assert.equal(session.getSnapshot().discoveries.a.error, null);
+  await session.matchGames(null, [], null, false);
+  await session.pollSourceTasks();
+  for (const instance of ["a", "b"]) {
+    assert.deepEqual(session.getSnapshot().report!.installs.find(row => row.game.instance_id === instance)!.discovery,
+      { status: "no_match", candidates: [], diagnostics: [] });
+  }
+  assert.equal(session.getSnapshot().report!.installs.find(row => row.game.instance_id === "c")!.discovery, undefined);
 });
 
-test("a stale backend result cannot replace metadata and leaves discovery retryable", async () => {
-  let calls = 0;
-  const session = createManagerSession(async () => ({ report: discoveryReport(), transactions: [] }), async () => ++calls === 1 ? discovery({ status: "stale" }) : discovery());
-  await session.refresh(); await session.discover("a", []);
-  assert.equal(session.getSnapshot().report!.installs[0].discovery, undefined);
-  await session.discover("a", []);
-  assert.equal(calls, 2);
-  assert.equal(session.getSnapshot().report!.installs[0].discovery!.candidates.length, 1);
+test("cancelling a source task keeps it visible until the host reports a terminal state", async () => {
+  const initial = rowReport();
+  const running = task();
+  const cancelled = task({ state: "cancelled" });
+  const { api, calls } = fakeApi([[running], [cancelled], []]);
+  const session = createManagerSession(async () => ({ report: initial, transactions: [] }), api);
+  await session.refresh();
+  await session.rematchGame("a", 1227890);
+  await session.pollSourceTasks();
+  await session.cancelSourceTask("task-1");
+  assert.deepEqual(calls.cancelTask, ["task-1"]);
+  assert.equal(session.getSnapshot().sourceTasks["task-1"].state, "cancelling");
+  await session.pollSourceTasks();
+  assert.deepEqual(session.getSnapshot().sourceTasks, {});
 });
 
+test("source interval writes refresh the source summaries without a scan", async () => {
+  const initial = rowReport();
+  const summaries = [{ id: "patchmoe", name: "patch.moe", enabled: true, interval_hours: 24 }] as unknown as SourceSubscription[];
+  let scans = 0;
+  const { api, calls } = fakeApi([], { listSources: async () => { calls.listSources++; return summaries; } });
+  const session = createManagerSession(async () => { scans++; return { report: initial, transactions: [] }; }, api);
+  await session.refresh();
+  await session.setSourceInterval("patchmoe", 24);
+  assert.deepEqual(calls.setInterval, [["patchmoe", 24]]);
+  assert.equal(session.getSnapshot().report!.sources, summaries);
+  assert.equal(scans, 1);
+  assert.equal(calls.listSources, 1);
+});
 
-test("game feedback survives remounts without claiming another game was installed", async () => {
+test("feedback survives remounts and stays scoped to the original game", async () => {
   const session = createManagerSession(async () => ({ report, transactions: [] }));
   await session.ensureSnapshot();
   session.setFeedback({ note: "安装完成，文件已写入。" }, "night");
@@ -333,40 +287,88 @@ test("game operation failures are scoped while scan and settings feedback remain
   assert.equal(feedbackFor(session.getSnapshot()).note, "已开启自动清理。");
 });
 
-test("explicit force query is not swallowed by pending cached query and fences its late reply", async () => {
-  let finishOld!: (value: DiscoveryResult) => void;
-  const calls: boolean[] = [];
-  const session = createManagerSession(async () => ({ report: discoveryReport(), transactions: [] }), async (_instance, _names, _language, force) => {
-    calls.push(force);
-    if (!force) return new Promise(resolve => { finishOld = resolve; });
-    return discovery({ patches: [release("fresh", "publisher_exe")] });
-  });
-  await session.refresh();
-  const old = session.discover("a", []);
-  await session.discover("a", [], "zh-CN", true);
-  finishOld(discovery({ patches: [release("old", "publisher_exe")] }));
-  await old;
-  assert.deepEqual(calls, [false, true]);
-  assert.deepEqual(session.getSnapshot().report!.installs[0].patches.map(p => p.release_id), ["fresh"]);
+test("source cards keep independent expansion through navigation, snapshots and source changes", async () => {
+  const { api, calls } = fakeApi([]);
+  let scans = 0;
+  const session = createManagerSession(async () => { scans++; return { report, transactions: [] }; }, api);
+  assert.deepEqual(session.getSnapshot().expandedSources, {});
+  const initial = session.getSnapshot();
+  session.toggleSourceExpanded("patchmoe");
+  session.toggleSourceExpanded("hgamer");
+  assert.deepEqual(initial.expandedSources, {});
+  assert.deepEqual(session.getSnapshot().expandedSources, { patchmoe: true, hgamer: true });
+  const unmount = session.subscribe(() => {});
+  unmount();
+  let notifications = 0;
+  const remount = session.subscribe(() => { notifications++; });
+  session.acceptSnapshot({ report, transactions: [] });
+  session.commitSources([{ id: "patchmoe", name: "Renamed source", enabled: false }, { id: "new-source" }] as SourceSubscription[]);
+  session.toggleSourceExpanded("patchmoe");
+  assert.deepEqual(session.getSnapshot().expandedSources, { patchmoe: false, hgamer: true });
+  assert.equal(session.getSnapshot().expandedSources["new-source"], undefined);
+  assert.ok(notifications > 0);
+  assert.equal(scans, 0);
+  assert.deepEqual(calls, { rematchGame: [], updateSource: [], cancelTask: [], projectInstances: [], listSources: 0, setInterval: [] });
+  remount();
+  assert.deepEqual(createManagerSession(async () => ({ report, transactions: [] })).getSnapshot().expandedSources, {});
 });
 
+test("collapsing an updating source neither cancels nor restarts its task", async () => {
+  const running = task({ kind: "update_source", key: "patchmoe", instances: [], appid: null });
+  const { api, calls } = fakeApi([[running]]);
+  const session = createManagerSession(async () => ({ report, transactions: [] }), api);
+  session.acceptSnapshot({ report, transactions: [] });
+  await session.updateSource("patchmoe");
+  session.toggleSourceExpanded("patchmoe");
+  session.toggleSourceExpanded("patchmoe");
+  await session.pollSourceTasks();
+  assert.equal(session.getSnapshot().expandedSources.patchmoe, false);
+  assert.equal(session.getSnapshot().sourceTasks["task-1"].state, "running");
+  assert.deepEqual(calls.updateSource, [["patchmoe", false]]);
+  assert.deepEqual(calls.cancelTask, []);
+  assert.equal(calls.listSources, 0);
+});
 
-test("a targeted query switches to task generation and continues polling after its starting RPC", async () => {
-  const base = discoveryReport();
-  const running: ScanResult = { ...base, generation: 4, scan_progress: { running: true, completed: 0, total: 1 } };
-  let polls = 0;
-  const session = createManagerSession(async () => ({ report: base, transactions: [] }),
-    async () => ({ ...discovery(), patches: [], query_report: running }),
-    async generation => {
-      assert.equal(generation, 4);
-      polls++;
-      return { ...running, scan_progress: { running: false, completed: 1, total: 1 } };
-    });
+test("failed source updates refresh the latest attempt without opening the card or losing error details", async () => {
+  const failed = task({ kind: "update_source", key: "patchmoe", instances: [], appid: null,
+    state: "failed", error: "source_refresh_failed", error_detail: "HTTP 503" });
+  const summaries = [{ id: "patchmoe", role: "publisher", status: "source_offline_cached" }] as SourceSubscription[];
+  const { api, calls } = fakeApi([[failed]], { listSources: async () => { calls.listSources++; return summaries; } });
+  const session = createManagerSession(async () => ({ report, transactions: [] }), api);
+  session.acceptSnapshot({ report, transactions: [] });
+  await session.pollSourceTasks();
+  assert.equal(session.getSnapshot().report!.sources, summaries);
+  assert.equal(calls.listSources, 1);
+  assert.deepEqual(session.getSnapshot().expandedSources, {});
+  assert.match(session.getSnapshot().error!, /HTTP 503/);
+  assert.deepEqual(session.getSnapshot().sourceTasks, {});
+  await session.pollSourceTasks();
+  assert.equal(calls.listSources, 1);
+});
+
+test("a failed attempt and a failed status read are both visible", async () => {
+  const { api } = fakeApi([[task({ kind: "update_source", instances: [], state: "failed", error_detail: "HTTP 503" })]],
+    { listSources: async () => { throw Error("status unavailable"); } });
+  const session = createManagerSession(async () => ({ report, transactions: [] }), api);
+  await session.pollSourceTasks();
+  assert.match(session.getSnapshot().error!, /HTTP 503/);
+  assert.match(session.getSnapshot().error!, /来源状态读取失败.*status unavailable/);
+});
+
+test("retrying a failed rematch clears its previous error and sends one game selector", async () => {
+  let attempts = 0;
+  const { api } = fakeApi([], {
+    rematchGame: async (instance, appid) => {
+      assert.equal(instance, "a");
+      assert.equal(appid, null);
+      if (++attempts === 1) throw new Error("Python Exception");
+      return task();
+    },
+  });
+  const session = createManagerSession(async () => ({ report: rowReport(), transactions: [] }), api);
   await session.refresh();
-  await session.discover("a", [], null, true);
-  assert.equal(session.getSnapshot().report!.generation, 4);
-  assert.equal(session.getSnapshot().report!.scan_progress!.running, true);
-  await new Promise(resolve => setTimeout(resolve, 1100));
-  assert.equal(polls, 1);
-  assert.equal(session.getSnapshot().report!.scan_progress!.running, false);
+  assert.equal(await session.rematchGame("a", 1227890), null);
+  assert.match(feedbackFor(session.getSnapshot(), "a").error!, /Python Exception/);
+  assert.equal(await session.rematchGame("a", 1227890), "task-1");
+  assert.equal(feedbackFor(session.getSnapshot(), "a").error, null);
 });

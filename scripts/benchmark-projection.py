@@ -252,7 +252,7 @@ def main():
     parser.add_argument('--runs', type=int, default=6)
     parser.add_argument('--cargo', type=Path, default=REPO / '.tools/cargo/bin/cargo.exe')
     parser.add_argument('--binary', type=Path, help='Current CLI for fixture timing only; hash counts remain unmeasured')
-    parser.add_argument('--protocol-version', type=int, choices=[4], default=4)
+    parser.add_argument('--protocol-version', type=int, choices=[5], default=5)
     parser.add_argument('--profile', choices=['debug', 'release'], default='debug')
     parser.add_argument('--real-root', type=Path, action='append', default=[], help='Explicit Steam root; manifest-only, no state/catalog, read-only')
     args = parser.parse_args()

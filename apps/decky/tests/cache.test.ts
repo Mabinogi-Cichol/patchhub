@@ -11,8 +11,10 @@ test("formatSize renders binary units and guards non-finite input", () => {
   assert.equal(formatSize(-5), "0 B");
 });
 
-test("cache summary does not invent usage statistics", () => {
-  assert.equal(cacheSummary(), "当前版本不提供占用统计");
+test("cache summary reports empty, populated and partial inventories", () => {
+  assert.equal(cacheSummary({entries: 0, total_bytes: 0, diagnostics: []}), "0 B");
+  assert.equal(cacheSummary({entries: 2, total_bytes: 1536, diagnostics: []}), "1.5 KiB");
+  assert.match(cacheSummary({entries: 1, total_bytes: 1024, diagnostics: [{code: "permission_denied"}]}), /1.0 KiB.*部分路径无法统计/);
 });
 
 test("cleanup and toggle notes describe the resulting state", () => {

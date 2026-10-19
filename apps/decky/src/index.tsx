@@ -1,33 +1,39 @@
 import { callable, definePlugin, routerHook } from "@decky/api";
 import { Button, ButtonItem, DropdownItem, Field, Focusable, Navigation, PanelSection, PanelSectionRow, SidebarNavigation, TextField, ToggleField, showModal, useParams } from "@decky/ui";
 import { FaGamepad, FaPuzzlePiece } from "react-icons/fa";
-import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ComponentProps, type ReactNode } from "react";
-import { downloadFileName, candidateMatched, displayPatches, filterInstalls, gameDisplayName, installSummary, patchState, reason, workflowState, type Filter, type Install, type Patch, type Preview, type ScanResult, type SourceCandidate, type SourceSubscription, type Transaction } from "@steam-patch/ui";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ComponentProps, type ReactNode } from "react";
+import { downloadFileName, candidateMatched, displayPatches, filterInstalls, gameDisplayName, gameMatchStatusLabel, gameMatchStatusTone, installSummary, patchState, reason, sourceCoverageText, sourceIntervalOptions, sourceLastAttemptText, sourceLastSuccessText, sourceNextDueText, workflowState, type Filter, type Install, type Patch, type Preview, type ProjectInstancesResult, type ScanResult, type SourceCandidate, type SourceSubscription, type Transaction } from "@steam-patch/ui";
 import { getListPreferences, setListPreferences, subscribeListPreferences } from "./preferences";
 import { gamePresentation, matchesGameQuery, transactionGameName } from "./steam";
 import { installationResult } from "@steam-patch/ui";
 import { installInput, primaryActionBlockers, primaryInstallAction } from "./actions";
-import { createManagerSession, feedbackFor, needsRecovery, type DiscoveryResult } from "./session";
+import { createManagerSession, feedbackFor, needsRecovery } from "./session";
+import { sourceCardSummary, sourceTaskStatusText, sourceTaskTargets, sourceTaskTerminal, type SourceTaskApi, type SourceTaskSnapshot } from "./source-tasks";
 import { decodeInstance, encodeInstance, settingsPage, settingsRoutes } from "./route";
-import { backupSummary, backupClearNote, type BackupInventory, type BackupCleanupResult, autoCleanupNote, cacheClearNote, cacheSummary, type CacheStatus, type CleanupResult, type Settings } from "./cache";
+import { backupSummary, backupClearNote, type BackupInventory, type BackupCleanupResult, autoCleanupNote, cacheClearNote, cacheSummary, type CacheInventory, type CacheStatus, type CleanupResult, type Settings } from "./cache";
 import { tasks, taskIsTerminal, type TaskSnapshot } from "./tasks";
 import { TaskProgressView, TaskResultView } from "./task-progress-view";
-import { candidateConditions, candidateLanguage, candidateSource, discoveryStatus, safeSourceUrl, unqueriedCount } from "./discovery";
+import { candidateConditions, candidateLanguage, candidateSource, discoveryNotice, discoveryStatus, safeSourceUrl, unqueriedCount } from "./discovery";
 
-const scan = callable<[boolean], ScanResult>("scan");
-const scanStatusRpc = callable<[number], ScanResult>("scan_status");
+const scan = callable<[], ScanResult>("scan");
 const previewRpc = callable<[string, string | null, string | null], Preview>("preview");
-const scanStatus = (generation: number) => scanStatusRpc(generation);
-const discoverGameRpc = callable<[string, string[], string | null, boolean], ScanResult>("start_game_discovery");
-const cancelSourceQueryRpc = callable<[], boolean>("cancel_source_query");
-const discoverGame = async (instance: string, names: string[], language: string | null, force: boolean): Promise<DiscoveryResult> => {
-  const report = await discoverGameRpc(instance, names, language, force);
-  const row = report.installs.find(item => item.game.instance_id === instance);
-  if (!row) throw new Error("instance_not_found");
-  return { ...row.discovery, status: row.discovery?.status ?? "not_queried", candidates: row.discovery?.candidates ?? [],
-    diagnostics: row.discovery?.diagnostics ?? [], appid: row.game.appid, instance_id: instance,
-    generation: report.generation ?? null, settings_revision: report.settings_revision ?? 0,
-    patches: row.patches, query_report: report };
+const projectInstancesRpc = callable<[string[]], ProjectInstancesResult>("project_instances");
+const listSourcesRpc = callable<[], SourceSubscription[]>("list_sources");
+const setSourceUpdateIntervalRpc = callable<[string, number], { interval_hours: number }>("set_source_update_interval");
+const updateSourceRpc = callable<[string, boolean], SourceTaskSnapshot>("update_source");
+const matchGamesRpc = callable<[string[] | null, string[], string | null, boolean], SourceTaskSnapshot>("match_games");
+const rematchGameRpc = callable<[string | null, number | null, string[], string | null], SourceTaskSnapshot>("rematch_game");
+const sourceTaskStatusRpc = callable<[], SourceTaskSnapshot[]>("source_task_status");
+const cancelSourceTaskRpc = callable<[string], SourceTaskSnapshot>("cancel_source_task");
+const sourceApi: SourceTaskApi = {
+  listSources: () => listSourcesRpc(),
+  updateSource: (sourceId, force = false) => updateSourceRpc(sourceId, force),
+  matchGames: (instances, nameHints, language, forceDetails) => matchGamesRpc(instances, nameHints, language, forceDetails),
+  rematchGame: (instance, appid, nameHints, language) => rematchGameRpc(instance, appid, nameHints, language),
+  setInterval: (sourceId, intervalHours) => setSourceUpdateIntervalRpc(sourceId, intervalHours),
+  projectInstances: instanceIds => projectInstancesRpc(instanceIds),
+  taskStatus: () => sourceTaskStatusRpc(),
+  cancelTask: taskId => cancelSourceTaskRpc(taskId),
 };
 const listTransactions = callable<[], Transaction[]>("list_transactions");
 const recover = callable<[], Transaction[]>("recover");
@@ -36,18 +42,19 @@ const setGameSource = callable<[number, string, boolean], { appid: number }>("se
 const addSource = callable<[string], SourceSubscription[]>("add_source");
 const backupStatus = callable<[], BackupInventory>("backup_status");
 const cleanupBackups = callable<[], BackupCleanupResult>("cleanup_backups");
+const cacheStatus = callable<[], CacheInventory>("cache_status");
 const clearCache = callable<[], CacheStatus>("clear_cache");
 const getSettings = callable<[], Settings>("get_settings");
 const setAutoCleanup = callable<[boolean], Settings>("set_auto_cleanup");
 
-async function readSnapshot(refreshSources = false) {
-  const report = await scan(refreshSources);
+async function readSnapshot() {
+  const report = await scan();
   let transactions = session.getSnapshot().transactions;
   try { transactions = await listTransactions(); }
   catch { /* Keep the last transaction snapshot during a transient read failure. */ }
   return { report, transactions };
 }
-const session = createManagerSession(readSnapshot, discoverGame, scanStatus);
+const session = createManagerSession(readSnapshot, sourceApi);
 const route = "/steam-patch-manager/:instance/:panel?";
 const sourceRoute = "sources";
 const panelKeys = ["overview", "patches", "records", "sources"] as const;
@@ -129,11 +136,24 @@ const css = `
   .patch-patch-name { font-weight:600; }
   .patch-patch-source { font-size:12px; opacity:.8; overflow-wrap:anywhere; }
   .patch-kv-value { overflow-wrap:anywhere; }
+  .patch-source-card { margin:0 0 16px; border:1px solid #627387; border-radius:8px; background:#202c39; min-width:0; }
+  .patch-source-card .patch-source-heading { box-sizing:border-box; width:100%; min-width:0; height:auto; margin:0; padding:14px 16px; border-radius:7px; border:0; background:#2b3b4d; color:#f3f6f8; box-shadow:none; font-size:16px; line-height:1.35; text-align:left; white-space:normal; }
+  .patch-source-card .patch-source-heading:hover { background:#344a60; }
+  .patch-source-card .patch-source-heading:focus-visible, .patch-source-card .patch-source-heading.gpfocus { background:#3b536b; outline:3px solid #fff; outline-offset:2px; }
+  .patch-source-heading-main { display:flex; align-items:center; gap:12px; min-width:0; }
+  .patch-source-heading-name { flex:1; min-width:0; font-weight:700; overflow-wrap:anywhere; }
+  .patch-source-heading-arrow { flex:none; }
+  .patch-source-heading-state, .patch-source-heading-task { display:block; margin-top:6px; font-size:13px; line-height:1.4; overflow-wrap:anywhere; }
+  .patch-source-heading-state { opacity:.8; }
+  .patch-source-body { padding:4px 12px 12px; border-top:1px solid #627387; min-width:0; }
+
   @media (max-width:600px) { .patch-page { padding:0 12px 40px; } }
 `;
 
 function matchSummary(item: Install): string {
-  return installSummary(item, !!session.getSnapshot().report?.scan_progress?.running);
+  const matching = Object.values(session.getSnapshot().sourceTasks).some(task =>
+    task.kind !== "update_source" && !sourceTaskTerminal(task.state));
+  return installSummary(item, matching);
 }
 function CandidateDetails({ candidate }: { candidate: SourceCandidate }) {
   const format = candidate.format_observed && candidate.format_observed !== "unknown" ? candidate.format_observed : candidate.format_reported && candidate.format_reported !== "unknown" ? candidate.format_reported : "待确认";
@@ -179,11 +199,16 @@ function GameButton({ item }: { item: Install }) {
 
 function QuickAccess() {
   const state = useSyncExternalStore(session.subscribe, session.getSnapshot);
-  const { report, busy } = state;
+  const { report, busy, sourceTasks } = state;
   const { error, note } = feedbackFor(state);
   const { filter, query } = useSyncExternalStore(subscribeListPreferences, getListPreferences);
   const listRef = useRef<HTMLDivElement>(null);
-  useEffect(() => { void session.ensureSnapshot(); void tasks.resume().catch(() => {}); }, []);
+  const running = Object.values(sourceTasks).filter(task => !sourceTaskTerminal(task.state));
+  useEffect(() => {
+    void session.ensureSnapshot();
+    void tasks.resume().catch(() => {});
+    return session.startSourcePolling();
+  }, []);
   useLayoutEffect(() => { if (listRef.current) listRef.current.scrollTop = listScroll; }, [report, filter, query]);
   const shown = useMemo(() => filterInstalls(report?.installs ?? [], filter, "").filter(item => {
     return matchesGameQuery(item, query);
@@ -199,10 +224,10 @@ function QuickAccess() {
       <Row><TextField label="搜索游戏名称或编号" value={query} onChange={e => setListPreferences({ query: e.target.value })} /></Row>
       <Row><DropdownItem label="筛选" layout="below" rgOptions={filterOptions} selectedOption={filter} onChange={option => setListPreferences({ filter: option.data })} /></Row>
       {busy && <Row><Status>{busy}</Status></Row>}{error && <Row><Status warning>{error}</Status></Row>}
-      {report?.scan_progress?.running && <Row><Status>正在查找补丁 · {report.scan_progress.completed}/{report.scan_progress.total}</Status></Row>}
+      {running.map(task => <Row key={task.task_id}><Status>{sourceTaskStatusText(task)}</Status><Action onClick={() => void session.cancelSourceTask(task.task_id)}>取消</Action></Row>)}
       {note && <Row><Status>{note}</Status></Row>}
       {filter === "matched" && unqueriedCount(report?.installs ?? []) > 0 && <>
-        <Row><Status>还有 {unqueriedCount(report?.installs ?? [])} 款未查询。</Status></Row>
+        <Row><Status>还有 {unqueriedCount(report?.installs ?? [])} 款尚未匹配。</Status></Row>
         <Row><Action onClick={() => setListPreferences({ filter: "all", query: "" })}>查看全部游戏</Action></Row>
       </>}
     </PanelSection></div>
@@ -217,7 +242,6 @@ function QuickAccess() {
     <div className="patch-qam-controls"><PanelSection>
       <Row><Action onClick={openSources}>全局设置 ›</Action></Row>
       <Row><Action onClick={() => void session.refresh()} disabled={!!busy}>重新扫描</Action></Row>
-      {session.getSnapshot().report?.scan_progress?.running && <Row><Action onClick={() => void cancelSourceQueryRpc()}>取消来源查询（保留已找到的结果）</Action></Row>}
     </PanelSection></div>
   </div>;
 }
@@ -256,7 +280,7 @@ function showTask(game: string, patch: string, onTerminal: (task: TaskSnapshot) 
 
 function GameManager({ item, seg, panel }: { item: Install; seg: string; panel?: string }) {
   const state = useSyncExternalStore(session.subscribe, session.getSnapshot);
-  const { report, transactions, busy, discoveries } = state;
+  const { report, transactions, busy, sourceTasks } = state;
   const { error, note } = feedbackFor(state, item.game.instance_id);
   // The decky SidebarNavigation is route-driven: it renders the page whose
   // `route` matches the URL and switches by replacing the URL. Keep one
@@ -296,6 +320,7 @@ function GameManager({ item, seg, panel }: { item: Install; seg: string; panel?:
   useEffect(() => {
     mounted.current = true;
     void session.ensureSnapshot();
+    const stopPolling = session.startSourcePolling();
     const restoreTask = () => {
       if (document.hidden) return;
       void tasks.resume().then(() => {
@@ -312,6 +337,7 @@ function GameManager({ item, seg, panel }: { item: Install; seg: string; panel?:
     window.addEventListener("pagehide", leave);
     return () => {
       mounted.current = false;
+      stopPolling();
       document.removeEventListener("visibilitychange", visibility);
       window.removeEventListener("pagehide", leave);
       leave();
@@ -329,9 +355,11 @@ function GameManager({ item, seg, panel }: { item: Install; seg: string; panel?:
   function chooseRelease(next: string) { setSelectedKey(next); setSelectedDownload(""); setManualConfirmation(""); setArchive(""); setPreview(null); }
   function changeGameSource(sourceId: string, subscribed: boolean) {
     void session.work("正在更新此游戏的订阅源…", async () => {
-      await setGameSource(item.game.appid, sourceId, subscribed); session.invalidateDiscovery(sourceId, item.game.appid); return readSnapshot();
-    }, snapshot => {
-      session.acceptSnapshot(snapshot); session.setFeedback({ note: "此游戏的订阅源已更新。" }, item.game.instance_id);
+      await setGameSource(item.game.appid, sourceId, subscribed);
+      session.invalidateDiscovery(sourceId, item.game.appid);
+      await session.refreshSources();
+    }, () => {
+      session.setFeedback({ note: "此游戏的订阅源已更新。" }, item.game.instance_id);
     }, item.game.instance_id);
   }
   function finishTask(task: TaskSnapshot) {
@@ -378,9 +406,16 @@ function GameManager({ item, seg, panel }: { item: Install; seg: string; panel?:
     setPreview(null);
     void session.work("正在检查文件变更…", () => previewRpc(item.game.instance_id, patch.selection_id ? null : patch.release_id, patch.selection_id ?? null), setPreview, item.game.instance_id);
   }
-  const finding = discoveries[item.game.instance_id];
+  const gameTask = Object.values(sourceTasks).find(task => !sourceTaskTerminal(task.state)
+    && sourceTaskTargets(task, item.game.instance_id, item.game.appid));
+  const matchStatus = item.discovery?.status;
+  const matchNotice = discoveryNotice(item);
+  function rematch() {
+    const hints = [item.game.localized_name, item.game.name, game].map(value => value?.trim() ?? "").filter(Boolean);
+    void session.rematchGame(item.game.instance_id, item.game.appid, [...new Set(hints)].slice(0, 3), preferredLanguage);
+  }
   const common = <>{busy && <Status>{busy}</Status>}{error && <Status warning>{error}</Status>}{note && <Status>{note}</Status>}
-    {finding?.busy && <Status>正在查询此游戏的补丁来源…</Status>}{finding?.error && <Status warning>{finding.error}</Status>}</>;
+    {gameTask && <Status>{sourceTaskStatusText(gameTask)}</Status>}</>;
   const selection = entries.length > 1 ? <PanelSection title="选择补丁"><Row><DropdownItem label="补丁" layout="below"
     rgOptions={entries.map(entry => ({ data: entry.key, label: entry.kind === "installable" ? entry.patch.name : `${entry.candidate.patch_title} · ${entry.candidate.version_raw || "版本待确认"} · ${candidateLanguage(entry.candidate)} · ${candidateSource(entry.candidate)}` }))}
     selectedOption={selectedKey} onChange={option => chooseRelease(option.data)} /></Row></PanelSection> : null;
@@ -392,12 +427,13 @@ function GameManager({ item, seg, panel }: { item: Install; seg: string; panel?:
       {owned.some(needsRecovery) && <Row><Status warning>有未完成的操作需要处理。</Status><Action onClick={() => navigatePanel("records")}>查看操作记录</Action></Row>}
     </PanelSection>
     <PanelSection title="查找来源">
-      {session.getSnapshot().report?.scan_progress?.running && <Row><Status>正在持续查找，已找到的候选可先选择。</Status><Action onClick={() => void cancelSourceQueryRpc()}>取消查询</Action></Row>}
-      <InfoRow label="查询状态">{discoveryStatus(item.discovery?.status)}</InfoRow>
+      <InfoRow label="匹配状态">{gameMatchStatusLabel(matchStatus)}</InfoRow>
+      {matchNotice && <Row><Status warning={gameMatchStatusTone(matchStatus) !== "fallback"}>{matchNotice}</Status></Row>}
+      {gameTask && <Row><Status>{sourceTaskStatusText(gameTask)}</Status><Action onClick={() => void session.cancelSourceTask(gameTask.task_id)}>取消匹配</Action></Row>}
       <Row><DropdownItem label="偏好的补丁语言" layout="below" rgOptions={[{ data: "", label: "未指定" }, { data: "zh-CN", label: "简体中文" }, { data: "zh-TW", label: "繁体中文" }, { data: "en", label: "英文" }, { data: "ja", label: "日文" }]}
         selectedOption={preferredLanguage ?? ""} onChange={option => setPreferredLanguage(option.data || null)} /></Row>
-      <Row><Status>语言偏好用于查找来源，游戏实际语言与 DLC 状态仍需确认。</Status></Row>
-      <Row><Action disabled={!!busy || !!finding?.busy} onClick={() => void session.discover(item.game.instance_id, [item.game.name, game], preferredLanguage, true)}>重新查找补丁</Action></Row>
+      <Row><Status>重新匹配只使用已更新的来源索引；缺少索引时请先在全局设置更新来源。</Status></Row>
+      <Row><Action disabled={!!busy} onClick={rematch}>重新匹配</Action></Row>
       {item.discovery?.diagnostics.map((diagnostic, index) => <Row key={index}><Status warning>{diagnostic.detail || reason(diagnostic.code)}{diagnostic.detail && diagnostic.detail !== diagnostic.code ? ` · ${reason(diagnostic.detail)}` : ""}</Status></Row>)}
     </PanelSection>
     {(!!item.patches.length || !item.discovery?.candidates.length) && <PanelSection title="匹配到的补丁">{item.patches.length ? entries.filter(e => e.kind === "installable").map(entry => entry.kind === "installable" && <PanelSectionRow key={entry.key}>
@@ -475,10 +511,19 @@ function GameManager({ item, seg, panel }: { item: Install; seg: string; panel?:
   const sources = <div className="patch-page" ref={activePanel === "sources" ? contentRef : undefined} onScroll={e => { panelScroll.current.sources = e.currentTarget.scrollTop; }}>
     {common}
     <Status>选择用于此游戏的订阅源。关闭后不再从该源匹配补丁；选择按游戏编号保存。</Status>
+    {(matchStatus === "incomplete" || matchStatus === "pending") && <Row><Status warning>{matchStatus === "incomplete"
+      ? "普通来源覆盖不完整，HGamer 不会在来源不完整时补查；请先在全局设置更新来源。"
+      : "此游戏尚未匹配；请重新匹配或先在全局设置更新来源。"}</Status></Row>}
+    {matchStatus === "fallback_match" && <Row><Status>普通来源未命中，补丁由 HGamer 补查得到。</Status></Row>}
+    {matchStatus === "no_match" && <Row><Status>已启用来源中未找到补丁。</Status></Row>}
     {item.sources?.length ? item.sources.map(source => <PanelSection key={source.id} title={source.name}>
       <Row><ToggleField label="用于此游戏" checked={source.subscribed} disabled={!!busy}
         onChange={subscribed => changeGameSource(source.id, subscribed)} /></Row>
-      <InfoRow label="游戏匹配">{source.matched || item.discovery?.candidates.some(candidate => candidate.source_id === source.id && candidateMatched(candidate)) ? "已找到此游戏的补丁" : discoveryStatus(item.discovery?.status)}</InfoRow>
+      <InfoRow label="游戏匹配">{source.matched || item.discovery?.candidates.some(candidate => candidate.source_id === source.id && candidateMatched(candidate))
+        ? "已找到此游戏的补丁"
+        : source.role === "fallback_indexer" ? "本次未在此来源找到候选" : "未在此来源找到候选"}</InfoRow>
+      <InfoRow label="索引覆盖">{sourceCoverageText(source)}</InfoRow>
+      {source.role === "fallback_indexer" && <Row><Status>补查来源：仅在重新匹配时按游戏查询，不参与自动更新。</Status></Row>}
       {!source.enabled && <Row><Status warning>此源已在全局设置中停用，当前不会参与匹配。</Status></Row>}
       <InfoRow label="查询状态">{source.status ? reason(source.status) : "待查询"}</InfoRow>
       <Row><Action onClick={() => openSource(source.pages[0])}>打开来源网页 ↗</Action></Row>
@@ -502,24 +547,77 @@ function GameManager({ item, seg, panel }: { item: Install; seg: string; panel?:
   return <SidebarNavigation {...navigation} />;
 }
 
-function SourcesPage({ report, busy, rule, setRule, changeSources, contentRef, onScroll }: {
-  report: ScanResult | null; busy: boolean; rule: string; setRule: (value: string) => void;
+function SourceCard({ source, busy, expanded, onToggle, task, changeSources, onUpdateSource, onCancelTask, onInterval }: {
+  source: SourceSubscription; busy: boolean; expanded: boolean; onToggle: () => void; task?: SourceTaskSnapshot;
   changeSources: (action: () => Promise<SourceSubscription[]>) => void;
-  contentRef?: React.Ref<HTMLDivElement>; onScroll?: (value: number) => void;
+  onUpdateSource: (sourceId: string, force: boolean) => void;
+  onCancelTask: (taskId: string) => void;
+  onInterval: (sourceId: string, hours: number) => void;
 }) {
-  return <div className="patch-page" ref={contentRef} onScroll={e => onScroll?.(e.currentTarget.scrollTop)}>
-    <Status>全局设置，对所有游戏生效。选择游戏后按需查询；HGamer 会收到该游戏的检索名称，可随时关闭。</Status>
-    <PanelSection><Row><Action disabled={busy} onClick={() => void session.work("正在刷新补丁来源…", () => readSnapshot(true), session.acceptSnapshot)}>刷新来源</Action></Row></PanelSection>
-    {([{ role: "publisher", title: "发行商补丁源" }, { role: "fallback_indexer", title: "补丁索引" }]).map(group => <PanelSection key={group.role} title={group.title}>{report?.sources?.filter(source => (source.role === "fallback_indexer" || source.id === "hgamer" ? "fallback_indexer" : "publisher") === group.role).map(source => <Fragment key={source.id}>
-      <InfoRow label="名称">{source.name}</InfoRow>
+  const publisher = source.role !== "fallback_indexer";
+  const summary = sourceCardSummary(source, task);
+  const contentId = `patch-source-${encodeURIComponent(source.id)}`;
+  return <div className="patch-source-card">
+    <Button className="patch-source-heading" aria-expanded={expanded} aria-controls={contentId} onClick={onToggle}>
+      <span className="patch-source-heading-main"><span className="patch-source-heading-name">{source.name}</span>
+        <span className="patch-source-heading-arrow" aria-hidden="true">{expanded ? "▾" : "▸"}</span></span>
+      <span className="patch-source-heading-state">{source.enabled ? "已启用" : "已停用"}</span>
+      {summary && <span className={`patch-source-heading-task${summary.warning ? " patch-warning" : ""}`}>{summary.text}</span>}
+    </Button>
+    {expanded && <div id={contentId} className="patch-source-body" role="group" aria-label={source.name}>
       <InfoRow label="站点" below>{source.pages.join(" · ")}</InfoRow>
-      <InfoRow label="启用状态">{source.enabled ? "已启用" : "已停用"}</InfoRow>
-      <InfoRow label="查询结果">{source.entry_count != null ? `${source.entry_count} 条` : "—"}</InfoRow>
-      <InfoRow label="查询或缓存">{source.status ? reason(source.status) : "待查询"}</InfoRow>
-      <InfoRow label="缓存时间">{source.cached_at ? new Date(source.cached_at * 1000).toLocaleString() : "—"}</InfoRow>
-      <InfoRow label="最近查询">{source.checked_at ? new Date(source.checked_at * 1000).toLocaleString() : "尚未查询"}</InfoRow>
-      <Row><ToggleField label={`启用 ${source.name}`} checked={source.enabled} disabled={busy} onChange={enabled => changeSources(() => setSourceEnabled(source.id, enabled))} /></Row>
-    </Fragment>)}</PanelSection>)}
+      {publisher && <>
+        <InfoRow label="索引条目">{source.entry_count} 条 · 修订 {source.revision}</InfoRow>
+        <InfoRow label="索引覆盖">{sourceCoverageText(source)}</InfoRow>
+        <InfoRow label="最近成功">{sourceLastSuccessText(source)}</InfoRow>
+        <InfoRow label="自动更新">{sourceNextDueText(source)}</InfoRow>
+      </>}
+      <InfoRow label="最近尝试">{sourceLastAttemptText(source)}</InfoRow>
+      <Row><ToggleField label={`启用 ${source.name}`} checked={source.enabled} disabled={busy}
+        onChange={enabled => changeSources(() => setSourceEnabled(source.id, enabled))} /></Row>
+      {publisher ? <>
+        <Row><DropdownItem label="自动更新间隔" layout="below" rgOptions={sourceIntervalOptions()}
+          selectedOption={source.interval_hours} onChange={option => onInterval(source.id, option.data)} /></Row>
+        {task && !sourceTaskTerminal(task.state)
+          ? <Row><Status>{sourceTaskStatusText(task)}</Status><Action onClick={() => onCancelTask(task.task_id)}>取消更新</Action></Row>
+          : <Row><Action disabled={busy} onClick={() => onUpdateSource(source.id, false)}>手动更新</Action></Row>}
+      </> : <Row><Status>补查来源：仅对单个游戏查询，不参与定时更新，也没有更新间隔。</Status></Row>}
+    </div>}
+  </div>;
+}
+
+function SourcesPage({ report, busy, tasks, expandedSources, onToggleSource, rule, setRule, changeSources, onUpdateSource, onCancelTask, onInterval, onMatchGames }: {
+  expandedSources: Record<string, boolean>; onToggleSource: (sourceId: string) => void;
+  report: ScanResult | null; busy: boolean; tasks: SourceTaskSnapshot[]; rule: string; setRule: (value: string) => void;
+  changeSources: (action: () => Promise<SourceSubscription[]>) => void;
+  onUpdateSource: (sourceId: string, force: boolean) => void;
+  onCancelTask: (taskId: string) => void;
+  onInterval: (sourceId: string, hours: number) => void;
+  onMatchGames: () => void;
+}) {
+  const sources = report?.sources ?? [];
+  const publishers = sources.filter(source => source.role !== "fallback_indexer");
+  const fallbacks = sources.filter(source => source.role === "fallback_indexer");
+  const taskFor = (sourceId: string) => tasks.find(task => task.kind === "update_source" && task.key === sourceId);
+  return <div className="patch-page">
+    <Status>全局设置，对所有游戏生效。普通来源按间隔自动更新；HGamer 只在重新匹配游戏时按游戏补查，不参与自动更新。</Status>
+    <PanelSection title="匹配游戏"><Row><Action disabled={busy} onClick={onMatchGames}>匹配全部游戏</Action></Row>
+      <Row><Status>来源更新后使用已更新的索引增量匹配当前游戏库；单个游戏可在游戏详情重新匹配。</Status></Row></PanelSection>
+    {!!tasks.length && <PanelSection title="来源任务">{tasks.map(task => <Row key={task.task_id}>
+      <Status>{sourceTaskStatusText(task)}</Status><Action onClick={() => onCancelTask(task.task_id)}>取消</Action>
+    </Row>)}</PanelSection>}
+    <PanelSection title="发行商补丁源">
+      {publishers.map(source => <SourceCard key={source.id} source={source} busy={busy}
+        expanded={expandedSources[source.id] === true} onToggle={() => onToggleSource(source.id)} task={taskFor(source.id)}
+        changeSources={changeSources} onUpdateSource={onUpdateSource} onCancelTask={onCancelTask} onInterval={onInterval} />)}
+      {!publishers.length && <Row><Status>尚未配置发行商补丁源。</Status></Row>}
+    </PanelSection>
+    <PanelSection title="补丁索引（补查来源）">
+      {fallbacks.map(source => <SourceCard key={source.id} source={source} busy={busy}
+        expanded={expandedSources[source.id] === true} onToggle={() => onToggleSource(source.id)}
+        changeSources={changeSources} onUpdateSource={onUpdateSource} onCancelTask={onCancelTask} onInterval={onInterval} />)}
+      {!fallbacks.length && <Row><Status>尚未配置补查来源。</Status></Row>}
+    </PanelSection>
     <PanelSection title="添加源"><Row><TextField label="源规则 JSON（高级）" value={rule} onChange={e => setRule(e.target.value)} /></Row>
       <Row><Action disabled={busy || !rule.trim()} onClick={() => changeSources(() => addSource(rule))}>添加补丁源</Action></Row></PanelSection>
   </div>;
@@ -530,12 +628,15 @@ function GlobalCache() {
   const { busy } = state;
   const { error, note } = feedbackFor(state);
   const [settings, setSettings] = useState<Settings | null>(null);
+  const [cache, setCache] = useState<CacheInventory | null>(null);
+  const [cacheError, setCacheError] = useState("");
   const [backups, setBackups] = useState<BackupInventory | null>(null);
   const [backupError, setBackupError] = useState("");
   const [failed, setFailed] = useState(false);
   useEffect(() => {
     let live = true;
     getSettings().then(value => { if (live) setSettings(value); }).catch(() => { if (live) setFailed(true); });
+    cacheStatus().then(value => { if (live) setCache(value); }).catch(() => { if (live) setCacheError("读取下载缓存占用失败。"); });
     backupStatus().then(value => { if (live) setBackups(value); }).catch(() => { if (live) setBackupError("读取安装备份占用失败。"); });
     return () => { live = false; };
   }, []);
@@ -543,7 +644,12 @@ function GlobalCache() {
     () => setAutoCleanup(enabled),
     value => { setSettings(value); session.update({ note: autoCleanupNote(value.auto_cleanup) }); });
   const clean = () => {
-    void session.work("正在清理下载缓存…", clearCache, value => {
+    void session.work("正在清理下载缓存…", async () => {
+      const result = await clearCache();
+      try { setCache(await cacheStatus()); setCacheError(""); }
+      catch { setCache(null); setCacheError("清理已返回，但刷新下载缓存占用失败，请重开页面查看。"); }
+      return result;
+    }, value => {
         session.update({ note: cacheClearNote(value) });
       });
   };
@@ -559,8 +665,9 @@ function GlobalCache() {
     <PanelSection title="下载缓存">
       {settings ? <>
         <Row><ToggleField label="安装成功后自动删除下载缓存" checked={settings.auto_cleanup} disabled={!!busy} onChange={toggle} /></Row>
-        <InfoRow label="当前占用">{cacheSummary()}</InfoRow>
+        <InfoRow label="当前占用">{cache ? cacheSummary(cache) : cacheError || "正在统计下载缓存…"}</InfoRow>
         <Row><Status>{settings.auto_cleanup ? "安装成功后删除本次下载的补丁包。" : "缓存将保留直至手动清理。"}</Status></Row>
+        {cache?.diagnostics.map((failure, index) => <Row key={index}><Status warning>{failure.detail || failure.code}</Status></Row>)}
         <Row><Action disabled={!!busy} onClick={clean}>清理下载缓存</Action></Row>
       </> : <Row><Status warning={failed}>{failed ? "读取缓存设置失败。" : "正在读取缓存设置…"}</Status></Row>}
     </PanelSection>
@@ -591,11 +698,23 @@ function Manager() {
 }
 function GlobalSources() {
   const state = useSyncExternalStore(session.subscribe, session.getSnapshot);
-  const { report, busy } = state;
+  const { report, busy, sourceTasks } = state;
   const { error, note } = feedbackFor(state);
   const [rule, setRule] = useState("");
+  const tasks = Object.values(sourceTasks);
+  useEffect(() => session.startSourcePolling(), []);
+  const changeSources = (action: () => Promise<SourceSubscription[]>) => void session.work("正在更新补丁源…", async () => {
+    const sources = await action();
+    session.commitSources(sources);
+    session.invalidateDiscovery();
+    return sources;
+  }, () => setRule(""));
   return <><div>{busy && <Status>{busy}</Status>}{error && <Status warning>{error}</Status>}{note && <Status>{note}</Status>}</div>
-    <SourcesPage report={report} busy={!!busy} rule={rule} setRule={setRule} changeSources={action => void session.work("正在更新补丁源…", async () => { await action(); session.invalidateDiscovery(); return readSnapshot(); }, snapshot => { session.acceptSnapshot(snapshot); setRule(""); })} />
+    <SourcesPage report={report} busy={!!busy} tasks={tasks} expandedSources={state.expandedSources} onToggleSource={session.toggleSourceExpanded} rule={rule} setRule={setRule} changeSources={changeSources}
+      onUpdateSource={(sourceId, force) => void session.updateSource(sourceId, force)}
+      onCancelTask={taskId => void session.cancelSourceTask(taskId)}
+      onInterval={(sourceId, hours) => void session.setSourceInterval(sourceId, hours)}
+      onMatchGames={() => void session.matchGames(null)} />
   </>;
 }
 

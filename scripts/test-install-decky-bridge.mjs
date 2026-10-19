@@ -36,7 +36,7 @@ function environment() {
         case 'utilities/get_user_info': return {path:'/home/deck'};
         case 'utilities/settings/get': return [...settings[args[0]]];
         case 'utilities/settings/set': settings[args[0]]=[...args[1]]; return;
-        case 'loader/call_plugin_method': return args[1]==='list_tasks'?[]:{protocol_version:4,methods:['scan','get_capabilities']};
+        case 'loader/call_plugin_method': return args[1]==='list_tasks'?[]:{protocol_version:5,methods:['scan','get_capabilities']};
         case 'utilities/install_plugin':
           this.emit('loader/add_plugin_install_prompt',name,args[2],'request-actual',args[3],args[4]); return;
         case 'utilities/confirm_plugin_install': return;
@@ -121,7 +121,7 @@ test('live confirm promise stays busy after caller disconnect; cannot forget or 
   await assert.rejects(e.run('launch',{...e.install,id:'rollback'}),/busy/);
   await assert.rejects(e.run('forget',{id:'job-1'}),/busy/);
   await assert.rejects(e.backend.call('loader/call_plugin_method',name,'start_install'),/update_in_progress/);
-  assert.equal((await e.backend.call('loader/call_plugin_method','other','start_install')).protocol_version,4);
+  assert.equal((await e.backend.call('loader/call_plugin_method','other','start_install')).protocol_version,5);
   resolve();
   assert.equal((await finished(e)).ok,true);
 });

@@ -1,6 +1,6 @@
 {
   "name": "steam-patch-windows",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -13,7 +13,7 @@
     "test:status": "node scripts/test-game-status.mjs"
   },
   "dependencies": {
-    "@steam-patch/ui": "0.1.0",
+    "@steam-patch/ui": "0.2.0",
     "@tauri-apps/api": "^2.0.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"

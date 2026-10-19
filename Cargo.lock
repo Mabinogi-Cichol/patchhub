@@ -3840,7 +3840,7 @@ checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
 
 [[package]]
 name = "steam-patch-cli"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "base64 0.22.1",
  "ed25519-dalek",
@@ -3859,7 +3859,7 @@ dependencies = [
 
 [[package]]
 name = "steam-patch-contract-gen"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "schemars 1.2.2",
  "serde",
@@ -3871,7 +3871,7 @@ dependencies = [
 
 [[package]]
 name = "steam-patch-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "base64 0.22.1",
  "caseless",
@@ -3899,7 +3899,7 @@ dependencies = [
 
 [[package]]
 name = "steam-patch-installer-format"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "base64 0.22.1",
  "caseless",
@@ -3916,7 +3916,7 @@ dependencies = [
 
 [[package]]
 name = "steam-patch-installer-worker"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "memmap2",
  "serde",
@@ -3930,7 +3930,7 @@ dependencies = [
 
 [[package]]
 name = "steam-patch-protocol"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "schemars 1.2.2",
  "serde",
@@ -3941,7 +3941,7 @@ dependencies = [
 
 [[package]]
 name = "steam-patch-windows"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "serde",
  "serde_json",

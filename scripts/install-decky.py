@@ -186,9 +186,9 @@ def validate_package(archive, expected_version=None):
         version_tag("v" + str(version))
         require(package.get("name") == "steam-patch-decky" and package.get("type") == "module" and not package.get("remote_binary"), "插件 package.json 不匹配")
         require(expected_version is None or version == expected_version, "包内版本与 Release Tag 不一致")
-        required = {"main.py", "dist/index.js", "backend/bridge.py", "backend/tasks.py", "backend/protocol.py", "backend/v4.schema.json", "bin/catalog.json", "bin/signed-catalog.json", "bin/trust-keys.json", "LICENSE", "licenses/sfextract-MIT.txt", "dependencies.cdx.json"}
+        required = {"main.py", "dist/index.js", "backend/bridge.py", "backend/tasks.py", "backend/protocol.py", "backend/v5.schema.json", "bin/catalog.json", "bin/signed-catalog.json", "bin/trust-keys.json", "LICENSE", "licenses/sfextract-MIT.txt", "dependencies.cdx.json"}
         require(required <= files.keys(), "插件运行文件不完整")
-        require(runtime.get("protocol_version") == 4 and runtime.get("worker_protocol") == 1, "不支持的 runtime 协议")
+        require(runtime.get("protocol_version") == 5 and runtime.get("worker_protocol") == 1, "不支持的 runtime 协议")
         binaries = runtime.get("files", [])
         require(isinstance(binaries, list) and len(binaries) == 2 and {entry.get("path") for entry in binaries} == {"bin/steam-patch", "bin/sf-worker"}, "runtime 清单不完整")
         for entry in binaries:
@@ -434,7 +434,7 @@ BRIDGE = r"""async (op, a) => {
    const tasks = await b.call('loader/call_plugin_method',name,'list_tasks');
    if (!Array.isArray(tasks) || tasks.some(t => !['completed','failed','cancelled'].includes(t.state))) fail('active_or_unknown_tasks');
    const caps = await b.call('loader/call_plugin_method',name,'get_capabilities');
-   if (!caps || caps.protocol_version!==4 || !Array.isArray(caps.methods)) fail('runtime_rpc_failed');
+   if (!caps || caps.protocol_version!==5 || !Array.isArray(caps.methods)) fail('runtime_rpc_failed');
    const response = await fetch('http://127.0.0.1:1337/plugins/' + encodeURIComponent(name) + '/dist/index.js');
    if (!response.ok) fail('frontend_http_failed');
    const hash = [...new Uint8Array(await crypto.subtle.digest('SHA-256', await response.arrayBuffer()))].map(x=>x.toString(16).padStart(2,'0')).join('');
