@@ -35,6 +35,10 @@ def store(kind, args):
     encoded = json.dumps(args, ensure_ascii=True, sort_keys=True, separators=(',', ':'))
     inputs[kind][hashlib.sha256(encoded.encode()).hexdigest()] = json.loads(encoded)
 
+# Preserve the original synthetic regression corpus independently of test discovery.
+for kind, cases in json.loads((ROOT / 'scripts/fixtures/sf-reference-inputs.json').read_text(encoding='utf8')).items():
+    for args in cases: store(kind, args)
+
 def capture(kind):
     fn = originals[kind]
     def wrapped(*args, **kwargs):
@@ -77,16 +81,17 @@ for source in [r'File.Delete("%AppFolder%\\identity.dat")',
 
 cases=[]
 for version in ('9.5','9.6','9.7'):
-    for name in ('payload.bin','补丁-测试.bin'):
-        f=Fixture(); data=f.metadata(version,name)
+    for name, display_blob in [('payload.bin',None),('补丁-测试.bin',None),('display-raw.bin',b'\x02\xa9 ')]:
+        f=Fixture(); data=f.metadata(version,name,display_blob=display_blob)
         with patch('test_sf95_audit.metadata',return_value=data): raw=sample([(b'unused',f.packed)],version=version+'.0.0')
         store('graph',{'data_hex':data.hex(),'version':version})
         store('inventory',{'data_hex':data.hex()})
         store('audit',{'data_hex':raw.hex()})
-        report=worker.audit_behavior(raw)
+        full_report=worker.audit_behavior(raw)
+        report=worker.audit_behavior(raw, decode_payloads=False)
         descriptor={'action':'convert_behavior','exe_sha256':report['exe']['sha256'],'exe_size':len(raw),
             'metadata_sha256':report['metadata']['sha256'],'behavior_sha256':report['behavior_sha256'],
-            'payload':[{'path':r['destination'],'size':r['unpacked_size'],'sha256':r['payload']['sha256']} for r in report['files']]}
+            'payload':[{'path':r['destination'],'size':r['unpacked_size'],'sha256':r['payload']['sha256']} for r in full_report['files']]}
         with tempfile.TemporaryDirectory() as directory:
             p=Path(directory); (p/'input.exe').write_bytes(raw)
             with (p/'input.exe').open('rb') as stream: converted=worker.convert(stream,descriptor,p/'normalized.zip')

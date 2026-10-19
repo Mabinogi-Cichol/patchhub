@@ -10,7 +10,6 @@ serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 base64.workspace = true
-encoding_rs.workspace = true
 unicode-normalization.workspace = true
 caseless.workspace = true
 unicode-general-category.workspace = true

@@ -1,13 +1,12 @@
 """Bounded, sequential SF9 CArchive object decoder.
 
 Class references are resolved from the archive map; no marker/script scanning.
-Only the default file-copy project settings are supported. Nondefault options,
-external files, selectors, passwords and unknown classes are rejected.
+Configuration values are data; unknown framing and external objects are rejected.
 """
 import re
 from sf95_audit import Reader, evidence, file_table, require, MAX_METADATA
 
-VERSION = "sf9-graph-v1"
+VERSION = "sf9-graph-v3"
 CONTROLS = {"CSUFCtrlButton": 8, "CSUFCtrlStaticText": 8,
             "CSUFCtrlRadioButton": 10, "CSUFCtrlScrollingText": 15,
             "CSUFCtrlEditField": 17, "CSUFCtrlProgressBar": 11}
@@ -24,12 +23,11 @@ class Archive:
         self.objects = []
         self.events = []
         self.includes = []
-        self.variables = {}
         self.packages = []
-        self.terms = []
         self.files, self.table = file_table(data, installer_version=version)
         self.file_index = 0
         self.context = "project"
+        self.lifecycle = "project"
 
     def nums(self, count):
         return [self.r.number("I") for _ in range(count)]
@@ -37,15 +35,14 @@ class Archive:
     def expected(self, values, code="exe_project_options_unsupported"):
         require(self.nums(len(values)) == values, code)
 
-    def byte(self, value=0):
-        require(self.r.number("B") == value, "exe_project_options_unsupported")
+    def byte(self):
+        self.r.number("B")
 
-    def string(self, *, display=False):
-        # ANSI display text uses the serialized language's code page; preserve
-        # byte values until presentation. Executable names/scripts stay strict.
+    def string(self):
+        return self.r.string()
+
+    def skip_display(self):
         r = self.r
-        if not display:
-            return r.string()
         length = r.number("B")
         wide = False
         if length == 255:
@@ -58,13 +55,7 @@ class Archive:
             if length == 65535:
                 length = r.number("I")
         require(length <= MAX_METADATA // (2 if wide else 1), "string_size_limit")
-        raw = r.read(length * (2 if wide else 1))
-        try:
-            value = raw.decode("utf-16-le" if wide else "gb18030").rstrip("\0")
-        except UnicodeError as error:
-            raise ValueError("exe_display_encoding_unsupported") from error
-        require("\0" not in value, "embedded_nul")
-        return value
+        r.read(length * (2 if wide else 1))
 
     def array(self, allowed, limit=1024):
         count = self.r.number("H")
@@ -93,13 +84,12 @@ class Archive:
         require(self.next_id < 0x7fff, "exe_object_count_limit")
         result = {"class": name, "offset": start}
         if name == "CGlobalIncludeLuaFile":
-            self.expected([1])
+            self.expected([1], "exe_include_schema_unsupported")
             kind = r.number("I")
-            require(kind in (0, 1), "exe_include_kind_unsupported")
             result.update(name=self.string(), script=self.string(), source_kind=kind)
             n = r.number("H")
             require(n <= 64, "exe_include_selectors_unsupported")
-            require([self.string() for _ in range(n)] in ([], ["All"]), "exe_include_selectors_unsupported")
+            result["selectors"] = [self.string() for _ in range(n)]
             self.includes.append(result)
         elif name == "CSetupFileData":
             self.expected([1], "exe_file_schema_unsupported")
@@ -108,7 +98,7 @@ class Archive:
             self.file_index += 1
             require(r.pos == row["serialized_record"]["offset"], "exe_file_framing_invalid")
             r.read(row["serialized_record"]["size"])
-            self.byte()
+            result["tail_flag"] = r.number("B")
             result["file_index"] = row["index"]
         elif name in SCREENS:
             if name == "CSUFScreenProgressBars":
@@ -116,28 +106,22 @@ class Archive:
             self.expected([1], "exe_screen_schema_unsupported")
             result["kind"] = r.number("I")
             result["name"] = self.string()
-            require(r.number("I") in (1, 2), "exe_screen_schema_unsupported")
-            self.string(display=True)
-            self.expected([0, 0, 0], "exe_screen_conditions_unsupported")
+            self.nums(1)
+            self.skip_display()
+            self.nums(3)
             old = self.context
             self.context = name + ":" + result["name"]
             result["controls"] = self.array(set(CONTROLS), 128)
             result["events"] = self.array({"CIREvent"}, 32)
-            expected_events = ["On Preload", "On Progress", "On Cancel"] if name == "CSUFScreenProgressBars" else ["On Preload", "On Back", "On Next", "On Cancel", "On Help", "On Ctrl Message"]
-            require([e["name"] for e in result["events"]] == expected_events, "exe_event_order_unsupported")
             result["languages"] = self.array({"CSUFLanguageFile"}, 16)
             self.appearance()
             if name == "CSUFScreenProgressBars":
                 self.expected([1], "exe_screen_schema_unsupported")
             elif name == "CSUFScreenLicenseAgreement":
-                self.expected([1, 1], "exe_terms_selection_unsupported")
-                for lang in result["languages"]:
-                    for message in lang["messages"]:
-                        if message["name"] == "IDS_CTRL_SCROLLTEXT_BODY":
-                            self.terms.append(message["text"])
+                self.nums(2)
             elif name == "CSUFScreenInstallFolder":
                 self.expected([1], "exe_screen_schema_unsupported")
-                require(self.string() == "%AppFolder%", "unsupported_target_variable")
+                self.string()
             self.context = old
         elif name in CONTROLS:
             fields = self.nums(CONTROLS[name])
@@ -147,54 +131,51 @@ class Archive:
                 self.byte()
             elif name == "CSUFCtrlEditField":
                 result["variable"] = self.string()
-                require(result["variable"] == "%AppFolder%", "exe_control_variable_unsupported")
         elif name == "CIREvent":
             self.expected([1], "exe_event_schema_unsupported")
             parameters = self.string()
             require(len(parameters) <= 8192 and all(re.fullmatch(
                 r"[A-Za-z_][A-Za-z0-9_]*\s+[A-Za-z_][A-Za-z0-9_]*", p.strip())
                 for p in parameters.split(",") if p), "exe_event_parameters_unsupported")
-            result.update(parameters=parameters, name=self.string(), script=self.string(), context=self.context)
-            require(result["name"].startswith("On ") or result["name"] == "Global Functions", "exe_event_name_invalid")
+            result.update(parameters=parameters, name=self.string(), script=self.string(), context=self.context, lifecycle=self.lifecycle)
             self.events.append(result)
         elif name == "CSUFLanguageFile":
-            self.expected([1, 1], "exe_language_schema_unsupported")
+            self.expected([1], "exe_language_schema_unsupported"); self.nums(1)
             result["name"] = self.string()
             self.byte()
-            self.expected([0, 0, 1, 4], "exe_language_schema_unsupported")
+            self.nums(4)
             n = r.number("H")
             require(n <= 128, "exe_language_count_limit")
             result["order"] = list(r.read(n))
             result["messages"] = self.array({"CSUFMessageID"}, 2048)
         elif name == "CSUFMessageID":
             self.expected([1], "exe_message_schema_unsupported")
-            result.update(name=self.string(), text=self.string(display=True))
+            result["name"] = self.string()
+            self.skip_display()
         elif name == "CSessionVar":
             self.expected([1], "exe_variable_schema_unsupported")
-            name = self.string()
-            value = self.string(display=True)
-            flag = r.number("I")
-            require(flag in (0, 1, 2) and name not in self.variables, "exe_variable_invalid")
-            self.variables[name] = value
+            self.string()
+            self.skip_display()
+            r.number("I")
         elif name == "CSUFPackage":
             self.expected([1], "exe_package_schema_unsupported")
             result["name"] = self.string()
-            self.expected([0, 0, 0], "exe_package_selection_unsupported")
-            require(self.string() == "0", "exe_package_condition_unsupported")
+            options = self.nums(3)
+            result.update(install=options[0] != 0, enabled=options[1] != 0, additional_space=options[2], condition=self.string())
             self.array({"CSUFLanguageFile"}, 16)
-            self.packages.append(result["name"])
+            if not result["install"]: self.packages.append(result["name"])
         elif name == "CPasswordData":
-            self.string(display=True)
+            self.skip_display()
             n = r.number("H")
             require(n <= 64, "exe_password_list_limit")
-            require([self.string() for _ in range(n)] == ["All"], "exe_password_components_unsupported")
+            [self.string() for _ in range(n)]
             require(r.number("H") == 0, "exe_password_unsupported")
         elif name == "CImageInfo":
-            self.string(display=True)
-            self.string(display=True)
-            require(r.number("I") in (1, 2), "exe_image_reference_unsupported")
+            self.skip_display()
+            self.skip_display()
+            self.nums(1)
         result["size"] = r.pos - start
-        self.objects.append({k: result[k] for k in ("class", "offset", "size")})
+        self.objects.append(result.copy() if name == "CSUFPackage" else {k: result[k] for k in ("class", "offset", "size")})
         return result
 
     def appearance(self):
@@ -202,46 +183,46 @@ class Archive:
         self.nums(16)  # Colors only; no paths or scripts.
         for _ in range(5):
             self.nums(5)
-            self.string(display=True)
+            self.skip_display()
         self.expected([1], "exe_appearance_schema_unsupported")
-        self.string(display=True)
-        self.string(display=True)
+        self.skip_display()
+        self.skip_display()
         self.byte()
         self.nums(26 if self.version == "9.7" else 25)  # Window geometry.
 
     def labels(self):
         for _ in range(3):
-            self.string(display=True)
+            self.skip_display()
             self.nums(4)
-            self.string(display=True)
+            self.skip_display()
             self.nums(4)
-            require(self.r.number("B") in (0, 1), "exe_appearance_schema_unsupported")
+            self.byte()
 
     def uninstall(self):
-        self.expected([1, 0], "exe_create_uninstall_unsupported")
+        self.lifecycle = "uninstall"
+        self.expected([1], "exe_uninstall_schema_unsupported"); self.nums(1)
         for _ in range(3):
-            self.string(display=True)  # Disabled uninstall paths are never used.
-        self.expected([0, 0, 0, 1, 0])
+            self.skip_display()  # Disabled uninstall paths are never used.
+        self.nums(5)
         self.byte()
         self.nums(5)
         self.byte()
         self.labels()
-        self.expected([1, 1, 1, 1])
-        self.string(display=True); self.string(display=True)
-        self.expected([0, 0]); self.byte()
-        for _ in range(5): self.string(display=True)
-        self.expected([0]); self.byte(); self.string(display=True)
-        self.expected([0, 0]); self.empty_array()
-        self.string(display=True); self.string(display=True)
-        self.expected([0, 0]); self.empty_array()
-        self.string(display=True); self.empty_array()
+        self.nums(4)
+        self.skip_display(); self.skip_display()
+        self.nums(2); self.byte()
+        for _ in range(5): self.skip_display()
+        self.nums(1); self.byte(); self.skip_display()
+        self.nums(2); self.empty_array()
+        self.skip_display(); self.skip_display()
+        self.nums(2); self.empty_array()
+        self.skip_display(); self.empty_array()
         old = self.context
         self.context = "uninstall"
         self.array(SCREENS, 32)
-        self.expected([1, 1])
+        self.nums(2)
         self.array(SCREENS, 32); self.array(SCREENS, 32)
-        events = self.array({"CIREvent"}, 32)
-        require([e["name"] for e in events] == ["On Startup", "On Pre Uninstall", "On Uninstall Error", "On Post Uninstall", "On Shutdown"], "exe_event_order_unsupported")
+        self.array({"CIREvent"}, 32)
         self.context = old
 
     def timestamp(self):
@@ -249,29 +230,29 @@ class Archive:
         self.r.read(8)
 
     def project(self):
+        self.lifecycle = "project"
         r = self.r
-        self.expected([1]); self.byte(); self.string(display=True)
-        require(r.read(6) == bytes.fromhex("000100000100"), "exe_project_options_unsupported")
-        self.expected([1, 0]); self.byte()
+        self.expected([1], "exe_project_schema_unsupported"); self.byte(); self.skip_display()
+        r.read(6)
+        self.nums(2); self.byte()
         self.nums(4)
-        require(r.read(2) == b"\0\1", "exe_project_options_unsupported")
-        self.string(display=True)
-        require(r.read(2) == b"\0\0", "exe_project_options_unsupported")
+        r.read(2)
+        self.skip_display()
+        r.read(2)
         self.labels()
-        self.expected([1, 0, 0, 30, 30, 1])
+        self.nums(6)
         self.timestamp()
-        self.expected([0, 0, 1, 1, 2, 1, 0])
-        self.string(display=True)  # Project GUID, no installation authority.
-        self.expected([0]); self.string(display=True); self.string(display=True)
-        self.byte(); self.byte(); self.expected([1])
+        self.nums(7)
+        self.skip_display()  # Project GUID, no installation authority.
+        self.nums(1); self.skip_display(); self.skip_display()
+        self.byte(); self.byte(); self.nums(1)
         n = r.number("H")
-        require(n == (16 if self.version == "9.5" else 19) and r.read(n * 2) == b"\0\x80" + b"\xff\xff" * (n - 1), "exe_platform_condition_unsupported")
-        self.expected([0, 0, 0, 0, 1, 0])
-        for _ in range(11): self.string(display=True)  # Authoring/version metadata.
-        self.expected([0, 0]); self.empty_array()
+        r.read(n * 2)
+        self.nums(6)
+        for _ in range(11): self.skip_display()  # Authoring/version metadata.
+        self.nums(2); self.empty_array()
         self.context = "project"
-        events = self.array({"CIREvent"}, 32)
-        require([e["name"] for e in events] == ["Global Functions", "On Startup", "On Pre Install", "On Install Error", "On Post Install", "On Shutdown"], "exe_event_order_unsupported")
+        self.array({"CIREvent"}, 32)
         self.array({"CImageInfo"}, 16)
         self.empty_array()
         self.array({"CSUFLanguageFile"}, 16)
@@ -279,12 +260,16 @@ class Archive:
 
     def decode(self):
         self.array({"CGlobalIncludeLuaFile"}, 64)
-        self.array({"CSetupFileData"}, 8192)
+        self.array({"CSetupFileData"}, 65535)
         require(self.file_index == len(self.files), "exe_file_count_mismatch")
         self.empty_array()  # No external/runtime files.
+        self.lifecycle = "before"
         self.array(SCREENS, 32)
-        self.expected([1, 1])
-        self.array(SCREENS, 32); self.array(SCREENS, 32)
+        self.nums(2)
+        self.lifecycle = "while"
+        self.array(SCREENS, 32)
+        self.lifecycle = "after"
+        self.array(SCREENS, 32)
         self.array({"CSessionVar"}, 256)
         self.array({"CSUFPackage"}, 64)
         self.array({"CPasswordData"}, 64)
@@ -293,8 +278,8 @@ class Archive:
         require(self.r.pos == self.r.end, "exe_metadata_trailing_data")
         return {"decoder": VERSION, "coverage": {"complete": True, "bytes": self.r.pos},
                 "metadata": evidence(self.r.data), "events": self.events, "includes": self.includes,
-                "variables": self.variables, "disabled_packages": self.packages,
-                "terms": self.terms, "objects": self.objects, "installable": False}
+                "disabled_packages": self.packages,
+                "objects": self.objects, "installable": False}
 
 
 def decode(data, version):

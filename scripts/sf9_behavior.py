@@ -3,12 +3,11 @@
 No source is executed. Values are literals, UI-only records, function syntax or
 symbolic file predicates. Unknown effects/calls/loops cannot grant permission.
 """
-import base64
 import re
 from sf95_audit import require, safe_target
 from sf9_lua import parse
 
-VERSION = "sf9-behavior-v1"
+VERSION = "sf9-behavior-v3"
 ROOT = "X:\\__scanned_game__"
 
 
@@ -40,28 +39,10 @@ def boolean(op, left, right=None):
 
 
 def file_policy(files, version):
-    """Only inert ordinary copy records; all remaining scalar options default."""
+    """Validate fields used by member selection; preferences are data."""
     for row in files:
-        destination = row["destination"].replace("\\", "/").casefold()
-        require(not set(destination.split("/")) & {"save", "saves", "savedata", "userdata", "user_data"}
-                and not destination.endswith((".sav", ".save")), "exe_user_data_target_unsupported")
-        require(row["runtime_folder"] == "Archive" and row["condition"] == ""
-                and row["install_type"] == "All" and row["extra"] == "None"
-                and row["packages"] == [], "exe_file_selection_unsupported")
-        require(not any(row["shortcuts"]) and row["icon"] == "" and row["font"] == "", "exe_file_registration_unsupported")
-        require(row["attributes"] in (0, 32) and row["use_original_attributes"] == 1
-                and row["forced_attributes"] == 0, "exe_file_attributes_unsupported")
-        fields = [base64.b64decode(f["base64"], validate=True) for f in row["unreviewed_fields"]]
-        require(len(fields) == 11, "exe_file_schema_unsupported")
-        require(fields[0] == b"\1\0" and fields[1] == bytes.fromhex("0a000080")
-            and fields[2][:4] == bytes.fromhex("0a000080")
-            and fields[2][12:] == bytes.fromhex("0a000080"), "exe_file_timestamp_unsupported")
-        require(fields[3] == bytes(25) and fields[4] == b"\2" + bytes(10)
-            and fields[5] == bytes(1) and fields[6] == bytes(8)
-            and fields[7] == bytes(4 if version == "9.7" else 3)
-            and fields[8] == bytes.fromhex("00000000e80300000000")
-            and fields[9] == b"\0\x80" + b"\xff\xff" * (15 if version == "9.5" else 18)
-            and fields[10] == b"\1\0", "exe_file_actions_or_options_unsupported")
+        require(isinstance(row["destination"], str) and isinstance(row["condition"], str)
+                and isinstance(row["packages"], list), "exe_file_schema_unsupported")
 
 
 class Compiler:
@@ -72,6 +53,8 @@ class Compiler:
         self.mode = "project"
         self.event_name = "Global Functions"
         self.protected = set()
+        self.packages = {}
+        self.lifecycle = "global"
         self.env = {"_NeedsReboot": False, "_SilentInstall": False, "_DoingUninstall": False,
                     "_SpaceRequired": total, "_SpaceAvailable": 2**63,
                     "strInstallFolderPath": ROOT, "e_Details": {"Text": ROOT},
@@ -178,7 +161,9 @@ class Compiler:
                 # instance; only its literal filename can become a condition.
                 relative = value.rsplit("\\", 1)[-1]
             else: raise ValueError("exe_condition_path_unsupported")
-            relative = safe_target("%AppFolder%", relative)
+            relative = relative.replace("/", "\\")
+            parent, _, leaf = relative.rpartition("\\")
+            relative = safe_target("%AppFolder%" + ("\\" + parent if parent else ""), leaf)
             return symbol("exists" if name.endswith("DoesExist") else "crc32", relative)
         if name == "Registry.GetValue":
             require(self.mode == "locator" and len(args) in (3, 4), "exe_registry_read_unsupported")
@@ -192,6 +177,23 @@ class Compiler:
         if name == "Screen.Next":
             require(self.event_name == "On Next", "exe_screen_transition_unsupported")
             self.next_paths.append(path)
+            return None
+        if name == "SetupData.GetPackageProperties":
+            require(args and isinstance(args[0], str), "exe_package_name_missing")
+            require(args[0] in self.packages, "exe_package_not_found")
+            return {"Install": self.packages[args[0]]}
+        if name == "SetupData.SetPackageProperties":
+            choosing = (self.lifecycle == "global"
+                or self.lifecycle == "before" and self.event_name in ("On Preload", "On Next")
+                or self.lifecycle == "project" and self.event_name in ("On Startup", "On Pre Install")
+                or self.lifecycle == "while" and self.event_name == "On Preload")
+            if not choosing: return None
+            require(args and isinstance(args[0], str), "exe_package_name_missing")
+            require(args[0] in self.packages, "exe_package_not_found")
+            require(len(args) > 1 and isinstance(args[1], dict), "exe_package_properties_invalid")
+            if "Install" in args[1]:
+                old = self.packages[args[0]]
+                self.packages[args[0]] = boolean("or", boolean("and", path, truth(args[1]["Install"])), boolean("and", boolean("not", path), old))
             return None
         if name == "Screen.Back": return None
         if name == "Application.Exit":
@@ -252,7 +254,7 @@ class Compiler:
                         elif target[0] == "index":
                             parent = self.value(target[1], env, path)
                             key = self.value(target[2], env, path)
-                            require(isinstance(parent, dict) and key in ("Text", "Checked", "Enabled"), "exe_lua_assignment_unsupported")
+                            require(isinstance(parent, dict) and key in ("Text", "Checked", "Enabled", "Install"), "exe_lua_assignment_unsupported")
                             parent[key] = value
                         else: raise ValueError("exe_lua_assignment_unsupported")
                 elif kind == "call": self.value(statement[1], env, path)
@@ -287,6 +289,7 @@ def lower(graph, files, version):
     require(graph["coverage"]["complete"], "exe_serialized_object_graph_incomplete")
     file_policy(files, version)
     compiler = Compiler(sum(f["unpacked_size"] for f in files))
+    compiler.packages = {o["name"]: o["install"] for o in graph.get("objects", []) if o["class"] == "CSUFPackage"}
     global_nodes = []
     for include in graph["includes"]:
         global_nodes.extend(parse(include["script"]))
@@ -296,7 +299,17 @@ def lower(graph, files, version):
     require(len(states) == 1 and not states[0][2], "exe_lua_global_flow_unsupported")
     compiler.protected = set(compiler.env)
     gates = []
-    for event in graph["events"]:
+    def lifecycle(event):
+        return event.get("lifecycle", "uninstall" if event["context"] == "uninstall" else "project" if event["context"] == "project" else "before")
+    def phase(pair):
+        i, e = pair; stage, name = lifecycle(e), e["name"]
+        order = (0 if stage == "project" and name == "On Startup" else 1 if stage == "before" else
+                 2 if stage == "project" and name == "On Pre Install" else 3 if stage == "while" and name == "On Preload" else
+                 4 if stage == "while" else 5 if stage == "project" and name == "On Post Install" else 6 if stage == "after" else 7)
+        return order, i
+    events = [(i,e) for i,e in enumerate(graph["events"]) if lifecycle(e) != "uninstall" and e["name"] != "Global Functions"]
+    for _, event in sorted(events, key=phase):
+        compiler.lifecycle = lifecycle(event)
         nodes = parse(event["script"])
         compiler.next_paths = []
         compiler.event_name = event["name"]
@@ -310,12 +323,11 @@ def lower(graph, files, version):
             scope = scope_copy(compiler.env)
             scope["e_Stage"] = stage
             compiler.block(nodes, [(scope, True, False, None)])
-        if name == "On Next":
+        if name == "On Next" and compiler.lifecycle == "before":
             condition = False
             for path in compiler.next_paths: condition = boolean("or", condition, path)
             require(condition is not False, "exe_installation_never_advances")
             gates.append(condition)
-    require(gates, "exe_installation_conditions_unresolved")
     condition = True
     for gate in gates: condition = boolean("and", condition, gate)
     def validate(node):
@@ -332,6 +344,20 @@ def lower(graph, files, version):
                     and any(type(x) is int and 0 <= x <= 0xffffffff for x in operands), "exe_condition_ir_unsupported")
         else: raise ValueError("exe_condition_ir_unsupported")
     validate(condition)
+    file_conditions = []
+    compiler.mode = "event"
+    for row in files:
+        expression = row["condition"]
+        selected = truth(compiler.value(parse("return (" + expression + ")")[0][1][0], scope_copy(compiler.env), True)) if expression.strip() else True
+        if row["packages"]:
+            installed = False
+            for package in row["packages"]:
+                require(package in compiler.packages, "exe_package_not_found")
+                installed = boolean("or", installed, compiler.packages[package])
+            selected = boolean("and", selected, installed)
+        if selected is not True:
+            validate(selected)
+            file_conditions.append({"path": row["destination"], "condition": selected})
     return {"schema_version": 1, "policy": VERSION, "condition": condition,
-            "copy_files": [f["destination"] for f in files], "terms": graph["terms"],
+            "file_conditions": file_conditions, "copy_files": [f["destination"] for f in files],
             "coverage": {"complete": True, "events": len(graph["events"]), "includes": len(graph["includes"]), "steps": compiler.steps}}

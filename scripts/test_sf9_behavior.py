@@ -8,9 +8,9 @@ from unittest.mock import patch
 import zipfile
 import zlib
 
-from sf95_audit import AuditError, file_table
+from sf95_audit import AuditError, Reader, file_table
 from sf9_behavior import Compiler, lower
-from sf9_graph import decode
+from sf9_graph import Archive, decode
 from sf9_lua import parse
 from sf95_worker import audit_behavior, convert
 from test_sf95_audit import compressed, sample
@@ -47,13 +47,16 @@ class Fixture:
         body += bytes(4 if version == "9.7" else 3) + b"\1\1\0" + bytes.fromhex("00000000e80300000000") + small(len(mask) // 2) + mask
         body += text("") + small(1) + text("All") + text("None") + small(0) + text("") + struct.pack("<qI", len(packed), zlib.crc32(content)) + b"\0"
         return body, packed
-    def metadata(self, version="9.5", name="payload.bin", script=None):
+    def metadata(self, version="9.5", name="payload.bin", script=None, display_blob=None, session_vars=(), includes=()):
         script = script or 'if File.DoesExist("%AppFolder%\\\\engine.exe") and File.GetCRC("%AppFolder%\\\\identity.dat") == 123 then Screen.Next(); end'
         body, self.packed = self.file(version, name, b"generic-content")
-        result = small(0) + self.array("CSetupFileData", [lambda: body]) + small(0)
+        include_bodies = [lambda kind=kind, selectors=selectors: num(1, kind) + text("synthetic") + text("") + small(len(selectors)) + b"".join(text(v) for v in selectors) for kind, selectors in includes]
+        result = self.array("CGlobalIncludeLuaFile", include_bodies) + self.array("CSetupFileData", [lambda: body]) + small(0)
         def screen():
-            return num(1, 110) + text("Any install folder title") + num(2) + text("Any display text") + num(0, 0, 0) + small(0) + self.events(["On Preload", "On Back", "On Next", "On Cancel", "On Help", "On Ctrl Message"], script) + small(0) + self.appearance(version) + num(1) + text("%AppFolder%")
-        result += self.array("CSUFScreenInstallFolder", [screen]) + num(1, 1) + small(0) * 5
+            return num(1, 110) + text("Any install folder title") + num(2) + (text("Any display text") if display_blob is None else display_blob) + num(0, 0, 0) + small(0) + self.events(["On Preload", "On Back", "On Next", "On Cancel", "On Help", "On Ctrl Message"], script) + small(0) + self.appearance(version) + num(1) + text("%AppFolder%")
+        result += self.array("CSUFScreenInstallFolder", [screen]) + num(1, 1) + small(0) * 2
+        variables = [lambda name=name, blob=blob, flag=flag: num(1) + text(name) + blob + num(flag) for name, blob, flag in session_vars]
+        result += self.array("CSessionVar", variables) + small(0) * 2
         result += num(1, 0) + text("") * 3 + num(0, 0, 0, 1, 0) + b"\0" + num(*([0] * 5)) + b"\0"
         labels = (text("") + num(*([0] * 4)) + text("") + num(*([0] * 4)) + b"\0") * 3
         result += labels + num(1, 1, 1, 1) + text("") * 2 + num(0, 0) + b"\0" + text("") * 5 + num(0) + b"\0" + text("") + num(0, 0) + small(0) + text("") * 2 + num(0, 0) + small(0) + text("") + small(0)
@@ -75,20 +78,74 @@ class BehaviorTests(unittest.TestCase):
             self.assertEqual(graph["coverage"], {"complete": True, "bytes": len(data)})
             self.assertEqual(result["condition"], ("symbol", "and", ("symbol", "exists", "engine.exe"), ("symbol", "==", ("symbol", "crc32", "identity.dat"), 123)))
             self.assertEqual(result["copy_files"], ["arbitrary-name.bin"])
+    def test_display_bytes_and_length_headers_do_not_change_installation(self):
+        # Invalid GB18030 and unpaired UTF-16 surrogates are display data only.
+        ansi = b"\xa9 "
+        wide = b"\x00\xd8\x00\x00"
+        variants = [bytes([2]) + ansi, b"\xff\x02\x00" + ansi,
+                    b"\xff\xff\xff" + num(2) + ansi,
+                    b"\xff\xfe\xff\x02" + wide,
+                    b"\xff\xfe\xff\xff\x02\x00" + wide,
+                    b"\xff\xfe\xff\xff\xff\xff" + num(2) + wide]
+        for version in ("9.5", "9.6", "9.7"):
+            reference = Fixture().metadata(version)
+            expected = lower(decode(reference, version), file_table(reference, installer_version=version)[0], version)
+            for blob in variants:
+                with self.subTest(version=version, header=blob.hex()):
+                    data = Fixture().metadata(version, display_blob=blob)
+                    graph = decode(data, version)
+                    observed = lower(graph, file_table(data, installer_version=version)[0], version)
+                    self.assertEqual(observed, expected)
+                    self.assertNotIn("variables", graph)
+                    self.assertNotIn("terms", graph)
+                    self.assertNotIn("terms", observed)
+                    archive = Archive(reference, version)
+                    archive.r = Reader(blob + num(0x12345678))
+                    self.assertIsNone(archive.skip_display())
+                    self.assertEqual(archive.r.number("I"), 0x12345678)
+                    for cut in range(len(blob)):
+                        archive.r = Reader(blob[:cut])
+                        with self.assertRaisesRegex(AuditError, "truncated_record"):
+                            archive.skip_display()
+
+    def test_session_values_are_skipped_and_include_selectors_are_evidence(self):
+        data = Fixture().metadata(session_vars=[("same", b"\x02\xa9 ", 255), ("same", b"\x01\x80", 0xffffffff)], includes=[(77, ["Custom", "All"])])
+        graph = decode(data, "9.5")
+        self.assertNotIn("variables", graph)
+        self.assertEqual(graph["includes"][0]["source_kind"], 77)
+        self.assertEqual(graph["includes"][0]["selectors"], ["Custom", "All"])
+        lower(graph, file_table(data)[0], "9.5")
+
+    def test_non_display_paths_and_scripts_still_reject_invalid_encoding(self):
+        data = Fixture().metadata()
+        for marker in (text("payload.bin"), text("On Next")):
+            changed = data.replace(marker, bytes([len(marker)-1]) + b"\xff" + marker[2:], 1)
+            with self.assertRaisesRegex(AuditError, "invalid_utf8"):
+                decode(changed, "9.5")
+
+    def test_reference_selection_and_lifecycle_match_v2_contract(self):
+        data = Fixture().metadata(script="Screen.Next()")
+        graph = decode(data, "9.5")
+        self.assertEqual({e["lifecycle"] for e in graph["events"]}, {"before", "project", "uninstall"})
+        graph["objects"].extend([
+            {"class": "CSUFPackage", "name": "a", "install": False},
+            {"class": "CSUFPackage", "name": "b", "install": True}])
+        graph["events"].extend([
+            {"context": "project", "name": "On Startup", "script": 'SetupData.SetPackageProperties("a", {Install=true})'},
+            {"context": "uninstall", "name": "On Startup", "script": 'File.Run("never-installed")'},
+            {"context": "CSUFScreenStaticText:after", "lifecycle": "after", "name": "On Next", "script": "Screen.Next()"}])
+        files = file_table(data)[0]
+        files[0].update(packages=["a", "b"], condition='File.DoesExist("%AppFolder%\\\\sub\\\\engine.exe")', runtime_folder="Data", attributes=999)
+        result = lower(graph, files, "9.5")
+        self.assertIs(result["condition"], True)
+        self.assertEqual(result["file_conditions"], [{"path": "payload.bin", "condition": ("symbol", "exists", "sub/engine.exe")}])
+
     def test_corrupt_objects_tail_and_order_fail_closed(self):
         data = Fixture().metadata()
-        for changed in (data[:-1], data + b"unexpected", data.replace(b"On Next", b"On Help", 1), data.replace(b"CSUFScreenInstallFolder", b"CSUFScreenExecuteStuff", 1)):
+        for changed in (data[:-1], data + b"unexpected", data.replace(b"CSUFScreenInstallFolder", b"CSUFScreenExecuteStuff", 1)):
             with self.assertRaises((ValueError, KeyError, UnicodeError)):
                 decode(changed, "9.5")
 
-    def test_user_save_targets_cannot_be_authorized_as_payload(self):
-        data = Fixture().metadata()
-        graph = decode(data, "9.5")
-        for path in ("savedata/file.dat", "www/save/file.rpgsave", "PROFILE.SAV", "userdata/settings.bin"):
-            files = file_table(data, installer_version="9.5")[0]
-            files[0]["destination"] = path
-            with self.subTest(path=path), self.assertRaisesRegex(AuditError, "exe_user_data_target_unsupported"):
-                lower(graph, files, "9.5")
     def test_behavior_converter_rechecks_same_graph_and_conditions(self):
         fixture = Fixture(); metadata = fixture.metadata("9.7")
         record = (b"unused", fixture.packed)

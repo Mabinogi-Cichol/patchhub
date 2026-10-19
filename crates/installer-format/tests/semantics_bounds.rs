@@ -28,7 +28,7 @@ fn checked_file(version: &str) -> Value {
         "unpacked_size":42,"unreviewed_fields":fields.into_iter().map(|f|json!({"base64":STANDARD.encode(f)})).collect::<Vec<_>>()})
 }
 fn graph(source: &str) -> Value {
-    json!({"coverage":{"complete":true},"includes":[],"terms":[],"events":[{"context":"CSUFScreenInstallFolder:test","name":"On Next","script":source}]})
+    json!({"coverage":{"complete":true},"includes":[],"events":[{"context":"CSUFScreenInstallFolder:test","name":"On Next","script":source}]})
 }
 fn lower(source: &str) -> steam_patch_installer_format::Result<Value> {
     behavior::lower(&graph(source), &[checked_file("9.5")], "9.5")

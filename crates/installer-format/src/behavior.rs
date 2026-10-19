@@ -8,7 +8,7 @@ use std::{
     rc::Rc,
 };
 
-pub const VERSION: &str = "sf9-behavior-v2";
+pub const VERSION: &str = "sf9-behavior-v3";
 const ROOT: &str = "X:\\__scanned_game__";
 const MAX_STEPS: usize = 200_000;
 const MAX_BRANCHES: usize = 1024;
@@ -1356,7 +1356,7 @@ pub fn lower(graph: &Value, files: &[Value], version: &str) -> Result<Value> {
     let condition = condition.to_json(&mut encoding_budget, 0)?;
     Ok(
         json!({"schema_version":1,"policy":VERSION,"condition":condition,
-        "file_conditions":file_conditions,"copy_files":files.iter().map(|f|f["destination"].clone()).collect::<Vec<_>>(),"terms":graph["terms"],
+        "file_conditions":file_conditions,"copy_files":files.iter().map(|f|f["destination"].clone()).collect::<Vec<_>>(),
         "coverage":{"complete":true,"events":events.len(),"includes":includes.len(),"steps":compiler.steps}}),
     )
 }
