@@ -43,3 +43,12 @@ RustSec 提示：RUSTSEC-2024-0429（glib 0.18.5，unsound）与 RUSTSEC-2024-03
 - 用户要求补充 Decky 实机截图，随后明确由用户操作、助手仅按指令截图，最后停止追加截图。已选取游戏列表、夏日 DLC 补丁/镜像选择、人工确认及实际下载 30% 共 4 张原始 PNG，放入 `docs/images/decky/` 并链接至 README；未合成或伪造安装完成画面。
 - 只读 RPC 确认用户实际执行的《夏日狂想曲+》覆盖任务 `38a5cc1d-35e9-4087-8156-16de0725582b` completed、事务 `96b611cf-f42c-880b-ae07-d23892f88aeb` committed，自动清理 completed/failures=[]，无活动任务、插件实例 1。助手没有触发本次安装，没有核验游戏内效果。设备现有插件用于截图，未重新部署 Release ZIP；这组画面不作为 Release 包的设备部署证明。
 - 原计划演示《夜勤病栋》时创建的 71 文件游戏及工具状态备份（4,864,491,520 字节）已取回本地并校验 SHA-256，保留于 `.artifacts/release-v0.1.0/deck-backup/`；未修改夜勤游戏。远端仅清理本轮独立备份暂存，用户当前页面不回退。
+
+
+## v0.2.0 发布准备（2026-10-19）
+
+- 用户明确要求分项提交、合并功能分支至 main，并发布 v0.2.0；本地合并提交为 70a1632。应用、Cargo/npm 锁文件、Tauri 与 SBOM 应用版本均为 0.2.0。
+- 沿用各功能施工记录中本 session 已完成的验证；版本调整后 SBOM 单测及 npm 工作区一致性检查通过。发布必须使用最终 Tag 对应 CI 产物，在线状态与附件核验在实际执行后补记。
+- 重新执行 npm 审计：完整依赖报告 7 条 high，均属于同一 braces 栈耗尽公告沿 @decky/rollup → rollup-plugin-delete → del/globby/fast-glob/micromatch 的构建依赖传播；npm audit --omit=dev 为 0。当前 Decky 构建清理模式固定为 ./dist/*，未把游戏/来源内容作为该模式输入。上游公告 [GHSA-vfj7-8cjw-p6xm](https://github.com/advisories/GHSA-vfj7-8cjw-p6xm) 尚无修复版本，本轮不声称全依赖无漏洞。证据位于 .artifacts/release-v0.2.0/npm-audit*.json。
+- 本轮尚未重跑 RustSec 审计；原记录不能当作当前锁文件审计结果。完整 Windows 实机、实体手柄、来源自动调度/休眠以及新版直接安装完整中断矩阵仍未全部验证。发布说明保留这些边界；未因本次发布操作设备或游戏。
+- GitHub SSH 凭据不可用、HTTPS 没有保存的凭据，已启动 Git Credential Manager 设备授权，待用户完成登录后推送与发布；不将本地合并称为远端合并或已发布。
