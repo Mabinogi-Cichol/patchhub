@@ -188,3 +188,8 @@ Rust 是来源缓存、匹配规则和 fallback 判定的唯一业务实现。�
 - 真实网站关键链路已通过：HGamer `hgamer_live`（搜索→身份→补丁详情，真实网络）+ Kagura 列表结构与 EN 双入口 fixture；真实 Kagura 全量更新耗时/流量未跑。
 - P6 未完成：Deck/Windows 实机矩阵、安装链真实回归、真实旧状态迁移样本。HGamer 与 Kagura 多入口两个真实网站阻塞项已闭环。
 - 结论：**自动化完成、实机验收前不合并 main（除非用户明确要求）**；下一步在 Deck + Windows 实机执行 §7.10 与真实网络任务，补真实 Kagura 成本与迁移样本后再评估合并。
+
+
+## 11. 子 feature：Decky 可折叠订阅源卡片
+
+管理订阅源页的来源分界与折叠交互细化为子 feature：[设计](collapsible-source-cards/design.md) / [施工记录](collapsible-source-cards/progress.md)。已实现并通过 67 项前端测试、类型检查与构建，已部署 Steam Deck 并验证真实页面、键盘及 RPC；实体手柄与真实任务待验收。默认收起、多卡独立展开、同一前端会话保留，复用现有来源任务与设置契约。本子项的进度与验收独立记录，不改变父功能既有验收事实。

@@ -1,7 +1,7 @@
 # 来源缓存与游戏匹配重构施工记录
 
 - 设计：[design.md](design.md)。
-- 当前状态：P0 基线/契约、P1 数据/存储/迁移、P2 按源更新、P3 增量匹配、P4 双端与自动更新、P5 切换清理均已实现并通过自动化；P6 自动化验收与过度设计复核完成，真实网站关键链路（HGamer live、Kagura 列表结构与 EN 多入口）已通过；双端实机/安装链真实回归未执行，**实机验收前不合并 main**。P6 证据：[p6-acceptance.md](p6-acceptance.md)。
+- 当前状态：P0 基线/契约、P1 数据/存储/迁移、P2 按源更新、P3 增量匹配、P4 双端与自动更新、P5 切换清理均已实现并通过自动化；P6 自动化验收与过度设计复核完成，真实网站关键链路（HGamer live、Kagura 列表结构与 EN 多入口）已通过；Steam Deck 编译部署与 RPC/真实界面冒烟已通过（2026-10-19）；Windows 实机、完整实机矩阵与安装链真实回归仍待验证，**实机验收前不合并 main**。P6 证据：[p6-acceptance.md](p6-acceptance.md)。
 - 分支：`feature/source-cache-matching-refactor`。
 
 ## 2026-10-18：制定重构计划
@@ -83,3 +83,33 @@
 - Kagura EN 双入口修复（core-sources，`adapters/kagura.rs`）：无 progress 时从 `rule.url` + `rule.pages` 全部入口起爬（canonical 去重），每个入口各自 `next_page` 分页；新增 fixture `kagura_en_crawls_every_configured_entry_root`（3 列表页、4 条目、complete=true、不抓详情）。本记录复跑该测试 **通过**；真实 Kagura 全量更新仍未执行。
 - 修复后复核门禁（Rust；宿主/协议/生成物未变，沿用首轮结果）：`cargo test --workspace` **通过**（42 套件汇总 **705 passed / 0 failed**；core 单元 369 passed / 5 ignored，含新增 2 项 HGamer 单测）；`cargo clippy --workspace --all-targets -- -D warnings` **通过**；`cargo run -p steam-patch-contract-gen -- check` **通过**（`v5 contracts check: ok`）；`cargo fmt --all -- --check` **通过**；`hgamer_live`（ignored）**通过**；`kagura_en_crawls_every_configured_entry_root` **通过**。日志见 `.artifacts/p6-*-after-fix.log`、`.artifacts/p6-hgamer-live.log`。
 - 更新结论：自动化矩阵 + 真实网站关键链路（HGamer live、Kagura 列表结构与多入口）通过；剩余未验证为双端实机矩阵、安装链真机回归、真实 Kagura 全量更新耗时/流量、真实旧状态迁移。**建议实机验收后再合并 main（除非用户明确要求）**。
+
+## 2026-10-19：编译并部署至 Steam Deck
+
+- 依据用户“计划已经完成，编译并部署至 steamdeck”的指示，在 `feature/source-cache-matching-refactor`（`431ec3c8bf1edd7d31f0bf61ad72fd45a9b38415`，部署前工作区干净）构建；沿用已有自动化验证，不重复运行测试。不合并、不提交、不发布版本。
+- 当前 Devkit 选中设备 `steamdeck`；本轮 SSH 使用当前配对密钥与已有可信主机记录，独立保存 known_hosts。部署前 `list_tasks` 无非终态任务，插件目录 root 所有，Loader 为 v3.2.10。
+- 构建：`npm run build:decky` 通过；当前源码归档上传隔离验证目录，设备已有 Rust 1.94.0 bookworm 容器执行 `cargo build --release --locked -p steam-patch-cli -p steam-patch-installer-worker --bin steam-patch --bin sf-worker` 通过（40.68s）。取回本轮 Linux ELF 至 `target/linux/release/`，`npm run package:plugin -w apps/decky` 通过；从当前 Cargo metadata 与锁文件生成 SBOM（749 components，无 license metadata missing），`scripts/package-artifacts.py --platform decky` 通过。
+- 完整包 23 文件、7,182,341 字节；ZIP SHA-256：`099bda3579610a05f37b08815e0f6a9523b529b81366fe4d6b7a432a02a3c937`。上传后逐成员大小/哈希与整体 ZIP 哈希一致；通过 Steam 已有 Decky 连接调用 Loader 本地 ZIP 重装，严格核对安装提示 name/version/hash/type/request ID，再确认安装。
+- 备份：完整旧插件、旧状态、Loader/本插件设置、逐文件清单及可安装 rollback.zip 已取回本地并核对 SHA-256。证据与回滚材料存放忽略目录 `.artifacts/source-cache-matching-deck-20261019/`，其中 `backup/` 保留首次备份。
+- 部署核验：正式 23 文件全部匹配，CLI/worker 有执行位，runtime manifest 为 protocol 5 / worker protocol 1；Loader 服务 active、插件实例严格 1。实际认证 HTTP bundle SHA 与本轮构建/正式文件一致：`28752f0ff6342aa09e73b4f554e138a0df2c137de005c9a6f59f8f745d6e3772`。
+- RPC：新版 `scan()` 返回 28 个真实游戏实例，`list_sources` 返回 4 个来源及 revision/complete/interval_hours 等 v5 字段，`source_task_status` 正常，`project_instances` 返回单实例投影，`list_transactions` 可读 23 条历史事务。最终安装/来源活动任务均为空。
+- 真实旧状态迁移冒烟：原文件无缺失；原有状态文件仅 `sources/rust-v1/schema.json` 与 `settings.json` 哈希改变，其余原文件（含事务/收据）保持一致；已保存来源索引和匹配结果可读。这是该设备现有样本验证，不代表全部旧状态组合已验收。
+- 真实界面：QAM 显示 7 款“有补丁”游戏；全屏来源页显示索引条目/修订、完整性、更新时间、自动更新关闭、更新间隔与手动更新按钮；HGamer 不显示定时更新设置。来源页顶部/底部与 VenusBlood FRONTIER International 游戏页已截图并检查，游戏页显示 HGamer 命中和“重新匹配”入口；DOM 滚动检查无横向溢出。未点击安装或实际来源更新/重匹配按钮。
+- 收尾：Loader 安装改变的本插件排序记录已恢复原有成员关系，其他设置不回写；已复核恢复结果。关闭安装提示和本次菜单，返回 Steam 首页。远端本轮暂存目录清理与隧道关闭结果见同目录 cleanup.json。
+- 设备诊断：扫描报告两个既存 Steam 库挂载路径不可用（`library_unavailable`）；当前可访问库扫描正常，未修改挂载配置。来源列表保留 HGamer 旧的 `source_refresh_failed` 尝试状态，本轮未发起来源网络刷新，不据此声称真实来源更新通过。
+- 工具限制与已复核情况：沙箱启动被 Z: 映射盘凭据错误阻断，使用获准的沙箱外执行通道完成；一次未认证的 HTTP bundle CDP fetch 超时，改用设备 loopback 认证请求核对成功；恢复设置并导航时 CDP Promise collected，之后独立读取确认设置已恢复且页面回到首页。
+- 验收边界：本轮完成编译、完整部署、文件/HTTP/RPC 与真实界面冒烟。实体手柄、来源真实更新/取消/调度/休眠、Windows 实机、完整迁移组合及安装链真实回归仍待验证，未将本轮部署等同于 P6 全矩阵验收，不合并 main。
+
+## 2026-10-19：新增子 feature 计划——可折叠订阅源卡片
+
+- 根据用户新增的页面分界与折叠需求，建立 [子 feature 设计](collapsible-source-cards/design.md) 与 [子施工记录](collapsible-source-cards/progress.md)，沿用当前父分支。
+- 子项当前待实现；已列明产品契约、技术方案、分阶段实施及自动化/实机验收矩阵，并完成静态过度设计自审。
+- 本轮仅编写计划与索引，未修改插件代码、未测试、未构建、未操作设备。父功能之前的部署结果不作为本子项通过依据。
+
+
+## 2026-10-19：可折叠订阅源卡片子 feature 实施
+
+- 子项 [设计](collapsible-source-cards/design.md) / [施工记录](collapsible-source-cards/progress.md)：C1–C3 已实现，前端 67 tests、typecheck/build/package 通过，过度设计静态自审完成。
+- 已部署 Steam Deck，文件/HTTP/RPC 与单插件实例验证通过；真实页面确认默认收起、独立展开、缓存页往返保留、aria/DOM 焦点和 Enter/Space，长 URL/QAM 无溢出。首次备份与证据保留，设备暂存及隧道清理完成。
+- Loader 重装期间前端导入超时，按技能确认空闲后重启 Steam JS 上下文恢复，最终状态已独立复核。详细过程与证据见子施工记录。
+- 子项实体手柄、真实任务进度/取消仍待验收；未启动来源刷新或补丁安装，未提交、未合并。父功能其他遗留验收边界保持不变。
