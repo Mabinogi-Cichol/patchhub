@@ -220,7 +220,7 @@ function QuickAccess() {
     if (row) lastGame = null;
   }, [shown]);
   return <div className="patch-qam"><style>{css}</style>
-    <div className="patch-qam-controls"><PanelSection title="Steam 补丁管理">
+    <div className="patch-qam-controls"><PanelSection title="Steam 黄油补丁助手">
       <Row><TextField label="搜索游戏名称或编号" value={query} onChange={e => setListPreferences({ query: e.target.value })} /></Row>
       <Row><DropdownItem label="筛选" layout="below" rgOptions={filterOptions} selectedOption={filter} onChange={option => setListPreferences({ filter: option.data })} /></Row>
       {busy && <Row><Status>{busy}</Status></Row>}{error && <Row><Status warning>{error}</Status></Row>}
@@ -541,7 +541,7 @@ function GameManager({ item, seg, panel }: { item: Install; seg: string; panel?:
   // history, and `disableRouteReporting` leaves Steam's own router untouched.
   // `showTitle` renders the non-focusable two-line header at the top of the
   // page list (native PagedSettings only renders `title` when it is true).
-  const navigation = { title: <div className="patch-nav-header"><span className="patch-nav-tool">Steam 补丁管理</span><span className="patch-nav-game" title={game}>{game}</span></div>, showTitle: true, page: `${base}/${activePanel}`, pages: navPages,
+  const navigation = { title: <div className="patch-nav-header"><span className="patch-nav-tool">Steam 黄油补丁助手</span><span className="patch-nav-game" title={game}>{game}</span></div>, showTitle: true, page: `${base}/${activePanel}`, pages: navPages,
     fnSetNavigateToPage: (setter: (route: string) => void) => { navigate.current = setter; },
     disableRouteReporting: true } as unknown as ComponentProps<typeof SidebarNavigation>;
   return <SidebarNavigation {...navigation} />;
@@ -687,13 +687,13 @@ function Manager() {
   const target = instance === sourceRoute ? instance : decodeInstance(instance ?? "");
   const item = report?.installs.find(i => i.game.instance_id === target);
   return <Focusable className="patch-full" onCancel={() => Navigation.NavigateBack()}><style>{css}</style>
-    {instance === sourceRoute ? <SidebarNavigation showTitle disableRouteReporting title={<div className="patch-nav-header"><span className="patch-nav-tool">Steam 补丁管理</span><span className="patch-nav-game">全局设置</span></div>} page={settingsPage(panel)} pages={[
+    {instance === sourceRoute ? <SidebarNavigation showTitle disableRouteReporting title={<div className="patch-nav-header"><span className="patch-nav-tool">Steam 黄油补丁助手</span><span className="patch-nav-game">全局设置</span></div>} page={settingsPage(panel)} pages={[
       { identifier: settingsRoutes.sources, route: settingsRoutes.sources, title: "管理订阅源", visible: true, content: <GlobalSources /> },
       "separator",
       { identifier: settingsRoutes.cache, route: settingsRoutes.cache, title: "缓存与备份", visible: true, content: <GlobalCache /> },
     ]} />
       : item ? <GameManager key={instance} item={item} seg={instance!} panel={panel} />
-        : <div className="patch-page"><h2>Steam 补丁管理</h2><Status>{report ? "游戏已不在当前扫描结果中。" : "正在加载游戏列表…"}</Status><Action onClick={() => Navigation.NavigateBack()}>返回游戏列表</Action></div>}
+        : <div className="patch-page"><h2>Steam 黄油补丁助手</h2><Status>{report ? "游戏已不在当前扫描结果中。" : "正在加载游戏列表…"}</Status><Action onClick={() => Navigation.NavigateBack()}>返回游戏列表</Action></div>}
   </Focusable>;
 }
 function GlobalSources() {
@@ -720,7 +720,7 @@ function GlobalSources() {
 
 export default definePlugin(() => {
   routerHook.addRoute(route, Manager);
-  return { name: "Steam 补丁管理", titleView: <div>Steam 补丁管理</div>, content: <QuickAccess />, icon: <FaPuzzlePiece />,
+  return { name: "Steam 黄油补丁助手", titleView: <div>Steam 黄油补丁助手</div>, content: <QuickAccess />, icon: <FaPuzzlePiece />,
     onDismount() { tasks.dismount(); hideTask(); routerHook.removeRoute(route); },
   };
 });

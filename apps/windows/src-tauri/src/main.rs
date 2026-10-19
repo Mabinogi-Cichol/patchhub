@@ -1815,7 +1815,7 @@ fn main() {
             add_source
         ])
         .run(tauri::generate_context!())
-        .expect("failed to start Steam Patch Manager");
+        .expect("failed to start Steam Hentai Patch");
 }
 
 #[cfg(test)]

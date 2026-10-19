@@ -94,7 +94,7 @@ class FakeLoader(m.Loader):
         if op == "probe":
             present = self.plugin.exists()
             version = m.json_read(self.plugin / "package.json")["version"] if present else None
-            return {"plugins": [{"version": version, "disabled": m.NAME in self.settings["disabled_plugins"]}] if present else [],
+            return {"plugins": [{"version": version, "disabled": any(name in self.settings["disabled_plugins"] for name in m.PLUGIN_NAMES)}] if present else [],
                     "settings": {key: list(value) for key, value in self.settings.items()},
                     "instances": [{"version": version, "valid": True}] if present else [], "user": {"path": str(Path.home())}}
         if op == "tasks":
@@ -123,7 +123,7 @@ class FakeLoader(m.Loader):
                 unpack_fixture(source, self.plugin)
                 # Simulate Loader's uninstall resetting just this plugin's settings.
                 for key in m.SETTINGS:
-                    self.settings[key] = [item for item in self.settings[key] if item != m.NAME]
+                    self.settings[key] = [item for item in self.settings[key] if item not in m.PLUGIN_NAMES]
                 if self.fail_install == "after" and not rollback:
                     job.update(ok=False, error="reload_failed")
                 if self.fail_install == "lost" and not rollback:
@@ -132,10 +132,11 @@ class FakeLoader(m.Loader):
                     raise KeyboardInterrupt()
             elif kind == "settings":
                 for key in m.SETTINGS:
-                    own = m.NAME in args["settings"][key]
-                    self.settings[key] = [item for item in self.settings[key] if item != m.NAME]
+                    name = args.get("name", m.NAME)
+                    own = name in args["settings"][key]
+                    self.settings[key] = [item for item in self.settings[key] if item not in m.PLUGIN_NAMES]
                     if own:
-                        self.settings[key].append(m.NAME)
+                        self.settings[key].append(name)
             elif kind == "uninstall":
                 shutil.rmtree(self.plugin)
             return True
@@ -198,6 +199,36 @@ class InstallerTests(unittest.TestCase):
         self.assertEqual(external.read_text(), "preserve")
         for key in ("pluginOrder", "frozenPlugins", "hiddenPlugins"):
             self.assertEqual(set(self.loader.settings[key]), {"other", "another", m.NAME})
+
+    def legacy(self):
+        self.old()
+        metadata = self.loader.plugin / "plugin.json"
+        data = m.json_read(metadata)
+        data["name"] = m.LEGACY_NAME
+        metadata.write_text(json.dumps(data), encoding="utf-8")
+        for key in m.SETTINGS:
+            self.loader.settings[key] = [m.LEGACY_NAME if name == m.NAME else name for name in self.loader.settings[key]]
+        self.original_files = m.tree_manifest(self.loader.plugin)
+
+    def test_legacy_update_migrates_identity_and_settings(self):
+        self.legacy()
+        self.installer.install(self.package, yes=True)
+        self.assertEqual(m.json_read(self.loader.plugin / "plugin.json")["name"], m.NAME)
+        for key in ("pluginOrder", "frozenPlugins", "hiddenPlugins"):
+            self.assertIn(m.NAME, self.loader.settings[key])
+            self.assertNotIn(m.LEGACY_NAME, self.loader.settings[key])
+        self.assertFalse(self.work.exists())
+
+    def test_failed_legacy_update_restores_old_name_files_and_settings(self):
+        self.legacy()
+        self.loader.fail_install = "after"
+        with self.assertRaisesRegex(m.InstallError, "已恢复"):
+            self.installer.install(self.package, yes=True)
+        self.assertEqual(m.tree_manifest(self.loader.plugin), self.original_files)
+        for key in ("pluginOrder", "frozenPlugins", "hiddenPlugins"):
+            self.assertIn(m.LEGACY_NAME, self.loader.settings[key])
+            self.assertNotIn(m.NAME, self.loader.settings[key])
+        self.assertFalse(self.work.exists())
 
     def test_install_and_reload_failures_restore_old_and_cleanup(self):
         self.old()
@@ -399,6 +430,29 @@ class PackageTests(unittest.TestCase):
 
     def tearDown(self):
         self.tmp.cleanup()
+
+    def test_new_and_released_legacy_names_are_preserved_in_package_metadata(self):
+        for name in m.PLUGIN_NAMES:
+            create_package(self.zip, changes={"plugin.json": json.dumps({"name": name, "api_version": 1, "flags": []}).encode()})
+            with self.subTest(name=name):
+                self.assertEqual(m.validate_package(self.zip)["name"], name)
+
+    def test_settings_migrate_to_target_and_restore_original_identity(self):
+        loader = type("LoaderSpy", (), {"mutate": lambda _, state, **args: calls.append(args)})()
+        installer = m.Installer(self.root, self.root / m.FOLDER, loader)
+        original = {key: ["other", m.LEGACY_NAME] for key in m.SETTINGS}
+        state = m.State(self.root, {"phase": "installing", "target": {"name": m.NAME}, "original": {"name": m.LEGACY_NAME}, "settings": original})
+        calls = []
+        installer.restore_settings(state)
+        self.assertEqual(calls[-1]["name"], m.NAME)
+        self.assertEqual(calls[-1]["settings"]["pluginOrder"], ["other", m.NAME])
+        state.data["phase"] = "restoring"
+        installer.restore_settings(state)
+        self.assertEqual(calls[-1]["name"], m.LEGACY_NAME)
+        self.assertEqual(calls[-1]["settings"], original)
+        state.data.update(phase="installing", target={"name": m.LEGACY_NAME}, original=None, settings={key: [] for key in m.SETTINGS})
+        installer.restore_settings(state, first_install_success=True)
+        self.assertEqual(calls[-1]["settings"]["pluginOrder"], [m.LEGACY_NAME])
 
     def test_rejects_unsafe_paths_duplicates_links_and_special_modes(self):
         for name, mode in [("../escape", 0o100644), ("/absolute", 0o100644), ("other/file", 0o100644),

@@ -10,8 +10,8 @@ import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
-URL = "https://raw.githubusercontent.com/Mabinogi-Cichol/steam-hentai-patch-searcher/main/scripts/install-decky.py"
-ENTRY_URL = "https://raw.githubusercontent.com/Mabinogi-Cichol/steam-hentai-patch-searcher/main/install.sh"
+URL = "https://raw.githubusercontent.com/Mabinogi-Cichol/steam-hentai-patch/main/scripts/install-decky.py"
+ENTRY_URL = "https://raw.githubusercontent.com/Mabinogi-Cichol/steam-hentai-patch/main/install.sh"
 SHORT_URL = "https://ba.sh/tz4y"
 
 

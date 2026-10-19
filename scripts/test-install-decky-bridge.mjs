@@ -7,7 +7,7 @@ import vm from 'node:vm';
 
 const source = readFileSync(new URL('./install-decky.py', import.meta.url), 'utf8');
 const bridge = source.match(/BRIDGE = r"""([\s\S]*?)"""/)[1];
-const name = 'Steam 补丁管理';
+const name = 'Steam 黄油补丁助手';
 const tick = () => new Promise(resolve => setImmediate(resolve));
 
 function environment() {
@@ -183,4 +183,70 @@ test('cancellation RPC failure still restores the original prompt handler and ca
   assert.equal((await finished(e)).ok,false);
   assert.equal(e.backend.call,previous);
   assert.deepEqual([...e.backend.eventListeners.get('loader/add_plugin_install_prompt')],[e.handler]);
+});
+
+const legacyName = 'Steam 补丁管理';
+
+test('legacy plugin is discovered and its tasks are read using its installed name', async () => {
+  const e=environment(), dispatch=e.backend.dispatch.bind(e.backend);
+  e.loader.plugins[0].name=legacyName;
+  e.backend.dispatch=async(route,...args)=>route==='loader/get_plugins'?[{name:legacyName,version:'0.2.0',disabled:false}]:dispatch(route,...args);
+  const probe=await e.run('probe',{});
+  assert.equal(probe.plugins[0].name,legacyName);
+  assert.equal(probe.instances.length,1);
+  await e.run('tasks',{});
+  assert.equal(e.seen.find(x=>x.route==='loader/call_plugin_method').args[0],legacyName);
+});
+
+test('renamed install unloads old name before confirmation and checks its tasks', async () => {
+  const e=environment(), dispatch=e.backend.dispatch.bind(e.backend);
+  e.backend.dispatch=async(route,...args)=>route==='loader/get_plugins'?[{name:legacyName,version:'0.2.0',disabled:false}]:dispatch(route,...args);
+  e.loader.plugins[0].name=legacyName;
+  await e.run('launch',{...e.install,name});
+  assert.equal((await finished(e)).ok,true);
+  assert.equal(e.seen.find(x=>x.route==='utilities/install_plugin').args[1],name);
+  assert.equal(e.seen.find(x=>x.route==='loader/call_plugin_method').args[0],legacyName);
+  assert.equal(e.seen.find(x=>x.route==='utilities/uninstall_plugin').args[0],legacyName);
+  assert.ok(e.seen.findIndex(x=>x.route==='utilities/uninstall_plugin') < e.seen.findIndex(x=>x.route==='utilities/confirm_plugin_install'));
+});
+
+test('settings replace old name, preserve neighbour order and can restore old identity', async () => {
+  const e=environment();
+  e.settings.pluginOrder=['alpha',legacyName,'beta'];
+  e.settings.frozenPlugins=[legacyName];
+  const target={...e.settings,pluginOrder:['alpha',name,'beta'],frozenPlugins:[name]};
+  await e.run('launch',{id:e.install.id,kind:'settings',name,settings:target});
+  assert.equal((await finished(e)).ok,true);
+  assert.deepEqual(e.settings.pluginOrder,['alpha',name,'beta']);
+  assert.deepEqual(e.settings.frozenPlugins,[name]);
+  await e.run('forget',{id:e.install.id});
+  const original={...e.settings,pluginOrder:['alpha',legacyName,'beta'],frozenPlugins:[legacyName]};
+  await e.run('launch',{id:e.install.id,kind:'settings',name:legacyName,settings:original});
+  assert.equal((await finished(e)).ok,true);
+  assert.deepEqual(e.settings.pluginOrder,['alpha',legacyName,'beta']);
+  assert.deepEqual(e.settings.frozenPlugins,[legacyName]);
+});
+
+test('runtime absence and duplicate checks cover both identities', async () => {
+  const e=environment(), dispatch=e.backend.dispatch.bind(e.backend);
+  e.loader.plugins[0].name=legacyName;
+  e.backend.dispatch=async(route,...args)=>route==='loader/get_plugins'?[{name:legacyName,version:'0.2.0',disabled:false}]:dispatch(route,...args);
+  await assert.rejects(e.run('runtime',{present:false,name}),/plugin_still_present/);
+  e.backend.dispatch=async(route,...args)=>route==='loader/get_plugins'?[{name},{name:legacyName}]:dispatch(route,...args);
+  await assert.rejects(e.run('probe',{}),/duplicate_plugin/);
+});
+
+test('rollback unloads renamed identity and confirms original metadata name', async () => {
+  const e=environment(), dispatch=e.backend.dispatch.bind(e.backend);
+  e.backend.dispatch=async(route,...args)=>{
+    if(route==='utilities/install_plugin') {
+      e.backend.emit('loader/add_plugin_install_prompt',args[1],args[2],'rollback-request',args[3],args[4]);
+      return;
+    }
+    return dispatch(route,...args);
+  };
+  await e.run('launch',{...e.install,name:legacyName,checkTasks:false});
+  assert.equal((await finished(e)).ok,true);
+  assert.equal(e.seen.find(x=>x.route==='utilities/uninstall_plugin').args[0],name);
+  assert.equal(e.seen.find(x=>x.route==='utilities/install_plugin').args[1],legacyName);
 });
