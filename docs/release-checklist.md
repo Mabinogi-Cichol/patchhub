@@ -26,7 +26,7 @@ Windows 当前未配置 Authenticode 证书，安装包没有发行者身份认�
 5. 在目标平台核对包哈希并测试首次运行、签名目录、安装与覆盖、下载取消、异常恢复；Decky 另测控制器导航、宿主重载和 SD 卡离线。
 6. 更新 docs/progress.md 中的已完成与未完成项目，发布说明明确缺失验收及已知限制。
 
-当前重要限制：不提供卸载入口或同目标增量升级，安装/覆盖以本次开始前现场为回滚基线，且不删除上一版本多出的文件。下载取消可能留下 .partial 缓存；写入阶段取消按事务回滚，恢复冲突报告 `needs_recovery`。文件事务依靠日志恢复，不是整个游戏目录的原子替换；对同一用户恶意改变路径与日志的防御仍有限。UI 在已知总量时显示字节与文件进度，未知总量不伪造百分比。
+当前重要限制：不提供补丁卸载入口或同目标增量升级，覆盖安装不会删除上一版本多出的文件。从 v0.2.0 起，新 ZIP/EXE 直接安装不创建备份、暂存或授权文件，也不回滚；写入后取消、失败或中断保留已写内容，需要时重新安装。历史事务仍按其原有记录恢复，冲突报告 `needs_recovery`。下载取消可能留下 `.partial` 缓存。文件写入不构成整个游戏目录的原子替换；对同一用户恶意改变路径与日志的防御仍有限。UI 在已知总量时显示字节与文件进度，未知总量不伪造百分比。
 
 RustSec 提示：RUSTSEC-2024-0429（glib 0.18.5，unsound）与 RUSTSEC-2024-0370（proc-macro-error 1.0.4，unmaintained）。cargo tree 分别按 steam-patch-windows / x86_64-pc-windows-msvc 及 steam-patch-cli / x86_64-unknown-linux-gnu 核对，均没有这些依赖路径；它们来自全平台锁文件中的其他平台 UI 依赖。当前不提供 Linux Tauri 桌面客户端。未来增加该平台前必须重新处理这些提示，未添加全局忽略。
 
@@ -45,10 +45,27 @@ RustSec 提示：RUSTSEC-2024-0429（glib 0.18.5，unsound）与 RUSTSEC-2024-03
 - 原计划演示《夜勤病栋》时创建的 71 文件游戏及工具状态备份（4,864,491,520 字节）已取回本地并校验 SHA-256，保留于 `.artifacts/release-v0.1.0/deck-backup/`；未修改夜勤游戏。远端仅清理本轮独立备份暂存，用户当前页面不回退。
 
 
-## v0.2.0 发布准备（2026-10-19）
+## v0.2.0 发布记录（2026-10-19）
 
-- 用户明确要求分项提交、合并功能分支至 main，并发布 v0.2.0；本地合并提交为 70a1632。应用、Cargo/npm 锁文件、Tauri 与 SBOM 应用版本均为 0.2.0。
-- 沿用各功能施工记录中本 session 已完成的验证；版本调整后 SBOM 单测及 npm 工作区一致性检查通过。发布必须使用最终 Tag 对应 CI 产物，在线状态与附件核验在实际执行后补记。
-- 重新执行 npm 审计：完整依赖报告 7 条 high，均属于同一 braces 栈耗尽公告沿 @decky/rollup → rollup-plugin-delete → del/globby/fast-glob/micromatch 的构建依赖传播；npm audit --omit=dev 为 0。当前 Decky 构建清理模式固定为 ./dist/*，未把游戏/来源内容作为该模式输入。上游公告 [GHSA-vfj7-8cjw-p6xm](https://github.com/advisories/GHSA-vfj7-8cjw-p6xm) 尚无修复版本，本轮不声称全依赖无漏洞。证据位于 .artifacts/release-v0.2.0/npm-audit*.json。
-- 本轮尚未重跑 RustSec 审计；原记录不能当作当前锁文件审计结果。完整 Windows 实机、实体手柄、来源自动调度/休眠以及新版直接安装完整中断矩阵仍未全部验证。发布说明保留这些边界；未因本次发布操作设备或游戏。
-- GitHub SSH 凭据不可用、HTTPS 没有保存的凭据，已启动 Git Credential Manager 设备授权，待用户完成登录后推送与发布；不将本地合并称为远端合并或已发布。
+- 用户明确要求分项提交、合并功能分支至 main，并发布 v0.2.0；本地合并提交为 `70a1632`。应用、Cargo/npm 锁文件、Tauri 与 SBOM 应用版本均为 0.2.0。发行 Tag `v0.2.0` 为注解 Tag，对象 `8111abebc1b2de8d1934ccb620f0d0847e3a37f2`，指向提交 `4d1059143fef2af3e7e78e21f0f825eae8bd9f58`（与远端 main 一致）。
+- GitHub Actions [39245207148](https://github.com/Mabinogi-Cichol/steam-hentai-patch-searcher/actions/runs/39245207148)（Tag push，head `4d10591`）的 core（Windows/Linux）、windows、decky、release 任务全部成功。Release 由该运行创建：<https://github.com/Mabinogi-Cichol/steam-hentai-patch-searcher/releases/tag/v0.2.0>，标题与 Tag 均为 `v0.2.0`，非草稿、非预发行，发布时间 2026-10-19T11:41:14Z，附件 9 个。
+- 工作流以 `--generate-notes` 创建 Release，正文初始只有自动生成的 Full Changelog 链接（106 字符）。中断后本轮用[发行说明](releases/v0.2.0.md)（4,060 字符）经 GitHub API PATCH 补全中文正文；读回确认 `name == tagName == v0.2.0`、正文与仓库文件逐字符一致、`draft=false`、`prerelease=false`、附件仍为 9 个、发布时间与 Tag 未变，正文 `updated_at` 为 2026-10-19T12:05:49Z。标题只使用版本 Tag，未重建 Tag 或附件。
+- 附件在线核验（2026-10-19）：从公开 Release 下载全部 9 个附件（合计 26,407,945 字节）并逐项核对，全部通过：名称、大小与 GitHub API `sha256:` digest 一致；`SHA256SUMS.txt` 8 条与下载哈希及公开文件名一致；两端 checksums JSON 的 file/size/sha256 与对应 ZIP 一致；两端 ZIP `testzip` 无 CRC 错误、无重复条目，条目 allowlist（Decky 23 / Windows 11）与 Tag 内资源、契约、文档和源码一致（Windows 按 runner CRLF 检出规则）；两份 SBOM 均为 CycloneDX 1.6、版本 0.2.0、各 749 组件、Cargo/npm 锁摘要与 Tag 匹配、附件与 ZIP 内 SBOM 字节一致；Decky `bin/steam-patch` 与 `bin/sf-worker` 为 ELF64 x86_64，runtime 哈希、大小与执行位正确；Windows 三个 exe 为 PE x86_64，NSIS 引导桩 machine 为 0x14c；`install-decky.py` 与 Tag 内 `scripts/install-decky.py` 逐字节一致。下载与证据 JSON 保存在本次会话临时目录（当时 DSH 沙箱对 `.artifacts/` 不可写），关键结果记录如下。
+- 附件 SHA-256（下载实测，与 GitHub API digest 及 `SHA256SUMS.txt` 一致）：
+
+| 附件 | 字节 | SHA-256 |
+| --- | --- | --- |
+| Steam.Patch.Manager_0.2.0_x64-setup.exe | 7,742,035 | `60bb1628a9cc48b32f0a3e8240ae6dfc609a1500ddf4747f7aa627bc6b0c3066` |
+| steam-patch-manager-windows-portable.zip | 10,748,348 | `99d933db051098f1836ac195eef7d92da7102fbf2b1325999509cfb0b6cc1c49` |
+| steam-patch-manager-decky.zip | 7,163,458 | `e62d4bff9c88aeca52a645ecdeea6e29fe79d2de68bc708405b82d962ac4edd3` |
+| checksums-windows.json | 178 | `eee93c4c0822ea5d60d745c6a40c6fb3c01111f8d14ca05697f0ce58d2ba6815` |
+| checksums-decky.json | 159 | `ac2290f528ef41743e25f75bff7d6509eab3719a27cb437a4bcd05d007c69766` |
+| dependencies-windows.cdx.json | 361,564 | `6a00b2fcd0db3efba83bbf1d08d9f0c0b2fb8c24fe1ec141ad28b78a0513b0c7` |
+| dependencies-decky.cdx.json | 347,896 | `e4148f1836a74e55529b9861b32792ec8cab5cbde1b09acf067de5ae1a39a165` |
+| install-decky.py | 43,549 | `65e34c058da384431eb68be6053a783996634d7959fd32f871f0cd917b9d0b31` |
+| SHA256SUMS.txt | 758 | `bd6b491133c443bfd611a62cfbb563adea0a1e92ed86f40d5d534f88e3ed3f70` |
+
+- 重新执行 npm 审计：完整依赖报告 7 条 high，均属于同一 braces 栈耗尽公告沿 @decky/rollup → rollup-plugin-delete → del/globby/fast-glob/micromatch 的构建依赖传播；`npm audit --omit=dev` 为 0。当前 Decky 构建清理模式固定为 `./dist/*`，未把游戏/来源内容作为该模式输入。上游公告 [GHSA-vfj7-8cjw-p6xm](https://github.com/advisories/GHSA-vfj7-8cjw-p6xm) 尚无修复版本，本轮不声称全依赖无漏洞。证据位于 `.artifacts/release-v0.2.0/npm-audit*.json`。
+- 本轮未重跑 RustSec 审计，原记录不能当作当前锁文件审计结果。完整 Windows 实机、实体手柄、来源自动调度/休眠、终端安装器实机入口以及新版直接安装的完整取消/中断矩阵仍未全部验证；发行说明保留这些边界。
+- 2026-10-19 另行按用户要求，把公开 Release 的 `steam-patch-manager-decky.zip`（SHA-256 `e62d4bff9c88aeca52a645ecdeea6e29fe79d2de68bc708405b82d962ac4edd3`，7,163,458 字节，与 Tag 对应 CI 产物一致）通过 Loader v3.3.0 本地 ZIP 安装到 Devkit 当前配对设备 `steamdeck`（`deck@192.168.31.186`）：安装前旧插件完整 tar 备份、Loader 设置、外部状态基线与回滚 ZIP 已取回本地并核对哈希；安装提示 name/version/SHA/type 与包一致后才确认。部署后正式目录 23/23 文件哈希与包清单一致，`bin/steam-patch` 与 `bin/sf-worker` 为 ELF64 x86_64 且保留执行位；设备实际 HTTP bundle SHA-256 与包内 `dist/index.js` 一致（`52ea420f4e00692ac5e28cfe60218f8dcb56da6060847b7011fde9776e29eb1f`）；插件实例 1、运行版本 0.2.0、`plugin_loader` active；RPC `scan` 返回 28 个实例（18.0 秒，另有两条既存 SD 卡 `library_unavailable` 诊断）、4 个来源、无活动安装/来源任务、23 条历史事务，`cache_status` 与 `backup_status` 可读。真实游戏模式 QAM 显示 7 款有补丁游戏；来源页 4 张卡片默认收起、展开时 `aria-expanded` 与正文正确；缓存与备份页、VenusBlood FRONTIER International 游戏页（HGamer 命中与重新匹配入口）正常渲染，无横向溢出。安装导致的 Loader `pluginOrder` 变化已恢复为安装前成员关系，其他设置未改；外部状态文件清单、`journal.sqlite` 与 `requests.sqlite` 哈希均未变。实体手柄焦点/返回、来源更新与重新匹配、Windows 实机仍未验证。证据与截图：`.artifacts/deploy-release-v0.2.0-20261019-2011/`（忽略目录）。
+- 随本版本附件分发的 `client-guide.md`（Windows 便携包）与 Decky 插件 README 仍保留旧版“事务回滚/每三秒续租”的表述，与本版直接安装语义不符；发行说明已明确新行为，本轮未重建已发布附件，相关文档修订随下一版本处理。
