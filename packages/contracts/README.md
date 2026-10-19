@@ -19,11 +19,11 @@
 - `serve-task`：单任务、可取消、可流式（`install_patch`、`update_source`、`match_games`、`rematch_game`），一个任务一个子进程。任务面方法经 `serve` 调用一律拒绝并返回 `task_required`。
 - 任务控制通道（非 JSON-RPC 方法）：`serve-task` stdin 行 `cancel`（先持久撤销再停获取/worker）；stdin EOF 等价 `cancel` 并回收 worker 进程组。
 
-## 方法白名单（20）
+## 方法白名单（21）
 
 与 `get_capabilities.methods` 精确一致：
 
-- 安装器/只读面（11）：`get_capabilities`、`scan`、`project_instances`、`preview`、`install_patch`、`list_transactions`、`recover`、`discard_plan`、`cleanup_cache`、`backup_status`、`cleanup_backups`。
+- 安装器/只读面（12）：`get_capabilities`、`scan`、`project_instances`、`preview`、`install_patch`、`list_transactions`、`recover`、`discard_plan`、`cleanup_cache`、`cache_status`、`backup_status`、`cleanup_backups`。
 - 来源面（9）：`list_sources`、`list_game_sources`、`set_source_enabled`、`set_game_source`、`add_source`、`set_source_update_interval`、`update_source`、`match_games`、`rematch_game`。
 
 旧 `refresh_sources`/`scan_sources`/`discover_game` 已删除，调用返回 `unsupported_method`；更早的 `plan_install` 等已删除方法同样如此。

@@ -60,3 +60,26 @@
 - 自动清理所需信息保存在内存 `_plan_metadata`；若插件重启后再安装“重启前准备但未安装”的计划，可能跳过自动清理，缓存留待手动清理。正常 UI 流程（准备后立即安装）不受影响。
 - 删除前默认不做 SHA-256 二次校验，仅做路径 + 链接校验，以避免刚写完又重读数 GB；依据是文件位于 0700 状态目录且路径由内部推导。
 - 订阅源查询缓存不在清理范围。
+
+
+## 2026-10-19：下载缓存当前占用修复
+
+- 原因：前端 `cacheSummary()` 固定返回占位提示，Rust 核心已有只读统计但未接入 wire 协议和 Decky 页面；设置中的 `cache` 是上次清理结果，不能作为实时占用。
+- 修改：新增只读 `cache_status` 协议/CLI/桥接，复用 `CacheService::inspect()`；页面进入时显示真实容量，手动清理后刷新，读取失败和部分统计分别提示。
+- 范围：复用本功能目录记录既有统计的恢复；保留当前功能分支已有来源卡片等未提交修改，未提交或合并 Git。
+- 已完成：Decky 类型检查、构建及 Python 缓存清理/统计测试 7 项通过。
+- 验证通过：`cargo test --locked -p steam-patch-cli -p steam-patch-protocol`（CLI 单测 57、集成 3、协议 5）；前端缓存测试 5 项；`npm run test:contracts`；Decky 类型检查和构建；Python 缓存测试 7 项。真实 wire 回归确认非空统计 16 字节 / 3 个目录项、清理后归零，事务 `.stage` 保留且不计入。
+- 精简设计审阅：沿“页面 → Decky → 协议/CLI → CacheService::inspect”及清理后刷新/读取失败/部分统计路径复核，未发现需修改的过度设计；复用现有目录边界，不增加遍历实现、阈值、自动轮询或重试。
+- 待验收：本次尚未部署设备，Steam Deck RPC 与页面待验收。代码与文档未提交 Git。
+
+
+## 2026-10-19：当前占用统计部署与实机验证
+
+- 用户授权“部署至steamdeck”。通过当前 SteamOS Devkit 所选 `steamdeck` 配对连接，沿用今天已验证的独立主机记录；Loader 3.2.10、服务 active、插件目录 root 所有。部署前确认安装任务和来源任务均无非终态。
+- 构建：当前工作区源码上传隔离目录，设备已有 Rust 1.94.0 bookworm 容器完成 CLI/worker release 构建（44.03 秒）；Linux CLI SHA-256 `503445919e200191a0b0088e7e57c845101f71a51ce8c70ad6bd83a0888725dd`。沿用本轮已通过测试，不重复运行。
+- 打包与部署：`npm run package:plugin -w apps/decky`、`scripts/package-artifacts.py --platform decky` 通过；23 文件 ZIP SHA-256 `6e389c9acbf1cae2b96c57c533ff233cc1c1571c384499341996c80eee9ea712`。上传并逐文件校验，通过 Loader 正式本地 ZIP 安装和后端重启，正式文件 23/23 一致，CLI/worker 有执行位、插件实例为 1。
+- 真实 RPC：`cache_status` 返回 `total_bytes=0, entries=0, diagnostics=[]`；`scan` 正常完成，28 个游戏，两个历史库挂载路径不存在而报告 `library_unavailable`。CDP 默认 25 秒等待曾超时，后续异步结果确认扫描约 35.7 秒完成，不作后端失败判断。`list_tasks` 与 `source_task_status` 无进行中任务。
+- 真实全屏画面：缓存与备份页“当前占用”为 `0 B`，占位提示已消失；底部按钮可见，CSS viewport 854×534，滚动区域高 776、可视高 534，无横向溢出。截图已人工查看。未触发清理或修改自动清理设置。
+- HTTP bundle SHA-256 `704935ac39c0d875663a1e47b5befead4d32b4fda267d30b7de554eed0588fb2`，与本次构建及正式文件一致。插件外部状态文件哈希无变化、无缺失；只恢复本插件原先的 Loader 排序成员关系，未整理既有重复项或修改其他插件。
+- 验收边界：全屏、缓存 RPC 和部署通过；打开 QAM 后 CEF 调试通道连简单表达式和截图也超时，QAM 侧栏及实体手柄操作仍待验收，未以先前画面冒充通过。未重启设备或 Loader 服务。最后 SSH 确认 Loader active、正式文件仍匹配。
+- 归档：本地 `.artifacts/cache-usage-deck-20261019/` 保存 `summary.json`、新包清单、完整旧插件/状态备份、`backup/rollback.zip`、构建/Loader 日志及 RPC/截图证据；备份和日志取回哈希一致。仅本轮远端 `cache-usage-20261019` 隔离暂存目录已清理，既有构建缓存保留。代码与文档未提交 Git。
