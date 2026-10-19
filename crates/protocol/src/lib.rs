@@ -9,6 +9,7 @@ pub use steam_patch_core::{
     install::{InstallOperation, Transaction},
     installer::{
         backup::{BackupCleanupResult, BackupInventory},
+        cache::CacheInventory,
         outcome::{CleanupResult, InstallerOutcome},
         service::CleanupPolicy,
     },
@@ -76,6 +77,7 @@ pub enum Method {
     Recover,
     DiscardPlan,
     CleanupCache,
+    CacheStatus,
     BackupStatus,
     CleanupBackups,
     ListSources,
@@ -88,7 +90,7 @@ pub enum Method {
     MatchGames,
     RematchGame,
 }
-pub const ALL_METHODS: [Method; 20] = [
+pub const ALL_METHODS: [Method; 21] = [
     Method::GetCapabilities,
     Method::Scan,
     Method::ProjectInstances,
@@ -98,6 +100,7 @@ pub const ALL_METHODS: [Method; 20] = [
     Method::Recover,
     Method::DiscardPlan,
     Method::CleanupCache,
+    Method::CacheStatus,
     Method::BackupStatus,
     Method::CleanupBackups,
     Method::ListSources,
@@ -110,7 +113,7 @@ pub const ALL_METHODS: [Method; 20] = [
     Method::MatchGames,
     Method::RematchGame,
 ];
-pub const METHODS: [&str; 20] = [
+pub const METHODS: [&str; 21] = [
     "get_capabilities",
     "scan",
     "project_instances",
@@ -120,6 +123,7 @@ pub const METHODS: [&str; 20] = [
     "recover",
     "discard_plan",
     "cleanup_cache",
+    "cache_status",
     "backup_status",
     "cleanup_backups",
     "list_sources",
@@ -190,6 +194,7 @@ pub enum RequestParams {
     Recover(HostParams),
     DiscardPlan(DiscardPlanParams),
     CleanupCache(HostParams),
+    CacheStatus(HostParams),
     BackupStatus(HostParams),
     CleanupBackups(HostParams),
     ListSources(HostParams),
@@ -210,6 +215,7 @@ impl RequestParams {
             | Self::ListTransactions(p)
             | Self::Recover(p)
             | Self::CleanupCache(p)
+            | Self::CacheStatus(p)
             | Self::BackupStatus(p)
             | Self::CleanupBackups(p)
             | Self::ListSources(p) => &p.host,
@@ -596,6 +602,7 @@ pub enum MethodResult {
     Install(InstallerOutcome),
     Transactions(Vec<Transaction>),
     Transaction(Transaction),
+    CacheInventory(CacheInventory),
     BackupInventory(BackupInventory),
     BackupCleanup(BackupCleanupResult),
     Cleanup(CleanupResult),
@@ -743,6 +750,9 @@ pub fn validate_response(
         Some(Method::DiscardPlan) => {
             check!(Transaction);
             validate_transaction(r)?;
+        }
+        Some(Method::CacheStatus) => {
+            check!(CacheInventory);
         }
         Some(Method::BackupStatus) => {
             check!(BackupInventory);
@@ -1328,7 +1338,7 @@ pub fn schema() -> Value {
     let variants: Vec<Value> = ALL_METHODS.iter().map(|method| {
         let name = match method {
             Method::GetCapabilities | Method::Scan | Method::ListTransactions | Method::Recover
-                | Method::CleanupCache | Method::BackupStatus | Method::CleanupBackups | Method::ListSources => "HostParams",
+                | Method::CleanupCache | Method::CacheStatus | Method::BackupStatus | Method::CleanupBackups | Method::ListSources => "HostParams",
             Method::Preview => "PreviewParams",
             Method::InstallPatch => "InstallPatchParams",
             Method::DiscardPlan => "DiscardPlanParams",
@@ -1512,6 +1522,7 @@ pub fn result_schema_name(method: Method) -> &'static str {
         Method::ListTransactions | Method::Recover => "Transactions",
         Method::DiscardPlan => "Transaction",
         Method::CleanupCache => "CleanupResult",
+        Method::CacheStatus => "CacheInventory",
         Method::BackupStatus => "BackupInventory",
         Method::CleanupBackups => "BackupCleanupResult",
         Method::ListSources => "Sources",

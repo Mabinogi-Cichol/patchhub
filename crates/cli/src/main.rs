@@ -218,7 +218,7 @@ Usage: steam-patch scan [--steam-root PATH]... [--catalog PATH] [--platform wind
        steam-patch preview --instance ID --release ID [scan options]\n\
        steam-patch serve  (versioned JSON-lines on stdin/stdout)\n\
 Installation requires a signed catalog. Close the game and pause Steam updates before installing.
-Methods: get_capabilities scan project_instances preview install_patch list_transactions recover discard_plan cleanup_cache backup_status cleanup_backups.
+Methods: get_capabilities scan project_instances preview install_patch list_transactions recover discard_plan cleanup_cache cache_status backup_status cleanup_backups.
 Sources: list_sources list_game_sources set_source_enabled set_game_source add_source set_source_update_interval update_source match_games rematch_game.
 Options: --signed-catalog --trust-keys --state-dir --archive --operation install|reinstall --request-id ID.
 Source options: --source-id ID --appid N --enabled true|false --subscribed true|false --rule JSON --interval-hours N --name-hint TEXT --preferred-language CODE --force --force-details --instance-id ID --match-instance ID.
@@ -471,6 +471,7 @@ mod tests {
         "recover",
         "discard_plan",
         "cleanup_cache",
+        "cache_status",
         "backup_status",
         "cleanup_backups",
         "list_sources",
@@ -490,7 +491,7 @@ mod tests {
         expected.sort_unstable();
         let mut actual = runtime::METHODS.to_vec();
         actual.sort_unstable();
-        assert_eq!(runtime::METHODS.len(), 20);
+        assert_eq!(runtime::METHODS.len(), 21);
         assert_eq!(actual, expected);
 
         let capabilities = respond(
@@ -502,7 +503,7 @@ mod tests {
             .iter()
             .map(|method| method.as_str().unwrap())
             .collect();
-        assert_eq!(methods.len(), 20);
+        assert_eq!(methods.len(), 21);
         let mut sorted = methods.clone();
         sorted.sort_unstable();
         assert_eq!(sorted, expected);
@@ -813,6 +814,16 @@ mod tests {
         let job = paths.jobs_dir().join("plan-1");
         std::fs::create_dir_all(&job).unwrap();
         std::fs::write(job.join("0.stage"), b"stage").unwrap();
+        let host = json!({"roots": [], "catalog": null, "signed_catalog": null, "trust_keys": null, "state_dir": state, "platform": if cfg!(windows) {"windows"} else {"steamos"}});
+        let request = |method: &str| {
+            respond(serde_json::to_vec(&json!({"protocol_version":5,"request_id":"cache-rpc","method":method,"params":{"host":host}})).unwrap().as_slice())
+        };
+        let inventory = request("cache_status");
+        assert_eq!(inventory["ok"], true, "{inventory}");
+        assert_eq!(inventory["result"]["total_bytes"], 16);
+        assert_eq!(inventory["result"]["entries"], 3);
+        assert_eq!(inventory["result"]["diagnostics"], json!([]));
+        assert!(downloads.join("artifact.zip").exists());
         let result = execute(
             "cleanup_cache",
             Params {
@@ -826,6 +837,10 @@ mod tests {
         assert!(!downloads.join("artifact.zip").exists());
         assert!(!paths.content("c1").unwrap().exists());
         assert!(job.join("0.stage").exists());
+        let inventory = request("cache_status");
+        assert_eq!(inventory["ok"], true, "{inventory}");
+        assert_eq!(inventory["result"]["total_bytes"], 0);
+        assert_eq!(inventory["result"]["entries"], 0);
     }
 
     #[test]

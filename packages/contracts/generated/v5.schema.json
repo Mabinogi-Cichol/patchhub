@@ -198,6 +198,33 @@
       ],
       "type": "object"
     },
+    "CacheInventory": {
+      "additionalProperties": false,
+      "properties": {
+        "diagnostics": {
+          "items": {
+            "$ref": "#/$defs/CleanupFailure"
+          },
+          "type": "array"
+        },
+        "entries": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "total_bytes": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "total_bytes",
+        "entries",
+        "diagnostics"
+      ],
+      "type": "object"
+    },
     "CacheStatus": {
       "enum": [
         "fresh",
@@ -1865,6 +1892,7 @@
         "recover",
         "discard_plan",
         "cleanup_cache",
+        "cache_status",
         "backup_status",
         "cleanup_backups",
         "list_sources",
@@ -1904,6 +1932,9 @@
         },
         {
           "$ref": "#/$defs/Transaction"
+        },
+        {
+          "$ref": "#/$defs/CacheInventory"
         },
         {
           "$ref": "#/$defs/BackupInventory"
@@ -2736,6 +2767,30 @@
           "properties": {
             "method": {
               "const": "cleanup_cache"
+            },
+            "params": {
+              "$ref": "#/$defs/HostParams"
+            },
+            "protocol_version": {
+              "const": 5
+            },
+            "request_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "protocol_version",
+            "request_id",
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "method": {
+              "const": "cache_status"
             },
             "params": {
               "$ref": "#/$defs/HostParams"

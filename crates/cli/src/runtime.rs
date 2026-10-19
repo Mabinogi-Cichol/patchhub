@@ -177,7 +177,7 @@ impl ProgressCursor {
 }
 
 /// `get_capabilities` v5 payload (p1-host-contract §3.1, p1-contract §9.2):
-/// installer and source sub-objects merged with the full 20-method whitelist.
+/// installer and source sub-objects merged with the full 21-method whitelist.
 fn capabilities(_params: &Params) -> Value {
     let availability = exe_sandbox_availability();
     let mut methods: Vec<&str> = Vec::with_capacity(METHODS.len());
@@ -510,8 +510,8 @@ pub fn execute_controlled(
     if method == "backup_status" || method == "cleanup_backups" {
         return backups(&params, method == "cleanup_backups");
     }
-    if method == "cleanup_cache" {
-        return cleanup_cache(&params);
+    if method == "cache_status" || method == "cleanup_cache" {
+        return cache(&params, method == "cleanup_cache");
     }
     // Source tasks stream progress; direct CLI invocations run the same
     // implementation with no event sink.
@@ -752,7 +752,7 @@ fn backups(params: &Params, delete: bool) -> Result<Value, DomainError> {
 }
 
 /// Thin adapter to the validated core cache service.
-fn cleanup_cache(params: &Params) -> Result<Value, DomainError> {
+fn cache(params: &Params, delete: bool) -> Result<Value, DomainError> {
     let state = state(params)?;
     let host = installer::service::ValidatedHostContext::new(
         &state,
@@ -764,11 +764,12 @@ fn cleanup_cache(params: &Params) -> Result<Value, DomainError> {
         }),
     )
     .map_err(projection_error)?;
-    value(
-        installer::cache::CacheService::new(&host)
-            .cleanup()
-            .map_err(projection_error)?,
-    )
+    let service = installer::cache::CacheService::new(&host);
+    if delete {
+        value(service.cleanup().map_err(projection_error)?)
+    } else {
+        value(service.inspect().map_err(projection_error)?)
+    }
 }
 
 fn game_query(install: &steam::GameInstall) -> sources::GameQuery {
@@ -1435,7 +1436,7 @@ mod sources_tests {
             .iter()
             .map(|method| method.as_str().unwrap())
             .collect();
-        assert_eq!(methods.len(), 20);
+        assert_eq!(methods.len(), 21);
         assert!(methods.contains(&"match_games"));
         assert!(methods.contains(&"project_instances"));
         assert_eq!(capabilities["sources"]["index_schema_version"], 1);

@@ -5,7 +5,7 @@ use super::{
     service::ValidatedHostContext,
 };
 use crate::projection::DomainError;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::{
     ffi::{OsStr, OsString},
     fs::{self, File},
@@ -14,7 +14,8 @@ use std::{
 };
 
 use native::Captured;
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema, ts_rs::TS)]
+#[serde(deny_unknown_fields)]
 pub struct CacheInventory {
     pub total_bytes: u64,
     pub entries: u64,

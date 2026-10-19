@@ -1,5 +1,5 @@
-import type { CleanupResult } from "@steam-patch/ui";
-export type { CleanupResult } from "@steam-patch/ui";
+import type { CacheInventory, CleanupResult } from "@steam-patch/ui";
+export type { CacheInventory, CleanupResult } from "@steam-patch/ui";
 export type CacheStatus = CleanupResult;
 export type Settings = { schema_version: number; auto_cleanup: boolean; cache: CacheStatus | null };
 
@@ -12,8 +12,8 @@ export function formatSize(bytes: number) {
   return `${i ? n.toFixed(1) : Math.round(n)} ${units[i]}`;
 }
 
-export function cacheSummary() {
-  return "当前版本不提供占用统计";
+export function cacheSummary(value: CacheInventory) {
+  return `${formatSize(value.total_bytes)}${value.diagnostics.length ? "（部分路径无法统计）" : ""}`;
 }
 
 export function cacheClearNote(result: CleanupResult) {

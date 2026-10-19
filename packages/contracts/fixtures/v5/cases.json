@@ -861,6 +861,25 @@
       "task_channel": false
     },
     {
+      "name": "cache_status-request",
+      "request": {
+        "method": "cache_status",
+        "params": {
+          "host": {
+            "catalog": null,
+            "platform": "windows",
+            "roots": [],
+            "signed_catalog": null,
+            "state_dir": null,
+            "trust_keys": null
+          }
+        },
+        "protocol_version": 5,
+        "request_id": "fixture"
+      },
+      "task_channel": false
+    },
+    {
       "name": "backup_status-request",
       "request": {
         "method": "backup_status",
@@ -1852,6 +1871,7 @@
             "recover",
             "discard_plan",
             "cleanup_cache",
+            "cache_status",
             "backup_status",
             "cleanup_backups",
             "list_sources",
@@ -2310,6 +2330,33 @@
     {
       "method": "cleanup_cache",
       "name": "cleanup_cache-failure",
+      "response": {
+        "error": {
+          "code": "io_error",
+          "detail": "固定诊断"
+        },
+        "ok": false,
+        "protocol_version": 5,
+        "request_id": "fixture"
+      }
+    },
+    {
+      "method": "cache_status",
+      "name": "cache_status-success",
+      "response": {
+        "ok": true,
+        "protocol_version": 5,
+        "request_id": "fixture",
+        "result": {
+          "diagnostics": [],
+          "entries": 0,
+          "total_bytes": 0
+        }
+      }
+    },
+    {
+      "method": "cache_status",
+      "name": "cache_status-failure",
       "response": {
         "error": {
           "code": "io_error",
@@ -4120,6 +4167,7 @@
             "recover",
             "discard_plan",
             "cleanup_cache",
+            "cache_status",
             "backup_status",
             "cleanup_backups",
             "list_sources",
@@ -4282,6 +4330,7 @@
             "recover",
             "discard_plan",
             "cleanup_cache",
+            "cache_status",
             "backup_status",
             "cleanup_backups",
             "list_sources",
@@ -4374,6 +4423,7 @@
             "recover",
             "discard_plan",
             "cleanup_cache",
+            "cache_status",
             "backup_status",
             "cleanup_backups",
             "list_sources",
@@ -4466,6 +4516,7 @@
             "recover",
             "discard_plan",
             "cleanup_cache",
+            "cache_status",
             "backup_status",
             "cleanup_backups",
             "list_sources",
@@ -4558,6 +4609,7 @@
             "recover",
             "discard_plan",
             "cleanup_cache",
+            "cache_status",
             "backup_status",
             "cleanup_backups",
             "list_sources",
@@ -4649,6 +4701,7 @@
             "recover",
             "discard_plan",
             "cleanup_cache",
+            "cache_status",
             "backup_status",
             "cleanup_backups",
             "list_sources",
@@ -4737,6 +4790,7 @@
             "recover",
             "discard_plan",
             "cleanup_cache",
+            "cache_status",
             "backup_status",
             "cleanup_backups",
             "list_sources",
@@ -4833,6 +4887,7 @@
             "recover",
             "discard_plan",
             "cleanup_cache",
+            "cache_status",
             "backup_status",
             "cleanup_backups",
             "list_sources",

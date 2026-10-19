@@ -133,6 +133,9 @@ class CoreBridge:
     async def recover(self):
         return await self._call("recover", {})
 
+    async def cache_status(self):
+        return await self._call("cache_status", {})
+
     async def backup_status(self):
         return await self._call("backup_status", {})
 

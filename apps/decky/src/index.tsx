@@ -10,7 +10,7 @@ import { installInput, primaryActionBlockers, primaryInstallAction } from "./act
 import { createManagerSession, feedbackFor, needsRecovery } from "./session";
 import { sourceCardSummary, sourceTaskStatusText, sourceTaskTargets, sourceTaskTerminal, type SourceTaskApi, type SourceTaskSnapshot } from "./source-tasks";
 import { decodeInstance, encodeInstance, settingsPage, settingsRoutes } from "./route";
-import { backupSummary, backupClearNote, type BackupInventory, type BackupCleanupResult, autoCleanupNote, cacheClearNote, cacheSummary, type CacheStatus, type CleanupResult, type Settings } from "./cache";
+import { backupSummary, backupClearNote, type BackupInventory, type BackupCleanupResult, autoCleanupNote, cacheClearNote, cacheSummary, type CacheInventory, type CacheStatus, type CleanupResult, type Settings } from "./cache";
 import { tasks, taskIsTerminal, type TaskSnapshot } from "./tasks";
 import { TaskProgressView, TaskResultView } from "./task-progress-view";
 import { candidateConditions, candidateLanguage, candidateSource, discoveryNotice, discoveryStatus, safeSourceUrl, unqueriedCount } from "./discovery";
@@ -42,6 +42,7 @@ const setGameSource = callable<[number, string, boolean], { appid: number }>("se
 const addSource = callable<[string], SourceSubscription[]>("add_source");
 const backupStatus = callable<[], BackupInventory>("backup_status");
 const cleanupBackups = callable<[], BackupCleanupResult>("cleanup_backups");
+const cacheStatus = callable<[], CacheInventory>("cache_status");
 const clearCache = callable<[], CacheStatus>("clear_cache");
 const getSettings = callable<[], Settings>("get_settings");
 const setAutoCleanup = callable<[boolean], Settings>("set_auto_cleanup");
@@ -627,12 +628,15 @@ function GlobalCache() {
   const { busy } = state;
   const { error, note } = feedbackFor(state);
   const [settings, setSettings] = useState<Settings | null>(null);
+  const [cache, setCache] = useState<CacheInventory | null>(null);
+  const [cacheError, setCacheError] = useState("");
   const [backups, setBackups] = useState<BackupInventory | null>(null);
   const [backupError, setBackupError] = useState("");
   const [failed, setFailed] = useState(false);
   useEffect(() => {
     let live = true;
     getSettings().then(value => { if (live) setSettings(value); }).catch(() => { if (live) setFailed(true); });
+    cacheStatus().then(value => { if (live) setCache(value); }).catch(() => { if (live) setCacheError("读取下载缓存占用失败。"); });
     backupStatus().then(value => { if (live) setBackups(value); }).catch(() => { if (live) setBackupError("读取安装备份占用失败。"); });
     return () => { live = false; };
   }, []);
@@ -640,7 +644,12 @@ function GlobalCache() {
     () => setAutoCleanup(enabled),
     value => { setSettings(value); session.update({ note: autoCleanupNote(value.auto_cleanup) }); });
   const clean = () => {
-    void session.work("正在清理下载缓存…", clearCache, value => {
+    void session.work("正在清理下载缓存…", async () => {
+      const result = await clearCache();
+      try { setCache(await cacheStatus()); setCacheError(""); }
+      catch { setCache(null); setCacheError("清理已返回，但刷新下载缓存占用失败，请重开页面查看。"); }
+      return result;
+    }, value => {
         session.update({ note: cacheClearNote(value) });
       });
   };
@@ -656,8 +665,9 @@ function GlobalCache() {
     <PanelSection title="下载缓存">
       {settings ? <>
         <Row><ToggleField label="安装成功后自动删除下载缓存" checked={settings.auto_cleanup} disabled={!!busy} onChange={toggle} /></Row>
-        <InfoRow label="当前占用">{cacheSummary()}</InfoRow>
+        <InfoRow label="当前占用">{cache ? cacheSummary(cache) : cacheError || "正在统计下载缓存…"}</InfoRow>
         <Row><Status>{settings.auto_cleanup ? "安装成功后删除本次下载的补丁包。" : "缓存将保留直至手动清理。"}</Status></Row>
+        {cache?.diagnostics.map((failure, index) => <Row key={index}><Status warning>{failure.detail || failure.code}</Status></Row>)}
         <Row><Action disabled={!!busy} onClick={clean}>清理下载缓存</Action></Row>
       </> : <Row><Status warning={failed}>{failed ? "读取缓存设置失败。" : "正在读取缓存设置…"}</Status></Row>}
     </PanelSection>
