@@ -69,3 +69,10 @@ RustSec 提示：RUSTSEC-2024-0429（glib 0.18.5，unsound）与 RUSTSEC-2024-03
 - 本轮未重跑 RustSec 审计，原记录不能当作当前锁文件审计结果。完整 Windows 实机、实体手柄、来源自动调度/休眠、终端安装器实机入口以及新版直接安装的完整取消/中断矩阵仍未全部验证；发行说明保留这些边界。
 - 2026-10-19 另行按用户要求，把公开 Release 的 `steam-patch-manager-decky.zip`（SHA-256 `e62d4bff9c88aeca52a645ecdeea6e29fe79d2de68bc708405b82d962ac4edd3`，7,163,458 字节，与 Tag 对应 CI 产物一致）通过 Loader v3.3.0 本地 ZIP 安装到 Devkit 当前配对设备 `steamdeck`（`deck@192.168.31.186`）：安装前旧插件完整 tar 备份、Loader 设置、外部状态基线与回滚 ZIP 已取回本地并核对哈希；安装提示 name/version/SHA/type 与包一致后才确认。部署后正式目录 23/23 文件哈希与包清单一致，`bin/steam-patch` 与 `bin/sf-worker` 为 ELF64 x86_64 且保留执行位；设备实际 HTTP bundle SHA-256 与包内 `dist/index.js` 一致（`52ea420f4e00692ac5e28cfe60218f8dcb56da6060847b7011fde9776e29eb1f`）；插件实例 1、运行版本 0.2.0、`plugin_loader` active；RPC `scan` 返回 28 个实例（18.0 秒，另有两条既存 SD 卡 `library_unavailable` 诊断）、4 个来源、无活动安装/来源任务、23 条历史事务，`cache_status` 与 `backup_status` 可读。真实游戏模式 QAM 显示 7 款有补丁游戏；来源页 4 张卡片默认收起、展开时 `aria-expanded` 与正文正确；缓存与备份页、VenusBlood FRONTIER International 游戏页（HGamer 命中与重新匹配入口）正常渲染，无横向溢出。安装导致的 Loader `pluginOrder` 变化已恢复为安装前成员关系，其他设置未改；外部状态文件清单、`journal.sqlite` 与 `requests.sqlite` 哈希均未变。实体手柄焦点/返回、来源更新与重新匹配、Windows 实机仍未验证。证据与截图：`.artifacts/deploy-release-v0.2.0-20261019-2011/`（忽略目录）。
 - 随本版本附件分发的 `client-guide.md`（Windows 便携包）与 Decky 插件 README 仍保留旧版“事务回滚/每三秒续租”的表述，与本版直接安装语义不符；发行说明已明确新行为，本轮未重建已发布附件，相关文档修订随下一版本处理。
+
+
+## v0.2.1 发布准备（2026-10-19）
+
+- 用户确认显示文本解码问题已修复，并明确要求提交 Git 和发布 v0.2.1。参考基线、修复代码、既有发行文档与本轮验收分别提交；程序、Cargo/npm 锁、Tauri 与 SBOM 应用版本为 0.2.1。
+- 沿用本 session 已通过的 Rust/Python/格式/clippy/Deck 样本及部署验证。版本修改仅补锁文件、npm 工作区版本一致性和 SBOM 测试。修复源码部署不代替最终 CI 发行包的部署验收。
+- 正式版以 Tag 对应 CI 产物为准；标题严格为 v0.2.1，中文正文来自 [v0.2.1 发行说明](releases/v0.2.1.md)。CI 运行与附件核验将在实际完成后记录；不移动或覆盖已有 v0.2.0 Tag。
