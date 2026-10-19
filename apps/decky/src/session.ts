@@ -190,6 +190,7 @@ export function createManagerSession(readSnapshot: () => Promise<Snapshot>, sour
   }
   async function beginSourceTask(scope: string | null, action: () => Promise<SourceTaskSnapshot>) {
     if (!sourceApi) return null;
+    setFeedback({ error: null, note: null }, scope);
     try {
       const task = await action();
       update({ sourceTasks: { ...state.sourceTasks, [task.task_id]: task } });
@@ -206,8 +207,8 @@ export function createManagerSession(readSnapshot: () => Promise<Snapshot>, sour
   async function matchGames(instances: string[] | null, nameHints: string[] = [], language: string | null = null, forceDetails = false) {
     return beginSourceTask(null, () => sourceApi!.matchGames(instances, nameHints, language, forceDetails));
   }
-  async function rematchGame(instance: string, appid: number, nameHints: string[] = [], language: string | null = null) {
-    return beginSourceTask(instance, () => sourceApi!.rematchGame(instance, appid, nameHints, language));
+  async function rematchGame(instance: string, _appid: number, nameHints: string[] = [], language: string | null = null) {
+    return beginSourceTask(instance, () => sourceApi!.rematchGame(instance, null, nameHints, language));
   }
   async function cancelSourceTask(taskId: string) {
     if (!sourceApi) return;

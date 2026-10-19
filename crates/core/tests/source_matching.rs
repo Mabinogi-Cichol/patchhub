@@ -1995,3 +1995,231 @@ fn candidate(page: &str, appid: u32) -> SourceCandidate {
     );
     candidate
 }
+const VBF_PAGE: &str = "https://kagurafan.com/2020/02/07/venus-blood-frontier/";
+
+fn vbf_upstream(appid: u32, page: &str) -> SourceCandidate {
+    let rule = hgamer_rule();
+    let query = QueryContext {
+        appid,
+        name: "VenusBlood FRONTIER International".into(),
+        name_hints: vec![],
+        preferred_language: None,
+        legacy_match: false,
+        force: false,
+        source_context: vec![],
+        parser_version: 2,
+        query_version: 1,
+        settings_revision: 0,
+        generation: None,
+    };
+    let mut candidates = steam_patch_core::sources::identity::build_candidates(
+        &rule,
+        "VenusBlood FRONTIER International 中文無碼補丁包",
+        "https://hgamer.tw/zh-TW/patches/vbf",
+        "中文 补丁 v5",
+        &[appid],
+        std::slice::from_ref(&query.name),
+        "unknown",
+        &[Mirror {
+            url: page.into(),
+            label: None,
+            format: "web".into(),
+        }],
+        &query,
+    );
+    let mut candidate = candidates.remove(0);
+    candidate.upstream_page = Some(page.into());
+    candidate
+}
+
+fn seed_vbf_fallback(store: &SourceStore, appid: u32, upstream: &str) {
+    store
+        .save_match(&GameMatchRecord {
+            schema_version: GAME_MATCH_SCHEMA_VERSION,
+            appid: 1189440,
+            name: "VenusBlood FRONTIER International".into(),
+            localized_name: None,
+            input_key: String::new(),
+            status: GameMatchStatus::FallbackMatch,
+            sources: Default::default(),
+            fallback: Some(FallbackMatchRecord {
+                query_key: String::new(),
+                status: FallbackMatchStatus::Matched,
+                candidates: vec![vbf_upstream(appid, upstream)],
+                checked_at: 100,
+                diagnostics: vec![],
+            }),
+            updated_at: 100,
+        })
+        .unwrap();
+}
+
+fn vbf_article() -> String {
+    "<article><h1 class=\"entry-title\">Venus Blood Frontier</h1><div class=\"entry-content\">中文无码补丁包v5 <a href=\"https://kaguraserver.com/venusblood-frontier-cn-v5.exe\">神乐下载</a></div></article>".into()
+}
+
+#[test]
+fn vbf_cached_appid_upstream_resolves_indexed_article_without_title_guessing() {
+    let tmp = tempfile::tempdir().unwrap();
+    let store = SourceStore::open(tmp.path()).unwrap();
+    let rules = vec![kagura_rule(), hgamer_rule()];
+    store
+        .save_index(&index(
+            "kagura-cn",
+            1,
+            true,
+            vec![entry("Venus Blood Frontier", VBF_PAGE, "article")],
+        ))
+        .unwrap();
+    seed_vbf_fallback(&store, 1189440, VBF_PAGE);
+    let fake = Arc::new(FakeFetcher::new());
+    fake.push(response(200, &vbf_article(), VBF_PAGE));
+    let results = run(
+        &store,
+        &rules,
+        &Overrides::default(),
+        &[game(1189440, "VenusBlood FRONTIER International")],
+        &fake,
+        false,
+        200,
+    )
+    .unwrap();
+    assert_eq!(results[0].status, GameMatchStatus::PublisherMatch);
+    assert_eq!(fake.call_count(), 1);
+    assert!(results[0]
+        .candidates
+        .iter()
+        .all(|c| c.source_id == "kagura-cn"));
+    let candidate = &results[0].candidates[0];
+    assert_eq!(candidate.game_appid, Some(1189440));
+    assert_eq!(candidate.match_basis, MatchBasis::VerifiedAlias);
+    assert_eq!(candidate.source_page, VBF_PAGE);
+    assert!(candidate
+        .identity_evidence
+        .iter()
+        .any(|e| e.kind == "verified_upstream"));
+    let offline = Arc::new(FakeFetcher::new());
+    let again = run(
+        &store,
+        &rules,
+        &Overrides::default(),
+        &[game(1189440, "VenusBlood FRONTIER International")],
+        &offline,
+        false,
+        300,
+    )
+    .unwrap();
+    assert_eq!(again[0].status, GameMatchStatus::PublisherMatch);
+    assert_eq!(offline.call_count(), 0);
+}
+
+#[test]
+fn vbf_upstream_does_not_fetch_unindexed_or_foreign_appid_pages() {
+    for (appid, upstream) in [
+        (42, VBF_PAGE),
+        (1189440, "https://kagurafan.com/not-indexed/"),
+    ] {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = SourceStore::open(tmp.path()).unwrap();
+        let rules = vec![kagura_rule(), hgamer_rule()];
+        store
+            .save_index(&index(
+                "kagura-cn",
+                1,
+                true,
+                vec![entry("Venus Blood Frontier", VBF_PAGE, "article")],
+            ))
+            .unwrap();
+        seed_vbf_fallback(&store, appid, upstream);
+        // With incomplete coverage no new HGamer request is made.
+        let mut incomplete = store.load_index("kagura-cn").unwrap().unwrap();
+        incomplete.complete = false;
+        store.save_index(&incomplete).unwrap();
+        let fake = Arc::new(FakeFetcher::new());
+        let results = run(
+            &store,
+            &rules,
+            &Overrides::default(),
+            &[game(1189440, "VenusBlood FRONTIER International")],
+            &fake,
+            false,
+            200,
+        )
+        .unwrap();
+        assert_ne!(results[0].status, GameMatchStatus::PublisherMatch);
+        assert!(record(&store, 1189440).sources["kagura-cn"]
+            .candidates
+            .is_empty());
+        assert_eq!(fake.call_count(), 0);
+    }
+}
+#[test]
+fn vbf_new_fallback_resolves_indexed_upstream_in_same_task() {
+    let tmp = tempfile::tempdir().unwrap();
+    let store = SourceStore::open(tmp.path()).unwrap();
+    let rules = vec![kagura_rule(), hgamer_rule()];
+    store
+        .save_index(&index(
+            "kagura-cn",
+            1,
+            true,
+            vec![entry("Venus Blood Frontier", VBF_PAGE, "article")],
+        ))
+        .unwrap();
+    let fake = Arc::new(FakeFetcher::new());
+    let name = "VenusBlood FRONTIER International";
+    fake.push(response(
+        200,
+        &hgamer_search(
+            name,
+            1,
+            &[(
+                "VenusBlood FRONTIER International patch",
+                "/zh-CN/patches/vbf",
+            )],
+        ),
+        "https://hgamer.tw/zh-CN/search?q=VenusBlood%20FRONTIER%20International",
+    ));
+    let patch = hgamer_patch("VenusBlood FRONTIER International patch", 1189440)
+        .replace("https://mirror.example/1189440.zip", VBF_PAGE);
+    fake.push(response(200, &patch, "https://hgamer.tw/zh-CN/patches/vbf"));
+    fake.push(response(200, &vbf_article(), VBF_PAGE));
+    let results = run(
+        &store,
+        &rules,
+        &Overrides::default(),
+        &[game(1189440, name)],
+        &fake,
+        false,
+        200,
+    )
+    .unwrap();
+    assert_eq!(results[0].status, GameMatchStatus::PublisherMatch);
+    assert_eq!(fake.call_count(), 3);
+    assert!(results[0]
+        .candidates
+        .iter()
+        .all(|c| c.source_id == "kagura-cn"));
+    assert_eq!(
+        record(&store, 1189440).fallback.unwrap().status,
+        FallbackMatchStatus::Matched
+    );
+    // A failed refresh with the same saved upstream evidence is attempted once.
+    let failed = Arc::new(FakeFetcher::new());
+    failed.push(response(404, "removed", VBF_PAGE));
+    run(
+        &store,
+        &rules,
+        &Overrides::default(),
+        &[game(1189440, name)],
+        &failed,
+        true,
+        300,
+    )
+    .unwrap();
+    assert_eq!(failed.call_count(), 1);
+    assert_eq!(
+        record(&store, 1189440).sources["kagura-cn"].status,
+        SourceMatchStatus::DetailIncomplete
+    );
+}

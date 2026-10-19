@@ -38,7 +38,10 @@ function fakeApi(queue: SourceTaskSnapshot[][], overrides: Partial<SourceTaskApi
     listSources: async () => { calls.listSources++; return []; },
     updateSource: async (...args) => { calls.updateSource.push(args); return task({ kind: "update_source", key: "patchmoe", instances: [], appid: null }); },
     matchGames: async () => task({ kind: "match_games", key: "match" }),
-    rematchGame: async (...args) => { calls.rematchGame.push(args); return task(); },
+    rematchGame: async (...args) => {
+      assert.notEqual(args[0] === null, args[1] === null, "backend requires exactly one game selector");
+      calls.rematchGame.push(args); return task();
+    },
     setInterval: async (...args) => { calls.setInterval.push(args); return {}; },
     projectInstances: async (ids) => { calls.projectInstances.push(ids); return { settings_revision: 9, instances: [] }; },
     taskStatus: async () => queue.shift() ?? [],
@@ -139,7 +142,7 @@ test("rematch task merges live match updates into every row sharing the AppID, t
   const session = createManagerSession(async () => ({ report: initial, transactions: [] }), api);
   await session.refresh();
   assert.equal(await session.rematchGame("a", 1227890, ["Summer Memories"], "zh-CN"), "task-1");
-  assert.deepEqual(calls.rematchGame[0], ["a", 1227890, ["Summer Memories"], "zh-CN"]);
+  assert.deepEqual(calls.rematchGame[0], ["a", null, ["Summer Memories"], "zh-CN"]);
   await session.pollSourceTasks();
   for (const instance of ["a", "a-dlc"]) {
     assert.equal(session.getSnapshot().report!.installs.find(row => row.game.instance_id === instance)!.discovery!.status, "publisher_match");
@@ -350,4 +353,22 @@ test("a failed attempt and a failed status read are both visible", async () => {
   await session.pollSourceTasks();
   assert.match(session.getSnapshot().error!, /HTTP 503/);
   assert.match(session.getSnapshot().error!, /来源状态读取失败.*status unavailable/);
+});
+
+test("retrying a failed rematch clears its previous error and sends one game selector", async () => {
+  let attempts = 0;
+  const { api } = fakeApi([], {
+    rematchGame: async (instance, appid) => {
+      assert.equal(instance, "a");
+      assert.equal(appid, null);
+      if (++attempts === 1) throw new Error("Python Exception");
+      return task();
+    },
+  });
+  const session = createManagerSession(async () => ({ report: rowReport(), transactions: [] }), api);
+  await session.refresh();
+  assert.equal(await session.rematchGame("a", 1227890), null);
+  assert.match(feedbackFor(session.getSnapshot(), "a").error!, /Python Exception/);
+  assert.equal(await session.rematchGame("a", 1227890), "task-1");
+  assert.equal(feedbackFor(session.getSnapshot(), "a").error, null);
 });

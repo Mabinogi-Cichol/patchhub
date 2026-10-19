@@ -16,9 +16,9 @@ use super::http::RequestContext;
 use super::identity;
 use super::model::{
     DetailRecord, Diagnostic, FactLink, FallbackMatchRecord, FallbackMatchStatus, GameMatch,
-    GameMatchRecord, GameMatchStatus, GameQuery, Overrides, PageFact, QueryContext,
-    SourceCandidate, SourceIndex, SourceIndexEntry, SourceMatchRecord, SourceMatchStatus,
-    SourceRole, SourceRule, Variant,
+    GameMatchRecord, GameMatchStatus, GameQuery, IdentityEvidence, MatchBasis, Overrides, PageFact,
+    QueryContext, SourceCandidate, SourceIndex, SourceIndexEntry, SourceMatchRecord,
+    SourceMatchStatus, SourceRole, SourceRule, Variant,
 };
 use super::r#match::{candidate_is_credible, derive_game_status, input_key};
 use super::registry::candidate_from_index_match;
@@ -350,6 +350,14 @@ fn match_one(
         })
         .unwrap_or_default();
 
+    if fallback_rule.is_some() {
+        if let Some(fallback) = previous.and_then(|record| record.fallback.as_ref()) {
+            if fallback.status == FallbackMatchStatus::Matched {
+                known.extend(fallback.candidates.iter().cloned());
+            }
+        }
+    }
+
     let mut sources: BTreeMap<String, SourceMatchRecord> = BTreeMap::new();
     let mut targets: Vec<&SourceRule> = Vec::new();
     match options.only_source {
@@ -408,6 +416,7 @@ fn match_one(
         });
 
     on_phase("fallback");
+    let known_before_fallback = known.len();
     let fallback = decide_fallback(
         &query,
         previous,
@@ -421,6 +430,51 @@ fn match_one(
         cancel,
         now,
     )?;
+
+    // HGamer can identify an indexed publisher article whose title differs
+    // from Steam. Resolve only that index hit, never crawl an upstream site.
+    if !publisher_matched {
+        if let Some(fallback) = &fallback {
+            if fallback.status == FallbackMatchStatus::Matched {
+                known.extend(fallback.candidates.iter().cloned());
+                for rule in &publishers {
+                    if options.only_source.is_some_and(|target| target != rule.id) {
+                        continue;
+                    }
+                    let index = indexes.get(&rule.id).and_then(Option::as_ref);
+                    if !index.is_some_and(|index| {
+                        index.entries.iter().any(|entry| {
+                            entry.kind != "entry"
+                                && entry.kind != "category"
+                                && upstream_identity(&entry.page, query.appid, &known).is_some()
+                                && upstream_identity(
+                                    &entry.page,
+                                    query.appid,
+                                    &known[..known_before_fallback],
+                                )
+                                .is_none()
+                        })
+                    }) {
+                        continue;
+                    }
+                    let source = match_publisher_source(
+                        store,
+                        rule,
+                        index,
+                        game,
+                        &query,
+                        sources.get(&rule.id),
+                        options.force_details,
+                        ctx,
+                        cancel,
+                        now,
+                        &mut known,
+                    )?;
+                    sources.insert(rule.id.clone(), source);
+                }
+            }
+        }
+    }
 
     let mut record = GameMatchRecord {
         schema_version: GAME_MATCH_SCHEMA_VERSION,
@@ -1112,6 +1166,8 @@ fn candidates_from_fact(
 ) -> Vec<SourceCandidate> {
     let mut related_query = query.clone();
     let title_relevant = identity::title_relevant(&fact.title, query);
+    let upstream = upstream_identity(&fact.page, query.appid, known)
+        .filter(|candidate| candidate.variant == identity::variant(&fact.title));
     let known_association = known.iter().any(|candidate| {
         candidate.source_page == fact.page
             && candidate.patch_title == fact.title
@@ -1127,7 +1183,8 @@ fn candidates_from_fact(
     });
     // A short DLC title is only promoted to a query hint when it either is a
     // title lead itself or explicitly links to a confirmed base page.
-    if known_association
+    if upstream.is_some()
+        || known_association
         || (lead_relevant(&fact.title, query, known) && (title_relevant || base_link))
     {
         related_query.name_hints.push(fact.title.clone());
@@ -1144,6 +1201,20 @@ fn candidates_from_fact(
         &related_query,
     );
     for candidate in &mut found {
+        if candidate.game_appid.is_none() {
+            if let Some(upstream) = upstream {
+                candidate.game_appid = Some(query.appid);
+                candidate.match_basis = MatchBasis::VerifiedAlias;
+                candidate.identity_evidence.push(IdentityEvidence {
+                    kind: "verified_upstream".to_string(),
+                    appid: Some(query.appid),
+                    page: Some(upstream.source_page.clone()),
+                });
+                candidate
+                    .provenance
+                    .extend(upstream.provenance.iter().cloned());
+            }
+        }
         if let Some(published_at) = &fact.published_at {
             candidate.published_at = Some(published_at.clone());
         }
@@ -1563,9 +1634,28 @@ fn entry_relevant(
     query: &QueryContext,
     known: &[SourceCandidate],
 ) -> bool {
-    std::iter::once(&entry.title)
-        .chain(entry.aliases.iter())
-        .any(|title| lead_relevant(title, query, known))
+    upstream_identity(&entry.page, query.appid, known).is_some()
+        || std::iter::once(&entry.title)
+            .chain(entry.aliases.iter())
+            .any(|title| lead_relevant(title, query, known))
+}
+
+/// An AppID-confirmed fallback must explicitly name this exact publisher page.
+/// A similar title, a foreign AppID or an unindexed URL cannot create a hit.
+fn upstream_identity<'a>(
+    page: &str,
+    appid: u32,
+    known: &'a [SourceCandidate],
+) -> Option<&'a SourceCandidate> {
+    let page = canonical::canonical_url(page);
+    known.iter().find(|candidate| {
+        candidate_is_credible(candidate)
+            && candidate.game_appid == Some(appid)
+            && candidate
+                .upstream_page
+                .as_ref()
+                .is_some_and(|upstream| canonical::canonical_url(upstream) == page)
+    })
 }
 
 /// Port of the old `lead_relevant` for a P3 fact/index title: title relevance,
