@@ -57,7 +57,7 @@ Test-Path -LiteralPath $deckKey
 | 项目 | 本仓库通常值 / 检查方式 |
 | --- | --- |
 | 插件目录 | `/home/deck/homebrew/plugins/steam-patch-manager`；确认真实路径、非符号链接和插件身份 |
-| 显示身份 | 从本地与远端 `plugin.json` 读取 `name`，目前为 `Steam 补丁管理`；版本读 `package.json` |
+| 显示身份 | 从本地与远端 `plugin.json` 读取 `name`，新版为 `Steam 黄油补丁助手`（旧版为 `Steam 补丁管理`）；版本读 `package.json` |
 | 状态目录 | `main.py` 使用 `DECKY_USER_HOME/.local/share/steam-patch-manager`；独立于插件目录 |
 | Loader | 本轮读取其版本、服务状态与日志，历史 3.2.9 的安装参数不能当作永久协议 |
 | CEF / HTTP | 设备 loopback 常见 `8080` / `1337`，只读探测是否可用，不直接暴露到局域网 |

@@ -1,12 +1,12 @@
-# Steam 补丁管理
+# Steam Hentai Patch · Steam 黄油补丁助手
 
-![Steam 补丁管理：查找、下载、安装，支持 Windows 和 Steam Deck](docs/images/branding/banner.png)
+![Steam 黄油补丁助手：查找、下载、安装，支持 Windows 和 Steam Deck](docs/images/branding/banner.png)
 
-为 Windows 和 Steam Deck 上已安装的 Steam 游戏查找、下载和安装补丁，省去逐个搜索发布页、核对下载文件和手动复制的步骤。
+一站式查找、下载并安装 Steam 黄油的成人内容补丁，支持 Windows 和 Steam Deck。省去逐个搜索发布页、核对下载文件和手动复制的步骤。
 
 工具会读取本机 Steam 游戏库，展示补丁来源、语言、适用版本和安装状态。支持的补丁可以直接安装或覆盖安装；无法自动处理的补丁，也可以从详情页打开来源网站，按发布方说明操作。
 
-**[下载最新版本](https://github.com/Mabinogi-Cichol/steam-hentai-patch-searcher/releases/latest)** · **[查看所有版本](https://github.com/Mabinogi-Cichol/steam-hentai-patch-searcher/releases)** · **[反馈问题](https://github.com/Mabinogi-Cichol/steam-hentai-patch-searcher/issues)**
+**[下载最新版本](https://github.com/Mabinogi-Cichol/steam-hentai-patch/releases/latest)** · **[查看所有版本](https://github.com/Mabinogi-Cichol/steam-hentai-patch/releases)** · **[反馈问题](https://github.com/Mabinogi-Cichol/steam-hentai-patch/issues)**
 
 **快速导航：** [功能介绍](#可以做什么) · [补丁来源](#已支持的发行商源) · [下载与安装](#下载与安装) · [安装第一个补丁](#安装第一个补丁) · [实机示例](#steam-deck-实机使用示例) · [常见问题](#常见问题)
 
@@ -41,7 +41,7 @@ Windows 提供独立桌面应用；Steam Deck 通过 Decky 插件在游戏模式
 
 ## 下载与安装
 
-安装包可从 [Releases 下载页](https://github.com/Mabinogi-Cichol/steam-hentai-patch-searcher/releases/latest) 获取，根据设备选择附件。Steam Deck 也可直接使用下方的命令行在线安装。
+安装包可从 [Releases 下载页](https://github.com/Mabinogi-Cichol/steam-hentai-patch/releases/latest) 获取，根据设备选择附件。Steam Deck 也可直接使用下方的命令行在线安装。
 
 | 设备 | 下载文件 | 安装方式 |
 | --- | --- | --- |
@@ -54,7 +54,7 @@ Windows 提供独立桌面应用；Steam Deck 通过 Decky 插件在游戏模式
 
 ### Windows
 
-安装后启动 **Steam 补丁管理**，等待游戏库扫描完成。使用便携版时，请保留解压后的全部文件，不要单独移动其中的 EXE。
+安装后启动 **Steam 黄油补丁助手**，等待游戏库扫描完成。使用便携版时，请保留解压后的全部文件，不要单独移动其中的 EXE。
 
 > [!NOTE]
 > Windows 安装包目前没有代码签名；系统可能提示未知发布者。请确认文件来自本仓库的 Release。
@@ -87,15 +87,17 @@ Windows 提供独立桌面应用；Steam Deck 通过 Decky 插件在游戏模式
 
 #### ZIP 离线安装
 
+从旧名称 **Steam 补丁管理** 升级时，推荐使用上方命令行安装，让安装器处理名称切换。若使用离线 ZIP，请先在 Decky 卸载旧名称插件，再导入新版 ZIP；游戏补丁与独立数据目录不随插件目录删除。旧 Release 附带的终端安装器内置旧仓库地址，仓库改名后请使用本页当前安装命令。
+
 适用于 Steam Deck 无法访问 GitHub，或希望手动选择版本的情况。先在可联网的设备下载完整 ZIP，再传到 Steam Deck 本地安装。
 
-1. 从 [Releases](https://github.com/Mabinogi-Cichol/steam-hentai-patch-searcher/releases) 选择所需版本，下载 **`steam-patch-manager-decky.zip`**。
+1. 从 [Releases](https://github.com/Mabinogi-Cichol/steam-hentai-patch/releases) 选择所需版本，下载 **`steam-patch-manager-decky.zip`**。
 2. 通过 U 盘或局域网文件传输，将 ZIP 放到 Steam Deck 的“下载”目录等易于找到的位置，保留完整 ZIP。
 3. 打开 Decky 设置，使用**从 ZIP / 本地文件安装插件**的入口，选择刚传入的 ZIP 并确认安装；部分版本需要先启用开发者模式。
 
 ZIP 已包含插件运行所需的核心程序，本地安装这一步无需从 GitHub 下载依赖。查找和下载游戏补丁仍需联网。
 
-任一方式安装完成后，返回游戏模式，按 **“…”** 打开快捷访问菜单，进入 Decky，选择 **Steam 补丁管理**，等待游戏库扫描完成。
+任一方式安装完成后，返回游戏模式，按 **“…”** 打开快捷访问菜单，进入 Decky，选择 **Steam 黄油补丁助手**，等待游戏库扫描完成。
 
 ## 安装第一个补丁
 

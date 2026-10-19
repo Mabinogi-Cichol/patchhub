@@ -58,3 +58,13 @@ Text EXACTLY:
 "Windows · Steam Deck"
 Constraints: all typography is flat, no fake dimensionality. No hearts, no faces, no characters, no food props, no Steam official symbol, no additional text, no badges, no watermark, no mockup presentation. Deliver one finished warm minimal banner that clearly belongs with the referenced flat logo.
 ```
+
+## 2026-10-20 名称统一
+
+横幅通过内置 imagegen 编辑为 Steam Hentai Patch / Steam 黄油补丁助手，保留原有图案、配色和 2172 × 724 尺寸。已目视核对中英文、查找/下载/安装及平台文字。上方原始生成提示词保留为历史记录。
+
+本次最终提示词（内置工具，text-localization）：
+
+```text
+Edit target: existing banner.png. Preserve butter yellow puzzle/check logo, cocoa background, flat typography and 3:1 composition. Replace main title with exact Chinese text "Steam 黄油补丁助手". Add smaller English brand "Steam Hentai Patch" above it. Keep "查找 · 下载 · 安装" and "Windows · Steam Deck". Fit all text without clipping. No new icons, hearts or decoration.
+```

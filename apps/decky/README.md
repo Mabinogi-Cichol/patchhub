@@ -42,7 +42,7 @@ curl -fsSL https://ba.sh/tz4y | bash -s -- --check
 不使用短链接时，可直接从 GitHub 获取同一个入口：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Mabinogi-Cichol/steam-hentai-patch-searcher/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Mabinogi-Cichol/steam-hentai-patch/main/install.sh | bash
 ```
 
 已手动保存 Python 安装器时，也可以直接运行；这些命令仍会联网下载插件包：
