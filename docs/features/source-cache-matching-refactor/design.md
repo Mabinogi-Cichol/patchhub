@@ -193,3 +193,10 @@ Rust 是来源缓存、匹配规则和 fallback 判定的唯一业务实现。�
 ## 11. 子 feature：Decky 可折叠订阅源卡片
 
 管理订阅源页的来源分界与折叠交互细化为子 feature：[设计](collapsible-source-cards/design.md) / [施工记录](collapsible-source-cards/progress.md)。已实现并通过 67 项前端测试、类型检查与构建，已部署 Steam Deck 并验证真实页面、键盘及 RPC；实体手柄与真实任务待验收。默认收起、多卡独立展开、同一前端会话保留，复用现有来源任务与设置契约。本子项的进度与验收独立记录，不改变父功能既有验收事实。
+
+
+## 2026-10-19：VenusBlood 身份关联修正
+
+专项证据与范围见 [vbf-matching-fix.md](vbf-matching-fix.md)。重新匹配 RPC 按安装实例定位，不能同时传 instance_id 和 appid。
+
+HGamer 已确认当前 AppID 且明确给出 upstream_page 时，该精确 URL 可以命中已启用普通源的已发布索引，按普通详情流程解析并保留 verified_upstream 身份依据；无标题模糊猜测。旧的可信 fallback 可参与首次筛选；本次补查新增的上游关联在同一任务内补充普通来源结果，随后按既有规则隐藏 HGamer。上游 URL 不在索引中时不抓取，不触发列表更新。文章携带其他 AppID 或本体/DLC 类型不同，不提升其身份。已有同一关联发生详情失败时，不重复进行业务层解析；HTTP 原有传输重试契约不变。

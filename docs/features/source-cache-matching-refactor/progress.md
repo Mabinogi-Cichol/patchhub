@@ -113,3 +113,15 @@
 - 已部署 Steam Deck，文件/HTTP/RPC 与单插件实例验证通过；真实页面确认默认收起、独立展开、缓存页往返保留、aria/DOM 焦点和 Enter/Space，长 URL/QAM 无溢出。首次备份与证据保留，设备暂存及隧道清理完成。
 - Loader 重装期间前端导入超时，按技能确认空闲后重启 Steam JS 上下文恢复，最终状态已独立复核。详细过程与证据见子施工记录。
 - 子项实体手柄、真实任务进度/取消仍待验收；未启动来源刷新或补丁安装，未提交、未合并。父功能其他遗留验收边界保持不变。
+
+## 2026-10-19：VenusBlood FRONTIER 漏匹配与详情异常修复
+
+- 专项记录：[vbf-matching-fix.md](vbf-matching-fix.md)。用户授权直接连接当前 Devkit 所选 Steam Deck 查看，设备 Loader 当前为 v3.3.0，插件实例可读，取证时安装任务全为终态、来源任务为空。
+- 根因 1：真实 Loader 日志中 rematch_game 抛出 instance_required；session 同时传入 instance_id 与 appid，违反 Python SourceService 的互斥契约。修复为按安装实例选择，RPC 的 appid 传 null；重新发起来源任务时清除前次错误提示，新增失败后重试回归。
+- 根因 2：设备 Kagura CN revision=1、complete=true 已有正确分类和 Venus Blood Frontier 文章；Steam 名称为 VenusBlood FRONTIER International。旧 HGamer 结果已确认 AppID 1189440 并给出该文章精确 upstream_page，matching 未使用该关联。修复为在已发布索引内按已确认 AppID 的精确上游页面定位，按既有详情流程解析，生成 verified_alias 候选并记录 verified_upstream 证据、保留 HGamer provenance。普通来源命中后隐藏 HGamer；没有放宽标题比较，也没有全站刷新或未入索引的上游遍历。
+- 回归：source_matching **24 passed**（新增 3 项，包含旧 fallback、首次新补查、错误 AppID/未入索引页面、暖缓存、失败详情不重复业务请求）；source_acceptance **11 passed**；核心 lib/匹配测试 clippy -D warnings 通过；cargo fmt 通过；Decky **68 passed**、typecheck、build 通过；Linux release CLI 构建通过。未重复父功能完整门禁，宿主协议/生成物/Python 未因本修复改变。
+- 真实设备隔离对比：分别复制正式 sources 状态到本轮隔离目录，旧/新 CLI 使用同一设备安装清单、来源索引与真实网站元数据；旧版为 fallback_match，仅 HGamer 网页候选；新版为 publisher_match，Kagura CN / AppID 1189440 / verified_alias，解析出中文 v5 的两条 EXE 下载镜像，diagnostics=[]。最终新 CLI SHA-256 为 0c3ac76ecc756336176e439c98440bec62bdf2f0c8f86804c0c7a90ff0e99d77。未下载或安装补丁，未替换正式插件，未改变正式匹配状态。
+- 过度设计实现复核：只保留精确上游 URL、当前 AppID 与本体/DLC 一致的已知身份关联；新补查仅补充新增关联，不因同一旧证据再试失败详情。沿用原 HTTP 传输重试、索引、详情缓存、候选与六态，无新配置/状态/限制，未发现其他需修改项。
+- 环境：Windows 沙箱启动被 Z: 凭据错误阻断，获准使用沙箱外命令；本机无 cargo，使用设备已有 Rust 1.94 bookworm 容器及编译缓存。临时容器内添加 rustfmt/clippy，未向 SteamOS 系统安装工具。一次测试夹具 503 触发既有传输重试，改用 404 隔离业务层重复解析断言，最终通过。
+- 验收边界：代码和构建已完成；真实设备仅隔离状态/CLI 验证。正式插件部署、真实页面按钮回归、实体手柄与安装链未执行。无 Git 提交或合并，保留本轮开始已有的未提交缓存清理/卡片改动。证据、本轮 Linux CLI、原始对比响应存于忽略目录 .artifacts/vbf-matching-bug-20261019/。
+- 收尾：最终正式 CLI 哈希与取证基线一致，正式 1189440 匹配记录 SHA-256 与本地取证副本完全一致。隔离证据归档 evidence.tar.gz 的本地/远端 SHA-256 均为 b03b76131f76cb79246468dfa671b3b97e7b47e20dbea96910b169b824769e5e；已取回并核对。已清理本轮远端隔离目录和两个停止的临时容器，关闭本轮 CEF SSH 隧道；保留原有共享构建缓存及其他验证目录。
