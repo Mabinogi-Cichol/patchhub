@@ -523,13 +523,12 @@ pub fn validate_response(
             "condition",
             "copy_files",
             "file_conditions",
-            "terms",
             "coverage",
         ],
     )?;
     require(
         behavior["schema_version"] == 1
-            && behavior["policy"] == "sf9-behavior-v2"
+            && behavior["policy"] == "sf9-behavior-v3"
             && behavior["coverage"]["complete"] == true
             && report["script_inventory"]["coverage"]["complete"] == true,
         "exe_report_coverage_incomplete",
@@ -543,7 +542,7 @@ pub fn validate_response(
         &["bytes", "complete"],
     )?;
     require(
-        report["script_inventory"]["decoder"] == "sf9-graph-v2"
+        report["script_inventory"]["decoder"] == "sf9-graph-v3"
             && uint(&report["script_inventory"]["coverage"], "bytes")?
                 == uint(&report["metadata"], "size")?,
         "exe_report_coverage_incomplete",
@@ -559,8 +558,6 @@ pub fn validate_response(
             "installable",
             "metadata",
             "objects",
-            "terms",
-            "variables",
         ],
     )?;
     // A certificate is null when unsigned; when present it is exactly the
@@ -598,12 +595,6 @@ pub fn validate_response(
             "exe_report_coverage_incomplete",
         )?;
     }
-    require(
-        behavior["terms"]
-            .as_array()
-            .is_some_and(|a| a.iter().all(Value::is_string)),
-        "exe_worker_invalid_response",
-    )?;
     let behavior_sha256 = text(report, "behavior_sha256")?;
     hash(behavior_sha256)?;
     require(

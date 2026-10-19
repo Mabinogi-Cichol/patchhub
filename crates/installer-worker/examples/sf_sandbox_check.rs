@@ -1,6 +1,8 @@
-//! Development-only LPAC/bwrap parity runner restricted to .artifacts/p2/<case>.
-use std::{path::PathBuf, time::Duration};
-use steam_patch_installer_worker::{run_sandboxed, SandboxConfig};
+//! Development-only parity runner using the production LPAC/bwrap session.
+//! Every output stays below the caller's disposable .artifacts/p2 case.
+use std::{fs, io::Write, path::PathBuf, sync::atomic::AtomicBool, time::Instant};
+use steam_patch_installer_worker::{production::WorkerRuntime, sf::Descriptor, IsolationError};
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let repo = std::env::current_dir()?.canonicalize()?;
     let boundary = repo.join(".artifacts/p2").canonicalize()?;
@@ -9,90 +11,60 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if !root.starts_with(&boundary) || root == boundary {
         return Err("case must be below .artifacts/p2".into());
     }
-    for p in root.ancestors().take_while(|p| p.starts_with(&boundary)) {
-        let m = std::fs::symlink_metadata(p)?;
-        if m.file_type().is_symlink() {
-            return Err("linked case directory".into());
+    let descriptor = fs::read(root.join("descriptor.json"))?;
+    let parsed = steam_patch_installer_worker::sf::parse_descriptor(&descriptor)?;
+    let (hash, size) = match &parsed {
+        Descriptor::Analyze {
+            exe_sha256,
+            exe_size,
         }
-        #[cfg(windows)]
-        {
-            use std::os::windows::fs::MetadataExt;
-            if m.file_attributes() & 0x400 != 0 {
-                return Err("reparse case directory".into());
-            }
+        | Descriptor::AnalyzeBehavior {
+            exe_sha256,
+            exe_size,
         }
-    }
-    let descriptor = std::fs::read(root.join("descriptor.json"))?;
-    steam_patch_installer_worker::sf::parse_descriptor(&descriptor)?;
-    let runtime = root.join("runtime");
-    std::fs::create_dir(&runtime)?;
-    let input = root.join("input");
-    let output = root.join("output");
-    std::fs::create_dir(&output)?;
-    #[cfg(windows)]
-    let name = "sf-worker.exe";
-    #[cfg(not(windows))]
-    let name = "sf-worker";
-    let worker = runtime.join(name);
-    std::fs::copy(
-        std::env::current_exe()?
-            .parent()
-            .and_then(|p| p.parent())
-            .ok_or("runner is outside build examples")?
-            .join(name),
-        &worker,
-    )?;
-    let profile = format!("steam-patch-p2-{}", std::process::id());
-    let mut cfg = SandboxConfig::new(&worker, &runtime, &profile);
-    cfg.input_dir = Some(input.clone());
-    cfg.output_dir = Some(output.clone());
-    #[cfg(windows)]
-    {
-        cfg.working_dir = Some(root.clone());
-    }
-    cfg.stdin = descriptor;
-    cfg.limits.process_memory_bytes = Some(3 * 1024 * 1024 * 1024);
-    cfg.limits.job_memory_bytes = Some(3 * 1024 * 1024 * 1024);
-    cfg.limits.active_process_limit = Some(1);
-    cfg.limits.per_job_user_time_100ns = Some(300 * 10_000_000);
-    cfg.limits.timeout = Some(Duration::from_secs(480));
-    #[cfg(windows)]
-    {
-        use steam_patch_installer_worker::win::{ensure_profile, grant_path_access, AccessKind};
-        let handle = ensure_profile(&profile)?;
-        // Only this freshly created, disposable verification case receives grants.
-        grant_path_access(&root, handle.sid, AccessKind::ReadExecute)?;
-        grant_path_access(&output, handle.sid, AccessKind::ReadWriteDelete)?;
-        cfg.environment = Some(
-            ["SystemRoot", "SystemDrive", "USERPROFILE", "LOCALAPPDATA"]
-                .into_iter()
-                .map(|k| (k.to_owned(), std::env::var(k).unwrap_or_default()))
-                .chain([
-                    ("TEMP".into(), output.to_string_lossy().into_owned()),
-                    ("TMP".into(), output.to_string_lossy().into_owned()),
-                ])
-                .collect(),
-        );
-    }
-    let result = run_sandboxed(&cfg);
-    #[cfg(windows)]
-    let cleanup = steam_patch_installer_worker::win::delete_profile(&profile);
-    let outcome = result?;
-    #[cfg(windows)]
-    cleanup?;
-    let evidence = serde_json::json!({"platform":std::env::consts::OS,"exit_code":outcome.exit_code,
-        "termination":format!("{:?}",outcome.termination),"wall_ms":outcome.wall_time.as_millis(),
-        "stderr":String::from_utf8_lossy(&outcome.stderr),"response":serde_json::from_slice::<serde_json::Value>(&outcome.stdout).unwrap_or(serde_json::Value::Null)});
-    std::fs::write(
+        | Descriptor::ExtractBehavior {
+            exe_sha256,
+            exe_size,
+            ..
+        } => (exe_sha256, *exe_size),
+    };
+    let worker = std::env::current_exe()?
+        .parent()
+        .and_then(|p| p.parent())
+        .ok_or("runner is outside build examples")?
+        .join(if cfg!(windows) {
+            "sf-worker.exe"
+        } else {
+            "sf-worker"
+        });
+    let stage = root.join("stage");
+    fs::create_dir_all(&stage)?;
+    let runtime = WorkerRuntime::new(worker, stage, None)?;
+    let cancel = AtomicBool::new(false);
+    let start = Instant::now();
+    let session = runtime.open_session(&root.join("input/archive.exe"), hash, size, &cancel)?;
+    let response = if matches!(parsed, Descriptor::ExtractBehavior { .. }) {
+        let mut sink = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(root.join("members.stream"))?;
+        session.extract(&descriptor, &cancel, &mut |chunk| {
+            sink.write_all(chunk)
+                .map_err(|e| IsolationError::new("parity-output", None, e.to_string()))
+        })?;
+        serde_json::Value::Null
+    } else {
+        session.analyze(&descriptor, &cancel)?.response
+    };
+    let evidence = serde_json::json!({"platform":std::env::consts::OS,"exit_code":0,
+        "wall_ms":start.elapsed().as_millis(),"response":response});
+    fs::write(
         root.join("result.json"),
         serde_json::to_vec_pretty(&evidence)?,
     )?;
     println!(
         "{}",
-        serde_json::json!({"evidence":root.join("result.json"),"exit_code":outcome.exit_code,"wall_ms":outcome.wall_time.as_millis()})
+        serde_json::json!({"evidence":root.join("result.json"),"exit_code":0})
     );
-    if outcome.exit_code != 0 {
-        return Err("worker failed (see evidence)".into());
-    }
     Ok(())
 }

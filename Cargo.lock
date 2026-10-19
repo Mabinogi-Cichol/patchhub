@@ -3903,7 +3903,6 @@ version = "0.2.0"
 dependencies = [
  "base64 0.22.1",
  "caseless",
- "encoding_rs",
  "lzma-rust2",
  "quick-xml 0.38.4",
  "serde",

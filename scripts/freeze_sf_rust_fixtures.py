@@ -81,8 +81,8 @@ for source in [r'File.Delete("%AppFolder%\\identity.dat")',
 
 cases=[]
 for version in ('9.5','9.6','9.7'):
-    for name in ('payload.bin','补丁-测试.bin'):
-        f=Fixture(); data=f.metadata(version,name)
+    for name, display_blob in [('payload.bin',None),('补丁-测试.bin',None),('display-raw.bin',b'\x02\xa9 ')]:
+        f=Fixture(); data=f.metadata(version,name,display_blob=display_blob)
         with patch('test_sf95_audit.metadata',return_value=data): raw=sample([(b'unused',f.packed)],version=version+'.0.0')
         store('graph',{'data_hex':data.hex(),'version':version})
         store('inventory',{'data_hex':data.hex()})

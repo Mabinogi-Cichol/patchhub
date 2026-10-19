@@ -7,7 +7,7 @@ import re
 from sf95_audit import require, safe_target
 from sf9_lua import parse
 
-VERSION = "sf9-behavior-v2"
+VERSION = "sf9-behavior-v3"
 ROOT = "X:\\__scanned_game__"
 
 
@@ -359,5 +359,5 @@ def lower(graph, files, version):
             validate(selected)
             file_conditions.append({"path": row["destination"], "condition": selected})
     return {"schema_version": 1, "policy": VERSION, "condition": condition,
-            "file_conditions": file_conditions, "copy_files": [f["destination"] for f in files], "terms": graph["terms"],
+            "file_conditions": file_conditions, "copy_files": [f["destination"] for f in files],
             "coverage": {"complete": True, "events": len(graph["events"]), "includes": len(graph["includes"]), "steps": compiler.steps}}

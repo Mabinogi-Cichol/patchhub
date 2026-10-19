@@ -45,65 +45,6 @@ fn map_evidence(map: &mut Map<String, Value>, data: &[u8], offset: usize) {
     }
 }
 
-// Python's gb18030 codec uses the older serialization mapping, whereas
-// encoding_rs follows current web mappings. Keep the legacy byte values exact.
-fn legacy_display(raw: &[u8]) -> Result<String> {
-    let decoded = encoding_rs::GB18030
-        .decode_without_bom_handling_and_without_replacement(raw)
-        .ok_or_else(|| Error("exe_display_encoding_unsupported".into()))?;
-    let mut chars = decoded.chars();
-    let mut result = String::with_capacity(decoded.len());
-    let mut position = 0;
-    while position < raw.len() {
-        let first = raw[position];
-        require(first != 0x80, "exe_display_encoding_unsupported")?;
-        let (size, replacement) = if first < 0x80 {
-            (1, None)
-        } else if raw[position + 1].is_ascii_digit() {
-            (
-                4,
-                if raw[position..position + 4] == [0x81, 0x35, 0xf4, 0x37] {
-                    Some(0x1e3f)
-                } else {
-                    None
-                },
-            )
-        } else {
-            let code = u16::from_be_bytes([first, raw[position + 1]]);
-            let replacement = match code {
-                0xa6d9 => Some(0xe78d),
-                0xa6da => Some(0xe78e),
-                0xa6db => Some(0xe78f),
-                0xa6dc => Some(0xe790),
-                0xa6dd => Some(0xe791),
-                0xa6de => Some(0xe792),
-                0xa6df => Some(0xe793),
-                0xa6ec => Some(0xe794),
-                0xa6ed => Some(0xe795),
-                0xa6f3 => Some(0xe796),
-                0xfe59 => Some(0xe81e),
-                0xfe61 => Some(0xe826),
-                0xfe66 => Some(0xe82b),
-                0xfe67 => Some(0xe82c),
-                0xfe6d => Some(0xe832),
-                0xfe7e => Some(0xe843),
-                0xfe90 => Some(0xe854),
-                0xfea0 => Some(0xe864),
-                0xa3a0 => Some(0xe5e5),
-                0xa8bc => Some(0xe7c7),
-                _ => None,
-            };
-            (2, replacement)
-        };
-        let character = chars
-            .next()
-            .ok_or_else(|| Error("exe_display_encoding_unsupported".into()))?;
-        result.push(replacement.and_then(char::from_u32).unwrap_or(character));
-        position += size;
-    }
-    require(chars.next().is_none(), "exe_display_encoding_unsupported")?;
-    Ok(result)
-}
 struct Archive<'a> {
     data: &'a [u8],
     r: Reader<'a>,
@@ -113,9 +54,7 @@ struct Archive<'a> {
     objects: Vec<Value>,
     events: Vec<Value>,
     includes: Vec<Value>,
-    variables: Map<String, Value>,
     packages: Vec<String>,
-    terms: Vec<String>,
     files: Vec<Value>,
     file_index: usize,
     context: String,
@@ -137,9 +76,7 @@ impl<'a> Archive<'a> {
             objects: vec![],
             events: vec![],
             includes: vec![],
-            variables: Map::new(),
             packages: vec![],
-            terms: vec![],
             files,
             file_index: 0,
             context: "project".into(),
@@ -158,7 +95,7 @@ impl<'a> Archive<'a> {
     fn string(&mut self) -> Result<String> {
         self.r.string()
     }
-    fn display(&mut self) -> Result<String> {
+    fn skip_display(&mut self) -> Result<()> {
         let mut length = self.r.u8()? as usize;
         let mut wide = false;
         if length == 255 {
@@ -178,20 +115,8 @@ impl<'a> Archive<'a> {
             length <= MAX_METADATA / if wide { 2 } else { 1 },
             "string_size_limit",
         )?;
-        let raw = self.r.read(length * if wide { 2 } else { 1 })?;
-        let text = if wide {
-            let words: Vec<u16> = raw
-                .chunks_exact(2)
-                .map(|v| u16::from_le_bytes([v[0], v[1]]))
-                .collect();
-            String::from_utf16(&words)
-                .map_err(|_| Error("exe_display_encoding_unsupported".into()))?
-        } else {
-            legacy_display(raw)?
-        };
-        let text = text.trim_end_matches('\0').to_owned();
-        require(!text.contains('\0'), "embedded_nul")?;
-        Ok(text)
+        self.r.read(length * if wide { 2 } else { 1 })?;
+        Ok(())
     }
     fn array(&mut self, allowed: &[&str], limit: usize) -> Result<Vec<Value>> {
         let count = self.r.u16()? as usize;
@@ -283,7 +208,7 @@ impl<'a> Archive<'a> {
                 let screen_name = self.string()?;
                 result.insert("name".into(), json!(screen_name));
                 self.nums(1)?;
-                self.display()?;
+                self.skip_display()?;
                 self.nums(3)?;
                 let old = std::mem::replace(&mut self.context, format!("{n}:{screen_name}"));
                 let controls: Vec<&str> = CONTROLS.iter().map(|v| v.0).collect();
@@ -298,15 +223,6 @@ impl<'a> Archive<'a> {
                     }
                     "CSUFScreenLicenseAgreement" => {
                         self.nums(2)?;
-                        for language in &languages {
-                            for message in language["messages"].as_array().into_iter().flatten() {
-                                if message["name"] == "IDS_CTRL_SCROLLTEXT_BODY" {
-                                    self.terms.push(
-                                        message["text"].as_str().unwrap_or_default().to_owned(),
-                                    );
-                                }
-                            }
-                        }
                     }
                     "CSUFScreenInstallFolder" => {
                         self.expected(&[1], "exe_screen_schema_unsupported")?;
@@ -367,18 +283,13 @@ impl<'a> Archive<'a> {
             "CSUFMessageID" => {
                 self.expected(&[1], "exe_message_schema_unsupported")?;
                 result.insert("name".into(), json!(self.string()?));
-                result.insert("text".into(), json!(self.display()?));
+                self.skip_display()?;
             }
             "CSessionVar" => {
                 self.expected(&[1], "exe_variable_schema_unsupported")?;
-                let variable = self.string()?;
-                let value = self.display()?;
-                let _flag = self.r.u32()?;
-                require(
-                    !self.variables.contains_key(&variable),
-                    "exe_variable_invalid",
-                )?;
-                self.variables.insert(variable, json!(value));
+                self.string()?;
+                self.skip_display()?;
+                self.r.u32()?;
             }
             "CSUFPackage" => {
                 self.expected(&[1], "exe_package_schema_unsupported")?;
@@ -395,7 +306,7 @@ impl<'a> Archive<'a> {
                 }
             }
             "CPasswordData" => {
-                self.display()?;
+                self.skip_display()?;
                 let count = self.r.u16()? as usize;
                 require(count <= 64, "exe_password_list_limit")?;
                 let components: Vec<String> =
@@ -404,8 +315,8 @@ impl<'a> Archive<'a> {
                 require(self.r.u16()? == 0, "exe_password_unsupported")?;
             }
             "CImageInfo" => {
-                self.display()?;
-                self.display()?;
+                self.skip_display()?;
+                self.skip_display()?;
                 self.nums(1)?;
             }
             _ => return Err(Error("exe_object_class_unsupported".into())),
@@ -431,20 +342,20 @@ impl<'a> Archive<'a> {
         self.nums(16)?;
         for _ in 0..5 {
             self.nums(5)?;
-            self.display()?;
+            self.skip_display()?;
         }
         self.expected(&[1], "exe_appearance_schema_unsupported")?;
-        self.display()?;
-        self.display()?;
+        self.skip_display()?;
+        self.skip_display()?;
         self.byte()?;
         self.nums(if self.version == "9.7" { 26 } else { 25 })?;
         Ok(())
     }
     fn labels(&mut self) -> Result<()> {
         for _ in 0..3 {
-            self.display()?;
+            self.skip_display()?;
             self.nums(4)?;
-            self.display()?;
+            self.skip_display()?;
             self.nums(4)?;
             self.byte()?;
         }
@@ -455,7 +366,7 @@ impl<'a> Archive<'a> {
         self.expected(&[1], "exe_uninstall_schema_unsupported")?;
         self.nums(1)?;
         for _ in 0..3 {
-            self.display()?;
+            self.skip_display()?;
         }
         self.nums(5)?;
         self.byte()?;
@@ -463,23 +374,23 @@ impl<'a> Archive<'a> {
         self.byte()?;
         self.labels()?;
         self.nums(4)?;
-        self.display()?;
-        self.display()?;
+        self.skip_display()?;
+        self.skip_display()?;
         self.nums(2)?;
         self.byte()?;
         for _ in 0..5 {
-            self.display()?;
+            self.skip_display()?;
         }
         self.nums(1)?;
         self.byte()?;
-        self.display()?;
+        self.skip_display()?;
         self.nums(2)?;
         self.empty_array()?;
-        self.display()?;
-        self.display()?;
+        self.skip_display()?;
+        self.skip_display()?;
         self.nums(2)?;
         self.empty_array()?;
-        self.display()?;
+        self.skip_display()?;
         self.empty_array()?;
         let old = std::mem::replace(&mut self.context, "uninstall".into());
         self.array(SCREENS, 32)?;
@@ -502,22 +413,22 @@ impl<'a> Archive<'a> {
         self.lifecycle = "project";
         self.expected(&[1], "exe_project_schema_unsupported")?;
         self.byte()?;
-        self.display()?;
+        self.skip_display()?;
         self.r.read(6)?;
         self.nums(2)?;
         self.byte()?;
         self.nums(4)?;
         self.r.read(2)?;
-        self.display()?;
+        self.skip_display()?;
         self.r.read(2)?;
         self.labels()?;
         self.nums(6)?;
         self.timestamp()?;
         self.nums(7)?;
-        self.display()?;
+        self.skip_display()?;
         self.nums(1)?;
-        self.display()?;
-        self.display()?;
+        self.skip_display()?;
+        self.skip_display()?;
         self.byte()?;
         self.byte()?;
         self.nums(1)?;
@@ -525,7 +436,7 @@ impl<'a> Archive<'a> {
         self.r.read(count * 2)?;
         self.nums(6)?;
         for _ in 0..11 {
-            self.display()?;
+            self.skip_display()?;
         }
         self.nums(2)?;
         self.empty_array()?;
@@ -558,9 +469,9 @@ impl<'a> Archive<'a> {
         self.project()?;
         require(self.r.pos == self.data.len(), "exe_metadata_trailing_data")?;
         Ok(
-            json!({"decoder": "sf9-graph-v2", "coverage": {"complete": true, "bytes": self.r.pos},
+            json!({"decoder": "sf9-graph-v3", "coverage": {"complete": true, "bytes": self.r.pos},
             "metadata": evidence(self.data, 0), "events": self.events, "includes": self.includes,
-            "variables": self.variables, "disabled_packages": self.packages, "terms": self.terms,
+            "disabled_packages": self.packages,
             "objects": self.objects, "installable": false}),
         )
     }
@@ -746,59 +657,65 @@ pub fn inventory(metadata: &[u8]) -> Result<Value> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn display_codec_keeps_python_legacy_mapping() {
-        let pairs = [
-            (0xa6d9u16, 0xe78d),
-            (0xa6da, 0xe78e),
-            (0xa6db, 0xe78f),
-            (0xa6dc, 0xe790),
-            (0xa6dd, 0xe791),
-            (0xa6de, 0xe792),
-            (0xa6df, 0xe793),
-            (0xa6ec, 0xe794),
-            (0xa6ed, 0xe795),
-            (0xa6f3, 0xe796),
-            (0xfe59, 0xe81e),
-            (0xfe61, 0xe826),
-            (0xfe66, 0xe82b),
-            (0xfe67, 0xe82c),
-            (0xfe6d, 0xe832),
-            (0xfe7e, 0xe843),
-            (0xfe90, 0xe854),
-            (0xfea0, 0xe864),
-            (0xa3a0, 0xe5e5),
-            (0xa8bc, 0xe7c7),
-        ];
-        for (bytes, codepoint) in pairs {
-            let expected = char::from_u32(codepoint).unwrap().to_string();
-            assert_eq!(legacy_display(&bytes.to_be_bytes()).unwrap(), expected);
+    fn archive(data: &[u8]) -> Archive<'_> {
+        Archive {
+            data,
+            r: Reader::new(data),
+            version: "9.5",
+            classes: BTreeMap::new(),
+            next_id: 1,
+            objects: vec![],
+            events: vec![],
+            includes: vec![],
+            packages: vec![],
+            files: vec![],
+            file_index: 0,
+            context: "project".into(),
+            lifecycle: "project",
         }
-        assert_eq!(
-            legacy_display(&[0x81, 0x35, 0xf4, 0x37]).unwrap(),
-            "\u{1e3f}"
-        );
-        assert_eq!(legacy_display(b"A\xd6\xd0\xce\xc4Z").unwrap(), "A中文Z");
-        assert_eq!(legacy_display(&[0x94, 0x39, 0xda, 0x33]).unwrap(), "💩");
     }
 
     #[test]
-    fn display_codec_rejects_malformed_bytes_without_panics() {
-        for raw in [
-            b"\x80".as_slice(),
-            b"A\x80Z",
-            b"\x81",
-            b"\xff",
-            b"\x81\x30",
-            b"\x81\x30\x81",
-            b"\x81\x30\x81\xff",
-            b"\x81\x7f",
+    fn display_headers_skip_exact_bytes_and_preserve_following_fields() {
+        for (wide, header) in [
+            (false, vec![2]),
+            (false, vec![255, 2, 0]),
+            (false, vec![255, 255, 255, 2, 0, 0, 0]),
+            (true, vec![255, 254, 255, 2]),
+            (true, vec![255, 254, 255, 255, 2, 0]),
+            (true, vec![255, 254, 255, 255, 255, 255, 2, 0, 0, 0]),
         ] {
-            assert_eq!(
-                legacy_display(raw).unwrap_err().0,
-                "exe_display_encoding_unsupported"
-            );
+            let mut blob = header;
+            blob.extend(if wide {
+                b"\x00\xd8\x00\x00".as_slice()
+            } else {
+                b"\xa9 "
+            });
+            for cut in 0..blob.len() {
+                assert_eq!(
+                    archive(&blob[..cut]).skip_display().unwrap_err().0,
+                    "truncated_record"
+                );
+            }
+            blob.extend(0x12345678u32.to_le_bytes());
+            let mut a = archive(&blob);
+            a.skip_display().unwrap();
+            assert_eq!(a.r.u32().unwrap(), 0x12345678);
+            assert_eq!(a.r.pos, blob.len());
         }
-        assert_eq!(legacy_display(b"").unwrap(), "");
+    }
+
+    #[test]
+    fn display_size_bound_and_non_display_decoding_remain_enforced() {
+        let mut oversized = vec![255, 255, 255];
+        oversized.extend((MAX_METADATA as u32 + 1).to_le_bytes());
+        assert_eq!(
+            archive(&oversized).skip_display().unwrap_err().0,
+            "string_size_limit"
+        );
+        assert_eq!(
+            archive(b"\x02\xa9 ").string().unwrap_err().0,
+            "invalid_utf8"
+        );
     }
 }

@@ -119,6 +119,52 @@
     {
       "expected": [
         [
+          "call",
+          [
+            "call",
+            [
+              "index",
+              [
+                "name",
+                "SetupData"
+              ],
+              [
+                "literal",
+                "SetPackageProperties"
+              ]
+            ],
+            [
+              [
+                "literal",
+                "a"
+              ],
+              [
+                "table",
+                [
+                  [
+                    [
+                      "literal",
+                      "Install"
+                    ],
+                    [
+                      "literal",
+                      true
+                    ]
+                  ]
+                ]
+              ]
+            ]
+          ]
+        ]
+      ],
+      "id": "27fe759f84b3f06ee6026a9c00c0dd135d0585a06e349dd997ca48acc50c358b",
+      "input": {
+        "source": "SetupData.SetPackageProperties(\"a\", {Install=true})"
+      }
+    },
+    {
+      "expected": [
+        [
           "if",
           [
             [
@@ -322,6 +368,39 @@
     {
       "expected": [
         [
+          "return",
+          [
+            [
+              "call",
+              [
+                "index",
+                [
+                  "name",
+                  "File"
+                ],
+                [
+                  "literal",
+                  "DoesExist"
+                ]
+              ],
+              [
+                [
+                  "literal",
+                  "%AppFolder%\\sub\\engine.exe"
+                ]
+              ]
+            ]
+          ]
+        ]
+      ],
+      "id": "53a1f853009d7ed4def3b7aa286274b35d1a4eab86999063fb9e5b111601405e",
+      "input": {
+        "source": "return (File.DoesExist(\"%AppFolder%\\\\sub\\\\engine.exe\"))"
+      }
+    },
+    {
+      "expected": [
+        [
           "if",
           [
             [
@@ -488,6 +567,32 @@
       "id": "91c81ed1fce268dc00ebef0820896d996fc1863921f6bd9acffc5ceb9088b6e3",
       "input": {
         "source": "local f=File.Run; f(\"payload\")"
+      }
+    },
+    {
+      "expected": [
+        [
+          "call",
+          [
+            "call",
+            [
+              "index",
+              [
+                "name",
+                "Screen"
+              ],
+              [
+                "literal",
+                "Next"
+              ]
+            ],
+            []
+          ]
+        ]
+      ],
+      "id": "9cd56249bf2076050a56b61cecd1017a6f94d9fb109c7af39c6b50ba301b54d3",
+      "input": {
+        "source": "Screen.Next()"
       }
     },
     {
