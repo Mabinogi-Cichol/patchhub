@@ -186,6 +186,17 @@ flowchart TD
 
 图解析保留原始配置和 before/while/after/project/uninstall 生命周期，普通配置不按默认值准入。组件 Install 状态与文件条件生成全局/逐成员条件；主进程观测条件路径一次，选中成员后计算内容身份，worker 只转换同一成员子集。重装查找同一 EXE/元数据/大小的最近可信事务，以原始条件事实重算选择，再核对成员身份与现场文件。
 
-报告 decoder/policy 及 EXE 授权适配版本升至 v2。未由插件执行的快捷方式、字体注册、向导显示及 Windows 属性配置不阻断普通文件提取；所需内容生成动作仍按已实现能力处理。
+2026-10-15 的报告 decoder/policy 及 EXE 授权适配版本升至 v2；2026-10-19 graph/behavior 报告更新为下述 v3。未由插件执行的快捷方式、字体注册、向导显示及 Windows 属性配置不阻断普通文件提取；所需内容生成动作仍按已实现能力处理。
 
 当前验证边界：显示进度屏幕的两个 DWORD 尚未映射；While OnPreload 按静态准备步骤处理。隐藏该屏幕且其 OnPreload 有选择副作用的情况，尚未与官方运行时核对。正式隔离 worker 回归与候选包记录见施工记录；设备部署与对应运行验收已通过，见 [本轮部署验收](deployment-20261015.md)；本轮实际游戏安装与生效已由用户明确排除。
+
+
+## 2026-10-19：跳过显示文本解码
+
+按[实施计划](skip-display-decoding-plan.md)，向导标题、消息正文、SessionVar 值、外观等显示字段只解析 CArchive 长度头并消费对应 ANSI/宽字符字节，不进行编码识别、解码、NUL 检查或回退。保留既有长度界限和截断错误；路径、变量名和脚本等非显示字符串仍按原契约严格读取。
+
+删除完整图的 `variables`/`terms` 和行为报告的 `terms`，不保留空占位。graph/behavior 标识分别为 `sf9-graph-v3`、`sf9-behavior-v3`，报告数字 schema 和外部协议不变。核心严格校验新版字段集合，核心与 worker 成对部署；历史 receipt 不迁移，重装仍以 EXE/metadata/payload 身份判断。
+
+Python 仅为独立研究参考，已同步现有事件生命周期、include selectors、文件尾字节、组件选择和逐文件条件。生产分析读取元数据；生产载荷由 `extract_behavior` 流式提取，核心负责写入。参考 ZIP 转换只用于独立内容基线，不能作为当前 worker 的生产协议。验证工具复用生产 LPAC/bwrap 会话，逐成员核对报告、字节、CRC 与 SHA，不恢复已删除的 `convert_behavior`。
+
+本轮用户将实机范围明确为构建、样本校验和插件部署，游戏安装由用户操作；不新增备份或恢复功能。已验证范围和未验证项见[施工记录](progress.md)。

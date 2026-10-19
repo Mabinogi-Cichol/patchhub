@@ -272,3 +272,89 @@
 - 部署：远端暂存 `/home/deck/steam-patch-validation/exe-progress-stage-fix-20261017/`（上传哈希一致）→ Loader `utilities/install_plugin` + `confirm_plugin_install`（prompt 参数 `steam-patch-manager` / `dev` / 本轮 hash / type 1 核对一致）；正式目录 24/24 与包内清单全等、`bin/*` 权限保持、`plugin_loader` active、实例 1 / 版本 0.1.0；HTTP bundle（URL 编码插件名路由）200、115,789 B、sha `996223c2…`；RPC `list_tasks` 31 全终态、`list_transactions` 18、`scan(false)` 28 实例 / 4 来源；Loader pluginOrder/disabled/frozen/hidden 前后一致；远端暂存已清理、隧道已关闭。
 - 关联实机证据：修复部署前，用户在新版 CLI 上完成一单 3.53 GiB EXE 安装（task `8d0c735d-…`，终态 completed/cleanup），分析→提取→核对→写入→清理全流程实机跑通。
 - 待验证：修复后的不确定进度显示待下一次实机 EXE 安装确认（用户操作）；Windows 宿主同项。证据在忽略目录 `.artifacts/defensive-logic-deck-20261017/`（stagefix 相关文件与本轮 ZIP 副本、`verify-zip-stagefix.py`、`compare-stagefix.py`）。
+
+## 2026-10-19：VenusBlood FRONTIER EXE 分析失败调查（exe_display_encoding_unsupported）
+
+- 背景：用户安装 `VenusBlood FRONTIER International`（AppID 1189440）Kagura CN v5 EXE 补丁返回 `exe_analysis_failed · [worker] exe_display_encoding_unsupported`。本次只做失败调查，未修改代码、未构建/部署、未执行安装。
+- 复现：本地 v5 样本（SHA-256 `502063d2…`，1,126,694,464 字节，与 2026-10-05 审核摘要一致）交给当前 Rust worker 执行 `analyze_behavior`，退出码 1、stdout `{"error":"exe_display_encoding_unsupported"}`；现有 Python 参考解析器同样失败。
+- 根因：元数据偏移 `71364` 的显示字符串为 `1e 43 6f … a9 20 …`，即 Windows-1252 的 `Copyright © 2020 %CompanyName%`；解析器对 ANSI 显示文本只按 GB18030 严格解码，`0xA9` 后跟空格 `0x20` 不是合法 GB18030 尾字节，故拒绝。逐条容错统计 772 条显示文本中 771 条 GB18030 正常（项目为中文），仅该版权行混入西文编码。
+- 链路：`analyze_behavior` → `graph::decode` → `legacy_display` 抛出错误 → worker 退出 1 → `IsolationError` 显示 `[worker] …` → 编排层归类 `exe_analysis_failed`；失败发生在生成安装计划之前，未写游戏。
+- 验收缺口：2026-10-05 的 VBF 审核使用只解析文件表的 `sf95_audit.audit`（`metadata_inspector=None`）+ 事件帧扫描，从未做完整图解码；2026-10-07 起通用行为路线要求完整图解码，Rust 真实字节回归只覆盖 2303800/3606360/3721970，未覆盖 VBF。既往“VBF 安装通过”不能作为当前通用路线证据。
+- 建议（未实施，已被 2026-10-19 方向调整取代）：原本建议显示文本 GB18030 严格失败时回退 Windows-1252/Latin-1；用户确认显示文本无业务价值后放弃该回退，改为跳过解码，详见[调查报告](investigation-20261019-vbf-display-encoding.md)与[跳过显示文本解码计划](skip-display-decoding-plan.md)。
+- 边界：修复、测试、构建、部署、实际安装与恢复均未执行；本次结论仅为根因与方案，不记为已修复。
+
+## 2026-10-19：放弃编码回退，改为跳过显示文本解码（计划）
+
+- 用户确认：显示文本在工具内没有任何显示位置，也不参与安装条件、载荷选择或写入；解码环节本身没有业务价值，因此不保留 GB18030 → Windows-1252 → Latin-1 回退，直接跳过解码。
+- 已回退方案 A 的全部代码改动：`crates/installer-format/src/graph.rs`、`scripts/sf9_graph.py`、`scripts/test_sf95_audit.py` 恢复原状；工作区不再保留回退实现、测试或文档中的“已实现”表述。
+- 现状不变：当前源码仍是严格 GB18030 解码，VBF v5 仍会在分析阶段失败；该问题尚未修复。
+- 新计划：[跳过显示文本解码计划](skip-display-decoding-plan.md)。计划范围包括删除显示编码函数与 `variables`/`terms` 证据字段、升级 decoder/policy 版本、同步 Python oracle/golden/校验器，并完成 VBF 真实安装验收；**计划未实施、未构建、未验证**。
+
+## 2026-10-19：跳过显示文本解码计划审阅修订（待实施）
+
+- 明确生产 Rust core/worker 与 Decky 前端、Python host、研究参考脚本的职责；本次不迁回 Python，也不扩大为全仓旧代码清理。
+- 根据当前源码静态审阅，补充 Python v1 与 Rust v2 的语义同步前置工作，不能仅改版本号后重生成 golden；要求保留基线、独立参考及可复现的生成方式。
+- 补充非 GB18030 显示字节、长度分支、后续字段定位及截断的合成回归；明确核心与 worker 配套部署，并从应用入口验收。
+- 修正 flag 仅消费、不恢复旧枚举限制，锁文件同步、测试执行依赖、历史证据保留及成套回退范围。
+- 验证：本轮仅修改计划与本条施工记录，进行文档差异及相对链接检查；未修改实现、未运行功能测试、未构建或部署。修复与实机验收仍待实施。详见[修订计划](skip-display-decoding-plan.md)。
+
+
+## 2026-10-19：跳过显示文本解码实施与部署
+
+- 基线提交 `4d1059143fef2af3e7e78e21f0f825eae8bd9f58`；从 main 创建 `feature/generic-exe-installation`。已有 README、功能索引、施工记录、总进度和发布文档未提交改动保留，本轮不提交 Git。对应[计划](skip-display-decoding-plan.md)与[设计](design.md)。
+- 用户执行中明确限定：**只完成构建、样本校验和插件部署，游戏安装由用户操作**。因此不操作游戏文件，不执行安装/同内容重装，不重新引入当前版本已删除的备份/恢复。
+
+### 参考基线与实现
+
+- 未在当前本地研究目录找到此前独立 v2 oracle，按当前 Rust 已实现契约同步仓库 Python：事件生命周期/阶段排序、include selectors、文件尾 flag、组件 Install/Enabled、默认值读取、条件子路径和逐文件条件。移除专属默认值拒绝测试，保留业务与结构测试。
+- **删除显示字段之前**，逐项重放原 13 个 graph、20 个 behavior golden，差异为 0；Python 36 项通过。随后发现旧 Python 分析仍解压全部载荷，补齐元数据分析入口，当前未改生产 Rust 的 v2 六项 Rust golden 全通过。日志 `v2-parity.json`、`rust-v2-golden.log` 和原始/对齐后基线位于 `.artifacts/skip-display-20261019/`。
+- Rust/Python 显示字段统一只读取长度并消费字节；删除显示解码、变量映射/重复名校验、许可正文和 `exe_display_encoding_unsupported` 路径。graph/behavior 升为 v3，核心精确键集合随之调整；删除 installer-format 对 encoding_rs 的直接依赖。其他 crate 仍使用 encoding_rs，因此锁文件保留其包记录。
+- 合成回归覆盖 `A9 20`、无效 UTF-16/NUL 显示字节，ANSI/宽字符短头与 FF/FFFE/FFFF 扩展头、逐字节截断和后续 DWORD 定位；完整报告证明安装条件/文件集合不变。另验证重复 SessionVar、任意 flag 仅消费、include selectors 保留，以及非显示路径/脚本仍拒绝非法编码。
+- `scripts/fixtures/sf-reference-inputs.json` 保留历史独立输入，避免测试发现变化造成覆盖丢失；所有预期均由 Python 重新生成。原 21 Lua/13 graph/20 behavior/9 inventory/6 audit/6 worker 用例逐项核对，只允许删除字段、版本和 behavior 摘要变化，全部通过。最终 golden 为 24/38/59/12/9/9（Lua/graph/behavior/inventory/audit/worker），新增用例来自合成数据；没有用 Rust 输出生成预期。
+- 旧 `verify_sf_rust_samples.py` 仍调用已删除的 convert_behavior；本轮同步为当前生产 WorkerRuntime LPAC/bwrap 会话，分析后以 extract_behavior 流逐成员与 Python 解码内容比较，输出成员清单摘要。参考 ZIP 转换仍是研究基线，不部署、不恢复旧生产接口。
+
+### 自动化验证
+
+- Rust 1.94.0：`cargo fmt --all -- --check` 通过；`cargo clippy -p steam-patch-installer-format -p steam-patch-core -p steam-patch-installer-worker --all-targets --locked -- -D warnings` 通过；`cargo test -p steam-patch-installer-format -p steam-patch-core -p steam-patch-installer-worker --locked` **604 passed、0 failed、7 ignored**。包含现有重装身份、授权、receipt 与事务回归；忽略项未冒充通过。
+- `python -m unittest discover -s scripts -p 'test_sf*.py' -v` **40 passed**；`python scripts/freeze_sf_rust_fixtures.py` 可重现；golden 原有预期差异核对通过。最终日志 `rust-final.log`、`clippy-final.log`、`python-final.log`、`golden-diff.json` 均在本轮忽略目录。
+- Windows release CLI/worker/样本 runner 构建通过。Windows 实际生产沙箱在创建私有暂存目录时报 `protect private staging DACL failed`（Win32 5），尚未进入样本解析；未弱化隔离或改用非隔离样本执行冒充通过。Windows 实样本仍待验证，日志 `windows-samples.log`。
+- Linux 在 Deck 现有 Rust 1.94 容器中构建同次源码 CLI、worker、runner；不安装系统工具链。生产代码清单 `source-manifest.json` 与构建日志已归档。
+
+### 真实样本与运行时
+
+执行命令（从独立 Linux 源码根目录）：
+
+```sh
+/usr/bin/python3 scripts/verify_sf_rust_samples.py --platform linux \
+  --sample 1189440=../samples/1189440.exe \
+  --sample 1227890=../samples/1227890.exe \
+  --sample 1390150=../samples/1390150.exe
+```
+
+- 9 个合成整包（SF9.5/9.6/9.7 × ASCII/Unicode 文件名/异常显示字节）全部通过生产 bwrap 分析、提取及逐字节/CRC/SHA 对等。
+- VBF AppID **1189440**，本地输入 `.artifacts/exe-patch-research/vbf/VenusBlood-FRONTIER-CN-Patch-v5.exe`：3 个成员全部通过，原显示解码失败消失。
+- 夏日本体 AppID **1227890**，本地输入 `.artifacts/exe-patch-research/Summer-Memories-CN-Patch-v1.03.exe`：2,502 个成员全部通过。
+- 夏日 DLC AppID **1390150**，本地输入 `.artifacts/exe-patch-research/summer-dlc/Summer-Memories-Plus-DLC-CN-Patch-v2.02.1.exe`：5,874 个成员全部通过。
+- EXE/metadata SHA-256 和逐成员清单摘要见下表。完整参考报告位于 `.artifacts/generic-exe-local/<appid>-behavior-analysis.json`，同份已归档到 `.artifacts/skip-display-20261019/linux-evidence/src/.artifacts/`。真实 EXE、报告和载荷不提交。旧三款 2303800/3606360/3721970 当前缺少本地 EXE，本轮未补下载，明确待验证。
+
+| AppID | EXE SHA-256 | metadata SHA-256 | 成员清单 SHA-256 |
+| --- | --- | --- | --- |
+| 1189440 | `502063d21d2e741533e7479955b6bbdc68dd36d55ad3cd01e86fa509d9056410` | `5a0ca3e10199a457ac8a52c83f4d61bc4662f2bbeb5a149825263b2ee558f5e3` | `e55ad6d5e438f845efeb45801a81790106f7a09c6fa57576c5b61218b523ca76` |
+| 1227890 | `21400ce2540b91a75cc56c3f90bc2f3f276b9ae3bd1e3fbb522675b0c6332130` | `6cb8429b7f308eb4a0a919ed0fa286c93dd1ba88a831d45d7413335de3c76c87` | `6fa7c867bf7948484d50ce531c1ee7571ba55b8ba6a9e64e97ac57c34cf69fba` |
+| 1390150 | `de370e86645e273bae205517b49077a9fd682a9d73309c518f5524d96216ecad` | `6cc974e6b7a1c997097554acff0d0cb7cb8d1a8f677a38b5f86a4166d6699baf` | `2c15d02e3478f341e7acb550d2d526cbcaa156d5ec453f3bd3bb34663e059b2c` |
+
+### 插件部署与边界
+
+- 使用项目 decky-deploy-verify 技能，当前 Devkit 配对/已有可信主机记录连接。部署前 Loader active、实例 1、无活动安装/来源任务。保存完整旧插件 tar 和本地 `backup/rollback.zip` 后，经 Loader v3.3.0 本地 ZIP 安装；未直接覆盖后手工结束后端进程。
+- 新包 7,033,786 字节，SHA-256 `e0c4f9e05c25029993b56c9e1167b6b0383ecbda67ae0e27fb7470bbaa6dbb5d`。新 SBOM 749 个组件，许可元数据无缺失。正式 23 个文件逐个核对，CLI/worker 执行位及 runtime.json 配对哈希正确。
+- Linux CLI SHA `2f26a634848e87eb795924f0c46b8da3ed9c3d981335f973cc6fb3ef93478934`；worker SHA `35fb1d079a783b5834075f97de6ca30145f5b00d300a913852814cf574a29355`，与本轮实际 bwrap 样本使用的 worker 一致。
+- 新后端 `list_tasks`、`list_transactions`、当前无参数 `scan()` RPC 通过：28 个游戏、23 条事务、无活动任务。首次沿旧技能示例传 scan(false) 报签名错误，已按当前接口改正，不算业务失败。Loader active、运行插件唯一，版本 0.2.0；保留既有版本号，不冒充发布。
+- 实际 HTTP 前端与包内 SHA 一致。全屏 VBF 页与 QAM 插件列表真实截图已检查，无横向溢出；关闭本轮部署弹窗、恢复 Loader 原排序并关闭 QAM。VBF 页可保留上次失败反馈，这是已有任务/前端状态，本轮没有通过启动新安装覆盖或删除历史记录。
+- 备份、正式哈希、RPC、截图及样本证据归档到 `.artifacts/skip-display-20261019/`；清理状态以该目录 `cleanup.json` 为准。实体手柄、Windows 实样本及三个缺失样本仍待验证；实际游戏安装/重装由用户进行。
+- 按 overengineering-review 对最终路径复核：生产修复删除显示解码与无用字段，不新增编码探测、回退、配置、硬限制或双版本兼容。新增参考同步和验证工具仅覆盖已有契约；未发现需修改的过度设计项。该结论不代替上述未执行验收。
+
+
+## 2026-10-19：用户确认修复并准备 v0.2.1
+
+- 用户明确回复“确认已修复”，要求提交 Git 并作为 v0.2.1 发布。此为用户确认结果，不补造未提供的安装/重装操作细节；Windows 沙箱 ACL 错误、缺少的旧三款本地样本及其他遗留矩阵仍按原记录保留。
+- 沿用本 session 已完成的 Rust 604 项、Python 40 项、fmt/clippy、真实 Deck 样本及插件部署验证，不重复运行未改代码的测试。参考基线修复与 v3 显示字段删除分别提交；功能文档与发行文档单独提交。
