@@ -76,3 +76,26 @@ RustSec 提示：RUSTSEC-2024-0429（glib 0.18.5，unsound）与 RUSTSEC-2024-03
 - 用户确认显示文本解码问题已修复，并明确要求提交 Git 和发布 v0.2.1。参考基线、修复代码、既有发行文档与本轮验收分别提交；程序、Cargo/npm 锁、Tauri 与 SBOM 应用版本为 0.2.1。
 - 沿用本 session 已通过的 Rust/Python/格式/clippy/Deck 样本及部署验证。版本修改仅补锁文件、npm 工作区版本一致性和 SBOM 测试。修复源码部署不代替最终 CI 发行包的部署验收。
 - 正式版以 Tag 对应 CI 产物为准；标题严格为 v0.2.1，中文正文来自 [v0.2.1 发行说明](releases/v0.2.1.md)。CI 运行与附件核验将在实际完成后记录；不移动或覆盖已有 v0.2.0 Tag。
+
+
+## v0.2.1 发布记录（2026-10-20）
+
+- 参考同步 `0f27187`、显示文本解码修复 `98b9b3a`、历史发行/指南文档 `c25cc3e`、功能验收 `c549ee9`、版本更新 `424430b`、发行说明 `d2e9c59` 分别提交，并以 `cc7dbc4bfddc5a943550622dc0a1c67a1a8004ef` 合并回 main。注解 Tag v0.2.1 保持指向该提交，未改写旧 Tag。
+- [Tag 对应运行 39280868529](https://github.com/Mabinogi-Cichol/steam-hentai-patch-searcher/actions/runs/39280868529) 的实际完整日志已取回：两端 core、Windows、Decky 和 release 共 5 个任务，日志均无 error annotation；release 日志确认发布 URL 与 9 个附件来自本次 Tag。正式 [Release v0.2.1](https://github.com/Mabinogi-Cichol/steam-hentai-patch-searcher/releases/tag/v0.2.1) 由 github-actions[bot] 于 2026-10-19T16:02:46Z（北京时间 10-20 00:02:46）发布。
+- 状态接口异常：REST 与连接器持续返回早期 queued/null，和完整任务日志、已公开附件不一致；最初据此判断仍在排队，随后以 Release 及真实日志纠正。尝试取消时 API 返回 409（not in progress），空运行移除也被拒绝，未成功取消/删除任何运行。未伪造接口结论为 success。此前 GitHub 状态页未报告 Actions 故障，不能据此确定状态异常的根因。
+- 用户在排队表象下选择本地构建。Windows 核心、worker、Tauri 与 NSIS 已成功本机构建，程序版本 0.2.1，另有完整便携包/SBOM/校验文件，保存在 `.artifacts/release-v0.2.1/release-assets/` 作为备用。设备旧编译缓存已不存在；本轮独立 Linux 源码目录创建后 SSH 中断，Linux 本地重建尚未完成。发现正式 CI 包已发布后未覆盖附件，当前公开附件保持原始 CI 构建。后续是否替换以用户选择为准；设备本轮源码目录 `/home/deck/steam-patch-validation/release-v021-local-20261020` 的清理需待连接恢复。
+- 中文发行正文已由 [docs/releases/v0.2.1.md](releases/v0.2.1.md) PATCH 并逐字符读回；`name == tagName == v0.2.1`、draft=false、prerelease=false，9 个附件 ID/digest 和发布时间未变。
+- 下载全部 9 个公开附件（26,022,010 字节）：公开文件名、大小、GitHub API digest、SHA256SUMS.txt 的 8 条内容附件及两端 checksums JSON 全部一致。ZIP CRC 与条目白名单通过（Decky 23 / Windows 11）；资源、文档、生成契约和许可与 Tag 匹配，Windows 按实际 LF/CRLF 检出规则核验。两份 CycloneDX SBOM 为 0.2.1、749 组件，内外 SBOM 字节一致、锁与安装器清单摘要匹配 Tag。Decky CLI/worker 为 ELF64 x86_64，runtime 配对摘要/大小/执行位正确；Windows 三个 exe 为 PE x86_64，Tauri FileVersion/ProductVersion 为 0.2.1，NSIS 引导桩为 x86。
+- 校验与完整日志保存在忽略目录 `.artifacts/release-v0.2.1/`。沿用前一轮已验证源码的 Deck 部署，不宣称本次公开发行包已经重新部署或游戏矩阵全通过。Windows 实样本 ACL、三个缺失样本及既有遗留验收范围继续保留。
+
+| 附件 | 字节 | SHA-256 |
+| --- | --- | --- |
+| checksums-decky.json | 159 | `c58c3f21532b8a90359cf19425c24d18d0de684dcda8e52b4482688b2241223f` |
+| checksums-windows.json | 178 | `42d3c0b06abec2e949970dad7c0402c9d55d965f55c265a71f5f193a12b9c338` |
+| dependencies-decky.cdx.json | 347,896 | `1289cb200c6b183b41fd2dd6c8bca38e2e088e9fde71d755add7d01c10976436` |
+| dependencies-windows.cdx.json | 361,564 | `4b2e77843e59813af72dac8fb33b85db6a55dff01b38e0e2beff2bfb1d3a22da` |
+| install-decky.py | 43,549 | `65e34c058da384431eb68be6053a783996634d7959fd32f871f0cd917b9d0b31` |
+| SHA256SUMS.txt | 758 | `72d394523d7896fbe212491912db44e788b9a540c69014bc46b47feb380688e0` |
+| steam-patch-manager-decky.zip | 7,025,959 | `2a38645332cf9f264982ef0051d7d020f09423db7c7106c6ce709a42d0685cb8` |
+| steam-patch-manager-windows-portable.zip | 10,601,983 | `e86c1cbfe105b3d281beaaf43dc9b38c5a7ee30e40635986421dd594a8219951` |
+| Steam.Patch.Manager_0.2.1_x64-setup.exe | 7,639,964 | `7ce0ba6b80f8f7c93e9128a12c969f5d3425fd7d86c88c4683e4541df9391d10` |
