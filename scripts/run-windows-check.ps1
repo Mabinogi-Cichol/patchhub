@@ -106,6 +106,9 @@ try {
         'installer::exe_orchestrator::tests', '--', '--ignored', '--nocapture'
     )
 
+    & (Join-Path $PSScriptRoot 'build-windows-flutter.ps1')
+    if ($LASTEXITCODE -ne 0) { throw 'Flutter Windows check failed' }
+
     Write-Summary "OK: P4 Windows check passed. Evidence: $evidencePath; log: $logPath"
 } finally {
     Pop-Location

@@ -367,6 +367,8 @@ pub fn cases() -> Value {
         ("rolled_back", "cancelled"),
         ("rolled_back", "failed"),
         ("needs_recovery", "failed"),
+        ("failed", "cancelled"),
+        ("failed", "failed"),
     ] {
         responses.push(json!({"name":format!("outcome-{state}-{disposition}"),"method":"install_patch","response":{"protocol_version":5,"request_id":"fixture","ok":true,"result":outcome(state,disposition)}}));
     }

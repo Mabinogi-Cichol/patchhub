@@ -1325,7 +1325,7 @@ pub fn schema() -> Value {
         serde_json::json!({"const":"overwrite"});
     defs.get_mut("ActionAvailability").unwrap()["oneOf"] = serde_json::json!([{"properties":{"available":{"const":true},"blockers":{"maxItems":0}}},{"properties":{"available":{"const":false},"blockers":{"minItems":1}}}]);
     defs.get_mut("InstallProgressEvent").unwrap()["anyOf"] = serde_json::json!([{"properties":{"stage":{"const":"applying"}}},{"properties":{"substage":{"type":"null"}}}]);
-    defs.get_mut("InstallerOutcome").unwrap()["oneOf"] = serde_json::json!([{"properties":{"state":{"const":"committed"},"disposition":{"const":"completed"},"recovery":{"type":"null"}}},{"properties":{"state":{"const":"needs_recovery"},"disposition":{"const":"failed"},"recovery":{"type":"object","required":["required"],"properties":{"required":{"const":true}}}}},{"properties":{"state":{"const":"rolled_back"},"disposition":{"enum":["cancelled","failed"]}}}]);
+    defs.get_mut("InstallerOutcome").unwrap()["oneOf"] = serde_json::json!([{"properties":{"state":{"const":"committed"},"disposition":{"const":"completed"},"recovery":{"type":"null"}}},{"properties":{"state":{"const":"needs_recovery"},"disposition":{"const":"failed"},"recovery":{"type":"object","required":["required"],"properties":{"required":{"const":true}}}}},{"properties":{"state":{"const":"rolled_back"},"disposition":{"enum":["cancelled","failed"]}}},{"properties":{"state":{"const":"failed"},"disposition":{"enum":["cancelled","failed"]},"recovery":{"type":"null"}}}]);
     defs.get_mut("InstallerFormats").unwrap()["properties"]["zip"] =
         serde_json::json!({"const":"supported"});
     defs.get_mut("InstallerFormats").unwrap()["properties"]["exe"] =

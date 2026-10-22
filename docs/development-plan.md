@@ -61,14 +61,14 @@ Decky 首版以插件内部列表为稳定入口；游戏详情页快捷入口�
 
 后续 [跨平台安装器迁移](features/cross-platform-installer-migration/design.md) 已建立独立设计与[施工记录](features/cross-platform-installer-migration/progress.md)：共享动态 ZIP/EXE 安装策略、原生隔离 worker、新状态 schema 与 Windows 动态安装能力已实现并通过 P5 双端验收；开发阶段允许旧缓存格式 breaking change，不承担旧版本兼容，切换前先处理未完成事务。P6 收口重复的 Python 安装逻辑，只保留薄 Python 桥接。
 
-建议采用共享 Rust 核心，负责 Steam 库解析、匹配、指纹、下载验证、文件事务、恢复和 SQLite 存储。Windows 使用 Tauri 2 + React / TypeScript；SteamOS 使用 Decky React / TypeScript 前端 + Python 桥接后端，再调用随插件打包的 Linux 核心进程。
+建议采用共享 Rust 核心，负责 Steam 库解析、匹配、指纹、下载验证、文件事务、恢复和 SQLite 存储。Windows 使用 Flutter / Dart + Material 3；SteamOS 使用 Decky React / TypeScript 前端 + Python 桥接后端，再调用随插件打包的 Linux 核心进程。
 
 Windows 可以直接链接核心库；Decky 桥接通过 stdin/stdout 上的版本化 JSON 消息调用核心，无监听公网或本地 TCP 服务。Python 仅转换 Decky 调用和任务事件，不复制安装逻辑。UI 共享 DTO、状态文案和业务 hooks，视觉组件按平台分别实现。
 
 ```text
 签名补丁目录 ──→ 本地可信目录缓存
                        ↓
-Windows Tauri UI → Rust commands ┐
+Windows Flutter UI → Dart JSONL ┐
                                 ├→ Rust 核心 → Steam 库 / 游戏文件
 Decky UI → Python bridge → CLI ┘       ↓
                               SQLite / 事务日志 / 备份
@@ -76,12 +76,12 @@ Decky UI → Python bridge → CLI ┘       ↓
 
 这一路线增加 Rust 与 Python 的打包工作，但能保持跨平台安装规则和安全检查一致。备选方案是 Python 共享核心配 Windows 桌面壳，初始开发更快，代价是运行时分发与双端权限管理复杂。P0 已用同一个配方完成双端验证并正式锁定 Rust 路线。
 
-Tauri 的 capabilities 可控制前端权限，但核心自己的路径检查仍然必要；远程网页应在外部浏览器打开，不能获得本地 IPC 权限。见 [Tauri capabilities](https://v2.tauri.app/security/capabilities/)。
+Windows 宿主通过 JSONL 调用共享 Rust CLI；核心保留自己的路径检查。远程网页在外部浏览器打开。Flutter 重写状态见 [Windows 施工记录](features/windows-ux-redesign/progress.md)。
 
 建议仓库结构：
 
 ```text
-apps/windows/              Tauri 桌面应用
+apps/windows-flutter/      Flutter 桌面应用
 apps/decky/                Decky 前端与 Python 桥接
 crates/core/               库发现、匹配、事务安装
 crates/cli/                Decky 所用 JSON 协议入口

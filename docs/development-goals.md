@@ -2,7 +2,7 @@
 
 目标：为 Windows 与 SteamOS / Steam Deck 上已安装的 Steam 游戏，提供补丁发现、匹配、安装状态检测，以及可恢复的安装与卸载体验。
 
-当前为 Alpha 开发中：共享核心已支持签名目录、本地 ZIP 计划、SQLite 备份事务、安装 / 卸载 / 恢复；Windows Tauri 与 Decky 客户端已实现并构建。Windows 与指定 Steam Deck 内置 SSD 已通过真实《夜勤病栋》的补丁安装 / 检测 / 卸载恢复；用户确认 Deck 桌面模式及 GE-Proton8-8 游戏模式补丁生效。其他样本、运行矩阵和发布门槛仍在验收中。
+当前为 Alpha 开发中：共享核心已支持签名目录、本地 ZIP 计划、SQLite 备份事务、安装 / 卸载 / 恢复；Windows Flutter 与 Decky 客户端已实现并构建。Windows 与指定 Steam Deck 内置 SSD 已通过真实《夜勤病栋》的补丁安装 / 检测 / 卸载恢复；用户确认 Deck 桌面模式及 GE-Proton8-8 游戏模式补丁生效。其他样本、运行矩阵和发布门槛仍在验收中。
 
 - [调研与开发计划](development-plan.md)
 - [调研来源与证据边界](research-sources.md)
@@ -12,7 +12,7 @@
 - [本地数据与隐私](privacy.md)
 - [Alpha 发行检查](release-checklist.md)
 
-建议路线：共享 Rust 安装核心 + Windows Tauri 桌面应用 + SteamOS Decky 插件；先建立少量经过审核的官方补丁目录，再扩大发行商覆盖。
+建议路线：共享 Rust 安装核心 + Windows Flutter 桌面应用 + SteamOS Decky 插件；先建立少量经过审核的官方补丁目录，再扩大发行商覆盖。
 
 安装 Rust 1.94 后，在仓库根目录运行（Windows 有仓库隔离工具链时可用 scripts/cargo.ps1 代替 cargo）：
 
@@ -46,6 +46,6 @@ GitHub Actions 在推送、Pull Request 和手动触发时检查代码并分别�
 
 推送 `v*` Tag（例如 `v0.1.0-alpha.1`）后，全部检查与构建成功才自动发布 GitHub Release；含 `-` 的 Tag 发布为预发行版。操作步骤见 [Tag 发布](client-guide.md#tag-发布)。
 
-客户端构建完成后运行 `python scripts/package-artifacts.py`，生成 Windows 便携 ZIP、Decky ZIP 与校验清单，保存在忽略目录 .artifacts。Windows 便携包解压后运行 steam-patch-windows.exe；NSIS 是管理工具的可选安装方式，游戏补丁本身仍按配方解压文件。
+客户端构建完成后运行 `python scripts/package-artifacts.py`，生成 Windows 便携 ZIP、Decky ZIP 与校验清单，保存在忽略目录 .artifacts。Windows 便携包解压后运行 steam_patch_windows.exe；NSIS 是管理工具的可选安装方式，游戏补丁本身仍按配方解压文件。
 
 只打包一端时，使用 `python scripts/package-artifacts.py --platform windows` 或 `--platform decky`，对应生成 `checksums-windows.json` 或 `checksums-decky.json`。

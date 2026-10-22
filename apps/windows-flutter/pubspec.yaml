@@ -1,0 +1,25 @@
+name: steam_patch_windows
+description: Steam 黄油补丁助手 Windows 客户端
+publish_to: none
+version: 0.2.1+1
+environment:
+  sdk: ^3.13.0
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_localizations:
+    sdk: flutter
+  file_selector: ^1.0.0
+  url_launcher: ^6.3.0
+  window_manager: ^0.5.0
+dev_dependencies:
+  integration_test:
+    sdk: flutter
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+flutter:
+  uses-material-design: true
+
+  assets:
+    - assets/protocol-v5.schema.json

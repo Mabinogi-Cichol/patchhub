@@ -1458,6 +1458,22 @@
               "const": "rolled_back"
             }
           }
+        },
+        {
+          "properties": {
+            "disposition": {
+              "enum": [
+                "cancelled",
+                "failed"
+              ]
+            },
+            "recovery": {
+              "type": "null"
+            },
+            "state": {
+              "const": "failed"
+            }
+          }
         }
       ],
       "properties": {

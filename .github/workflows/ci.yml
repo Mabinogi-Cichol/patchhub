@@ -30,6 +30,7 @@ jobs:
       - run: python -m unittest discover -s apps/decky/backend -p 'test_*.py' -v
       - run: python -m unittest discover -s scripts -p test_package_artifacts.py -v
       - run: python -m unittest discover -s scripts -p test_build_sbom.py -v
+      - run: python -m unittest discover -s scripts -p test_flutter_sbom.py -v
       - run: python -m unittest discover -s scripts -p test_install_decky.py -v
       - run: python -m unittest discover -s scripts -p test_decky_bootstrap.py -v
       - run: python -m unittest discover -s scripts -p test_sf95_audit.py -v
@@ -51,12 +52,19 @@ jobs:
       - run: npm ci
       - run: npm run test:contracts
       - run: cargo build --release --locked -p steam-patch-cli -p steam-patch-installer-worker --bin steam-patch --bin sf-worker
-      - run: npm run bundle -w apps/windows -- -- --locked
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.47.7'
+          channel: stable
+          cache: true
+      - run: ./scripts/build-windows-flutter.ps1 -SkipRust
       - run: New-Item -ItemType Directory -Path .artifacts -Force
       - run: cargo metadata --locked --format-version 1 > .artifacts/cargo-metadata.json
-      - run: python scripts/build-sbom.py .artifacts/cargo-metadata.json
+      - run: python scripts/build-sbom.py .artifacts/cargo-metadata.json --flutter-deps .artifacts/windows-flutter/pub-deps.json --flutter-version .artifacts/windows-flutter/flutter-version.json
       - run: python scripts/package-artifacts.py --platform windows
-      - run: git diff --exit-code -- Cargo.lock package-lock.json packages/contracts/generated packages/contracts/fixtures
+      - run: choco install nsis --yes --no-progress
+      - run: ./scripts/build-windows-installer.ps1 -Makensis 'C:/Program Files (x86)/NSIS/makensis.exe'
+      - run: git diff --exit-code -- Cargo.lock package-lock.json packages/contracts/generated packages/contracts/fixtures apps/windows-flutter/pubspec.lock apps/windows-flutter/assets/protocol-v5.schema.json
       - uses: actions/upload-artifact@v4
         with:
           name: windows-portable
@@ -68,7 +76,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: windows-nsis
-          path: target/release/bundle/nsis/*.exe
+          path: .artifacts/*_x64-setup.exe
           if-no-files-found: error
 
   release:

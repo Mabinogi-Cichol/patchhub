@@ -2951,6 +2951,76 @@
       }
     },
     {
+      "method": "install_patch",
+      "name": "outcome-failed-cancelled",
+      "response": {
+        "ok": true,
+        "protocol_version": 5,
+        "request_id": "fixture",
+        "result": {
+          "cause": {
+            "code": "cancelled",
+            "kind": "user_cancelled"
+          },
+          "cleanup": {
+            "failures": [],
+            "performed": false,
+            "removed_bytes": 0,
+            "status": "not_requested"
+          },
+          "content_id": null,
+          "created_at": 1,
+          "direct": false,
+          "disposition": "cancelled",
+          "error": null,
+          "has_replacements": false,
+          "instance_id": "instance",
+          "plan_id": "plan",
+          "recovery": null,
+          "release_id": "release",
+          "selection_id": null,
+          "state": "failed",
+          "transaction_id": "transaction",
+          "updated_at": 1
+        }
+      }
+    },
+    {
+      "method": "install_patch",
+      "name": "outcome-failed-failed",
+      "response": {
+        "ok": true,
+        "protocol_version": 5,
+        "request_id": "fixture",
+        "result": {
+          "cause": {
+            "code": "apply_failed",
+            "kind": "domain_failure"
+          },
+          "cleanup": {
+            "failures": [],
+            "performed": false,
+            "removed_bytes": 0,
+            "status": "not_requested"
+          },
+          "content_id": null,
+          "created_at": 1,
+          "direct": false,
+          "disposition": "failed",
+          "error": null,
+          "has_replacements": false,
+          "instance_id": "instance",
+          "plan_id": "plan",
+          "recovery": null,
+          "release_id": "release",
+          "selection_id": null,
+          "state": "failed",
+          "transaction_id": "transaction",
+          "updated_at": 1
+        }
+      }
+    },
+    {
       "method": "scan",
       "name": "detail-beyond-2048-bytes",
       "response": {
