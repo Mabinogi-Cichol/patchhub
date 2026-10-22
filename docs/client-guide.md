@@ -1,6 +1,6 @@
 # Alpha 客户端与目录维护
 
-Windows 使用 Tauri 2，Decky 使用 @decky/api 和 @decky/ui；两端调用同一个 Rust CLI。核心路径、目录、公钥和状态路径由宿主配置。前端只传入实例、release、受限 operation 与 request ID，不能指定目标目录、核心程序或执行脚本。
+Windows 使用 Flutter / Material 3，Decky 使用 @decky/api 和 @decky/ui；两端调用同一个 Rust CLI。核心路径、目录、公钥和状态路径由宿主配置。前端只传入实例、release、受限 operation 与 request ID，不能指定目标目录、核心程序或执行脚本。
 
 ## 使用流程
 
@@ -16,19 +16,19 @@ Decky 点击“安装补丁 / 重新安装补丁”即开始自动获取、校�
 
 ## 构建
 
-仓库固定 Rust 1.94，使用 Cargo.lock 和 package-lock.json。先 `npm ci`，再 `npm run typecheck`、`npm run build:windows`、`npm run build:decky`。
+仓库固定 Rust 1.94，使用 Cargo.lock 和 package-lock.json。共享 TS/Decky 使用 `npm ci`、`npm run typecheck` 与 `npm run build:decky`；Windows 使用固定 Flutter 3.47.7 和 `npm run build:windows`。Flutter 依赖由 `apps/windows-flutter/pubspec.lock` 固定。
 
 ### Windows 一键构建
 
-准备 Node.js 22（含 npm）、Rust 1.94 MSVC 工具链、Python 3.11 或更新版本，以及 Visual Studio 2022 Build Tools 的“使用 C++ 的桌面开发”和 Windows SDK。将 node、npm、cargo、rustc、python（或 py）加入 PATH；已有仓库隔离工具链 `.tools/cargo` 和 `.tools/rustup` 时，脚本优先使用它。首次构建需要联网下载依赖和 NSIS 工具。
+准备 Flutter 3.47.7、PowerShell 7、NSIS 3、Node.js 22（共享检查）、Rust 1.94 MSVC 工具链、Python 3.11 或更新版本，以及 Visual Studio 2022 Build Tools 的“使用 C++ 的桌面开发”和 Windows SDK。将 node、npm、cargo、rustc、python（或 py）加入 PATH；已有仓库隔离工具链 `.tools/cargo` 和 `.tools/rustup` 时，脚本优先使用它。首次构建需要联网下载依赖和 NSIS 工具。
 
-双击仓库根目录 `build.bat`；脚本自动切换到仓库目录，执行依赖安装、类型检查、release CLI、Tauri 应用与 NSIS 构建，再生成依赖 SBOM 和 Windows 便携 ZIP。失败时显示步骤和非零退出码，窗口保持打开。终端或自动化调用可关闭末尾暂停：
+双击仓库根目录 `build.bat`；脚本自动切换到仓库目录，执行依赖安装、类型检查、release CLI/worker、Flutter 分析/测试与 release 构建，再生成包含 Rust、Dart/Flutter 的依赖 SBOM、Windows 便携 ZIP 和 NSIS 安装包。失败时显示步骤和非零退出码，窗口保持打开。终端或自动化调用可关闭末尾暂停：
 
 ```bat
 build.bat --no-pause
 ```
 
-便携包为 `.artifacts/steam-patch-manager-windows-portable.zip`，SHA-256 清单为 `.artifacts/checksums-windows.json`，依赖清单为 `.artifacts/dependencies.cdx.json`。NSIS 安装包位于 `target/release/bundle/nsis/`。此脚本构建 Windows 客户端；Decky 的 Linux CLI 在 Linux 环境构建。
+便携包为 `.artifacts/steam-patch-manager-windows-portable.zip`，SHA-256 清单为 `.artifacts/checksums-windows.json`，依赖清单为 `.artifacts/dependencies.cdx.json`。NSIS 安装包位于 `.artifacts/Steam.Hentai.Patch_0.2.1_x64-setup.exe`。安装包沿用已有安装目录和卸载条目，卸载保留用户状态与恢复资料。此脚本构建 Windows 客户端；Decky 的 Linux CLI 在 Linux 环境构建。
 
 ### GitHub Actions
 
@@ -40,7 +40,7 @@ build.bat --no-pause
 
 推送以 `v` 开头的 Tag（例如 `v0.1.0`、`v0.1.0-alpha.1`）会触发构建；只有 core、windows、decky 三个任务全部成功后，才自动创建对应 Tag 的 GitHub Release。分支推送、PR 和手动运行仅构建，不发布。非 `v` 开头的 Tag 不触发此工作流。
 
-先确保要发布的提交包含最新工作流，并手动将 Cargo workspace、Windows package.json 和 tauri.conf.json 等版本字段更新为计划发布的版本。Tag 不会自动改写程序内版本。将提交推送后，再创建并推送 Tag，例如：
+先确保要发布的提交包含最新工作流，并手动将 Cargo workspace、Flutter pubspec.yaml 与 Windows runner/NSIS 等版本字段更新为计划发布的版本。Tag 不会自动改写程序内版本。将提交推送后，再创建并推送 Tag，例如：
 
 ```powershell
 git tag -a v0.1.0-alpha.1 -m "Release v0.1.0-alpha.1"
@@ -53,7 +53,7 @@ Tag 名含 `-` 时标记为预发行版，其余标记为正式发行版。Relea
 
 ### 手动构建
 
-Windows：先构建 `cargo build --release --locked -p steam-patch-cli -p steam-patch-installer-worker --bin steam-patch --bin sf-worker`，将工具链 bin 加入 PATH，再运行 `npm run bundle -w apps/windows -- -- --locked`。prepare-sidecar 会复制同版 CLI、固定 worker 以及三个目录资源，Tauri 生成 NSIS 安装包。开发构建也需准备 sidecar 与资源。不要把私钥放入资源或提交到 Git。
+Windows：执行 `pwsh -NoProfile -File scripts/build-windows-flutter.ps1`，生成完整 `apps/windows-flutter/build/windows/x64/runner/Release/`；再用 `cargo metadata --locked --format-version 1` 生成元数据，执行 `python scripts/build-sbom.py .artifacts/cargo-metadata.json --flutter-deps .artifacts/windows-flutter/pub-deps.json --flutter-version .artifacts/windows-flutter/flutter-version.json`、`python scripts/package-artifacts.py --platform windows` 和 `pwsh -NoProfile -File scripts/build-windows-installer.ps1`。NSIS 可用 `-Makensis` 指定路径。完整解压便携包后运行 `steam_patch_windows.exe`，不可单独复制主程序。
 
 Linux：`sh scripts/build-linux.sh` 使用仓库内隔离工具链，测试核心与 CLI，并输出 `target/linux/release/steam-patch`。然后 `npm run package:plugin -w apps/decky` 生成 plugin-output 目录。安装到 Decky 前应检查二进制可执行权限、文件所属用户、宿主版本和日志；root 宿主启动核心时按游戏用户降权并同步 HOME / XDG，状态存于用户 ~/.local/share/steam-patch-manager；商店审核另设门槛。
 
@@ -75,3 +75,12 @@ Linux：`sh scripts/build-linux.sh` 使用仓库内隔离工具链，测试核�
 
 
 补丁源订阅通过“管理订阅源”维护。默认扫描读取缓存；显式刷新更新 ZIP 来源，选择游戏后按需查找 Kagura 国内 / 海外及 HGamer。未查询的游戏可通过“全部游戏”进入；“有补丁”包含已核实身份的来源候选。详情展示语言、本体 / DLC、格式和发布页；EXE、网盘或未知布局候选只有网页引导，不能准备安装。游戏语言和 DLC 拥有 / 安装状态需按实际情况确认。查询失败保留成功缓存，部分完成可重新查找。新游戏只需网站发布符合规则的记录，无需更新固定游戏清单。添加网站及专用解析器的方法见 [源适配器与订阅](source-adapters.md)。停用源停止查询和匹配，既有安装收据仍保留。
+
+
+### Windows Flutter 界面
+
+默认显示“有补丁”的游戏；左侧保留搜索和筛选，游戏内容分为概览、补丁管理、操作记录、游戏订阅。全局来源独立管理，卡片默认收起。右上角“外观”可选择跟随系统、浅色、深色；手动选择仅保留在当前会话。
+
+安装进度对话框的 Esc 和“取消安装”都只是请求取消，需等待核心终态。直接覆盖安装取消后可能留下不完整文件，界面显示失败原因，不能当成自动回滚成功。成功后的状态刷新失败会单独提示，并保留成功结果。关闭应用会先取消活动任务并等待清理；最小化不会取消。恢复按钮针对全部未完成操作，执行前会列出全局范围。
+
+本轮自动化与本地发行验证见 [Windows 重写施工记录](features/windows-ux-redesign/progress.md)；尚未完成的真实窗口和网络路线不视为通过。

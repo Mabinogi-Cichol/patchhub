@@ -54,7 +54,7 @@
 
 ## 终态：`InstallerOutcome`
 
-新安装终态保留原事务字段，并包含 `disposition`（completed/cancelled/failed）、`cause`、`recovery` 和 `cleanup`。`state` 仅 committed/rolled_back/needs_recovery。宿主用 disposition 决定提示，取消只在回滚完成且无恢复需求时成立。历史 Transaction 保留原 error 字符串，不反向推导新终态；同一外层 request_id 的重试返回稳定结果。
+新安装终态保留原事务字段，并包含 `disposition`（completed/cancelled/failed）、`cause`、`recovery` 和 `cleanup`。`state` 为 committed/rolled_back/needs_recovery/failed；直接 EXE 提取未完成时会返回 failed，已写入文件不自动恢复，必须保留 direct、disposition、cause 和 error 的实际语义。宿主用 disposition 决定提示，取消只在回滚完成且无恢复需求时成立。历史 Transaction 保留原 error 字符串，不反向推导新终态；同一外层 request_id 的重试返回稳定结果。
 
 计划建立前失败返回 `ok:false + error{code,detail?}`。DomainError 代码为开放字符串，宿主保留未知合法代码，不能把 detail 或历史错误文本解释成权限。
 

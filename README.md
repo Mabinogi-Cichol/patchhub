@@ -46,7 +46,7 @@ Windows 提供独立桌面应用；Steam Deck 通过 Decky 插件在游戏模式
 | 设备 | 下载文件 | 安装方式 |
 | --- | --- | --- |
 | Windows 64 位 | 文件名以 `x64-setup.exe` 结尾的安装包 | 运行安装程序，按提示完成安装 |
-| Windows 64 位，免安装 | `steam-patch-manager-windows-portable.zip` | 完整解压到一个文件夹，运行 `steam-patch-windows.exe` |
+| Windows 64 位，免安装 | `steam-patch-manager-windows-portable.zip` | 完整解压到一个文件夹，运行 `steam_patch_windows.exe` |
 | Steam Deck / SteamOS | `steam-patch-manager-decky.zip` | [命令行在线安装](#命令行在线安装)或 [ZIP 离线安装](#zip-离线安装) |
 
 > [!TIP]
