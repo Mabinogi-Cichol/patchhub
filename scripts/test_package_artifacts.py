@@ -53,9 +53,22 @@ class PackagingTests(unittest.TestCase):
             'components': [{'name': 'steam-patch-rust-installer', 'version': '1', 'licenses': [{'expression': 'MIT'}], 'properties': properties}]}
         self.write(root, '.artifacts/dependencies.cdx.json', json.dumps(inventory).encode())
         if windows:
-            for path in ('target/release/steam-patch-windows.exe', 'target/release/steam-patch.exe', 'target/release/sf-worker.exe',
-                         'catalog/catalog.json', 'catalog/signed-catalog.json', 'catalog/trust-keys.json', 'docs/client-guide.md', 'docs/privacy.md'):
-                self.write(root, path)
+            bundle = root / 'apps/windows-flutter/build/windows/x64/runner/Release'
+            for path in ('steam_patch_windows.exe', 'steam-patch.exe', 'sf-worker.exe',
+                         'flutter_windows.dll', 'msvcp140.dll', 'vcruntime140.dll', 'vcruntime140_1.dll', 'file_selector_windows_plugin.dll',
+                         'url_launcher_windows_plugin.dll', 'window_manager_plugin.dll',
+                         'screen_retriever_windows_plugin.dll', 'data/icudtl.dat', 'data/app.so',
+                         'data/flutter_assets/AssetManifest.bin', 'data/flutter_assets/NOTICES.Z',
+                         'data/flutter_assets/assets/protocol-v5.schema.json',
+                         'resources/catalog.json', 'resources/signed-catalog.json', 'resources/trust-keys.json',
+                         'resources/licenses/Flutter-LICENSE', 'resources/licenses/Dart-LICENSE'):
+                self.write(bundle, path)
+            self.write(root, 'apps/windows-flutter/pubspec.lock', b'dart lock')
+            self.write(root, 'docs/client-guide.md')
+            self.write(root, 'docs/privacy.md')
+            inventory['metadata']['properties'].append({'name': 'steam-patch:dart-lock-sha256',
+                'value': hashlib.sha256(b'dart lock').hexdigest()})
+            self.write(root, '.artifacts/dependencies.cdx.json', json.dumps(inventory).encode())
         return plugin
 
     def test_decky_runtime_permissions_and_provenance(self):
@@ -78,6 +91,14 @@ class PackagingTests(unittest.TestCase):
                 self.assertEqual(archive.read('LICENSE'), (root / 'LICENSE').read_bytes())
                 self.assertEqual(archive.read('licenses/sfextract-MIT.txt'), (root / 'scripts/licenses/sfextract-MIT.txt').read_bytes())
                 self.assertIn('dependencies.cdx.json', archive.namelist())
+
+    def test_windows_missing_flutter_runtime_refuses_before_zip(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); self.fixture(root, windows=True)
+            (root / 'apps/windows-flutter/build/windows/x64/runner/Release/data/app.so').unlink()
+            with self.assertRaisesRegex(FileNotFoundError, 'Missing Flutter runtime'):
+                self.run_package(root, 'windows')
+            self.assertFalse(list((root / '.artifacts').glob('*.zip')))
 
     def test_rejects_second_production_engine(self):
         for name in ('publisher.py', 'source_engine.py', 'exe_worker'):

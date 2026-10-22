@@ -1,0 +1,1214 @@
+[
+  {
+    "name": "signed-single",
+    "row": {
+      "diagnostics": [],
+      "discovery": {
+        "candidates": [],
+        "diagnostics": [],
+        "status": "pending"
+      },
+      "game": {
+        "appid": 42,
+        "availability": "installed",
+        "buildid": null,
+        "install_path": "fixture/library/steamapps/common/game",
+        "instance_id": "instance",
+        "kind": "game",
+        "library_path": "fixture/library",
+        "localized_name": null,
+        "name": "Fixture",
+        "name_language": null
+      },
+      "match_status": "matched",
+      "patches": [
+        {
+          "actions": {
+            "automatic": {
+              "available": true,
+              "blockers": []
+            },
+            "local_archive": {
+              "available": true,
+              "blockers": []
+            },
+            "overwrite": {
+              "available": true,
+              "blockers": []
+            },
+            "primary": {
+              "input": "automatic",
+              "label": "install",
+              "operation": "overwrite"
+            },
+            "reinstall": {
+              "available": false,
+              "blockers": [
+                {
+                  "code": "reinstall_unowned_or_incomplete"
+                }
+              ]
+            }
+          },
+          "blockers": [],
+          "compatibility": "verified",
+          "detection": {
+            "files": [
+              {
+                "actual_sha256": null,
+                "path": "patch.dat",
+                "status": "missing"
+              }
+            ],
+            "status": "not_detected"
+          },
+          "name": "Patch",
+          "release_id": "release",
+          "source_page": "https://example.com/game",
+          "support_level": "managed_zip"
+        }
+      ]
+    },
+    "language": null,
+    "entries": [
+      {
+        "kind": "installable",
+        "key": "release",
+        "title": "Patch",
+        "choices": [
+          "release"
+        ]
+      }
+    ],
+    "matched": true,
+    "attention": false,
+    "summary": "有可用补丁",
+    "filters": {
+      "matched": [
+        "instance"
+      ],
+      "all": [
+        "instance"
+      ],
+      "installed": [],
+      "attention": []
+    }
+  },
+  {
+    "name": "external-install",
+    "row": {
+      "diagnostics": [],
+      "discovery": {
+        "candidates": [],
+        "diagnostics": [],
+        "status": "pending"
+      },
+      "game": {
+        "appid": 42,
+        "availability": "installed",
+        "buildid": null,
+        "install_path": "fixture/library/steamapps/common/game",
+        "instance_id": "instance",
+        "kind": "game",
+        "library_path": "fixture/library",
+        "localized_name": null,
+        "name": "Fixture",
+        "name_language": null
+      },
+      "match_status": "matched",
+      "patches": [
+        {
+          "actions": {
+            "automatic": {
+              "available": true,
+              "blockers": []
+            },
+            "local_archive": {
+              "available": true,
+              "blockers": []
+            },
+            "overwrite": {
+              "available": true,
+              "blockers": []
+            },
+            "primary": {
+              "input": "automatic",
+              "label": "install",
+              "operation": "overwrite"
+            },
+            "reinstall": {
+              "available": false,
+              "blockers": [
+                {
+                  "code": "reinstall_unowned_or_incomplete"
+                }
+              ]
+            }
+          },
+          "blockers": [],
+          "compatibility": "verified",
+          "detection": {
+            "files": [
+              {
+                "actual_sha256": null,
+                "path": "patch.dat",
+                "status": "missing"
+              }
+            ],
+            "status": "installed_external"
+          },
+          "name": "Patch",
+          "release_id": "release",
+          "source_page": "https://example.com/game",
+          "support_level": "managed_zip"
+        }
+      ]
+    },
+    "language": null,
+    "entries": [
+      {
+        "kind": "installable",
+        "key": "release",
+        "title": "Patch",
+        "choices": [
+          "release"
+        ]
+      }
+    ],
+    "matched": true,
+    "attention": false,
+    "summary": "已安装补丁",
+    "filters": {
+      "matched": [
+        "instance"
+      ],
+      "all": [
+        "instance"
+      ],
+      "installed": [
+        "instance"
+      ],
+      "attention": []
+    }
+  },
+  {
+    "name": "unconfirmed-title",
+    "row": {
+      "diagnostics": [],
+      "discovery": {
+        "candidates": [
+          {
+            "aliases": [],
+            "cache_status": "fresh",
+            "candidate_id": "candidate-0123456789abcdef01234567",
+            "capability": "discover_only",
+            "excludes_dlc": null,
+            "fingerprint": "fixture",
+            "format_observed": "unknown",
+            "format_reported": "zip",
+            "game_appid": 42,
+            "game_title": "Fixture",
+            "identity_evidence": [],
+            "languages": [
+              "zh_cn"
+            ],
+            "match_basis": "title",
+            "mirrors": [],
+            "observed_at": "2026-10-11T00:00:00Z",
+            "parent_appid": null,
+            "patch_kind": "adult_content",
+            "patch_title": "Patch",
+            "patch_updated_at": null,
+            "platforms": [
+              "windows"
+            ],
+            "provenance": [],
+            "published_at": null,
+            "requires_dlc": null,
+            "source_id": "fixture",
+            "source_page": "https://example.com/game",
+            "source_record_id": "https://example.com/game",
+            "upstream_page": null,
+            "variant": "base",
+            "version_evidence": [],
+            "version_identity": "fixture",
+            "version_raw": null,
+            "warnings": []
+          }
+        ],
+        "diagnostics": [],
+        "status": "pending"
+      },
+      "game": {
+        "appid": 42,
+        "availability": "installed",
+        "buildid": null,
+        "install_path": "fixture/library/steamapps/common/game",
+        "instance_id": "instance",
+        "kind": "game",
+        "library_path": "fixture/library",
+        "localized_name": null,
+        "name": "Fixture",
+        "name_language": null
+      },
+      "match_status": "matched",
+      "patches": []
+    },
+    "language": null,
+    "entries": [
+      {
+        "kind": "discovery",
+        "key": "candidate-0123456789abcdef01234567",
+        "title": "Patch",
+        "choices": []
+      }
+    ],
+    "matched": false,
+    "attention": false,
+    "summary": "尚未匹配，请重新匹配",
+    "filters": {
+      "matched": [],
+      "all": [
+        "instance"
+      ],
+      "installed": [],
+      "attention": []
+    }
+  },
+  {
+    "name": "strong-source-match",
+    "row": {
+      "diagnostics": [],
+      "discovery": {
+        "candidates": [
+          {
+            "aliases": [],
+            "cache_status": "fresh",
+            "candidate_id": "candidate-0123456789abcdef01234567",
+            "capability": "discover_only",
+            "excludes_dlc": null,
+            "fingerprint": "fixture",
+            "format_observed": "unknown",
+            "format_reported": "zip",
+            "game_appid": 42,
+            "game_title": "Fixture",
+            "identity_evidence": [],
+            "languages": [
+              "zh_cn"
+            ],
+            "match_basis": "appid",
+            "mirrors": [],
+            "observed_at": "2026-10-11T00:00:00Z",
+            "parent_appid": null,
+            "patch_kind": "adult_content",
+            "patch_title": "Patch",
+            "patch_updated_at": null,
+            "platforms": [
+              "windows"
+            ],
+            "provenance": [],
+            "published_at": null,
+            "requires_dlc": null,
+            "source_id": "fixture",
+            "source_page": "https://example.com/game",
+            "source_record_id": "https://example.com/game",
+            "upstream_page": null,
+            "variant": "base",
+            "version_evidence": [],
+            "version_identity": "fixture",
+            "version_raw": null,
+            "warnings": []
+          }
+        ],
+        "diagnostics": [],
+        "status": "pending"
+      },
+      "game": {
+        "appid": 42,
+        "availability": "installed",
+        "buildid": null,
+        "install_path": "fixture/library/steamapps/common/game",
+        "instance_id": "instance",
+        "kind": "game",
+        "library_path": "fixture/library",
+        "localized_name": null,
+        "name": "Fixture",
+        "name_language": null
+      },
+      "match_status": "matched",
+      "patches": []
+    },
+    "language": null,
+    "entries": [
+      {
+        "kind": "discovery",
+        "key": "candidate-0123456789abcdef01234567",
+        "title": "Patch",
+        "choices": []
+      }
+    ],
+    "matched": true,
+    "attention": false,
+    "summary": "找到补丁来源",
+    "filters": {
+      "matched": [
+        "instance"
+      ],
+      "all": [
+        "instance"
+      ],
+      "installed": [],
+      "attention": []
+    }
+  },
+  {
+    "name": "no-match",
+    "row": {
+      "diagnostics": [],
+      "discovery": {
+        "candidates": [],
+        "diagnostics": [],
+        "status": "no_match"
+      },
+      "game": {
+        "appid": 42,
+        "availability": "installed",
+        "buildid": null,
+        "install_path": "fixture/library/steamapps/common/game",
+        "instance_id": "instance",
+        "kind": "game",
+        "library_path": "fixture/library",
+        "localized_name": null,
+        "name": "Fixture",
+        "name_language": null
+      },
+      "match_status": "matched",
+      "patches": []
+    },
+    "language": null,
+    "entries": [],
+    "matched": false,
+    "attention": false,
+    "summary": "已启用来源中未找到补丁",
+    "filters": {
+      "matched": [],
+      "all": [
+        "instance"
+      ],
+      "installed": [],
+      "attention": []
+    }
+  },
+  {
+    "name": "suppress-fallback-next-to-publisher",
+    "row": {
+      "diagnostics": [],
+      "discovery": {
+        "candidates": [
+          {
+            "aliases": [],
+            "cache_status": "fresh",
+            "candidate_id": "candidate-0123456789abcdef01234567",
+            "capability": "discover_only",
+            "excludes_dlc": null,
+            "fingerprint": "fixture",
+            "format_observed": "unknown",
+            "format_reported": "zip",
+            "game_appid": 42,
+            "game_title": "Fixture",
+            "identity_evidence": [],
+            "languages": [
+              "zh_cn"
+            ],
+            "match_basis": "appid",
+            "mirrors": [],
+            "observed_at": "2026-10-11T00:00:00Z",
+            "parent_appid": null,
+            "patch_kind": "adult_content",
+            "patch_title": "Patch",
+            "patch_updated_at": null,
+            "platforms": [
+              "windows"
+            ],
+            "provenance": [],
+            "published_at": null,
+            "requires_dlc": null,
+            "source_id": "hgamer",
+            "source_page": "https://example.com/game",
+            "source_record_id": "https://example.com/game",
+            "upstream_page": null,
+            "variant": "base",
+            "version_evidence": [],
+            "version_identity": "fixture",
+            "version_raw": null,
+            "warnings": []
+          }
+        ],
+        "diagnostics": [],
+        "status": "publisher_match"
+      },
+      "game": {
+        "appid": 42,
+        "availability": "installed",
+        "buildid": null,
+        "install_path": "fixture/library/steamapps/common/game",
+        "instance_id": "instance",
+        "kind": "game",
+        "library_path": "fixture/library",
+        "localized_name": null,
+        "name": "Fixture",
+        "name_language": null
+      },
+      "match_status": "matched",
+      "patches": []
+    },
+    "language": null,
+    "entries": [],
+    "matched": true,
+    "attention": false,
+    "summary": "找到补丁来源",
+    "filters": {
+      "matched": [
+        "instance"
+      ],
+      "all": [
+        "instance"
+      ],
+      "installed": [],
+      "attention": []
+    }
+  },
+  {
+    "name": "manual-duplicate-and-mirror",
+    "row": {
+      "diagnostics": [],
+      "discovery": {
+        "candidates": [
+          {
+            "aliases": [],
+            "cache_status": "fresh",
+            "candidate_id": "candidate-0123456789abcdef01234567",
+            "capability": "discover_only",
+            "excludes_dlc": null,
+            "fingerprint": "fixture",
+            "format_observed": "unknown",
+            "format_reported": "zip",
+            "game_appid": 42,
+            "game_title": "Fixture",
+            "identity_evidence": [],
+            "languages": [
+              "zh_cn"
+            ],
+            "match_basis": "appid",
+            "mirrors": [],
+            "observed_at": "2026-10-11T00:00:00Z",
+            "parent_appid": null,
+            "patch_kind": "adult_content",
+            "patch_title": "Grouped patch",
+            "patch_updated_at": null,
+            "platforms": [
+              "windows"
+            ],
+            "provenance": [],
+            "published_at": null,
+            "requires_dlc": null,
+            "source_id": "fixture",
+            "source_page": "https://example.com/game",
+            "source_record_id": "https://example.com/game",
+            "upstream_page": null,
+            "variant": "base",
+            "version_evidence": [],
+            "version_identity": "fixture",
+            "version_raw": null,
+            "warnings": []
+          }
+        ],
+        "diagnostics": [],
+        "status": "pending"
+      },
+      "game": {
+        "appid": 42,
+        "availability": "installed",
+        "buildid": null,
+        "install_path": "fixture/library/steamapps/common/game",
+        "instance_id": "instance",
+        "kind": "game",
+        "library_path": "fixture/library",
+        "localized_name": null,
+        "name": "Fixture",
+        "name_language": null
+      },
+      "match_status": "matched",
+      "patches": [
+        {
+          "actions": {
+            "automatic": {
+              "available": true,
+              "blockers": []
+            },
+            "local_archive": {
+              "available": true,
+              "blockers": []
+            },
+            "overwrite": {
+              "available": true,
+              "blockers": []
+            },
+            "primary": {
+              "input": "automatic",
+              "label": "install",
+              "operation": "overwrite"
+            },
+            "reinstall": {
+              "available": false,
+              "blockers": [
+                {
+                  "code": "reinstall_unowned_or_incomplete"
+                }
+              ]
+            }
+          },
+          "blockers": [],
+          "compatibility": "verified",
+          "detection": {
+            "files": [
+              {
+                "actual_sha256": null,
+                "path": "patch.dat",
+                "status": "missing"
+              }
+            ],
+            "status": "not_detected"
+          },
+          "name": "Patch",
+          "release_id": "release",
+          "source_page": "https://example.com/game",
+          "support_level": "managed_zip",
+          "candidate_id": "candidate-0123456789abcdef01234567",
+          "source_id": "fixture",
+          "selection_id": "automatic",
+          "download_url": "https://example.com/patch.exe"
+        },
+        {
+          "actions": {
+            "automatic": {
+              "available": true,
+              "blockers": []
+            },
+            "local_archive": {
+              "available": true,
+              "blockers": []
+            },
+            "overwrite": {
+              "available": true,
+              "blockers": []
+            },
+            "primary": {
+              "input": "automatic",
+              "label": "install",
+              "operation": "overwrite"
+            },
+            "reinstall": {
+              "available": false,
+              "blockers": [
+                {
+                  "code": "reinstall_unowned_or_incomplete"
+                }
+              ]
+            }
+          },
+          "blockers": [],
+          "compatibility": "manual_selection_required",
+          "detection": {
+            "files": [
+              {
+                "actual_sha256": null,
+                "path": "patch.dat",
+                "status": "missing"
+              }
+            ],
+            "status": "not_detected"
+          },
+          "name": "Patch",
+          "release_id": "release",
+          "source_page": "https://example.com/game",
+          "support_level": "managed_zip",
+          "candidate_id": "candidate-0123456789abcdef01234567",
+          "source_id": "fixture",
+          "selection_id": "manual-same-file",
+          "download_url": "https://example.com/patch.exe"
+        },
+        {
+          "actions": {
+            "automatic": {
+              "available": true,
+              "blockers": []
+            },
+            "local_archive": {
+              "available": true,
+              "blockers": []
+            },
+            "overwrite": {
+              "available": true,
+              "blockers": []
+            },
+            "primary": {
+              "input": "automatic",
+              "label": "install",
+              "operation": "overwrite"
+            },
+            "reinstall": {
+              "available": false,
+              "blockers": [
+                {
+                  "code": "reinstall_unowned_or_incomplete"
+                }
+              ]
+            }
+          },
+          "blockers": [],
+          "compatibility": "manual_selection_required",
+          "detection": {
+            "files": [
+              {
+                "actual_sha256": null,
+                "path": "patch.dat",
+                "status": "missing"
+              }
+            ],
+            "status": "not_detected"
+          },
+          "name": "Patch",
+          "release_id": "release",
+          "source_page": "https://example.com/game",
+          "support_level": "managed_zip",
+          "candidate_id": "candidate-0123456789abcdef01234567",
+          "source_id": "fixture",
+          "selection_id": "manual-mirror",
+          "download_url": "https://mirror.example.com/patch.exe"
+        }
+      ]
+    },
+    "language": null,
+    "entries": [
+      {
+        "kind": "installable",
+        "key": "candidate:fixture:candidate-0123456789abcdef01234567",
+        "title": "Grouped patch",
+        "choices": [
+          "automatic",
+          "manual-mirror"
+        ]
+      }
+    ],
+    "matched": true,
+    "attention": false,
+    "summary": "有可用补丁",
+    "filters": {
+      "matched": [
+        "instance"
+      ],
+      "all": [
+        "instance"
+      ],
+      "installed": [],
+      "attention": []
+    }
+  },
+  {
+    "name": "variant-order",
+    "row": {
+      "diagnostics": [],
+      "discovery": {
+        "candidates": [
+          {
+            "aliases": [],
+            "cache_status": "fresh",
+            "candidate_id": "candidate-0",
+            "capability": "discover_only",
+            "excludes_dlc": null,
+            "fingerprint": "fixture",
+            "format_observed": "unknown",
+            "format_reported": "zip",
+            "game_appid": 42,
+            "game_title": "Fixture",
+            "identity_evidence": [],
+            "languages": [
+              "zh_cn"
+            ],
+            "match_basis": "appid",
+            "mirrors": [],
+            "observed_at": "2026-10-11T00:00:00Z",
+            "parent_appid": null,
+            "patch_kind": "adult_content",
+            "patch_title": "Patch",
+            "patch_updated_at": null,
+            "platforms": [
+              "windows"
+            ],
+            "provenance": [],
+            "published_at": null,
+            "requires_dlc": null,
+            "source_id": "fixture",
+            "source_page": "https://example.com/game",
+            "source_record_id": "https://example.com/game",
+            "upstream_page": null,
+            "variant": "dlc",
+            "version_evidence": [],
+            "version_identity": "fixture",
+            "version_raw": null,
+            "warnings": []
+          },
+          {
+            "aliases": [],
+            "cache_status": "fresh",
+            "candidate_id": "candidate-1",
+            "capability": "discover_only",
+            "excludes_dlc": null,
+            "fingerprint": "fixture",
+            "format_observed": "unknown",
+            "format_reported": "zip",
+            "game_appid": 42,
+            "game_title": "Fixture",
+            "identity_evidence": [],
+            "languages": [
+              "zh_cn"
+            ],
+            "match_basis": "appid",
+            "mirrors": [],
+            "observed_at": "2026-10-11T00:00:00Z",
+            "parent_appid": null,
+            "patch_kind": "adult_content",
+            "patch_title": "Patch",
+            "patch_updated_at": null,
+            "platforms": [
+              "windows"
+            ],
+            "provenance": [],
+            "published_at": null,
+            "requires_dlc": null,
+            "source_id": "fixture",
+            "source_page": "https://example.com/game",
+            "source_record_id": "https://example.com/game",
+            "upstream_page": null,
+            "variant": "unknown",
+            "version_evidence": [],
+            "version_identity": "fixture",
+            "version_raw": null,
+            "warnings": []
+          },
+          {
+            "aliases": [],
+            "cache_status": "fresh",
+            "candidate_id": "candidate-2",
+            "capability": "discover_only",
+            "excludes_dlc": null,
+            "fingerprint": "fixture",
+            "format_observed": "unknown",
+            "format_reported": "zip",
+            "game_appid": 42,
+            "game_title": "Fixture",
+            "identity_evidence": [],
+            "languages": [
+              "zh_cn"
+            ],
+            "match_basis": "appid",
+            "mirrors": [],
+            "observed_at": "2026-10-11T00:00:00Z",
+            "parent_appid": null,
+            "patch_kind": "adult_content",
+            "patch_title": "Patch",
+            "patch_updated_at": null,
+            "platforms": [
+              "windows"
+            ],
+            "provenance": [],
+            "published_at": null,
+            "requires_dlc": null,
+            "source_id": "fixture",
+            "source_page": "https://example.com/game",
+            "source_record_id": "https://example.com/game",
+            "upstream_page": null,
+            "variant": "base",
+            "version_evidence": [],
+            "version_identity": "fixture",
+            "version_raw": null,
+            "warnings": []
+          }
+        ],
+        "diagnostics": [],
+        "status": "pending"
+      },
+      "game": {
+        "appid": 42,
+        "availability": "installed",
+        "buildid": null,
+        "install_path": "fixture/library/steamapps/common/game",
+        "instance_id": "instance",
+        "kind": "game",
+        "library_path": "fixture/library",
+        "localized_name": null,
+        "name": "Fixture",
+        "name_language": null
+      },
+      "match_status": "matched",
+      "patches": [
+        {
+          "actions": {
+            "automatic": {
+              "available": true,
+              "blockers": []
+            },
+            "local_archive": {
+              "available": true,
+              "blockers": []
+            },
+            "overwrite": {
+              "available": true,
+              "blockers": []
+            },
+            "primary": {
+              "input": "automatic",
+              "label": "install",
+              "operation": "overwrite"
+            },
+            "reinstall": {
+              "available": false,
+              "blockers": [
+                {
+                  "code": "reinstall_unowned_or_incomplete"
+                }
+              ]
+            }
+          },
+          "blockers": [],
+          "compatibility": "verified",
+          "detection": {
+            "files": [
+              {
+                "actual_sha256": null,
+                "path": "patch.dat",
+                "status": "missing"
+              }
+            ],
+            "status": "not_detected"
+          },
+          "name": "Patch",
+          "release_id": "release",
+          "source_page": "https://example.com/game",
+          "support_level": "managed_zip",
+          "selection_id": "selection-dlc",
+          "candidate_id": "candidate-0"
+        },
+        {
+          "actions": {
+            "automatic": {
+              "available": true,
+              "blockers": []
+            },
+            "local_archive": {
+              "available": true,
+              "blockers": []
+            },
+            "overwrite": {
+              "available": true,
+              "blockers": []
+            },
+            "primary": {
+              "input": "automatic",
+              "label": "install",
+              "operation": "overwrite"
+            },
+            "reinstall": {
+              "available": false,
+              "blockers": [
+                {
+                  "code": "reinstall_unowned_or_incomplete"
+                }
+              ]
+            }
+          },
+          "blockers": [],
+          "compatibility": "verified",
+          "detection": {
+            "files": [
+              {
+                "actual_sha256": null,
+                "path": "patch.dat",
+                "status": "missing"
+              }
+            ],
+            "status": "not_detected"
+          },
+          "name": "Patch",
+          "release_id": "release",
+          "source_page": "https://example.com/game",
+          "support_level": "managed_zip",
+          "selection_id": "selection-unknown",
+          "candidate_id": "candidate-1"
+        },
+        {
+          "actions": {
+            "automatic": {
+              "available": true,
+              "blockers": []
+            },
+            "local_archive": {
+              "available": true,
+              "blockers": []
+            },
+            "overwrite": {
+              "available": true,
+              "blockers": []
+            },
+            "primary": {
+              "input": "automatic",
+              "label": "install",
+              "operation": "overwrite"
+            },
+            "reinstall": {
+              "available": false,
+              "blockers": [
+                {
+                  "code": "reinstall_unowned_or_incomplete"
+                }
+              ]
+            }
+          },
+          "blockers": [],
+          "compatibility": "verified",
+          "detection": {
+            "files": [
+              {
+                "actual_sha256": null,
+                "path": "patch.dat",
+                "status": "missing"
+              }
+            ],
+            "status": "not_detected"
+          },
+          "name": "Patch",
+          "release_id": "release",
+          "source_page": "https://example.com/game",
+          "support_level": "managed_zip",
+          "selection_id": "selection-base",
+          "candidate_id": "candidate-2"
+        }
+      ]
+    },
+    "language": null,
+    "entries": [
+      {
+        "kind": "installable",
+        "key": "candidate::candidate-2",
+        "title": "Patch",
+        "choices": [
+          "selection-base"
+        ]
+      },
+      {
+        "kind": "installable",
+        "key": "candidate::candidate-1",
+        "title": "Patch",
+        "choices": [
+          "selection-unknown"
+        ]
+      },
+      {
+        "kind": "installable",
+        "key": "candidate::candidate-0",
+        "title": "Patch",
+        "choices": [
+          "selection-dlc"
+        ]
+      }
+    ],
+    "matched": true,
+    "attention": false,
+    "summary": "有可用补丁",
+    "filters": {
+      "matched": [
+        "instance"
+      ],
+      "all": [
+        "instance"
+      ],
+      "installed": [],
+      "attention": []
+    }
+  },
+  {
+    "name": "language-preference",
+    "row": {
+      "diagnostics": [],
+      "discovery": {
+        "candidates": [
+          {
+            "aliases": [],
+            "cache_status": "fresh",
+            "candidate_id": "english",
+            "capability": "discover_only",
+            "excludes_dlc": null,
+            "fingerprint": "fixture",
+            "format_observed": "unknown",
+            "format_reported": "zip",
+            "game_appid": 42,
+            "game_title": "Fixture",
+            "identity_evidence": [],
+            "languages": [
+              "en"
+            ],
+            "match_basis": "appid",
+            "mirrors": [],
+            "observed_at": "2026-10-11T00:00:00Z",
+            "parent_appid": null,
+            "patch_kind": "adult_content",
+            "patch_title": "Patch",
+            "patch_updated_at": null,
+            "platforms": [
+              "windows"
+            ],
+            "provenance": [],
+            "published_at": null,
+            "requires_dlc": null,
+            "source_id": "fixture",
+            "source_page": "https://example.com/game",
+            "source_record_id": "https://example.com/game",
+            "upstream_page": null,
+            "variant": "base",
+            "version_evidence": [],
+            "version_identity": "fixture",
+            "version_raw": null,
+            "warnings": []
+          },
+          {
+            "aliases": [],
+            "cache_status": "fresh",
+            "candidate_id": "chinese",
+            "capability": "discover_only",
+            "excludes_dlc": null,
+            "fingerprint": "fixture",
+            "format_observed": "unknown",
+            "format_reported": "zip",
+            "game_appid": 42,
+            "game_title": "Fixture",
+            "identity_evidence": [],
+            "languages": [
+              "zh-CN"
+            ],
+            "match_basis": "appid",
+            "mirrors": [],
+            "observed_at": "2026-10-11T00:00:00Z",
+            "parent_appid": null,
+            "patch_kind": "adult_content",
+            "patch_title": "Patch",
+            "patch_updated_at": null,
+            "platforms": [
+              "windows"
+            ],
+            "provenance": [],
+            "published_at": null,
+            "requires_dlc": null,
+            "source_id": "fixture",
+            "source_page": "https://example.com/game",
+            "source_record_id": "https://example.com/game",
+            "upstream_page": null,
+            "variant": "base",
+            "version_evidence": [],
+            "version_identity": "fixture",
+            "version_raw": null,
+            "warnings": []
+          },
+          {
+            "aliases": [],
+            "cache_status": "fresh",
+            "candidate_id": "fallback",
+            "capability": "discover_only",
+            "excludes_dlc": null,
+            "fingerprint": "fixture",
+            "format_observed": "unknown",
+            "format_reported": "zip",
+            "game_appid": 42,
+            "game_title": "Fixture",
+            "identity_evidence": [],
+            "languages": [
+              "zh-CN"
+            ],
+            "match_basis": "appid",
+            "mirrors": [],
+            "observed_at": "2026-10-11T00:00:00Z",
+            "parent_appid": null,
+            "patch_kind": "adult_content",
+            "patch_title": "Patch",
+            "patch_updated_at": null,
+            "platforms": [
+              "windows"
+            ],
+            "provenance": [],
+            "published_at": null,
+            "requires_dlc": null,
+            "source_id": "hgamer",
+            "source_page": "https://example.com/game",
+            "source_record_id": "https://example.com/game",
+            "upstream_page": null,
+            "variant": "base",
+            "version_evidence": [],
+            "version_identity": "fixture",
+            "version_raw": null,
+            "warnings": []
+          }
+        ],
+        "diagnostics": [],
+        "status": "pending"
+      },
+      "game": {
+        "appid": 42,
+        "availability": "installed",
+        "buildid": null,
+        "install_path": "fixture/library/steamapps/common/game",
+        "instance_id": "instance",
+        "kind": "game",
+        "library_path": "fixture/library",
+        "localized_name": null,
+        "name": "Fixture",
+        "name_language": null
+      },
+      "match_status": "matched",
+      "patches": []
+    },
+    "language": "zh-CN",
+    "entries": [
+      {
+        "kind": "discovery",
+        "key": "chinese",
+        "title": "Patch",
+        "choices": []
+      },
+      {
+        "kind": "discovery",
+        "key": "english",
+        "title": "Patch",
+        "choices": []
+      },
+      {
+        "kind": "discovery",
+        "key": "fallback",
+        "title": "Patch",
+        "choices": []
+      }
+    ],
+    "matched": true,
+    "attention": false,
+    "summary": "找到补丁来源",
+    "filters": {
+      "matched": [
+        "instance"
+      ],
+      "all": [
+        "instance"
+      ],
+      "installed": [],
+      "attention": []
+    }
+  }
+]

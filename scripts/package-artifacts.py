@@ -87,13 +87,11 @@ def main():
     parser.add_argument('--platform', choices=['all', 'windows', 'decky'], default='all')
     platform = parser.parse_args().platform
     OUTPUT.mkdir(exist_ok=True)
-    windows = [(ROOT / 'target/release/steam-patch-windows.exe', 'steam-patch-windows.exe', True),
-               (ROOT / 'target/release/steam-patch.exe', 'steam-patch.exe', True),
-               (ROOT / 'target/release/sf-worker.exe', 'sf-worker.exe', True)]
-    for name in ['catalog.json', 'signed-catalog.json', 'trust-keys.json']:
-        windows.append((ROOT / 'catalog' / name, 'resources/' + name, False))
-    windows.append((ROOT / 'docs/client-guide.md', 'client-guide.md', False))
-    windows.append((ROOT / 'docs/privacy.md', 'privacy.md', False))
+    bundle = ROOT / 'apps/windows-flutter/build/windows/x64/runner/Release'
+    windows = [(path, path.relative_to(bundle).as_posix(), path.suffix == '.exe')
+               for path in sorted(bundle.rglob('*')) if path.is_file() and path.relative_to(bundle).as_posix() not in ('client-guide.md', 'privacy.md', 'LICENSE', 'licenses/sfextract-MIT.txt', 'dependencies.cdx.json')]
+    for name in ('client-guide.md', 'privacy.md'):
+        windows.append((ROOT / 'docs' / name, name, False))
     for source, packaged, _ in INSTALLER_FILES:
         if packaged:
             windows.append((ROOT / source, packaged, False))
@@ -114,6 +112,23 @@ def main():
         decky.append((sbom, 'steam-patch-manager/' + sbom.name, False))
     selected = []
     if platform in ('all', 'windows'):
+        for name in ('steam_patch_windows.exe', 'steam-patch.exe', 'sf-worker.exe',
+                     'flutter_windows.dll', 'msvcp140.dll', 'vcruntime140.dll', 'vcruntime140_1.dll', 'file_selector_windows_plugin.dll',
+                     'url_launcher_windows_plugin.dll', 'window_manager_plugin.dll',
+                     'screen_retriever_windows_plugin.dll', 'data/icudtl.dat', 'data/app.so',
+                     'data/flutter_assets/AssetManifest.bin', 'data/flutter_assets/NOTICES.Z',
+                     'data/flutter_assets/assets/protocol-v5.schema.json',
+                     'resources/catalog.json', 'resources/signed-catalog.json', 'resources/trust-keys.json',
+                     'resources/licenses/Flutter-LICENSE', 'resources/licenses/Dart-LICENSE'):
+            if not (bundle / name).is_file():
+                raise FileNotFoundError(f'Missing Flutter runtime input: {name}')
+        if ((bundle / 'data/flutter_assets/assets/protocol-v5.schema.json').read_bytes()
+                != (ROOT / 'packages/contracts/generated/v5.schema.json').read_bytes()):
+            raise ValueError('Rebuild Flutter: generated contract mismatch')
+        inventory = json.loads(sbom.read_text(encoding='utf-8'))
+        properties = {p['name']: p['value'] for p in inventory['metadata']['properties']}
+        if properties.get('steam-patch:dart-lock-sha256') != hashlib.sha256((ROOT / 'apps/windows-flutter/pubspec.lock').read_bytes()).hexdigest():
+            raise ValueError('Regenerate SBOM with current Flutter dependencies before packaging')
         selected.append(('steam-patch-manager-windows-portable.zip', windows))
     if platform in ('all', 'decky'):
         selected.append(('steam-patch-manager-decky.zip', decky))

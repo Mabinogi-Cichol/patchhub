@@ -1,11 +1,14 @@
 {
   "name": "steam-patch-clients",
   "private": true,
-  "workspaces": ["apps/windows", "apps/decky", "packages/ui"],
+  "workspaces": [
+    "apps/decky",
+    "packages/ui"
+  ],
   "scripts": {
-    "build:windows": "npm run build -w apps/windows",
+    "build:windows": "pwsh -NoProfile -File scripts/build-windows-flutter.ps1",
     "build:decky": "npm run build -w apps/decky",
-    "test:contracts": "node scripts/test-ui-contract.mjs",
-    "typecheck": "npm run typecheck -w apps/windows && npm run typecheck -w apps/decky"
+    "test:contracts": "node scripts/test-ui-contract.mjs && node scripts/test-flutter-presentation.mjs --check",
+    "typecheck": "npm run typecheck -w apps/decky"
   }
 }

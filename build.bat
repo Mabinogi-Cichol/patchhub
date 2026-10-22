@@ -20,7 +20,7 @@ set "RESULT=2"
 goto finish
 
 :help
-echo Builds the Windows CLI, Tauri NSIS installer, portable ZIP, SBOM, and checksums.
+echo Builds the Windows CLI, Flutter NSIS installer, portable ZIP, SBOM, and checksums.
 echo Run build.bat by double-clicking, or use --no-pause for automation.
 set "RESULT=0"
 goto finish
@@ -85,14 +85,14 @@ set "STEP=npm run typecheck"
 call npm run typecheck
 if errorlevel 1 goto build_failed
 
-echo [3/6] Building the Windows CLI sidecar with Cargo.lock...
+echo [3/6] Building the Windows CLI and worker with Cargo.lock...
 set "STEP=cargo build --release -p steam-patch-cli --locked"
-call cargo build --release -p steam-patch-cli --locked
+call cargo build --release --locked -p steam-patch-cli -p steam-patch-installer-worker --bin steam-patch --bin sf-worker
 if errorlevel 1 goto build_failed
 
-echo [4/6] Building the Tauri application and NSIS installer...
-set "STEP=npm run bundle -w apps/windows -- -- --locked"
-call npm run bundle -w apps/windows -- -- --locked
+echo [4/6] Checking and building the Flutter application...
+set "STEP=Flutter release build"
+call pwsh -NoProfile -File scripts/build-windows-flutter.ps1 -SkipRust
 if errorlevel 1 goto build_failed
 
 echo [5/6] Generating the dependency SBOM...
@@ -105,7 +105,7 @@ set "STEP=cargo metadata --locked"
 call cargo metadata --locked --format-version 1 > ".artifacts\cargo-metadata.json"
 if errorlevel 1 goto build_failed
 set "STEP=scripts/build-sbom.py"
-call %PYTHON% "scripts\build-sbom.py" ".artifacts\cargo-metadata.json"
+call %PYTHON% "scripts\build-sbom.py" ".artifacts\cargo-metadata.json" --flutter-deps ".artifacts\windows-flutter\pub-deps.json" --flutter-version ".artifacts\windows-flutter\flutter-version.json"
 if errorlevel 1 goto build_failed
 
 echo [6/6] Packaging the portable Windows ZIP and checksums...
@@ -113,8 +113,12 @@ set "STEP=scripts/package-artifacts.py --platform windows"
 call %PYTHON% "scripts\package-artifacts.py" --platform windows
 if errorlevel 1 goto build_failed
 
+set "STEP=NSIS installer"
+call pwsh -NoProfile -File scripts/build-windows-installer.ps1
+if errorlevel 1 goto build_failed
+
 echo.
-echo Build complete. Release files are in .artifacts and the Tauri bundle directory.
+echo Build complete. Release files are in .artifacts.
 set "RESULT=0"
 goto finish
 

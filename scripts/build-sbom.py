@@ -3,6 +3,7 @@
 Run cargo metadata --locked --format-version 1 into a local JSON file first.
 Includes build/development and target-specific dependencies; not a reachability audit.
 """
+import argparse
 import base64
 import hashlib
 import json
@@ -12,7 +13,12 @@ import tomllib
 from urllib.parse import quote
 
 root = Path(__file__).resolve().parents[1]
-metadata = json.loads(Path(sys.argv[1]).read_text(encoding='utf-8-sig'))
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument('metadata')
+parser.add_argument('--flutter-deps')
+parser.add_argument('--flutter-version')
+args = parser.parse_args()
+metadata = json.loads(Path(args.metadata).read_text(encoding='utf-8-sig'))
 cargo_lock = tomllib.loads((root / 'Cargo.lock').read_text(encoding='utf-8'))
 checksums = {(p['name'], p['version'], p.get('source')): p.get('checksum')
              for p in cargo_lock['package']}
@@ -50,6 +56,11 @@ for location, package in lock['packages'].items():
         value['hashes'] = [{'alg': 'SHA-512', 'content': base64.b64decode(integrity[7:]).hex()}]
 
 
+if args.flutter_deps:
+    from flutter_sbom import flutter_components
+    for item in flutter_components(root, args.flutter_deps, args.flutter_version):
+        components[item['bom-ref']] = item
+
 # The Python oracle remains developer-only; disclose the shipped Rust engine.
 rust_installer = component('generic', 'steam-patch-rust-installer', '1', 'MIT')
 rust_installer['properties'] = [
@@ -72,13 +83,16 @@ for source, destination, prefix in (
 
 output = root / '.artifacts/dependencies.cdx.json'
 output.parent.mkdir(exist_ok=True)
+extra_properties = []
+if args.flutter_deps:
+    extra_properties.append({'name': 'steam-patch:dart-lock-sha256', 'value': hashlib.sha256((root / 'apps/windows-flutter/pubspec.lock').read_bytes()).hexdigest()})
 output.write_text(json.dumps({
     'bomFormat': 'CycloneDX', 'specVersion': '1.6', 'version': 1,
     'metadata': {'component': {'type': 'application', 'name': 'Steam Hentai Patch', 'version': '0.2.1'},
                  'properties': [{'name': 'steam-patch:inventory-scope',
-                                 'value': 'All resolved Rust and locked npm dependencies, including build, development and target-specific packages, plus the bundled Rust installer and its reference license; no reachability analysis.'},
+                                 'value': 'All resolved Rust and locked npm dependencies, including build, development and target-specific packages, plus the bundled Rust installer and its reference license; Flutter/Dart when requested; no reachability analysis.'},
                                 {'name': 'steam-patch:cargo-lock-sha256', 'value': hashlib.sha256((root / 'Cargo.lock').read_bytes()).hexdigest()},
-                                {'name': 'steam-patch:npm-lock-sha256', 'value': hashlib.sha256((root / 'package-lock.json').read_bytes()).hexdigest()}]},
+                                {'name': 'steam-patch:npm-lock-sha256', 'value': hashlib.sha256((root / 'package-lock.json').read_bytes()).hexdigest()}] + extra_properties},
     'components': sorted(components.values(), key=lambda item: item['bom-ref'])
 }, indent=2) + '\n', encoding='utf-8')
 missing = [item['purl'] for item in components.values() if 'licenses' not in item]
