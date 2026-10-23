@@ -15,14 +15,14 @@ void main() {
         .setMockMethodCallHandler(channel, null),
   );
 
-  test('minimize leaves task running, close waits for cancellation before native destroy', () async {
+  test('minimize leaves task running, close waits for cancellation before native close', () async {
     final gate = Completer<void>();
     final host = AppTasks(ProcessFixtureClient('cancel_wait', gate: gate));
     final task = host.startInstall({});
     final destroyed = Completer<void>();
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(channel, (call) async {
-          if (call.method == 'destroy') {
+          if (call.method == 'close') {
             expect(task.running, isFalse);
             destroyed.complete();
           }
@@ -55,7 +55,7 @@ void main() {
         var destroyed = false;
         TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
             .setMockMethodCallHandler(channel, (call) async {
-              if (call.method == 'destroy') destroyed = true;
+              if (call.method == 'close') destroyed = true;
               return null;
             });
         final lifecycle = AppLifecycle(tasks: host);

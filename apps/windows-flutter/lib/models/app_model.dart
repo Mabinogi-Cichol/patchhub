@@ -99,6 +99,7 @@ class AppModel extends ChangeNotifier {
     notifyListeners();
     try {
       final value = await client.call('scan') as Map<String, dynamic>;
+      if (tasks.closing) return false;
       snapshot = ScanSnapshot(value);
       stateRefreshError = null;
       settingsRevision = value['settings_revision'] as int?;

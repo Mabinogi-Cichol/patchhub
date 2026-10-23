@@ -94,7 +94,10 @@ class CoreTask {
   }
 
   bool _allowed(String event) => switch (method) {
-    'install_patch' => event == 'install_progress',
+    'install_patch' ||
+    'scan' ||
+    'project_instances' ||
+    'preview' => event == 'install_progress',
     'update_source' => [
       'source_progress',
       'source_update',

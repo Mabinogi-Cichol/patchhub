@@ -59,7 +59,10 @@ class AppTasks extends ChangeNotifier {
     closing = true;
     notifyListeners();
     final tasks = active.toList();
-    await Future.wait(tasks.map((task) => task.cancel()));
+    await Future.wait([
+      client.cancelReads(),
+      ...tasks.map((task) => task.cancel()),
+    ]);
     await Future.wait(tasks.map((task) => task.done));
     await client.waitForIdle();
     return [
@@ -81,6 +84,7 @@ class AppTasks extends ChangeNotifier {
   }
 
   void resume() {
+    client.resume();
     closing = false;
     notifyListeners();
   }

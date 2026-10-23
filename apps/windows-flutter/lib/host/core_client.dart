@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'core_paths.dart';
+import 'core_task.dart';
 import 'protocol_models.dart';
 export 'protocol_models.dart';
 
@@ -13,6 +14,15 @@ class CoreClient {
   Future<Process> startProcess(String channel) =>
       Process.start(paths.binary, [channel]);
   final _calls = <Future<void>>{};
+  final _reads = <CoreTask>{};
+  bool _closing = false;
+
+  Future<void> cancelReads() async {
+    _closing = true;
+    await Future.wait(_reads.toList().map((task) => task.cancel()));
+  }
+
+  void resume() => _closing = false;
   Future<T> _tracked<T>(Future<T> Function() action) async {
     final done = Completer<void>();
     _calls.add(done.future);
@@ -36,6 +46,20 @@ class CoreClient {
 
   Future<Object?> call(String method, [Map<String, Object?> args = const {}]) =>
       _tracked(() async {
+        if (_closing) throw const CoreError('app_closing');
+        if (['scan', 'project_instances', 'preview'].contains(method)) {
+          // Reuse the existing task channel: these reads may hash large files.
+          final task = CoreTask.start(this, method, args);
+          _reads.add(task);
+          try {
+            await task.done;
+            if (task.error != null) throw task.error!;
+            if (task.cancelRequested) throw const CoreError('task_cancelled');
+            return task.result;
+          } finally {
+            _reads.remove(task);
+          }
+        }
         if (method != 'get_capabilities') await capabilities();
         return _invoke(method, args);
       });

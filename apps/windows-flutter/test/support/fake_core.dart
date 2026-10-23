@@ -23,12 +23,13 @@ Future<void> main(List<String> args) async {
     'request_id': id,
   };
   if (channel == 'serve') {
-    stdout.writeln(jsonEncode(response('get_capabilities-success')));
+    stdout.writeln(jsonEncode(response('$method-success')));
     await stdout.flush();
     exit(0);
   }
   if (scenario == 'missing') exit(0);
-  final eventName = method == 'install_patch'
+  final eventName =
+      ['install_patch', 'scan', 'project_instances', 'preview'].contains(method)
       ? 'install_progress'
       : 'match_progress';
   final event = {
