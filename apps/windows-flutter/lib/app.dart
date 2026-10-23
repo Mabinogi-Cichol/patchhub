@@ -23,13 +23,119 @@ class _SteamPatchAppState extends State<SteamPatchApp> {
     setState(() => themeMode = mode);
   }
 
-  ThemeData theme(Brightness brightness) => ThemeData(
-    useMaterial3: true,
-    colorScheme: ColorScheme.fromSeed(
-      seedColor: const Color(0xff42685e),
-      brightness: brightness,
-    ),
-  );
+  ThemeData theme(Brightness brightness) {
+    final dark = brightness == Brightness.dark;
+    final accent = dark ? const Color(0xff78a9ff) : const Color(0xff245dd8);
+    final scheme =
+        ColorScheme.fromSeed(
+          seedColor: const Color(0xff3b75ee),
+          brightness: brightness,
+        ).copyWith(
+          primary: dark ? const Color(0xff346be0) : const Color(0xff245dd8),
+          onPrimary: Colors.white,
+          primaryContainer: dark
+              ? const Color(0xff1c3557)
+              : const Color(0xffe3edff),
+          onPrimaryContainer: dark
+              ? const Color(0xffb9d3ff)
+              : const Color(0xff18489f),
+          secondary: accent,
+          onSecondary: dark ? const Color(0xff102a51) : Colors.white,
+          secondaryContainer: dark
+              ? const Color(0xff182230)
+              : const Color(0xffeaf0f6),
+          onSecondaryContainer: dark
+              ? const Color(0xffeeeeee)
+              : const Color(0xff202020),
+          tertiary: accent,
+          surface: dark ? const Color(0xff111923) : Colors.white,
+          surfaceContainer: dark
+              ? const Color(0xff182230)
+              : const Color(0xffeaf0f6),
+          onSurface: dark ? const Color(0xfff3f6fa) : const Color(0xff172333),
+          onSurfaceVariant: dark
+              ? const Color(0xffa9b7c9)
+              : const Color(0xff526176),
+          outline: dark ? const Color(0xff43546b) : const Color(0xff8695aa),
+          outlineVariant: dark
+              ? const Color(0xff293647)
+              : const Color(0xffd5dee9),
+          surfaceTint: Colors.transparent,
+        );
+    return ThemeData(
+      useMaterial3: true,
+      colorScheme: scheme,
+      scaffoldBackgroundColor: dark
+          ? const Color(0xff0c1118)
+          : const Color(0xfff3f5f8),
+      fontFamily: 'Segoe UI',
+      fontFamilyFallback: const ['Microsoft YaHei UI', 'Microsoft YaHei'],
+      appBarTheme: AppBarTheme(
+        backgroundColor: scheme.surface,
+        foregroundColor: scheme.onSurface,
+        surfaceTintColor: Colors.transparent,
+        elevation: 0,
+      ),
+      cardTheme: CardThemeData(
+        color: scheme.surface,
+        surfaceTintColor: Colors.transparent,
+        elevation: 0,
+        margin: const EdgeInsets.only(bottom: 16),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+          side: BorderSide(color: scheme.outlineVariant),
+        ),
+      ),
+      inputDecorationTheme: InputDecorationTheme(
+        filled: true,
+        fillColor: scheme.surfaceContainer,
+        isDense: true,
+        contentPadding: const EdgeInsets.symmetric(
+          horizontal: 14,
+          vertical: 14,
+        ),
+        border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(10),
+          borderSide: BorderSide(color: scheme.outlineVariant),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(10),
+          borderSide: BorderSide(color: accent, width: 2),
+        ),
+      ),
+      filledButtonTheme: FilledButtonThemeData(
+        style: FilledButton.styleFrom(
+          minimumSize: const Size(0, 44),
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(10),
+          ),
+        ),
+      ),
+      outlinedButtonTheme: OutlinedButtonThemeData(
+        style: OutlinedButton.styleFrom(
+          foregroundColor: scheme.onSurface,
+          minimumSize: const Size(0, 40),
+          side: BorderSide(color: scheme.outline),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(10),
+          ),
+        ),
+      ),
+      dividerColor: scheme.outlineVariant,
+      focusColor: accent.withValues(alpha: 0.16),
+      textButtonTheme: TextButtonThemeData(
+        style: TextButton.styleFrom(foregroundColor: accent),
+      ),
+      progressIndicatorTheme: ProgressIndicatorThemeData(color: accent),
+      textSelectionTheme: TextSelectionThemeData(
+        cursorColor: accent,
+        selectionColor: accent.withValues(alpha: 0.25),
+        selectionHandleColor: accent,
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) => MaterialApp(
