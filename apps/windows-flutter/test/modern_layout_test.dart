@@ -61,6 +61,23 @@ void main() {
             await tester.pumpAndSettle();
             expect(find.text('打开游戏目录').hitTestable(), findsOneWidget);
             expect(find.text('安装补丁').hitTestable(), findsOneWidget);
+            final footer = tester.getRect(
+              find.byKey(const ValueKey('patch-floating-actions')),
+            );
+            final page = tester.getRect(find.byType(LibraryPage));
+            expect(page.right - footer.right, greaterThanOrEqualTo(16));
+            expect(page.bottom - footer.bottom, greaterThanOrEqualTo(16));
+            final status = find.byKey(const ValueKey('patch-status-panel'));
+            await tester.ensureVisible(find.text('补丁状态'));
+            await tester.pumpAndSettle();
+            expect(
+              find.descendant(of: status, matching: find.text('可安装补丁')),
+              findsOneWidget,
+            );
+            expect(
+              find.descendant(of: status, matching: find.text('游戏信息')),
+              findsOneWidget,
+            );
             expect(tester.takeException(), isNull);
             // Scroll the information without moving the persistent action bar.
             final actionPosition = tester.getTopLeft(find.text('安装补丁'));

@@ -16,6 +16,50 @@ class DirectoryDesktop extends FixtureDesktop {
 }
 
 void main() {
+  for (final scenario in [
+    'installed',
+    'confirmation',
+    'archive',
+    'blocked',
+    'installed_blocked',
+  ]) {
+    testWidgets('patch summary follows real action conditions: $scenario', (
+      tester,
+    ) async {
+      final model = InstallFixtureModel('success');
+      final patch = model.snapshot!.rows.single.patches.single;
+      final expected = switch (scenario) {
+        'installed' => '已安装补丁',
+        'confirmation' => '待确认适用条件',
+        'archive' => '需要本地 ZIP',
+        _ => '暂不可安装',
+      };
+      switch (scenario) {
+        case 'installed':
+          patch['detection']['status'] = 'installed_managed';
+        case 'confirmation':
+          patch['compatibility'] = 'manual_selection_required';
+        case 'archive':
+          patch['actions']['primary']['input'] = 'local_archive';
+        case 'blocked':
+          patch['actions']['automatic']['available'] = false;
+        case 'installed_blocked':
+          patch['detection']['status'] = 'installed_managed';
+          patch['actions']['automatic']['available'] = false;
+      }
+      await mountPatch(tester, model, FixtureDesktop());
+      final panel = find.byKey(const ValueKey('patch-status-panel'));
+      expect(
+        find.descendant(of: panel, matching: find.text(expected)),
+        findsOneWidget,
+      );
+      final button = tester.widget<FilledButton>(find.byType(FilledButton));
+      expect(button.onPressed != null, scenario == 'installed');
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+      model.dispose();
+    });
+  }
   testWidgets(
     'directory action uses the selected instance and explains failure without installing',
     (tester) async {

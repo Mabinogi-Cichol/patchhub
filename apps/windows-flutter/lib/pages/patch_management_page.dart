@@ -203,12 +203,48 @@ class _PatchManagementPageState extends State<PatchManagementPage> {
         widget.model.tasks.installation?.running == true ||
         widget.model.scanning ||
         widget.model.tasks.closing;
+    final technicalDetails = patch == null
+        ? null
+        : ExpansionTile(
+            title: const Text('文件与技术详情'),
+            leading: const Icon(Icons.description_outlined),
+            subtitle: const Text('补丁文件、版本依据与变更预览'),
+            children: [
+              SelectableText(
+                '发行标识：${patch['release_id']}\n选择标识：${patch['selection_id'] ?? '无'}\n下载地址：${patch['download_url'] ?? '无'}',
+              ),
+              if (candidate != null)
+                SelectableText(
+                  '身份依据：${candidate['match_basis']}\n版本依据：${(candidate['version_evidence'] as List).join('、')}',
+                ),
+              OutlinedButton(
+                onPressed: reading || busy ? null : readPreview,
+                child: Text(reading ? '正在读取变更' : '查看文件变更（可选，只读）'),
+              ),
+              if (preview != null) ...[
+                for (final blocker in preview!['blockers'] as List)
+                  SelectableText(statusLabel(blocker)),
+                for (final change in preview!['changes'] as List)
+                  ListTile(
+                    title: SelectableText(change['path'] as String),
+                    subtitle: Text('${change['action']}'),
+                  ),
+                for (final diagnostic in preview!['diagnostics'] as List)
+                  SelectableText('${diagnostic['message']}'),
+              ],
+            ],
+          );
+    final fieldTitleStyle = Theme.of(context).textTheme.labelLarge?.copyWith(
+      color: Theme.of(context).colorScheme.onSurfaceVariant,
+      fontWeight: FontWeight.w600,
+    );
     final details = <Widget>[
-      if (patch != null && installables.length > 1)
+      if (patch != null && installables.length > 1) ...[
+        Text('补丁选择', style: fieldTitleStyle),
         DropdownButtonFormField<String>(
           initialValue: widget.entry.key,
           isExpanded: true,
-          decoration: const InputDecoration(labelText: '补丁'),
+          decoration: const InputDecoration(),
           items: [
             for (final entry in installables)
               DropdownMenuItem(value: entry.key, child: Text(entry.title)),
@@ -217,11 +253,14 @@ class _PatchManagementPageState extends State<PatchManagementPage> {
             if (value != null) widget.onEntry(value);
           },
         ),
-      SelectableText(
-        widget.entry.title,
-        style: Theme.of(context).textTheme.titleLarge
-            ?.copyWith(fontWeight: FontWeight.w700),
-      ),
+        const SizedBox(height: 4),
+      ],
+      if (patch == null || installables.length <= 1)
+        SelectableText(
+          widget.entry.title,
+          style: Theme.of(context).textTheme.titleLarge
+              ?.copyWith(fontWeight: FontWeight.w700),
+        ),
       Wrap(
         spacing: 12,
         runSpacing: 4,
@@ -246,9 +285,14 @@ class _PatchManagementPageState extends State<PatchManagementPage> {
       if (patch != null) ...[
         Text('当前状态：${statusLabel(patch['detection']['status'])}'),
         Text('适用性：${statusLabel(patch['compatibility'])}'),
+        if (widget.entry.choices.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: Text('下载项 / 镜像', style: fieldTitleStyle),
+          ),
         if (widget.entry.choices.length == 1)
           InputDecorator(
-            decoration: const InputDecoration(labelText: '下载项 / 镜像'),
+            decoration: const InputDecoration(),
             child: SelectableText(
               '${patch['download_label'] ?? '来源下载'} · ${patch['download_url'] != null ? Uri.parse(patch['download_url'] as String).pathSegments.lastOrNull ?? '下载文件' : patch['name']}',
             ),
@@ -258,7 +302,7 @@ class _PatchManagementPageState extends State<PatchManagementPage> {
             initialValue:
                 (patch['selection_id'] ?? patch['release_id']) as String,
             isExpanded: true,
-            decoration: const InputDecoration(labelText: '下载项 / 镜像'),
+            decoration: const InputDecoration(),
             items: [
               for (final choice in widget.entry.choices)
                 DropdownMenuItem(
@@ -312,33 +356,6 @@ class _PatchManagementPageState extends State<PatchManagementPage> {
             }),
             child: const Text('改用自动下载'),
           ),
-        ExpansionTile(
-          title: const Text('文件与技术详情'),
-          children: [
-            SelectableText(
-              '发行标识：${patch['release_id']}\n选择标识：${patch['selection_id'] ?? '无'}\n下载地址：${patch['download_url'] ?? '无'}',
-            ),
-            if (candidate != null)
-              SelectableText(
-                '身份依据：${candidate['match_basis']}\n版本依据：${(candidate['version_evidence'] as List).join('、')}',
-              ),
-            OutlinedButton(
-              onPressed: reading || busy ? null : readPreview,
-              child: Text(reading ? '正在读取变更' : '查看文件变更（可选，只读）'),
-            ),
-            if (preview != null) ...[
-              for (final blocker in preview!['blockers'] as List)
-                SelectableText(statusLabel(blocker)),
-              for (final change in preview!['changes'] as List)
-                ListTile(
-                  title: SelectableText(change['path'] as String),
-                  subtitle: Text('${change['action']}'),
-                ),
-              for (final diagnostic in preview!['diagnostics'] as List)
-                SelectableText('${diagnostic['message']}'),
-            ],
-          ],
-        ),
       ] else ...[
         const SizedBox(height: 16),
         const Text('此条目是待核对的来源线索，不能据此启动安装。请核对来源网页的语言、版本和 DLC 条件。'),
@@ -351,9 +368,111 @@ class _PatchManagementPageState extends State<PatchManagementPage> {
       if (error != null) SelectableText('操作失败：$error'),
     ];
     final scheme = Theme.of(context).colorScheme;
+    final ready = patch != null && available(patch);
+    final installed =
+        patch != null && installedStatus(patch['detection']['status']);
+    final statusColor = !busy && ready
+        ? (scheme.brightness == Brightness.dark
+              ? const Color(0xff75ddb0)
+              : const Color(0xff176b48))
+        : scheme.onSurfaceVariant;
+    final statusTitle = patch == null
+        ? '待核对来源'
+        : busy
+        ? '操作进行中'
+        : ready
+        ? (installed ? '已安装补丁' : '可安装补丁')
+        : input == 'local_archive' && archive == null
+        ? '需要本地 ZIP'
+        : patch['compatibility'] == 'manual_selection_required' && !confirmed
+        ? '待确认适用条件'
+        : '暂不可安装';
+    final statusDescription = patch == null
+        ? '此来源线索尚不能用于安装'
+        : busy
+        ? '请等待当前任务完成'
+        : ready
+        ? (installed ? '可按当前安装路线覆盖安装' : '可按当前安装路线安装此补丁')
+        : input == 'local_archive' && archive == null
+        ? '选择文件后检查安装条件'
+        : '请核对适用条件及阻断原因';
+    final summary = Container(
+      key: const ValueKey('patch-status-panel'),
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: scheme.outlineVariant),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text('补丁状态', style: Theme.of(context).textTheme.titleMedium),
+          const SizedBox(height: 12),
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: statusColor.withValues(alpha: .08),
+              border: Border.all(color: statusColor.withValues(alpha: .35)),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Row(
+              children: [
+                Icon(
+                  busy
+                      ? Icons.hourglass_top
+                      : installed && ready
+                      ? Icons.check_circle_outline
+                      : Icons.download_outlined,
+                  color: statusColor,
+                  size: 26,
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        statusTitle,
+                        style: TextStyle(
+                          color: statusColor,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        statusDescription,
+                        style: TextStyle(
+                          color: scheme.onSurfaceVariant,
+                          fontSize: 12,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 24),
+          Text('游戏信息', style: Theme.of(context).textTheme.titleMedium),
+          const SizedBox(height: 12),
+          Text(
+            'AppID',
+            style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 12),
+          ),
+          SelectableText('${widget.row.game['appid']}'),
+          const Divider(height: 24),
+          Text(
+            '游戏 Build',
+            style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 12),
+          ),
+          SelectableText('${widget.row.game['buildid'] ?? '未知'}'),
+        ],
+      ),
+    );
     return LayoutBuilder(
       builder: (context, constraints) {
-        final wide = constraints.maxWidth >= 1020;
+        final textScale = MediaQuery.textScalerOf(context).scale(14) / 14;
+        final wide = constraints.maxWidth >= 880 * textScale;
         final showCover = constraints.maxWidth >= 660;
         final inset = constraints.maxWidth < 660 ? 16.0 : 24.0;
         return Column(
@@ -412,55 +531,23 @@ class _PatchManagementPageState extends State<PatchManagementPage> {
                               ),
                               if (wide) ...[
                                 const SizedBox(width: 24),
-                                SizedBox(
-                                  width: 200,
-                                  child: DecoratedBox(
-                                    decoration: BoxDecoration(
-                                      color: scheme.surfaceContainer,
-                                      borderRadius: BorderRadius.circular(12),
-                                    ),
-                                    child: Padding(
-                                      padding: const EdgeInsets.all(20),
-                                      child: Column(
-                                        crossAxisAlignment:
-                                            CrossAxisAlignment.start,
-                                        children: [
-                                          Text(
-                                            '游戏信息',
-                                            style: Theme.of(context)
-                                                .textTheme
-                                                .titleMedium,
-                                          ),
-                                          const SizedBox(height: 20),
-                                          Text(
-                                            'AppID',
-                                            style: TextStyle(
-                                              color: scheme.onSurfaceVariant,
-                                              fontSize: 12,
-                                            ),
-                                          ),
-                                          SelectableText(
-                                            '${widget.row.game['appid']}',
-                                          ),
-                                          const Divider(height: 28),
-                                          Text(
-                                            '游戏 Build',
-                                            style: TextStyle(
-                                              color: scheme.onSurfaceVariant,
-                                              fontSize: 12,
-                                            ),
-                                          ),
-                                          SelectableText(
-                                            '${widget.row.game['buildid'] ?? '未知'}',
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                  ),
-                                ),
+                                SizedBox(width: 240, child: summary),
                               ],
                             ],
                           ),
+                          if (!wide) ...[const SizedBox(height: 20), summary],
+                          if (technicalDetails != null) ...[
+                            const SizedBox(height: 16),
+                            Material(
+                              color: scheme.surfaceContainer,
+                              clipBehavior: Clip.antiAlias,
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12),
+                                side: BorderSide(color: scheme.outlineVariant),
+                              ),
+                              child: technicalDetails,
+                            ),
+                          ],
                         ],
                       ),
                     ),
@@ -469,77 +556,101 @@ class _PatchManagementPageState extends State<PatchManagementPage> {
               ),
             ),
             if (patch != null)
-              Container(
-                padding: EdgeInsets.symmetric(horizontal: inset, vertical: 14),
-                decoration: BoxDecoration(
-                  color: scheme.surface,
-                  border: Border(top: BorderSide(color: scheme.outlineVariant)),
-                ),
-                child: LayoutBuilder(
-                  builder: (context, footer) {
-                    final notice = Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(
-                          Icons.info_outline,
-                          color: scheme.secondary,
-                          size: 20,
-                        ),
-                        const SizedBox(width: 10),
-                        const Flexible(
-                          child: Text(
-                            '安装时请关闭游戏并暂停 Steam 更新',
-                            style: TextStyle(fontSize: 13),
+              Padding(
+                padding: EdgeInsets.fromLTRB(inset, 8, inset, 20),
+                child: Container(
+                  key: const ValueKey('patch-floating-actions'),
+                  padding: EdgeInsets.symmetric(
+                    horizontal: inset,
+                    vertical: 20,
+                  ),
+                  decoration: BoxDecoration(
+                    color: scheme.surface,
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(color: scheme.outlineVariant),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: .16),
+                        blurRadius: 24,
+                        offset: const Offset(0, 6),
+                      ),
+                    ],
+                  ),
+                  child: LayoutBuilder(
+                    builder: (context, footer) {
+                      final notice = Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            Icons.info_outline,
+                            color: scheme.brightness == Brightness.dark
+                                ? const Color(0xffffc75b)
+                                : const Color(0xff875d00),
+                            size: 20,
                           ),
-                        ),
-                      ],
-                    );
-                    final buttons = Wrap(
-                      spacing: 12,
-                      runSpacing: 8,
-                      crossAxisAlignment: WrapCrossAlignment.center,
-                      children: [
-                        OutlinedButton.icon(
-                          onPressed: openDirectory,
-                          icon: const Icon(
-                            Icons.folder_open_outlined,
-                            size: 18,
+                          const SizedBox(width: 10),
+                          const Flexible(
+                            child: Text(
+                              '安装时请关闭游戏并暂停 Steam 更新',
+                              style: TextStyle(fontSize: 13),
+                            ),
                           ),
-                          label: const Text('打开游戏目录'),
-                        ),
-                        FilledButton.icon(
-                          focusNode: installFocus,
-                          onPressed: !busy && available(patch) ? install : null,
-                          icon: const Icon(Icons.download_outlined, size: 20),
-                          label: Text(
-                            input == 'local_archive' && archive == null
-                                ? '需要选择本地 ZIP'
-                                : localRoute
-                                ? '使用本地 ZIP 安装'
-                                : patch['actions']['primary']['label'] ==
-                                      'overwrite'
-                                ? '覆盖安装补丁'
-                                : '安装补丁',
-                          ),
-                        ),
-                      ],
-                    );
-                    final textScale =
-                        MediaQuery.textScalerOf(context).scale(14) / 14;
-                    if (footer.maxWidth < 920 * textScale) {
-                      return Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [notice, const SizedBox(height: 12), buttons],
+                        ],
                       );
-                    }
-                    return Row(
-                      children: [
-                        Expanded(child: notice),
-                        const SizedBox(width: 16),
-                        buttons,
-                      ],
-                    );
-                  },
+                      final buttons = Wrap(
+                        alignment: WrapAlignment.end,
+                        spacing: 12,
+                        runSpacing: 8,
+                        crossAxisAlignment: WrapCrossAlignment.center,
+                        children: [
+                          OutlinedButton.icon(
+                            onPressed: openDirectory,
+                            icon: const Icon(
+                              Icons.folder_open_outlined,
+                              size: 18,
+                            ),
+                            label: const Text('打开游戏目录'),
+                          ),
+                          FilledButton.icon(
+                            focusNode: installFocus,
+                            onPressed: !busy && available(patch)
+                                ? install
+                                : null,
+                            icon: const Icon(Icons.download_outlined, size: 20),
+                            label: Text(
+                              input == 'local_archive' && archive == null
+                                  ? '需要选择本地 ZIP'
+                                  : localRoute
+                                  ? '使用本地 ZIP 安装'
+                                  : patch['actions']['primary']['label'] ==
+                                        'overwrite'
+                                  ? '覆盖安装补丁'
+                                  : '安装补丁',
+                            ),
+                          ),
+                        ],
+                      );
+                      final textScale =
+                          MediaQuery.textScalerOf(context).scale(14) / 14;
+                      if (footer.maxWidth < 720 * textScale) {
+                        return Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            notice,
+                            const SizedBox(height: 12),
+                            buttons,
+                          ],
+                        );
+                      }
+                      return Row(
+                        children: [
+                          Expanded(child: notice),
+                          const SizedBox(width: 16),
+                          buttons,
+                        ],
+                      );
+                    },
+                  ),
                 ),
               ),
           ],
