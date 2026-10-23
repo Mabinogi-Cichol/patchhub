@@ -4,7 +4,7 @@
 
 ## 当前状态
 
-2026-10-23 Modern 视觉迭代已获施工授权并完成主体实现，见 [Modern 视觉重设计方案](visual-design.md)。自动化、原生窗口与候选构建结果见文末施工记录；本轮状态不改变下方原 Flutter 重写的历史验收结论。
+2026-10-24 已按用户反馈补齐悬浮底栏、右侧补丁状态与整行技术详情；相关自动化、原生截图和候选验证通过，待用户视觉验收。此前 Modern 视觉迭代已完成主体实现，见 [Modern 视觉重设计方案](visual-design.md)。自动化、原生窗口与候选构建结果见文末施工记录；本轮状态不改变下方原 Flutter 重写的历史验收结论。
 
 2026-10-22：P0–P7 实施及本地/用户实机验收已完成，系统/浅色/深色主题、Flutter 宿主、来源、安装/恢复和发行迁移均已落地；旧 React/Tauri 端已退役。用户确认系统交互全部通过，并明确将官方 ZIP 的 Cloudflare HTTP 403 作为外部遗留项接受，授权完成并合回 main。下方保留施工历史，最终证据与遗留项以末节为准；未推送或发布。
 
@@ -318,3 +318,30 @@ flutter test integration_test/windows_acceptance_test.dart -d windows "--dart-de
 - `f41e30d`：Modern UI、Steam 艺术作品读取、窗口工具栏、目录操作与必要测试；不包含图像缓存、截图、候选程序或工具链。
 - 此前同分支的下载速度 `c4e962f`、关窗修复 `ca62c44`、品牌图标 `aed058a` 分别提交，相关文档单独归档。
 - 本功能文档独立提交，沿用已完成验证，未重复运行测试、修改功能代码、合并、推送或发布。上文未提交的表述保留为当时施工状态，以本节为最新记录。
+
+### 2026-10-24 参考图布局修订
+
+- 用户反馈：底栏需要悬浮设计，补丁管理右侧缺少补丁状态。按修订后的 [视觉方案](visual-design.md#10-2026-10-24-参考图对齐修订) 修正展示。
+- 已实现四周留白的圆角悬浮操作卡；右侧加入真实补丁状态及游戏信息，窄窗口改为纵向排列；技术详情独占整行。
+- 相关布局、目录与安装交互 30 项回归通过：`.artifacts/windows-flutter/refinement-final-tests.log`。随后针对已安装但被阻断场景补充用例，只复验受影响的状态测试；不重复无关安装矩阵。
+- 最终状态专项 8 项通过：`refinement-status-final-tests.log`，覆盖已安装、待确认、本地 ZIP、阻断及已安装但被阻断；最后一种情况不显示绿色可操作提示。与 30 项相关回归合计覆盖 31 个不同用例。静态终检 `refinement-final-analyze.log` 无问题。
+- 真实 Windows 窗口矩阵：`refinement-native-renders/result.json` 为 `passed: true`，18 张深浅色截图；默认 1180×760 外窗的右侧状态面板可见，1440×900 下技术详情独占整行，最小 850×560 / 150% 文字下底栏保持留白且按钮可操作。示例：`.artifacts/windows-flutter/refinement-native-renders/dark-1440-patch.png`、`dark-1180-patch.png`、`light-850-patch.png`。原生日志 `refinement-native-stdout.log` 为 `All tests passed`；已正常关闭本次只读测试窗口。没有操作系统 DPI 切换或真实游戏安装。
+- 普通入口候选：`.artifacts/windows-flutter/modern-ui-refinement-candidate/steam_patch_windows.exe`，构建日志 `refinement-release-build.log`；沿用已验证 MSVC/CMake/Ninja 构建方式，标准 Flutter 工具链发现问题未改变。仅包含程序及必要资源，没有打包 Steam 游戏图片或快照。
+- 最终候选 EXE SHA-256：`D709EA20E3093C2F20CA7E0F9FB4ECE1CFF670333E9ED5727EEF9BC678FBB8E0`；`data/app.so`：`C717FD9F4582213A833A0B63114DB19B9679D884CA1E84685CC93D5644926489`。完整清单 `refinement-candidate-manifest.json`。
+- 独立 APPDATA 普通入口启动并正常关闭，退出码 **0**、关闭 **949ms**，见 `refinement-smoke-result.json`；此前中间候选 876ms，最终记录以本条为准。未改用户状态目录，未强杀正常程序。
+- 按 overengineering-review 技能复核本次差异：状态直接派生于既有动作、检测、人工确认和 ZIP 选择；悬浮外观用现有固定区域加留白、圆角、阴影实现，无额外覆盖定位、尺寸测量、状态机、协议或防御分支。技术详情仅移动展示位置，安装调用与取消/恢复路径保持既有实现；未发现需另改机制的项目。
+- 设计与施工记录、功能索引已同步。此次修订未提交、合并、推送或发布；真实用户自定义图和系统 DPI 切换的先前未验证边界仍保留，待用户视觉验收。
+
+### 2026-10-24 选择器标题排版
+
+- 按用户反馈，补丁选择及下载项 / 镜像改为独立的上方标题，统一字号、颜色和间距，取消边框浮动标签。单项及多项下载显示保持一致；多补丁时去除选择框下方重复的补丁大标题，让下载项更靠上。
+- 仅修改局部展示，保留既有补丁和镜像选择回调。最终相关布局及安装交互 23 项通过（`selector-label-final-tests.log`），静态分析无问题（`selector-label-final-analyze.log`）。`selector-label-final-renders/result.json` 为 `passed: true`，18 张原生深浅色截图通过；已核对默认窗口中下载项完整显示，标题不再与边框相交。
+
+- 依 overengineering-review 技能对本次标题改动复核：只调整文本样式、位置及多补丁时的重复名称显示，无新增配置、抽象或业务约束；未发现需修改项。真实系统 DPI 切换等既有未验证边界保留。
+- 普通入口新版候选：`.artifacts/windows-flutter/modern-ui-selector-candidate/steam_patch_windows.exe`，构建日志 `selector-label-release-build.log`，完整 SHA-256 清单 `selector-label-candidate-manifest.json`。EXE：`45417A243A7FA033EF71AC60F9255125151571CC5A7B7702945B4FCE428EA5B4`；`data/app.so`：`7B8B621A6800FA872574C82A30631668B0FD85BBEC3E2A6A8E6C8C6132BF1FDD`。
+- 隔离 APPDATA 普通入口启动与正常关闭通过，退出码 0、1245ms（`selector-label-smoke-result.json`）。未改用户配置或游戏文件，未提交、推送或发布；最新候选以本节为准。
+
+### 2026-10-24 合并与 v0.3.0 发布准备
+
+- 用户明确要求合并主线并作为 v0.3.0 发布，当前界面作为发行基线；沿用已完成的自动化和原生 UI 验证，不重跑未改动的界面矩阵。系统 DPI 切换、真实自定义图等未验证边界继续保留。
+- 布局修订已独立提交；版本、发行说明与施工记录分别提交。Tag 对应 CI 和公开附件核验尚待执行，完成后写入发行检查记录。
