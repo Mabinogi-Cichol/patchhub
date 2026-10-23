@@ -9,6 +9,7 @@ import 'package:steam_patch_windows/host/desktop_services.dart';
 import 'package:steam_patch_windows/models/app_model.dart';
 import 'package:steam_patch_windows/models/library.dart';
 import 'package:steam_patch_windows/pages/patch_management_page.dart';
+import 'package:steam_patch_windows/pages/install_dialog.dart';
 import 'package:steam_patch_windows/presentation/library_presentation.dart';
 
 import 'support/process_fixture_client.dart';
@@ -167,6 +168,68 @@ void main() {
     expect(find.textContaining('状态刷新失败'), findsNothing);
     await tester.tap(find.text('关闭结果'));
     await tester.pumpAndSettle();
+    await tester.pumpWidget(const SizedBox.shrink());
+    model.dispose();
+  });
+  testWidgets('download dialog shows throughput alongside byte progress', (
+    tester,
+  ) async {
+    final model = InstallFixtureModel('cancel_wait');
+    final task = (await tester.runAsync(() async {
+      final task = model.tasks.startInstall({});
+      await task.events.first;
+      return task;
+    }))!;
+    task.progress = {
+      ...task.progress!,
+      'stage': 'downloading',
+      'bytes_done': 4000000,
+      'total_bytes': 8000000,
+    };
+    await tester.pumpWidget(
+      SteamPatchApp(
+        home: Scaffold(
+          body: InstallDialog(
+            model: model,
+            task: task,
+            game: '测试游戏',
+            patch: '测试补丁',
+          ),
+        ),
+      ),
+    );
+    expect(find.text('下载速度：计算中…'), findsOneWidget);
+    task.downloadRate.update(
+      'downloading',
+      1000000,
+      const Duration(seconds: 1),
+    );
+    task.downloadRate.update(
+      'downloading',
+      4000000,
+      const Duration(seconds: 3),
+    );
+    // Rebuild with the next accepted progress sample, without a real download.
+    await tester.pumpWidget(
+      SteamPatchApp(
+        home: Scaffold(
+          body: InstallDialog(
+            model: model,
+            task: task,
+            game: '测试游戏',
+            patch: '测试补丁',
+          ),
+        ),
+      ),
+    );
+    expect(find.text('下载速度：1.5 MB/s'), findsOneWidget);
+    expect(find.text('4.0 MB / 8.0 MB'), findsOneWidget);
+    await tester.runAsync(() async {
+      await task.cancel();
+      await task.done;
+    });
+    await tester.pumpAndSettle();
+    expect(find.textContaining('下载速度：'), findsNothing);
     await tester.pumpWidget(const SizedBox.shrink());
     model.dispose();
   });
