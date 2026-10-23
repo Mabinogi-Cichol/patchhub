@@ -116,3 +116,8 @@ RustSec 提示：RUSTSEC-2024-0429（glib 0.18.5，unsound）与 RUSTSEC-2024-03
 ### 冷启动检查与并发复验
 
 - 39998306298 的 Linux 核心和 Decky 成功；Windows SDK 首次启动日志污染机器 JSON，已用显式初始化顺序修复并验证。Windows 核心有一次并发信任库测试失败；本机精确复验通过，保留日志，不改断言或降低 CI 门槛。继续依用户授权更新未发行 Tag，正式发行仍以新 Tag 全部检查通过为前提。
+
+### 安装器附件上传修复
+
+- 运行 39999762120 的 Windows/Linux 核心和 Decky 全部通过，Windows 也完成 Flutter 检查、Release 构建、SBOM、便携包及 NSIS 生成；最后上传 NSIS 时通配符没有匹配到隐藏 .artifacts 目录内文件，release 被跳过。
+- 根据 actions/upload-artifact 官方说明，仅对 windows-nsis 的 .artifacts/*_x64-setup.exe 路径开启 include-hidden-files，不扩大文件范围。修复只改一个工作流输入，静态核对与 diff 检查通过，待新 Tag CI 实证。此前并发信任库测试本轮已通过，保留失败历史，不宣称其根因已定位。
