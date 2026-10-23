@@ -1,6 +1,10 @@
 import 'package:flutter/material.dart';
 
 import '../app.dart';
+import '../host/steam_artwork.dart';
+import '../presentation/game_artwork.dart';
+import '../presentation/game_status.dart';
+import '../presentation/desktop_toolbar.dart';
 import '../models/app_model.dart';
 import '../models/library.dart';
 import '../presentation/library_presentation.dart';
@@ -9,8 +13,9 @@ import 'records_page.dart';
 import 'source_pages.dart';
 
 class LibraryPage extends StatefulWidget {
-  const LibraryPage({super.key, required this.model});
+  const LibraryPage({super.key, required this.model, this.artwork});
   final AppModel model;
+  final SteamArtworkStore? artwork;
   @override
   State<LibraryPage> createState() => _LibraryPageState();
 }
@@ -25,6 +30,8 @@ class _LibraryPageState extends State<LibraryPage> {
   bool globalSources = false;
   int tab = 0;
   final scroll = ScrollController();
+  late final artwork = widget.artwork ?? SteamArtworkStore();
+  ScanSnapshot? artworkSnapshot;
 
   @override
   void initState() {
@@ -41,6 +48,10 @@ class _LibraryPageState extends State<LibraryPage> {
   }
 
   void changed() {
+    if (artworkSnapshot != widget.model.snapshot) {
+      artworkSnapshot = widget.model.snapshot;
+      artwork.refresh();
+    }
     final row = widget.model.snapshot?.rows
         .where((row) => row.id == selectedId)
         .firstOrNull;
@@ -131,39 +142,41 @@ class _LibraryPageState extends State<LibraryPage> {
     final rows = model.snapshot?.rows ?? <GameRow>[];
     final visible = filterGames(rows, filter, query);
     final row = rows.where((row) => row.id == selectedId).firstOrNull;
+    final scheme = Theme.of(context).colorScheme;
+    final width = MediaQuery.sizeOf(context).width;
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Steam 黄油补丁助手'),
-        actions: [
-          TextButton.icon(
-            onPressed: () => setState(() => globalSources = !globalSources),
-            icon: Icon(
-              globalSources ? Icons.arrow_back : Icons.source_outlined,
-            ),
-            label: Text(globalSources ? '返回游戏' : '全局来源'),
-          ),
-          PopupMenuButton<ThemeMode>(
-            tooltip: '外观',
-            icon: const Icon(Icons.brightness_6_outlined),
-            onSelected: (mode) => SteamPatchApp.setThemeMode(context, mode),
-            itemBuilder: (context) => [
-              for (final entry in const {
-                ThemeMode.system: '跟随系统',
-                ThemeMode.light: '浅色',
-                ThemeMode.dark: '深色',
-              }.entries)
-                CheckedPopupMenuItem(
-                  value: entry.key,
-                  checked: SteamPatchApp.themeModeOf(context) == entry.key,
-                  child: Text(entry.value),
-                ),
-            ],
-          ),
-          const SizedBox(width: 16),
-        ],
-      ),
       body: Column(
         children: [
+          DesktopToolbar(
+            actions: [
+              TextButton.icon(
+                onPressed: () => setState(() => globalSources = !globalSources),
+                icon: Icon(
+                  globalSources ? Icons.arrow_back : Icons.folder_open_outlined,
+                  size: 20,
+                ),
+                label: Text(globalSources ? '返回游戏' : '全局来源'),
+              ),
+              PopupMenuButton<ThemeMode>(
+                tooltip: '外观',
+                icon: const Icon(Icons.tune_outlined, size: 20),
+                onSelected: (mode) => SteamPatchApp.setThemeMode(context, mode),
+                itemBuilder: (context) => [
+                  for (final entry in const {
+                    ThemeMode.system: '跟随系统',
+                    ThemeMode.light: '浅色',
+                    ThemeMode.dark: '深色',
+                  }.entries)
+                    CheckedPopupMenuItem(
+                      value: entry.key,
+                      checked: SteamPatchApp.themeModeOf(context) == entry.key,
+                      child: Text(entry.value),
+                    ),
+                ],
+              ),
+            ],
+          ),
+          Divider(height: 1, color: scheme.outlineVariant),
           if (issues.isNotEmpty)
             MaterialBanner(
               content: Text(issues.map((issue) => issue.$1).join('；')),
@@ -182,101 +195,275 @@ class _LibraryPageState extends State<LibraryPage> {
             child: Row(
               children: [
                 SizedBox(
-                  width: 260,
-                  child: Column(
-                    children: [
-                      Padding(
-                        padding: const EdgeInsets.all(12),
-                        child: TextField(
-                          decoration: const InputDecoration(
-                            labelText: '搜索名称或 AppID',
-                            prefixIcon: Icon(Icons.search),
-                            border: OutlineInputBorder(),
-                          ),
-                          onChanged: (value) => setState(() => query = value),
-                        ),
-                      ),
-                      Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 12),
-                        child: DropdownButtonFormField<GameFilter>(
-                          initialValue: filter,
-                          key: ValueKey(filter),
-                          isExpanded: true,
-                          decoration: const InputDecoration(labelText: '筛选游戏'),
-                          items: [
-                            for (final value in GameFilter.values)
-                              DropdownMenuItem(
-                                value: value,
-                                child: Text(value.label),
-                              ),
-                          ],
-                          onChanged: (value) => setState(() => filter = value!),
-                        ),
-                      ),
-                      if (model.scanning) const LinearProgressIndicator(),
-                      Expanded(
-                        child: visible.isEmpty
-                            ? Center(
-                                child: Padding(
-                                  padding: const EdgeInsets.all(16),
-                                  child: Column(
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      Text(
-                                        model.snapshot == null
-                                            ? (model.scanning
-                                                  ? '正在扫描游戏库'
-                                                  : '尚未扫描')
-                                            : rows.isEmpty
-                                            ? '未发现已安装游戏'
-                                            : '没有符合条件的游戏',
-                                      ),
-                                      if (filter != GameFilter.all &&
-                                          rows.isNotEmpty)
-                                        TextButton(
-                                          onPressed: () => setState(
-                                            () => filter = GameFilter.all,
-                                          ),
-                                          child: const Text('查看全部游戏'),
+                  width: width < 1050
+                      ? 228
+                      : width >= 1440
+                      ? 296
+                      : 272,
+                  child: ColoredBox(
+                    color: scheme.surface,
+                    child: LayoutBuilder(
+                      builder: (context, sidebar) => Column(
+                        children: [
+                          ConstrainedBox(
+                            constraints: BoxConstraints(
+                              maxHeight: sidebar.maxHeight * 0.65,
+                            ),
+                            child: SingleChildScrollView(
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Padding(
+                                    padding: const EdgeInsets.all(16),
+                                    child: TextField(
+                                      decoration: const InputDecoration(
+                                        hintText: '搜索名称或 AppID',
+                                        prefixIcon: Icon(
+                                          Icons.search,
+                                          size: 20,
                                         ),
-                                    ],
-                                  ),
-                                ),
-                              )
-                            : ListView.builder(
-                                controller: scroll,
-                                itemCount: visible.length,
-                                itemBuilder: (context, index) {
-                                  final item = visible[index];
-                                  final multiple =
-                                      rows
-                                          .where(
-                                            (row) =>
-                                                row.game['appid'] ==
-                                                item.game['appid'],
-                                          )
-                                          .length >
-                                      1;
-                                  return ListTile(
-                                    selected: selectedId == item.id,
-                                    title: Text(item.name),
-                                    subtitle: Text(
-                                      '${rowSummary(item)}${multiple ? '\n${item.game['library_path']}' : ''}',
+                                      ),
+                                      onChanged: (value) =>
+                                          setState(() => query = value),
                                     ),
-                                    onTap: () => selectGame(item),
-                                  );
-                                },
+                                  ),
+                                  for (final value in [
+                                    GameFilter.matched,
+                                    GameFilter.installed,
+                                    GameFilter.all,
+                                    GameFilter.attention,
+                                  ])
+                                    Padding(
+                                      padding: const EdgeInsets.fromLTRB(
+                                        12,
+                                        0,
+                                        12,
+                                        4,
+                                      ),
+                                      child: Material(
+                                        color: filter == value
+                                            ? scheme.primaryContainer
+                                            : Colors.transparent,
+                                        borderRadius: BorderRadius.circular(10),
+                                        child: InkWell(
+                                          borderRadius: BorderRadius.circular(
+                                            10,
+                                          ),
+                                          onTap: () =>
+                                              setState(() => filter = value),
+                                          child: Padding(
+                                            padding: const EdgeInsets.symmetric(
+                                              horizontal: 12,
+                                              vertical: 8,
+                                            ),
+                                            child: Row(
+                                              children: [
+                                                Icon(
+                                                  switch (value) {
+                                                    GameFilter.matched =>
+                                                      Icons.science_outlined,
+                                                    GameFilter.installed =>
+                                                      Icons.task_alt,
+                                                    GameFilter.all =>
+                                                      Icons.grid_view_rounded,
+                                                    GameFilter.attention =>
+                                                      Icons.error_outline,
+                                                  },
+                                                  size: 18,
+                                                  color: filter == value
+                                                      ? scheme
+                                                            .onPrimaryContainer
+                                                      : scheme.onSurfaceVariant,
+                                                ),
+                                                const SizedBox(width: 10),
+                                                Expanded(
+                                                  child: Text(
+                                                    value.label,
+                                                    style: TextStyle(
+                                                      fontSize: 14,
+                                                      fontWeight:
+                                                          filter == value
+                                                          ? FontWeight.w600
+                                                          : FontWeight.w400,
+                                                    ),
+                                                  ),
+                                                ),
+                                                const SizedBox(width: 4),
+                                                Text(
+                                                  '${filterGames(rows, value, query).length}',
+                                                  style: TextStyle(
+                                                    fontSize: 12,
+                                                    color:
+                                                        scheme.onSurfaceVariant,
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  const SizedBox(height: 8),
+                                ],
                               ),
+                            ),
+                          ),
+                          if (model.scanning)
+                            const LinearProgressIndicator(minHeight: 2),
+                          Expanded(
+                            child: visible.isEmpty
+                                ? SingleChildScrollView(
+                                    child: Padding(
+                                      padding: const EdgeInsets.all(16),
+                                      child: Column(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          const Icon(
+                                            Icons.videogame_asset_off_outlined,
+                                            size: 32,
+                                          ),
+                                          const SizedBox(height: 12),
+                                          Text(
+                                            model.snapshot == null
+                                                ? (model.scanning
+                                                      ? '正在扫描游戏库'
+                                                      : '尚未扫描')
+                                                : rows.isEmpty
+                                                ? '未发现已安装游戏'
+                                                : '没有符合条件的游戏',
+                                          ),
+                                          if (filter != GameFilter.all &&
+                                              rows.isNotEmpty)
+                                            TextButton(
+                                              onPressed: () => setState(
+                                                () => filter = GameFilter.all,
+                                              ),
+                                              child: const Text('查看全部游戏'),
+                                            ),
+                                        ],
+                                      ),
+                                    ),
+                                  )
+                                : ListView.builder(
+                                    controller: scroll,
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 10,
+                                    ),
+                                    itemCount: visible.length,
+                                    itemBuilder: (context, index) {
+                                      final item = visible[index];
+                                      final multiple =
+                                          rows
+                                              .where(
+                                                (r) =>
+                                                    r.game['appid'] ==
+                                                    item.game['appid'],
+                                              )
+                                              .length >
+                                          1;
+                                      final selected = selectedId == item.id;
+                                      return Padding(
+                                        padding: const EdgeInsets.only(
+                                          bottom: 4,
+                                        ),
+                                        child: Material(
+                                          color: selected
+                                              ? scheme.primaryContainer
+                                                    .withValues(alpha: 0.65)
+                                              : Colors.transparent,
+                                          shape: RoundedRectangleBorder(
+                                            borderRadius: BorderRadius.circular(
+                                              12,
+                                            ),
+                                            side: BorderSide(
+                                              color: selected
+                                                  ? scheme.secondary
+                                                  : Colors.transparent,
+                                            ),
+                                          ),
+                                          clipBehavior: Clip.antiAlias,
+                                          child: InkWell(
+                                            onTap: () => selectGame(item),
+                                            child: Padding(
+                                              padding: const EdgeInsets.all(8),
+                                              child: Row(
+                                                children: [
+                                                  ClipRRect(
+                                                    borderRadius:
+                                                        BorderRadius.circular(
+                                                          8,
+                                                        ),
+                                                    child: SizedBox(
+                                                      width: 48,
+                                                      height: 54,
+                                                      child: GameArtwork(
+                                                        artwork: artwork.load(
+                                                          item.game['appid']
+                                                              as int,
+                                                        ),
+                                                      ),
+                                                    ),
+                                                  ),
+                                                  const SizedBox(width: 10),
+                                                  Expanded(
+                                                    child: Column(
+                                                      crossAxisAlignment:
+                                                          CrossAxisAlignment
+                                                              .start,
+                                                      children: [
+                                                        Text(
+                                                          item.name,
+                                                          maxLines: 2,
+                                                          overflow: TextOverflow
+                                                              .ellipsis,
+                                                          style: TextStyle(
+                                                            fontSize: 14,
+                                                            fontWeight: selected
+                                                                ? FontWeight
+                                                                      .w600
+                                                                : FontWeight
+                                                                      .w400,
+                                                          ),
+                                                        ),
+                                                        const SizedBox(
+                                                          height: 4,
+                                                        ),
+                                                        GameStatus(row: item),
+                                                        if (multiple)
+                                                          Text(
+                                                            '${item.game['library_path']}',
+                                                            style: TextStyle(
+                                                              fontSize: 12,
+                                                              color: scheme
+                                                                  .onSurfaceVariant,
+                                                            ),
+                                                          ),
+                                                      ],
+                                                    ),
+                                                  ),
+                                                ],
+                                              ),
+                                            ),
+                                          ),
+                                        ),
+                                      );
+                                    },
+                                  ),
+                          ),
+                          Padding(
+                            padding: const EdgeInsets.all(12),
+                            child: OutlinedButton.icon(
+                              onPressed: model.scanning ? null : model.refresh,
+                              icon: const Icon(Icons.refresh, size: 18),
+                              label: Text(
+                                model.scanning ? '正在扫描' : '重新扫描游戏库',
+                                style: const TextStyle(fontSize: 13),
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
-                      Padding(
-                        padding: const EdgeInsets.all(12),
-                        child: OutlinedButton.icon(
-                          onPressed: model.scanning ? null : model.refresh,
-                          icon: const Icon(Icons.refresh),
-                          label: Text(model.scanning ? '正在扫描' : '重新扫描游戏库'),
-                        ),
-                      ),
-                    ],
+                    ),
                   ),
                 ),
                 const VerticalDivider(width: 1),
@@ -285,7 +472,32 @@ class _LibraryPageState extends State<LibraryPage> {
                     index: globalSources ? 1 : 0,
                     children: [
                       row == null
-                          ? const Center(child: Text('从游戏库选择游戏'))
+                          ? Center(
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(
+                                    Icons.sports_esports_outlined,
+                                    size: 56,
+                                    color: scheme.onSurfaceVariant,
+                                  ),
+                                  const SizedBox(height: 16),
+                                  Text(
+                                    '从游戏库选择游戏',
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .titleLarge,
+                                  ),
+                                  const SizedBox(height: 8),
+                                  Text(
+                                    '查看补丁、安装状态与游戏订阅',
+                                    style: TextStyle(
+                                      color: scheme.onSurfaceVariant,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            )
                           : gameDetails(row),
                       GlobalSourcesPage(model: model),
                     ],
@@ -312,35 +524,156 @@ class _LibraryPageState extends State<LibraryPage> {
             )
             .firstOrNull ??
         entry?.patch;
+    final candidate =
+        entry?.candidate ??
+        ((row.discovery?['candidates'] as List?) ?? [])
+            .cast<Map<String, dynamic>>()
+            .where((value) => value['candidate_id'] == patch?['candidate_id'])
+            .firstOrNull;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(row.name, style: Theme.of(context).textTheme.headlineSmall),
-              Text(rowSummary(row)),
-              if (selectionNotice != null) Text(selectionNotice!),
-              const SizedBox(height: 12),
-              SingleChildScrollView(
-                scrollDirection: Axis.horizontal,
-                child: SegmentedButton<int>(
-                  segments: const [
-                    ButtonSegment(value: 0, label: Text('概览')),
-                    ButtonSegment(value: 1, label: Text('补丁管理')),
-                    ButtonSegment(value: 2, label: Text('操作记录')),
-                    ButtonSegment(value: 3, label: Text('游戏订阅')),
-                  ],
-                  selected: {tab},
-                  onSelectionChanged: (value) =>
-                      setState(() => tab = value.single),
+        LayoutBuilder(
+          builder: (context, constraints) {
+            final scheme = Theme.of(context).colorScheme;
+            final compact = constraints.maxWidth < 800;
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                SizedBox(
+                  height: compact ? 112 : 158,
+                  child: Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      GameArtwork(
+                        artwork: artwork.load(row.game['appid'] as int),
+                        kind: ArtworkKind.hero,
+                      ),
+                      DecoratedBox(
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            colors: [
+                              scheme.surface,
+                              scheme.surface.withValues(alpha: 0.85),
+                              scheme.surface.withValues(alpha: 0.15),
+                            ],
+                            stops: const [0, 0.45, 1],
+                          ),
+                        ),
+                      ),
+                      DecoratedBox(
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            begin: Alignment.topCenter,
+                            end: Alignment.bottomCenter,
+                            colors: [
+                              Colors.transparent,
+                              Theme.of(context).scaffoldBackgroundColor,
+                            ],
+                          ),
+                        ),
+                      ),
+                      Padding(
+                        padding: EdgeInsets.fromLTRB(
+                          compact ? 20 : 28,
+                          20,
+                          24,
+                          12,
+                        ),
+                        child: SingleChildScrollView(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Wrap(
+                                spacing: 12,
+                                runSpacing: 8,
+                                crossAxisAlignment: WrapCrossAlignment.center,
+                                children: [
+                                  SelectionArea(
+                                    child: Text(
+                                      row.name,
+                                      style: TextStyle(
+                                        fontSize: compact ? 24 : 32,
+                                        fontWeight: FontWeight.w700,
+                                        height: 1.25,
+                                        letterSpacing: -0.5,
+                                      ),
+                                    ),
+                                  ),
+                                  GameStatus(row: row, emphasized: true),
+                                ],
+                              ),
+                              if (entry != null) ...[
+                                const SizedBox(height: 6),
+                                Text(
+                                  '${sourceName((patch?['source_id'] ?? candidate?['source_id']) as String?, widget.model.sources)} · '
+                                  '${languageLabel(candidate?['languages'] as List?)} · ${formatLabel(candidate, patch)}',
+                                  style: TextStyle(
+                                    color: scheme.onSurfaceVariant,
+                                    fontSize: 13,
+                                  ),
+                                ),
+                              ],
+                              if (selectionNotice != null)
+                                Text(
+                                  selectionNotice!,
+                                  style: TextStyle(color: scheme.error),
+                                ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
-              ),
-            ],
-          ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
+                  child: SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: SegmentedButton<int>(
+                      showSelectedIcon: false,
+                      style: SegmentedButton.styleFrom(
+                        selectedBackgroundColor: scheme.primaryContainer,
+                        selectedForegroundColor: scheme.onPrimaryContainer,
+                        side: BorderSide(color: scheme.outlineVariant),
+                        visualDensity: VisualDensity.compact,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                      ),
+                      segments: const [
+                        ButtonSegment(
+                          value: 0,
+                          icon: Icon(Icons.explore_outlined, size: 18),
+                          label: Text('概览'),
+                        ),
+                        ButtonSegment(
+                          value: 1,
+                          icon: Icon(Icons.build_outlined, size: 18),
+                          label: Text('补丁管理'),
+                        ),
+                        ButtonSegment(
+                          value: 2,
+                          icon: Icon(Icons.receipt_long_outlined, size: 18),
+                          label: Text('操作记录'),
+                        ),
+                        ButtonSegment(
+                          value: 3,
+                          icon: Icon(Icons.bookmark_outline, size: 18),
+                          label: Text('游戏订阅'),
+                        ),
+                      ],
+                      selected: {tab},
+                      onSelectionChanged: (value) =>
+                          setState(() => tab = value.single),
+                    ),
+                  ),
+                ),
+              ],
+            );
+          },
         ),
+
         Expanded(
           child: IndexedStack(
             index: tab,
@@ -354,6 +687,7 @@ class _LibraryPageState extends State<LibraryPage> {
                     '${row.id}:${entry.key}:${patch?['selection_id'] ?? patch?['release_id']}',
                   ),
                   model: widget.model,
+                  artwork: artwork.load(row.game['appid'] as int),
                   row: row,
                   entry: entry,
                   entries: entries,

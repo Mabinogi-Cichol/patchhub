@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'core_client.dart';
+import 'download_rate.dart';
 
 class EventSequence {
   EventSequence(this.protocol, this.requestId);
@@ -46,6 +47,8 @@ class CoreTask {
   bool _requestWritten = false;
   bool _controlClosed = false;
   Process? _process;
+  final downloadRate = DownloadRate();
+  final _progressClock = Stopwatch()..start();
   Map<String, dynamic>? progress;
   Map<String, dynamic>? lastEvent;
   dynamic result;
@@ -91,7 +94,10 @@ class CoreTask {
   }
 
   bool _allowed(String event) => switch (method) {
-    'install_patch' => event == 'install_progress',
+    'install_patch' ||
+    'scan' ||
+    'project_instances' ||
+    'preview' => event == 'install_progress',
     'update_source' => [
       'source_progress',
       'source_update',
@@ -153,6 +159,13 @@ class CoreTask {
                   if (!sequence.accept(value)) continue;
                   if (!_allowed(value['event'] as String)) {
                     throw const CoreError('invalid_core_response');
+                  }
+                  if (value['event'] == 'install_progress') {
+                    downloadRate.update(
+                      value['stage'] as String,
+                      value['bytes_done'] as int,
+                      _progressClock.elapsed,
+                    );
                   }
                   lastEvent = value;
                   _events.add(value);

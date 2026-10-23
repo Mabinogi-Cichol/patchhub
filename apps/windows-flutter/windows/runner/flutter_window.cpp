@@ -1,6 +1,8 @@
 #include "flutter_window.h"
 
 #include <optional>
+#include <flutter/standard_method_codec.h>
+#include <vector>
 
 #include "flutter/generated_plugin_registrant.h"
 
@@ -25,6 +27,53 @@ bool FlutterWindow::OnCreate() {
     return false;
   }
   RegisterPlugins(flutter_controller_->engine());
+  desktop_channel_ = std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(
+      flutter_controller_->engine()->messenger(), "steam_patch/desktop",
+      &flutter::StandardMethodCodec::GetInstance());
+  desktop_channel_->SetMethodCallHandler([](
+      const flutter::MethodCall<flutter::EncodableValue>& call,
+      std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result) {
+    if (call.method_name() != "steamArtworkContext") {
+      result->NotImplemented();
+      return;
+    }
+    DWORD bytes = 0;
+    auto status = RegGetValueW(HKEY_CURRENT_USER, L"Software\\Valve\\Steam",
+        L"SteamPath", RRF_RT_REG_SZ, nullptr, nullptr, &bytes);
+    if (status == ERROR_FILE_NOT_FOUND || status == ERROR_PATH_NOT_FOUND) {
+      result->Success();
+      return;
+    }
+    if (status != ERROR_SUCCESS) {
+      result->Error("steam_registry", "Cannot read Steam install location");
+      return;
+    }
+    std::vector<wchar_t> path(bytes / sizeof(wchar_t));
+    status = RegGetValueW(HKEY_CURRENT_USER, L"Software\\Valve\\Steam",
+        L"SteamPath", RRF_RT_REG_SZ, nullptr, path.data(), &bytes);
+    if (status != ERROR_SUCCESS) {
+      result->Error("steam_registry", "Cannot read Steam install location");
+      return;
+    }
+    const int length = WideCharToMultiByte(CP_UTF8, 0, path.data(), -1, nullptr, 0, nullptr, nullptr);
+    std::string root(length, '\0');
+    WideCharToMultiByte(CP_UTF8, 0, path.data(), -1, root.data(), length, nullptr, nullptr);
+    root.resize(length - 1);
+    DWORD user = 0;
+    DWORD user_bytes = sizeof(user);
+    const auto user_status = RegGetValueW(HKEY_CURRENT_USER,
+        L"Software\\Valve\\Steam\\ActiveProcess", L"ActiveUser",
+        RRF_RT_REG_DWORD, nullptr, &user, &user_bytes);
+    if (user_status != ERROR_SUCCESS && user_status != ERROR_FILE_NOT_FOUND &&
+        user_status != ERROR_PATH_NOT_FOUND) {
+      result->Error("steam_registry", "Cannot read Steam active account");
+      return;
+    }
+    result->Success(flutter::EncodableValue(flutter::EncodableMap{
+      {flutter::EncodableValue("root"), flutter::EncodableValue(root)},
+      {flutter::EncodableValue("activeUser"), flutter::EncodableValue(static_cast<int64_t>(user))},
+    }));
+  });
   SetChildContent(flutter_controller_->view()->GetNativeWindow());
 
   flutter_controller_->engine()->SetNextFrameCallback([&]() {
@@ -40,6 +89,7 @@ bool FlutterWindow::OnCreate() {
 }
 
 void FlutterWindow::OnDestroy() {
+  desktop_channel_ = nullptr;
   if (flutter_controller_) {
     flutter_controller_ = nullptr;
   }

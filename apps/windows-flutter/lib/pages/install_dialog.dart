@@ -194,6 +194,12 @@ class _InstallDialogState extends State<InstallDialog> {
                             ? '${byteCount(doneBytes)} / ${byteCount(totalBytes)}'
                             : '已处理 ${byteCount(doneBytes)}',
                       ),
+                      if (progress?['stage'] == 'downloading')
+                        Text(
+                          task.downloadRate.bytesPerSecond != null
+                              ? '下载速度：${byteCount(task.downloadRate.bytesPerSecond!.round())}/s'
+                              : '下载速度：计算中…',
+                        ),
                       Text(
                         totalFiles != null
                             ? '$doneFiles / $totalFiles 个文件'

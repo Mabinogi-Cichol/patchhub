@@ -1,12 +1,14 @@
 # Windows 交互重设计
 
+2026-10-23 补充：[Modern 视觉重设计方案](visual-design.md)，按用户参考图实现 Steam 艺术作品横幅、封面列表与补丁信息布局；自动化、原生视觉矩阵及本地候选检查通过，待用户视觉验收。以下保留原 Flutter 交互与迁移设计，历史实施及验收以 [progress.md](progress.md) 为准。
+
 状态：整体交互方案已获用户认可；按用户要求改为 Flutter 重写，技术实施于 2026-10-22 开始，P0/P1 进行中，整端待实现与验收。施工记录见 [progress.md](progress.md)。
 
 ## 1. 目标与依据
 
 以 Decky 的任务分层为参照，改善 Windows 找游戏、选补丁、安装、查看结果与管理来源的完整路径。保留桌面端快速切换游戏的优势，不照搬手柄导航。
 
-静态检查基线：main `4079692`。依据：[Windows 页面](../../../apps/windows/src/main.tsx)、[样式](../../../apps/windows/src/style.css)、[来源面板](../../../apps/windows/src/SourcePanel.tsx)、[宿主](../../../apps/windows/src-tauri/src/main.rs)、[Decky 页面](../../../apps/decky/src/index.tsx)、[Decky 设计](../decky-ux/design.md)、[来源折叠设计](../source-cache-matching-refactor/collapsible-source-cards/design.md)。当前判断来自源码，不是 Windows 实机体验验收。
+原方案静态检查基线：main `4079692`。历史依据为该提交中的 `apps/windows/src/main.tsx`（Windows 页面）、`apps/windows/src/style.css`（样式）、`apps/windows/src/SourcePanel.tsx`（来源面板）、`apps/windows/src-tauri/src/main.rs`（宿主）；这些旧端文件已随 Flutter 重写退役，需在历史提交中查看。另见 [Decky 页面](../../../apps/decky/src/index.tsx)、[Decky 设计](../decky-ux/design.md)、[来源折叠设计](../source-cache-matching-refactor/collapsible-source-cards/design.md)。原方案判断来自源码，不是 Windows 实机体验验收。
 
 当前具体问题：
 - 游戏详情把检测、兼容性、技术标识、安装、来源匹配、事务全部纵向排列，主要操作被信息淹没。

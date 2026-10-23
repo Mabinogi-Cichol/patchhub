@@ -11,6 +11,7 @@ import 'host/core_paths.dart';
 import 'host/source_tasks.dart';
 import 'pages/library_page.dart';
 import 'models/app_model.dart';
+import 'presentation/desktop_toolbar.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -29,6 +30,10 @@ Future<void> main() async {
     home = LibraryPage(model: model);
   } catch (error) {
     home = Scaffold(
+      appBar: const PreferredSize(
+        preferredSize: Size.fromHeight(52),
+        child: DesktopToolbar(actions: []),
+      ),
       body: Center(
         child: Padding(
           padding: const EdgeInsets.all(24),
@@ -44,6 +49,8 @@ Future<void> main() async {
     minimumSize: Size(850, 560),
     center: true,
     title: 'Steam 黄油补丁助手',
+    titleBarStyle: TitleBarStyle.hidden,
+    windowButtonVisibility: false,
   );
   windowManager.waitUntilReadyToShow(options, () async {
     await windowManager.show();

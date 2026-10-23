@@ -99,3 +99,9 @@ RustSec 提示：RUSTSEC-2024-0429（glib 0.18.5，unsound）与 RUSTSEC-2024-03
 | steam-patch-manager-decky.zip | 7,025,959 | `2a38645332cf9f264982ef0051d7d020f09423db7c7106c6ce709a42d0685cb8` |
 | steam-patch-manager-windows-portable.zip | 10,601,983 | `e86c1cbfe105b3d281beaaf43dc9b38c5a7ee30e40635986421dd594a8219951` |
 | Steam.Patch.Manager_0.2.1_x64-setup.exe | 7,639,964 | `7ce0ba6b80f8f7c93e9128a12c969f5d3425fd7d86c88c4683e4541df9391d10` |
+
+## v0.3.0 发布准备（2026-10-24）
+
+- 用户授权将 Windows Modern UI 分支合并至 main 并发布 v0.3.0。沿用已完成的功能回归、原生截图及候选启动/退出记录；版本变更补充 Cargo 锁文件、npm 工作区和 SBOM 检查，均通过。
+- Cargo workspace、Flutter、Decky、共享 UI、安装器与 SBOM 应用版本统一为 0.3.0。正式发行以 Tag 对应 CI 新构建为准，不上传本地旧版本候选。
+- 发行标题严格为 v0.3.0，中文正文来自 [发行说明](releases/v0.3.0.md)。CI 与公开附件核验尚待执行；本次不执行设备部署或真实游戏补丁安装。

@@ -41,7 +41,10 @@ class AppLifecycle extends ChangeNotifier with WindowListener {
 
   Future<void> finishExit() async {
     try {
-      await windowManager.destroy();
+      // Use the normal WM_CLOSE -> WM_DESTROY path after cleanup. On Windows,
+      // plugin destroy() posts WM_QUIT and skips the runner's window teardown.
+      await windowManager.setPreventClose(false);
+      await windowManager.close();
     } catch (failure) {
       error = failure;
       closing = false;
