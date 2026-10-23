@@ -18,9 +18,12 @@ function Invoke-Checked {
     if ($LASTEXITCODE -ne 0) { throw "$Executable failed with exit code $LASTEXITCODE" }
 }
 $taskExpected = (Get-Content (Join-Path $taskApp '.flutter-version') -Raw).Trim()
+# A fresh SDK bootstraps its tool before machine output is usable as JSON.
+Invoke-Checked $Flutter @('--version')
 $taskVersionJson = & $Flutter --version --machine
+if ($LASTEXITCODE -ne 0) { throw 'Unable to read Flutter version metadata' }
 $taskVersion = ($taskVersionJson | ConvertFrom-Json).frameworkVersion
-if ($LASTEXITCODE -ne 0 -or $taskVersion -ne $taskExpected) {
+if ($taskVersion -ne $taskExpected) {
     throw "Flutter $taskExpected required; found $taskVersion"
 }
 if (-not $SkipRust) {
