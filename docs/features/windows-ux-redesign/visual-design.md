@@ -1,6 +1,6 @@
 # Windows Modern 视觉重设计方案
 
-状态：2026-10-24 参考图对齐修订已实现，悬浮底栏、右侧补丁状态及整行技术详情已验证，待用户视觉验收；具体证据与未验证边界见 [progress.md](progress.md)。既有交互及 Flutter 技术方案见 [design.md](design.md)。
+状态：2026-10-24 参考图对齐修订已实现，悬浮底栏、右侧补丁状态及整行技术详情已验证，用户已授权合并并发布 v0.3.0，正式发行包核验通过；具体证据与未验证边界见 [progress.md](progress.md)。既有交互及 Flutter 技术方案见 [design.md](design.md)。
 
 ## 1. 设计方向与范围
 

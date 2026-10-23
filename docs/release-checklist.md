@@ -121,3 +121,26 @@ RustSec 提示：RUSTSEC-2024-0429（glib 0.18.5，unsound）与 RUSTSEC-2024-03
 
 - 运行 39999762120 的 Windows/Linux 核心和 Decky 全部通过，Windows 也完成 Flutter 检查、Release 构建、SBOM、便携包及 NSIS 生成；最后上传 NSIS 时通配符没有匹配到隐藏 .artifacts 目录内文件，release 被跳过。
 - 根据 actions/upload-artifact 官方说明，仅对 windows-nsis 的 .artifacts/*_x64-setup.exe 路径开启 include-hidden-files，不扩大文件范围。修复只改一个工作流输入，静态核对与 diff 检查通过，待新 Tag CI 实证。此前并发信任库测试本轮已通过，保留失败历史，不宣称其根因已定位。
+
+## v0.3.0 发布记录（2026-10-24）
+
+- 用户授权合并至主线并发布 v0.3.0，后又明确允许更新尚未生成 Release 的同名 Tag。依赖修复、Flutter 冷初始化修复和 NSIS 附件上传修复分别提交、合并；未降低测试门槛。此前失败运行及未发行 Tag 更新历史保留在上文，所有日志已存入忽略目录。
+- 最终发行提交：`48c9de68745ad59a6019ac3a165a8e7d0c03dab8`；注解 Tag 对象：`121bd2a3ea1ecf6dab0776ba0ed063edb14ce059`。公开 Release 生成后不再移动 Tag。
+- [Tag 运行 40001266403](https://github.com/Mabinogi-Cichol/steam-hentai-patch/actions/runs/40001266403) 的 Windows/Linux core、Windows、Decky、release 共 5 个任务全部成功。Flutter 210 项测试、静态分析和原生 release 构建通过；此前信任库并发测试在本轮完整 CI 再次通过，未修改该测试或生产逻辑，早期单次失败不宣称已定位根因。
+- [正式 Release v0.3.0](https://github.com/Mabinogi-Cichol/steam-hentai-patch/releases/tag/v0.3.0) 于 UTC 2026-10-23 18:23:52（北京时间 2026-10-24 02:23:52）发布。标题与 Tag 均为 `v0.3.0`，非草稿、非预发行，共 9 个附件；中文正文与 [发行说明](releases/v0.3.0.md)逐字符读回一致。
+- 从公开 Release 下载全部 9 个附件，名称、大小、GitHub digest、SHA256SUMS 的 8 个内容文件及两端 checksums JSON 全部一致。ZIP CRC、无重复/越界条目及内容白名单通过（Windows 39 文件 / Decky 23 文件）；两端源码、目录、契约、品牌及许可与 Tag 一致，Windows 按 runner 实际 CRLF/LF 规则核对。
+- 两份 CycloneDX 1.6 SBOM 的应用及全部 6 个 Rust 工作区组件版本为 0.3.0，内外 SBOM 字节一致，Cargo/npm/Dart 锁及安装器清单来源摘要匹配；Windows 505 组件、Decky 437 组件。Windows 程序与 DLL 为 PE x86_64，NSIS 引导桩为 x86；Decky CLI/worker 为 ELF64 x86_64，runtime 哈希、大小和执行位正确。独立 install-decky.py 与 Tag 源码字节一致。
+- 正式 Windows 便携包在独立 APPDATA 中启动并正常关闭，FileVersion/ProductVersion 为 `0.3.0+1`，退出码 0、关闭 1001ms；未操作用户原配置或真实游戏安装，没有强制结束正常程序。证据：`.artifacts/release-v0.3.0/` 中的 release.json、tag-run.json、tag-jobs.json、tag-ci-logs.zip、verification.json、ci-validation-summary.json、portable-smoke-result.json 及 downloads/。
+- 本次没有重新部署最终 Decky 包或执行真实游戏安装。系统 DPI 切换、真实自定义艺术作品及其他既有未验证边界仍按发行说明保留；不将本次构建/附件核验改写成这些实机项目通过。
+
+| 附件 | 字节 | SHA-256 |
+| --- | --- | --- |
+| checksums-decky.json | 159 | `a3156bf5f7db94e95986cb9efc7972fdd622af3636cb0eccc9a1beb3dede5dfd` |
+| checksums-windows.json | 178 | `237314e7040bf46f02bdb11c1268b98682234b90c767ea1077d4b8536b1e8f12` |
+| dependencies-decky.cdx.json | 206617 | `f1196a39d9e876076b8b38e52a45d04a16ca85159299f4b41a9776c42c31224f` |
+| dependencies-windows.cdx.json | 1698821 | `e867cef26d89120556fd9df16f5d1546751042ee7053bdd96f185e193668588d` |
+| install-decky.py | 44671 | `7d89a0a5a125c4ac666642e34f97aace5df87d8565f2e8298c6b2cf0f1afc918` |
+| SHA256SUMS.txt | 757 | `eb4e1a4aacee36c64942ad162a67c8cd50482b4c73753ba50bf0c17054870095` |
+| steam-patch-manager-decky.zip | 7003317 | `59f3c713d3b735c54fbb8c1be936b416ddd05b3f6ac44b9bd7711c7377a76d62` |
+| steam-patch-manager-windows-portable.zip | 19199825 | `6cadfe5cbd9f8bc0126ff85ce483973dd2f3e9e5e95c0519d1881787fc001604` |
+| Steam.Hentai.Patch_0.3.0_x64-setup.exe | 14551300 | `57aee4da5bf891cb40af6210b60292246d5c50214a4d6f12c8ab3faee3eb2fd3` |
