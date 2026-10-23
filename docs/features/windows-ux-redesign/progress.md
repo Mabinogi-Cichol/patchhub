@@ -345,3 +345,9 @@ flutter test integration_test/windows_acceptance_test.dart -d windows "--dart-de
 
 - 用户明确要求合并主线并作为 v0.3.0 发布，当前界面作为发行基线；沿用已完成的自动化和原生 UI 验证，不重跑未改动的界面矩阵。系统 DPI 切换、真实自定义图等未验证边界继续保留。
 - 布局修订已独立提交；版本、发行说明与施工记录分别提交。Tag 对应 CI 和公开附件核验尚待执行，完成后写入发行检查记录。
+
+### 2026-10-24 干净 CI 依赖修复
+
+- Tag 首轮 CI 39996679880 在 npm 契约测试因 esbuild 未声明而失败。干净 npm 安装还复现 Decky 渲染测试缺少 React DOM；此前本地旧 Windows 前端遗留依赖掩盖了问题。
+- 显式声明根目录 esbuild 开发依赖与 Decky 测试所需 React / React DOM，版本沿用既有安装；锁文件只增加对应依赖树。干净 npm ci、契约测试、类型检查及 Decky 68 项测试通过，证据位于 .artifacts/release-v0.3.0/。
+- 过度设计复核：修复已复现的缺失直接依赖，没有新增兼容路径或重试。v0.3.0 尚无公开 Release，已推送 Tag 的处理按发布技能边界等待用户决定，不擅自移动。
