@@ -3,16 +3,30 @@ on:
   push:
     branches: ['main']
     tags: ['v*']
-    paths-ignore:
-      - 'docs/**'
-      - '**/*.md'
   pull_request:
     branches: ['main']
   workflow_dispatch:
 permissions:
   contents: read
 jobs:
+  changes:
+    runs-on: ubuntu-22.04
+    outputs:
+      core: ${{ steps.select.outputs.core }}
+      windows: ${{ steps.select.outputs.windows }}
+      decky: ${{ steps.select.outputs.decky }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+      - run: python3 -m unittest discover -s .github/ci -p 'test_*.py' -v
+      - id: select
+        run: python3 .github/ci/select_jobs.py
+
   core:
+    needs: changes
+    if: needs.changes.outputs.core == 'true'
     strategy:
       matrix:
         os: [windows-latest, ubuntu-latest]
@@ -31,16 +45,12 @@ jobs:
       - run: cargo clippy -p steam-patch-core -p steam-patch-cli -p steam-patch-protocol -p steam-patch-contract-gen --all-targets --locked -- -D warnings
       - run: cargo test -p steam-patch-core -p steam-patch-cli --locked
       - run: cargo build -p steam-patch-core -p steam-patch-cli --locked
-      - run: python -m unittest discover -s apps/decky/backend -p 'test_*.py' -v
-      - run: python -m unittest discover -s scripts -p test_package_artifacts.py -v
-      - run: python -m unittest discover -s scripts -p test_build_sbom.py -v
-      - run: python -m unittest discover -s scripts -p test_flutter_sbom.py -v
-      - run: python -m unittest discover -s scripts -p test_install_decky.py -v
-      - run: python -m unittest discover -s scripts -p test_decky_bootstrap.py -v
       - run: python -m unittest discover -s scripts -p test_sf95_audit.py -v
       - run: python -m unittest discover -s scripts -p test_sf95_worker.py -v
 
   windows:
+    needs: changes
+    if: needs.changes.outputs.windows == 'true'
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
@@ -52,6 +62,9 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - run: python -m unittest discover -s scripts -p test_package_artifacts.py -v
+      - run: python -m unittest discover -s scripts -p test_build_sbom.py -v
+      - run: python -m unittest discover -s scripts -p test_flutter_sbom.py -v
       - run: cargo run --locked -p steam-patch-contract-gen -- check
       - run: npm ci
       - run: npm run test:contracts
@@ -139,6 +152,8 @@ jobs:
               --verify-tag --title "$RELEASE_TAG" --generate-notes "${flags[@]}"
           fi
   decky:
+    needs: changes
+    if: needs.changes.outputs.decky == 'true'
     runs-on: ubuntu-22.04
     env:
       CARGO_TARGET_DIR: target/linux
@@ -152,6 +167,11 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - run: python -m unittest discover -s apps/decky/backend -p 'test_*.py' -v
+      - run: python -m unittest discover -s scripts -p test_package_artifacts.py -v
+      - run: python -m unittest discover -s scripts -p test_build_sbom.py -v
+      - run: python -m unittest discover -s scripts -p test_install_decky.py -v
+      - run: python -m unittest discover -s scripts -p test_decky_bootstrap.py -v
       - run: cargo run --locked -p steam-patch-contract-gen -- check
       - run: npm ci
       - run: npm run test:contracts
@@ -175,3 +195,23 @@ jobs:
             .artifacts/dependencies.cdx.json
             .artifacts/install-decky.py
           if-no-files-found: error
+
+  ci:
+    needs: [changes, core, windows, decky]
+    if: always()
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Check selected jobs succeeded
+        env:
+          CHANGES: ${{ needs.changes.result }}
+          CORE: ${{ needs.core.result }}
+          WINDOWS: ${{ needs.windows.result }}
+          DECKY: ${{ needs.decky.result }}
+        run: |
+          test "$CHANGES" = success
+          for result in "$CORE" "$WINDOWS" "$DECKY"; do
+            case "$result" in
+              success|skipped) ;;
+              *) exit 1 ;;
+            esac
+          done
