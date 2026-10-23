@@ -10,5 +10,8 @@
     "build:decky": "npm run build -w apps/decky",
     "test:contracts": "node scripts/test-ui-contract.mjs && node scripts/test-flutter-presentation.mjs --check",
     "typecheck": "npm run typecheck -w apps/decky"
+  },
+  "devDependencies": {
+    "esbuild": "0.25.12"
   }
 }
