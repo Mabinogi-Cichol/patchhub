@@ -14,6 +14,8 @@ RequestExecutionLevel user
 SetCompressor /SOLID lzma
 Var ProductName
 Var UninstallKey
+!define MUI_ICON "${__FILEDIR__}/../apps/windows-flutter/windows/runner/resources/app_icon.ico"
+!define MUI_UNICON "${__FILEDIR__}/../apps/windows-flutter/windows/runner/resources/app_icon.ico"
 !insertmacro MUI_PAGE_WELCOME
 !insertmacro MUI_PAGE_DIRECTORY
 !insertmacro MUI_PAGE_INSTFILES
