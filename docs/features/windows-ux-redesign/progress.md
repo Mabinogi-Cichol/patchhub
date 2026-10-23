@@ -351,3 +351,10 @@ flutter test integration_test/windows_acceptance_test.dart -d windows "--dart-de
 - Tag 首轮 CI 39996679880 在 npm 契约测试因 esbuild 未声明而失败。干净 npm 安装还复现 Decky 渲染测试缺少 React DOM；此前本地旧 Windows 前端遗留依赖掩盖了问题。
 - 显式声明根目录 esbuild 开发依赖与 Decky 测试所需 React / React DOM，版本沿用既有安装；锁文件只增加对应依赖树。干净 npm ci、契约测试、类型检查及 Decky 68 项测试通过，证据位于 .artifacts/release-v0.3.0/。
 - 过度设计复核：修复已复现的缺失直接依赖，没有新增兼容路径或重试。v0.3.0 尚无公开 Release，已推送 Tag 的处理按发布技能边界等待用户决定，不擅自移动。
+
+### 2026-10-24 Flutter 冷启动构建修复
+
+- 更新 Tag 后运行 39998306298：Linux 核心与 Decky 通过，Windows 构建在首次运行 SDK 时将初始化输出混入 --version --machine 结果，ConvertFrom-Json 失败。
+- 构建脚本先执行普通 --version 完成初始化，再读取机器 JSON；两次命令各自检查退出状态，不用文本过滤或重试掩盖异常。真实脚本片段的冷启动输出隔离、初始化失败及语法验证通过，见 bootstrap-verification.json。
+- Windows 核心的 concurrent_remember_cannot_lower_high_water_mark 曾在本轮返回 trust_store_error，前一 Tag 运行同项通过。本机精确复验通过（0.25s），见 trust-concurrency-probe.log；未修改测试断言、并发度或生产信任逻辑，暂不宣称根因已修复，等待新 Tag 的完整矩阵。
+- 过度设计复核：冷初始化顺序修复对应 CI 实际输出污染，无兜底 JSON 猜测、额外重试或任意超时。用户对未发行 v0.3.0 Tag 的更新与继续发布授权仍适用。
