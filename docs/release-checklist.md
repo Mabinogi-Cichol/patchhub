@@ -105,3 +105,8 @@ RustSec 提示：RUSTSEC-2024-0429（glib 0.18.5，unsound）与 RUSTSEC-2024-03
 - 用户授权将 Windows Modern UI 分支合并至 main 并发布 v0.3.0。沿用已完成的功能回归、原生截图及候选启动/退出记录；版本变更补充 Cargo 锁文件、npm 工作区和 SBOM 检查，均通过。
 - Cargo workspace、Flutter、Decky、共享 UI、安装器与 SBOM 应用版本统一为 0.3.0。正式发行以 Tag 对应 CI 新构建为准，不上传本地旧版本候选。
 - 发行标题严格为 v0.3.0，中文正文来自 [发行说明](releases/v0.3.0.md)。CI 与公开附件核验尚待执行；本次不执行设备部署或真实游戏补丁安装。
+
+### 首轮 CI 阻断与修复
+
+- v0.3.0 初始 Tag 指向 7030553；运行 39996679880 的 Decky 与 Windows 契约步骤因未声明 esbuild 失败，未生成公开 Release。干净安装还发现 React DOM 测试依赖缺失，已补齐并通过契约、类型及 Decky 68 项测试。
+- 已推送 Tag 保持不变，待用户明确决定是否例外更新尚未发行的 v0.3.0 Tag，或改用新版本。当前不宣称发行完成。
