@@ -1,7 +1,7 @@
 name: steam_patch_windows
 description: Steam 黄油补丁助手 Windows 客户端
 publish_to: none
-version: 0.2.1+1
+version: 0.3.0+1
 environment:
   sdk: ^3.13.0
 dependencies:

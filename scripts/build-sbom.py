@@ -88,7 +88,7 @@ if args.flutter_deps:
     extra_properties.append({'name': 'steam-patch:dart-lock-sha256', 'value': hashlib.sha256((root / 'apps/windows-flutter/pubspec.lock').read_bytes()).hexdigest()})
 output.write_text(json.dumps({
     'bomFormat': 'CycloneDX', 'specVersion': '1.6', 'version': 1,
-    'metadata': {'component': {'type': 'application', 'name': 'Steam Hentai Patch', 'version': '0.2.1'},
+    'metadata': {'component': {'type': 'application', 'name': 'Steam Hentai Patch', 'version': '0.3.0'},
                  'properties': [{'name': 'steam-patch:inventory-scope',
                                  'value': 'All resolved Rust and locked npm dependencies, including build, development and target-specific packages, plus the bundled Rust installer and its reference license; Flutter/Dart when requested; no reachability analysis.'},
                                 {'name': 'steam-patch:cargo-lock-sha256', 'value': hashlib.sha256((root / 'Cargo.lock').read_bytes()).hexdigest()},

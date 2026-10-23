@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param([string]$Makensis = '', [string]$Version = '0.2.1')
+param([string]$Makensis = '', [string]$Version = '0.3.0')
 $ErrorActionPreference = 'Stop'
 $taskRoot = Split-Path -Parent $PSScriptRoot
 $taskBundle = Join-Path $taskRoot 'apps/windows-flutter/build/windows/x64/runner/Release'

@@ -5,7 +5,7 @@ Unicode true
   !error "BUNDLE must point to the complete Flutter Release directory"
 !endif
 !ifndef VERSION
-  !define VERSION "0.2.1"
+  !define VERSION "0.3.0"
 !endif
 Name "Steam Hentai Patch"
 OutFile "${OUTPUT}"
