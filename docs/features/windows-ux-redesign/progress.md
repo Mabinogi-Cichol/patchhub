@@ -239,3 +239,7 @@ flutter test integration_test/windows_acceptance_test.dart -d windows "--dart-de
 - `d662b6a`：补齐直接安装未完成的合法协议终态及共享夹具。
 - `a14c807`：Flutter客户端、深浅主题、任务/来源/安装/恢复、原生验收、构建打包与旧端退役。
 - 文档按仓库要求独立提交；提交前暂存区与diff检查通过，仅包含本功能及必要契约修复，没有验收归档、真实游戏文件、私钥或工具链。按用户明确授权合回main，保留外部403遗留。
+
+## 关窗验收证据更正与后续修复
+
+后续用户报告关闭窗口卡顿。本轮原生退出复验发现旧候选flutter_windows.dll崩溃，Windows错误处理亦会延长退出。此前本记录的release关闭检查仅确认进程结束，未读取退出码，不能单独证明正常销毁窗口。已在[Windows完善施工记录](../windows-visual-polish/progress.md)记录读取协作取消及正常WM_CLOSE/WM_DESTROY修复，并以真实release退出码0和880ms实测补足证据；不把此前异常退出追认成正常退出。

@@ -1,0 +1,30 @@
+# Windows 视觉与下载进度完善
+
+施工记录：[progress.md](progress.md)。延续 [Flutter 重写](../windows-ux-redesign/design.md)。
+
+## 目标与范围
+
+1. 安装下载阶段显示具体下载速度，与已下载/总量同时可见。
+2. Windows 主程序、任务栏、快捷方式和 NSIS 安装/卸载图标使用 docs/images/branding/logo.png 原图，保持图形、颜色与透明度。
+3. 浅色/深色主题均以黑白灰为主，蓝色仅用于进度、链接与键盘焦点等少量强调；保留现有主题切换和页面上下文。
+
+## 实现
+
+- 复用已校验的 install_progress.bytes_done。宿主用 Stopwatch 单调时间，计算相邻下载事件字节差/时间差；首次采样显示计算中，离开下载阶段清空速度，下载计数重置时重新采样。不修改 Rust/JSONL 协议，不新增定时器、平滑框架或任意时间窗口。
+- Material 3 monochrome 色板定义中性表面、文本、边框、按钮与选择背景；单独设置蓝色进度、TextButton、文本选择及焦点。错误保留语义提示。
+- 原 PNG 转换为包含16/24/32/48/64/128/256像素的ICO，供现有Runner资源及NSIS的MUI_ICON/MUI_UNICON引用；不重绘或重新生成品牌图。
+
+## 验收
+
+- 下载事件首次/持续/重置/离开阶段的速度准确，重复协议事件不改变采样；对话框显示单位且安装取消/终态逻辑保持有效。
+- 两种主题表面为灰阶，最小窗口125%/150%字体布局正常；蓝色强调可辨识。
+- ICO尺寸/透明度与原图转换一致，release与两类包构建成功。
+- 按overengineering-review复核实际实现；记录自动化与真实窗口检查边界。
+
+## 关窗迟缓修复
+
+用户补充报告关闭窗口长时间卡顿。已有release实测关窗在15秒观察内未退出、之后等待一次性核心调用结束才退出。CoreClient对scan/project_instances/preview使用无取消的serve，AppTasks.shutdown等待所有call，检测大文件期间无法提前结束。核心已将取消标志传入检测/投影，serve-task本来就支持这些方法。
+
+将三项读取复用现有CoreTask/serve-task；关闭时取消它们并等待实际结束，不显示已取消扫描的部分结果，不继续发新RPC。恢复、设置等写调用仍按原通道等待真实完成。返回应用恢复接收调用。不新增Rust协议、强杀或任意退出超时。
+
+原生退出复验还发现window_manager 0.5.2的destroy仅PostQuitMessage，跳过正常WM_CLOSE/WM_DESTROY路径；本机Flutter engine退出时实际发生0xc0000005/0xc000041d并触发Windows错误处理。清理完成后解除关闭拦截并调用插件close，让runner按正常消息顺序销毁窗口；不修改系统错误报告设置、不补丁本机插件缓存、不强制退出进程。

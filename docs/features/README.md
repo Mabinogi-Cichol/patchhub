@@ -6,6 +6,7 @@
 
 | 功能 | 状态 | 设计文档 | 施工记录 | 附加文档 |
 | --- | --- | --- | --- | --- |
+| Windows 视觉与下载进度完善 | 已实现：下载速度、品牌图标、中性主题及关窗卡顿修复；179项测试、真实数据渲染及release关窗880ms/exit0通过 | [设计](windows-visual-polish/design.md) | [施工记录](windows-visual-polish/progress.md) | — |
 | Windows 交互重设计 | P0–P7完成：Flutter/暗色模式、171项测试、原生关窗、两款游戏文件级验证及用户系统交互验收通过，旧端已退役；官方ZIP 403按用户确认保留外部遗留，授权合回main | [设计](windows-ux-redesign/design.md) | [施工记录](windows-ux-redesign/progress.md) | [实施计划](windows-ux-redesign/implementation-plan.md) |
 | 项目统一命名 | 已实现，类型/前端构建/桥接及当前平台 Python 检查通过；POSIX 与实机升级待验证 | [设计](unified-project-naming/design.md) | [施工记录](unified-project-naming/progress.md) | — |
 | 来源缓存与游戏匹配重构 | P1–P5 已实现并通过自动化门禁；P6 自动化验收与过度设计复核完成，真实网站关键链路（HGamer live、Kagura 列表结构与 EN 多入口）已修复并通过；Steam Deck 已完成编译部署、RPC/真实界面冒烟；Windows 实机、完整实机矩阵与安装链回归待验收；用户已要求合并 main 并发布 v0.2.0 | [设计](source-cache-matching-refactor/design.md) | [施工记录](source-cache-matching-refactor/progress.md) | [P0 基线](source-cache-matching-refactor/p0-baseline.md) · [P1 契约](source-cache-matching-refactor/p1-contract.md) · [P4 测绘](source-cache-matching-refactor/p4-host-map.md) · [P6 验收](source-cache-matching-refactor/p6-acceptance.md) · [VenusBlood 修复](source-cache-matching-refactor/vbf-matching-fix.md) |
