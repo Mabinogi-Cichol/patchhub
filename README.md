@@ -1,6 +1,6 @@
 # Steam Hentai Patch · Steam 黄油补丁助手
 
-![Steam 黄油补丁助手：查找、下载、安装，支持 Windows 和 Steam Deck](docs/images/branding/banner.png)
+![PatchHub：Steam 游戏补丁助手，查找、下载、安装，支持 Windows 和 Steam Deck](docs/images/branding/banner.png)
 
 一站式查找、下载并安装 Steam 黄油的成人内容补丁，支持 Windows 和 Steam Deck。省去逐个搜索发布页、核对下载文件和手动复制的步骤。
 
