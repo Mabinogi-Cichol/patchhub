@@ -4,7 +4,7 @@
 
 权威契约见 [P1 契约](../../docs/features/source-cache-matching-refactor/p1-contract.md) 与 [P4 宿主落点](../../docs/features/source-cache-matching-refactor/p4-host-map.md)，唯一 wire 类型与校验位于 `crates/protocol`。`crates/contract-gen` 由 Rust 类型确定性生成 [JSON Schema](generated/v5.schema.json)、[TypeScript](generated/protocol.ts) 与 [Python 纯数据](generated/protocol.py)，双端共用 [夹具](fixtures/v5/cases.json)。
 
-生成：`cargo run --locked -p steam-patch-contract-gen -- generate`；检查：`cargo run --locked -p steam-patch-contract-gen -- check`。生成器不打入插件，core 不依赖 wire 协议。
+生成：`cargo run --locked -p patchhub-contract-gen -- generate`；检查：`cargo run --locked -p patchhub-contract-gen -- check`。生成器不打入插件，core 不依赖 wire 协议。
 
 ## 传输与信封
 

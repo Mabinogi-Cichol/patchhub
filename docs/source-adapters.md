@@ -6,7 +6,7 @@
 
 ## 配置和状态
 
-默认订阅由核心内置 `crates/core/resources/sources.json`（编译进 CLI，单一来源）。用户启用状态、新增源、逐游戏订阅与每源自动更新间隔写入核心命名空间 `~/.local/share/steam-patch-manager/sources/rust-v1/`：
+默认订阅由核心内置 `crates/core/resources/sources.json`（编译进 CLI，单一来源）。用户启用状态、新增源、逐游戏订阅与每源自动更新间隔写入核心命名空间 `~/.local/share/patchhub/sources/rust-v1/`：
 
 ```text
 sources/rust-v1/
@@ -83,4 +83,4 @@ sources/rust-v1/
 
 运行时查询遵守网站的实际可访问性。403、登录、验证码或网站结构变化显示查询失败或索引不完整，不会伪造匹配。真实网络验收与本地模拟页面测试分别报告。
 
-网页解析由核心 Rust CLI 完成（随插件打包为 `bin/steam-patch`），插件运行时不再包含 Python HTML 解析模块，也不需要 `/usr/bin/python3` 解析工作进程。下载仍验证 HTTPS 证书，使用系统证书库。
+网页解析由核心 Rust CLI 完成（随插件打包为 `bin/patchhub-core`），插件运行时不再包含 Python HTML 解析模块，也不需要 `/usr/bin/python3` 解析工作进程。下载仍验证 HTTPS 证书，使用系统证书库。

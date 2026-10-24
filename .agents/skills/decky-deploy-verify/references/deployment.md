@@ -47,7 +47,7 @@ $deckSsh = @('-i', $deckKey, '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=8',
 Test-Path -LiteralPath $deckKey
 & ssh @deckSsh $deckTarget 'id'
 & ssh @deckSsh $deckTarget 'systemctl is-active plugin_loader'
-& ssh @deckSsh $deckTarget 'stat -c "%U:%G %a %n" /home/deck/homebrew/plugins/steam-patch-manager'
+& ssh @deckSsh $deckTarget 'stat -c "%U:%G %a %n" /home/deck/homebrew/plugins/patchhub'
 ```
 
 先确认 known-hosts 来自已有可信记录或本轮已核实的配对/指纹；冲突按 1.2 节处理。连接失败先检查设备唤醒、网络及 SSH 服务，不自动更改防火墙或系统配置。
@@ -56,9 +56,9 @@ Test-Path -LiteralPath $deckKey
 
 | 项目 | 本仓库通常值 / 检查方式 |
 | --- | --- |
-| 插件目录 | `/home/deck/homebrew/plugins/steam-patch-manager`；确认真实路径、非符号链接和插件身份 |
-| 显示身份 | 从本地与远端 `plugin.json` 读取 `name`，新版为 `Steam 黄油补丁助手`（旧版为 `Steam 补丁管理`）；版本读 `package.json` |
-| 状态目录 | `main.py` 使用 `DECKY_USER_HOME/.local/share/steam-patch-manager`；独立于插件目录 |
+| 插件目录 | `/home/deck/homebrew/plugins/patchhub`；确认真实路径、非符号链接和插件身份 |
+| 显示身份 | 从本地与远端 `plugin.json` 读取 `name`，新版为 `PatchHub`；旧品牌不自动迁移；版本读 `package.json` |
+| 状态目录 | `main.py` 使用 `DECKY_USER_HOME/.local/share/patchhub`；独立于插件目录 |
 | Loader | 本轮读取其版本、服务状态与日志，历史 3.2.9 的安装参数不能当作永久协议 |
 | CEF / HTTP | 设备 loopback 常见 `8080` / `1337`，只读探测是否可用，不直接暴露到局域网 |
 | 活动任务 | Steam 现有连接调用 `list_tasks`；当前终态为 completed/failed/cancelled，其他状态禁止部署 |
@@ -73,14 +73,14 @@ Test-Path -LiteralPath $deckKey
 npm test -w apps/decky
 npm run typecheck -w apps/decky
 npm run build:decky
-git -c safe.directory='D:/Project Files/git/steam-hentai-patch-searcher' diff --check
+git -c safe.directory='E:/ProjectFiles/Git/steam-hentai-patch-searcher' diff --check
 ```
 
 依赖不存在时按 lockfile 执行 `npm ci`；已有验证且代码没变时沿用记录。直接调用 Rollup 必须设工作目录 `apps/decky`（`node ../../node_modules/rollup/dist/bin/rollup -c`），根目录执行会找不到 `plugin.json`。
 
-Python 变动运行相关 unittest；CLI 桥接测试需指定实际可运行的 CLI，缺二进制的检查记作未执行。Rust 变动执行对应核心测试和 Linux 构建；Windows `.exe` 不能部署为 Linux `bin/steam-patch`。无 Linux 编译环境时可在独立设备验证目录构建，不把工具链安装进 SteamOS 系统分区。
+Python 变动运行相关 unittest；CLI 桥接测试需指定实际可运行的 CLI，缺二进制的检查记作未执行。Rust 变动执行对应核心测试和 Linux 构建；Windows `.exe` 不能部署为 Linux `bin/patchhub-core`。无 Linux 编译环境时可在独立设备验证目录构建，不把工具链安装进 SteamOS 系统分区。
 
-完整插件以当前 [package-plugin.mjs](../../../../apps/decky/scripts/package-plugin.mjs) 为准：该脚本读取 `target/linux/release/steam-patch`。即使 Cargo 编译成功，也要把**对应新构建**的 Linux CLI 放到这个精确路径，核对来源/哈希，再执行：
+完整插件以当前 [package-plugin.mjs](../../../../apps/decky/scripts/package-plugin.mjs) 为准：该脚本读取 `target/linux/release/patchhub-core`。即使 Cargo 编译成功，也要把**对应新构建**的 Linux CLI 放到这个精确路径，核对来源/哈希，再执行：
 
 ```powershell
 npm run package:plugin -w apps/decky
@@ -94,7 +94,7 @@ python scripts/package-artifacts.py --platform decky
 
 本地 `.artifacts/<feature>-deck-<timestamp>/` 保存新文件清单（相对路径、字节数、SHA-256）、首次旧文件备份及旧清单；完整更新还生成可供 Loader 安装的旧版回滚 ZIP。保留二进制可执行权限。重复部署不覆盖首次有效备份，也不将失败后的混合版本作为原始备份。
 
-远端暂存用唯一目录 `/home/deck/steam-patch-validation/<feature>-<timestamp>/`。上传前验证清单无绝对路径、`..`、重复路径或符号链接逃逸；ZIP 顶层为 `steam-patch-manager/`，成员与清单一致。上传后核对整个 ZIP 的 SHA-256 和每个成员的 SHA-256。
+远端暂存用唯一目录 `/home/deck/patchhub-validation/<feature>-<timestamp>/`。上传前验证清单无绝对路径、`..`、重复路径或符号链接逃逸；ZIP 顶层为 `patchhub/`，成员与清单一致。上传后核对整个 ZIP 的 SHA-256 和每个成员的 SHA-256。
 
 PowerShell 用 `Get-FileHash -Algorithm SHA256`，设备用 `sha256sum` 或 `/usr/bin/python3 -I` 的 hashlib。通过 SCP 参数数组上传到确定的路径，不拼接未转义用户数据执行 shell。前端最小更新同时带 `dist/index.js` 和 map；完整更新必须包括新模块、默认规则及 worker，不能只拷 `main.py`。
 
@@ -123,4 +123,4 @@ PowerShell 用 `Get-FileHash -Algorithm SHA256`，设备用 `sha256sum` 或 `/us
 
 文件校验或重载失败：停止后续验证，保存异常、服务日志和当前清单。增量更新恢复本轮旧文件及权限，删除本轮新增且身份可确认的文件；Loader 更新安装已验证旧版回滚 ZIP。确认状态与活动任务安全后重载，复查旧版哈希、RPC 及服务；回滚失败或设备失联时报告待恢复路径，不无限重试，也不删除证据。
 
-正常结束后将远端备份、回滚 ZIP、manifest、RPC JSON、日志和截图取回本地并核对哈希。再检查本轮远端暂存目录解析后的绝对路径严格属于 `/home/deck/steam-patch-validation/<本轮目录>/`，不能是验证根目录或插件/state/游戏目录；使用同一远端脚本清理该目录并复核不存在。设备只保留运行必需文件；本地回滚材料和证据继续保留。失联或取回失败时标明待清理，不删除唯一备份。
+正常结束后将远端备份、回滚 ZIP、manifest、RPC JSON、日志和截图取回本地并核对哈希。再检查本轮远端暂存目录解析后的绝对路径严格属于 `/home/deck/patchhub-validation/<本轮目录>/`，不能是验证根目录或插件/state/游戏目录；使用同一远端脚本清理该目录并复核不存在。设备只保留运行必需文件；本地回滚材料和证据继续保留。失联或取回失败时标明待清理，不删除唯一备份。

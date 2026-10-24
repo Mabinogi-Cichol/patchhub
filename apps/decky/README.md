@@ -6,7 +6,7 @@
 
 root Loader 启动时按可信用户目录降权运行整个 CLI。当前来源配置继续使用 sources/rust-v1，任务历史使用 host-v3；旧 Python 来源、任务和安装日志不会作为当前运行时输入。切换前必须通过旧插件完成事务收尾并保留完整备份。安装按钮使用覆盖安装语义，只写入本次配方目标；已有补丁或旧保护文件不会阻止安装，执行中的事务仍需先完成恢复。
 
-生产包固定包含 bin/steam-patch、bin/sf-worker、协议与哈希清单、签名目录、许可及 SBOM，不包含旧 Python SF、publisher/exe 或引擎切换实现。受支持的 EXE 只由 Rust 核心在 worker 沙箱中静态分析和流式提取；不能把任意 EXE 当作游戏安装程序运行。
+生产包固定包含 bin/patchhub-core、bin/patchhub-worker、协议与哈希清单、签名目录、许可及 SBOM，不包含旧 Python SF、publisher/exe 或引擎切换实现。受支持的 EXE 只由 Rust 核心在 worker 沙箱中静态分析和流式提取；不能把任意 EXE 当作游戏安装程序运行。
 
 仓库根目录执行 npm ci、npm run typecheck、npm run test -w apps/decky；在 Linux/WSL 执行 sh scripts/build-linux.sh，再执行 npm run package:plugin -w apps/decky。生成当前依赖元数据后运行 python scripts/build-sbom.py .artifacts/cargo-metadata.json 与 python scripts/package-artifacts.py --platform decky。完整包通过 Loader 正式 ZIP 安装，不能裸替换后手工结束后端进程。
 
@@ -16,18 +16,20 @@ root Loader 启动时按可信用户目录降权运行整个 CLI。当前来源�
 
 ## 终端安装器（开发版）
 
+PatchHub 代码和配套新名称附件尚未发布；以下公开安装命令在代码进入 main 并发布新版后适用，旧品牌 Release 不兼容新身份安装器。
+
 [`install-decky.py`](../../scripts/install-decky.py) 已完成隔离测试，Steam Deck 实机验收仍待执行。用户在桌面模式打开 Konsole，复制以下一行即可下载安装器并进入安装/更新流程，无需先保存文件：
 
 ```bash
-curl -fsSL https://ba.sh/tz4y | bash
+curl -fsSL https://raw.githubusercontent.com/Mabinogi-Cichol/patchhub/main/install.sh | bash
 ```
 
-短链接指向本仓库 [`install.sh`](../../install.sh)。引导脚本把 Python 安装器完整下载到内存，成功且非空后执行；插件包仍取自 GitHub 正式 Release。版本确认从终端读取，命令依赖系统 Bash、curl 与 Python 3.10+，不生成安装器临时文件。入口跟随本仓库 `main` 分支，不依赖新的安装器 Release 附件。
+上面的完整地址指向本仓库 [`install.sh`](../../install.sh)。引导脚本把 Python 安装器完整下载到内存，成功且非空后执行；插件包仍取自 GitHub 正式 Release。版本确认从终端读取，命令依赖系统 Bash、curl 与 Python 3.10+，不生成安装器临时文件。入口跟随本仓库 `main` 分支，不依赖新的安装器 Release 附件。
 
 需要参数时使用 `bash -s --`，例如只检查：
 
 ```bash
-curl -fsSL https://ba.sh/tz4y | bash -s -- --check
+curl -fsSL https://raw.githubusercontent.com/Mabinogi-Cichol/patchhub/main/install.sh | bash -s -- --check
 ```
 
 `--` 后可以填写以下参数：
@@ -35,14 +37,14 @@ curl -fsSL https://ba.sh/tz4y | bash -s -- --check
 | 参数 | 用途 |
 | --- | --- |
 | `--check` | 只下载、检查并清理 |
-| `--version v0.1.0` | 安装指定的已有 Release |
+| `--version vX.Y.Z` | 安装指定的 PatchHub Release；旧品牌包不兼容 |
 | `--yes` | 显式无人交互安装 |
 | `--recover` | 只续做上次恢复与清理 |
 
 不使用短链接时，可直接从 GitHub 获取同一个入口：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Mabinogi-Cichol/steam-hentai-patch/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Mabinogi-Cichol/patchhub/main/install.sh | bash
 ```
 
 已手动保存 Python 安装器时，也可以直接运行；这些命令仍会联网下载插件包：
@@ -63,4 +65,4 @@ python3 install-decky.py --recover               # 只续做上次恢复与清�
 
 ## ZIP 离线安装
 
-在可联网的设备从 Release 下载完整 `steam-patch-manager-decky.zip`，传到 Steam Deck 后，通过 Decky 的本地 ZIP / 文件安装入口选择该文件。包内已包含运行所需的核心程序；无需运行在线安装命令。详细步骤见[主 README 的 ZIP 离线安装](../../README.md#zip-离线安装)。
+在可联网的设备从 Release 下载完整 `patchhub-decky.zip`，传到 Steam Deck 后，通过 Decky 的本地 ZIP / 文件安装入口选择该文件。包内已包含运行所需的核心程序；无需运行在线安装命令。详细步骤见[主 README 的 ZIP 离线安装](../../README.md#zip-离线安装)。

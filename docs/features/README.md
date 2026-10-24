@@ -6,7 +6,7 @@
 
 | 功能 | 状态 | 设计文档 | 施工记录 | 附加文档 |
 | --- | --- | --- | --- | --- |
-| PatchHub 品牌与全面改名 | Logo、横幅及 Windows PNG/ICO 已替换；全面改名待实现，构建与实机待验证 | [设计与改名计划](patchhub-branding/design.md) | [施工记录](patchhub-branding/progress.md) | — |
+| PatchHub 品牌与全面改名 | 全面改名与双端构建/打包、Windows 原生更新链通过；GitHub 已改名，源码未推送，系统安装/Decky 实机与正式发布待验收 | [设计与改名计划](patchhub-branding/design.md) | [施工记录](patchhub-branding/progress.md) | [实现复核](patchhub-branding/review.md) |
 | Windows 与 Decky 客户端自更新 | 已实现；双端本地 Release 夹具完整更新链、自动化与 Decky 实机部署/检测页面/失败恢复通过；正式发布、Windows 安装版完整矩阵及实体手柄待验收 | [设计](client-self-update/design.md) | [施工记录](client-self-update/progress.md) | [实现复核](client-self-update/review.md) |
 | Windows 视觉与下载进度完善 | 已实现：下载速度、品牌图标、中性主题及关窗卡顿修复；179项测试、真实数据渲染及release关窗880ms/exit0通过 | [设计](windows-visual-polish/design.md) | [施工记录](windows-visual-polish/progress.md) | — |
 | Windows 交互重设计 | 2026-10-24 三项UI反馈已修复，Flutter 219项通过/1项跳过，Release构建/隔离启动退出与30张原生截图验证通过；P0–P7原重写已验收，旧端退役；官方ZIP 403按用户确认保留外部遗留。2026-10-24 已补齐悬浮操作栏、右侧补丁状态、整行技术详情及选择器标题排版，相关回归与18张原生截图通过（此前205项完整回归通过）；v0.3.0已合并发布，正式210项Flutter回归及公开附件核验通过，真实自定义图和系统DPI切换未实测 | [设计](windows-ux-redesign/design.md) | [施工记录](windows-ux-redesign/progress.md) | [实施计划](windows-ux-redesign/implementation-plan.md) · [Modern 视觉方案](windows-ux-redesign/visual-design.md) |

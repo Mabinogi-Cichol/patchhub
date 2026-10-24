@@ -40,7 +40,7 @@ node .agents/skills/decky-deploy-verify/scripts/cef.mjs --target '<列表中的�
 (() => {
   const loader = window.DeckyPluginLoader;
   if (!loader || !Array.isArray(loader.plugins)) throw new Error('Loader unavailable');
-  const name = 'Steam 黄油补丁助手'; // 验证旧版时以远端 plugin.json 的 name 为准
+  const name = 'PatchHub'; // 验证旧版时以远端 plugin.json 的 name 为准
   return {
     instances: loader.plugins.filter(p => p.name === name).length,
     present: typeof loader.hasPlugin === 'function' ? loader.hasPlugin(name) : null

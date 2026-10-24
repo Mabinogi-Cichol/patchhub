@@ -26,7 +26,7 @@
 | --- | --- | --- |
 | [Dharker / Negligee](https://dharkerstudio.com/negligee.html) | 官方页面说明 138MB，解压后把 adultpatch.rpa 加入游戏 game 目录，保留原文件；菜单可显示内容版本 | 新增文件配方候选；页面未见明确补丁版号，仍需哈希、AppID、包获取与双端验证 |
 | [Paper / Dischan / Mahou Arms](https://paper.moe/downloads) | 官方页面说明 patcher 自动识别版本；有 Steam Deck 用 Linux patcher 与 Windows 固定版本 bundle | 首版仅引导官方程序；未执行程序，不能推导具体文件改动或托管回滚 |
-| [072 Project 门户样本](https://hgamer.tw/zh-TW/patches/colosseum-clothes-ripper-the-erotic-arena-rpg-steam-patch) | HGamer 标为 v1.0.0、8MB ZIP，说明免费登录 / 结账后下载，并称修复事件与 BUG | 账号流程只提供引导 / 导入；这不是已证实的内容恢复补丁，需另选符合目标的样本；外站未独立核实 |
+| [072 Project 门户样本](https://hgamer.tw/zh-TW/patches/colosseum-clothes-ripper-the-erotic-arena-rpg-patchhub-core) | HGamer 标为 v1.0.0、8MB ZIP，说明免费登录 / 结账后下载，并称修复事件与 BUG | 账号流程只提供引导 / 导入；这不是已证实的内容恢复补丁，需另选符合目标的样本；外站未独立核实 |
 | [azucat 门户样本](https://hgamer.tw/zh-TW/patches/the-too-cute-girl-who-moved-in-next-door-patch) | HGamer 标为 Ver.1.043、175MB ZIP，说明 R18 而非去码，解压 app_Data 后覆盖 | 覆盖文件配方候选；开发者下载页读取失败，包内容 / 哈希 / 兼容性待核实 |
 
 另有 Saikey Studios 样本由来源 Agent 查到，但本轮主 Agent 复查详情页不可访问，因此不将它列为已复核的自动下载候选。以上候选均未下载文件或检查实际包内容。

@@ -5,7 +5,7 @@ description: 用户明确要求提交本项目 Git 改动时，核对变更与�
 
 # 本项目 Git 提交
 
-适用于本技能所在的 `steam-hentai-patch` 仓库。项目根目录为本技能目录向上三级；不将此项目的信任配置套用到其他仓库。明确的“提交 GIT”请求授权必要的检查、暂存和本地提交；用户提供了提交说明时沿用其意图，否则根据实际内容拟定说明。
+适用于本技能所在的 `patchhub` 仓库。项目根目录为本技能目录向上三级；不将此项目的信任配置套用到其他仓库。明确的“提交 GIT”请求授权必要的检查、暂存和本地提交；用户提供了提交说明时沿用其意图，否则根据实际内容拟定说明。
 
 ## 提交前
 
@@ -19,11 +19,11 @@ description: 用户明确要求提交本项目 Git 改动时，核对变更与�
 
 ```powershell
 # 在已确认的项目根目录执行；不要在其他仓库照抄此路径
-$steamPatchGit = @('-c', 'safe.directory=D:/Project Files/git/steam-hentai-patch-searcher')
-& git @steamPatchGit status --short
-& git @steamPatchGit diff --stat
-& git @steamPatchGit diff --cached --stat
-& git @steamPatchGit diff --check
+$patchhubGit = @('-c', 'safe.directory=E:/ProjectFiles/Git/steam-hentai-patch-searcher')
+& git @patchhubGit status --short
+& git @patchhubGit diff --stat
+& git @patchhubGit diff --cached --stat
+& git @patchhubGit diff --check
 ```
 
 每次 Git 调用检查退出码；失败后不继续暂存或提交。
