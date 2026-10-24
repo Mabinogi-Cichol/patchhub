@@ -19,6 +19,9 @@ Windows 当前未配置 Authenticode 证书，安装包没有发行者身份认�
 
 ## 每次发布前
 
+- 自更新版本校验需确认 Cargo、Flutter、Decky、Windows `app-version.json` 与 Release Tag 一致。Windows ZIP 与 NSIS 使用相同受管理文件清单；验证更新多次后仍可正确卸载，且不删除用户额外文件。
+- 先创建草稿 Release，完整上传双端 ZIP、NSIS、校验清单和其他附件，下载核对 `SHA256SUMS.txt` 后再公开；不自动覆盖已有公开附件。自动检查不依赖 NSIS 附件。
+
 1. 核对公开目录的 AppID、来源链接、包哈希、游戏 build、语言、许可条件和平台验证证据。未知平台或版本保持禁用自动安装。
 2. 完成 fmt、Clippy、核心事务与恢复测试、Python 薄桥接模块测试（生产 backend allowlist）、双端前端构建；记录实际执行结果。
 3. 审查依赖变更、许可及已披露漏洞；保留工具版本和可复查报告。2026-10-01 npm 官方安全接口对当前锁定依赖返回 0 条已披露漏洞。cargo-audit 0.22.2 使用 RustSec 数据库 commit 9b3a3b73a7f42606494c943e95f8196e9994df46 检查当时的锁文件 528 个 Rust 依赖，无漏洞命中，另有下方两个提示；该记录早于后续依赖变更，当前 Cargo.lock 为 545 个包，正式发布前需重跑 cargo-audit 并更新记录。scripts/build-sbom.py 生成 744 个组件的 CycloneDX 依赖清单（2026-10-11 P6 重建实测），包括开发及其他平台依赖；清单与审计均不代表依赖没有未知漏洞，也不替代许可证法律审查。
