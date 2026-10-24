@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -6,6 +7,8 @@ import 'package:window_manager/window_manager.dart';
 
 import 'app.dart';
 import 'host/app_lifecycle.dart';
+import 'host/app_update.dart';
+import 'pages/app_update_panel.dart';
 import 'host/core_client.dart';
 import 'host/core_paths.dart';
 import 'host/source_tasks.dart';
@@ -13,9 +16,79 @@ import 'pages/library_page.dart';
 import 'models/app_model.dart';
 import 'presentation/desktop_toolbar.dart';
 
-Future<void> main() async {
+Future<void> main(List<String> arguments) async {
   WidgetsFlutterBinding.ensureInitialized();
   await windowManager.ensureInitialized();
+  final directory = File(Platform.resolvedExecutable).parent;
+  if (!arguments.contains('--update-probe')) {
+    final maintenance = File('${directory.path}/.steam-patch-maintenance.lock');
+    if (await maintenance.exists()) {
+      try {
+        final handle = await maintenance.open(mode: FileMode.append);
+        await handle.close();
+      } on FileSystemException {
+        stderr.writeln('应用正在更新或卸载，请稍后重试。');
+        exit(1);
+      }
+    }
+  }
+  final marker = File('${directory.path}/.steam-patch-update.json');
+  if (!arguments.contains('--update-probe') && await marker.exists()) {
+    final transaction = jsonDecode(await marker.readAsString()) as Map;
+    await Process.start('powershell.exe', [
+      '-NoProfile',
+      '-NonInteractive',
+      '-ExecutionPolicy',
+      'Bypass',
+      '-File',
+      '${transaction['work']}/windows-update.ps1',
+      '-Mode',
+      'Recover',
+      '-Target',
+      directory.path,
+      '-ParentId',
+      '$pid',
+    ], mode: ProcessStartMode.detached);
+    exit(0);
+  }
+  if (arguments.length == 2 && arguments[0] == '--update-probe') {
+    try {
+      final request =
+          jsonDecode(await File(arguments[1]).readAsString()) as Map;
+      final metadata = jsonDecode(
+        await File('${directory.path}/app-version.json').readAsString(),
+      ) as Map;
+      if (request['target'] != directory.path ||
+          request['version'] != metadata['version']) {
+        throw StateError('更新目标不匹配');
+      }
+      final protocol = WireProtocol(
+        jsonDecode(
+          await rootBundle.loadString('assets/protocol-v5.schema.json'),
+        ) as Map<String, dynamic>,
+      );
+      await CoreClient(CorePaths.resolve(), protocol).capabilities();
+      runApp(
+        const SteamPatchApp(
+          home: Scaffold(body: Center(child: Text('正在确认更新…'))),
+        ),
+      );
+      await WidgetsBinding.instance.endOfFrame;
+      final work = request['work'] as String;
+      await File('$work/ready.json').writeAsString(
+        jsonEncode({'pid': pid, 'version': metadata['version']}),
+        flush: true,
+      );
+      while (!await File('$work/commit.json').exists()) {
+        if (await File('$work/abort.json').exists()) exit(1);
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+      }
+      await File('$work/ack.json').writeAsString('{}', flush: true);
+    } catch (e) {
+      stderr.writeln(e);
+      exit(1);
+    }
+  }
   AppTasks? tasks;
   AppModel? model;
   Widget home;
@@ -44,6 +117,22 @@ Future<void> main() async {
   }
   final lifecycle = AppLifecycle(tasks: tasks, onReturnToApp: model?.refresh);
   await lifecycle.initialize();
+  final metadataFile = File('${directory.path}/app-version.json');
+  final version = await metadataFile.exists()
+      ? (jsonDecode(await metadataFile.readAsString()) as Map)['version']
+            as String
+      : 'development';
+  final appData = Platform.environment['APPDATA'];
+  final update = AppUpdate(
+    directory: directory,
+    current: version,
+    stateFile: File('$appData/io.github.steampatch.manager/updates/state.json'),
+  );
+  final updateHome = AppUpdatePanel(
+    update: update,
+    lifecycle: lifecycle,
+    child: home,
+  );
   const options = WindowOptions(
     size: Size(1180, 760),
     minimumSize: Size(850, 560),
@@ -118,7 +207,10 @@ Future<void> main() async {
             children: [
               ExcludeFocus(
                 excluding: overlay != null,
-                child: AbsorbPointer(absorbing: overlay != null, child: home),
+                child: AbsorbPointer(
+                  absorbing: overlay != null,
+                  child: updateHome,
+                ),
               ),
               if (overlay != null) Positioned.fill(child: overlay),
             ],

@@ -84,10 +84,14 @@ class PackagingTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp); self.fixture(root, windows=True)
             self.write(root, 'apps/decky/plugin-output/bin/sf-worker', b'bad old Linux runtime')
+            self.write(root, 'apps/windows-flutter/build/windows/x64/runner/Release/.steam-patch-maintenance.lock', b'')
             self.run_package(root, 'windows')
             self.assertFalse((root / '.artifacts/steam-patch-manager-decky.zip').exists())
             with zipfile.ZipFile(root / '.artifacts/steam-patch-manager-windows-portable.zip') as archive:
                 self.assertIn('sf-worker.exe', archive.namelist())
+                self.assertNotIn('.steam-patch-maintenance.lock', archive.namelist())
+                manifest = json.loads(archive.read('update-manifest.json'))
+                self.assertEqual(set(manifest['files']), set(archive.namelist()))
                 self.assertEqual(archive.read('LICENSE'), (root / 'LICENSE').read_bytes())
                 self.assertEqual(archive.read('licenses/sfextract-MIT.txt'), (root / 'scripts/licenses/sfextract-MIT.txt').read_bytes())
                 self.assertIn('dependencies.cdx.json', archive.namelist())

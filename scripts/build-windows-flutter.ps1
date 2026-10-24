@@ -69,3 +69,5 @@ $taskDeps | Set-Content -Encoding utf8 (Join-Path $taskEvidence 'pub-deps.json')
 $taskFlutterRoot = Split-Path -Parent (Split-Path -Parent (Resolve-Path $Flutter).Path)
 Copy-Item -LiteralPath (Join-Path $taskFlutterRoot 'LICENSE') -Destination (Join-Path $taskResources 'licenses/Flutter-LICENSE')
 Copy-Item -LiteralPath (Join-Path $taskFlutterRoot 'bin/cache/dart-sdk/LICENSE') -Destination (Join-Path $taskResources 'licenses/Dart-LICENSE')
+& python (Join-Path $PSScriptRoot 'update_manifest.py') $taskOutput
+if ($LASTEXITCODE -ne 0) { throw 'Update manifest generation failed' }

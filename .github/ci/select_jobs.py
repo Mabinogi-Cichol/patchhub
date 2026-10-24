@@ -25,6 +25,8 @@ RULES = (
         "apps/windows-flutter/**", "scripts/build-windows-*.ps1",
         "scripts/windows-installer.nsi", "scripts/flutter_sbom.py",
         "scripts/test_flutter_sbom.py",
+        "scripts/windows-update.ps1", "scripts/update_manifest.py", "scripts/test_windows_update.py",
+        "scripts/fixtures/app-update.json",
         "catalog/catalog.json", "catalog/signed-catalog.json",
         "docs/client-guide.md", "docs/privacy.md",
     )),
@@ -33,6 +35,7 @@ RULES = (
         "catalog/catalog.json", "catalog/signed-catalog.json",
         "scripts/install-decky.py", "scripts/test_install_decky.py",
         "scripts/test_decky_bootstrap.py", "scripts/test-install-decky-bridge.mjs",
+        "scripts/fixtures/app-update.json",
     )),
     (("core",), (
         "scripts/sf*.py", "scripts/test_sf*.py", "scripts/fixtures/**",

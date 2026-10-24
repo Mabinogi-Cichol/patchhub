@@ -16,6 +16,7 @@ from plugin_settings import Settings, _no_links
 from source_service import SourceService, due_source_ids
 from state_host import prepare_host_state
 from tasks import TaskManager
+from app_update import AppUpdate
 
 # Runtime-only automatic update check. The core persists intervals and derives
 # next_due_at; the host never stores its own timers (p1-contract §10).
@@ -38,6 +39,9 @@ class Plugin:
         root = Path(decky.DECKY_PLUGIN_DIR)
         home = Path(decky.DECKY_USER_HOME)
         state_dir = home / ".local/share/steam-patch-manager"
+        self.app_update = AppUpdate(root, state_dir)
+        self._app_update_gate = (home / '.cache/steam-patch-decky-install/journal.json').exists()
+        self._app_update_checker = asyncio.create_task(self._app_update_loop())
         run_uid = run_gid = None
         if os.geteuid() == 0:
             import pwd
@@ -57,7 +61,8 @@ class Plugin:
         self._scan_generation = 0
         self._cache_result = None
         # Old recovery is a deployment gate; this RPC reads the new schema only.
-        await self.bridge.recover()
+        if not self._app_update_gate:
+            await self.bridge.recover()
         self._scheduler = asyncio.create_task(self._scheduler_loop())
         # First-seen local games must enter matching without a user action
         # (design §3.3). The check itself is off the startup critical path.
@@ -106,6 +111,8 @@ class Plugin:
         return self.sources.start_match_games(instances, force_details=False)
 
     async def _startup_match_check(self):
+        if getattr(self, '_app_update_gate', False):
+            return
         try:
             report = await self._read_report()
         except asyncio.CancelledError:
@@ -201,7 +208,11 @@ class Plugin:
             await asyncio.sleep(SCHEDULER_INTERVAL_SECONDS)
 
     async def _check_due_sources(self, now=None):
+        if getattr(self, '_app_update_gate', False):
+            return []
         summaries = await self.sources.reload_sources()
+        if getattr(self, '_app_update_gate', False):
+            return []
         moment = int(time.time()) if now is None else now
         started = []
         for source_id in due_source_ids(summaries, moment):
@@ -210,6 +221,63 @@ class Plugin:
             self.sources.start_update_source(source_id)
             started.append(source_id)
         return started
+
+    async def _app_update_loop(self):
+        while True:
+            try:
+                await self.get_app_update_status()
+                await self.app_update.check()
+            except Exception as error:
+                logging.getLogger(__name__).warning('app_update_check_failed: %s', error)
+            await asyncio.sleep(3600)
+
+    async def check_app_update(self):
+        return await self.app_update.check(manual=True)
+
+    async def claim_app_update_notice(self):
+        return self.app_update.claim_notice()
+
+    async def get_app_update_status(self):
+        status = self.app_update.snapshot()
+        execution = status.get('execution') or {}
+        if execution.get('state') in ('completed', 'failed') and not (Path(decky.DECKY_USER_HOME) / '.cache/steam-patch-decky-install/journal.json').exists():
+            self._app_update_gate = False
+        return status
+
+    async def skip_app_update(self, tag):
+        return self.app_update.skip(tag)
+
+    async def cancel_app_update(self):
+        return self.app_update.cancel()
+
+    async def recover_app_update(self):
+        return self.app_update.start(recover=True)
+
+    def _prepare_app_update(self):
+        patch_busy = hasattr(self, 'tasks') and self.tasks.busy()
+        source_busy = hasattr(self, 'sources') and any(t['state'] not in ('completed', 'failed', 'cancelled') for t in self.sources.task_status())
+        if getattr(self, '_active_host_calls', 0) > 1 or patch_busy or source_busy:
+            raise RuntimeError('请先完成或取消补丁、来源与扫描任务，再更新插件')
+        self._app_update_gate = True
+        return {'ready': True}
+
+    async def prepare_app_update(self):
+        return self._prepare_app_update()
+
+    async def finish_app_update(self):
+        if (Path(decky.DECKY_USER_HOME) / '.cache/steam-patch-decky-install/journal.json').exists():
+            raise RuntimeError('更新事务尚未完成')
+        await self.bridge.recover()
+        self._app_update_gate = False
+        return {'ready': True}
+
+    async def start_app_update(self, tag):
+        self._prepare_app_update()
+        try:
+            return self.app_update.start(tag)
+        except BaseException:
+            self._app_update_gate = False
+            raise
 
     async def get_settings(self):
         return {**self.settings.snapshot(), "cache": getattr(self, "_cache_result", None)}
@@ -302,7 +370,7 @@ class Plugin:
         return [task.snapshot() for task in self.tasks.tasks.values()]
 
     async def _unload(self):
-        for name in ("_startup_check", "_scheduler"):
+        for name in ("_startup_check", "_scheduler", "_app_update_checker"):
             background = getattr(self, name, None)
             if background is not None:
                 background.cancel()
@@ -317,12 +385,23 @@ def _await_startup(method):
     from functools import wraps
     @wraps(method)
     async def ready(self, *args, **kwargs):
+        update_methods = {'get_app_update_status', 'check_app_update', 'skip_app_update',
+                          'claim_app_update_notice', 'start_app_update', 'cancel_app_update',
+                          'recover_app_update', 'prepare_app_update'}
         event = getattr(self, "_startup_ready", None)
         if event is not None:
             await event.wait()
-            if self._startup_error is not None:
+            if self._startup_error is not None and method.__name__ not in update_methods:
                 raise RuntimeError("plugin_startup_failed") from self._startup_error
-        return await method(self, *args, **kwargs)
+        allowed = {'get_capabilities', 'list_tasks', 'source_task_status', 'get_app_update_status',
+                   'prepare_app_update', 'finish_app_update', 'check_app_update', 'skip_app_update', 'cancel_app_update', 'recover_app_update', 'claim_app_update_notice'}
+        if getattr(self, '_app_update_gate', False) and method.__name__ not in allowed:
+            raise RuntimeError('plugin_update_in_progress')
+        self._active_host_calls = getattr(self, '_active_host_calls', 0) + 1
+        try:
+            return await method(self, *args, **kwargs)
+        finally:
+            self._active_host_calls -= 1
     return ready
 
 

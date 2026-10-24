@@ -33,8 +33,7 @@ PLUGIN_NAMES = (NAME, LEGACY_NAME)
 FOLDER = "steam-patch-manager"
 SETTINGS = ("pluginOrder", "frozenPlugins", "hiddenPlugins", "disabled_plugins")
 TERMINAL = {"completed", "failed", "cancelled"}
-MAX_ZIP = 512 * 1024 * 1024
-MAX_EXPANDED = 1024 * 1024 * 1024
+DOWNLOAD_PROGRESS = None
 
 
 class InstallError(RuntimeError):
@@ -95,7 +94,7 @@ def version_tag(value):
     return value
 
 
-def fetch(url, output=None, limit=2 * 1024 * 1024):
+def fetch(url, output=None):
     request = urllib.request.Request(url, headers={"User-Agent": "steam-patch-decky-installer", "Accept": "application/vnd.github+json" if "/api.github.com/" in url else "application/octet-stream"})
     require(urllib.parse.urlsplit(url).scheme == "https", "下载必须使用 HTTPS")
     with urllib.request.urlopen(request, timeout=30) as response:
@@ -108,7 +107,8 @@ def fetch(url, output=None, limit=2 * 1024 * 1024):
                 if not block:
                     break
                 size += len(block)
-                require(size <= limit, "下载超过允许大小")
+                if DOWNLOAD_PROGRESS:
+                    DOWNLOAD_PROGRESS(size, int(response.headers.get('Content-Length', 0)), url)
                 if target:
                     target.write(block)
                 else:
@@ -142,17 +142,18 @@ def release_package(work, requested, download=fetch):
             matches.append(match[1].lower())
     require(len(matches) == 1, "校验清单缺少唯一 Decky ZIP 哈希")
     archive = work / "package.zip"
-    download(selected[ASSET], archive, MAX_ZIP)
+    download(selected[ASSET], archive)
     require(digest(archive) == matches[0], "Release ZIP SHA-256 不匹配")
+    api_digest = next(item.get('digest') for item in assets if item.get('name') == ASSET)
+    require(api_digest is None or api_digest == 'sha256:' + matches[0], 'Release API digest 与校验清单不一致')
     package = validate_package(archive, tag[1:])
-    return {"tag": tag, "sha256": matches[0], "files": package["files"], "version": package["version"]}
+    return {**package, "tag": tag, "sha256": matches[0]}
 
 
 def validate_package(archive, expected_version=None):
-    require(archive.stat().st_size <= MAX_ZIP, "ZIP 过大")
     with zipfile.ZipFile(archive) as bundle:
         entries = bundle.infolist()
-        require(0 < len(entries) <= 10000, "ZIP 文件数量异常")
+        require(entries, "ZIP 为空")
         files, infos, total, seen = {}, {}, 0, set()
         for item in entries:
             raw = item.orig_filename
@@ -168,7 +169,6 @@ def validate_package(archive, expected_version=None):
                 continue
             require(len(path.parts) > 1 and not stat.S_ISDIR(mode), "ZIP 文件类型异常")
             total += item.file_size
-            require(total <= MAX_EXPANDED and item.file_size <= MAX_ZIP, "ZIP 解压大小超限")
             relative = "/".join(path.parts[1:])
             with bundle.open(item) as stream:
                 sha = _digest(stream)
@@ -179,7 +179,6 @@ def validate_package(archive, expected_version=None):
 
         def read(name):
             require(name in infos, f"ZIP 缺少 {name}")
-            require(infos[name].file_size < 2 * 1024 * 1024, "元数据过大")
             return json.loads(bundle.read(infos[name]))
 
         plugin, package, runtime = read("plugin.json"), read("package.json"), read("bin/runtime.json")
@@ -381,7 +380,7 @@ BRIDGE = r"""async (op, a) => {
    'utilities/enable_plugin','utilities/disable_plugin','utilities/settings/set']);
  const busy = () => [...b.runningCalls.values()].some(r => mutations.has(r.message?.route));
  const jobs = window.__steamPatchTerminalJobs ||= Object.create(null);
- const reads=new Set(['list_tasks','get_capabilities','get_settings','list_sources','list_transactions','scan_status','task_status']);
+ const reads=new Set(['list_tasks','get_capabilities','get_settings','list_sources','list_transactions','scan_status','task_status','prepare_app_update','finish_app_update','get_app_update_status','source_task_status']);
  const pluginWrite = (route,args) => route==='loader/call_plugin_method' && names.includes(args[0]) && !reads.has(args[1]);
  if (op === 'guard') return window.__steamPatchTerminalGuard?.id===a.id;
  if (op === 'acquire') {
@@ -420,13 +419,16 @@ BRIDGE = r"""async (op, a) => {
      if (!Array.isArray(settings[k]) || settings[k].some(x => typeof x !== 'string')) fail('invalid_settings');
    }
    const version=await b.call('updater/get_version_info');
-   if (!['v3.2.9','3.2.9'].includes(version?.current)) fail('unsupported_loader_version');
+   if (!['v3.2.9','3.2.9','v3.3.0','3.3.0'].includes(version?.current)) fail('unsupported_loader_version');
    return {plugins: matches, settings, instances: l.plugins.filter(p => names.includes(p.name)).map(p => ({version:p.version, valid:!!p.titleView})), user:await b.call('utilities/get_user_info')};
  }
  if (op === 'tasks') {
    const tasks = await b.call('loader/call_plugin_method',name,'list_tasks');
    if (!Array.isArray(tasks) || tasks.some(t => !['completed','failed','cancelled'].includes(t.state))) fail('active_or_unknown_tasks');
    return true;
+ }
+ if (op === 'prepare_app_update' || op === 'finish_app_update') {
+   return await b.call('loader/call_plugin_method',name,op);
  }
  if (op === 'runtime') {
    const plugins = (await b.call('loader/get_plugins')).filter(p => names.includes(p.name));
@@ -793,7 +795,17 @@ def main(argv=None):
     parser.add_argument("--recover", action="store_true", help="只续做上次恢复和清理，不开始新安装")
     parser.add_argument("--cef-port", type=int, default=8080, help="本机 Steam CEF 调试端口（默认 8080）")
     parser.add_argument("--homebrew", type=Path, default=Path.home() / "homebrew", help="Decky homebrew 目录；必须与 Loader 实际目录一致")
+    parser.add_argument('--gui-request', type=Path, help=argparse.SUPPRESS)
     options = parser.parse_args(argv)
+    gui = json_read(options.gui_request) if options.gui_request else None
+    if gui:
+        options.recover = gui.get('recover', False)
+        options.version = None if options.recover else version_tag(gui['candidate']['tag'])
+        options.yes = not options.recover
+        options.homebrew = Path(gui['plugin']).parent.parent
+        global DOWNLOAD_PROGRESS
+        DOWNLOAD_PROGRESS = lambda size, total, url: atomic_json(Path(gui['status']), {
+            'state': 'preparing', 'bytes': size, 'total': total, 'file': urllib.parse.urlsplit(url).path.rsplit('/', 1)[-1]})
     require(sys.version_info >= (3, 10) and sys.platform == "linux", "请使用 Steam Deck 上的 Python 3.10+ 运行")
     require(os.geteuid() != 0, "请以 Steam 用户运行，不要使用 sudo")
     require(not options.recover or (not options.version and not options.check and not options.yes), "--recover 不能与版本、安装或检查参数组合")
@@ -813,6 +825,10 @@ def main(argv=None):
             with recovery_signals():
                 installer.recover()
         if options.recover:
+            if (plugin / 'backend/app_update.py').exists():
+                loader.call('finish_app_update')
+            if gui:
+                atomic_json(Path(gui['status']), {'state': 'completed', 'message': '恢复与清理完成'})
             print("恢复与清理完成。")
             return
         work.mkdir(mode=0o700)
@@ -823,6 +839,14 @@ def main(argv=None):
             os.close(cache_fd)
         try:
             package = release_package(work, options.version)
+            if gui:
+                release = json.loads(fetch(f'https://api.github.com/repos/{REPOSITORY}/releases/tags/{options.version}'))
+                selected = gui['candidate']
+                require(release['id'] == selected['release_id'], 'Release identity changed')
+                for key in ('asset', 'sums'):
+                    original = selected[key]
+                    matches = [a for a in release['assets'] if a['name'] == original['name']]
+                    require(len(matches) == 1 and all(matches[0].get(field) == original.get(field) for field in ('id','digest','size','updated_at','browser_download_url')), 'Release asset changed')
             if options.check:
                 with recovery_signals():
                     cleanup(work)
@@ -831,7 +855,14 @@ def main(argv=None):
             require(plugin.parent.is_dir(), "找不到 Decky 插件目录，请核对 --homebrew")
             require(loader_root() / "plugins" / FOLDER == plugin, "--homebrew 与 Loader 实际插件根目录不同")
             loader.identity()
+            if gui:
+                loader.call('prepare_app_update')
+                atomic_json(Path(gui['status']), {'state': 'applying', 'version': options.version})
             installer.install(package, yes=options.yes)
+            if 'backend/app_update.py' in package['files']:
+                loader.call('finish_app_update')
+            if gui:
+                atomic_json(Path(gui['status']), {'state': 'completed', 'version': options.version})
             print(f"{package['tag']} 安装及运行验证通过；本次备份、下载与恢复记录已清理。")
         finally:
             loader.cdp.close()
@@ -845,5 +876,17 @@ if __name__ == "__main__":
     try:
         main()
     except (Exception, KeyboardInterrupt) as error:
+        if '--gui-request' in sys.argv:
+            try:
+                request = json_read(Path(sys.argv[sys.argv.index('--gui-request') + 1]))
+                atomic_json(Path(request['status']), {'state': 'failed', 'error': str(error) or '已取消'})
+            except Exception as status_error:
+                print(f'无法写入更新结果：{status_error}', file=sys.stderr)
         print(f"未完成：{error or '已取消'}。", file=sys.stderr)
         sys.exit(1)
+    finally:
+        if '--gui-request' in sys.argv:
+            # Keep structured status; install recovery material lives in its own transaction directory.
+            gui_directory = Path(sys.argv[sys.argv.index('--gui-request') + 1]).parent
+            for name in ('request.json', 'worker.json', 'worker.log', 'install-decky.py'):
+                (gui_directory / name).unlink(missing_ok=True)
