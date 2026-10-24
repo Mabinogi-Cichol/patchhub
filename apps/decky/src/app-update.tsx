@@ -28,7 +28,7 @@ export function startAppUpdateNotifications() {
   let active = true;
   const inspect = () => { void claimNotice().then(value => {
     if (!active || !value) return;
-    toaster.toast({ title: `发现新版 ${value.tag}`, body: 'Steam 黄油补丁助手 · 点击查看更新', onClick: () => {
+    toaster.toast({ title: `发现新版 ${value.tag}`, body: 'PatchHub · 点击查看更新', onClick: () => {
       Navigation.Navigate(settingsRoutes.cache); Navigation.CloseSideMenus();
     } });
   }).catch(error => console.warn('app_update_notice_failed', error)); };

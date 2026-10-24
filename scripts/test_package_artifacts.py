@@ -33,28 +33,28 @@ class PackagingTests(unittest.TestCase):
         for name in ('protocol.py', 'v5.schema.json'):
             self.write(root, 'packages/contracts/generated/' + name)
         files = []
-        for name in ('steam-patch', 'sf-worker'):
+        for name in ('patchhub-core', 'patchhub-worker'):
             data = b'\x7fELF' + name.encode()
             self.write(plugin, 'bin/' + name, data)
             files.append({'path': 'bin/' + name, 'size': len(data), 'sha256': hashlib.sha256(data).hexdigest()})
         self.write(plugin, 'bin/runtime.json', json.dumps({'protocol_version': 5, 'worker_protocol': 1, 'files': files}).encode())
-        properties = [{'name': 'steam-patch:reference-commit', 'value': packager.SFEXTRACT_COMMIT}]
+        properties = [{'name': 'patchhub:reference-commit', 'value': packager.SFEXTRACT_COMMIT}]
         for source, dest, prefix in packager.INSTALLER_FILES:
             data = source.encode()
             self.write(root, source, data)
             if dest:
                 self.write(plugin, dest, data)
-                properties.append({'name': f'steam-patch:{prefix}-path', 'value': dest})
-            properties.extend([{'name': f'steam-patch:{prefix}-source', 'value': source},
-                               {'name': f'steam-patch:{prefix}-sha256', 'value': hashlib.sha256(data).hexdigest()}])
+                properties.append({'name': f'patchhub:{prefix}-path', 'value': dest})
+            properties.extend([{'name': f'patchhub:{prefix}-source', 'value': source},
+                               {'name': f'patchhub:{prefix}-sha256', 'value': hashlib.sha256(data).hexdigest()}])
         inventory = {'metadata': {'properties': [
-            {'name': f'steam-patch:{name}-lock-sha256', 'value': hashlib.sha256((root / path).read_bytes()).hexdigest()}
+            {'name': f'patchhub:{name}-lock-sha256', 'value': hashlib.sha256((root / path).read_bytes()).hexdigest()}
             for name, path in [('cargo', 'Cargo.lock'), ('npm', 'package-lock.json')]]},
-            'components': [{'name': 'steam-patch-rust-installer', 'version': '1', 'licenses': [{'expression': 'MIT'}], 'properties': properties}]}
+            'components': [{'name': 'patchhub-rust-installer', 'version': '1', 'licenses': [{'expression': 'MIT'}], 'properties': properties}]}
         self.write(root, '.artifacts/dependencies.cdx.json', json.dumps(inventory).encode())
         if windows:
             bundle = root / 'apps/windows-flutter/build/windows/x64/runner/Release'
-            for path in ('steam_patch_windows.exe', 'steam-patch.exe', 'sf-worker.exe',
+            for path in ('patchhub.exe', 'patchhub-core.exe', 'patchhub-worker.exe',
                          'flutter_windows.dll', 'msvcp140.dll', 'vcruntime140.dll', 'vcruntime140_1.dll', 'file_selector_windows_plugin.dll',
                          'url_launcher_windows_plugin.dll', 'window_manager_plugin.dll',
                          'screen_retriever_windows_plugin.dll', 'data/icudtl.dat', 'data/app.so',
@@ -66,7 +66,7 @@ class PackagingTests(unittest.TestCase):
             self.write(root, 'apps/windows-flutter/pubspec.lock', b'dart lock')
             self.write(root, 'docs/client-guide.md')
             self.write(root, 'docs/privacy.md')
-            inventory['metadata']['properties'].append({'name': 'steam-patch:dart-lock-sha256',
+            inventory['metadata']['properties'].append({'name': 'patchhub:dart-lock-sha256',
                 'value': hashlib.sha256(b'dart lock').hexdigest()})
             self.write(root, '.artifacts/dependencies.cdx.json', json.dumps(inventory).encode())
         return plugin
@@ -74,22 +74,22 @@ class PackagingTests(unittest.TestCase):
     def test_decky_runtime_permissions_and_provenance(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp); self.fixture(root); self.run_package(root, 'decky')
-            with zipfile.ZipFile(root / '.artifacts/steam-patch-manager-decky.zip') as archive:
-                for name in ('steam-patch', 'sf-worker'):
-                    self.assertEqual(archive.getinfo('steam-patch-manager/bin/' + name).external_attr >> 16 & 0o777, 0o755)
-                self.assertIn('steam-patch-manager/dependencies.cdx.json', archive.namelist())
-                self.assertIn('steam-patch-manager/licenses/sfextract-MIT.txt', archive.namelist())
+            with zipfile.ZipFile(root / '.artifacts/patchhub-decky.zip') as archive:
+                for name in ('patchhub-core', 'patchhub-worker'):
+                    self.assertEqual(archive.getinfo('patchhub/bin/' + name).external_attr >> 16 & 0o777, 0o755)
+                self.assertIn('patchhub/dependencies.cdx.json', archive.namelist())
+                self.assertIn('patchhub/licenses/sfextract-MIT.txt', archive.namelist())
 
     def test_windows_does_not_require_decky(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp); self.fixture(root, windows=True)
-            self.write(root, 'apps/decky/plugin-output/bin/sf-worker', b'bad old Linux runtime')
-            self.write(root, 'apps/windows-flutter/build/windows/x64/runner/Release/.steam-patch-maintenance.lock', b'')
+            self.write(root, 'apps/decky/plugin-output/bin/patchhub-worker', b'bad old Linux runtime')
+            self.write(root, 'apps/windows-flutter/build/windows/x64/runner/Release/.patchhub-maintenance.lock', b'')
             self.run_package(root, 'windows')
-            self.assertFalse((root / '.artifacts/steam-patch-manager-decky.zip').exists())
-            with zipfile.ZipFile(root / '.artifacts/steam-patch-manager-windows-portable.zip') as archive:
-                self.assertIn('sf-worker.exe', archive.namelist())
-                self.assertNotIn('.steam-patch-maintenance.lock', archive.namelist())
+            self.assertFalse((root / '.artifacts/patchhub-decky.zip').exists())
+            with zipfile.ZipFile(root / '.artifacts/patchhub-windows-portable.zip') as archive:
+                self.assertIn('patchhub-worker.exe', archive.namelist())
+                self.assertNotIn('.patchhub-maintenance.lock', archive.namelist())
                 manifest = json.loads(archive.read('update-manifest.json'))
                 self.assertEqual(set(manifest['files']), set(archive.namelist()))
                 self.assertEqual(archive.read('LICENSE'), (root / 'LICENSE').read_bytes())
@@ -117,7 +117,7 @@ class PackagingTests(unittest.TestCase):
         for missing in (True, False):
             with self.subTest(missing=missing), tempfile.TemporaryDirectory() as tmp:
                 root = Path(tmp); plugin = self.fixture(root)
-                binary = plugin / 'bin/sf-worker'
+                binary = plugin / 'bin/patchhub-worker'
                 if missing: binary.unlink()
                 else: binary.write_bytes(b'MZ Windows binary')
                 with self.assertRaises((ValueError, FileNotFoundError)):

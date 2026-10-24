@@ -1,5 +1,5 @@
+use patchhub_installer_format::{audit, behavior, graph, lua, Result};
 use serde_json::Value;
-use steam_patch_installer_format::{audit, behavior, graph, lua, Result};
 
 fn unhex(s: &str) -> Vec<u8> {
     s.as_bytes()

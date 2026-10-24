@@ -53,19 +53,19 @@ checksum = "{cargo_checksum}"
             inventory = json.loads((root / '.artifacts/dependencies.cdx.json').read_text(encoding='utf-8'))
             components = {entry['name']: entry for entry in inventory['components']}
             self.assertEqual(summary['components'], 3)
-            self.assertEqual(set(components), {'locked-rust', 'locked-npm', 'steam-patch-rust-installer'})
+            self.assertEqual(set(components), {'locked-rust', 'locked-npm', 'patchhub-rust-installer'})
             self.assertEqual(components['locked-rust']['hashes'][0]['content'], 'ab' * 32)
             self.assertEqual(components['locked-npm']['hashes'][0]['content'], npm_digest.hex())
-            sf95 = components['steam-patch-rust-installer']
+            sf95 = components['patchhub-rust-installer']
             self.assertEqual(sf95['version'], '1')
             self.assertEqual(sf95['licenses'], [{'expression': 'MIT'}])
             properties = {entry['name']: entry['value'] for entry in sf95['properties']}
-            self.assertEqual(properties['steam-patch:format-manifest-sha256'], hashlib.sha256(b'installer-format').hexdigest())
-            self.assertEqual(properties['steam-patch:reference-license-sha256'], hashlib.sha256(license_text).hexdigest())
-            self.assertEqual(properties['steam-patch:project-license-path'], 'LICENSE')
-            self.assertEqual(properties['steam-patch:project-license-sha256'], hashlib.sha256(project_license).hexdigest())
-            self.assertEqual(properties['steam-patch:reference-commit'], '21f5c5595a70e9284fff83476c0e307d5b92f573')
-            self.assertIn('Python developer oracles are not bundled', properties['steam-patch:implementation'])
+            self.assertEqual(properties['patchhub:format-manifest-sha256'], hashlib.sha256(b'installer-format').hexdigest())
+            self.assertEqual(properties['patchhub:reference-license-sha256'], hashlib.sha256(license_text).hexdigest())
+            self.assertEqual(properties['patchhub:project-license-path'], 'LICENSE')
+            self.assertEqual(properties['patchhub:project-license-sha256'], hashlib.sha256(project_license).hexdigest())
+            self.assertEqual(properties['patchhub:reference-commit'], '21f5c5595a70e9284fff83476c0e307d5b92f573')
+            self.assertIn('Python developer oracles are not bundled', properties['patchhub:implementation'])
             self.assertIn('build, development and target-specific packages',
                           inventory['metadata']['properties'][0]['value'])
 

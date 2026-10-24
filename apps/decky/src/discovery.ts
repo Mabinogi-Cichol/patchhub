@@ -1,4 +1,4 @@
-import { candidateMatched, gameMatchStatusHint, gameMatchStatusLabel, hasMatchedPatch, type Install, type SourceCandidate } from "@steam-patch/ui";
+import { candidateMatched, gameMatchStatusHint, gameMatchStatusLabel, hasMatchedPatch, type Install, type SourceCandidate } from "@patchhub/ui";
 
 // `InstanceProjection.discovery.status` is the v5 six-state game match
 // (p1-contract §7.1). Source-level status codes remain for legacy rows.
@@ -70,4 +70,4 @@ export function candidateConditions(candidate: SourceCandidate): string {
   if (candidate.requires_dlc == null && candidate.excludes_dlc == null) parts.push("DLC 条件待确认");
   return parts.join(" · ");
 }
-export { safeSourceUrl } from "@steam-patch/ui";
+export { safeSourceUrl } from "@patchhub/ui";

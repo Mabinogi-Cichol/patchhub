@@ -1,10 +1,5 @@
 //! Authoritative version 5 JSONL wire contract. Core is deliberately independent.
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
-use std::collections::BTreeMap;
-use std::path::PathBuf;
-pub use steam_patch_core::{
+pub use patchhub_core::{
     catalog::{PatchMatch, Platform, SupportLevel},
     install::{InstallOperation, Transaction},
     installer::{
@@ -19,12 +14,16 @@ pub use steam_patch_core::{
         SourceSummary,
     },
 };
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use std::collections::BTreeMap;
+use std::path::PathBuf;
 use ts_rs::TS;
 pub const PROTOCOL_VERSION: u32 = 5;
 pub const MAX_REQUEST_ID_BYTES: usize = 128;
 pub const MAX_ID_BYTES: usize = 256;
-pub const MAX_INSTANCE_ID_BYTES: usize =
-    steam_patch_core::installer::service::MAX_INSTANCE_ID_BYTES;
+pub const MAX_INSTANCE_ID_BYTES: usize = patchhub_core::installer::service::MAX_INSTANCE_ID_BYTES;
 pub const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
@@ -367,8 +366,8 @@ pub fn validate_request(
                 return Err(ProtocolError::code("selection_or_release_required"));
             }
             if let Some(s) = selection {
-                if steam_patch_core::installer::service::ZipSelectionId::new(s).is_err()
-                    && steam_patch_core::installer::service::ExeSelectionId::new(s).is_err()
+                if patchhub_core::installer::service::ZipSelectionId::new(s).is_err()
+                    && patchhub_core::installer::service::ExeSelectionId::new(s).is_err()
                 {
                     return Err(ProtocolError::code("invalid_selection_id"));
                 }
@@ -514,7 +513,7 @@ pub fn validate_capabilities(v: &Value) -> Result<Capabilities, ProtocolError> {
     ]
     .iter()
     .any(|v| *v != 1)
-        || c.sources.parser_version != steam_patch_core::sources::PARSER_VERSION
+        || c.sources.parser_version != patchhub_core::sources::PARSER_VERSION
     {
         return Err(ProtocolError::code("installer_schema_unsupported"));
     }
@@ -1088,7 +1087,7 @@ pub struct MatchUpdateEvent {
     /// One of the six `GameMatchStatus` values (snake_case).
     pub status: String,
     pub candidates: Vec<SourceCandidate>,
-    pub diagnostics: Vec<steam_patch_core::sources::Diagnostic>,
+    pub diagnostics: Vec<patchhub_core::sources::Diagnostic>,
     #[ts(type = "number")]
     pub settings_revision: u64,
 }

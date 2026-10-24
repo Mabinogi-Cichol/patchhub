@@ -1,12 +1,13 @@
 import { callable, definePlugin, routerHook } from "@decky/api";
 import { AppUpdatePanel, startAppUpdateNotifications, waitForAppUpdate } from './app-update';
 import { Button, ButtonItem, DropdownItem, Field, Focusable, Navigation, PanelSection, PanelSectionRow, SidebarNavigation, TextField, ToggleField, showModal, useParams } from "@decky/ui";
-import { FaGamepad, FaPuzzlePiece } from "react-icons/fa";
+import { FaGamepad } from "react-icons/fa";
+import brandLogo from "../../../docs/images/branding/logo.png";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ComponentProps, type ReactNode } from "react";
-import { downloadFileName, candidateMatched, displayPatches, filterInstalls, gameDisplayName, gameMatchStatusLabel, gameMatchStatusTone, installSummary, patchState, reason, sourceCoverageText, sourceIntervalOptions, sourceLastAttemptText, sourceLastSuccessText, sourceNextDueText, workflowState, type Filter, type Install, type Patch, type Preview, type ProjectInstancesResult, type ScanResult, type SourceCandidate, type SourceSubscription, type Transaction } from "@steam-patch/ui";
+import { downloadFileName, candidateMatched, displayPatches, filterInstalls, gameDisplayName, gameMatchStatusLabel, gameMatchStatusTone, installSummary, patchState, reason, sourceCoverageText, sourceIntervalOptions, sourceLastAttemptText, sourceLastSuccessText, sourceNextDueText, workflowState, type Filter, type Install, type Patch, type Preview, type ProjectInstancesResult, type ScanResult, type SourceCandidate, type SourceSubscription, type Transaction } from "@patchhub/ui";
 import { getListPreferences, setListPreferences, subscribeListPreferences } from "./preferences";
 import { gamePresentation, matchesGameQuery, transactionGameName } from "./steam";
-import { installationResult } from "@steam-patch/ui";
+import { installationResult } from "@patchhub/ui";
 import { installInput, primaryActionBlockers, primaryInstallAction } from "./actions";
 import { createManagerSession, feedbackFor, needsRecovery } from "./session";
 import { sourceCardSummary, sourceTaskStatusText, sourceTaskTargets, sourceTaskTerminal, type SourceTaskApi, type SourceTaskSnapshot } from "./source-tasks";
@@ -57,7 +58,7 @@ async function readSnapshot() {
   return { report, transactions };
 }
 const session = createManagerSession(readSnapshot, sourceApi);
-const route = "/steam-patch-manager/:instance/:panel?";
+const route = "/patchhub/:instance/:panel?";
 const sourceRoute = "sources";
 const panelKeys = ["overview", "patches", "records", "sources"] as const;
 const filterOptions: { data: Filter; label: string }[] = [
@@ -70,7 +71,7 @@ let lastGame: string | null = null;
 const pendingRequestIds = new Map<string, string>();
 
 function openManager(instance: string) {
-  Navigation.Navigate(`/steam-patch-manager/${encodeInstance(instance)}`);
+  Navigation.Navigate(`/patchhub/${encodeInstance(instance)}`);
   Navigation.CloseSideMenus();
 }
 function openSources() {
@@ -222,7 +223,7 @@ function QuickAccess() {
     if (row) lastGame = null;
   }, [shown]);
   return <div className="patch-qam"><style>{css}</style>
-    <div className="patch-qam-controls"><PanelSection title="Steam 黄油补丁助手">
+    <div className="patch-qam-controls"><PanelSection title="PatchHub">
       <Row><TextField label="搜索游戏名称或编号" value={query} onChange={e => setListPreferences({ query: e.target.value })} /></Row>
       <Row><DropdownItem label="筛选" layout="below" rgOptions={filterOptions} selectedOption={filter} onChange={option => setListPreferences({ filter: option.data })} /></Row>
       {busy && <Row><Status>{busy}</Status></Row>}{error && <Row><Status warning>{error}</Status></Row>}
@@ -288,7 +289,7 @@ function GameManager({ item, seg, panel }: { item: Install; seg: string; panel?:
   // `route` matches the URL and switches by replacing the URL. Keep one
   // sub-route per panel so selection and content follow the URL.
   const activePanel = panel && (panelKeys as readonly string[]).includes(panel) ? panel : "overview";
-  const base = `/steam-patch-manager/${seg}`;
+  const base = `/patchhub/${seg}`;
   const navigate = useRef<((route: string) => void) | null>(null);
   const [preferredLanguage, setPreferredLanguage] = useState<string | null>(null);
   const entries = displayPatches(item, preferredLanguage);
@@ -543,7 +544,7 @@ function GameManager({ item, seg, panel }: { item: Install; seg: string; panel?:
   // history, and `disableRouteReporting` leaves Steam's own router untouched.
   // `showTitle` renders the non-focusable two-line header at the top of the
   // page list (native PagedSettings only renders `title` when it is true).
-  const navigation = { title: <div className="patch-nav-header"><span className="patch-nav-tool">Steam 黄油补丁助手</span><span className="patch-nav-game" title={game}>{game}</span></div>, showTitle: true, page: `${base}/${activePanel}`, pages: navPages,
+  const navigation = { title: <div className="patch-nav-header"><span className="patch-nav-tool">PatchHub</span><span className="patch-nav-game" title={game}>{game}</span></div>, showTitle: true, page: `${base}/${activePanel}`, pages: navPages,
     fnSetNavigateToPage: (setter: (route: string) => void) => { navigate.current = setter; },
     disableRouteReporting: true } as unknown as ComponentProps<typeof SidebarNavigation>;
   return <SidebarNavigation {...navigation} />;
@@ -690,13 +691,13 @@ function Manager() {
   const target = instance === sourceRoute ? instance : decodeInstance(instance ?? "");
   const item = report?.installs.find(i => i.game.instance_id === target);
   return <Focusable className="patch-full" onCancel={() => Navigation.NavigateBack()}><style>{css}</style>
-    {instance === sourceRoute ? <SidebarNavigation showTitle disableRouteReporting title={<div className="patch-nav-header"><span className="patch-nav-tool">Steam 黄油补丁助手</span><span className="patch-nav-game">全局设置</span></div>} page={settingsPage(panel)} pages={[
+    {instance === sourceRoute ? <SidebarNavigation showTitle disableRouteReporting title={<div className="patch-nav-header"><span className="patch-nav-tool">PatchHub</span><span className="patch-nav-game">全局设置</span></div>} page={settingsPage(panel)} pages={[
       { identifier: settingsRoutes.sources, route: settingsRoutes.sources, title: "管理订阅源", visible: true, content: <GlobalSources /> },
       "separator",
       { identifier: settingsRoutes.cache, route: settingsRoutes.cache, title: "缓存、备份与更新", visible: true, content: <GlobalCache /> },
     ]} />
       : item ? <GameManager key={instance} item={item} seg={instance!} panel={panel} />
-        : <div className="patch-page"><h2>Steam 黄油补丁助手</h2><Status>{report ? "游戏已不在当前扫描结果中。" : "正在加载游戏列表…"}</Status><Action onClick={() => Navigation.NavigateBack()}>返回游戏列表</Action></div>}
+        : <div className="patch-page"><h2>PatchHub</h2><Status>{report ? "游戏已不在当前扫描结果中。" : "正在加载游戏列表…"}</Status><Action onClick={() => Navigation.NavigateBack()}>返回游戏列表</Action></div>}
   </Focusable>;
 }
 function GlobalSources() {
@@ -724,7 +725,7 @@ function GlobalSources() {
 export default definePlugin(() => {
   const stopUpdateNotifications = startAppUpdateNotifications();
   routerHook.addRoute(route, Manager);
-  return { name: "Steam 黄油补丁助手", titleView: <div>Steam 黄油补丁助手</div>, content: <QuickAccess />, icon: <FaPuzzlePiece />,
+  return { name: "PatchHub", titleView: <div>PatchHub</div>, content: <QuickAccess />, icon: <img src={brandLogo} alt="" width={24} height={24} style={{ objectFit: "contain" }} />,
     onDismount() { stopUpdateNotifications(); tasks.dismount(); hideTask(); routerHook.removeRoute(route); },
   };
 });

@@ -7,9 +7,9 @@ Unicode true
 !ifndef VERSION
   !define VERSION "0.3.0"
 !endif
-Name "Steam Hentai Patch"
+Name "PatchHub"
 OutFile "${OUTPUT}"
-InstallDir "$LOCALAPPDATA\Steam Hentai Patch"
+InstallDir "$LOCALAPPDATA\PatchHub"
 RequestExecutionLevel user
 SetCompressor /SOLID lzma
 Var ProductName
@@ -28,48 +28,36 @@ Var MaintenanceHandle
 
 Function .onInit
   SetRegView 64
-  StrCpy $ProductName "Steam Hentai Patch"
-  ReadRegStr $0 HKCU "Software\github\Steam Hentai Patch" ""
+  StrCpy $ProductName "PatchHub"
+  ReadRegStr $0 HKCU "Software\github\PatchHub" ""
   ${If} $0 != ""
     StrCpy $INSTDIR $0
-  ${Else}
-    ReadRegStr $0 HKCU "Software\github\Steam Patch Manager" ""
-    ${If} $0 != ""
-      StrCpy $INSTDIR $0
-      StrCpy $ProductName "Steam Patch Manager"
-    ${EndIf}
   ${EndIf}
   StrCpy $UninstallKey "Software\Microsoft\Windows\CurrentVersion\Uninstall\$ProductName"
 FunctionEnd
 
-Section "Steam 黄油补丁助手"
+Section "PatchHub"
   CreateDirectory "$INSTDIR"
-  System::Call 'kernel32::CreateFileW(w "$INSTDIR\.steam-patch-maintenance.lock", i 0xC0000000, i 0, p 0, i 4, i 0, p 0) p.r0'
+  System::Call 'kernel32::CreateFileW(w "$INSTDIR\.patchhub-maintenance.lock", i 0xC0000000, i 0, p 0, i 4, i 0, p 0) p.r0'
   StrCpy $MaintenanceHandle $0
   ${If} $MaintenanceHandle == -1
     MessageBox MB_OK "应用正在更新或卸载，请稍后重试。"
     Abort
   ${EndIf}
-  IfFileExists "$INSTDIR\.steam-patch-update.json" 0 +4
+  IfFileExists "$INSTDIR\.patchhub-update.json" 0 +4
     System::Call 'kernel32::CloseHandle(p $MaintenanceHandle)'
     MessageBox MB_OK "请先启动应用完成更新恢复，再运行安装器。"
     Abort
   SetOutPath "$INSTDIR"
-  File /r /x ".steam-patch-maintenance.lock" /x ".steam-patch-update.json" /x "install.ini" /x "uninstall.exe" "${BUNDLE}\*"
-  Delete "$INSTDIR\steam-patch-windows.exe"
-  Delete "$INSTDIR\resources\README.txt"
-  Delete "$SMPROGRAMS\Steam Patch Manager.lnk"
-  Delete "$SMPROGRAMS\Steam Hentai Patch.lnk"
-  Delete "$DESKTOP\Steam Patch Manager.lnk"
-  Delete "$DESKTOP\Steam Hentai Patch.lnk"
-  CreateShortcut "$SMPROGRAMS\$ProductName.lnk" "$INSTDIR\steam_patch_windows.exe"
+  File /r /x ".patchhub-maintenance.lock" /x ".patchhub-update.json" /x "install.ini" /x "uninstall.exe" "${BUNDLE}\*"
+  CreateShortcut "$SMPROGRAMS\$ProductName.lnk" "$INSTDIR\patchhub.exe"
   WriteRegStr HKCU "Software\github\$ProductName" "" "$INSTDIR"
   WriteRegStr HKCU "$UninstallKey" "DisplayName" "$ProductName"
   WriteRegStr HKCU "$UninstallKey" "DisplayVersion" "${VERSION}"
   WriteRegStr HKCU "$UninstallKey" "Publisher" "github"
   WriteRegStr HKCU "$UninstallKey" "InstallLocation" "$INSTDIR"
-  WriteRegStr HKCU "$UninstallKey" "MainBinaryName" "steam_patch_windows.exe"
-  WriteRegStr HKCU "$UninstallKey" "DisplayIcon" "$INSTDIR\steam_patch_windows.exe"
+  WriteRegStr HKCU "$UninstallKey" "MainBinaryName" "patchhub.exe"
+  WriteRegStr HKCU "$UninstallKey" "DisplayIcon" "$INSTDIR\patchhub.exe"
   WriteRegStr HKCU "$UninstallKey" "UninstallString" '$\"$INSTDIR\uninstall.exe$\"'
   WriteRegStr HKCU "$UninstallKey" "QuietUninstallString" '$\"$INSTDIR\uninstall.exe$\" /S'
   WriteRegDWORD HKCU "$UninstallKey" "NoModify" 1
@@ -94,5 +82,5 @@ Section "Uninstall"
   Delete "$INSTDIR\install.ini"
   Delete "$INSTDIR\uninstall.exe"
   RMDir "$INSTDIR"
-  ; APPDATA/io.github.steampatch.manager contains recovery data and is retained.
+  ; APPDATA/PatchHub contains recovery data and is retained.
 SectionEnd

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { candidateMatched, displayPatches, fallbackDisplayStatus, filterInstalls, gameMatchStatusLabel, gameMatchStatusTone, needsAttention, sourceCoverageText, sourceIntervalLabel, sourceIntervalOptions, sourceLastAttemptText, sourceNextDueText, sourcePhaseLabel, type Install, type SourceCandidate } from "@steam-patch/ui";
+import { candidateMatched, displayPatches, fallbackDisplayStatus, filterInstalls, gameMatchStatusLabel, gameMatchStatusTone, needsAttention, sourceCoverageText, sourceIntervalLabel, sourceIntervalOptions, sourceLastAttemptText, sourceNextDueText, sourcePhaseLabel, type Install, type SourceCandidate } from "@patchhub/ui";
 import { candidateConditions, candidateSource, discoveryNotice, discoveryStatus, discoverySummary, safeSourceUrl, unqueriedCount } from "../src/discovery.ts";
 
 const candidate = (fields: Partial<SourceCandidate> = {}): SourceCandidate => ({ candidate_id: "candidate-1", source_id: "kagura-cn", game_appid: 1227890, game_title: "Summer Memories", patch_title: "夏日狂想曲补丁", source_page: "https://kagurafan.com/patch/", capability: "discover_only", match_basis: "appid", ...fields });

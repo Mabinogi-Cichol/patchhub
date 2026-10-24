@@ -5,7 +5,7 @@
 //! Run with:
 //!
 //! ```text
-//! cargo test -p steam-patch-core --test source_acceptance -- --nocapture --test-threads=1
+//! cargo test -p patchhub-core --test source_acceptance -- --nocapture --test-threads=1
 //! ```
 //!
 //! Matrix mapping:
@@ -24,18 +24,18 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use steam_patch_core::sources::http::{
+use patchhub_core::sources::http::{
     FakeFetcher, FetchRequest, FetchResponse, Fetcher, RequestContext,
 };
-use steam_patch_core::sources::matching::{
+use patchhub_core::sources::matching::{
     game_match_summary, match_games, rematch_game, rematch_source,
 };
-use steam_patch_core::sources::model::*;
-use steam_patch_core::sources::registry::SourceRegistry;
-use steam_patch_core::sources::snapshot::SourceSnapshot;
-use steam_patch_core::sources::store::SourceStore;
-use steam_patch_core::sources::update::update_source;
-use steam_patch_core::sources::{GAME_MATCH_SCHEMA_VERSION, SOURCE_DETAIL_SCHEMA_VERSION};
+use patchhub_core::sources::model::*;
+use patchhub_core::sources::registry::SourceRegistry;
+use patchhub_core::sources::snapshot::SourceSnapshot;
+use patchhub_core::sources::store::SourceStore;
+use patchhub_core::sources::update::update_source;
+use patchhub_core::sources::{GAME_MATCH_SCHEMA_VERSION, SOURCE_DETAIL_SCHEMA_VERSION};
 
 // ---- fixtures ------------------------------------------------------------
 
@@ -352,7 +352,7 @@ fn run_update(
     rule: &SourceRule,
     force: bool,
     fake: &Arc<FakeFetcher>,
-) -> std::io::Result<steam_patch_core::sources::update::SourceUpdateOutcome> {
+) -> std::io::Result<patchhub_core::sources::update::SourceUpdateOutcome> {
     let mut ctx = context(fake);
     update_source(
         store,

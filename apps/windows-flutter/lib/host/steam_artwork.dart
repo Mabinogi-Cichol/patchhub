@@ -28,7 +28,7 @@ class SteamArtworkStore {
   int _revision = 0;
 
   static Future<Map<String, dynamic>?> _nativeContext() =>
-      const MethodChannel('steam_patch/desktop')
+      const MethodChannel('patchhub/desktop')
           .invokeMapMethod<String, dynamic>('steamArtworkContext');
 
   Future<SteamArtwork> load(int appid) =>

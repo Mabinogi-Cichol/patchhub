@@ -1,10 +1,10 @@
-use sha2::{Digest, Sha256};
-use std::{fs, path::Path, sync::atomic::AtomicBool};
-use steam_patch_core::{
+use patchhub_core::{
     catalog::{self, Catalog, PatchRelease, Platform, Recipe, SupportLevel},
     detection::{self, EvidenceStatus},
     steam::GameInstall,
 };
+use sha2::{Digest, Sha256};
+use std::{fs, path::Path, sync::atomic::AtomicBool};
 fn game(root: &Path) -> GameInstall {
     GameInstall {
         instance_id: "test".into(),

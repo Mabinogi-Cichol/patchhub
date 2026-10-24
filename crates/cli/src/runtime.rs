@@ -1,17 +1,17 @@
+#[cfg(test)]
+use patchhub_core::catalog::SupportLevel;
+use patchhub_core::projection::DomainError;
+use patchhub_core::{
+    catalog::{self, Catalog, Platform},
+    install, installer, projection, sources, steam,
+    trust::{self, VerifiedCatalog},
+};
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::{
     fs,
     path::{Path, PathBuf},
     sync::atomic::AtomicBool,
-};
-#[cfg(test)]
-use steam_patch_core::catalog::SupportLevel;
-use steam_patch_core::projection::DomainError;
-use steam_patch_core::{
-    catalog::{self, Catalog, Platform},
-    install, installer, projection, sources, steam,
-    trust::{self, VerifiedCatalog},
 };
 
 #[derive(Debug, Default, Clone, Serialize)]
@@ -53,7 +53,7 @@ pub struct Params {
 }
 
 impl Params {
-    pub fn from_wire(request: &steam_patch_protocol::ValidatedRequest) -> Self {
+    pub fn from_wire(request: &patchhub_protocol::ValidatedRequest) -> Self {
         let h = request.params.host();
         let v = request.params.params_value();
         let text = |key: &str| v.get(key).and_then(Value::as_str).map(str::to_owned);
@@ -110,8 +110,8 @@ fn string_list(value: &Value, key: &str) -> Vec<String> {
 }
 
 /// Formal methods are owned by the protocol crate.
-pub const METHODS: &[&str] = &steam_patch_protocol::METHODS;
-pub const SOURCE_METHODS: &[&str] = &steam_patch_protocol::SOURCE_METHODS;
+pub const METHODS: &[&str] = &patchhub_protocol::METHODS;
+pub const SOURCE_METHODS: &[&str] = &patchhub_protocol::SOURCE_METHODS;
 
 /// Streaming source-task methods that emit `source_progress`/`source_update`/
 /// `match_progress`/`match_update` lines before the single terminal response.
@@ -147,7 +147,7 @@ impl ProgressCursor {
     /// Renders one event and advances the monotonic sequence. Internal apply
     /// substates fold into the host-visible `applying` stage + diagnostic
     /// `substage` (p1-host-contract §2.1).
-    pub fn event(&mut self, progress: &steam_patch_core::operation::Progress) -> Value {
+    pub fn event(&mut self, progress: &patchhub_core::operation::Progress) -> Value {
         let (stage, substage) = match progress.stage.as_str() {
             // Archive telemetry can precede an explicit stage in signed/local ZIP
             // routes. Protocol v4 never exposes the internal empty default.
@@ -183,7 +183,7 @@ fn capabilities(_params: &Params) -> Value {
     let mut methods: Vec<&str> = Vec::with_capacity(METHODS.len());
     methods.extend(METHODS.iter().copied());
     json!({
-        "protocol_version": steam_patch_protocol::PROTOCOL_VERSION,
+        "protocol_version": patchhub_protocol::PROTOCOL_VERSION,
         "installer": {
             "schema_version": 1,
             "selection_version": 1,
@@ -220,13 +220,13 @@ fn capabilities(_params: &Params) -> Value {
 fn bundled_worker() -> Option<PathBuf> {
     let host = std::env::current_exe().ok()?;
     Some(host.parent()?.join(if cfg!(windows) {
-        "sf-worker.exe"
+        "patchhub-worker.exe"
     } else {
-        "sf-worker"
+        "patchhub-worker"
     }))
 }
 
-fn worker_runtime(stage: &Path) -> Result<steam_patch_core::installer::WorkerRuntime, DomainError> {
+fn worker_runtime(stage: &Path) -> Result<patchhub_core::installer::WorkerRuntime, DomainError> {
     state_safe(stage)?;
     fs::create_dir_all(stage).map_err(err)?;
     state_safe(stage)?;
@@ -290,7 +290,7 @@ fn exe_sandbox_availability() -> installer::SandboxAvailability {
 
 /// One real probe in a private temp staging root (never the installer state).
 fn probe_in_temp_staging(worker: &Path) -> installer::SandboxAvailability {
-    let root = std::env::temp_dir().join(format!("steam-patch-probe-{}", std::process::id()));
+    let root = std::env::temp_dir().join(format!("patchhub-probe-{}", std::process::id()));
     let availability = match fs::create_dir_all(&root).map_err(err).and_then(|_| {
         installer::WorkerRuntime::new(worker, &root, None)
             .map_err(|e| failed("exe_sandbox_unavailable", e.to_string()))
@@ -1384,7 +1384,7 @@ fn install_patch(
 #[cfg(test)]
 mod sources_tests {
     use super::*;
-    use steam_patch_core::sources::model::{SourceIndex, SourceIndexEntry};
+    use patchhub_core::sources::model::{SourceIndex, SourceIndexEntry};
 
     fn fixture_root(temp: &Path) -> PathBuf {
         let root = temp.join("Steam");
@@ -2510,11 +2510,11 @@ mod install_flow_tests {
 #[cfg(test)]
 mod dynamic_projection_tests {
     use super::*;
-    use sha2::{Digest, Sha256};
-    use steam_patch_core::sources::model::{
+    use patchhub_core::sources::model::{
         ArtifactFormat, CacheStatus, Capability, GameMatchRecord, GameMatchStatus, MatchBasis,
         Mirror, SourceCandidate, SourceMatchRecord, SourceMatchStatus,
     };
+    use sha2::{Digest, Sha256};
 
     const APPID: u32 = 42;
 
@@ -2528,7 +2528,7 @@ mod dynamic_projection_tests {
             aliases: Vec::new(),
             game_title: "Test".to_string(),
             patch_title: "Test patch".to_string(),
-            variant: steam_patch_core::sources::model::Variant::Base,
+            variant: patchhub_core::sources::model::Variant::Base,
             requires_dlc: None,
             excludes_dlc: None,
             platforms: vec!["steam".to_string()],
@@ -2911,7 +2911,7 @@ mod dynamic_projection_tests {
         .unwrap();
         let state = temp.path().join("state");
         let mut candidate = dynamic_candidate();
-        candidate.variant = steam_patch_core::sources::model::Variant::Demo;
+        candidate.variant = patchhub_core::sources::model::Variant::Demo;
         candidate.mirrors[0].format = "exe".into();
         candidate.mirrors[0].url = "https://kaguraserver.com/a.exe".into();
         candidate.format_reported = ArtifactFormat::Exe;

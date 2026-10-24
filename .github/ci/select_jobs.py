@@ -20,6 +20,7 @@ RULES = (
         "scripts/package-artifacts.py", "scripts/test_package_artifacts.py",
         "scripts/build-sbom.py", "scripts/test_build_sbom.py",
         "scripts/licenses/**", "LICENSE",
+        "docs/images/branding/logo.png",
     )),
     (("windows",), (
         "apps/windows-flutter/**", "scripts/build-windows-*.ps1",

@@ -1,4 +1,4 @@
-import { progressPercent } from "@steam-patch/ui";
+import { progressPercent } from "@patchhub/ui";
 import type { TaskSnapshot } from "./task-controller";
 
 export function taskProgressPercent(task: TaskSnapshot | null): number | null {

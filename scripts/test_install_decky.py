@@ -25,9 +25,9 @@ def create_package(path, version="0.2.0", changes=None):
         "main.py", "dist/index.js", "backend/bridge.py", "backend/tasks.py", "backend/protocol.py", "backend/v5.schema.json",
         "bin/catalog.json", "bin/signed-catalog.json", "bin/trust-keys.json", "LICENSE", "licenses/sfextract-MIT.txt", "dependencies.cdx.json")}
     files["plugin.json"] = json.dumps({"name": m.NAME, "api_version": 1, "flags": []}).encode()
-    files["package.json"] = json.dumps({"name": "steam-patch-decky", "version": version, "type": "module"}).encode()
+    files["package.json"] = json.dumps({"name": "@patchhub/decky", "version": version, "type": "module"}).encode()
     entries = []
-    for name in ("bin/steam-patch", "bin/sf-worker"):
+    for name in ("bin/patchhub-core", "bin/patchhub-worker"):
         files[name] = elf
         entries.append({"path": name, "size": len(elf), "sha256": m.hashlib.sha256(elf).hexdigest()})
     files["bin/runtime.json"] = json.dumps({"protocol_version": 5, "worker_protocol": 1, "files": entries}).encode()
@@ -38,7 +38,7 @@ def create_package(path, version="0.2.0", changes=None):
                 continue
             info = zipfile.ZipInfo(m.FOLDER + "/" + name)
             info.create_system = 3
-            info.external_attr = (0o100755 if name in ("bin/steam-patch", "bin/sf-worker") else 0o100644) << 16
+            info.external_attr = (0o100755 if name in ("bin/patchhub-core", "bin/patchhub-worker") else 0o100644) << 16
             bundle.writestr(info, data)
     return {"tag": "v" + version, "sha256": m.digest(path), **m.validate_package(path)} if not changes else None
 
@@ -156,7 +156,7 @@ class InstallerTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.root = Path(self.temporary.name).resolve()
-        self.work = self.root / "steam-patch-decky-install"
+        self.work = self.root / "patchhub-decky-install"
         self.work.mkdir(mode=0o700)
         self.loader = FakeLoader(self.root / "homebrew")
         self.installer = m.Installer(self.work, self.loader.plugin, self.loader)
@@ -200,35 +200,6 @@ class InstallerTests(unittest.TestCase):
         for key in ("pluginOrder", "frozenPlugins", "hiddenPlugins"):
             self.assertEqual(set(self.loader.settings[key]), {"other", "another", m.NAME})
 
-    def legacy(self):
-        self.old()
-        metadata = self.loader.plugin / "plugin.json"
-        data = m.json_read(metadata)
-        data["name"] = m.LEGACY_NAME
-        metadata.write_text(json.dumps(data), encoding="utf-8")
-        for key in m.SETTINGS:
-            self.loader.settings[key] = [m.LEGACY_NAME if name == m.NAME else name for name in self.loader.settings[key]]
-        self.original_files = m.tree_manifest(self.loader.plugin)
-
-    def test_legacy_update_migrates_identity_and_settings(self):
-        self.legacy()
-        self.installer.install(self.package, yes=True)
-        self.assertEqual(m.json_read(self.loader.plugin / "plugin.json")["name"], m.NAME)
-        for key in ("pluginOrder", "frozenPlugins", "hiddenPlugins"):
-            self.assertIn(m.NAME, self.loader.settings[key])
-            self.assertNotIn(m.LEGACY_NAME, self.loader.settings[key])
-        self.assertFalse(self.work.exists())
-
-    def test_failed_legacy_update_restores_old_name_files_and_settings(self):
-        self.legacy()
-        self.loader.fail_install = "after"
-        with self.assertRaisesRegex(m.InstallError, "已恢复"):
-            self.installer.install(self.package, yes=True)
-        self.assertEqual(m.tree_manifest(self.loader.plugin), self.original_files)
-        for key in ("pluginOrder", "frozenPlugins", "hiddenPlugins"):
-            self.assertIn(m.LEGACY_NAME, self.loader.settings[key])
-            self.assertNotIn(m.NAME, self.loader.settings[key])
-        self.assertFalse(self.work.exists())
 
     def test_install_and_reload_failures_restore_old_and_cleanup(self):
         self.old()
@@ -431,33 +402,11 @@ class PackageTests(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def test_new_and_released_legacy_names_are_preserved_in_package_metadata(self):
-        for name in m.PLUGIN_NAMES:
-            create_package(self.zip, changes={"plugin.json": json.dumps({"name": name, "api_version": 1, "flags": []}).encode()})
-            with self.subTest(name=name):
-                self.assertEqual(m.validate_package(self.zip)["name"], name)
-
-    def test_settings_migrate_to_target_and_restore_original_identity(self):
-        loader = type("LoaderSpy", (), {"mutate": lambda _, state, **args: calls.append(args)})()
-        installer = m.Installer(self.root, self.root / m.FOLDER, loader)
-        original = {key: ["other", m.LEGACY_NAME] for key in m.SETTINGS}
-        state = m.State(self.root, {"phase": "installing", "target": {"name": m.NAME}, "original": {"name": m.LEGACY_NAME}, "settings": original})
-        calls = []
-        installer.restore_settings(state)
-        self.assertEqual(calls[-1]["name"], m.NAME)
-        self.assertEqual(calls[-1]["settings"]["pluginOrder"], ["other", m.NAME])
-        state.data["phase"] = "restoring"
-        installer.restore_settings(state)
-        self.assertEqual(calls[-1]["name"], m.LEGACY_NAME)
-        self.assertEqual(calls[-1]["settings"], original)
-        state.data.update(phase="installing", target={"name": m.LEGACY_NAME}, original=None, settings={key: [] for key in m.SETTINGS})
-        installer.restore_settings(state, first_install_success=True)
-        self.assertEqual(calls[-1]["settings"]["pluginOrder"], [m.LEGACY_NAME])
 
     def test_rejects_unsafe_paths_duplicates_links_and_special_modes(self):
         for name, mode in [("../escape", 0o100644), ("/absolute", 0o100644), ("other/file", 0o100644),
-                           ("steam-patch-manager/a/../file", 0o100644), ("steam-patch-manager\\file", 0o100644),
-                           ("steam-patch-manager/link", 0o120777), ("steam-patch-manager/suid", 0o104755)]:
+                           ("patchhub/a/../file", 0o100644), ("patchhub\\file", 0o100644),
+                           ("patchhub/link", 0o120777), ("patchhub/suid", 0o104755)]:
             create_package(self.zip)
             with zipfile.ZipFile(self.zip, "a") as bundle:
                 info = zipfile.ZipInfo(name)
@@ -468,14 +417,14 @@ class PackageTests(unittest.TestCase):
                 m.validate_package(self.zip)
         create_package(self.zip)
         with zipfile.ZipFile(self.zip, "a") as bundle:
-            bundle.writestr("steam-patch-manager/MAIN.PY", "bad")
+            bundle.writestr("patchhub/MAIN.PY", "bad")
         with self.assertRaisesRegex(m.InstallError, "重复"):
             m.validate_package(self.zip)
 
     def test_rejects_wrong_version_runtime_and_identity(self):
         cases = [({"plugin.json": b'{"name":"other"}'}, None),
                  ({"bin/runtime.json": b'{"protocol_version":3}'}, None),
-                 ({"bin/steam-patch": b"MZ"}, None),
+                 ({"bin/patchhub-core": b"MZ"}, None),
                  ({"dist/index.js": None}, None),
                  ({}, "9.9.9")]
         for changes, expected in cases:
@@ -489,7 +438,7 @@ class PackageTests(unittest.TestCase):
             entries = [(item, bundle.read(item)) for item in bundle.infolist()]
         with zipfile.ZipFile(self.zip, "w") as bundle:
             for item, data in entries:
-                if item.filename.endswith("/bin/steam-patch"):
+                if item.filename.endswith("/bin/patchhub-core"):
                     item.external_attr = 0o100644 << 16
                 bundle.writestr(item, data)
         with self.assertRaisesRegex(m.InstallError, "runtime"):
@@ -519,7 +468,7 @@ class PackageTests(unittest.TestCase):
         create_package(self.zip)
         prefix = f"https://github.com/{m.REPOSITORY}/releases/download/v0.2.0/"
         release = {"tag_name": "v0.2.0", "assets": [{"name": n, "browser_download_url": prefix+n} for n in (m.ASSET, "SHA256SUMS.txt")]}
-        work = self.root / "steam-patch-decky-install"
+        work = self.root / "patchhub-decky-install"
         work.mkdir()
         def download(url, output=None, limit=None):
             if "api.github.com" in url:
@@ -535,7 +484,7 @@ class PackageTests(unittest.TestCase):
 
     def test_partial_download_is_cleanable_without_deleting_callers_original(self):
         create_package(self.zip)
-        work = self.root / "steam-patch-decky-install"
+        work = self.root / "patchhub-decky-install"
         work.mkdir()
         prefix = f"https://github.com/{m.REPOSITORY}/releases/download/v0.2.0/"
         release = {"tag_name": "v0.2.0", "assets": [{"name": n, "browser_download_url": prefix+n} for n in (m.ASSET, "SHA256SUMS.txt")]}

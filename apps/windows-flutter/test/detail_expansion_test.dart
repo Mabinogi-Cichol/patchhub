@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:steam_patch_windows/app.dart';
-import 'package:steam_patch_windows/pages/library_page.dart';
+import 'package:patchhub_windows/app.dart';
+import 'package:patchhub_windows/pages/library_page.dart';
 
 import 'modern_layout_test.dart' show ModernFixtureModel;
 
@@ -14,7 +14,7 @@ void main() {
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
     final model = ModernFixtureModel();
-    await tester.pumpWidget(SteamPatchApp(home: LibraryPage(model: model)));
+    await tester.pumpWidget(PatchHubApp(home: LibraryPage(model: model)));
     await tester.pumpAndSettle();
     await tester.tap(find.text(model.snapshot!.rows.single.name));
     await tester.pumpAndSettle();

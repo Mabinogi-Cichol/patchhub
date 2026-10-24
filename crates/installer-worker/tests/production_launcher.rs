@@ -1,6 +1,6 @@
+use patchhub_installer_worker::production::WorkerRuntime;
 use serde_json::{json, Value};
 use std::{fs, path::PathBuf, sync::atomic::AtomicBool};
-use steam_patch_installer_worker::production::WorkerRuntime;
 fn cases() -> Vec<Value> {
     let v: Value = serde_json::from_str(include_str!(
         "../../installer-format/tests/fixtures/sf/worker-golden.json"
@@ -16,14 +16,19 @@ fn unhex(s: &str) -> Vec<u8> {
 }
 fn new_runtime(root: &std::path::Path) -> WorkerRuntime {
     #[cfg(target_os = "linux")]
-    let run_as = if steam_patch_installer_worker::linux::euid() == 0 {
+    let run_as = if patchhub_installer_worker::linux::euid() == 0 {
         Some((1000, 1000))
     } else {
         None
     };
     #[cfg(not(target_os = "linux"))]
     let run_as = None;
-    WorkerRuntime::new(PathBuf::from(env!("CARGO_BIN_EXE_sf-worker")), root, run_as).unwrap()
+    WorkerRuntime::new(
+        PathBuf::from(env!("CARGO_BIN_EXE_patchhub-worker")),
+        root,
+        run_as,
+    )
+    .unwrap()
 }
 #[test]
 fn production_probe_and_all_synthetic_behavior_extractions() {
@@ -162,9 +167,9 @@ fn production_missing_runtime_fails_closed() {
     assert!(WorkerRuntime::new(stage.path().join("missing-worker"), stage.path(), None).is_err());
     assert!(WorkerRuntime::new("relative-worker", stage.path(), None).is_err());
     #[cfg(target_os = "linux")]
-    if steam_patch_installer_worker::linux::euid() == 0 {
+    if patchhub_installer_worker::linux::euid() == 0 {
         assert!(WorkerRuntime::new(
-            PathBuf::from(env!("CARGO_BIN_EXE_sf-worker")),
+            PathBuf::from(env!("CARGO_BIN_EXE_patchhub-worker")),
             stage.path(),
             None
         )

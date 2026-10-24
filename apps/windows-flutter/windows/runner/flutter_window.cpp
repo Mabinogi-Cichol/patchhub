@@ -28,7 +28,7 @@ bool FlutterWindow::OnCreate() {
   }
   RegisterPlugins(flutter_controller_->engine());
   desktop_channel_ = std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(
-      flutter_controller_->engine()->messenger(), "steam_patch/desktop",
+      flutter_controller_->engine()->messenger(), "patchhub/desktop",
       &flutter::StandardMethodCodec::GetInstance());
   desktop_channel_->SetMethodCallHandler([](
       const flutter::MethodCall<flutter::EncodableValue>& call,

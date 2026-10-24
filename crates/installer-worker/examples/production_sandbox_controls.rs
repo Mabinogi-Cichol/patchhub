@@ -1,4 +1,5 @@
 //! Offline development acceptance for production launch controls; no game/Steam paths.
+use patchhub_installer_worker::{production::WorkerRuntime, SandboxConfig, TerminationReason};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{
@@ -8,7 +9,6 @@ use std::{
     sync::atomic::{AtomicBool, Ordering},
     time::{Duration, Instant},
 };
-use steam_patch_installer_worker::{production::WorkerRuntime, SandboxConfig, TerminationReason};
 fn layout() -> (PathBuf, PathBuf) {
     #[cfg(windows)]
     {
@@ -56,11 +56,11 @@ fn worker() -> Result<(), Box<dyn std::error::Error>> {
             });
             #[cfg(windows)]
             let identity = {
-                let t = steam_patch_installer_worker::win::token_info();
+                let t = patchhub_installer_worker::win::token_info();
                 t.is_app_container && t.capability_count == Some(0)
             };
             #[cfg(target_os = "linux")]
-            let identity = steam_patch_installer_worker::linux::euid() != 0;
+            let identity = patchhub_installer_worker::linux::euid() != 0;
             #[cfg(not(any(windows, target_os = "linux")))]
             let identity = false;
             #[cfg(target_os = "linux")]
@@ -105,7 +105,7 @@ fn worker() -> Result<(), Box<dyn std::error::Error>> {
 fn identity() -> Option<(u32, u32)> {
     #[cfg(target_os = "linux")]
     {
-        if steam_patch_installer_worker::linux::euid() == 0 {
+        if patchhub_installer_worker::linux::euid() == 0 {
             Some((1000, 1000))
         } else {
             None
@@ -139,7 +139,7 @@ fn worker_pid(stage: &Path) -> Option<u32> {
             // host PID by the private executable inode's path, never mistake
             // namespace PID 2 for host kthreadd.
             use std::os::unix::fs::MetadataExt;
-            let expected = fs::metadata(path.join("runtime/sf-worker")).ok()?;
+            let expected = fs::metadata(path.join("runtime/patchhub-worker")).ok()?;
             for process in fs::read_dir("/proc").ok()?.filter_map(Result::ok) {
                 let Ok(pid) = process.file_name().to_string_lossy().parse::<u32>() else {
                     continue;
@@ -157,11 +157,11 @@ fn worker_pid(stage: &Path) -> Option<u32> {
 fn alive(pid: u32) -> bool {
     #[cfg(windows)]
     {
-        steam_patch_installer_worker::win::process_alive(pid)
+        patchhub_installer_worker::win::process_alive(pid)
     }
     #[cfg(target_os = "linux")]
     {
-        steam_patch_installer_worker::linux::process_alive(pid)
+        patchhub_installer_worker::linux::process_alive(pid)
     }
     #[cfg(not(any(windows, target_os = "linux")))]
     {
@@ -223,7 +223,7 @@ fn verify() -> Result<(), Box<dyn std::error::Error>> {
     #[cfg(windows)]
     let permission_check = true;
     #[cfg(target_os = "linux")]
-    let permission_check = steam_patch_installer_worker::linux::euid() != 0;
+    let permission_check = patchhub_installer_worker::linux::euid() != 0;
     #[cfg(not(any(windows, target_os = "linux")))]
     let permission_check = false;
     if permission_check {
@@ -352,7 +352,7 @@ fn verify() -> Result<(), Box<dyn std::error::Error>> {
     let mut cfg = SandboxConfig::new(
         &copied,
         &runtime,
-        &format!("steam-patch-p3-timeout-{}", std::process::id()),
+        &format!("patchhub-p3-timeout-{}", std::process::id()),
     );
     cfg.production_strict = true;
     cfg.input_dir = Some(input.clone());
@@ -364,7 +364,7 @@ fn verify() -> Result<(), Box<dyn std::error::Error>> {
     cfg.limits.active_process_limit = Some(1);
     #[cfg(windows)]
     {
-        use steam_patch_installer_worker::win::{ensure_profile, grant_path_access, AccessKind};
+        use patchhub_installer_worker::win::{ensure_profile, grant_path_access, AccessKind};
         let profile = ensure_profile(&cfg.profile_name)?;
         for p in [&timeout_root, &runtime, &input] {
             grant_path_access(p, profile.sid, AccessKind::ReadExecute)?;
@@ -382,9 +382,9 @@ fn verify() -> Result<(), Box<dyn std::error::Error>> {
     if let Some((uid, gid)) = identity() {
         std::os::unix::fs::chown(&output, Some(uid), Some(gid))?;
     }
-    let result = steam_patch_installer_worker::run_sandboxed(&cfg);
+    let result = patchhub_installer_worker::run_sandboxed(&cfg);
     #[cfg(windows)]
-    steam_patch_installer_worker::win::delete_profile(&cfg.profile_name)?;
+    patchhub_installer_worker::win::delete_profile(&cfg.profile_name)?;
     let outcome = result?;
     assert_eq!(outcome.termination, TerminationReason::Timeout);
     assert!(!alive(outcome.pid));
@@ -439,20 +439,20 @@ fn set_stage_acl(path: &Path, readonly: bool) -> Result<(), Box<dyn std::error::
         SetFileSecurityW, DACL_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION,
         PSECURITY_DESCRIPTOR,
     };
-    let sid = steam_patch_installer_worker::win::appcontainer::host_sid()?;
+    let sid = patchhub_installer_worker::win::appcontainer::host_sid()?;
     let rights = if readonly { "GRGX" } else { "FA" };
     let sddl =
-        steam_patch_installer_worker::win::util::hstring(&format!("D:P(A;OICI;{rights};;;{sid})"));
+        patchhub_installer_worker::win::util::hstring(&format!("D:P(A;OICI;{rights};;;{sid})"));
     let mut sd = PSECURITY_DESCRIPTOR::default();
     unsafe { ConvertStringSecurityDescriptorToSecurityDescriptorW(&sddl, 1, &mut sd, None) }?;
     let ok = unsafe {
         SetFileSecurityW(
-            &steam_patch_installer_worker::win::util::hstring(&path.to_string_lossy()),
+            &patchhub_installer_worker::win::util::hstring(&path.to_string_lossy()),
             DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
             sd,
         )
     };
-    unsafe { steam_patch_installer_worker::win::util::local_free(sd.0) };
+    unsafe { patchhub_installer_worker::win::util::local_free(sd.0) };
     if !ok.as_bool() {
         return Err("readonly stage DACL failed".into());
     }

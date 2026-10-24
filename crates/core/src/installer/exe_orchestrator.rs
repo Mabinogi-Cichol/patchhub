@@ -8,9 +8,9 @@ use crate::{
     operation,
     steam::GameInstall,
 };
+use patchhub_installer_worker::production::WorkerRuntime;
 use serde_json::json;
 use std::{fs, sync::atomic::AtomicBool};
-use steam_patch_installer_worker::production::WorkerRuntime;
 pub type Error = common::ZipTaskError;
 type Result<T> = std::result::Result<T, Error>;
 fn error(e: impl std::fmt::Display) -> Error {
@@ -94,7 +94,7 @@ fn boundary(deps: &ExeInstallDeps<'_>, control: &TaskControl) -> Result<()> {
         .map_err(error)
 }
 
-fn worker_error(control: &TaskControl, e: steam_patch_installer_worker::IsolationError) -> Error {
+fn worker_error(control: &TaskControl, e: patchhub_installer_worker::IsolationError) -> Error {
     if control.cancel.load(std::sync::atomic::Ordering::Acquire)
         || e.stage == "cancelled"
         || matches!(
@@ -411,7 +411,7 @@ mod tests {
         let exe = std::env::var_os("SF_WORKER_TEST_BIN")
             .expect("set SF_WORKER_TEST_BIN to the built bundled worker (release profile)");
         #[cfg(target_os = "linux")]
-        let uid = if steam_patch_installer_worker::linux::euid() == 0 {
+        let uid = if patchhub_installer_worker::linux::euid() == 0 {
             Some((1000, 1000))
         } else {
             None

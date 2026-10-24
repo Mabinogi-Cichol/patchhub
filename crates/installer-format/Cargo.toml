@@ -1,5 +1,5 @@
 [package]
-name = "steam-patch-installer-format"
+name = "patchhub-installer-format"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

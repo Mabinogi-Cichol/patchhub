@@ -1,4 +1,4 @@
-// Run only with STEAM_PATCH_UPDATE_FIXTURE pointing to an isolated native bundle.
+// Run only with PATCHHUB_UPDATE_FIXTURE pointing to an isolated native bundle.
 // Release metadata and HTTPS bodies are local fixtures; production has no test URL.
 import 'dart:async';
 import 'dart:convert';
@@ -7,13 +7,13 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:steam_patch_windows/app.dart';
-import 'package:steam_patch_windows/host/app_lifecycle.dart';
-import 'package:steam_patch_windows/host/app_update.dart';
-import 'package:steam_patch_windows/host/core_client.dart';
-import 'package:steam_patch_windows/host/core_paths.dart';
-import 'package:steam_patch_windows/host/source_tasks.dart';
-import 'package:steam_patch_windows/pages/app_update_panel.dart';
+import 'package:patchhub_windows/app.dart';
+import 'package:patchhub_windows/host/app_lifecycle.dart';
+import 'package:patchhub_windows/host/app_update.dart';
+import 'package:patchhub_windows/host/core_client.dart';
+import 'package:patchhub_windows/host/core_paths.dart';
+import 'package:patchhub_windows/host/source_tasks.dart';
+import 'package:patchhub_windows/pages/app_update_panel.dart';
 
 class FixtureHttp extends HttpOverrides {
   FixtureHttp(this.root);
@@ -80,7 +80,7 @@ class FixtureResponse extends Stream<List<int>> implements HttpClientResponse {
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
-  final path = Platform.environment['STEAM_PATCH_UPDATE_FIXTURE'];
+  final path = Platform.environment['PATCHHUB_UPDATE_FIXTURE'];
   testWidgets(
     'confirmed update downloads, validates and hands off to the real Windows updater',
     (tester) async {
@@ -99,7 +99,7 @@ void main() {
         directory: Directory('$path/program'),
         current: '0.2.9',
         stateFile: File(
-          '${Platform.environment['APPDATA']}/io.github.steampatch.manager/updates/state.json',
+          '${Platform.environment['APPDATA']}/PatchHub/updates/state.json',
         ),
         fetchRelease: () async =>
             jsonDecode(await File('$path/release.json').readAsString())
@@ -112,7 +112,7 @@ void main() {
       final tasks = AppTasks(
         CoreClient(
           CorePaths(
-            binary: '$path/program/steam-patch.exe',
+            binary: '$path/program/patchhub-core.exe',
             stateDirectory: '$path/state',
             resourceDirectory: '$path/program/resources',
           ),
@@ -124,7 +124,7 @@ void main() {
         await tester.runAsync(update.initialize);
         await lifecycle.initialize();
         await tester.pumpWidget(
-          SteamPatchApp(
+          PatchHubApp(
             home: AppUpdatePanel(
               update: update,
               lifecycle: lifecycle,
@@ -132,7 +132,10 @@ void main() {
             ),
           ),
         );
-        await tester.pump();
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('查看更新'));
+        await tester.pumpAndSettle();
+        await tester.ensureVisible(find.text('下载更新'));
         expect(find.text('下载更新'), findsOneWidget);
         await tester.runAsync(() async {
           await tester.tap(find.text('下载更新'));

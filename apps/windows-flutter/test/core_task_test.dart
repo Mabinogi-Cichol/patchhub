@@ -5,9 +5,9 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:steam_patch_windows/host/core_client.dart';
-import 'package:steam_patch_windows/host/core_task.dart';
-import 'package:steam_patch_windows/host/source_tasks.dart';
+import 'package:patchhub_windows/host/core_client.dart';
+import 'package:patchhub_windows/host/core_task.dart';
+import 'package:patchhub_windows/host/source_tasks.dart';
 
 void main() {
   final protocol = ProcessFixtureClient('chunked').protocol;

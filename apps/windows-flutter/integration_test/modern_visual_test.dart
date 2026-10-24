@@ -8,16 +8,16 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
-import 'package:steam_patch_windows/app.dart';
-import 'package:steam_patch_windows/host/app_lifecycle.dart';
-import 'package:steam_patch_windows/host/app_update.dart';
-import 'package:steam_patch_windows/host/core_client.dart';
-import 'package:steam_patch_windows/host/core_paths.dart';
-import 'package:steam_patch_windows/host/steam_artwork.dart';
-import 'package:steam_patch_windows/models/app_model.dart';
-import 'package:steam_patch_windows/models/library.dart';
-import 'package:steam_patch_windows/pages/library_page.dart';
-import 'package:steam_patch_windows/pages/app_update_panel.dart';
+import 'package:patchhub_windows/app.dart';
+import 'package:patchhub_windows/host/app_lifecycle.dart';
+import 'package:patchhub_windows/host/app_update.dart';
+import 'package:patchhub_windows/host/core_client.dart';
+import 'package:patchhub_windows/host/core_paths.dart';
+import 'package:patchhub_windows/host/steam_artwork.dart';
+import 'package:patchhub_windows/models/app_model.dart';
+import 'package:patchhub_windows/models/library.dart';
+import 'package:patchhub_windows/pages/library_page.dart';
+import 'package:patchhub_windows/pages/app_update_panel.dart';
 import 'package:window_manager/window_manager.dart';
 
 // This target only renders an existing scan snapshot. No core process is started.
@@ -85,10 +85,10 @@ class VisualUpdate extends AppUpdate {
 
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
-  const dataPath = String.fromEnvironment('STEAM_PATCH_VISUAL_DATA');
-  const outputPath = String.fromEnvironment('STEAM_PATCH_VISUAL_OUTPUT');
+  const dataPath = String.fromEnvironment('PATCHHUB_VISUAL_DATA');
+  const outputPath = String.fromEnvironment('PATCHHUB_VISUAL_OUTPUT');
   const appid = int.fromEnvironment(
-    'STEAM_PATCH_VISUAL_APPID',
+    'PATCHHUB_VISUAL_APPID',
     defaultValue: 42,
   );
 
@@ -121,7 +121,7 @@ void main() {
           'transactions': <Map<String, dynamic>>[],
         };
       }
-      final location = await const MethodChannel('steam_patch/desktop')
+      final location = await const MethodChannel('patchhub/desktop')
           .invokeMapMethod<String, dynamic>('steamArtworkContext');
       final art = SteamArtworkStore();
       final images = await art.load(appid);
@@ -159,7 +159,7 @@ void main() {
           await tester.pumpWidget(
             RepaintBoundary(
               key: key,
-              child: SteamPatchApp(
+              child: PatchHubApp(
                 home: Builder(
                   builder: (context) => MediaQuery(
                     data: MediaQuery.of(context)
@@ -170,7 +170,7 @@ void main() {
               ),
             ),
           );
-          SteamPatchApp.setThemeMode(
+          PatchHubApp.setThemeMode(
             tester.element(find.byType(LibraryPage)),
             dark ? ThemeMode.dark : ThemeMode.light,
           );
@@ -287,7 +287,7 @@ void main() {
       final updateKey = GlobalKey();
       await windowManager.setSize(const Size(1180, 760));
       await tester.pumpWidget(
-        SteamPatchApp(
+        PatchHubApp(
           home: RepaintBoundary(
             key: updateKey,
             child: AppUpdatePanel(
@@ -316,7 +316,7 @@ void main() {
       await windowManager.setSize(const Size(1180, 760));
       final closeModel = VisualReadModel(jsonDecode(jsonEncode(data)));
       await tester.pumpWidget(
-        SteamPatchApp(home: LibraryPage(model: closeModel)),
+        PatchHubApp(home: LibraryPage(model: closeModel)),
       );
       await tester.pumpAndSettle();
       final lifecycle = VisualCloseObserver(tasks: closeModel.tasks);

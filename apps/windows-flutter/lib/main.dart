@@ -21,7 +21,7 @@ Future<void> main(List<String> arguments) async {
   await windowManager.ensureInitialized();
   final directory = File(Platform.resolvedExecutable).parent;
   if (!arguments.contains('--update-probe')) {
-    final maintenance = File('${directory.path}/.steam-patch-maintenance.lock');
+    final maintenance = File('${directory.path}/.patchhub-maintenance.lock');
     if (await maintenance.exists()) {
       try {
         final handle = await maintenance.open(mode: FileMode.append);
@@ -32,7 +32,7 @@ Future<void> main(List<String> arguments) async {
       }
     }
   }
-  final marker = File('${directory.path}/.steam-patch-update.json');
+  final marker = File('${directory.path}/.patchhub-update.json');
   if (!arguments.contains('--update-probe') && await marker.exists()) {
     final transaction = jsonDecode(await marker.readAsString()) as Map;
     await Process.start('powershell.exe', [
@@ -69,7 +69,7 @@ Future<void> main(List<String> arguments) async {
       );
       await CoreClient(CorePaths.resolve(), protocol).capabilities();
       runApp(
-        const SteamPatchApp(
+        const PatchHubApp(
           home: Scaffold(body: Center(child: Text('正在确认更新…'))),
         ),
       );
@@ -126,7 +126,7 @@ Future<void> main(List<String> arguments) async {
   final update = AppUpdate(
     directory: directory,
     current: version,
-    stateFile: File('$appData/io.github.steampatch.manager/updates/state.json'),
+    stateFile: File('$appData/PatchHub/updates/state.json'),
   );
   final updateHome = AppUpdatePanel(
     update: update,
@@ -137,7 +137,7 @@ Future<void> main(List<String> arguments) async {
     size: Size(1180, 760),
     minimumSize: Size(850, 560),
     center: true,
-    title: 'Steam 黄油补丁助手',
+    title: 'PatchHub',
     titleBarStyle: TitleBarStyle.hidden,
     windowButtonVisibility: false,
   );
@@ -146,7 +146,7 @@ Future<void> main(List<String> arguments) async {
     await windowManager.focus();
   });
   runApp(
-    SteamPatchApp(
+    PatchHubApp(
       home: ListenableBuilder(
         listenable: Listenable.merge([lifecycle, ?tasks]),
         builder: (context, _) {

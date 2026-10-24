@@ -1,7 +1,7 @@
 //! Development-only parity runner using the production LPAC/bwrap session.
 //! Every output stays below the caller's disposable .artifacts/p2 case.
+use patchhub_installer_worker::{production::WorkerRuntime, sf::Descriptor, IsolationError};
 use std::{fs, io::Write, path::PathBuf, sync::atomic::AtomicBool, time::Instant};
-use steam_patch_installer_worker::{production::WorkerRuntime, sf::Descriptor, IsolationError};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let repo = std::env::current_dir()?.canonicalize()?;
@@ -12,7 +12,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Err("case must be below .artifacts/p2".into());
     }
     let descriptor = fs::read(root.join("descriptor.json"))?;
-    let parsed = steam_patch_installer_worker::sf::parse_descriptor(&descriptor)?;
+    let parsed = patchhub_installer_worker::sf::parse_descriptor(&descriptor)?;
     let (hash, size) = match &parsed {
         Descriptor::Analyze {
             exe_sha256,
@@ -33,9 +33,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .and_then(|p| p.parent())
         .ok_or("runner is outside build examples")?
         .join(if cfg!(windows) {
-            "sf-worker.exe"
+            "patchhub-worker.exe"
         } else {
-            "sf-worker"
+            "patchhub-worker"
         });
     let stage = root.join("stage");
     fs::create_dir_all(&stage)?;

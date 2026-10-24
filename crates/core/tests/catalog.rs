@@ -1,6 +1,6 @@
+use patchhub_core::{catalog::*, steam::GameInstall};
 use sha2::{Digest, Sha256};
 use std::{fs, path::PathBuf};
-use steam_patch_core::{catalog::*, steam::GameInstall};
 
 fn hash(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))

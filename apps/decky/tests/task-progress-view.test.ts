@@ -6,7 +6,7 @@ import { runInNewContext } from "node:vm";
 import ts from "typescript";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { installationResult, progressStageLabel } from "@steam-patch/ui";
+import { installationResult, progressStageLabel } from "@patchhub/ui";
 import type { TaskSnapshot } from "../src/task-controller.ts";
 
 // Use the actual JSX with native-component stand-ins: no Steam runtime is needed.
@@ -24,7 +24,7 @@ const output = ts.transpileModule(source, { compilerOptions: {
 const exports: Record<string, any> = {};
 runInNewContext(output, { exports, require: (id: string) => {
   if (id === "@decky/ui") return native;
-  if (id === "@steam-patch/ui") return { reason: (code: string) => `原因：${code}`, installationResult, progressStageLabel };
+  if (id === "@patchhub/ui") return { reason: (code: string) => `原因：${code}`, installationResult, progressStageLabel };
   if (id === "./cache") return { formatSize: (bytes: number) => `${bytes} B` };
   if (id === "./task-progress") return { taskProgressPercent: () => 50 };
   return require(id);

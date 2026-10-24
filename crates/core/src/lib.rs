@@ -19,6 +19,6 @@ pub mod trust;
 pub mod zip_metadata;
 
 #[cfg(test)]
-extern crate self as steam_patch_core;
+extern crate self as patchhub_core;
 #[cfg(test)]
 mod install_tests;

@@ -1,8 +1,8 @@
 import 'dart:async';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:steam_patch_windows/host/core_client.dart';
-import 'package:steam_patch_windows/host/source_tasks.dart';
+import 'package:patchhub_windows/host/core_client.dart';
+import 'package:patchhub_windows/host/source_tasks.dart';
 
 import 'support/process_fixture_client.dart';
 

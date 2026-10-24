@@ -11,7 +11,7 @@ try:
     import protocol as generated
 except ModuleNotFoundError:
     location = Path(__file__).resolve().parents[3] / "packages/contracts/generated/protocol.py"
-    spec = importlib.util.spec_from_file_location("steam_patch_protocol", location)
+    spec = importlib.util.spec_from_file_location("patchhub_protocol", location)
     generated = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(generated)
 

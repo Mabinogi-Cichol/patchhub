@@ -336,7 +336,7 @@ impl ReqwestFetcher {
         let client = Client::builder()
             .redirect(Policy::none())
             .timeout(CLIENT_TIMEOUT)
-            .user_agent("SteamPatchDiscovery/1")
+            .user_agent("PatchHubDiscovery/1")
             .build()
             .map_err(|_| invalid("discovery_client_failed"))?;
         Ok(Self { client })

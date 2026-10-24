@@ -1,5 +1,5 @@
+use patchhub_installer_format::{behavior, lua};
 use serde_json::{json, Value};
-use steam_patch_installer_format::{behavior, lua};
 
 fn checked_file(version: &str) -> Value {
     use base64::{engine::general_purpose::STANDARD, Engine};
@@ -30,7 +30,7 @@ fn checked_file(version: &str) -> Value {
 fn graph(source: &str) -> Value {
     json!({"coverage":{"complete":true},"includes":[],"events":[{"context":"CSUFScreenInstallFolder:test","name":"On Next","script":source}]})
 }
-fn lower(source: &str) -> steam_patch_installer_format::Result<Value> {
+fn lower(source: &str) -> patchhub_installer_format::Result<Value> {
     behavior::lower(&graph(source), &[checked_file("9.5")], "9.5")
 }
 

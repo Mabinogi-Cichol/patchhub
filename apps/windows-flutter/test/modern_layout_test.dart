@@ -4,10 +4,10 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:steam_patch_windows/app.dart';
-import 'package:steam_patch_windows/models/app_model.dart';
-import 'package:steam_patch_windows/models/library.dart';
-import 'package:steam_patch_windows/pages/library_page.dart';
+import 'package:patchhub_windows/app.dart';
+import 'package:patchhub_windows/models/app_model.dart';
+import 'package:patchhub_windows/models/library.dart';
+import 'package:patchhub_windows/pages/library_page.dart';
 
 import 'library_page_test.dart' show FixtureClient;
 
@@ -52,7 +52,7 @@ void main() {
             );
             final model = ModernFixtureModel();
             await tester.pumpWidget(
-              SteamPatchApp(home: LibraryPage(model: model)),
+              PatchHubApp(home: LibraryPage(model: model)),
             );
             await tester.pumpAndSettle();
             await tester.tap(find.text(model.snapshot!.rows.single.name));

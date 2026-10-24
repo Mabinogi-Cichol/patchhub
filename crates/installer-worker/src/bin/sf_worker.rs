@@ -1,13 +1,13 @@
 //! Fixed SF worker entry point. Paths come only from the sandbox mount layout.
+use patchhub_installer_worker::sf;
 use std::io::{Read, Write};
 use std::path::Path;
-use steam_patch_installer_worker::sf;
 
 fn main() {
     let mut extracting = false;
     let result = (|| {
         if std::env::args_os().len() != 1 {
-            return Err(steam_patch_installer_format::Error(
+            return Err(patchhub_installer_format::Error(
                 "invalid_worker_arguments".into(),
             ));
         }
@@ -22,7 +22,7 @@ fn main() {
         #[cfg(windows)]
         let input = Path::new("input/archive.exe");
         #[cfg(not(any(windows, target_os = "linux")))]
-        return Err(steam_patch_installer_format::Error(
+        return Err(patchhub_installer_format::Error(
             "worker_platform_unsupported".into(),
         ));
         let file = sf::open_input(input)?;
@@ -36,7 +36,7 @@ fn main() {
                 .lock()
                 .write_all(&sf::encode_response(&response)?)?;
         }
-        Ok::<(), steam_patch_installer_format::Error>(())
+        Ok::<(), patchhub_installer_format::Error>(())
     })();
     if let Err(error) = result {
         let detail: String = error.0.chars().take(2048).collect();

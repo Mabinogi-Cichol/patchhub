@@ -65,8 +65,8 @@ class CoreBridge:
                 or type(run_gid) is not int or run_gid < 1))
                 or (hasattr(os, "geteuid") and os.geteuid() == 0 and run_uid is None)):
             raise ValueError("unprivileged_user_required")
-        # Rust locates sf-worker beside this fixed executable; no RPC runtime path.
-        self.worker = self.binary.with_name("sf-worker")
+        # Rust locates patchhub-worker beside this fixed executable; no RPC runtime path.
+        self.worker = self.binary.with_name("patchhub-worker")
         if user_home is not None:
             home = str(user_home)
             self.process_env.update(HOME=home, USER=user_home.name, LOGNAME=user_home.name,

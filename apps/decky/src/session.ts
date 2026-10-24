@@ -1,4 +1,4 @@
-import { reason, type GameMatch, type Install, type MatchGamesResult, type ProjectInstancesResult, type ScanResult, type SourceSubscription, type SourceUpdateResult, type Transaction } from "@steam-patch/ui";
+import { reason, type GameMatch, type Install, type MatchGamesResult, type ProjectInstancesResult, type ScanResult, type SourceSubscription, type SourceUpdateResult, type Transaction } from "@patchhub/ui";
 import type { SourceTaskApi, SourceTaskSnapshot } from "./source-tasks";
 
 // Decky has no push channel. `project_instances` replaces the rows a finished

@@ -1,22 +1,22 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 
-class SteamPatchApp extends StatefulWidget {
-  const SteamPatchApp({super.key, required this.home});
+class PatchHubApp extends StatefulWidget {
+  const PatchHubApp({super.key, required this.home});
   final Widget home;
 
   static ThemeMode themeModeOf(BuildContext context) =>
-      context.findAncestorStateOfType<_SteamPatchAppState>()!.themeMode;
+      context.findAncestorStateOfType<_PatchHubAppState>()!.themeMode;
 
   static void setThemeMode(BuildContext context, ThemeMode mode) => context
-      .findAncestorStateOfType<_SteamPatchAppState>()!
+      .findAncestorStateOfType<_PatchHubAppState>()!
       .setThemeMode(mode);
 
   @override
-  State<SteamPatchApp> createState() => _SteamPatchAppState();
+  State<PatchHubApp> createState() => _PatchHubAppState();
 }
 
-class _SteamPatchAppState extends State<SteamPatchApp> {
+class _PatchHubAppState extends State<PatchHubApp> {
   ThemeMode themeMode = ThemeMode.system;
 
   void setThemeMode(ThemeMode mode) {
@@ -139,7 +139,7 @@ class _SteamPatchAppState extends State<SteamPatchApp> {
 
   @override
   Widget build(BuildContext context) => MaterialApp(
-    title: 'Steam 黄油补丁助手',
+    title: 'PatchHub',
     debugShowCheckedModeBanner: false,
     locale: const Locale('zh', 'CN'),
     supportedLocales: const [Locale('zh', 'CN')],

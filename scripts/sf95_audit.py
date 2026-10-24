@@ -209,7 +209,7 @@ def safe_target(directory, basename):
         device = part.split(".", 1)[0].upper()
         require(device not in ("CON", "PRN", "AUX", "NUL")
                 and not re.fullmatch(r"(?:COM|LPT)[0-9¹²³]", device), "unsafe_target_path")
-        require(not part.casefold().startswith(".steam-patch-"), "reserved_target_path")
+        require(not part.casefold().startswith(".patchhub-"), "reserved_target_path")
     require("\\" not in basename, "unsafe_basename")
     return name.replace("\\", "/")
 

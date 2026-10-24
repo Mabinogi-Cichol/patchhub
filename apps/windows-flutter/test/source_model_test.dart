@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:steam_patch_windows/app.dart';
-import 'package:steam_patch_windows/models/app_model.dart';
-import 'package:steam_patch_windows/pages/source_pages.dart';
+import 'package:patchhub_windows/app.dart';
+import 'package:patchhub_windows/models/app_model.dart';
+import 'package:patchhub_windows/pages/source_pages.dart';
 
 import 'library_page_test.dart' show FixtureClient;
 
@@ -100,7 +100,7 @@ void main() {
           },
         ];
       await tester.pumpWidget(
-        SteamPatchApp(
+        PatchHubApp(
           home: Scaffold(body: GlobalSourcesPage(model: model)),
         ),
       );

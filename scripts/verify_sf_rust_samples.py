@@ -68,7 +68,7 @@ def main():
     parser.add_argument('--sample', action='append', default=[], metavar='APPID=PATH')
     args = parser.parse_args()
     runner = ROOT / ('target/release/examples/sf_sandbox_check.exe' if args.platform == 'windows' else 'target/linux/release/examples/sf_sandbox_check')
-    worker = runner.parent.parent / ('sf-worker.exe' if args.platform == 'windows' else 'sf-worker')
+    worker = runner.parent.parent / ('patchhub-worker.exe' if args.platform == 'windows' else 'patchhub-worker')
     run = f'{args.platform}-{time.time_ns()}'
     P2.mkdir(parents=True, exist_ok=True)
     LOCAL.mkdir(parents=True, exist_ok=True)

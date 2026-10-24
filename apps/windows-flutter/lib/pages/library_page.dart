@@ -160,7 +160,7 @@ class _LibraryPageState extends State<LibraryPage> {
               PopupMenuButton<ThemeMode>(
                 tooltip: '外观',
                 icon: const Icon(Icons.tune_outlined, size: 20),
-                onSelected: (mode) => SteamPatchApp.setThemeMode(context, mode),
+                onSelected: (mode) => PatchHubApp.setThemeMode(context, mode),
                 itemBuilder: (context) => [
                   for (final entry in const {
                     ThemeMode.system: '跟随系统',
@@ -169,7 +169,7 @@ class _LibraryPageState extends State<LibraryPage> {
                   }.entries)
                     CheckedPopupMenuItem(
                       value: entry.key,
-                      checked: SteamPatchApp.themeModeOf(context) == entry.key,
+                      checked: PatchHubApp.themeModeOf(context) == entry.key,
                       child: Text(entry.value),
                     ),
                 ],

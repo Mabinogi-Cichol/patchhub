@@ -92,7 +92,7 @@ impl WorkerRuntime {
     /// invalid bytes must reach the parser; executable/bwrap existence is insufficient.
     pub fn probe(&self) -> SandboxAvailability {
         let result = (|| {
-            let sample = b"steam-patch inert sandbox capability probe";
+            let sample = b"patchhub-core inert sandbox capability probe";
             let dir = self.directory()?;
             let archive = dir.path().join("probe.exe");
             fs::write(&archive, sample).map_err(|e| ioerr("probe", e))?;
@@ -204,7 +204,7 @@ impl WorkerRuntime {
             .map_err(|e| ioerr("stage", e))?;
         lock.try_lock().map_err(|e| err("stage", e.to_string()))?;
         let marker = InvocationMarker {
-            schema: "steam-patch/worker-stage/v1".into(),
+            schema: "patchhub-core/worker-stage/v1".into(),
             owner: host_owner()?,
             directory: d.path().file_name().unwrap().to_string_lossy().into_owned(),
         };
@@ -239,19 +239,16 @@ impl WorkerRuntime {
             fs::create_dir(p).map_err(|e| ioerr("stage", e))?;
         }
         #[cfg(windows)]
-        let exe = runtime.join("sf-worker.exe");
+        let exe = runtime.join("patchhub-worker.exe");
         #[cfg(not(windows))]
-        let exe = runtime.join("sf-worker");
+        let exe = runtime.join("patchhub-worker");
         fs::copy(&self.worker_exe, &exe).map_err(|e| ioerr("runtime", e))?;
         let staged_input = input.join("archive.exe");
         copy_bound(archive, &staged_input, exe_sha256, exe_size, cancel)?;
         let mut cfg = SandboxConfig::new(
             &exe,
             &runtime,
-            &format!(
-                "steam-patch-{}",
-                root.file_name().unwrap().to_string_lossy()
-            ),
+            &format!("patchhub-{}", root.file_name().unwrap().to_string_lossy()),
         );
         cfg.production_strict = true;
         cfg.input_dir = Some(input.clone());
@@ -823,7 +820,7 @@ fn cleanup_stale(root: &Path) -> Result<(), IsolationError> {
         let Ok(marker) = serde_json::from_slice::<InvocationMarker>(&raw) else {
             continue;
         };
-        if marker.schema != "steam-patch/worker-stage/v1"
+        if marker.schema != "patchhub-core/worker-stage/v1"
             || marker.owner != owner
             || marker.directory != name
         {
@@ -831,7 +828,7 @@ fn cleanup_stale(root: &Path) -> Result<(), IsolationError> {
         }
         #[cfg(windows)]
         {
-            match crate::win::delete_profile(&format!("steam-patch-{name}")) {
+            match crate::win::delete_profile(&format!("patchhub-{name}")) {
                 Ok(()) => {}
                 Err(e) if matches!(e.code, Some(2 | 3 | 1168)) => {}
                 Err(e) => return Err(e),

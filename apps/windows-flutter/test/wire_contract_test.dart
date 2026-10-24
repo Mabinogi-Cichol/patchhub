@@ -2,7 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:steam_patch_windows/host/core_client.dart';
+import 'package:patchhub_windows/host/core_client.dart';
 
 void main() {
   final source = File('../../packages/contracts/generated/v5.schema.json')

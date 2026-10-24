@@ -8,6 +8,7 @@ use crate::{
     installer::exe_report::PayloadEntry,
     operation,
 };
+use patchhub_installer_worker::IsolationError;
 use serde_json::Value;
 use std::{
     collections::BTreeSet,
@@ -15,7 +16,6 @@ use std::{
     io::{BufWriter, Write},
     path::PathBuf,
 };
-use steam_patch_installer_worker::IsolationError;
 
 fn err(message: impl Into<String>) -> IsolationError {
     IsolationError::new("extract", None, message)

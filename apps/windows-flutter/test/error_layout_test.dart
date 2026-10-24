@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:steam_patch_windows/app.dart';
-import 'package:steam_patch_windows/host/core_client.dart';
-import 'package:steam_patch_windows/models/app_model.dart';
-import 'package:steam_patch_windows/pages/library_page.dart';
+import 'package:patchhub_windows/app.dart';
+import 'package:patchhub_windows/host/core_client.dart';
+import 'package:patchhub_windows/models/app_model.dart';
+import 'package:patchhub_windows/pages/library_page.dart';
 
 import 'library_page_test.dart' show FixtureClient;
 
@@ -32,7 +32,7 @@ void main() {
       addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
       final client = LongFailureClient();
       final model = AppModel(client);
-      await tester.pumpWidget(SteamPatchApp(home: LibraryPage(model: model)));
+      await tester.pumpWidget(PatchHubApp(home: LibraryPage(model: model)));
       await tester.pumpAndSettle();
       await tester.tap(find.text('查看全部游戏'));
       await tester.pumpAndSettle();

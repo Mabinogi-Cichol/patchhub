@@ -20,7 +20,7 @@ def flutter_components(root, deps_path, version_path):
         name, release = package['name'], package['version']
         ref = f'pkg:pub/{name}@{release}'
         item = {'type': 'library', 'name': name, 'version': release, 'purl': ref, 'bom-ref': ref,
-                'properties': [{'name': 'steam-patch:dependency-source', 'value': package['source']}]}
+                'properties': [{'name': 'patchhub:dependency-source', 'value': package['source']}]}
         licenses = sorted(path for path in locations[name].iterdir()
                           if path.is_file() and path.name.upper().startswith(('LICENSE', 'COPYING')))
         if licenses:
@@ -28,7 +28,7 @@ def flutter_components(root, deps_path, version_path):
                 'text': {'contentType': 'text/plain', 'content': path.read_text(encoding='utf-8')}}}
                 for path in licenses]
         else:
-            item['properties'].append({'name': 'steam-patch:license-review', 'value': 'required; consult bundled data/flutter_assets/NOTICES.Z'})
+            item['properties'].append({'name': 'patchhub:license-review', 'value': 'required; consult bundled data/flutter_assets/NOTICES.Z'})
         result.append(item)
     for name, release in [('Flutter SDK', version['frameworkVersion']), ('Dart SDK', version['dartSdkVersion'])]:
         ref = f'flutter-runtime:{name}:{release}'

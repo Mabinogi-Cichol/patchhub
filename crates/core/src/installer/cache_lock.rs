@@ -396,11 +396,11 @@ mod tests {
 
     #[test]
     fn lock_child() {
-        let Some(state) = std::env::var_os("STEAM_PATCH_CACHE_LOCK_CHILD_STATE") else {
+        let Some(state) = std::env::var_os("PATCHHUB_CACHE_LOCK_CHILD_STATE") else {
             return;
         };
-        let mode = std::env::var("STEAM_PATCH_CACHE_LOCK_CHILD_MODE").unwrap();
-        let expected = std::env::var("STEAM_PATCH_CACHE_LOCK_CHILD_EXPECT").unwrap();
+        let mode = std::env::var("PATCHHUB_CACHE_LOCK_CHILD_MODE").unwrap();
+        let expected = std::env::var("PATCHHUB_CACHE_LOCK_CHILD_EXPECT").unwrap();
         let paths = InstallerPaths::new(Path::new(&state));
         let result = if mode == "legacy" {
             CacheLock::legacy_journal(paths.root())
@@ -421,9 +421,9 @@ mod tests {
                 "installer::cache_lock::tests::lock_child",
                 "--nocapture",
             ])
-            .env("STEAM_PATCH_CACHE_LOCK_CHILD_STATE", state)
-            .env("STEAM_PATCH_CACHE_LOCK_CHILD_MODE", mode)
-            .env("STEAM_PATCH_CACHE_LOCK_CHILD_EXPECT", expected)
+            .env("PATCHHUB_CACHE_LOCK_CHILD_STATE", state)
+            .env("PATCHHUB_CACHE_LOCK_CHILD_MODE", mode)
+            .env("PATCHHUB_CACHE_LOCK_CHILD_EXPECT", expected)
             .output()
             .unwrap();
         assert!(

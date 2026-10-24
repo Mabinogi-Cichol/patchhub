@@ -163,7 +163,7 @@ pub fn safe_target(directory: &str, basename: &str) -> Result<String> {
                 .chars()
                 .default_case_fold()
                 .collect::<String>()
-                .starts_with(".steam-patch-"),
+                .starts_with(".patchhub-"),
             "reserved_target_path",
         )?;
     }

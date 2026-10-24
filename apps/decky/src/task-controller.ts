@@ -1,4 +1,4 @@
-import type { InstallerOutcome, InstallStage } from "@steam-patch/ui";
+import type { InstallerOutcome, InstallStage } from "@patchhub/ui";
 
 export type TaskSnapshot = {
   task_id: string;

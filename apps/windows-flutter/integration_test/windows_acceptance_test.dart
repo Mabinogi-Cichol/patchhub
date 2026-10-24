@@ -8,13 +8,13 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 import 'package:window_manager/window_manager.dart';
-import 'package:steam_patch_windows/app.dart';
-import 'package:steam_patch_windows/host/app_lifecycle.dart';
-import 'package:steam_patch_windows/host/core_client.dart';
-import 'package:steam_patch_windows/host/core_paths.dart';
-import 'package:steam_patch_windows/models/app_model.dart';
-import 'package:steam_patch_windows/pages/install_dialog.dart';
-import 'package:steam_patch_windows/pages/library_page.dart';
+import 'package:patchhub_windows/app.dart';
+import 'package:patchhub_windows/host/app_lifecycle.dart';
+import 'package:patchhub_windows/host/core_client.dart';
+import 'package:patchhub_windows/host/core_paths.dart';
+import 'package:patchhub_windows/models/app_model.dart';
+import 'package:patchhub_windows/pages/install_dialog.dart';
+import 'package:patchhub_windows/pages/library_page.dart';
 
 class AcceptancePaths extends CorePaths {
   AcceptancePaths(this.spec)
@@ -46,13 +46,13 @@ class ObservedLifecycle extends AppLifecycle {
 
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
-  const specPath = String.fromEnvironment('STEAM_PATCH_NATIVE_SPEC');
+  const specPath = String.fromEnvironment('PATCHHUB_NATIVE_SPEC');
   testWidgets(
     'Windows window themes and native close cancel the real temporary ZIP task',
     (tester) async {
       if (specPath.isEmpty) {
         throw StateError(
-          'Pass --dart-define=STEAM_PATCH_NATIVE_SPEC=<temporary acceptance spec.json>',
+          'Pass --dart-define=PATCHHUB_NATIVE_SPEC=<temporary acceptance spec.json>',
         );
       }
       final spec =
@@ -97,14 +97,14 @@ void main() {
       final lifecycle = ObservedLifecycle(model);
       await windowManager.ensureInitialized();
       await lifecycle.initialize();
-      await windowManager.setTitle('Steam 黄油补丁助手 · 本地集成验收');
+      await windowManager.setTitle('PatchHub · 本地集成验收');
       await windowManager.setSize(const Size(1180, 760));
       await windowManager.show();
       final surface = GlobalKey();
       await tester.pumpWidget(
         RepaintBoundary(
           key: surface,
-          child: SteamPatchApp(home: LibraryPage(model: model)),
+          child: PatchHubApp(home: LibraryPage(model: model)),
         ),
       );
       await tester.pumpAndSettle();

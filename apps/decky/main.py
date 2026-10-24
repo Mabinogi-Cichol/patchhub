@@ -1,4 +1,4 @@
-"""Decky host for the bundled protocol-v5 Rust installer and sf-worker."""
+"""Decky host for the bundled protocol-v5 Rust installer and patchhub-worker."""
 from pathlib import Path
 import sys
 import os
@@ -38,9 +38,9 @@ class Plugin:
     async def _initialize(self):
         root = Path(decky.DECKY_PLUGIN_DIR)
         home = Path(decky.DECKY_USER_HOME)
-        state_dir = home / ".local/share/steam-patch-manager"
+        state_dir = home / ".local/share/patchhub"
         self.app_update = AppUpdate(root, state_dir)
-        self._app_update_gate = (home / '.cache/steam-patch-decky-install/journal.json').exists()
+        self._app_update_gate = (home / '.cache/patchhub-decky-install/journal.json').exists()
         self._app_update_checker = asyncio.create_task(self._app_update_loop())
         run_uid = run_gid = None
         if os.geteuid() == 0:
@@ -49,7 +49,7 @@ class Plugin:
             if account.pw_uid == 0 or Path(account.pw_dir) != home:
                 raise ValueError("unprivileged_user_required")
             run_uid, run_gid = account.pw_uid, account.pw_gid
-        self.bridge = CoreBridge(root / "bin/steam-patch", root / "bin/catalog.json",
+        self.bridge = CoreBridge(root / "bin/patchhub-core", root / "bin/catalog.json",
             signed_catalog=root / "bin/signed-catalog.json", trust_keys=root / "bin/trust-keys.json",
             state_dir=state_dir, run_uid=run_uid, run_gid=run_gid, user_home=home)
         await self.bridge.preflight()
@@ -240,7 +240,7 @@ class Plugin:
     async def get_app_update_status(self):
         status = self.app_update.snapshot()
         execution = status.get('execution') or {}
-        if execution.get('state') in ('completed', 'failed') and not (Path(decky.DECKY_USER_HOME) / '.cache/steam-patch-decky-install/journal.json').exists():
+        if execution.get('state') in ('completed', 'failed') and not (Path(decky.DECKY_USER_HOME) / '.cache/patchhub-decky-install/journal.json').exists():
             self._app_update_gate = False
         return status
 
@@ -265,7 +265,7 @@ class Plugin:
         return self._prepare_app_update()
 
     async def finish_app_update(self):
-        if (Path(decky.DECKY_USER_HOME) / '.cache/steam-patch-decky-install/journal.json').exists():
+        if (Path(decky.DECKY_USER_HOME) / '.cache/patchhub-decky-install/journal.json').exists():
             raise RuntimeError('更新事务尚未完成')
         await self.bridge.recover()
         self._app_update_gate = False

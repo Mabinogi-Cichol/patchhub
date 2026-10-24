@@ -14,9 +14,9 @@ from pathlib import Path
 
 from plugin_settings import _write_json
 
-REPOSITORY = "Mabinogi-Cichol/steam-hentai-patch"
+REPOSITORY = "Mabinogi-Cichol/patchhub"
 API = f"https://api.github.com/repos/{REPOSITORY}/releases/latest"
-ASSET = "steam-patch-manager-decky.zip"
+ASSET = "patchhub-decky.zip"
 INTERVAL = 24 * 60 * 60
 
 
@@ -81,7 +81,7 @@ class RateLimited(Exception):
 
 
 def fetch_release():
-    request = urllib.request.Request(API, headers={'User-Agent': 'steam-patch-manager',
+    request = urllib.request.Request(API, headers={'User-Agent': 'patchhub',
         'Accept': 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28'})
     try:
         # Loader's frozen interpreter resolves its bundled CA location incorrectly on
@@ -116,7 +116,7 @@ class AppUpdate:
         if load_error:
             self.result = {'state': 'failed', 'current': self.current, 'error': load_error}
         self.pending = None
-        self.worker_dir = Path.home() / '.cache' / 'steam-patch-app-update'
+        self.worker_dir = Path.home() / '.cache' / 'patchhub-app-update'
 
     def snapshot(self):
         worker = self.worker_dir / 'result.json'
@@ -137,7 +137,7 @@ class AppUpdate:
                     _write_json(worker, execution)
         return {**self.result, 'execution': execution, 'skipped': bool(self.result.get('tag')) and self.data.get('skipped_tag') == self.result.get('tag'),
                 'retry_at': self.data.get('retry_at'),
-                'needs_recovery': (Path.home() / '.cache/steam-patch-decky-install/journal.json').exists()}
+                'needs_recovery': (Path.home() / '.cache/patchhub-decky-install/journal.json').exists()}
 
     def start(self, tag=None, recover=False):
         if not recover and (self.result.get('state') != 'available' or tag != self.result.get('tag')):

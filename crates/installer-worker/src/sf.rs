@@ -1,13 +1,13 @@
 //! Fixed-action SF worker protocol. The caller must launch this code in the platform sandbox.
 //! This module never authorizes installation or opens a game/state directory.
 use memmap2::MmapOptions;
+use patchhub_installer_format::{audit, require, Error, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::Path;
-use steam_patch_installer_format::{audit, require, Error, Result};
 
 pub const MAX_MESSAGE: usize = 16 * 1024 * 1024;
 

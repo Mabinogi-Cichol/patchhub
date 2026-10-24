@@ -596,7 +596,7 @@ impl Transport for ReqwestTransport {
             .resolve_to_addrs(host, &addresses)
             .connect_timeout(Duration::from_secs(15))
             .timeout(Duration::from_secs(15))
-            .user_agent("steam-patch-manager/0.1")
+            .user_agent("patchhub/0.1")
             .no_gzip()
             .no_deflate()
             .build()

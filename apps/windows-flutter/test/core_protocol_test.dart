@@ -2,8 +2,8 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:steam_patch_windows/host/core_client.dart';
-import 'package:steam_patch_windows/models/library.dart';
+import 'package:patchhub_windows/host/core_client.dart';
+import 'package:patchhub_windows/models/library.dart';
 
 void main() {
   final corpus = jsonDecode(

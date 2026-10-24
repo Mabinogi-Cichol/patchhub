@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { installInput, primaryActionBlockers, primaryInstallAction } from "../src/actions.ts";
-import { installationResult, installSummary, type InstallerOutcome, type ActionBlockerCode, type Patch, type PatchActions, type Transaction } from "@steam-patch/ui";
+import { installationResult, installSummary, type InstallerOutcome, type ActionBlockerCode, type Patch, type PatchActions, type Transaction } from "@patchhub/ui";
 
 const availability = (available: boolean, blockers: { code: ActionBlockerCode; detail?: string }[] = []) => ({ available, blockers });
 const actions = (values: Partial<PatchActions> = {}): PatchActions => ({

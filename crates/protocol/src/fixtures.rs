@@ -2,7 +2,7 @@
 use crate::*;
 use serde_json::{json, Value};
 pub fn capabilities() -> Value {
-    json!({"protocol_version":5,"methods":METHODS,"contracts":ContractVersions::default(),"installer":{"schema_version":1,"selection_version":1,"content_version":1,"adapter_version":1,"policy_schema_version":1,"report_schema_version":1,"formats":{"zip":"supported","exe":"supported"},"strategies":["managed_zip","publisher_zip","publisher_exe"],"links":{"zip":{"available":true,"blockers":[]},"exe":{"available":false,"blockers":[{"code":"exe_sandbox_unavailable"}]}}},"sources":{"index_schema_version":1,"detail_schema_version":1,"match_schema_version":1,"schedule_schema_version":1,"adapter_version":1,"parser_version":steam_patch_core::sources::PARSER_VERSION,"encoding_version":1,"methods":SOURCE_METHODS}})
+    json!({"protocol_version":5,"methods":METHODS,"contracts":ContractVersions::default(),"installer":{"schema_version":1,"selection_version":1,"content_version":1,"adapter_version":1,"policy_schema_version":1,"report_schema_version":1,"formats":{"zip":"supported","exe":"supported"},"strategies":["managed_zip","publisher_zip","publisher_exe"],"links":{"zip":{"available":true,"blockers":[]},"exe":{"available":false,"blockers":[{"code":"exe_sandbox_unavailable"}]}}},"sources":{"index_schema_version":1,"detail_schema_version":1,"match_schema_version":1,"schedule_schema_version":1,"adapter_version":1,"parser_version":patchhub_core::sources::PARSER_VERSION,"encoding_version":1,"methods":SOURCE_METHODS}})
 }
 pub fn host() -> Value {
     json!({"roots":[],"catalog":null,"signed_catalog":null,"trust_keys":null,"state_dir":null,"platform":"windows"})
@@ -40,7 +40,7 @@ pub fn outcome(state: &str, disposition: &str) -> Value {
     } else {
         Value::Null
     };
-    v["cleanup"] = json!(steam_patch_core::installer::outcome::CleanupResult::default());
+    v["cleanup"] = json!(patchhub_core::installer::outcome::CleanupResult::default());
     v
 }
 pub fn rule() -> Value {
@@ -84,7 +84,7 @@ pub fn success_result(method: Method) -> Value {
             json!({"status":"completed","removed_bytes":0,"removed_files":0,"failures":[]})
         }
         Method::CleanupCache => {
-            json!(steam_patch_core::installer::outcome::CleanupResult::default())
+            json!(patchhub_core::installer::outcome::CleanupResult::default())
         }
         Method::ListSources => json!([source_summary()]),
         Method::ListGameSources => {

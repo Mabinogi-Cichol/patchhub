@@ -1,5 +1,5 @@
-import type { CacheInventory, CleanupResult } from "@steam-patch/ui";
-export type { CacheInventory, CleanupResult } from "@steam-patch/ui";
+import type { CacheInventory, CleanupResult } from "@patchhub/ui";
+export type { CacheInventory, CleanupResult } from "@patchhub/ui";
 export type CacheStatus = CleanupResult;
 export type Settings = { schema_version: number; auto_cleanup: boolean; cache: CacheStatus | null };
 
@@ -33,8 +33,8 @@ export function autoCleanupNote(enabled: boolean) {
   return enabled ? "已开启安装成功后自动清理下载缓存。" : "已关闭自动清理，缓存将保留直至手动清理。";
 }
 
-export type { BackupInventory, BackupCleanupResult } from "@steam-patch/ui";
-import type { BackupInventory, BackupCleanupResult } from "@steam-patch/ui";
+export type { BackupInventory, BackupCleanupResult } from "@patchhub/ui";
+import type { BackupInventory, BackupCleanupResult } from "@patchhub/ui";
 export function backupSummary(value: BackupInventory) {
   return `${value.files} 个文件 · ${formatSize(value.total_bytes)}${value.failures.length ? "（部分路径无法统计）" : ""}`;
 }

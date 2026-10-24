@@ -1,18 +1,7 @@
 //! Public signed-route acceptance: the caller supplies trust bytes, never a recipe.
 use base64::{engine::general_purpose::STANDARD, Engine};
 use ed25519_dalek::{Signer, SigningKey};
-use sha2::{Digest, Sha256};
-use std::{
-    cell::{Cell, RefCell},
-    fs::{self, File},
-    io::{self, Cursor, Write},
-    path::PathBuf,
-    sync::{
-        atomic::{AtomicU8, Ordering},
-        Arc,
-    },
-};
-use steam_patch_core::{
+use patchhub_core::{
     catalog::{
         Artifact, Catalog, FileMapping, Fingerprint, PatchRelease, Platform, Recipe, SupportLevel,
     },
@@ -34,6 +23,17 @@ use steam_patch_core::{
             TrustedCatalogProvider,
         },
         CatalogPayload, SignedEnvelope, TrustKey, TrustKeys,
+    },
+};
+use sha2::{Digest, Sha256};
+use std::{
+    cell::{Cell, RefCell},
+    fs::{self, File},
+    io::{self, Cursor, Write},
+    path::PathBuf,
+    sync::{
+        atomic::{AtomicU8, Ordering},
+        Arc,
     },
 };
 use zip::{write::SimpleFileOptions, ZipWriter};
@@ -289,7 +289,7 @@ impl Fixture {
         local: bool,
         operation: InstallOperation,
         policy: CleanupPolicy,
-        emit: &mut dyn FnMut(steam_patch_core::operation::Progress),
+        emit: &mut dyn FnMut(patchhub_core::operation::Progress),
     ) -> Result<InstallerOutcome, DomainError> {
         let host =
             ValidatedHostContext::new(&self.state, std::slice::from_ref(&self.library), platform())
@@ -312,7 +312,7 @@ impl Fixture {
         )
     }
     fn projected_actions(&self, provider: &Provider) -> serde_json::Value {
-        use steam_patch_core::projection::{self, CatalogView, HostCapabilities, ProjectionInputs};
+        use patchhub_core::projection::{self, CatalogView, HostCapabilities, ProjectionInputs};
         let report = steam::scan(std::slice::from_ref(&self.library));
         let transactions = install::TransactionSnapshot::load_ro(&self.state, &report).unwrap();
         let verified =
@@ -343,7 +343,7 @@ impl Fixture {
 // Production deliberately rejects privileged Linux hosts. These route fixtures
 // run where the public host identity is supported (Windows or non-root Linux).
 fn can_install() -> bool {
-    steam_patch_core::installer::host_identity_blocker().is_none()
+    patchhub_core::installer::host_identity_blocker().is_none()
 }
 
 #[test]
@@ -496,7 +496,7 @@ fn signed_download_rejects_unapproved_redirect_before_a_plan() {
     );
     f.unchanged();
     assert!(install::list_transactions_at(
-        steam_patch_core::installer::InstallerPaths::new(&f.state).root()
+        patchhub_core::installer::InstallerPaths::new(&f.state).root()
     )
     .unwrap()
     .is_empty());
@@ -612,7 +612,7 @@ fn entry_trust_validation_rejects_revoked_expired_and_rolled_back_catalogs() {
         assert_eq!(p.calls.get(), 1);
         f.unchanged();
         assert!(install::list_transactions_at(
-            steam_patch_core::installer::InstallerPaths::new(&f.state).root()
+            patchhub_core::installer::InstallerPaths::new(&f.state).root()
         )
         .unwrap()
         .is_empty());
@@ -657,7 +657,7 @@ fn postplan_user_cancel_reports_untouched_and_replays() {
     let lease = Arc::new(Lease::default());
     let signal = lease.clone();
     let mut emitted = false;
-    let result = steam_patch_core::operation::run(
+    let result = patchhub_core::operation::run(
         Arc::new(std::sync::atomic::AtomicBool::new(false)),
         move |progress| {
             if progress.stage == "extracting" && !emitted {
@@ -739,9 +739,9 @@ fn terminal_ledger_write_failure_keeps_real_journal_outcome_and_replay() {
         let p = f.provider();
         let lease = Arc::new(Lease::default());
         let signal = lease.clone();
-        let requests = steam_patch_core::installer::InstallerPaths::new(&f.state).requests();
+        let requests = patchhub_core::installer::InstallerPaths::new(&f.state).requests();
         let mut emitted = false;
-        let result = steam_patch_core::operation::run(
+        let result = patchhub_core::operation::run(
             Arc::new(std::sync::atomic::AtomicBool::new(false)),
             move |progress| {
                 if progress.stage != "extracting" || emitted {
@@ -785,8 +785,8 @@ fn terminal_ledger_write_failure_keeps_real_journal_outcome_and_replay() {
                 Disposition::Completed
             }
         );
-        let paths = steam_patch_core::installer::InstallerPaths::new(&f.state);
-        let recorded = steam_patch_core::installer::RequestLedger::open(&paths)
+        let paths = patchhub_core::installer::InstallerPaths::new(&f.state);
+        let recorded = patchhub_core::installer::RequestLedger::open(&paths)
             .unwrap()
             .get("signed-ledger-failure")
             .unwrap()
@@ -826,9 +826,9 @@ fn terminal_ledger_write_failure_keeps_real_journal_outcome_and_replay() {
 #[test]
 fn failed_plan_binding_starts_a_new_direct_install() {
     let f = Fixture::new();
-    let paths = steam_patch_core::installer::InstallerPaths::new(&f.state);
-    steam_patch_core::installer::init_atomic(&paths).unwrap();
-    let _ledger = steam_patch_core::installer::RequestLedger::open(&paths).unwrap();
+    let paths = patchhub_core::installer::InstallerPaths::new(&f.state);
+    patchhub_core::installer::init_atomic(&paths).unwrap();
+    let _ledger = patchhub_core::installer::RequestLedger::open(&paths).unwrap();
     rusqlite::Connection::open(paths.requests()).unwrap().execute_batch("CREATE TRIGGER reject_all_backfills BEFORE UPDATE ON requests BEGIN SELECT RAISE(FAIL,'fixture_all_backfills_failed'); END;").unwrap();
     let p = f.provider();
     let lease = Lease::default();
@@ -844,7 +844,7 @@ fn failed_plan_binding_starts_a_new_direct_install() {
         .unwrap();
     assert_eq!(result.state, "failed");
     assert_eq!(result.disposition, Disposition::Failed);
-    let record = steam_patch_core::installer::RequestLedger::open(&paths)
+    let record = patchhub_core::installer::RequestLedger::open(&paths)
         .unwrap()
         .get("signed-double-ledger-failure")
         .unwrap()
@@ -893,7 +893,7 @@ fn recovery_leaves_a_direct_commit_untouched() {
             InstallOperation::Overwrite,
         )
         .unwrap();
-    let paths = steam_patch_core::installer::InstallerPaths::new(&f.state);
+    let paths = patchhub_core::installer::InstallerPaths::new(&f.state);
     let db = rusqlite::Connection::open(paths.journal()).unwrap();
     let raw: String = db
         .query_row(
@@ -927,7 +927,7 @@ fn after_commit_cleans_once_and_replay_preserves_new_cache() {
         return;
     }
     let f = Fixture::new();
-    let paths = steam_patch_core::installer::InstallerPaths::new(&f.state);
+    let paths = patchhub_core::installer::InstallerPaths::new(&f.state);
     fs::create_dir_all(paths.downloads_dir()).unwrap();
     let cache = paths.downloads_dir().join("disposable");
     fs::write(&cache, b"cache").unwrap();
@@ -936,7 +936,7 @@ fn after_commit_cleans_once_and_replay_preserves_new_cache() {
         ValidatedHostContext::new(&f.state, std::slice::from_ref(&f.library), platform()).unwrap();
     p.on_second.replace(Some(Box::new(move || {
         assert_eq!(
-            steam_patch_core::installer::cache::CacheService::new(&host)
+            patchhub_core::installer::cache::CacheService::new(&host)
                 .cleanup()
                 .unwrap_err()
                 .code,
@@ -984,12 +984,12 @@ fn after_commit_busy_preserves_commit_and_does_not_upgrade_own_lock() {
         return;
     }
     let f = Fixture::new();
-    let paths = steam_patch_core::installer::InstallerPaths::new(&f.state);
+    let paths = patchhub_core::installer::InstallerPaths::new(&f.state);
     fs::create_dir_all(paths.downloads_dir()).unwrap();
     let cache = paths.downloads_dir().join("keep");
     fs::write(&cache, b"keep").unwrap();
     let mut other_writer = None;
-    let mut emit = |progress: steam_patch_core::operation::Progress| {
+    let mut emit = |progress: patchhub_core::operation::Progress| {
         if progress.stage == "cleanup" {
             let lock = fs::OpenOptions::new()
                 .read(true)
@@ -1028,7 +1028,7 @@ fn after_commit_partial_or_front_refusal_cannot_rewrite_committed_install() {
     }
     for front_refusal in [false, true] {
         let f = Fixture::new();
-        let paths = steam_patch_core::installer::InstallerPaths::new(&f.state);
+        let paths = patchhub_core::installer::InstallerPaths::new(&f.state);
         fs::create_dir_all(paths.downloads_dir()).unwrap();
         fs::write(paths.downloads_dir().join("safe"), b"safe").unwrap();
         let outside = f._temp.path().join("outside");
@@ -1082,14 +1082,14 @@ fn failed_direct_install_does_not_clean_and_exclusive_lock_blocks_others() {
     }
     let f = Fixture::new();
     let p = f.provider();
-    let paths = steam_patch_core::installer::InstallerPaths::new(&f.state);
+    let paths = patchhub_core::installer::InstallerPaths::new(&f.state);
     fs::create_dir_all(paths.downloads_dir()).unwrap();
     let cache = paths.downloads_dir().join("keep");
     fs::write(&cache, b"keep").unwrap();
     let lease = Arc::new(Lease::default());
     let signal = lease.clone();
     let mut emitted = false;
-    let result = steam_patch_core::operation::run(
+    let result = patchhub_core::operation::run(
         Arc::new(std::sync::atomic::AtomicBool::new(false)),
         move |progress| {
             if progress.stage == "extracting" && !emitted {
@@ -1183,7 +1183,7 @@ fn stale_local_actions_cannot_bypass_a_revoked_release_or_changed_build() {
         );
         f.unchanged();
         assert!(install::list_transactions_at(
-            steam_patch_core::installer::InstallerPaths::new(&f.state).root()
+            patchhub_core::installer::InstallerPaths::new(&f.state).root()
         )
         .unwrap()
         .is_empty());
@@ -1256,7 +1256,7 @@ fn recovery_created_after_scan_blocks_a_different_patch_and_preserves_journal() 
         f.projected_actions(&provider)["local_archive"]["available"],
         true
     );
-    let paths = steam_patch_core::installer::InstallerPaths::new(&f.state);
+    let paths = patchhub_core::installer::InstallerPaths::new(&f.state);
     let db = rusqlite::Connection::open(paths.journal()).unwrap();
     let document: String = db
         .query_row(
@@ -1331,7 +1331,7 @@ fn long_instance_and_large_durable_error_replay_preserve_committed_truth() {
         )
         .unwrap();
     assert!(first.instance_id.len() > 256);
-    let paths = steam_patch_core::installer::InstallerPaths::new(&f.state);
+    let paths = patchhub_core::installer::InstallerPaths::new(&f.state);
     let db = rusqlite::Connection::open(paths.journal()).unwrap();
     let raw: String = db
         .query_row(
@@ -1349,7 +1349,7 @@ fn long_instance_and_large_durable_error_replay_preserve_committed_truth() {
     )
     .unwrap();
     drop(db);
-    let ledger = steam_patch_core::installer::requests::RequestLedger::open(&paths).unwrap();
+    let ledger = patchhub_core::installer::requests::RequestLedger::open(&paths).unwrap();
     let mut record = ledger.get("long-replay").unwrap().unwrap();
     record.error = Some(legacy_error.clone());
     ledger.record(&record).unwrap();
@@ -1384,7 +1384,7 @@ fn long_instance_and_large_durable_error_replay_preserve_committed_truth() {
             == legacy_error,
         "durable journal diagnostic must remain unchanged"
     );
-    let ledger = steam_patch_core::installer::requests::RequestLedger::open(&paths).unwrap();
+    let ledger = patchhub_core::installer::requests::RequestLedger::open(&paths).unwrap();
     assert!(
         ledger.get("long-replay").unwrap().unwrap().error.as_deref() == Some(legacy_error.as_str()),
         "durable ledger diagnostic must remain unchanged"

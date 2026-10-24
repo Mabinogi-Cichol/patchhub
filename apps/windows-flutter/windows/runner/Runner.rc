@@ -89,13 +89,13 @@ BEGIN
     BEGIN
         BLOCK "040904e4"
         BEGIN
-            VALUE "CompanyName", "io.github.steampatch" "\0"
-            VALUE "FileDescription", "Steam 黄油补丁助手" "\0"
+            VALUE "CompanyName", "io.github.patchhub" "\0"
+            VALUE "FileDescription", "PatchHub" "\0"
             VALUE "FileVersion", VERSION_AS_STRING "\0"
-            VALUE "InternalName", "steam_patch_windows" "\0"
-            VALUE "LegalCopyright", "Copyright (C) 2026 io.github.steampatch. All rights reserved." "\0"
-            VALUE "OriginalFilename", "steam_patch_windows.exe" "\0"
-            VALUE "ProductName", "Steam 黄油补丁助手" "\0"
+            VALUE "InternalName", "patchhub_windows" "\0"
+            VALUE "LegalCopyright", "Copyright (C) 2026 io.github.patchhub. All rights reserved." "\0"
+            VALUE "OriginalFilename", "patchhub.exe" "\0"
+            VALUE "ProductName", "PatchHub" "\0"
             VALUE "ProductVersion", VERSION_AS_STRING "\0"
         END
     END

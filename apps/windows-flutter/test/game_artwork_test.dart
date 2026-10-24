@@ -2,8 +2,8 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:steam_patch_windows/host/steam_artwork.dart';
-import 'package:steam_patch_windows/presentation/game_artwork.dart';
+import 'package:patchhub_windows/host/steam_artwork.dart';
+import 'package:patchhub_windows/presentation/game_artwork.dart';
 
 void main() {
   testWidgets(

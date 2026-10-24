@@ -1,5 +1,5 @@
+use patchhub_installer_format::audit::*;
 use serde_json::json;
-use steam_patch_installer_format::audit::*;
 
 fn crc(data: &[u8]) -> u32 {
     let mut n = !0u32;
@@ -208,7 +208,7 @@ fn sample(
     }
     out
 }
-fn rejects<T>(result: steam_patch_installer_format::Result<T>, code: &str) {
+fn rejects<T>(result: patchhub_installer_format::Result<T>, code: &str) {
     assert_eq!(result.err().unwrap().0, code);
 }
 
@@ -250,7 +250,7 @@ fn destination_paths_and_unicode_conflicts() {
         "%AppFolder%\\www\\NUL",
         "%AppFolder%\\www\\COM¹",
         "%AppFolder%\\www\\x ",
-        "%AppFolder%\\www\\.steam-patch-backup",
+        "%AppFolder%\\www\\.patchhub-backup",
     ] {
         assert!(safe_target(path, "x").is_err());
     }

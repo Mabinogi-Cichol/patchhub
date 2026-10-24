@@ -1,9 +1,9 @@
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:steam_patch_windows/host/core_client.dart';
-import 'package:steam_patch_windows/host/core_paths.dart';
-import 'package:steam_patch_windows/host/core_task.dart';
+import 'package:patchhub_windows/host/core_client.dart';
+import 'package:patchhub_windows/host/core_paths.dart';
+import 'package:patchhub_windows/host/core_task.dart';
 
 class ProbePaths extends CorePaths {
   ProbePaths(this.spec)

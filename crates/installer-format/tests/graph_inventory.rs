@@ -1,5 +1,5 @@
+use patchhub_installer_format::graph::{decode, inventory};
 use serde_json::json;
-use steam_patch_installer_format::graph::{decode, inventory};
 
 fn text(s: &str) -> Vec<u8> {
     let mut v = vec![s.len() as u8];

@@ -45,6 +45,7 @@ class SelectionTests(unittest.TestCase):
             ("catalog/signed-catalog.json", ("windows", "decky")),
             ("docs/client-guide.md", ("windows",)),
             ("docs/privacy.md", ("windows",)),
+            ("docs/images/branding/logo.png", ("windows", "decky")),
             ("scripts/sf95_worker.py", ("core",)),
             ("scripts/test_sf9_metadata.py", ("core",)),
         )
