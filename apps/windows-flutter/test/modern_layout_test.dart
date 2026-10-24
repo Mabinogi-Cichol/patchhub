@@ -99,6 +99,18 @@ void main() {
             await tester.sendKeyEvent(LogicalKeyboardKey.tab);
             await tester.pump();
             expect(installButton.focusNode!.hasFocus, isTrue);
+            for (final tab in ['概览', '操作记录', '游戏订阅', '补丁管理']) {
+              await tester.tap(find.text(tab));
+              await tester.pumpAndSettle();
+              expect(find.text('打开游戏目录').hitTestable(), findsOneWidget);
+              expect(find.text('安装补丁').hitTestable(), findsOneWidget);
+              expect(
+                tester.getRect(
+                  find.byKey(const ValueKey('patch-floating-actions')),
+                ),
+                footer,
+              );
+            }
             expect(tester.takeException(), isNull);
             await tester.pumpWidget(const SizedBox.shrink());
             model.dispose();
