@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import json
 import zipfile
+from update_manifest import prepare as prepare_update
 
 ROOT = Path(__file__).resolve().parents[1]
 OUTPUT = ROOT / '.artifacts'
@@ -14,7 +15,7 @@ INSTALLER_FILES = (
     ('scripts/licenses/sfextract-MIT.txt', 'licenses/sfextract-MIT.txt', 'reference-license'),
 )
 SFEXTRACT_COMMIT = '21f5c5595a70e9284fff83476c0e307d5b92f573'
-PRODUCTION_BACKEND = {'bridge.py', 'source_service.py', 'tasks.py', 'plugin_settings.py', 'state_host.py', 'protocol.py', 'protocol_validation.py', 'v5.schema.json'}
+PRODUCTION_BACKEND = {'bridge.py', 'source_service.py', 'tasks.py', 'plugin_settings.py', 'state_host.py', 'protocol.py', 'protocol_validation.py', 'v5.schema.json', 'app_update.py', 'install-decky.py'}
 
 
 def validate_sbom(sbom, plugin, decky):
@@ -88,8 +89,24 @@ def main():
     platform = parser.parse_args().platform
     OUTPUT.mkdir(exist_ok=True)
     bundle = ROOT / 'apps/windows-flutter/build/windows/x64/runner/Release'
+    windows_files = None
+    if platform in ('all', 'windows'):
+        # Add documentation/SBOM before finalizing the exact ZIP/NSIS inventory.
+        import shutil
+        if not (OUTPUT / 'dependencies.cdx.json').is_file():
+            raise FileNotFoundError('Generate the current SBOM before packaging')
+        for source, name in ((ROOT / 'docs/client-guide.md', 'client-guide.md'),
+                             (ROOT / 'docs/privacy.md', 'privacy.md'),
+                             (ROOT / 'LICENSE', 'LICENSE'),
+                             (OUTPUT / 'dependencies.cdx.json', 'dependencies.cdx.json')):
+            shutil.copyfile(source, bundle / name)
+        (bundle / 'licenses').mkdir(exist_ok=True)
+        shutil.copyfile(ROOT / 'scripts/licenses/sfextract-MIT.txt', bundle / 'licenses/sfextract-MIT.txt')
+        windows_files = set(prepare_update(bundle))
     windows = [(path, path.relative_to(bundle).as_posix(), path.suffix == '.exe')
-               for path in sorted(bundle.rglob('*')) if path.is_file() and path.relative_to(bundle).as_posix() not in ('client-guide.md', 'privacy.md', 'LICENSE', 'licenses/sfextract-MIT.txt', 'dependencies.cdx.json')]
+               for path in sorted(bundle.rglob('*')) if path.is_file()
+               and (windows_files is None or path.relative_to(bundle).as_posix() in windows_files)
+               and path.relative_to(bundle).as_posix() not in ('client-guide.md', 'privacy.md', 'LICENSE', 'licenses/sfextract-MIT.txt', 'dependencies.cdx.json')]
     for name in ('client-guide.md', 'privacy.md'):
         windows.append((ROOT / 'docs' / name, name, False))
     for source, packaged, _ in INSTALLER_FILES:

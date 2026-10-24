@@ -1,4 +1,5 @@
 import { callable, definePlugin, routerHook } from "@decky/api";
+import { AppUpdatePanel, startAppUpdateNotifications, waitForAppUpdate } from './app-update';
 import { Button, ButtonItem, DropdownItem, Field, Focusable, Navigation, PanelSection, PanelSectionRow, SidebarNavigation, TextField, ToggleField, showModal, useParams } from "@decky/ui";
 import { FaGamepad, FaPuzzlePiece } from "react-icons/fa";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ComponentProps, type ReactNode } from "react";
@@ -48,6 +49,7 @@ const getSettings = callable<[], Settings>("get_settings");
 const setAutoCleanup = callable<[boolean], Settings>("set_auto_cleanup");
 
 async function readSnapshot() {
+  await waitForAppUpdate();
   const report = await scan();
   let transactions = session.getSnapshot().transactions;
   try { transactions = await listTransactions(); }
@@ -677,6 +679,7 @@ function GlobalCache() {
       {backups?.failures.map((failure, index) => <Row key={index}><Status warning>{failure.detail || failure.code}</Status></Row>)}
       <Row><Action disabled={!!busy} onClick={cleanBackups}>清理全部安装备份</Action></Row>
     </PanelSection>
+    <AppUpdatePanel />
   </div>;
 }
 
@@ -690,7 +693,7 @@ function Manager() {
     {instance === sourceRoute ? <SidebarNavigation showTitle disableRouteReporting title={<div className="patch-nav-header"><span className="patch-nav-tool">Steam 黄油补丁助手</span><span className="patch-nav-game">全局设置</span></div>} page={settingsPage(panel)} pages={[
       { identifier: settingsRoutes.sources, route: settingsRoutes.sources, title: "管理订阅源", visible: true, content: <GlobalSources /> },
       "separator",
-      { identifier: settingsRoutes.cache, route: settingsRoutes.cache, title: "缓存与备份", visible: true, content: <GlobalCache /> },
+      { identifier: settingsRoutes.cache, route: settingsRoutes.cache, title: "缓存、备份与更新", visible: true, content: <GlobalCache /> },
     ]} />
       : item ? <GameManager key={instance} item={item} seg={instance!} panel={panel} />
         : <div className="patch-page"><h2>Steam 黄油补丁助手</h2><Status>{report ? "游戏已不在当前扫描结果中。" : "正在加载游戏列表…"}</Status><Action onClick={() => Navigation.NavigateBack()}>返回游戏列表</Action></div>}
@@ -719,8 +722,9 @@ function GlobalSources() {
 }
 
 export default definePlugin(() => {
+  const stopUpdateNotifications = startAppUpdateNotifications();
   routerHook.addRoute(route, Manager);
   return { name: "Steam 黄油补丁助手", titleView: <div>Steam 黄油补丁助手</div>, content: <QuickAccess />, icon: <FaPuzzlePiece />,
-    onDismount() { tasks.dismount(); hideTask(); routerHook.removeRoute(route); },
+    onDismount() { stopUpdateNotifications(); tasks.dismount(); hideTask(); routerHook.removeRoute(route); },
   };
 });

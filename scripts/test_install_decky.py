@@ -509,6 +509,7 @@ class PackageTests(unittest.TestCase):
             output.write_bytes(self.zip.read_bytes())
         result = m.release_package(self.root, None, download)
         self.assertEqual(result["tag"], "v0.2.0")
+        self.assertEqual(result["name"], m.validate_package(self.root / "package.zip")["name"])
         self.assertTrue(all("/v0.2.0/" in url for url in calls[1:]))
         release["tag_name"] = "v0.3.0"
         with self.assertRaisesRegex(m.InstallError, "Tag"):

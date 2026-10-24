@@ -1,0 +1,11 @@
+{
+  "versions": [
+    {"remote":"v0.10.0","local":"0.9.0","newer":true},
+    {"remote":"v0.3.0","local":"0.3.0+2","newer":false},
+    {"remote":"v0.3.0","local":"0.3.0-beta.1","newer":true},
+    {"remote":"v0.3.0","local":"0.4.0","newer":false},
+    {"remote":"v1.0.0-beta.10","local":"1.0.0-beta.2","newer":true},
+    {"remote":"v1.0.0-alpha.a","local":"1.0.0-alpha.1","newer":true}
+  ],
+  "invalid": ["development", "v01.2.3", "1.0", "1.0.0-01", "1.0.0-beta..1", "1.0.0+build..1"]
+}

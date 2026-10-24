@@ -65,6 +65,7 @@ jobs:
       - run: python -m unittest discover -s scripts -p test_package_artifacts.py -v
       - run: python -m unittest discover -s scripts -p test_build_sbom.py -v
       - run: python -m unittest discover -s scripts -p test_flutter_sbom.py -v
+      - run: python -m unittest discover -s scripts -p test_windows_update.py -v
       - run: cargo run --locked -p steam-patch-contract-gen -- check
       - run: npm ci
       - run: npm run test:contracts
@@ -146,11 +147,18 @@ jobs:
             flags+=(--prerelease)
           fi
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            test "$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)" = true || {
+              echo 'Release already public; refusing to replace published assets'
+              exit 1
+            }
             gh release upload "$RELEASE_TAG" release-assets/* --clobber
           else
             gh release create "$RELEASE_TAG" release-assets/* \
-              --verify-tag --title "$RELEASE_TAG" --generate-notes "${flags[@]}"
+              --draft --verify-tag --title "$RELEASE_TAG" --generate-notes "${flags[@]}"
           fi
+          gh release download "$RELEASE_TAG" --dir verify-release
+          (cd verify-release && sha256sum --check SHA256SUMS.txt)
+          gh release edit "$RELEASE_TAG" --draft=false --title "$RELEASE_TAG"
   decky:
     needs: changes
     if: needs.changes.outputs.decky == 'true'
