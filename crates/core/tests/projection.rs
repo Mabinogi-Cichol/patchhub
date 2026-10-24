@@ -1,9 +1,7 @@
 use base64::{engine::general_purpose::STANDARD, Engine};
 use ed25519_dalek::{Signer, SigningKey};
-use sha2::{Digest, Sha256};
-use std::{fs, path::Path, sync::atomic::AtomicBool};
-use steam_patch_core::trust::*;
-use steam_patch_core::{
+use patchhub_core::trust::*;
+use patchhub_core::{
     catalog::{Catalog, Fingerprint, PatchRelease, Platform, SupportLevel},
     install::{InstallOperation, InstallPlan, PlannedChange, Transaction, TransactionSnapshot},
     projection::*,
@@ -16,6 +14,8 @@ use steam_patch_core::{
     },
     steam,
 };
+use sha2::{Digest, Sha256};
+use std::{fs, path::Path, sync::atomic::AtomicBool};
 
 fn fixture() -> (tempfile::TempDir, steam::ScanReport) {
     let temp = tempfile::tempdir().unwrap();
@@ -114,9 +114,9 @@ fn release() -> PatchRelease {
             path: "data.txt".into(),
             sha256: format!("{:x}", Sha256::digest(b"patched")),
         }],
-        recipe: Some(steam_patch_core::catalog::Recipe {
+        recipe: Some(patchhub_core::catalog::Recipe {
             artifact_sha256: "a".repeat(64),
-            files: vec![steam_patch_core::catalog::FileMapping {
+            files: vec![patchhub_core::catalog::FileMapping {
                 source: "data.txt".into(),
                 destination: "data.txt".into(),
                 original_sha256: None,
@@ -336,7 +336,7 @@ fn selection_instance_live_bytes_and_superseded_binding() {
     let (temp, steam) = fixture();
     let state = temp.path().join("state");
     let candidate = candidate();
-    let selection = steam_patch_core::installer::zip_selection_id(&candidate).unwrap();
+    let selection = patchhub_core::installer::zip_selection_id(&candidate).unwrap();
     let now = seed(&state, candidate);
     let source = load(&state, &steam, now);
     let game = &steam.installs[0];
@@ -388,7 +388,7 @@ fn newest_unreadable_empty_or_unsafe_plan_is_unknown() {
     let (temp, steam) = fixture();
     let state = temp.path().join("state");
     let candidate = candidate();
-    let selection = steam_patch_core::installer::zip_selection_id(&candidate).unwrap();
+    let selection = patchhub_core::installer::zip_selection_id(&candidate).unwrap();
     let now = seed(&state, candidate);
     let source = load(&state, &steam, now);
     let game = &steam.installs[0];
@@ -416,7 +416,7 @@ fn newest_unreadable_empty_or_unsafe_plan_is_unknown() {
         assert!(!row.diagnostics.is_empty());
         assert_eq!(
             row.patches[0].actions.primary.label,
-            steam_patch_core::actions::PrimaryLabel::Overwrite
+            patchhub_core::actions::PrimaryLabel::Overwrite
         );
         assert!(!row.patches[0].actions.reinstall.available);
         if mode == 2 {
@@ -501,7 +501,7 @@ fn corrupted_latest_database_plan_preserves_receipt_or_suppresses_unknown_identi
         let (temp, steam) = fixture();
         let state = temp.path().join("state");
         let candidate = candidate();
-        let selection = steam_patch_core::installer::zip_selection_id(&candidate).unwrap();
+        let selection = patchhub_core::installer::zip_selection_id(&candidate).unwrap();
         let now = seed(&state, candidate);
         let source = load(&state, &steam, now);
         let game = &steam.installs[0];
@@ -569,9 +569,9 @@ fn zip_and_exe_selection_previews_are_typed_and_read_only() {
             candidate.mirrors[0].url = "https://kaguraserver.com/a.exe".into();
         }
         let selection = if exe {
-            steam_patch_core::installer::exe_resolve::exe_selection_id(&candidate)
+            patchhub_core::installer::exe_resolve::exe_selection_id(&candidate)
         } else {
-            steam_patch_core::installer::zip_selection_id(&candidate)
+            patchhub_core::installer::zip_selection_id(&candidate)
         }
         .unwrap();
         let now = seed(&state, candidate);
@@ -657,7 +657,7 @@ fn damaged_newer_overlay_timestamp_never_falls_back_to_older_receipt() {
     let (temp, steam) = fixture();
     let state = temp.path().join("state");
     let selected = candidate();
-    let selection = steam_patch_core::installer::zip_selection_id(&selected).unwrap();
+    let selection = patchhub_core::installer::zip_selection_id(&selected).unwrap();
     let now = seed(&state, selected);
     let source = load(&state, &steam, now);
     let game = &steam.installs[0];
@@ -734,18 +734,18 @@ fn signed_records(
     t.selection_id = None;
     t.content_id = None;
     p.release_id = release.release_id.clone();
-    p.recipe_sha256 = Some(steam_patch_core::install::recipe_identity(release).unwrap());
+    p.recipe_sha256 = Some(patchhub_core::install::recipe_identity(release).unwrap());
     (t, p)
 }
 fn has_action_blocker(
-    availability: &steam_patch_core::actions::ActionAvailability,
-    code: steam_patch_core::actions::ActionBlockerCode,
+    availability: &patchhub_core::actions::ActionAvailability,
+    code: patchhub_core::actions::ActionBlockerCode,
 ) -> bool {
     availability.blockers.iter().any(|b| b.code == code)
 }
 #[test]
 fn signed_actions_receipt_and_input_truth_table() {
-    use steam_patch_core::actions::{ActionBlockerCode::*, InstallInputKind, PrimaryLabel};
+    use patchhub_core::actions::{ActionBlockerCode::*, InstallInputKind, PrimaryLabel};
     // No receipt, external, partial, complete managed, damaged managed, content
     // changed, build changed and historical superseded all remain distinct.
     for case in [
@@ -845,7 +845,7 @@ fn signed_actions_receipt_and_input_truth_table() {
 }
 #[test]
 fn signed_trust_links_and_recipe_never_bypassed_by_matching_files() {
-    use steam_patch_core::actions::ActionBlockerCode::*;
+    use patchhub_core::actions::ActionBlockerCode::*;
     for case in [
         "unsigned",
         "expired",
@@ -913,7 +913,7 @@ fn signed_trust_links_and_recipe_never_bypassed_by_matching_files() {
 }
 #[test]
 fn recovery_blocks_all_current_instance_patches_but_other_instances_are_independent() {
-    use steam_patch_core::actions::ActionBlockerCode::NeedsRecovery;
+    use patchhub_core::actions::ActionBlockerCode::NeedsRecovery;
     for same_instance in [false, true] {
         let (_temp, steam) = fixture();
         let game = &steam.installs[0];
@@ -949,7 +949,7 @@ fn recovery_blocks_all_current_instance_patches_but_other_instances_are_independ
 }
 #[test]
 fn publisher_actions_resolve_urls_and_distinguish_format_links_and_unknown_detection() {
-    use steam_patch_core::actions::{ActionBlockerCode::*, InstallInputKind};
+    use patchhub_core::actions::{ActionBlockerCode::*, InstallInputKind};
     for case in ["zip", "exe", "bad_url", "ambiguous", "zip_link", "exe_link"] {
         let (temp, steam) = fixture();
         let state = temp.path().join("state");
@@ -1072,13 +1072,13 @@ fn serialized_action_stress_records_actual_jsonl_bytes_without_raising_cap() {
 
 #[test]
 fn signed_automatic_is_preferred_and_revocation_blocks_both_inputs() {
-    use steam_patch_core::actions::{
+    use patchhub_core::actions::{
         ActionBlockerCode::ReleaseRevoked, InstallInputKind, PrimaryLabel,
     };
     for revoked in [false, true] {
         let (_temp, steam) = fixture();
         let mut r = release();
-        r.artifact = Some(steam_patch_core::catalog::Artifact {
+        r.artifact = Some(patchhub_core::catalog::Artifact {
             url: "https://example.invalid/patch.zip".into(),
             size: 7,
             sha256: r.recipe.as_ref().unwrap().artifact_sha256.clone(),
@@ -1147,13 +1147,13 @@ fn signed_automatic_is_preferred_and_revocation_blocks_both_inputs() {
 }
 #[test]
 fn dynamic_complete_receipt_reinstalls_but_changed_selection_or_files_cannot() {
-    use steam_patch_core::actions::ActionBlockerCode::*;
+    use patchhub_core::actions::ActionBlockerCode::*;
     for case in ["intact", "damaged", "selection", "content", "superseded"] {
         let (temp, steam) = fixture();
         let game = &steam.installs[0];
         let state = temp.path().join("state");
         let candidate = candidate();
-        let selection = steam_patch_core::installer::zip_selection_id(&candidate).unwrap();
+        let selection = patchhub_core::installer::zip_selection_id(&candidate).unwrap();
         let now = seed(&state, candidate);
         let source = load(&state, &steam, now);
         fs::write(
@@ -1216,7 +1216,7 @@ fn dynamic_complete_receipt_reinstalls_but_changed_selection_or_files_cannot() {
 }
 #[test]
 fn action_instance_boundary_is_checked_even_without_dynamic_file_receipts() {
-    use steam_patch_core::actions::ActionBlockerCode::GameNotReady;
+    use patchhub_core::actions::ActionBlockerCode::GameNotReady;
     let (temp, mut steam) = fixture();
     let state = temp.path().join("state");
     let now = seed(&state, candidate());
@@ -1242,8 +1242,8 @@ fn action_instance_boundary_is_checked_even_without_dynamic_file_receipts() {
 
 #[test]
 fn manual_unknown_candidate_binds_download_and_instance_without_faking_metadata() {
+    use patchhub_core::installer::{exe_resolve, manual_selection, resolve_zip};
     use sources::model::{ArtifactFormat, MatchBasis, Mirror, Variant};
-    use steam_patch_core::installer::{exe_resolve, manual_selection, resolve_zip};
     for format in ["zip", "exe"] {
         let (temp, steam) = fixture();
         let state = temp.path().join("state");

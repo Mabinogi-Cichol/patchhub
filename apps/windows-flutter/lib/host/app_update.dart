@@ -4,8 +4,8 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 
-const updateRepository = 'Mabinogi-Cichol/steam-hentai-patch';
-const windowsUpdateAsset = 'steam-patch-manager-windows-portable.zip';
+const updateRepository = 'Mabinogi-Cichol/patchhub';
+const windowsUpdateAsset = 'patchhub-windows-portable.zip';
 
 class AppVersion implements Comparable<AppVersion> {
   AppVersion(String value) {
@@ -162,7 +162,7 @@ class AppUpdate extends ChangeNotifier {
           'https://api.github.com/repos/$updateRepository/releases/latest',
         ),
       );
-      request.headers.set('User-Agent', 'steam-patch-manager');
+      request.headers.set('User-Agent', 'patchhub');
       request.headers.set('Accept', 'application/vnd.github+json');
       request.headers.set('X-GitHub-Api-Version', '2022-11-28');
       final response = await request.close();
@@ -385,9 +385,9 @@ class AppUpdate extends ChangeNotifier {
           '-NoProfile',
           '-NonInteractive',
           '-Command',
-          r'$s=[IO.File]::OpenRead($env:STEAM_PATCH_UPDATE_PACKAGE); $h=[Security.Cryptography.SHA256]::Create(); try { [BitConverter]::ToString($h.ComputeHash($s)).Replace("-", "") } finally { $s.Dispose(); $h.Dispose() }',
+          r'$s=[IO.File]::OpenRead($env:PATCHHUB_UPDATE_PACKAGE); $h=[Security.Cryptography.SHA256]::Create(); try { [BitConverter]::ToString($h.ComputeHash($s)).Replace("-", "") } finally { $s.Dispose(); $h.Dispose() }',
         ],
-        environment: {'STEAM_PATCH_UPDATE_PACKAGE': target.path},
+        environment: {'PATCHHUB_UPDATE_PACKAGE': target.path},
       );
       if (verified.exitCode != 0 ||
           '${verified.stdout}'.trim().toLowerCase() != hashes.single) {

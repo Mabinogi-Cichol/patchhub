@@ -2,12 +2,8 @@
 //! schema 1 → 2 migration, and the pure revision/input/schedule helpers
 //! (p1-contract §12).
 
-use serde_json::{json, Value};
-use std::collections::BTreeMap;
-use std::fs;
-use std::path::{Path, PathBuf};
-use steam_patch_core::installer;
-use steam_patch_core::sources::{
+use patchhub_core::installer;
+use patchhub_core::sources::{
     index::content_revision,
     model::*,
     r#match::{derive_game_status, input_key},
@@ -17,6 +13,10 @@ use steam_patch_core::sources::{
     Sources, GAME_MATCH_SCHEMA_VERSION, SOURCE_DETAIL_SCHEMA_VERSION, SOURCE_INDEX_SCHEMA_VERSION,
     STORE_SCHEMA_VERSION,
 };
+use serde_json::{json, Value};
+use std::collections::BTreeMap;
+use std::fs;
+use std::path::{Path, PathBuf};
 
 // ---- fixtures ------------------------------------------------------------
 

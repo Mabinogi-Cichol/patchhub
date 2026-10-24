@@ -4,10 +4,10 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:steam_patch_windows/app.dart';
-import 'package:steam_patch_windows/models/app_model.dart';
-import 'package:steam_patch_windows/models/library.dart';
-import 'package:steam_patch_windows/pages/library_page.dart';
+import 'package:patchhub_windows/app.dart';
+import 'package:patchhub_windows/models/app_model.dart';
+import 'package:patchhub_windows/models/library.dart';
+import 'package:patchhub_windows/pages/library_page.dart';
 
 import 'library_page_test.dart' show FixtureClient;
 
@@ -52,7 +52,7 @@ void main() {
             );
             final model = ModernFixtureModel();
             await tester.pumpWidget(
-              SteamPatchApp(home: LibraryPage(model: model)),
+              PatchHubApp(home: LibraryPage(model: model)),
             );
             await tester.pumpAndSettle();
             await tester.tap(find.text(model.snapshot!.rows.single.name));
@@ -99,6 +99,18 @@ void main() {
             await tester.sendKeyEvent(LogicalKeyboardKey.tab);
             await tester.pump();
             expect(installButton.focusNode!.hasFocus, isTrue);
+            for (final tab in ['概览', '操作记录', '游戏订阅', '补丁管理']) {
+              await tester.tap(find.text(tab));
+              await tester.pumpAndSettle();
+              expect(find.text('打开游戏目录').hitTestable(), findsOneWidget);
+              expect(find.text('安装补丁').hitTestable(), findsOneWidget);
+              expect(
+                tester.getRect(
+                  find.byKey(const ValueKey('patch-floating-actions')),
+                ),
+                footer,
+              );
+            }
             expect(tester.takeException(), isNull);
             await tester.pumpWidget(const SizedBox.shrink());
             model.dispose();

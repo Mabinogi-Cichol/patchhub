@@ -49,7 +49,7 @@ class V5BridgeTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
-        binary = Path(self.temp.name) / "steam-patch"
+        binary = Path(self.temp.name) / "patchhub-core"
         binary.touch()
         self.bridge = CoreBridge(binary, binary)
         self.bridge._preflight_done = True
@@ -232,7 +232,7 @@ class V5BridgeTests(unittest.IsolatedAsyncioTestCase):
                 CoreBridge(self.bridge.binary, self.bridge.catalog, run_uid=0, run_gid=0)
             bridge = CoreBridge(self.bridge.binary, self.bridge.catalog, run_uid=1000, run_gid=1000)
             self.assertEqual(bridge.process_identity, {"user": 1000, "group": 1000, "extra_groups": []})
-            self.assertEqual(bridge.worker, bridge.binary.with_name("sf-worker"))
+            self.assertEqual(bridge.worker, bridge.binary.with_name("patchhub-worker"))
 
     async def test_large_valid_scan_result_succeeds_and_a_later_call_still_works(self):
         class Process(_FakeProcess):

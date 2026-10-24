@@ -10,7 +10,7 @@ class HostStateTests(unittest.TestCase):
     def test_idempotent_preserves_old_state_and_subscription(self):
         with tempfile.TemporaryDirectory() as tmp:
             home = Path(tmp)
-            root = home / ".local/share/steam-patch-manager"
+            root = home / ".local/share/patchhub"
             host = prepare_host_state(root, home)
             old = root / "publisher"
             old.mkdir()
@@ -32,7 +32,7 @@ class HostStateTests(unittest.TestCase):
     @unittest.skipUnless(hasattr(os, "geteuid"), "Unix identity boundary")
     def test_rejects_wrong_uid_without_chown_existing_home(self):
         with tempfile.TemporaryDirectory() as tmp, patch("state_host.os.chown") as chown:
-            root = Path(tmp) / ".local/share/steam-patch-manager"
+            root = Path(tmp) / ".local/share/patchhub"
             with self.assertRaisesRegex(ValueError, "state_owner_mismatch"):
                 prepare_host_state(root, tmp, os.getuid() + 1, os.getgid())
             chown.assert_not_called()
@@ -47,7 +47,7 @@ class HostStateTests(unittest.TestCase):
             except OSError:
                 self.skipTest("symlink permission unavailable")
             with self.assertRaisesRegex(ValueError, "linked_state_path"):
-                prepare_host_state(home / ".local/share/steam-patch-manager", home)
+                prepare_host_state(home / ".local/share/patchhub", home)
             self.assertFalse((target / "share").exists())
 
 

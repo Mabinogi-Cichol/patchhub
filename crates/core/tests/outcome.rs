@@ -1,4 +1,4 @@
-use steam_patch_core::{install::Transaction, installer::outcome::*};
+use patchhub_core::{install::Transaction, installer::outcome::*};
 
 fn transaction(state: &str, error: Option<&str>) -> Transaction {
     Transaction {

@@ -27,7 +27,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
   FlutterWindow window(project);
   Win32Window::Point origin(10, 10);
   Win32Window::Size size(1180, 760);
-  if (!window.Create(L"Steam 黄油补丁助手", origin, size)) {
+  if (!window.Create(L"PatchHub", origin, size)) {
     return EXIT_FAILURE;
   }
   window.SetQuitOnClose(true);

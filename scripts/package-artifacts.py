@@ -22,24 +22,24 @@ def validate_sbom(sbom, plugin, decky):
     data = json.loads(sbom.read_text(encoding='utf-8'))
     try:
         properties = {item['name']: item['value'] for item in data['metadata']['properties']}
-        matches = [item for item in data['components'] if item.get('name') == 'steam-patch-rust-installer']
+        matches = [item for item in data['components'] if item.get('name') == 'patchhub-rust-installer']
     except (KeyError, TypeError) as error:
         raise ValueError('Regenerate SBOM for current dependencies before packaging') from error
     for name, path in [('cargo', 'Cargo.lock'), ('npm', 'package-lock.json')]:
-        if properties.get(f'steam-patch:{name}-lock-sha256') != hashlib.sha256((ROOT / path).read_bytes()).hexdigest():
+        if properties.get(f'patchhub:{name}-lock-sha256') != hashlib.sha256((ROOT / path).read_bytes()).hexdigest():
             raise ValueError('Regenerate SBOM for current lockfiles before packaging')
     if len(matches) != 1:
         raise ValueError('Regenerate SBOM with the Rust installer before packaging')
     installer = matches[0]
     details = {item['name']: item['value'] for item in installer.get('properties', [])}
     if (installer.get('version') != '1' or installer.get('licenses') != [{'expression': 'MIT'}]
-            or details.get('steam-patch:reference-commit') != SFEXTRACT_COMMIT):
+            or details.get('patchhub:reference-commit') != SFEXTRACT_COMMIT):
         raise ValueError('Regenerate SBOM for the current Rust installer before packaging')
     for source, packaged, prefix in INSTALLER_FILES:
         digest = hashlib.sha256((ROOT / source).read_bytes()).hexdigest()
-        if (details.get(f'steam-patch:{prefix}-source') != source
-                or details.get(f'steam-patch:{prefix}-sha256') != digest
-                or (packaged and details.get(f'steam-patch:{prefix}-path') != packaged)):
+        if (details.get(f'patchhub:{prefix}-source') != source
+                or details.get(f'patchhub:{prefix}-sha256') != digest
+                or (packaged and details.get(f'patchhub:{prefix}-path') != packaged)):
             raise ValueError(f'Regenerate SBOM for current {source} before packaging')
         if decky and packaged:
             bundled = plugin / packaged
@@ -60,7 +60,7 @@ def validate_decky(plugin):
     if runtime.get('protocol_version') != 5 or runtime.get('worker_protocol') != 1:
         raise ValueError('Rebuild Decky plugin: invalid runtime manifest')
     files = runtime.get('files', [])
-    if {item.get('path') for item in files} != {'bin/steam-patch', 'bin/sf-worker'} or len(files) != 2:
+    if {item.get('path') for item in files} != {'bin/patchhub-core', 'bin/patchhub-worker'} or len(files) != 2:
         raise ValueError('Rebuild Decky plugin: incomplete runtime manifest')
     for item in files:
         binary = plugin / item['path']
@@ -117,8 +117,8 @@ def main():
         if not plugin.is_dir():
             raise FileNotFoundError('Build apps/decky package:plugin first')
         validate_decky(plugin)
-    decky = [(path, 'steam-patch-manager/' + path.relative_to(plugin).as_posix(),
-              path.relative_to(plugin).as_posix() in ('bin/steam-patch', 'bin/sf-worker'))
+    decky = [(path, 'patchhub/' + path.relative_to(plugin).as_posix(),
+              path.relative_to(plugin).as_posix() in ('bin/patchhub-core', 'bin/patchhub-worker'))
              for path in sorted(plugin.rglob('*')) if path.is_file()]
     sbom = OUTPUT / 'dependencies.cdx.json'
     if not sbom.is_file():
@@ -126,10 +126,10 @@ def main():
     if sbom.is_file():
         validate_sbom(sbom, plugin, platform in ('all', 'decky'))
         windows.append((sbom, sbom.name, False))
-        decky.append((sbom, 'steam-patch-manager/' + sbom.name, False))
+        decky.append((sbom, 'patchhub/' + sbom.name, False))
     selected = []
     if platform in ('all', 'windows'):
-        for name in ('steam_patch_windows.exe', 'steam-patch.exe', 'sf-worker.exe',
+        for name in ('patchhub.exe', 'patchhub-core.exe', 'patchhub-worker.exe',
                      'flutter_windows.dll', 'msvcp140.dll', 'vcruntime140.dll', 'vcruntime140_1.dll', 'file_selector_windows_plugin.dll',
                      'url_launcher_windows_plugin.dll', 'window_manager_plugin.dll',
                      'screen_retriever_windows_plugin.dll', 'data/icudtl.dat', 'data/app.so',
@@ -144,11 +144,11 @@ def main():
             raise ValueError('Rebuild Flutter: generated contract mismatch')
         inventory = json.loads(sbom.read_text(encoding='utf-8'))
         properties = {p['name']: p['value'] for p in inventory['metadata']['properties']}
-        if properties.get('steam-patch:dart-lock-sha256') != hashlib.sha256((ROOT / 'apps/windows-flutter/pubspec.lock').read_bytes()).hexdigest():
+        if properties.get('patchhub:dart-lock-sha256') != hashlib.sha256((ROOT / 'apps/windows-flutter/pubspec.lock').read_bytes()).hexdigest():
             raise ValueError('Regenerate SBOM with current Flutter dependencies before packaging')
-        selected.append(('steam-patch-manager-windows-portable.zip', windows))
+        selected.append(('patchhub-windows-portable.zip', windows))
     if platform in ('all', 'decky'):
-        selected.append(('steam-patch-manager-decky.zip', decky))
+        selected.append(('patchhub-decky.zip', decky))
     for _, entries in selected:
         for source, _, _ in entries:
             if not source.is_file():

@@ -8,8 +8,8 @@ param(
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 $taskTarget = [IO.Path]::GetFullPath($Target).TrimEnd('\','/')
-$taskMarker = Join-Path $taskTarget '.steam-patch-update.json'
-$taskLockPath = Join-Path $taskTarget '.steam-patch-maintenance.lock'
+$taskMarker = Join-Path $taskTarget '.patchhub-update.json'
+$taskLockPath = Join-Path $taskTarget '.patchhub-maintenance.lock'
 $taskLock = $null
 $taskChild = $null
 $taskJournal = $null
@@ -22,7 +22,7 @@ function Write-Json($Path, $Value) {
 function Safe-Path($Root, [string]$Relative) {
     if (-not $Relative -or $Relative.Contains('\') -or $Relative.Contains(':') -or
         $Relative.StartsWith('/') -or ($Relative.Split('/') | Where-Object { $_ -in @('','..','.') }) -or
-        $Relative -match '[<>"|?*]' -or $Relative.Split('/')[0] -in @('install.ini','uninstall.exe','.steam-patch-update.json','.steam-patch-maintenance.lock')) {
+        $Relative -match '[<>"|?*]' -or $Relative.Split('/')[0] -in @('install.ini','uninstall.exe','.patchhub-update.json','.patchhub-maintenance.lock')) {
         throw "Invalid managed path: $Relative"
     }
     $taskPath = [IO.Path]::GetFullPath((Join-Path $Root $Relative))
@@ -43,13 +43,13 @@ function Read-Manifest($Root) {
         if ($taskSeen.ContainsKey($taskName)) { throw "Duplicate managed path: $taskName" }
         $taskSeen[$taskName] = $true
     }
-    foreach ($taskRequired in @('steam_patch_windows.exe','steam-patch.exe','sf-worker.exe','windows-update.ps1','update-manifest.json')) {
+    foreach ($taskRequired in @('patchhub.exe','patchhub-core.exe','patchhub-worker.exe','windows-update.ps1','update-manifest.json')) {
         if (-not $taskSeen.ContainsKey($taskRequired)) { throw "Missing managed file: $taskRequired" }
     }
     return $taskManifest
 }
 function Assert-Idle {
-    foreach ($taskProcess in Get-Process -Name steam_patch_windows,steam-patch,sf-worker -ErrorAction SilentlyContinue) {
+    foreach ($taskProcess in Get-Process -Name patchhub,patchhub-core,patchhub-worker -ErrorAction SilentlyContinue) {
         if ($taskProcess.Path -and [IO.Path]::GetDirectoryName($taskProcess.Path).Equals($taskTarget, [StringComparison]::OrdinalIgnoreCase)) {
             throw 'Application still running in target directory'
         }
@@ -134,7 +134,7 @@ try {
         if ($taskJournal.target -ne $taskTarget) { throw 'Journal target mismatch' }
         if ($taskJournal.phase -notin @('committed','restored')) { Restore-Update }
         Finish-Transaction @{state=$taskJournal.phase; message='Update recovery completed'}
-        if ($ParentId) { Start-Process -FilePath (Join-Path $taskTarget 'steam_patch_windows.exe') -WindowStyle Hidden }
+        if ($ParentId) { Start-Process -FilePath (Join-Path $taskTarget 'patchhub.exe') -WindowStyle Hidden }
         exit 0
     }
     $taskRequest = Get-Content -LiteralPath (Join-Path $Work 'request.json') -Raw -Encoding UTF8 | ConvertFrom-Json
@@ -201,7 +201,7 @@ try {
     $taskIni = Join-Path $taskTarget 'install.ini'
     if (Test-Path -LiteralPath $taskIni) {
         $taskProduct = [regex]::Match((Get-Content -LiteralPath $taskIni -Raw -Encoding UTF8), '(?m)^ProductName=(.+)\r?$').Groups[1].Value.Trim()
-        if ($taskProduct -notin @('Steam Hentai Patch','Steam Patch Manager')) { throw 'Invalid installed product identity' }
+        if ($taskProduct -ne 'PatchHub') { throw 'Invalid installed product identity' }
         $taskKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\$taskProduct"
         $taskValues = Get-ItemProperty -LiteralPath $taskKey
         if ([IO.Path]::GetFullPath($taskValues.InstallLocation).TrimEnd('\') -ne $taskTarget) { throw 'Installed location mismatch' }
@@ -221,7 +221,7 @@ try {
     }
     $taskProbe = Join-Path $Work 'probe.json'
     Write-Json $taskProbe @{target=$taskTarget; version=$taskNew.version; work=$Work}
-    $taskChild = Start-Process -FilePath (Join-Path $taskTarget 'steam_patch_windows.exe') -ArgumentList @('--update-probe', ('"' + $taskProbe + '"')) -PassThru -WindowStyle Hidden
+    $taskChild = Start-Process -FilePath (Join-Path $taskTarget 'patchhub.exe') -ArgumentList @('--update-probe', ('"' + $taskProbe + '"')) -PassThru -WindowStyle Hidden
     while (-not (Test-Path -LiteralPath (Join-Path $Work 'ready.json'))) {
         if ($taskChild.HasExited) { throw "Updated client initialization failed: $($taskChild.ExitCode)" }
         Start-Sleep -Milliseconds 100
@@ -252,7 +252,7 @@ try {
     if ($Work -and (Test-Path -LiteralPath $Work)) {
         if (-not $taskJournal -or $taskJournal.phase -in @('restored','committed')) {
             Finish-Transaction @{state='failed'; error=$taskFailure}
-            if ($ParentId -and $taskJournal -and $taskJournal.phase -eq 'restored') { Start-Process -FilePath (Join-Path $taskTarget 'steam_patch_windows.exe') -WindowStyle Hidden }
+            if ($ParentId -and $taskJournal -and $taskJournal.phase -eq 'restored') { Start-Process -FilePath (Join-Path $taskTarget 'patchhub.exe') -WindowStyle Hidden }
         } else { Write-Json (Join-Path $Work 'result.json') @{state='failed'; error=$taskFailure} }
     }
     [Console]::Error.WriteLine($taskFailure)

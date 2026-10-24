@@ -1,13 +1,13 @@
 //! Opt-in production download acceptance; never writes game files or executes EXEs.
+use patchhub_core::installer::{self, Acquisition, DownloadRequest, InstallerPaths};
 use std::{fs, net::ToSocketAddrs, path::PathBuf, sync::atomic::AtomicBool};
-use steam_patch_core::installer::{self, Acquisition, DownloadRequest, InstallerPaths};
 
 #[test]
 #[ignore = "requires explicit official patch URL, evidence directory, and network access"]
 fn production_download_uses_system_dns() {
-    let url = std::env::var("STEAM_PATCH_TEST_DOWNLOAD_URL").expect("explicit download URL");
+    let url = std::env::var("PATCHHUB_TEST_DOWNLOAD_URL").expect("explicit download URL");
     let evidence = PathBuf::from(
-        std::env::var("STEAM_PATCH_TEST_DOWNLOAD_EVIDENCE").expect("isolated evidence directory"),
+        std::env::var("PATCHHUB_TEST_DOWNLOAD_EVIDENCE").expect("isolated evidence directory"),
     );
     let parsed = reqwest::Url::parse(&url).unwrap();
     let host = parsed.host_str().unwrap();

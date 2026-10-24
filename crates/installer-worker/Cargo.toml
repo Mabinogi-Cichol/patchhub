@@ -1,20 +1,20 @@
 [package]
-name = "steam-patch-installer-worker"
+name = "patchhub-installer-worker"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
 [lib]
-name = "steam_patch_installer_worker"
+name = "patchhub_installer_worker"
 path = "src/lib.rs"
 
 [[bin]]
-name = "probe-runner"
+name = "patchhub-probe-runner"
 path = "src/bin/probe_runner.rs"
 
 [[bin]]
-name = "probe-worker"
+name = "patchhub-probe-worker"
 path = "src/bin/probe_worker.rs"
 
 [dependencies]
@@ -22,7 +22,7 @@ serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 memmap2 = "0.9"
-steam-patch-installer-format = { path = "../installer-format" }
+patchhub-installer-format = { path = "../installer-format" }
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62", features = [
@@ -46,5 +46,5 @@ winreg = "0.56"
 workspace = true
 
 [[bin]]
-name = "sf-worker"
+name = "patchhub-worker"
 path = "src/bin/sf_worker.rs"

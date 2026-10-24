@@ -29,6 +29,7 @@ class PatchManagementPage extends StatefulWidget {
     required this.onMirror,
     required this.onRecords,
     this.artwork,
+    this.contentBuilder,
   });
   final AppModel model;
   final DesktopServices desktop;
@@ -40,6 +41,7 @@ class PatchManagementPage extends StatefulWidget {
   final ValueChanged<String> onMirror;
   final VoidCallback onRecords;
   final Future<SteamArtwork>? artwork;
+  final Widget Function(Widget management)? contentBuilder;
   @override
   State<PatchManagementPage> createState() => _PatchManagementPageState();
 }
@@ -206,31 +208,50 @@ class _PatchManagementPageState extends State<PatchManagementPage> {
     final technicalDetails = patch == null
         ? null
         : ExpansionTile(
+            key: PageStorageKey(
+              '${widget.row.id}:${widget.entry.key}:technical',
+            ),
             title: const Text('文件与技术详情'),
+            expandedCrossAxisAlignment: CrossAxisAlignment.stretch,
+            childrenPadding: const EdgeInsets.all(16),
             leading: const Icon(Icons.description_outlined),
             subtitle: const Text('补丁文件、版本依据与变更预览'),
             children: [
               SelectableText(
                 '发行标识：${patch['release_id']}\n选择标识：${patch['selection_id'] ?? '无'}\n下载地址：${patch['download_url'] ?? '无'}',
+                key: const PageStorageKey('release-details'),
               ),
               if (candidate != null)
                 SelectableText(
                   '身份依据：${candidate['match_basis']}\n版本依据：${(candidate['version_evidence'] as List).join('、')}',
+                  key: const PageStorageKey('candidate-details'),
                 ),
               OutlinedButton(
                 onPressed: reading || busy ? null : readPreview,
                 child: Text(reading ? '正在读取变更' : '查看文件变更（可选，只读）'),
               ),
               if (preview != null) ...[
-                for (final blocker in preview!['blockers'] as List)
-                  SelectableText(statusLabel(blocker)),
-                for (final change in preview!['changes'] as List)
+                for (final (index, blocker)
+                    in (preview!['blockers'] as List).indexed)
+                  SelectableText(
+                    statusLabel(blocker),
+                    key: PageStorageKey('blocker:$index'),
+                  ),
+                for (final (index, change)
+                    in (preview!['changes'] as List).indexed)
                   ListTile(
-                    title: SelectableText(change['path'] as String),
+                    title: SelectableText(
+                      change['path'] as String,
+                      key: PageStorageKey('change:$index'),
+                    ),
                     subtitle: Text('${change['action']}'),
                   ),
-                for (final diagnostic in preview!['diagnostics'] as List)
-                  SelectableText('${diagnostic['message']}'),
+                for (final (index, diagnostic)
+                    in (preview!['diagnostics'] as List).indexed)
+                  SelectableText(
+                    '${diagnostic['message']}',
+                    key: PageStorageKey('diagnostic:$index'),
+                  ),
               ],
             ],
           );
@@ -339,13 +360,20 @@ class _PatchManagementPageState extends State<PatchManagementPage> {
           if (archive != null) SelectableText('已选择：$archive'),
         ] else if (patch['actions']['local_archive']['available'] == true)
           ExpansionTile(
+            key: PageStorageKey(
+              '${widget.row.id}:${widget.entry.key}:local-zip',
+            ),
             title: const Text('使用本地 ZIP'),
             children: [
               OutlinedButton(
                 onPressed: busy ? null : chooseArchive,
                 child: const Text('选择本地 ZIP'),
               ),
-              if (archive != null) SelectableText('已选择：$archive'),
+              if (archive != null)
+                SelectableText(
+                  '已选择：$archive',
+                  key: const PageStorageKey('local-archive'),
+                ),
             ],
           ),
         if (localRoute && patch['actions']['primary']['input'] == 'automatic')
@@ -361,8 +389,16 @@ class _PatchManagementPageState extends State<PatchManagementPage> {
         const Text('此条目是待核对的来源线索，不能据此启动安装。请核对来源网页的语言、版本和 DLC 条件。'),
         if (candidate != null)
           ExpansionTile(
+            key: PageStorageKey(
+              '${widget.row.id}:${widget.entry.key}:source-details',
+            ),
             title: const Text('来源技术详情'),
-            children: [SelectableText(jsonEncode(candidate))],
+            children: [
+              SelectableText(
+                jsonEncode(candidate),
+                key: const PageStorageKey('source-json'),
+              ),
+            ],
           ),
       ],
       if (error != null) SelectableText('操作失败：$error'),
@@ -479,80 +515,84 @@ class _PatchManagementPageState extends State<PatchManagementPage> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Expanded(
-              child: ListView(
-                key: PageStorageKey(
-                  '${widget.row.id}:${widget.entry.key}:management',
-                ),
-                padding: EdgeInsets.fromLTRB(inset, 12, inset, 0),
-                children: [
-                  Card(
-                    child: Padding(
-                      padding: EdgeInsets.all(inset),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            '补丁信息',
-                            style: Theme.of(context).textTheme.titleMedium
-                                ?.copyWith(fontWeight: FontWeight.w600),
-                          ),
-                          const SizedBox(height: 20),
-                          Row(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              if (showCover && widget.artwork != null) ...[
-                                ClipRRect(
-                                  borderRadius: BorderRadius.circular(12),
-                                  child: SizedBox(
-                                    width: wide ? 144 : 112,
-                                    height: wide ? 216 : 168,
-                                    child: GameArtwork(
-                                      artwork: widget.artwork!,
-                                      kind: ArtworkKind.cover,
+              child: buildContent(
+                ListView(
+                  key: PageStorageKey(
+                    '${widget.row.id}:${widget.entry.key}:management',
+                  ),
+                  padding: EdgeInsets.fromLTRB(inset, 12, inset, 0),
+                  children: [
+                    Card(
+                      child: Padding(
+                        padding: EdgeInsets.all(inset),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              '补丁信息',
+                              style: Theme.of(context).textTheme.titleMedium
+                                  ?.copyWith(fontWeight: FontWeight.w600),
+                            ),
+                            const SizedBox(height: 20),
+                            Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                if (showCover && widget.artwork != null) ...[
+                                  ClipRRect(
+                                    borderRadius: BorderRadius.circular(12),
+                                    child: SizedBox(
+                                      width: wide ? 144 : 112,
+                                      height: wide ? 216 : 168,
+                                      child: GameArtwork(
+                                        artwork: widget.artwork!,
+                                        kind: ArtworkKind.cover,
+                                      ),
                                     ),
                                   ),
-                                ),
-                                const SizedBox(width: 24),
-                              ],
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment:
-                                      CrossAxisAlignment.stretch,
-                                  children: [
-                                    for (final detail in details)
-                                      Padding(
-                                        padding: const EdgeInsets.only(
-                                          bottom: 8,
+                                  const SizedBox(width: 24),
+                                ],
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.stretch,
+                                    children: [
+                                      for (final detail in details)
+                                        Padding(
+                                          padding: const EdgeInsets.only(
+                                            bottom: 8,
+                                          ),
+                                          child: detail,
                                         ),
-                                        child: detail,
-                                      ),
-                                  ],
+                                    ],
+                                  ),
                                 ),
-                              ),
-                              if (wide) ...[
-                                const SizedBox(width: 24),
-                                SizedBox(width: 240, child: summary),
+                                if (wide) ...[
+                                  const SizedBox(width: 24),
+                                  SizedBox(width: 240, child: summary),
+                                ],
                               ],
-                            ],
-                          ),
-                          if (!wide) ...[const SizedBox(height: 20), summary],
-                          if (technicalDetails != null) ...[
-                            const SizedBox(height: 16),
-                            Material(
-                              color: scheme.surfaceContainer,
-                              clipBehavior: Clip.antiAlias,
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(12),
-                                side: BorderSide(color: scheme.outlineVariant),
-                              ),
-                              child: technicalDetails,
                             ),
+                            if (!wide) ...[const SizedBox(height: 20), summary],
+                            if (technicalDetails != null) ...[
+                              const SizedBox(height: 16),
+                              Material(
+                                color: scheme.surfaceContainer,
+                                clipBehavior: Clip.antiAlias,
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(12),
+                                  side: BorderSide(
+                                    color: scheme.outlineVariant,
+                                  ),
+                                ),
+                                child: technicalDetails,
+                              ),
+                            ],
                           ],
-                        ],
+                        ),
                       ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
             ),
             if (patch != null)
@@ -658,4 +698,7 @@ class _PatchManagementPageState extends State<PatchManagementPage> {
       },
     );
   }
+
+  Widget buildContent(Widget management) =>
+      widget.contentBuilder?.call(management) ?? management;
 }

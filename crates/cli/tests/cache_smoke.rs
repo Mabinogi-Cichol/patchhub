@@ -58,7 +58,7 @@ fn wire_params(method: &str, mut legacy: Value) -> Value {
 }
 
 fn call(method: &str, id: &str, params: Value) -> Value {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_steam-patch"))
+    let mut child = Command::new(env!("CARGO_BIN_EXE_patchhub-core"))
         .arg(if method == "install_patch" {
             "serve-task"
         } else {
@@ -105,7 +105,7 @@ fn call(method: &str, id: &str, params: Value) -> Value {
     );
     let response = response.unwrap();
     assert_eq!(response["request_id"], id);
-    steam_patch_protocol::validate_response(
+    patchhub_protocol::validate_response(
         &response,
         response["request_id"].as_str().unwrap(),
         Some(serde_json::from_value(json!(method)).unwrap()),
@@ -115,7 +115,7 @@ fn call(method: &str, id: &str, params: Value) -> Value {
 }
 #[test]
 fn cli_after_commit_policy_reaches_core_and_replay_does_not_delete_new_cache() {
-    if steam_patch_core::installer::host_identity_blocker().is_some() {
+    if patchhub_core::installer::host_identity_blocker().is_some() {
         return;
     }
     let temp = tempfile::tempdir().unwrap();
@@ -132,7 +132,7 @@ fn cli_after_commit_policy_reaches_core_and_replay_does_not_delete_new_cache() {
     .unwrap();
     zip.write_all(b"patched").unwrap();
     zip.finish().unwrap();
-    let now = steam_patch_core::trust::now().unwrap();
+    let now = patchhub_core::trust::now().unwrap();
     let payload = serde_json::to_vec(&json!({"catalog":{"schema_version":1,"revision":1,"releases":[{
         "patch_id":"fixture","release_id":"fixture-v1","appid":42,"name":"Fixture","version":"1","language":"en","category":"content_restore",
         "source_page":"https://publisher.example/patch","support_level":"managed_zip","platforms":["windows","steamos"],"verified_buildids":["100"],
@@ -145,11 +145,11 @@ fn cli_after_commit_policy_reaches_core_and_replay_does_not_delete_new_cache() {
     fs::write(&signed, json!({"schema_version":1,"key_id":"fixture","payload":STANDARD.encode(&payload),"signature":STANDARD.encode(signing.sign(&payload).to_bytes())}).to_string()).unwrap();
     fs::write(&keys, json!({"schema_version":1,"keys":[{"key_id":"fixture","public_key":STANDARD.encode(signing.verifying_key().to_bytes()),"revoked":false}]}).to_string()).unwrap();
     let state = temp.path().join("state");
-    let paths = steam_patch_core::installer::InstallerPaths::new(&state);
+    let paths = patchhub_core::installer::InstallerPaths::new(&state);
     fs::create_dir_all(paths.downloads_dir()).unwrap();
     let cache = paths.downloads_dir().join("discard-me");
     fs::write(&cache, b"cache").unwrap();
-    let id = steam_patch_core::steam::scan(std::slice::from_ref(&library))
+    let id = patchhub_core::steam::scan(std::slice::from_ref(&library))
         .installs
         .remove(0)
         .instance_id;

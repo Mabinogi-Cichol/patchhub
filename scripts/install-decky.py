@@ -25,12 +25,10 @@ import urllib.parse
 import urllib.request
 import zipfile
 
-REPOSITORY = "Mabinogi-Cichol/steam-hentai-patch"
-ASSET = "steam-patch-manager-decky.zip"
-NAME = "Steam 黄油补丁助手"
-LEGACY_NAME = "Steam 补丁管理"
-PLUGIN_NAMES = (NAME, LEGACY_NAME)
-FOLDER = "steam-patch-manager"
+REPOSITORY = "Mabinogi-Cichol/patchhub"
+ASSET = "patchhub-decky.zip"
+NAME = "PatchHub"
+FOLDER = "patchhub"
 SETTINGS = ("pluginOrder", "frozenPlugins", "hiddenPlugins", "disabled_plugins")
 TERMINAL = {"completed", "failed", "cancelled"}
 DOWNLOAD_PROGRESS = None
@@ -95,7 +93,7 @@ def version_tag(value):
 
 
 def fetch(url, output=None):
-    request = urllib.request.Request(url, headers={"User-Agent": "steam-patch-decky-installer", "Accept": "application/vnd.github+json" if "/api.github.com/" in url else "application/octet-stream"})
+    request = urllib.request.Request(url, headers={"User-Agent": "patchhub-decky-installer", "Accept": "application/vnd.github+json" if "/api.github.com/" in url else "application/octet-stream"})
     require(urllib.parse.urlsplit(url).scheme == "https", "下载必须使用 HTTPS")
     with urllib.request.urlopen(request, timeout=30) as response:
         require(urllib.parse.urlsplit(response.url).scheme == "https", "拒绝非 HTTPS 重定向")
@@ -182,16 +180,16 @@ def validate_package(archive, expected_version=None):
             return json.loads(bundle.read(infos[name]))
 
         plugin, package, runtime = read("plugin.json"), read("package.json"), read("bin/runtime.json")
-        require(plugin.get("name") in PLUGIN_NAMES and plugin.get("api_version") == 1 and plugin.get("flags") == [], "插件身份/API/权限不匹配")
+        require(plugin.get("name") == NAME and plugin.get("api_version") == 1 and plugin.get("flags") == [], "插件身份/API/权限不匹配")
         version = package.get("version")
         version_tag("v" + str(version))
-        require(package.get("name") == "steam-patch-decky" and package.get("type") == "module" and not package.get("remote_binary"), "插件 package.json 不匹配")
+        require(package.get("name") == "@patchhub/decky" and package.get("type") == "module" and not package.get("remote_binary"), "插件 package.json 不匹配")
         require(expected_version is None or version == expected_version, "包内版本与 Release Tag 不一致")
         required = {"main.py", "dist/index.js", "backend/bridge.py", "backend/tasks.py", "backend/protocol.py", "backend/v5.schema.json", "bin/catalog.json", "bin/signed-catalog.json", "bin/trust-keys.json", "LICENSE", "licenses/sfextract-MIT.txt", "dependencies.cdx.json"}
         require(required <= files.keys(), "插件运行文件不完整")
         require(runtime.get("protocol_version") == 5 and runtime.get("worker_protocol") == 1, "不支持的 runtime 协议")
         binaries = runtime.get("files", [])
-        require(isinstance(binaries, list) and len(binaries) == 2 and {entry.get("path") for entry in binaries} == {"bin/steam-patch", "bin/sf-worker"}, "runtime 清单不完整")
+        require(isinstance(binaries, list) and len(binaries) == 2 and {entry.get("path") for entry in binaries} == {"bin/patchhub-core", "bin/patchhub-worker"}, "runtime 清单不完整")
         for entry in binaries:
             name = entry["path"]
             require(name in files and files[name]["size"] == entry.get("size") and files[name]["sha256"] == entry.get("sha256") and files[name]["executable"], "runtime 哈希/大小/权限不匹配")
@@ -228,7 +226,7 @@ def verify_files(root, expected):
 
 def backup_plugin(root, output):
     manifest = tree_manifest(root)
-    require(json_read(root / "plugin.json").get("name") in PLUGIN_NAMES, "旧插件身份不匹配")
+    require(json_read(root / "plugin.json").get("name") == NAME, "旧插件身份不匹配")
     version = json_read(root / "package.json")["version"]
     with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as bundle:
         for name in manifest:
@@ -250,7 +248,7 @@ def backup_plugin(root, output):
 def cleanup(work):
     """Only remove the installer's fixed, private workspace; never follow links."""
     no_links(work)
-    require(work.name == "steam-patch-decky-install", "清理目录错误")
+    require(work.name == "patchhub-decky-install", "清理目录错误")
     if not work.exists():
         return
     require(work.is_dir(), "清理目标不是目录")
@@ -367,9 +365,7 @@ class CDP:
 # Python journal before launch and a retained JS promise until it settles.
 BRIDGE = r"""async (op, a) => {
  const b = window.DeckyBackend, l = window.DeckyPluginLoader;
- const names = ['Steam 黄油补丁助手', 'Steam 补丁管理'];
- const currentName = l?.plugins?.find(p => names.includes(p.name))?.name || names[0];
- const name = a.name || currentName;
+ const name = 'PatchHub';
  const fail = m => { throw new Error(m); };
  if (!b || !l || !(b.runningCalls instanceof Map) || !(b.eventListeners instanceof Map) ||
      typeof b.call !== 'function' || typeof b.addEventListener !== 'function' ||
@@ -379,12 +375,12 @@ BRIDGE = r"""async (op, a) => {
    'utilities/confirm_plugin_install','utilities/uninstall_plugin','loader/reload_plugin',
    'utilities/enable_plugin','utilities/disable_plugin','utilities/settings/set']);
  const busy = () => [...b.runningCalls.values()].some(r => mutations.has(r.message?.route));
- const jobs = window.__steamPatchTerminalJobs ||= Object.create(null);
+ const jobs = window.__patchhubTerminalJobs ||= Object.create(null);
  const reads=new Set(['list_tasks','get_capabilities','get_settings','list_sources','list_transactions','scan_status','task_status','prepare_app_update','finish_app_update','get_app_update_status','source_task_status']);
- const pluginWrite = (route,args) => route==='loader/call_plugin_method' && names.includes(args[0]) && !reads.has(args[1]);
- if (op === 'guard') return window.__steamPatchTerminalGuard?.id===a.id;
+ const pluginWrite = (route,args) => route==='loader/call_plugin_method' && args[0]===name && !reads.has(args[1]);
+ if (op === 'guard') return window.__patchhubTerminalGuard?.id===a.id;
  if (op === 'acquire') {
-   const old=window.__steamPatchTerminalGuard;
+   const old=window.__patchhubTerminalGuard;
    if (old) { if (old.id!==a.id) fail('another_terminal_guard'); return true; }
    if (busy() || [...b.runningCalls.values()].some(r=>pluginWrite(r.message?.route,r.message?.args||[]))) fail('pending_plugin_write');
    const previous=b.call;
@@ -392,14 +388,14 @@ BRIDGE = r"""async (op, a) => {
      if (pluginWrite(route,args)) return Promise.reject(new Error('plugin_update_in_progress'));
      return previous.call(this,route,...args);
    };
-   window.__steamPatchTerminalGuard={id:a.id,previous,guard}; b.call=guard; return true;
+   window.__patchhubTerminalGuard={id:a.id,previous,guard}; b.call=guard; return true;
  }
  if (op === 'release') {
-   const guard=window.__steamPatchTerminalGuard;
-   if (!guard) { if (!Object.keys(jobs).length) delete window.__steamPatchTerminalJobs; return true; }
+   const guard=window.__patchhubTerminalGuard;
+   if (!guard) { if (!Object.keys(jobs).length) delete window.__patchhubTerminalJobs; return true; }
    if (guard.id!==a.id || busy() || b.call!==guard.guard) fail('cannot_release_terminal_guard');
-   b.call=guard.previous; delete window.__steamPatchTerminalGuard;
-   if (!Object.keys(jobs).length) delete window.__steamPatchTerminalJobs;
+   b.call=guard.previous; delete window.__patchhubTerminalGuard;
+   if (!Object.keys(jobs).length) delete window.__patchhubTerminalJobs;
    return true;
  }
  if (op === 'status') {
@@ -411,7 +407,7 @@ BRIDGE = r"""async (op, a) => {
    if (busy()) fail('loader_busy');
    const plugins = await b.call('loader/get_plugins');
    if (!Array.isArray(plugins)) fail('invalid_plugin_list');
-   const matches = plugins.filter(p => names.includes(p.name));
+   const matches = plugins.filter(p => p.name===name);
    if (matches.length > 1) fail('duplicate_plugin');
    const settings = {};
    for (const k of ['pluginOrder','frozenPlugins','hiddenPlugins','disabled_plugins']) {
@@ -420,7 +416,7 @@ BRIDGE = r"""async (op, a) => {
    }
    const version=await b.call('updater/get_version_info');
    if (!['v3.2.9','3.2.9','v3.3.0','3.3.0'].includes(version?.current)) fail('unsupported_loader_version');
-   return {plugins: matches, settings, instances: l.plugins.filter(p => names.includes(p.name)).map(p => ({version:p.version, valid:!!p.titleView})), user:await b.call('utilities/get_user_info')};
+   return {plugins: matches, settings, instances: l.plugins.filter(p => p.name===name).map(p => ({version:p.version, valid:!!p.titleView})), user:await b.call('utilities/get_user_info')};
  }
  if (op === 'tasks') {
    const tasks = await b.call('loader/call_plugin_method',name,'list_tasks');
@@ -431,8 +427,8 @@ BRIDGE = r"""async (op, a) => {
    return await b.call('loader/call_plugin_method',name,op);
  }
  if (op === 'runtime') {
-   const plugins = (await b.call('loader/get_plugins')).filter(p => names.includes(p.name));
-   const front = l.plugins.filter(p => names.includes(p.name));
+   const plugins = (await b.call('loader/get_plugins')).filter(p => p.name===name);
+   const front = l.plugins.filter(p => p.name===name);
    if (!a.present) { if (plugins.length || front.length) fail('plugin_still_present'); return true; }
    if (plugins.length !== 1 || plugins[0].name !== name || plugins[0].version !== a.version || !!plugins[0].disabled !== a.disabled) fail('backend_version_or_state');
    if (a.disabled) { if (front.length) fail('disabled_frontend_present'); return true; }
@@ -451,7 +447,6 @@ BRIDGE = r"""async (op, a) => {
  const j = jobs[a.id] = {done:false, ok:false};
  j.promise = (async () => {
    if (a.kind === 'install') {
-     const installed=(await b.call('loader/get_plugins')).find(p=>names.includes(p.name));
      // Suppress only this exact terminal-confirmed prompt. Forward every other
      // event to the existing Loader UI, and restore listeners in finally.
      const event = 'loader/add_plugin_install_prompt';
@@ -480,12 +475,9 @@ BRIDGE = r"""async (op, a) => {
      try {
        await b.call('utilities/install_plugin',a.artifact,name,a.version,a.hash,a.installType);
        await prompt;
-       if (a.checkTasks) await b.call('loader/call_plugin_method',installed?.name || currentName,'list_tasks').then(tasks=>{
+       if (a.checkTasks) await b.call('loader/call_plugin_method',name,'list_tasks').then(tasks=>{
          if (!Array.isArray(tasks)||tasks.some(t=>!['completed','failed','cancelled'].includes(t.state))) fail('active_or_unknown_tasks');
        });
-       // Loader finds replacements by metadata name, not ZIP directory.
-       // Explicitly unload the old identity before extracting the renamed ZIP.
-       if (installed && installed.name!==name) await b.call('utilities/uninstall_plugin',installed.name);
        const id=requestId; requestId=null;
        await b.call('utilities/confirm_plugin_install',id);
      } finally {
@@ -502,7 +494,7 @@ BRIDGE = r"""async (op, a) => {
      for (const k of ['pluginOrder','frozenPlugins','hiddenPlugins','disabled_plugins']) {
        const current=await b.call('utilities/settings/get',k,[]), old=a.settings[k];
        if (!Array.isArray(current)||!Array.isArray(old)) fail('invalid_settings');
-       const next=current.filter(x=>!names.includes(x)), index=old.indexOf(name);
+       const next=current.filter(x=>x!==name), index=old.indexOf(name);
        if (index>=0) {
          // Preserve other plugins' current order; restore only our membership
          // and place it next to a surviving original neighbour.
@@ -608,7 +600,7 @@ class Loader:
         deadline = time.monotonic() + self.timeout
         while True:
             try:
-                self.call("runtime", name=original.get("name", LEGACY_NAME), present=present, version=original.get("version"), disabled=original.get("disabled", False), bundle=original.get("files", {}).get("dist/index.js", {}).get("sha256"))
+                self.call("runtime", name=NAME, present=present, version=original.get("version"), disabled=original.get("disabled", False), bundle=original.get("files", {}).get("dist/index.js", {}).get("sha256"))
                 return
             except (InstallError, OSError):
                 self.cdp.close()
@@ -629,9 +621,8 @@ class Installer:
         self.work, self.plugin, self.loader = work, plugin, loader
 
     def restore_settings(self, state, first_install_success=False):
-        target = state.data["target"] if state.data["phase"] == "installing" else (state.data["original"] or {})
-        name = target.get("name", LEGACY_NAME)
-        settings = {key: [name if value in PLUGIN_NAMES else value for value in values] for key, values in state.data["settings"].items()}
+        name = NAME
+        settings = {key: list(values) for key, values in state.data["settings"].items()}
         if first_install_success and name not in settings["pluginOrder"]:
             settings["pluginOrder"].append(name)
         self.loader.mutate(state, kind="settings", name=name, settings=settings)
@@ -695,7 +686,7 @@ class Installer:
         else:
             if self.plugin.exists() or probe["plugins"]:
                 # Do not uninstall an unrelated directory or plugin.
-                require(self.plugin.is_dir() and json_read(self.plugin / "plugin.json").get("name") in PLUGIN_NAMES, "首次安装失败后的目录身份无法确认")
+                require(self.plugin.is_dir() and json_read(self.plugin / "plugin.json").get("name") == NAME, "首次安装失败后的目录身份无法确认")
                 self.loader.mutate(state, kind="uninstall")
             self.restore_settings(state)
             require(not self.plugin.exists(), "首次安装的文件尚未移除")
@@ -709,12 +700,12 @@ class Installer:
         require(Path(probe["user"]["path"]).resolve() == Path.home().resolve(), "Steam 用户与终端用户不同")
         require(len(probe["plugins"]) == int(self.plugin.exists()), "Loader 与插件目录状态不一致")
         disabled = bool(probe["plugins"] and probe["plugins"][0].get("disabled"))
-        require(not disabled and not any(name in probe["settings"]["disabled_plugins"] for name in PLUGIN_NAMES), "插件已禁用，无法确认运行中任务；请先在 Decky 启用后再更新")
+        require(not disabled and NAME not in probe["settings"]["disabled_plugins"], "插件已禁用，无法确认运行中任务；请先在 Decky 启用后再更新")
         if self.plugin.exists():
             self.loader.call("tasks")
             require(len(probe["instances"]) == 1 and probe["instances"][0].get("valid"), "当前插件前端实例异常")
         old_version = probe["plugins"][0].get("version") if probe["plugins"] else "未安装"
-        print(f"Steam 黄油补丁助手：{old_version} → {package['version']}")
+        print(f"PatchHub：{old_version} → {package['version']}")
         if not yes:
             prompt = "通过 Decky 安装此版本？[y/N] "
             if confirm is not None:
@@ -788,7 +779,7 @@ def workspace_lock(cache):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description="在 Steam Deck 上通过 Decky 安装/更新 Steam 黄油补丁助手（Python 3.10+，Steam/Decky 已运行）")
+    parser = argparse.ArgumentParser(description="在 Steam Deck 上通过 Decky 安装/更新 PatchHub（Python 3.10+，Steam/Decky 已运行）")
     parser.add_argument("--version", type=version_tag, help="指定 Release Tag；省略时使用最新正式版")
     parser.add_argument("--yes", action="store_true", help="显式同意无人交互安装")
     parser.add_argument("--check", action="store_true", help="只下载并校验，不操作 Loader")
@@ -811,7 +802,7 @@ def main(argv=None):
     require(not options.recover or (not options.version and not options.check and not options.yes), "--recover 不能与版本、安装或检查参数组合")
     require(1 <= options.cef_port <= 65535, "CEF 端口无效")
     cache = no_links(Path.home() / ".cache")
-    work = cache / "steam-patch-decky-install"
+    work = cache / "patchhub-decky-install"
     plugin = no_links(options.homebrew.absolute() / "plugins" / FOLDER)
     loader = Loader(options.cef_port)
     installer = Installer(work, plugin, loader)

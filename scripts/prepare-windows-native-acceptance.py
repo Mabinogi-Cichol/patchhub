@@ -15,10 +15,10 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--core', type=Path, default=ROOT / 'target/release/steam-patch.exe')
+    parser.add_argument('--core', type=Path, default=ROOT / 'target/release/patchhub-core.exe')
     args = parser.parse_args()
     core = args.core.resolve(strict=True)
-    base = Path(tempfile.mkdtemp(prefix='steam-patch-windows-acceptance-'))
+    base = Path(tempfile.mkdtemp(prefix='patchhub-windows-acceptance-'))
     library = base / 'Steam'
     game = library / 'steamapps/common/Native acceptance'
     game.mkdir(parents=True)

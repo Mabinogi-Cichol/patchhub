@@ -81,16 +81,16 @@ def build_pair(scratch, cargo, profile):
     suffix = '.exe' if os.name == 'nt' else ''
     def build(label):
         print('Building isolated ' + label + ' ' + profile + ' CLI', flush=True)
-        command = [str(cargo), 'build', '--offline', '-p', 'steam-patch-cli']
+        command = [str(cargo), 'build', '--offline', '-p', 'patchhub-cli']
         if profile == 'release':
             command.append('--release')
         subprocess.run(command, cwd=source, env=env, check=True, timeout=900)
         binary = scratch / (label + suffix)
-        shutil.copy2(target / profile / ('steam-patch' + suffix), binary)
+        shutil.copy2(target / profile / ('patchhub-core' + suffix), binary)
         return binary
     plain = build('plain')
     instrument(source / 'crates/core/src/detection.rs', 'fn read_digest_with(', '\n#[cfg(test)]\nmod tests')
-    count_expression = 'serde_json::json!({"evidence": steam_patch_core::detection::p0_hash_counts()})'
+    count_expression = 'serde_json::json!({"evidence": patchhub_core::detection::p0_hash_counts()})'
     main = source / 'crates/cli/src/main.rs'
     text = once(main.read_text(encoding='utf-8'), 'fn main() -> ExitCode {', '''fn main() -> ExitCode {
     struct P0Summary;

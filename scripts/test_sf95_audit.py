@@ -192,7 +192,7 @@ class AuditTests(unittest.TestCase):
     def test_paths_are_rejected_before_game_payload_decoding(self):
         paths = ["%AppFolder%\\..", "%AppFolder%\\C:", "\\\\server\\share", "%Temp%\\www",
                  "%AppFolder%\\www\\NUL", "%AppFolder%\\www\\COM¹", "%AppFolder%\\www\\x ",
-                 "%AppFolder%\\www\\.steam-patch-backup"]
+                 "%AppFolder%\\www\\.patchhub-backup"]
         for path in paths:
             with self.subTest(path=path):
                 data = sample([file_record(directory=path)])

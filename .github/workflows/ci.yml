@@ -39,12 +39,12 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: cargo run --locked -p steam-patch-contract-gen -- check
-      - run: cargo test --locked -p steam-patch-protocol
+      - run: cargo run --locked -p patchhub-contract-gen -- check
+      - run: cargo test --locked -p patchhub-protocol
       - run: cargo fmt --all -- --check
-      - run: cargo clippy -p steam-patch-core -p steam-patch-cli -p steam-patch-protocol -p steam-patch-contract-gen --all-targets --locked -- -D warnings
-      - run: cargo test -p steam-patch-core -p steam-patch-cli --locked
-      - run: cargo build -p steam-patch-core -p steam-patch-cli --locked
+      - run: cargo clippy -p patchhub-core -p patchhub-cli -p patchhub-protocol -p patchhub-contract-gen --all-targets --locked -- -D warnings
+      - run: cargo test -p patchhub-core -p patchhub-cli --locked
+      - run: cargo build -p patchhub-core -p patchhub-cli --locked
       - run: python -m unittest discover -s scripts -p test_sf95_audit.py -v
       - run: python -m unittest discover -s scripts -p test_sf95_worker.py -v
 
@@ -66,10 +66,10 @@ jobs:
       - run: python -m unittest discover -s scripts -p test_build_sbom.py -v
       - run: python -m unittest discover -s scripts -p test_flutter_sbom.py -v
       - run: python -m unittest discover -s scripts -p test_windows_update.py -v
-      - run: cargo run --locked -p steam-patch-contract-gen -- check
+      - run: cargo run --locked -p patchhub-contract-gen -- check
       - run: npm ci
       - run: npm run test:contracts
-      - run: cargo build --release --locked -p steam-patch-cli -p steam-patch-installer-worker --bin steam-patch --bin sf-worker
+      - run: cargo build --release --locked -p patchhub-cli -p patchhub-installer-worker --bin patchhub-core --bin patchhub-worker
       - uses: subosito/flutter-action@v2
         with:
           flutter-version: '3.47.7'
@@ -87,14 +87,14 @@ jobs:
         with:
           name: windows-portable
           path: |
-            .artifacts/steam-patch-manager-windows-portable.zip
+            .artifacts/patchhub-windows-portable.zip
             .artifacts/checksums-windows.json
             .artifacts/dependencies.cdx.json
           if-no-files-found: error
       - uses: actions/upload-artifact@v4
         with:
           name: windows-nsis
-          path: .artifacts/*_x64-setup.exe
+          path: .artifacts/patchhub-windows-x64-setup.exe
           include-hidden-files: true
           if-no-files-found: error
 
@@ -121,14 +121,14 @@ jobs:
         run: |
           set -euo pipefail
           mkdir release-assets
-          cp release-input/windows-portable/steam-patch-manager-windows-portable.zip release-assets/
+          cp release-input/windows-portable/patchhub-windows-portable.zip release-assets/
           cp release-input/windows-portable/checksums-windows.json release-assets/
           cp release-input/windows-portable/dependencies.cdx.json release-assets/dependencies-windows.cdx.json
           for installer in release-input/windows-nsis/*.exe; do
             filename="$(basename "$installer")"
             cp "$installer" "release-assets/${filename// /.}"
           done
-          cp release-input/decky-plugin/steam-patch-manager-decky.zip release-assets/
+          cp release-input/decky-plugin/patchhub-decky.zip release-assets/
           cp release-input/decky-plugin/checksums-decky.json release-assets/
           cp release-input/decky-plugin/dependencies.cdx.json release-assets/dependencies-decky.cdx.json
           cp release-input/decky-plugin/install-decky.py release-assets/
@@ -180,13 +180,13 @@ jobs:
       - run: python -m unittest discover -s scripts -p test_build_sbom.py -v
       - run: python -m unittest discover -s scripts -p test_install_decky.py -v
       - run: python -m unittest discover -s scripts -p test_decky_bootstrap.py -v
-      - run: cargo run --locked -p steam-patch-contract-gen -- check
+      - run: cargo run --locked -p patchhub-contract-gen -- check
       - run: npm ci
       - run: npm run test:contracts
       - run: npm run typecheck
       - run: npm run test -w apps/decky
       - run: node --test scripts/test-install-decky-bridge.mjs
-      - run: cargo build --release --locked -p steam-patch-cli -p steam-patch-installer-worker --bin steam-patch --bin sf-worker
+      - run: cargo build --release --locked -p patchhub-cli -p patchhub-installer-worker --bin patchhub-core --bin patchhub-worker
       - run: npm run package:plugin -w apps/decky
       - run: mkdir -p .artifacts
       - run: cargo metadata --locked --format-version 1 > .artifacts/cargo-metadata.json
@@ -198,7 +198,7 @@ jobs:
         with:
           name: decky-plugin
           path: |
-            .artifacts/steam-patch-manager-decky.zip
+            .artifacts/patchhub-decky.zip
             .artifacts/checksums-decky.json
             .artifacts/dependencies.cdx.json
             .artifacts/install-decky.py

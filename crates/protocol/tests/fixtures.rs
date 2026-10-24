@@ -1,5 +1,5 @@
+use patchhub_protocol::*;
 use serde_json::{json, Value};
-use steam_patch_protocol::*;
 fn corpus() -> Value {
     serde_json::from_str(include_str!(
         "../../../packages/contracts/fixtures/v5/cases.json"

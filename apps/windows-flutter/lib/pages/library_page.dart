@@ -160,7 +160,7 @@ class _LibraryPageState extends State<LibraryPage> {
               PopupMenuButton<ThemeMode>(
                 tooltip: '外观',
                 icon: const Icon(Icons.tune_outlined, size: 20),
-                onSelected: (mode) => SteamPatchApp.setThemeMode(context, mode),
+                onSelected: (mode) => PatchHubApp.setThemeMode(context, mode),
                 itemBuilder: (context) => [
                   for (final entry in const {
                     ThemeMode.system: '跟随系统',
@@ -169,7 +169,7 @@ class _LibraryPageState extends State<LibraryPage> {
                   }.entries)
                     CheckedPopupMenuItem(
                       value: entry.key,
-                      checked: SteamPatchApp.themeModeOf(context) == entry.key,
+                      checked: PatchHubApp.themeModeOf(context) == entry.key,
                       child: Text(entry.value),
                     ),
                 ],
@@ -530,6 +530,23 @@ class _LibraryPageState extends State<LibraryPage> {
             .cast<Map<String, dynamic>>()
             .where((value) => value['candidate_id'] == patch?['candidate_id'])
             .firstOrNull;
+    Widget tabs(Widget management) => IndexedStack(
+      index: tab,
+      children: [
+        overview(row, entries),
+        management,
+        RecordsPage(
+          key: ValueKey('${row.id}:records'),
+          model: widget.model,
+          row: row,
+        ),
+        GameSourcesPage(
+          key: ValueKey('${row.id}:subscriptions'),
+          model: widget.model,
+          row: row,
+        ),
+      ],
+    );
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -675,14 +692,9 @@ class _LibraryPageState extends State<LibraryPage> {
         ),
 
         Expanded(
-          child: IndexedStack(
-            index: tab,
-            children: [
-              overview(row, entries),
-              if (entry == null)
-                const Center(child: Text('当前没有补丁条目，请查看游戏订阅并重新匹配'))
-              else
-                PatchManagementPage(
+          child: entry == null
+              ? tabs(const Center(child: Text('当前没有补丁条目，请查看游戏订阅并重新匹配')))
+              : PatchManagementPage(
                   key: ValueKey(
                     '${row.id}:${entry.key}:${patch?['selection_id'] ?? patch?['release_id']}',
                   ),
@@ -698,19 +710,8 @@ class _LibraryPageState extends State<LibraryPage> {
                     selectionNotice = null;
                   }),
                   onRecords: () => setState(() => tab = 2),
+                  contentBuilder: tabs,
                 ),
-              RecordsPage(
-                key: ValueKey('${row.id}:records'),
-                model: widget.model,
-                row: row,
-              ),
-              GameSourcesPage(
-                key: ValueKey('${row.id}:subscriptions'),
-                model: widget.model,
-                row: row,
-              ),
-            ],
-          ),
         ),
       ],
     );
@@ -765,12 +766,14 @@ class _LibraryPageState extends State<LibraryPage> {
         ),
       ],
       ExpansionTile(
+        key: PageStorageKey('${row.id}:game-info'),
         title: const Text('游戏信息'),
         children: [
           Padding(
             padding: const EdgeInsets.all(16),
             child: SelectableText(
               'AppID：${row.game['appid']}\nbuild：${row.game['buildid'] ?? '未知'}\n安装路径：${row.game['install_path']}\n库位置：${row.game['library_path']}',
+              key: const PageStorageKey('game-info-text'),
             ),
           ),
         ],

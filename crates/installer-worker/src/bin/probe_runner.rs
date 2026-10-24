@@ -1,5 +1,5 @@
-//! `probe-runner`: host-side harness that creates synthetic unauthorized directories,
-//! establishes the AppContainer profile and ACL grants, launches `probe-worker` under
+//! `patchhub-probe-runner`: host-side harness that creates synthetic unauthorized directories,
+//! establishes the AppContainer profile and ACL grants, launches `patchhub-probe-worker` under
 //! LPAC + Job Object, and records the resulting evidence as JSON.
 
 fn main() {
@@ -11,7 +11,7 @@ fn main() {
 
     #[cfg(not(any(windows, target_os = "linux")))]
     {
-        eprintln!("probe-runner: sandbox probe is only supported on Windows/Linux");
+        eprintln!("patchhub-probe-runner: sandbox probe is only supported on Windows/Linux");
         std::process::exit(2);
     }
 }
@@ -24,16 +24,16 @@ mod win_impl {
     use std::path::{Path, PathBuf};
     use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-    use serde_json::{json, Value};
-    use steam_patch_installer_worker::model::{
+    use patchhub_installer_worker::model::{
         CheckResult, CheckStatus, SandboxConfig, WorkerRequest, WorkerResponse,
     };
-    use steam_patch_installer_worker::win::{
+    use patchhub_installer_worker::win::{
         delete_profile, ensure_profile, grant_path_access, process_alive, run_worker, self_in_job,
         set_raw_handle_inherit, AccessKind,
     };
+    use serde_json::{json, Value};
 
-    const CANARY_ENV: &str = "STEAM_PATCH_PROBE_CANARY";
+    const CANARY_ENV: &str = "PATCHHUB_PROBE_CANARY";
     const FIXTURE_TEXT: &str = "PROBE_INPUT_v1_中文";
 
     struct Harness {
@@ -55,7 +55,7 @@ mod win_impl {
         let mut worker_exe: Option<PathBuf> = None;
         let mut root: Option<PathBuf> = None;
         let mut out: Option<PathBuf> = None;
-        let mut profile = "steam-patch-probe".to_string();
+        let mut profile = "patchhub-probe".to_string();
 
         let mut i = 1;
         while i < args.len() {
@@ -77,7 +77,7 @@ mod win_impl {
                     profile = args.get(i).cloned().unwrap_or(profile);
                 }
                 other => {
-                    eprintln!("probe-runner: ignoring unknown argument {other}");
+                    eprintln!("patchhub-probe-runner: ignoring unknown argument {other}");
                 }
             }
             i += 1;
@@ -113,7 +113,7 @@ mod win_impl {
             .count();
 
         let evidence = json!({
-            "schema": steam_patch_installer_worker::PROBE_SCHEMA,
+            "schema": patchhub_installer_worker::PROBE_SCHEMA,
             "generated_unix_secs": SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0),
             "os": os_info(),
             "arch": std::env::consts::ARCH,
@@ -151,8 +151,8 @@ mod win_impl {
     fn default_worker_exe() -> PathBuf {
         std::env::current_exe()
             .ok()
-            .and_then(|p| p.parent().map(|d| d.join("probe-worker.exe")))
-            .unwrap_or_else(|| PathBuf::from("probe-worker.exe"))
+            .and_then(|p| p.parent().map(|d| d.join("patchhub-probe-worker.exe")))
+            .unwrap_or_else(|| PathBuf::from("patchhub-probe-worker.exe"))
     }
 
     fn default_root() -> PathBuf {
@@ -160,11 +160,7 @@ mod win_impl {
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_millis())
             .unwrap_or(0);
-        std::env::temp_dir().join(format!(
-            "steam-patch-probe-{}-{}",
-            std::process::id(),
-            stamp
-        ))
+        std::env::temp_dir().join(format!("patchhub-probe-{}-{}", std::process::id(), stamp))
     }
 
     fn setup(root: &Path, source_worker_exe: &Path, profile: &str) -> Harness {
@@ -184,7 +180,7 @@ mod win_impl {
         let worker_exe = worker_dir.join(
             source_worker_exe
                 .file_name()
-                .unwrap_or_else(|| std::ffi::OsStr::new("probe-worker.exe")),
+                .unwrap_or_else(|| std::ffi::OsStr::new("patchhub-probe-worker.exe")),
         );
         std::fs::copy(source_worker_exe, &worker_exe).expect("copy worker exe");
 
@@ -271,7 +267,7 @@ mod win_impl {
             tweak: impl FnOnce(&mut SandboxConfig),
         ) -> Result<
             (
-                steam_patch_installer_worker::LaunchOutcome,
+                patchhub_installer_worker::LaunchOutcome,
                 Option<WorkerResponse>,
             ),
             String,
@@ -302,7 +298,7 @@ mod win_impl {
     }
 
     fn check_profile_lifecycle(checks: &mut Vec<CheckResult>) {
-        let name = format!("steam-patch-probe-life-{}", std::process::id());
+        let name = format!("patchhub-probe-life-{}", std::process::id());
         let first = ensure_profile(&name);
         let second = ensure_profile(&name);
         let result = match (&first, &second) {
@@ -439,7 +435,7 @@ mod win_impl {
         let env_count = resp.data["env_count"].as_u64().unwrap_or(0);
         checks.push(
             CheckResult::new("env_clean", "环境变量清洁")
-                .expected("宿主 STEAM_PATCH_PROBE_CANARY 不出现；仅传入白名单环境")
+                .expected("宿主 PATCHHUB_PROBE_CANARY 不出现；仅传入白名单环境")
                 .actual(format!(
                     "canary_present={canary_present}, env_count={env_count}, passed_env={}",
                     h.env.len()
@@ -775,7 +771,7 @@ mod win_impl {
     fn check_registry(h: &Harness, checks: &mut Vec<CheckResult>) {
         // Write to HKLM\SOFTWARE: expect denied.
         let req = WorkerRequest::new("registry_write")
-            .key("HKLM\\SOFTWARE\\SteamPatchProbeP0")
+            .key("HKLM\\SOFTWARE\\PatchHubProbeP0")
             .value("p0");
         let (actual, code, status) = match h.launch(&req, |_| {}) {
             Ok((_, resp)) => {
@@ -972,8 +968,7 @@ mod win_impl {
                         outcome.wall_time.as_millis(),
                         outcome.exit_code
                     ),
-                    if outcome.termination
-                        == steam_patch_installer_worker::TerminationReason::Timeout
+                    if outcome.termination == patchhub_installer_worker::TerminationReason::Timeout
                         && dead
                     {
                         CheckStatus::Pass
@@ -1165,7 +1160,7 @@ mod win_impl {
         checks: &mut Vec<CheckResult>,
         result: Result<
             (
-                steam_patch_installer_worker::LaunchOutcome,
+                patchhub_installer_worker::LaunchOutcome,
                 Option<WorkerResponse>,
             ),
             String,
@@ -1241,15 +1236,15 @@ mod linux_impl {
     use std::path::{Path, PathBuf};
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-    use serde_json::json;
-    use steam_patch_installer_worker::linux::{
+    use patchhub_installer_worker::linux::{
         bwrap_available, bwrap_version, euid, find_processes, process_alive, run_worker, uname_info,
     };
-    use steam_patch_installer_worker::model::{
+    use patchhub_installer_worker::model::{
         CheckResult, CheckStatus, LaunchOutcome, SandboxConfig, WorkerRequest, WorkerResponse,
     };
+    use serde_json::json;
 
-    const CANARY_ENV: &str = "STEAM_PATCH_PROBE_CANARY";
+    const CANARY_ENV: &str = "PATCHHUB_PROBE_CANARY";
     const FIXTURE_TEXT: &str = "PROBE_INPUT_v1_中文";
 
     struct Harness {
@@ -1293,7 +1288,7 @@ mod linux_impl {
                     i += 1;
                     run_as = args.get(i).and_then(|v| parse_run_as(v));
                 }
-                other => eprintln!("probe-runner: ignoring unknown argument {other}"),
+                other => eprintln!("patchhub-probe-runner: ignoring unknown argument {other}"),
             }
             i += 1;
         }
@@ -1326,7 +1321,7 @@ mod linux_impl {
             .count();
 
         let evidence = json!({
-            "schema": steam_patch_installer_worker::PROBE_SCHEMA,
+            "schema": patchhub_installer_worker::PROBE_SCHEMA,
             "generated_unix_secs": SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .map(|d| d.as_secs())
@@ -1367,8 +1362,8 @@ mod linux_impl {
     fn default_worker_exe() -> PathBuf {
         std::env::current_exe()
             .ok()
-            .and_then(|p| p.parent().map(|d| d.join("probe-worker")))
-            .unwrap_or_else(|| PathBuf::from("probe-worker"))
+            .and_then(|p| p.parent().map(|d| d.join("patchhub-probe-worker")))
+            .unwrap_or_else(|| PathBuf::from("patchhub-probe-worker"))
     }
 
     fn default_root() -> PathBuf {
@@ -1376,11 +1371,7 @@ mod linux_impl {
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_millis())
             .unwrap_or(0);
-        std::env::temp_dir().join(format!(
-            "steam-patch-probe-{}-{}",
-            std::process::id(),
-            stamp
-        ))
+        std::env::temp_dir().join(format!("patchhub-probe-{}-{}", std::process::id(), stamp))
     }
 
     /// Parse `<uid>:<gid>`.
@@ -1402,7 +1393,7 @@ mod linux_impl {
 
         let worker_name = source_worker_exe
             .file_name()
-            .unwrap_or_else(|| std::ffi::OsStr::new("probe-worker"))
+            .unwrap_or_else(|| std::ffi::OsStr::new("patchhub-probe-worker"))
             .to_string_lossy()
             .to_string();
         let worker_exe = worker_dir.join(&worker_name);
@@ -1832,7 +1823,7 @@ mod linux_impl {
                         ))
                         .status(
                             if outcome.termination
-                                == steam_patch_installer_worker::TerminationReason::Timeout
+                                == patchhub_installer_worker::TerminationReason::Timeout
                                 && dead
                             {
                                 CheckStatus::Pass

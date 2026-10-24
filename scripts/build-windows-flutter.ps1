@@ -34,8 +34,8 @@ if (-not $SkipRust) {
     } else { $taskCargo = (Get-Command cargo -ErrorAction Stop).Source }
     Push-Location $taskRoot
     try {
-        Invoke-Checked $taskCargo @('build','--release','--locked','-p','steam-patch-cli',
-            '-p','steam-patch-installer-worker','--bin','steam-patch','--bin','sf-worker')
+        Invoke-Checked $taskCargo @('build','--release','--locked','-p','patchhub-cli',
+            '-p','patchhub-installer-worker','--bin','patchhub-core','--bin','patchhub-worker')
     } finally { Pop-Location }
 }
 Copy-Item -LiteralPath (Join-Path $taskRoot 'packages/contracts/generated/v5.schema.json') -Destination (Join-Path $taskApp 'assets/protocol-v5.schema.json')
@@ -49,7 +49,7 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Unable to collect Flutter dependencies' }
 } finally { Pop-Location }
 $taskOutput = Join-Path $taskApp 'build/windows/x64/runner/Release'
-foreach ($taskBinary in @('steam-patch.exe','sf-worker.exe')) {
+foreach ($taskBinary in @('patchhub-core.exe','patchhub-worker.exe')) {
     Copy-Item -LiteralPath (Join-Path $taskRoot "target/release/$taskBinary") -Destination $taskOutput
 }
 $taskResources = Join-Path $taskOutput 'resources'

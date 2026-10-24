@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:steam_patch_windows/host/download_rate.dart';
+import 'package:patchhub_windows/host/download_rate.dart';
 
 void main() {
   test('download rate uses byte delta and elapsed time, including stalled progress', () {

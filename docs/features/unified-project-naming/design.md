@@ -2,6 +2,8 @@
 
 [施工记录](progress.md)
 
+> 本文保留 2026-10-20 的命名与兼容设计。2026-10-25 起的新品牌及破坏性身份切换以 [PatchHub 计划](../patchhub-branding/design.md) 为准；原施工记录不改写。
+
 ## 目标与范围
 
 - 仓库名：`steam-hentai-patch`。英文名：Steam Hentai Patch。中文名：Steam 黄油补丁助手。

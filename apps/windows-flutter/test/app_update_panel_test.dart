@@ -3,10 +3,10 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:steam_patch_windows/app.dart';
-import 'package:steam_patch_windows/host/app_lifecycle.dart';
-import 'package:steam_patch_windows/host/app_update.dart';
-import 'package:steam_patch_windows/pages/app_update_panel.dart';
+import 'package:patchhub_windows/app.dart';
+import 'package:patchhub_windows/host/app_lifecycle.dart';
+import 'package:patchhub_windows/host/app_update.dart';
+import 'package:patchhub_windows/pages/app_update_panel.dart';
 
 class PanelUpdate extends AppUpdate {
   PanelUpdate()
@@ -51,7 +51,7 @@ class PanelUpdate extends AppUpdate {
 void main() {
   Future<void> mount(WidgetTester tester, PanelUpdate update) async {
     await tester.pumpWidget(
-      SteamPatchApp(
+      PatchHubApp(
         home: Scaffold(
           body: AppUpdatePanel(
             update: update,

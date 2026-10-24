@@ -4,13 +4,13 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:steam_patch_windows/app.dart';
-import 'package:steam_patch_windows/host/desktop_services.dart';
-import 'package:steam_patch_windows/models/app_model.dart';
-import 'package:steam_patch_windows/models/library.dart';
-import 'package:steam_patch_windows/pages/patch_management_page.dart';
-import 'package:steam_patch_windows/pages/install_dialog.dart';
-import 'package:steam_patch_windows/presentation/library_presentation.dart';
+import 'package:patchhub_windows/app.dart';
+import 'package:patchhub_windows/host/desktop_services.dart';
+import 'package:patchhub_windows/models/app_model.dart';
+import 'package:patchhub_windows/models/library.dart';
+import 'package:patchhub_windows/pages/patch_management_page.dart';
+import 'package:patchhub_windows/pages/install_dialog.dart';
+import 'package:patchhub_windows/presentation/library_presentation.dart';
 
 import 'support/process_fixture_client.dart';
 
@@ -52,7 +52,7 @@ Future<void> mountPatch(
   final row = model.snapshot!.rows.single;
   final entries = displayEntries(row);
   await tester.pumpWidget(
-    SteamPatchApp(
+    PatchHubApp(
       home: Scaffold(
         body: PatchManagementPage(
           model: model,
@@ -187,7 +187,7 @@ void main() {
       'total_bytes': 8000000,
     };
     await tester.pumpWidget(
-      SteamPatchApp(
+      PatchHubApp(
         home: Scaffold(
           body: InstallDialog(
             model: model,
@@ -211,7 +211,7 @@ void main() {
     );
     // Rebuild with the next accepted progress sample, without a real download.
     await tester.pumpWidget(
-      SteamPatchApp(
+      PatchHubApp(
         home: Scaffold(
           body: InstallDialog(
             model: model,

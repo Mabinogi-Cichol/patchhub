@@ -1,9 +1,9 @@
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:steam_patch_windows/host/core_client.dart';
-import 'package:steam_patch_windows/host/core_paths.dart';
-import 'package:steam_patch_windows/models/library.dart';
+import 'package:patchhub_windows/host/core_client.dart';
+import 'package:patchhub_windows/host/core_paths.dart';
+import 'package:patchhub_windows/models/library.dart';
 
 Future<void> main(List<String> args) async {
   if (args.length != 3) {

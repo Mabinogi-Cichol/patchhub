@@ -20,7 +20,7 @@ def prepare_host_state(state_dir, user_home, run_uid=None, run_gid=None):
     """
     home = Path(user_home).absolute()
     root = Path(state_dir).absolute()
-    if root != home / ".local/share/steam-patch-manager":
+    if root != home / ".local/share/patchhub":
         raise ValueError("invalid_state_path")
     _plain(root)
     if not home.is_dir():

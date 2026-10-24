@@ -1,4 +1,4 @@
-use steam_patch_core::sources::{snapshot::SourceSnapshot, store::SourceStore, GameQuery};
+use patchhub_core::sources::{snapshot::SourceSnapshot, store::SourceStore, GameQuery};
 
 fn game(appid: u32) -> GameQuery {
     GameQuery {
@@ -108,7 +108,7 @@ fn linked_legacy_directories_are_ignored_and_new_state_directories_rejected() {
         let link = root.join(subdirectory);
         directory_link(outside.path(), &link);
         let error =
-            steam_patch_core::sources::store::read_bounded(&link.join("record.json")).unwrap_err();
+            patchhub_core::sources::store::read_bounded(&link.join("record.json")).unwrap_err();
         assert_eq!(error.to_string(), "linked_source_state");
         assert!(
             SourceSnapshot::load(&state, &[game(42)], 1234).is_ok(),

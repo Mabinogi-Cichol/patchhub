@@ -1,24 +1,24 @@
 //! All mutation tests are confined to synthetic Steam libraries inside TempDir.
+use patchhub_core::{
+    catalog::{FileMapping, Fingerprint, PatchRelease, Platform, Recipe, SupportLevel},
+    install::*,
+    steam,
+};
 use sha2::{Digest, Sha256};
 use std::{
     fs::{self, File},
     io::Write,
     path::PathBuf,
 };
-use steam_patch_core::{
-    catalog::{FileMapping, Fingerprint, PatchRelease, Platform, Recipe, SupportLevel},
-    install::*,
-    steam,
-};
 use zip::{write::SimpleFileOptions, ZipWriter};
 
 #[test]
 fn cancellation_after_first_live_write_restores_all_originals() {
+    use patchhub_core::operation;
     use std::sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
     };
-    use steam_patch_core::operation;
     let fixture = Fixture::new();
     let plan = fixture.plan().unwrap();
     let cancel = Arc::new(AtomicBool::new(false));
@@ -48,11 +48,11 @@ fn cancellation_after_first_live_write_restores_all_originals() {
 
 #[test]
 fn cancellation_inside_large_backup_or_write_cleans_partial_and_rolls_back() {
+    use patchhub_core::operation;
     use std::sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
     };
-    use steam_patch_core::operation;
     for stage in ["backing_up", "writing"] {
         let mut fixture = Fixture::new();
         let original = vec![1u8; 1024 * 1024];
@@ -92,11 +92,11 @@ fn cancellation_inside_large_backup_or_write_cleans_partial_and_rolls_back() {
 
 #[test]
 fn cancelled_preparation_removes_staging_and_discarded_plan_cannot_apply() {
+    use patchhub_core::operation;
     use std::sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
     };
-    use steam_patch_core::operation;
     let fixture = Fixture::new();
     let cancel = Arc::new(AtomicBool::new(false));
     let signal = cancel.clone();
@@ -278,7 +278,7 @@ impl Fixture {
             .join(destination)
             .parent()
             .unwrap()
-            .join(format!(".steam-patch-{id}-{index}.tmp"))
+            .join(format!(".patchhub-{id}-{index}.tmp"))
     }
     fn edit_journal(&self, id: &str, edit: impl FnOnce(&mut serde_json::Value)) {
         let db = rusqlite::Connection::open(self.state.join("journal.sqlite")).unwrap();
@@ -656,7 +656,7 @@ fn zip_traversal_ntfs_names_and_unmapped_malicious_entries_are_rejected() {
         "dir./file",
         "x\\y",
         "NUL",
-        ".steam-patch-forged",
+        ".patchhub-forged",
     ] {
         let mut f = Fixture::new();
         f.archive_with(&[
@@ -942,11 +942,11 @@ fn same_content_reinstall_failure_before_backups_rolls_back() {
 
 #[test]
 fn owned_missing_and_damaged_files_overwrite_and_failed_retry_preserves_preop_and_receipt() {
+    use patchhub_core::operation;
     use std::sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
     };
-    use steam_patch_core::operation;
     let f = Fixture::new();
     let first = f.plan().unwrap();
     apply(&first.plan_id, &f.state).unwrap();
@@ -1010,8 +1010,8 @@ fn reinstall_rejects_changed_content_and_unowned_damage() {
 
 #[test]
 fn revoked_marker_alone_blocks_apply_and_during_write_rolls_back() {
+    use patchhub_core::operation;
     use std::sync::{atomic::AtomicBool, Arc};
-    use steam_patch_core::operation;
     let f = Fixture::new();
     let first = f.plan().unwrap();
     fs::write(f.job_file(&first.plan_id, "revoked"), b"").unwrap();
@@ -1037,8 +1037,8 @@ fn revoked_marker_alone_blocks_apply_and_during_write_rolls_back() {
 
 #[test]
 fn committed_success_wins_over_late_cancel() {
+    use patchhub_core::operation;
     use std::sync::{atomic::AtomicBool, Arc};
-    use steam_patch_core::operation;
     let f = Fixture::new();
     let plan = f.plan().unwrap();
     // An unexpected directory in a derived cleanup slot is retained and recorded.
@@ -1083,11 +1083,11 @@ fn unfinished_legacy_transaction_blocks_reinstall_without_journal_discard() {
 
 #[test]
 fn cancellation_at_planning_boundary_never_leaves_executable_plan() {
+    use patchhub_core::operation;
     use std::sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
     };
-    use steam_patch_core::operation;
     let f = Fixture::new();
     let cancel = Arc::new(AtomicBool::new(false));
     let signal = cancel.clone();
@@ -1209,7 +1209,7 @@ fn cancelled_overwrite_restores_current_bytes_and_keeps_old_receipt() {
     let second = f.overwrite().unwrap();
     let cancel = Arc::new(AtomicBool::new(false));
     let signal = cancel.clone();
-    let result = steam_patch_core::operation::run(
+    let result = patchhub_core::operation::run(
         cancel,
         move |p| {
             if p.stage == "writing" && p.files_done == 1 {
@@ -1445,7 +1445,7 @@ fn discard_validates_locked_job_before_game_lock_or_terminal_mutation() {
     use fs2::FileExt;
     let fixture = Fixture::new();
     let plan = fixture.plan().unwrap();
-    let game_lock = fixture.game.join(".steam-patch-manager.lock");
+    let game_lock = fixture.game.join(".patchhub.lock");
     if game_lock.exists() {
         fs::remove_file(&game_lock).unwrap();
     }
@@ -1600,11 +1600,11 @@ fn archive_backed_task_rejects_changed_source_before_overwriting_game() {
 
 #[test]
 fn archive_backed_partial_member_cancellation_restores_without_stage() {
+    use patchhub_core::operation;
     use std::sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
     };
-    use steam_patch_core::operation;
     let mut f = Fixture::new();
     let patched = vec![2u8; 1024 * 1024];
     f.release.recipe.as_mut().unwrap().files[0].installed_sha256 = hash(&patched);
@@ -1722,7 +1722,7 @@ fn external_local_zip_tampered_before_adoption_is_rejected() {
 
 #[test]
 fn cache_cleanup_retains_unfinished_archive_source_and_releases_terminal_cache() {
-    use steam_patch_core::installer::{self, cache::CacheService, service::ValidatedHostContext};
+    use patchhub_core::installer::{self, cache::CacheService, service::ValidatedHostContext};
     let f = Fixture::new();
     let platform = if cfg!(windows) {
         Platform::Windows

@@ -1,10 +1,10 @@
 //! Cache public boundary regression coverage using temporary state only.
-#[cfg(windows)]
-use std::fs;
-use steam_patch_core::{
+use patchhub_core::{
     catalog::Platform,
     installer::{cache::CacheService, outcome::CleanupStatus, service::ValidatedHostContext},
 };
+#[cfg(windows)]
+use std::fs;
 fn platform() -> Platform {
     if cfg!(windows) {
         Platform::Windows
@@ -21,7 +21,7 @@ fn missing_cache_inspection_is_readonly_and_manual_cleanup_returns_truthful_empt
     let inventory = CacheService::new(&host).inspect().unwrap();
     assert_eq!((inventory.total_bytes, inventory.entries), (0, 0));
     assert!(!state.exists());
-    if steam_patch_core::installer::host_identity_blocker().is_some() {
+    if patchhub_core::installer::host_identity_blocker().is_some() {
         assert_eq!(
             CacheService::new(&host).cleanup().unwrap_err().code,
             "installer_host_requires_non_root"

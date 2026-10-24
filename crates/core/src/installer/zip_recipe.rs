@@ -170,7 +170,7 @@ fn validate_entries(entries: &[Entry], cancel: &AtomicBool) -> Result<()> {
         if entry
             .name
             .split('/')
-            .any(|part| part.to_ascii_lowercase().starts_with(".steam-patch-"))
+            .any(|part| part.to_ascii_lowercase().starts_with(".patchhub-"))
         {
             return Err(invalid("reserved_installer_path"));
         }
@@ -819,7 +819,7 @@ mod tests {
             "unsafe_relative_path"
         );
         assert_eq!(
-            recipe_err("res.zip", &[(".steam-patch-state", b"x")]),
+            recipe_err("res.zip", &[(".patchhub-state", b"x")]),
             "reserved_installer_path"
         );
     }

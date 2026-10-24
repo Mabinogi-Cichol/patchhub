@@ -555,7 +555,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn cleanup_child() {
-        let Some(state) = std::env::var_os("STEAM_PATCH_TEST_BACKUP_STATE") else {
+        let Some(state) = std::env::var_os("PATCHHUB_TEST_BACKUP_STATE") else {
             return;
         };
         let state = std::path::PathBuf::from(state);
@@ -578,8 +578,8 @@ mod tests {
         let marker = dir.path().join("captured");
         let mut child = std::process::Command::new(std::env::current_exe().unwrap())
             .args(["--exact", "installer::backup::tests::cleanup_child"])
-            .env("STEAM_PATCH_TEST_BACKUP_STATE", host.state_dir())
-            .env("STEAM_PATCH_TEST_BACKUP_CAPTURE", &marker)
+            .env("PATCHHUB_TEST_BACKUP_STATE", host.state_dir())
+            .env("PATCHHUB_TEST_BACKUP_CAPTURE", &marker)
             .spawn()
             .unwrap();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);

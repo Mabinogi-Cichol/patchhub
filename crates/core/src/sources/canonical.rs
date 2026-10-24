@@ -431,7 +431,7 @@ mod tests {
 
     /// Regenerates `crates/core/tests/fixtures/sources/encoding-golden.json`.
     ///
-    /// Run manually with `cargo test -p steam-patch-core --lib -- --ignored
+    /// Run manually with `cargo test -p patchhub-core --lib -- --ignored
     /// regenerate_encoding_golden`. This is the Rust replacement for the former
     /// `gen_identity_golden.py` (now deleted along with the Python byte golden).
     #[test]

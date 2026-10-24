@@ -1,5 +1,5 @@
+use patchhub_installer_format::{audit, graph};
 use serde_json::Value;
-use steam_patch_installer_format::{audit, graph};
 
 fn fixture() -> (Vec<u8>, String) {
     let fixtures: Value =

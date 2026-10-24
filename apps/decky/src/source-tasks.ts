@@ -1,5 +1,5 @@
-import { sourcePhaseLabel, sourceRefreshFailed } from "@steam-patch/ui";
-import type { MatchGamesResult, MatchUpdateEvent, ProjectInstancesResult, SourceSubscription, SourceUpdateResult } from "@steam-patch/ui";
+import { sourcePhaseLabel, sourceRefreshFailed } from "@patchhub/ui";
+import type { MatchGamesResult, MatchUpdateEvent, ProjectInstancesResult, SourceSubscription, SourceUpdateResult } from "@patchhub/ui";
 
 // Host snapshots for the three v5 source task methods (update_source /
 // match_games / rematch_game). Decky has no push channel; the frontend polls

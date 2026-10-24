@@ -6,15 +6,15 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use steam_patch_core::sources::http::{
+use patchhub_core::sources::http::{
     FakeFetcher, FetchRequest, FetchResponse, Fetcher, RequestContext,
 };
-use steam_patch_core::sources::matching::{
+use patchhub_core::sources::matching::{
     game_match_summary, match_games, rematch_game, rematch_source, source_revisions,
 };
-use steam_patch_core::sources::model::*;
-use steam_patch_core::sources::store::SourceStore;
-use steam_patch_core::sources::{GAME_MATCH_SCHEMA_VERSION, SOURCE_DETAIL_SCHEMA_VERSION};
+use patchhub_core::sources::model::*;
+use patchhub_core::sources::store::SourceStore;
+use patchhub_core::sources::{GAME_MATCH_SCHEMA_VERSION, SOURCE_DETAIL_SCHEMA_VERSION};
 
 // ---- fixtures ------------------------------------------------------------
 
@@ -1990,9 +1990,8 @@ fn candidate(page: &str, appid: u32) -> SourceCandidate {
         fingerprint: "fingerprint".to_string(),
         related_index_pages: Vec::new(),
     };
-    candidate.fingerprint = steam_patch_core::sources::canonical::fingerprint(
-        &serde_json::to_value(&candidate).unwrap(),
-    );
+    candidate.fingerprint =
+        patchhub_core::sources::canonical::fingerprint(&serde_json::to_value(&candidate).unwrap());
     candidate
 }
 const VBF_PAGE: &str = "https://kagurafan.com/2020/02/07/venus-blood-frontier/";
@@ -2012,7 +2011,7 @@ fn vbf_upstream(appid: u32, page: &str) -> SourceCandidate {
         settings_revision: 0,
         generation: None,
     };
-    let mut candidates = steam_patch_core::sources::identity::build_candidates(
+    let mut candidates = patchhub_core::sources::identity::build_candidates(
         &rule,
         "VenusBlood FRONTIER International 中文無碼補丁包",
         "https://hgamer.tw/zh-TW/patches/vbf",

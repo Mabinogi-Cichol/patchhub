@@ -1,4 +1,4 @@
-import { gameDisplayName, type Install } from "@steam-patch/ui";
+import { gameDisplayName, type Install } from "@patchhub/ui";
 
 export function gamePresentation(appid: number, fallbackName: string): { name: string; icon?: string } {
   try {

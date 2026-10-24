@@ -1,6 +1,6 @@
+use patchhub_core::steam::{scan, GameInstall};
 use std::fs;
 use std::path::Path;
-use steam_patch_core::steam::{scan, GameInstall};
 
 fn write_manifest(root: &Path, appid: u32) {
     fs::create_dir_all(root.join("steamapps/common/Game")).unwrap();

@@ -1,4 +1,4 @@
-//! `probe-worker`: the process that runs inside the LPAC + Job sandbox. It reads one
+//! `patchhub-probe-worker`: the process that runs inside the LPAC + Job sandbox. It reads one
 //! JSON request from stdin, performs a read-only/filesystem/network/registry/process
 //! operation, and writes one JSON response line to stdout.
 //!
@@ -14,7 +14,7 @@ fn main() {
 
     #[cfg(not(any(windows, target_os = "linux")))]
     {
-        eprintln!("probe-worker: sandbox probe is only supported on Windows/Linux");
+        eprintln!("patchhub-probe-worker: sandbox probe is only supported on Windows/Linux");
         std::process::exit(2);
     }
 }
@@ -27,11 +27,11 @@ mod win_impl {
     use std::process::Command;
     use std::time::{Duration, Instant};
 
+    use patchhub_installer_worker::model::{WorkerRequest, WorkerResponse};
+    use patchhub_installer_worker::win::probe_os;
     use serde_json::{json, Map, Value};
-    use steam_patch_installer_worker::model::{WorkerRequest, WorkerResponse};
-    use steam_patch_installer_worker::win::probe_os;
 
-    const CANARY_ENV: &str = "STEAM_PATCH_PROBE_CANARY";
+    const CANARY_ENV: &str = "PATCHHUB_PROBE_CANARY";
 
     pub fn main() {
         let mut args = std::env::args().skip(1);
@@ -41,7 +41,7 @@ mod win_impl {
                 std::thread::sleep(Duration::from_millis(ms));
                 std::process::exit(0);
             }
-            eprintln!("probe-worker: unknown argv mode {mode}");
+            eprintln!("patchhub-probe-worker: unknown argv mode {mode}");
             std::process::exit(2);
         }
 
@@ -424,11 +424,11 @@ mod linux_impl {
     use std::process::Command;
     use std::time::{Duration, Instant};
 
+    use patchhub_installer_worker::linux::probe_os;
+    use patchhub_installer_worker::model::{WorkerRequest, WorkerResponse};
     use serde_json::{json, Map, Value};
-    use steam_patch_installer_worker::linux::probe_os;
-    use steam_patch_installer_worker::model::{WorkerRequest, WorkerResponse};
 
-    const CANARY_ENV: &str = "STEAM_PATCH_PROBE_CANARY";
+    const CANARY_ENV: &str = "PATCHHUB_PROBE_CANARY";
 
     pub fn main() {
         let mut args = std::env::args().skip(1);
@@ -438,7 +438,7 @@ mod linux_impl {
                 std::thread::sleep(Duration::from_millis(ms));
                 std::process::exit(0);
             }
-            eprintln!("probe-worker: unknown argv mode {mode}");
+            eprintln!("patchhub-probe-worker: unknown argv mode {mode}");
             std::process::exit(2);
         }
 

@@ -19,12 +19,12 @@ pwsh -NoProfile -File scripts/build-windows-flutter.ps1 -SkipRust
 
 # 开发模式，资源位置通过显式绝对路径注入，不依赖启动工作目录。
 cd apps/windows-flutter
-../../.tools/flutter/bin/flutter.bat run -d windows --dart-define=STEAM_PATCH_ROOT=E:/ProjectFiles/Git/steam-hentai-patch-searcher
+../../.tools/flutter/bin/flutter.bat run -d windows --dart-define=PATCHHUB_ROOT=E:/ProjectFiles/Git/patchhub
 ```
 
-默认继续使用 `%APPDATA%/io.github.steampatch.manager`。迁移验证应先复制旧数据，
-通过 `--dart-define=STEAM_PATCH_STATE_DIR=<副本绝对路径>` 使用副本。
-不要同时运行两个客户端的来源调度。
+默认使用新的 `%APPDATA%/PatchHub` 数据目录，不读取或迁移旧品牌数据。
+隔离验证可通过 `--dart-define=PATCHHUB_STATE_DIR=<隔离目录绝对路径>` 指定测试目录。
+旧品牌请先卸载，再安装 PatchHub；旧数据由用户保留。
 
 ```powershell
 cd apps/windows-flutter

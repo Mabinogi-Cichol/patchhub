@@ -1,6 +1,6 @@
+use patchhub_core::steam::scan;
 use std::fs;
 use std::path::{Path, PathBuf};
-use steam_patch_core::steam::scan;
 
 fn write(path: &Path, text: &str) {
     fs::create_dir_all(path.parent().unwrap()).unwrap();

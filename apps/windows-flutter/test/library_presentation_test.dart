@@ -2,8 +2,8 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:steam_patch_windows/models/library.dart';
-import 'package:steam_patch_windows/presentation/library_presentation.dart';
+import 'package:patchhub_windows/models/library.dart';
+import 'package:patchhub_windows/presentation/library_presentation.dart';
 
 void main() {
   final cases = jsonDecode(

@@ -325,7 +325,7 @@ pub(crate) fn relative_path(path: &str) -> Result<()> {
                     .chars()
                     .default_case_fold()
                     .collect::<String>()
-                    .starts_with(".steam-patch-"),
+                    .starts_with(".patchhub-"),
             "exe_condition_path_unsupported",
         )?;
     }

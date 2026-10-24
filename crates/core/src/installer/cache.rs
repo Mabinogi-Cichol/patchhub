@@ -856,7 +856,7 @@ mod native {
             }
             #[cfg(test)]
             if backup {
-                if let Some(marker) = std::env::var_os("STEAM_PATCH_TEST_BACKUP_CAPTURE") {
+                if let Some(marker) = std::env::var_os("PATCHHUB_TEST_BACKUP_CAPTURE") {
                     fs::write(marker, b"captured")?;
                     loop {
                         std::thread::sleep(std::time::Duration::from_millis(10));

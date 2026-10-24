@@ -165,7 +165,7 @@ pub fn fetch(
             // Blocking reqwest applies this timeout to each read operation,
             // allowing long downloads while bounding stalled cancellation.
             .timeout(Duration::from_secs(15))
-            .user_agent("steam-patch-manager/0.1")
+            .user_agent("patchhub/0.1")
             // Artifact integrity checks compare Content-Length to the catalog
             // size, so force identity encoding even though the crate enables
             // gzip/deflate for the bounded metadata fetcher.

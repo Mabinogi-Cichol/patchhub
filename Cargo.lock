@@ -955,6 +955,106 @@ dependencies = [
 ]
 
 [[package]]
+name = "patchhub-cli"
+version = "0.3.0"
+dependencies = [
+ "base64 0.22.1",
+ "ed25519-dalek",
+ "fs2",
+ "getrandom 0.4.3",
+ "patchhub-core",
+ "patchhub-protocol",
+ "rusqlite",
+ "schemars",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "zip",
+]
+
+[[package]]
+name = "patchhub-contract-gen"
+version = "0.3.0"
+dependencies = [
+ "patchhub-core",
+ "patchhub-protocol",
+ "schemars",
+ "serde",
+ "serde_json",
+ "ts-rs",
+]
+
+[[package]]
+name = "patchhub-core"
+version = "0.3.0"
+dependencies = [
+ "base64 0.22.1",
+ "caseless",
+ "ed25519-dalek",
+ "encoding_rs",
+ "fs2",
+ "libc",
+ "patchhub-installer-worker",
+ "reqwest",
+ "rusqlite",
+ "schemars",
+ "scraper",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "ts-rs",
+ "unicode-general-category",
+ "unicode-normalization",
+ "url",
+ "uuid",
+ "winreg",
+ "zip",
+]
+
+[[package]]
+name = "patchhub-installer-format"
+version = "0.3.0"
+dependencies = [
+ "base64 0.22.1",
+ "caseless",
+ "lzma-rust2",
+ "quick-xml",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "unicode-general-category",
+ "unicode-normalization",
+]
+
+[[package]]
+name = "patchhub-installer-worker"
+version = "0.3.0"
+dependencies = [
+ "memmap2",
+ "patchhub-installer-format",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "windows",
+ "winreg",
+]
+
+[[package]]
+name = "patchhub-protocol"
+version = "0.3.0"
+dependencies = [
+ "patchhub-core",
+ "schemars",
+ "serde",
+ "serde_json",
+ "ts-rs",
+]
+
+[[package]]
 name = "percent-encoding"
 version = "2.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1597,106 +1697,6 @@ name = "stable_deref_trait"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
-
-[[package]]
-name = "steam-patch-cli"
-version = "0.3.0"
-dependencies = [
- "base64 0.22.1",
- "ed25519-dalek",
- "fs2",
- "getrandom 0.4.3",
- "rusqlite",
- "schemars",
- "serde",
- "serde_json",
- "sha2",
- "steam-patch-core",
- "steam-patch-protocol",
- "tempfile",
- "zip",
-]
-
-[[package]]
-name = "steam-patch-contract-gen"
-version = "0.3.0"
-dependencies = [
- "schemars",
- "serde",
- "serde_json",
- "steam-patch-core",
- "steam-patch-protocol",
- "ts-rs",
-]
-
-[[package]]
-name = "steam-patch-core"
-version = "0.3.0"
-dependencies = [
- "base64 0.22.1",
- "caseless",
- "ed25519-dalek",
- "encoding_rs",
- "fs2",
- "libc",
- "reqwest",
- "rusqlite",
- "schemars",
- "scraper",
- "serde",
- "serde_json",
- "sha2",
- "steam-patch-installer-worker",
- "tempfile",
- "ts-rs",
- "unicode-general-category",
- "unicode-normalization",
- "url",
- "uuid",
- "winreg",
- "zip",
-]
-
-[[package]]
-name = "steam-patch-installer-format"
-version = "0.3.0"
-dependencies = [
- "base64 0.22.1",
- "caseless",
- "lzma-rust2",
- "quick-xml",
- "serde",
- "serde_json",
- "sha2",
- "tempfile",
- "unicode-general-category",
- "unicode-normalization",
-]
-
-[[package]]
-name = "steam-patch-installer-worker"
-version = "0.3.0"
-dependencies = [
- "memmap2",
- "serde",
- "serde_json",
- "sha2",
- "steam-patch-installer-format",
- "tempfile",
- "windows",
- "winreg",
-]
-
-[[package]]
-name = "steam-patch-protocol"
-version = "0.3.0"
-dependencies = [
- "schemars",
- "serde",
- "serde_json",
- "steam-patch-core",
- "ts-rs",
-]
 
 [[package]]
 name = "string_cache"

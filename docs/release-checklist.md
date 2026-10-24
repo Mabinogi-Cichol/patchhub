@@ -7,7 +7,7 @@
 - Rust 依赖锁定于 Cargo.lock，前端依赖锁定于 package-lock.json；安装依赖使用 npm ci。
 - Windows 构建使用仓库隔离的 Rust 工具链；Linux 核心在 Ubuntu 构建，不修改 SteamOS 系统分区。
 - Windows NSIS 仅安装客户端及核心。便携 ZIP 包含同一客户端、核心和目录资源；两者均不包含游戏补丁资产。
-- Decky ZIP 的 bin/steam-patch 使用 Unix 0755 权限。插件不携带私钥、不镜像发行商补丁。
+- Decky ZIP 的 bin/patchhub-core 使用 Unix 0755 权限。插件不携带私钥、不镜像发行商补丁。
 - scripts/package-artifacts.py 为 ZIP 生成 SHA-256 清单。此清单检测传输变化，不能替代可信发布渠道或代码签名。
 - 依赖 SBOM 已通过 CycloneDX 官方仓库的 1.6 JSON Schema 验证；其锁文件哈希必须匹配当前 Cargo.lock 与 package-lock.json，否则打包拒绝使用过期清单。
 
@@ -31,7 +31,7 @@ Windows 当前未配置 Authenticode 证书，安装包没有发行者身份认�
 
 当前重要限制：不提供补丁卸载入口或同目标增量升级，覆盖安装不会删除上一版本多出的文件。从 v0.2.0 起，新 ZIP/EXE 直接安装不创建备份、暂存或授权文件，也不回滚；写入后取消、失败或中断保留已写内容，需要时重新安装。历史事务仍按其原有记录恢复，冲突报告 `needs_recovery`。下载取消可能留下 `.partial` 缓存。文件写入不构成整个游戏目录的原子替换；对同一用户恶意改变路径与日志的防御仍有限。UI 在已知总量时显示字节与文件进度，未知总量不伪造百分比。
 
-RustSec 提示：RUSTSEC-2024-0429（glib 0.18.5，unsound）与 RUSTSEC-2024-0370（proc-macro-error 1.0.4，unmaintained）。cargo tree 分别按 steam-patch-windows / x86_64-pc-windows-msvc 及 steam-patch-cli / x86_64-unknown-linux-gnu 核对，均没有这些依赖路径；它们来自全平台锁文件中的其他平台 UI 依赖。当前不提供 Linux Tauri 桌面客户端。未来增加该平台前必须重新处理这些提示，未添加全局忽略。
+RustSec 提示：RUSTSEC-2024-0429（glib 0.18.5，unsound）与 RUSTSEC-2024-0370（proc-macro-error 1.0.4，unmaintained）。cargo tree 分别按 patchhub-windows / x86_64-pc-windows-msvc 及 patchhub-cli / x86_64-unknown-linux-gnu 核对，均没有这些依赖路径；它们来自全平台锁文件中的其他平台 UI 依赖。当前不提供 Linux Tauri 桌面客户端。未来增加该平台前必须重新处理这些提示，未添加全局忽略。
 
 许可证材料仍需补齐：从本地依赖包收集了 LICENSE / COPYING / NOTICE 文本，但 53 个全平台 / 开发 / 工作区包未发现顶层许可文件（不等于它们没有许可）。正式分发前需按实际发行依赖复核这些材料与图标来源署名，不能以 SBOM 中有 SPDX 声明推导全部分发条件已满足。
 

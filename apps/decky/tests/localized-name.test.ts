@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { filterInstalls, gameDisplayName, type Install } from "@steam-patch/ui";
+import { filterInstalls, gameDisplayName, type Install } from "@patchhub/ui";
 import { gamePresentation, matchesGameQuery, transactionGameName } from "../src/steam.ts";
 
 const oldInstall = (): Install => JSON.parse(JSON.stringify({

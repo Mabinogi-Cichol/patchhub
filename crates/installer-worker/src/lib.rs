@@ -36,10 +36,10 @@ pub use model::{
 };
 
 /// Schema tag written into the probe evidence JSON.
-pub const PROBE_SCHEMA: &str = "steam-patch/p0-sandbox-probe/v1";
+pub const PROBE_SCHEMA: &str = "patchhub-core/p0-sandbox-probe/v1";
 
 /// Default AppContainer profile name used by the probe binaries.
-pub const DEFAULT_PROFILE_NAME: &str = "steam-patch-probe";
+pub const DEFAULT_PROFILE_NAME: &str = "patchhub-probe";
 
 /// Windows build (as `CurrentBuildNumber`) from which LPAC is available (Win10 1703).
 pub const LPAC_MIN_BUILD: u32 = 15063;

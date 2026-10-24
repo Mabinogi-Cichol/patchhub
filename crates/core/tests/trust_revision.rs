@@ -1,13 +1,6 @@
 use base64::{engine::general_purpose::STANDARD, Engine};
 use ed25519_dalek::{Signer, SigningKey};
-use rusqlite::Connection;
-use std::{
-    fs,
-    path::Path,
-    sync::{Arc, Barrier},
-    thread,
-};
-use steam_patch_core::{
+use patchhub_core::{
     catalog::Catalog,
     projection::DomainError,
     steam::GameInstall,
@@ -18,6 +11,13 @@ use steam_patch_core::{
         },
         CatalogPayload, SignedEnvelope, TrustKey, TrustKeys, VerifiedCatalog,
     },
+};
+use rusqlite::Connection;
+use std::{
+    fs,
+    path::Path,
+    sync::{Arc, Barrier},
+    thread,
 };
 
 struct Provider {
@@ -173,7 +173,7 @@ fn provider_cannot_bypass_core_signature_limits_time_or_key_revocation() {
         verify_catalog(&provider, &store, 2000).unwrap_err().code,
         "catalog_expired"
     );
-    provider.envelope = vec![0; (steam_patch_core::catalog::MAX_CATALOG_BYTES * 2 + 1) as usize];
+    provider.envelope = vec![0; (patchhub_core::catalog::MAX_CATALOG_BYTES * 2 + 1) as usize];
     assert_eq!(
         verify_catalog(&provider, &store, 1500).unwrap_err().code,
         "catalog_too_large"

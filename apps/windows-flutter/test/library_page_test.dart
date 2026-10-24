@@ -3,11 +3,11 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:steam_patch_windows/app.dart';
-import 'package:steam_patch_windows/models/app_model.dart';
-import 'package:steam_patch_windows/host/core_client.dart';
-import 'package:steam_patch_windows/host/core_paths.dart';
-import 'package:steam_patch_windows/pages/library_page.dart';
+import 'package:patchhub_windows/app.dart';
+import 'package:patchhub_windows/models/app_model.dart';
+import 'package:patchhub_windows/host/core_client.dart';
+import 'package:patchhub_windows/host/core_paths.dart';
+import 'package:patchhub_windows/pages/library_page.dart';
 
 class FixtureClient extends CoreClient {
   FixtureClient()
@@ -59,7 +59,7 @@ void main() {
       addTearDown(tester.view.resetDevicePixelRatio);
       final client = FixtureClient();
       final model = AppModel(client);
-      await tester.pumpWidget(SteamPatchApp(home: LibraryPage(model: model)));
+      await tester.pumpWidget(PatchHubApp(home: LibraryPage(model: model)));
       await tester.pumpAndSettle();
       expect(find.text('未匹配游戏'), findsNothing);
       await tester.tap(find.text('查看全部游戏'));
@@ -84,7 +84,7 @@ void main() {
       addTearDown(tester.platformDispatcher.clearPlatformBrightnessTestValue);
       final client = FixtureClient();
       final model = AppModel(client);
-      await tester.pumpWidget(SteamPatchApp(home: LibraryPage(model: model)));
+      await tester.pumpWidget(PatchHubApp(home: LibraryPage(model: model)));
       await tester.pumpAndSettle();
       Brightness brightness() =>
           Theme.of(tester.element(find.byType(LibraryPage))).brightness;

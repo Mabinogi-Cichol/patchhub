@@ -1,6 +1,7 @@
 mod maintenance;
 mod runtime;
 
+use patchhub_core::catalog::Platform;
 use runtime::{execute, Params};
 use serde_json::{json, Value};
 use std::{
@@ -13,9 +14,8 @@ use std::{
         Arc,
     },
 };
-use steam_patch_core::catalog::Platform;
 
-use steam_patch_protocol::PROTOCOL_VERSION;
+use patchhub_protocol::PROTOCOL_VERSION;
 
 /// Internal execution arguments, constructed only after the sole wire decoder.
 struct Request {
@@ -26,8 +26,8 @@ struct Request {
 fn parse_request(
     bytes: &[u8],
     task_channel: bool,
-) -> Result<Request, steam_patch_protocol::ProtocolError> {
-    let wire = steam_patch_protocol::decode_request(bytes, task_channel)?;
+) -> Result<Request, patchhub_protocol::ProtocolError> {
+    let wire = patchhub_protocol::decode_request(bytes, task_channel)?;
     let params = Params::from_wire(&wire);
     Ok(Request {
         request_id: wire.request_id,
@@ -90,7 +90,7 @@ fn read_request(reader: &mut impl BufRead) -> io::Result<Option<Vec<u8>>> {
 }
 
 fn write_line(writer: &mut impl Write, value: &Value) -> io::Result<()> {
-    writer.write_all(&steam_patch_protocol::json_line(value))?;
+    writer.write_all(&patchhub_protocol::json_line(value))?;
     writer.flush()
 }
 
@@ -155,7 +155,7 @@ pub(crate) fn run_task(
             request.params.instance_id.clone(),
             request.params.selection_id.clone(),
         );
-        return steam_patch_core::operation::run(
+        return patchhub_core::operation::run(
             Arc::clone(&cancel),
             move |progress| {
                 if progress.stage != "finalizing" {
@@ -185,7 +185,7 @@ fn stream_sources_task(
     let mut sequence = 0_u64;
     // Install the operation scope so `operation::check` inside the source
     // fetchers observes this stream task's cancel flag.
-    let response = steam_patch_core::operation::with_cancel(cancel.clone(), || {
+    let response = patchhub_core::operation::with_cancel(cancel.clone(), || {
         runtime::execute_streaming(&method, params, cancel.as_ref(), &mut |payload| {
             let mut object = match payload {
                 Value::Object(map) => map,
@@ -213,10 +213,10 @@ fn stream_sources_task(
     }
 }
 
-const HELP: &str = "Steam patch manager Alpha\n\
-Usage: steam-patch scan [--steam-root PATH]... [--catalog PATH] [--platform windows|steamos]\n\
-       steam-patch preview --instance ID --release ID [scan options]\n\
-       steam-patch serve  (versioned JSON-lines on stdin/stdout)\n\
+const HELP: &str = "PatchHub Core\n\
+Usage: patchhub-core scan [--steam-root PATH]... [--catalog PATH] [--platform windows|steamos]\n\
+       patchhub-core preview --instance ID --release ID [scan options]\n\
+       patchhub-core serve  (versioned JSON-lines on stdin/stdout)\n\
 Installation requires a signed catalog. Close the game and pause Steam updates before installing.
 Methods: get_capabilities scan project_instances preview install_patch list_transactions recover discard_plan cleanup_cache cache_status backup_status cleanup_backups.
 Sources: list_sources list_game_sources set_source_enabled set_game_source add_source set_source_update_interval update_source match_games rematch_game.
@@ -298,9 +298,9 @@ fn run() -> Result<(), String> {
             "--preferred-language" => params.preferred_language = Some(value),
             "--operation" => {
                 params.operation = match value.as_str() {
-                    "install" => steam_patch_core::install::InstallOperation::Install,
-                    "reinstall" => steam_patch_core::install::InstallOperation::Reinstall,
-                    "overwrite" => steam_patch_core::install::InstallOperation::Overwrite,
+                    "install" => patchhub_core::install::InstallOperation::Install,
+                    "reinstall" => patchhub_core::install::InstallOperation::Reinstall,
+                    "overwrite" => patchhub_core::install::InstallOperation::Overwrite,
                     _ => return Err("invalid_operation".into()),
                 }
             }
@@ -602,13 +602,13 @@ mod tests {
         let captured = Rc::clone(&events);
         let mut cursor =
             runtime::ProgressCursor::new(5, "signed".into(), Some("instance".into()), None);
-        steam_patch_core::operation::run(
+        patchhub_core::operation::run(
             Arc::new(AtomicBool::new(false)),
             move |progress| captured.borrow_mut().push(cursor.event(progress)),
             || {
                 // Same ordering as signed download and local ZIP verification.
-                steam_patch_core::operation::archive(123);
-                steam_patch_core::operation::stage("validating", Some(123), Some(1));
+                patchhub_core::operation::archive(123);
+                patchhub_core::operation::stage("validating", Some(123), Some(1));
             },
         );
         let rows = events.borrow();
@@ -625,7 +625,7 @@ mod tests {
 
     #[test]
     fn install_progress_fields_and_monotonic_sequence() {
-        use steam_patch_core::operation::Progress;
+        use patchhub_core::operation::Progress;
         let mut cursor = runtime::ProgressCursor::new(
             5,
             "req".to_string(),
@@ -682,13 +682,13 @@ mod tests {
         let payload = 9 * 1024 * 1024;
         let mut response = json!({"protocol_version":5,"request_id":id,"ok":true,"result":""});
         response["result"] = json!("a".repeat(payload));
-        let line = steam_patch_protocol::json_line(&response);
+        let line = patchhub_protocol::json_line(&response);
         assert!(line.len() > 8 * 1024 * 1024);
         assert!(line.ends_with(b"\n"));
         let decoded: Value = serde_json::from_slice(&line).unwrap();
         assert_eq!(decoded["ok"], true);
         assert_eq!(decoded["result"].as_str().unwrap().len(), payload);
-        let next = steam_patch_protocol::json_line(&error_with_detail(
+        let next = patchhub_protocol::json_line(&error_with_detail(
             Some("next"),
             "unknown_future_code",
             None,
@@ -701,17 +701,17 @@ mod tests {
 
     #[test]
     fn committed_outcome_with_maximum_escaped_cleanup_diagnostics_is_complete() {
-        let mut result = steam_patch_protocol::fixtures::outcome("committed", "completed");
+        let mut result = patchhub_protocol::fixtures::outcome("committed", "completed");
         result["cleanup"] = json!({"status":"partial","performed":true,"removed_bytes":0,
             "failures": vec![json!({"code":"cleanup_failed","detail":"\u{1}".repeat(2048)});512]});
         let value = json!({"protocol_version":5,"request_id":"fixture","ok":true,"result":result});
-        steam_patch_protocol::validate_response(
+        patchhub_protocol::validate_response(
             &value,
             "fixture",
-            Some(steam_patch_protocol::Method::InstallPatch),
+            Some(patchhub_protocol::Method::InstallPatch),
         )
         .unwrap();
-        let line = steam_patch_protocol::json_line(&value);
+        let line = patchhub_protocol::json_line(&value);
         let decoded: Value = serde_json::from_slice(&line).unwrap();
         assert_eq!(decoded["result"]["disposition"], "completed");
         assert_eq!(
@@ -726,10 +726,10 @@ mod tests {
     #[test]
     fn v5_capabilities_pass_the_shared_response_validator() {
         let value = respond(json!({"protocol_version":5,"request_id":"cap","method":"get_capabilities","params":{"host":{"roots":[],"catalog":null,"signed_catalog":null,"trust_keys":null,"state_dir":null,"platform":"windows"}}}).to_string().as_bytes());
-        steam_patch_protocol::validate_response(
+        patchhub_protocol::validate_response(
             &value,
             "cap",
-            Some(steam_patch_protocol::Method::GetCapabilities),
+            Some(patchhub_protocol::Method::GetCapabilities),
         )
         .unwrap();
     }
@@ -804,7 +804,7 @@ mod tests {
     fn cleanup_cache_sweeps_cleanable_roots_and_protects_recovery_material() {
         let temp = tempfile::tempdir().unwrap();
         let state = temp.path().join("state");
-        let paths = steam_patch_core::installer::InstallerPaths::new(&state);
+        let paths = patchhub_core::installer::InstallerPaths::new(&state);
         let downloads = paths.downloads_dir();
         std::fs::create_dir_all(&downloads).unwrap();
         std::fs::write(downloads.join("artifact.zip"), b"stale bytes").unwrap();
@@ -870,7 +870,7 @@ mod tests {
     fn backup_rpc_inventory_cleanup_and_unknown_path_are_contract_checked() {
         let dir = tempfile::tempdir().unwrap();
         let state = dir.path().join("state");
-        let paths = steam_patch_core::installer::InstallerPaths::new(&state);
+        let paths = patchhub_core::installer::InstallerPaths::new(&state);
         let job = paths.jobs_dir().join("orphan");
         std::fs::create_dir_all(&job).unwrap();
         std::fs::write(job.join("0.backup"), b"original").unwrap();

@@ -17,16 +17,16 @@
 安装 Rust 1.94 后，在仓库根目录运行（Windows 有仓库隔离工具链时可用 scripts/cargo.ps1 代替 cargo）：
 
 ```powershell
-cargo build -p steam-patch-cli --locked
-cargo run -p steam-patch-cli -- scan --catalog catalog/catalog.json
-cargo run -p steam-patch-cli -- scan --steam-root 'D:/Steam'
-cargo test -p steam-patch-core -p steam-patch-cli --locked
+cargo build -p patchhub-cli --locked
+cargo run -p patchhub-cli -- scan --catalog catalog/catalog.json
+cargo run -p patchhub-cli -- scan --steam-root 'D:/Steam'
+cargo test -p patchhub-core -p patchhub-cli --locked
 ```
 
 本次工作区已生成可直接运行的 Windows 调试 CLI：
 
 ```powershell
-.\target\debug\steam-patch.exe scan --catalog catalog/catalog.json
+.\target\debug\patchhub-core.exe scan --catalog catalog/catalog.json
 ```
 
 目录包含 13 个 AppID：12 个官方来源引导，以及经过实机验证的 Windows / SteamOS《夜勤病栋》ZIP 配方。Deck 内置 SSD 的真实文件安装 / 检测 / 卸载恢复已通过，用户确认桌面模式及 GE-Proton8-8 游戏模式补丁生效。未审核包结构、哈希和运行结果的条目保持 discover_only。no_catalog_match 仅表示没有目录匹配。Steam 工具 / 运行时暂时保留 kind=unknown。
@@ -34,7 +34,7 @@ cargo test -p steam-patch-core -p steam-patch-cli --locked
 如果使用 PowerShell 包装脚本，Cargo 的参数分隔符需作为字符串传递：
 
 ```powershell
-.\scripts\cargo.ps1 run -p steam-patch-cli '--' scan --catalog catalog/catalog.json
+.\scripts\cargo.ps1 run -p patchhub-cli '--' scan --catalog catalog/catalog.json
 .\scripts\cargo.ps1 clippy --workspace --all-targets '--' '-D' warnings
 ```
 
@@ -46,6 +46,6 @@ GitHub Actions 在推送、Pull Request 和手动触发时检查代码并分别�
 
 推送 `v*` Tag（例如 `v0.1.0-alpha.1`）后，全部检查与构建成功才自动发布 GitHub Release；含 `-` 的 Tag 发布为预发行版。操作步骤见 [Tag 发布](client-guide.md#tag-发布)。
 
-客户端构建完成后运行 `python scripts/package-artifacts.py`，生成 Windows 便携 ZIP、Decky ZIP 与校验清单，保存在忽略目录 .artifacts。Windows 便携包解压后运行 steam_patch_windows.exe；NSIS 是管理工具的可选安装方式，游戏补丁本身仍按配方解压文件。
+客户端构建完成后运行 `python scripts/package-artifacts.py`，生成 Windows 便携 ZIP、Decky ZIP 与校验清单，保存在忽略目录 .artifacts。Windows 便携包解压后运行 patchhub.exe；NSIS 是管理工具的可选安装方式，游戏补丁本身仍按配方解压文件。
 
 只打包一端时，使用 `python scripts/package-artifacts.py --platform windows` 或 `--platform decky`，对应生成 `checksums-windows.json` 或 `checksums-decky.json`。

@@ -285,7 +285,7 @@ fn relative(path: &str) -> io::Result<PathBuf> {
     let result = catalog::relative_path(path)?;
     if path
         .split('/')
-        .any(|s| s.to_lowercase().starts_with(".steam-patch-"))
+        .any(|s| s.to_lowercase().starts_with(".patchhub-"))
     {
         return Err(invalid("reserved_installer_path"));
     }
@@ -964,7 +964,7 @@ fn validate_install(install: &GameInstall, state: &Path) -> io::Result<()> {
 }
 
 fn game_lock(install: &GameInstall) -> io::Result<File> {
-    let path = install.install_path.join(".steam-patch-manager.lock");
+    let path = install.install_path.join(".patchhub.lock");
     safe_path(&path)?;
     if path.exists() {
         drop(regular_file(&path)?);
@@ -1911,7 +1911,7 @@ fn temporary(job: &Job, index: usize) -> io::Result<PathBuf> {
     let temp = dest
         .parent()
         .ok_or_else(|| invalid("missing_parent"))?
-        .join(format!(".steam-patch-{}-{index}.tmp", job.plan.plan_id));
+        .join(format!(".patchhub-{}-{index}.tmp", job.plan.plan_id));
     safe_path(&temp)?;
     Ok(temp)
 }

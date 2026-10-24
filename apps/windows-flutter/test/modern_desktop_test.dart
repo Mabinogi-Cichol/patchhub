@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:steam_patch_windows/app.dart';
+import 'package:patchhub_windows/app.dart';
 
 import 'installation_flow_test.dart'
     show FixtureDesktop, InstallFixtureModel, mountPatch;
@@ -86,7 +86,7 @@ void main() {
       tester.platformDispatcher.platformBrightnessTestValue = brightness;
       addTearDown(tester.platformDispatcher.clearPlatformBrightnessTestValue);
       await tester.pumpWidget(
-        const SteamPatchApp(home: Scaffold(body: Text('contrast'))),
+        const PatchHubApp(home: Scaffold(body: Text('contrast'))),
       );
       final scheme = Theme.of(tester.element(find.text('contrast')))
           .colorScheme;

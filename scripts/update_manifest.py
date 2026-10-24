@@ -27,7 +27,7 @@ def prepare(bundle, version=None):
     (bundle / 'app-version.json').write_text(json.dumps({'version': version}) + '\n', encoding='utf-8')
     files = sorted({p.relative_to(bundle).as_posix() for p in bundle.rglob('*') if p.is_file()
                     and p.name not in ('install.ini', 'uninstall.exe', 'update-manifest.json',
-                                       '.steam-patch-maintenance.lock', '.steam-patch-update.json')}
+                                       '.patchhub-maintenance.lock', '.patchhub-update.json')}
                    | {'update-manifest.json'})
     (bundle / 'update-manifest.json').write_text(json.dumps({'schema': 1, 'version': version, 'files': files}, indent=2) + '\n', encoding='utf-8')
     return files

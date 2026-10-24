@@ -1,7 +1,7 @@
 // SidebarNavigation uses prefix matching, so settings panels need sibling paths.
 export const settingsRoutes = {
-  sources: "/steam-patch-manager/sources/subscriptions",
-  cache: "/steam-patch-manager/sources/cache",
+  sources: "/patchhub/sources/subscriptions",
+  cache: "/patchhub/sources/cache",
 } as const;
 
 export function settingsPage(panel?: string): string {

@@ -311,7 +311,7 @@ class BridgeStreamTests(unittest.IsolatedAsyncioTestCase):
 class BridgeIntegrationTests(unittest.IsolatedAsyncioTestCase):
     async def test_real_core_v5_scan_and_error(self):
         root = Path(__file__).resolve().parents[3]
-        binary = root / "target/debug" / ("steam-patch.exe" if os.name == "nt" else "steam-patch")
+        binary = root / "target/debug" / ("patchhub-core.exe" if os.name == "nt" else "patchhub-core")
         if not binary.exists(): self.skipTest("core binary not built")
         with tempfile.TemporaryDirectory() as temporary:
             catalog = Path(temporary) / "catalog.json"

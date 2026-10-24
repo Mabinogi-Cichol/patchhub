@@ -6,11 +6,11 @@
 
 .DESCRIPTION
   Mirrors .artifacts/p3-production/run-linux-check.sh for the Windows host:
-    1. cargo build --release -p steam-patch-installer-worker --bin sf-worker
-    2. set SF_WORKER_TEST_BIN to <target>\release\sf-worker.exe
+    1. cargo build --release -p patchhub-installer-worker --bin patchhub-worker
+    2. set SF_WORKER_TEST_BIN to <target>\release\patchhub-worker.exe
     3. set P3_EVIDENCE_PATH to .artifacts\p4-windows\windows-real-sf.json
-    4. cargo test -p steam-patch-core -p steam-patch-cli
-    5. cargo test -p steam-patch-core --lib installer::exe_orchestrator::tests -- --ignored --nocapture
+    4. cargo test -p patchhub-core -p patchhub-cli
+    5. cargo test -p patchhub-core --lib installer::exe_orchestrator::tests -- --ignored --nocapture
   All output is teed to .artifacts\p4-windows\windows-check.log; the first failing
   step aborts with a non-zero exit code and prints a summary line.
 
@@ -50,7 +50,7 @@ if (Test-Path -LiteralPath $taskCargo) {
 }
 
 $targetDir = if ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { Join-Path $taskRoot 'target' }
-$workerExe = Join-Path $targetDir 'release\sf-worker.exe'
+$workerExe = Join-Path $targetDir 'release\patchhub-worker.exe'
 $evidencePath = Join-Path $artifactDir 'windows-real-sf.json'
 
 function Write-Summary {
@@ -77,8 +77,8 @@ function Invoke-Step {
 
 Push-Location $taskRoot
 try {
-    Invoke-Step -Name 'build sf-worker (release)' -Command @(
-        $taskCargo, 'build', '--release', '-p', 'steam-patch-installer-worker', '--bin', 'sf-worker'
+    Invoke-Step -Name 'build patchhub-worker (release)' -Command @(
+        $taskCargo, 'build', '--release', '-p', 'patchhub-installer-worker', '--bin', 'patchhub-worker'
     )
 
     if (-not (Test-Path -LiteralPath $workerExe)) {
@@ -92,17 +92,17 @@ try {
 
     if ($Clippy) {
         Invoke-Step -Name 'clippy (core/cli/worker)' -Command @(
-            $taskCargo, 'clippy', '-p', 'steam-patch-core', '-p', 'steam-patch-cli',
-            '-p', 'steam-patch-installer-worker', '--all-targets', '--', '-D', 'warnings'
+            $taskCargo, 'clippy', '-p', 'patchhub-core', '-p', 'patchhub-cli',
+            '-p', 'patchhub-installer-worker', '--all-targets', '--', '-D', 'warnings'
         )
     }
 
     Invoke-Step -Name 'core/cli tests' -Command @(
-        $taskCargo, 'test', '-p', 'steam-patch-core', '-p', 'steam-patch-cli'
+        $taskCargo, 'test', '-p', 'patchhub-core', '-p', 'patchhub-cli'
     )
 
     Invoke-Step -Name 'exe_orchestrator production tests (ignored)' -Command @(
-        $taskCargo, 'test', '-p', 'steam-patch-core', '--lib',
+        $taskCargo, 'test', '-p', 'patchhub-core', '--lib',
         'installer::exe_orchestrator::tests', '--', '--ignored', '--nocapture'
     )
 

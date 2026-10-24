@@ -12,7 +12,7 @@
 
 SQLite 使用 `synchronous=FULL` 与 DELETE journal；每次状态更新独立持久提交。state 中仅使用程序派生的 `jobs/<uuid>/<index>.stage` 和 `.backup`，不反序列化任意备份绝对路径。state 与游戏根互不包含。读取 state、游戏根及其所有现存祖先时拒绝符号链接/Windows reparse point。普通文件拒绝硬链接。
 
-prepare 在隔离 state 目录暂存配方文件并返回空间需求、变更列表和冲突。游戏目录不改变。apply 取得 state 独占锁和游戏根独占锁 `.steam-patch-manager.lock`，重新确认基线和剩余空间，先备份并核验所有覆盖文件，再执行逐文件提交。
+prepare 在隔离 state 目录暂存配方文件并返回空间需求、变更列表和冲突。游戏目录不改变。apply 取得 state 独占锁和游戏根独占锁 `.patchhub.lock`，重新确认基线和剩余空间，先备份并核验所有覆盖文件，再执行逐文件提交。
 
 文件状态为 `pending → backed_up → writing → installed → restoring → restored`。事务记录先于创建目标子目录、写目标临时文件及替换落盘。备份与暂存数据 `sync_all`，Linux 上同时同步目录项。替换和还原保留原文件权限（包括 SteamOS 可执行位）；新增文件使用普通文件默认权限。目标临时文件与目标位于同一父目录，复制校验完成后 rename；跨磁盘仍是逐文件替换，不是全目录原子提交。崩溃后通过 journal 和文件前后哈希识别实际进度。
 

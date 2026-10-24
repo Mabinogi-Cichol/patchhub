@@ -1,5 +1,5 @@
 {
-  "name": "steam-patch-clients",
+  "name": "patchhub",
   "private": true,
   "workspaces": [
     "apps/decky",

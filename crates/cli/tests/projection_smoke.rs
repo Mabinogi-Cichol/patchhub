@@ -54,7 +54,7 @@ fn wire_params(method: &str, mut legacy: Value) -> Value {
 }
 
 fn call(method: &str, params: Value) -> Value {
-    let mut process = Command::new(env!("CARGO_BIN_EXE_steam-patch"))
+    let mut process = Command::new(env!("CARGO_BIN_EXE_patchhub-core"))
         .arg("serve")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -77,7 +77,7 @@ fn call(method: &str, params: Value) -> Value {
     assert!(output.stdout.len() <= 8 * 1024 * 1024);
     let response: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(response["request_id"], "projection-smoke");
-    steam_patch_protocol::validate_response(
+    patchhub_protocol::validate_response(
         &response,
         response["request_id"].as_str().unwrap(),
         Some(serde_json::from_value(json!(method)).unwrap()),

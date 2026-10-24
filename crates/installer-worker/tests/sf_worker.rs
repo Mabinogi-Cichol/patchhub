@@ -1,6 +1,6 @@
+use patchhub_installer_worker::sf::{self, Descriptor};
 use serde_json::{json, Value};
 use std::fs;
-use steam_patch_installer_worker::sf::{self, Descriptor};
 
 fn cases() -> Vec<Value> {
     let v: Value = serde_json::from_str(include_str!(
@@ -162,7 +162,7 @@ fn descriptor_rejects_out_of_range_member_ranges() {
 }
 #[test]
 fn binary_rejects_paths_commands_and_unknown_actions() {
-    let output = std::process::Command::new(env!("CARGO_BIN_EXE_sf-worker"))
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_patchhub-worker"))
         .arg("--input")
         .arg("anything.exe")
         .output()

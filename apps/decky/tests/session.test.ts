@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { GameMatch, Install, ProjectInstancesResult, ScanResult, SourceSubscription, SourceUpdateResult, Transaction } from "@steam-patch/ui";
+import type { GameMatch, Install, ProjectInstancesResult, ScanResult, SourceSubscription, SourceUpdateResult, Transaction } from "@patchhub/ui";
 import { createManagerSession, feedbackFor, needsRecovery } from "../src/session.ts";
 import type { SourceTaskApi, SourceTaskSnapshot } from "../src/source-tasks.ts";
 import { setListPreferences } from "../src/preferences.ts";

@@ -1,6 +1,6 @@
 import { Focusable, ModalRoot, ProgressBar } from "@decky/ui";
 import { useLayoutEffect, useRef, type ReactNode } from "react";
-import { reason, installationResult, progressStageLabel } from "@steam-patch/ui";
+import { reason, installationResult, progressStageLabel } from "@patchhub/ui";
 import { formatSize } from "./cache";
 import { type TaskSnapshot } from "./task-controller";
 import { taskProgressPercent } from "./task-progress";

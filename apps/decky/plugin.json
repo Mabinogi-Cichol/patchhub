@@ -1,6 +1,6 @@
 {
-  "name": "Steam 黄油补丁助手",
-  "author": "Steam Hentai Patch contributors",
+  "name": "PatchHub",
+  "author": "PatchHub contributors",
   "api_version": 1,
   "flags": [],
   "publish": { "tags": ["utility", "games"], "description": "一站式查找、下载并安装 Steam 黄油的成人内容补丁。" }

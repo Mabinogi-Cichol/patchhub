@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 const here = dirname(fileURLToPath(import.meta.url));
 const app = resolve(here, "..");
 const root = resolve(app, "../..");
-const binaries = ["steam-patch", "sf-worker"];
+const binaries = ["patchhub-core", "patchhub-worker"];
 for (const name of binaries) {
   const binary = join(root, "target/linux/release", name);
   if (!existsSync(binary) || !statSync(binary).isFile() || !readFileSync(binary).subarray(0, 4).equals(Buffer.from([0x7f, 0x45, 0x4c, 0x46])))

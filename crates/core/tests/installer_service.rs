@@ -1,6 +1,5 @@
 //! Public write-boundary regression tests. These never trust caller game facts.
-use std::{fs, io, path::Path};
-use steam_patch_core::{
+use patchhub_core::{
     catalog::Platform,
     install::InstallOperation,
     installer::{outcome::CancellationCause, service::*, HttpResponse, Transport},
@@ -10,6 +9,7 @@ use steam_patch_core::{
         VerifiedCatalog,
     },
 };
+use std::{fs, io, path::Path};
 fn platform() -> Platform {
     if cfg!(windows) {
         Platform::Windows
@@ -119,7 +119,7 @@ fn write_rescans_steam_instead_of_using_context_time_facts() {
     let t = tempfile::tempdir().unwrap();
     let root = t.path().join("Steam");
     manifest(&root, "Old");
-    let id = steam_patch_core::steam::scan(std::slice::from_ref(&root))
+    let id = patchhub_core::steam::scan(std::slice::from_ref(&root))
         .installs
         .remove(0)
         .instance_id;
@@ -134,7 +134,7 @@ fn unbound_trust_store_is_rejected_before_any_state_write() {
     let t = tempfile::tempdir().unwrap();
     let root = t.path().join("Steam");
     manifest(&root, "Game");
-    let id = steam_patch_core::steam::scan(std::slice::from_ref(&root))
+    let id = patchhub_core::steam::scan(std::slice::from_ref(&root))
         .installs
         .remove(0)
         .instance_id;
@@ -154,7 +154,7 @@ fn recovery_empty_state_is_readonly() {
 
 #[test]
 fn publisher_download_cancel_is_standard_cancel_before_any_transaction() {
-    use steam_patch_core::{
+    use patchhub_core::{
         install,
         sources::{
             model::{GameQuery, SourceIndex, SourceIndexEntry},
@@ -178,7 +178,7 @@ fn publisher_download_cancel_is_standard_cancel_before_any_transaction() {
         manifest(&root, "Game");
         let game = root.join("steamapps/common/Game");
         fs::write(game.join("original.txt"), b"original").unwrap();
-        let id = steam_patch_core::steam::scan(std::slice::from_ref(&root))
+        let id = patchhub_core::steam::scan(std::slice::from_ref(&root))
             .installs
             .remove(0)
             .instance_id;
@@ -219,7 +219,7 @@ fn publisher_download_cancel_is_standard_cancel_before_any_transaction() {
             instance_id: Some(id.clone()),
         };
         let candidate = sources.registry().index_candidates(&query).remove(0);
-        let selection = steam_patch_core::installer::zip_selection_id(&candidate).unwrap();
+        let selection = patchhub_core::installer::zip_selection_id(&candidate).unwrap();
         drop(sources);
         let revisions = SqliteTrustRevisionStore::new(&state).unwrap();
         let mut emit = |_| {};

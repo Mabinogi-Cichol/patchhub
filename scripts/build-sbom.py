@@ -32,9 +32,9 @@ def component(ecosystem, name, version, license_expression=None):
         expression = ' OR '.join(part.strip() for part in license_expression.split('/'))
         value['licenses'] = [{'expression': expression}]
         if expression != license_expression:
-            value['properties'] = [{'name': 'steam-patch:declared-license', 'value': license_expression}]
+            value['properties'] = [{'name': 'patchhub:declared-license', 'value': license_expression}]
     else:
-        value['properties'] = [{'name': 'steam-patch:license-review', 'value': 'required'}]
+        value['properties'] = [{'name': 'patchhub:license-review', 'value': 'required'}]
     components.setdefault(ref, value)
     return components[ref]
 
@@ -62,10 +62,10 @@ if args.flutter_deps:
         components[item['bom-ref']] = item
 
 # The Python oracle remains developer-only; disclose the shipped Rust engine.
-rust_installer = component('generic', 'steam-patch-rust-installer', '1', 'MIT')
+rust_installer = component('generic', 'patchhub-rust-installer', '1', 'MIT')
 rust_installer['properties'] = [
-    {'name': 'steam-patch:implementation', 'value': 'Rust SF9 format library and fixed sandbox worker; Python developer oracles are not bundled.'},
-    {'name': 'steam-patch:reference-commit', 'value': '21f5c5595a70e9284fff83476c0e307d5b92f573'},
+    {'name': 'patchhub:implementation', 'value': 'Rust SF9 format library and fixed sandbox worker; Python developer oracles are not bundled.'},
+    {'name': 'patchhub:reference-commit', 'value': '21f5c5595a70e9284fff83476c0e307d5b92f573'},
 ]
 for source, destination, prefix in (
     ('crates/installer-format/Cargo.toml', None, 'format-manifest'),
@@ -74,25 +74,25 @@ for source, destination, prefix in (
     ('scripts/licenses/sfextract-MIT.txt', 'licenses/sfextract-MIT.txt', 'reference-license'),
 ):
     rust_installer['properties'].extend([
-        {'name': f'steam-patch:{prefix}-source', 'value': source},
-        {'name': f'steam-patch:{prefix}-sha256', 'value': hashlib.sha256((root / source).read_bytes()).hexdigest()},
+        {'name': f'patchhub:{prefix}-source', 'value': source},
+        {'name': f'patchhub:{prefix}-sha256', 'value': hashlib.sha256((root / source).read_bytes()).hexdigest()},
     ])
     if destination:
-        rust_installer['properties'].append({'name': f'steam-patch:{prefix}-path', 'value': destination})
+        rust_installer['properties'].append({'name': f'patchhub:{prefix}-path', 'value': destination})
 
 
 output = root / '.artifacts/dependencies.cdx.json'
 output.parent.mkdir(exist_ok=True)
 extra_properties = []
 if args.flutter_deps:
-    extra_properties.append({'name': 'steam-patch:dart-lock-sha256', 'value': hashlib.sha256((root / 'apps/windows-flutter/pubspec.lock').read_bytes()).hexdigest()})
+    extra_properties.append({'name': 'patchhub:dart-lock-sha256', 'value': hashlib.sha256((root / 'apps/windows-flutter/pubspec.lock').read_bytes()).hexdigest()})
 output.write_text(json.dumps({
     'bomFormat': 'CycloneDX', 'specVersion': '1.6', 'version': 1,
-    'metadata': {'component': {'type': 'application', 'name': 'Steam Hentai Patch', 'version': '0.3.0'},
-                 'properties': [{'name': 'steam-patch:inventory-scope',
+    'metadata': {'component': {'type': 'application', 'name': 'PatchHub', 'version': '0.3.0'},
+                 'properties': [{'name': 'patchhub:inventory-scope',
                                  'value': 'All resolved Rust and locked npm dependencies, including build, development and target-specific packages, plus the bundled Rust installer and its reference license; Flutter/Dart when requested; no reachability analysis.'},
-                                {'name': 'steam-patch:cargo-lock-sha256', 'value': hashlib.sha256((root / 'Cargo.lock').read_bytes()).hexdigest()},
-                                {'name': 'steam-patch:npm-lock-sha256', 'value': hashlib.sha256((root / 'package-lock.json').read_bytes()).hexdigest()}] + extra_properties},
+                                {'name': 'patchhub:cargo-lock-sha256', 'value': hashlib.sha256((root / 'Cargo.lock').read_bytes()).hexdigest()},
+                                {'name': 'patchhub:npm-lock-sha256', 'value': hashlib.sha256((root / 'package-lock.json').read_bytes()).hexdigest()}] + extra_properties},
     'components': sorted(components.values(), key=lambda item: item['bom-ref'])
 }, indent=2) + '\n', encoding='utf-8')
 missing = [item['purl'] for item in components.values() if 'licenses' not in item]

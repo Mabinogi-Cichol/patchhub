@@ -8,11 +8,11 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::Duration;
 
-use steam_patch_core::sources::adapters::kagura::resolve_page;
-use steam_patch_core::sources::http::{FakeFetcher, FetchResponse, RequestContext};
-use steam_patch_core::sources::model::*;
-use steam_patch_core::sources::store::SourceStore;
-use steam_patch_core::sources::update::{update_source, SourceUpdateOutcome};
+use patchhub_core::sources::adapters::kagura::resolve_page;
+use patchhub_core::sources::http::{FakeFetcher, FetchResponse, RequestContext};
+use patchhub_core::sources::model::*;
+use patchhub_core::sources::store::SourceStore;
+use patchhub_core::sources::update::{update_source, SourceUpdateOutcome};
 
 // ---- helpers -------------------------------------------------------------
 

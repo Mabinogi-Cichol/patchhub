@@ -86,8 +86,8 @@ call npm run typecheck
 if errorlevel 1 goto build_failed
 
 echo [3/6] Building the Windows CLI and worker with Cargo.lock...
-set "STEP=cargo build --release -p steam-patch-cli --locked"
-call cargo build --release --locked -p steam-patch-cli -p steam-patch-installer-worker --bin steam-patch --bin sf-worker
+set "STEP=cargo build --release -p patchhub-cli --locked"
+call cargo build --release --locked -p patchhub-cli -p patchhub-installer-worker --bin patchhub-core --bin patchhub-worker
 if errorlevel 1 goto build_failed
 
 echo [4/6] Checking and building the Flutter application...

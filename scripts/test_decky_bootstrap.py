@@ -10,8 +10,8 @@ import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
-URL = "https://raw.githubusercontent.com/Mabinogi-Cichol/steam-hentai-patch/main/scripts/install-decky.py"
-ENTRY_URL = "https://raw.githubusercontent.com/Mabinogi-Cichol/steam-hentai-patch/main/install.sh"
+URL = "https://raw.githubusercontent.com/Mabinogi-Cichol/patchhub/main/scripts/install-decky.py"
+ENTRY_URL = "https://raw.githubusercontent.com/Mabinogi-Cichol/patchhub/main/install.sh"
 SHORT_URL = "https://ba.sh/tz4y"
 
 
@@ -133,7 +133,7 @@ esac
 
     def test_truncated_entry_without_invocation_does_not_run_install(self):
         source = (ROOT / "install.sh").read_text(encoding="utf-8")
-        self.entry.write_text(source.rsplit('steam_patch_install "$@"', 1)[0], encoding="utf-8")
+        self.entry.write_text(source.rsplit('patchhub_install "$@"', 1)[0], encoding="utf-8")
         marker = self.work / "must-not-execute"
         result = self.run_command(f"from pathlib import Path; Path({str(marker)!r}).write_text('bad')")
         self.assertEqual(result.returncode, 0, result.stderr)

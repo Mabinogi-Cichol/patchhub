@@ -2,7 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:steam_patch_windows/host/app_update.dart';
+import 'package:patchhub_windows/host/app_update.dart';
 
 void main() {
   test('shared semantic version contract', () {

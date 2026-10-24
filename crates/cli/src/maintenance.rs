@@ -1,10 +1,10 @@
 use base64::{engine::general_purpose::STANDARD, Engine};
 use ed25519_dalek::{Signer, SigningKey};
-use std::{fs, io::Write, path::Path};
-use steam_patch_core::{
+use patchhub_core::{
     catalog,
     trust::{self, CatalogPayload, SignedEnvelope, TrustKey, TrustKeys},
 };
+use std::{fs, io::Write, path::Path};
 
 fn write_new(path: &Path, bytes: &[u8]) -> Result<(), String> {
     let mut options = fs::OpenOptions::new();

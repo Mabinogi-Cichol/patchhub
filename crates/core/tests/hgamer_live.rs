@@ -1,14 +1,14 @@
 //! Live HGamer verification (`#[ignore]`; never part of the default suite).
 //!
-//! Run with `cargo test -p steam-patch-core --test hgamer_live -- --ignored
+//! Run with `cargo test -p patchhub-core --test hgamer_live -- --ignored
 //! --nocapture` to re-check the server-rendered search summary/detail parsing
 //! against the real site. Only list/detail metadata pages are requested; no
 //! artifact is downloaded and no page is persisted.
+use patchhub_core::sources::adapters::{self, DiscoverPrevious};
+use patchhub_core::sources::http::RequestContext;
+use patchhub_core::sources::model::{QueryContext, RulesConfig, SourceRule};
+use patchhub_core::sources::{validate, DEFAULT_RULES_JSON, PARSER_VERSION, QUERY_VERSION};
 use std::time::Instant;
-use steam_patch_core::sources::adapters::{self, DiscoverPrevious};
-use steam_patch_core::sources::http::RequestContext;
-use steam_patch_core::sources::model::{QueryContext, RulesConfig, SourceRule};
-use steam_patch_core::sources::{validate, DEFAULT_RULES_JSON, PARSER_VERSION, QUERY_VERSION};
 
 fn live_rule() -> SourceRule {
     let config: RulesConfig = serde_json::from_str(DEFAULT_RULES_JSON).unwrap();

@@ -1,7 +1,7 @@
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:steam_patch_windows/host/steam_artwork.dart';
+import 'package:patchhub_windows/host/steam_artwork.dart';
 
 void main() {
   late Directory root;

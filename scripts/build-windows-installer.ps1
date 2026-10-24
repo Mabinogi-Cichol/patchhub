@@ -25,7 +25,7 @@ Copy-Item -LiteralPath (Join-Path $taskRoot 'scripts/licenses/sfextract-MIT.txt'
 & python (Join-Path $PSScriptRoot 'update_manifest.py') $taskBundle
 if ($LASTEXITCODE -ne 0) { throw 'Update manifest generation failed' }
 if ((Get-Content -LiteralPath (Join-Path $taskBundle 'app-version.json') -Raw | ConvertFrom-Json).version -ne $Version) { throw 'NSIS version differs from application' }
-$taskInstaller = Join-Path $taskArtifacts "Steam.Hentai.Patch_${Version}_x64-setup.exe"
+$taskInstaller = Join-Path $taskArtifacts 'patchhub-windows-x64-setup.exe'
 & $Makensis /V2 /INPUTCHARSET UTF8 "/DBUNDLE=$taskBundle" "/DVERSION=$Version" "/DOUTPUT=$taskInstaller" (Join-Path $PSScriptRoot 'windows-installer.nsi')
 if ($LASTEXITCODE -ne 0) { throw "NSIS failed: $LASTEXITCODE" }
 Get-FileHash -LiteralPath $taskInstaller -Algorithm SHA256

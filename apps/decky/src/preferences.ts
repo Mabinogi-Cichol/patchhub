@@ -1,4 +1,4 @@
-import type { Filter } from "@steam-patch/ui";
+import type { Filter } from "@patchhub/ui";
 
 // Opening a Steam menu can unmount QAM content before its selection callback.
 // Keep list preferences outside that component and notify the new mount too.

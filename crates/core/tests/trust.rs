@@ -1,6 +1,6 @@
 use base64::{engine::general_purpose::STANDARD, Engine};
 use ed25519_dalek::{Signer, SigningKey};
-use steam_patch_core::{catalog::Catalog, trust::*};
+use patchhub_core::{catalog::Catalog, trust::*};
 
 fn fixture(revision: u64) -> (Vec<u8>, TrustKeys) {
     let key = SigningKey::from_bytes(&[7; 32]);

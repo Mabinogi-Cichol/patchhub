@@ -8,14 +8,16 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
-import 'package:steam_patch_windows/app.dart';
-import 'package:steam_patch_windows/host/app_lifecycle.dart';
-import 'package:steam_patch_windows/host/core_client.dart';
-import 'package:steam_patch_windows/host/core_paths.dart';
-import 'package:steam_patch_windows/host/steam_artwork.dart';
-import 'package:steam_patch_windows/models/app_model.dart';
-import 'package:steam_patch_windows/models/library.dart';
-import 'package:steam_patch_windows/pages/library_page.dart';
+import 'package:patchhub_windows/app.dart';
+import 'package:patchhub_windows/host/app_lifecycle.dart';
+import 'package:patchhub_windows/host/app_update.dart';
+import 'package:patchhub_windows/host/core_client.dart';
+import 'package:patchhub_windows/host/core_paths.dart';
+import 'package:patchhub_windows/host/steam_artwork.dart';
+import 'package:patchhub_windows/models/app_model.dart';
+import 'package:patchhub_windows/models/library.dart';
+import 'package:patchhub_windows/pages/library_page.dart';
+import 'package:patchhub_windows/pages/app_update_panel.dart';
 import 'package:window_manager/window_manager.dart';
 
 // This target only renders an existing scan snapshot. No core process is started.
@@ -64,12 +66,29 @@ class VisualCloseObserver extends AppLifecycle {
   }
 }
 
+class VisualUpdate extends AppUpdate {
+  VisualUpdate()
+    : super(
+        directory: Directory.current,
+        current: '0.3.0',
+        stateFile: File('unused'),
+      );
+  @override
+  Future<void> initialize() async {}
+  @override
+  Future<void> check({bool manual = false}) async {
+    lastCheckWasManual = manual;
+    result = {'state': 'up_to_date'};
+    notifyListeners();
+  }
+}
+
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
-  const dataPath = String.fromEnvironment('STEAM_PATCH_VISUAL_DATA');
-  const outputPath = String.fromEnvironment('STEAM_PATCH_VISUAL_OUTPUT');
+  const dataPath = String.fromEnvironment('PATCHHUB_VISUAL_DATA');
+  const outputPath = String.fromEnvironment('PATCHHUB_VISUAL_OUTPUT');
   const appid = int.fromEnvironment(
-    'STEAM_PATCH_VISUAL_APPID',
+    'PATCHHUB_VISUAL_APPID',
     defaultValue: 42,
   );
 
@@ -102,7 +121,7 @@ void main() {
           'transactions': <Map<String, dynamic>>[],
         };
       }
-      final location = await const MethodChannel('steam_patch/desktop')
+      final location = await const MethodChannel('patchhub/desktop')
           .invokeMapMethod<String, dynamic>('steamArtworkContext');
       final art = SteamArtworkStore();
       final images = await art.load(appid);
@@ -140,7 +159,7 @@ void main() {
           await tester.pumpWidget(
             RepaintBoundary(
               key: key,
-              child: SteamPatchApp(
+              child: PatchHubApp(
                 home: Builder(
                   builder: (context) => MediaQuery(
                     data: MediaQuery.of(context)
@@ -151,7 +170,7 @@ void main() {
               ),
             ),
           );
-          SteamPatchApp.setThemeMode(
+          PatchHubApp.setThemeMode(
             tester.element(find.byType(LibraryPage)),
             dark ? ThemeMode.dark : ThemeMode.light,
           );
@@ -208,9 +227,37 @@ void main() {
           }
 
           await capture('overview');
+          final info = find.widgetWithText(ExpansionTile, '游戏信息');
+          await tester.scrollUntilVisible(
+            info,
+            150,
+            scrollable: find
+                .descendant(
+                  of: find.byKey(PageStorageKey('${row.id}:overview')),
+                  matching: find.byType(Scrollable),
+                )
+                .first,
+          );
+          await tester.pumpAndSettle();
+          await tester.tap(
+            find.descendant(of: info, matching: find.text('游戏信息')),
+          );
+          await tester.pumpAndSettle();
+          expect(find.textContaining('安装路径：'), findsOneWidget);
+          await tester.ensureVisible(find.textContaining('安装路径：'));
+          await tester.pumpAndSettle();
+          await capture('overview-expanded');
           await tester.tap(find.text('补丁管理'));
           await tester.pumpAndSettle();
           await capture('patch');
+          final technical = find.text('文件与技术详情');
+          await tester.ensureVisible(technical);
+          await tester.pumpAndSettle();
+          await tester.tap(technical);
+          await tester.pumpAndSettle();
+          await tester.ensureVisible(find.textContaining('发行标识：'));
+          await tester.pumpAndSettle();
+          await capture('patch-expanded');
           if (size.width == 1180) {
             for (final page in {
               '操作记录': 'records',
@@ -235,12 +282,41 @@ void main() {
           model.dispose();
         }
       }
+      final update = VisualUpdate();
+      final updateModel = VisualReadModel(jsonDecode(jsonEncode(data)));
+      final updateKey = GlobalKey();
+      await windowManager.setSize(const Size(1180, 760));
+      await tester.pumpWidget(
+        PatchHubApp(
+          home: RepaintBoundary(
+            key: updateKey,
+            child: AppUpdatePanel(
+              update: update,
+              lifecycle: AppLifecycle(),
+              child: LibraryPage(model: updateModel),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      final before = tester.getRect(find.byType(LibraryPage));
+      await tester.tap(find.text('检查更新'));
+      await tester.pumpAndSettle();
+      expect(find.text('当前已是最新正式版。'), findsOneWidget);
+      expect(tester.getRect(find.byType(LibraryPage)), before);
+      await tester.tap(find.text('关闭'));
+      await tester.pumpAndSettle();
+      expect(tester.getRect(find.byType(LibraryPage)), before);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+      updateModel.dispose();
+      update.dispose();
       // A real WM_CLOSE changes native window activation. Verify it only after
       // the screenshot matrix, rather than reusing that window for another size.
       await windowManager.setSize(const Size(1180, 760));
       final closeModel = VisualReadModel(jsonDecode(jsonEncode(data)));
       await tester.pumpWidget(
-        SteamPatchApp(home: LibraryPage(model: closeModel)),
+        PatchHubApp(home: LibraryPage(model: closeModel)),
       );
       await tester.pumpAndSettle();
       final lifecycle = VisualCloseObserver(tasks: closeModel.tasks);

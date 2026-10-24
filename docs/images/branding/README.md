@@ -1,5 +1,34 @@
 # 插件品牌素材
 
+## 当前正式素材（2026-10-25）
+
+已按用户选择替换为 PatchHub 品牌。保留圆角拼图、对勾和左侧缺口结构：深炭黑主体，蓝紫渐变对勾及缺口弧形边带，外部与缺口内部透明。横幅采用浅冷灰背景，展示 PatchHub、Steam 游戏补丁助手、查找 · 下载 · 安装和 Windows · Steam Deck。
+
+配色方向为深炭黑 `#171A21`、紫 `#8B5CF6`、蓝 `#1A9FFF`，实际颜色以生成文件为准。素材使用内置 imagegen 生成；程序名称及内部身份已改为 PatchHub，实施范围见[设计计划](../../features/patchhub-branding/design.md)与[施工记录](../../features/patchhub-branding/progress.md)。
+
+| 文件 | 尺寸 | 用途 |
+| --- | --- | --- |
+| [logo.png](logo.png) | 1254 × 1254，RGBA | 透明背景 Logo |
+| [banner.png](banner.png) | 2172 × 724，RGB | 项目首页 3:1 横幅 |
+| [Windows PNG](../../../apps/windows-flutter/assets/branding/logo.png) | 1254 × 1254 | 与正式 Logo 字节一致 |
+| [Windows ICO](../../../apps/windows-flutter/windows/runner/resources/app_icon.ico) | 16/24/32/48/64/128/256 | Runner 与 NSIS 共用 |
+
+![PatchHub 首页横幅](banner.png)
+
+<img src="logo.png" alt="PatchHub Logo" width="256">
+
+### 本次生成说明
+
+Logo 以原拼图为基础改色，保留轮廓、比例与透明背景；深炭黑主体，仅对勾及左侧缺口的厚弧形边带使用紫到蓝渐变。不增加外环、字母或装饰。缺口保持透明，不填成实心圆。
+
+横幅以选定 Logo 为参考，3:1 浅冷灰画布，左侧 Logo、右侧品牌与功能文字，右侧边缘使用低对比蓝紫圆弧。平面设计，无立体、发光或投影。
+
+已目视核对原图和横幅，并检查图片尺寸、透明通道及 ICO 尺寸集合；两端构建与包内图标核验通过。系统小图标缓存与 Decky 实机显示待验收。
+
+## 历史素材说明（替换前）
+
+以下保留旧品牌的设计与生成记录，其中“正式素材”、配色及检查结论均对应当时版本，非当前素材。
+
 正式采用的 LOGO 与横幅，使用内置 imagegen 工具生成。采用黄油色系与扁平图形，不含爱心元素。横幅已用于[项目首页](../../../README.md)，客户端图标尚未替换。
 
 以成人游戏的中文俗称“黄油”为视觉线索，采用奶油黄、深可可色与柔软的边角轮廓；拼图缺口表达“补丁”，对勾表达“安装完成”。按反馈去掉爱心、高光、厚边和立体阴影，降低拟物感。
