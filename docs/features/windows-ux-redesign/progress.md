@@ -364,3 +364,24 @@ flutter test integration_test/windows_acceptance_test.dart -d windows "--dart-de
 - Modern UI 与布局、选择器标题修订已合并 main，发行提交为 48c9de68745ad59a6019ac3a165a8e7d0c03dab8；用户明确允许例外更新尚未发行的 v0.3.0 Tag，正式 Release 生成后 Tag 保持不变。
 - Tag CI 40001266403 全部成功，Flutter 210 项完整回归及静态检查通过；9 个公开附件的哈希、ZIP 内容/CRC、SBOM、平台架构与来源核验通过。正式 Windows 便携包版本 0.3.0+1，隔离 APPDATA 启动和正常关闭通过，退出码 0、1001ms。
 - 发行详情、前序 CI 问题与修复、公开附件校验及未验证边界见[发行检查](../../release-checklist.md#v030-发布记录2026-10-24)及[发行说明](../../releases/v0.3.0.md)。此前“尚未提交/发布/待决定”的表述保留为施工历史，以本节为最新结果；未增加设备部署、真实游戏安装或系统 DPI 验收结论。
+
+### 2026-10-24 Windows 底栏、折叠区与更新布局修复
+
+- 复用本功能文档，在当前 `feature/client-self-update` 未提交工作区内修复；未切换或覆盖既有更新功能修改，未提交或合并。
+- 四个游戏 Tab 共用补丁操作栏，继续使用同一 PatchManagementPage 状态和安装流程；切换 Tab 不丢本地 ZIP、确认、补丁/镜像选择。
+- 自动化复现灰块根因：ExpansionTile 展开 bool 与 ListView/SelectableText 滚动 double 共用 PageStorage 路径，展开后报 `type 'bool' is not a subtype of type 'double?'`。为折叠项及内部可复制文本分配独立标识，文件详情补齐横向伸展与内边距；同页本地 ZIP/来源技术详情使用同样的存储隔离。
+- 手动更新改为弹窗，检查中/最新/失败/新版本均不撑高主界面；自动检测仅在发现未跳过/未暂缓的新版本时提醒。更新细节见[自更新施工记录](../client-self-update/progress.md)。
+- 验证：新增针对性 24 项通过（18 项覆盖三种尺寸、100%/125%/150%文字缩放与深浅主题，四 Tab 操作栏位置和按钮可操作性）；Flutter analyze 无问题；完整 Flutter 回归 219 项通过、1 项原生更新链夹具测试按既有条件跳过。日志 `.artifacts/windows-ui-fixes-tests.log`。随后仅修改存储键索引与同页折叠区，增量复验结果见后续记录。
+- 原生窗口验证尝试未启动：Flutter 报 `Unable to find suitable Visual Studio toolchain`；doctor 检出当前 Visual Studio Community 2026 18.10.1 缺少所需 C++ 组件。本次无原生截图或新安装包；已扩展 integration_test/modern_visual_test.dart 的折叠区和手动检查几何断言，待工具链可用后执行，未将历史截图当成本次通过证据。
+- 按 overengineering-review 技能复核本次 UI 路径：使用单一页面状态/安装入口、独立存储键和标准弹窗，无新增超时、重试、输入硬限制或通用框架；未发现需额外修改项。此结论不代表原生窗口验收通过。
+
+- 最终增量复验：存储键按条目序号区分并覆盖同页本地 ZIP/来源详情后，Flutter analyze 无问题，折叠区/四 Tab/更新面板 24 项再次通过；日志 .artifacts/windows-ui-fixes-incremental.log。git diff --check 通过。
+
+### 2026-10-24 用户要求本地构建后补齐验证
+
+- 原工具链阻断已解除：复用 VS 2026 18.10.1 已有 MSVC/SDK，管理员安装 NativeDesktop 工作负载及 VC.CMake.Project，安装器退出码 0，未重启系统。旧 VS 2022 生成缓存连同原产物保留在 `.artifacts/windows-ui-fixes-build-backup-20261024`，未删除。
+- `flutter build windows --release --no-pub` 通过；可运行包 `.artifacts/windows-ui-fixes-20261024/windows/steam_patch_windows.exe`，版本维持 `0.3.0+1`，包含本轮三项 UI 修复与当前工作区已有的 Windows 自更新修改。复用未修改的 Rust release 二进制，按当前脚本生成 app-version/update-manifest，核对全部清单文件存在。
+- 本地便携包 `.artifacts/windows-ui-fixes-20261024/steam-patch-manager-windows-ui-fixes.zip`；SHA-256 `15677F7E1CAEA1FBD4F297868EDC9A187D1DD862D564715B3124ABA3359F3798`。文件与 UI 源码哈希见同目录 `build-evidence.json`，工具链/清单记录见 `toolchain-and-package.json`；构建日志 `.artifacts/windows-ui-fixes-build.log`。
+- 对最终 Release 使用独立 APPDATA 启动/正常 WM_CLOSE 验证通过，退出码 0、关闭 884ms、无残留直属子进程；未使用强制终止。记录 `release-smoke/result.json`。没有使用现有客户端数据执行安装或更新。
+- 原生布局集成测试通过：三种尺寸、深浅主题共 30 张截图，覆盖概览与文件详情展开、四个 Tab 和全局来源；原生更新弹窗检查最新版本且 LibraryPage 矩形不变；原生标题栏最大化/还原及关闭路径通过。证据 `native-ui/result.json`、`native-ui/metrics.json`、`.artifacts/windows-ui-fixes-native.log`。首轮测试在小窗口未先滚动生成懒加载项，已修正测试定位并重跑通过，未因此修改产品逻辑。
+- 人工查看了原生文件详情、概览展开和订阅页截图：无灰块，操作栏可见。原生截图使用夹具数据；真实游戏安装、正式跨版本更新不属于本次构建验证。未提交或发布版本。
