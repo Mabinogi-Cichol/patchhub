@@ -25,3 +25,4 @@
 - 过度设计复核：仅增加一个对应实际预览需求的模式开关，复用已有构建和资源复制路径，没有默认跳过核心编译而产生旧核心的风险；没有增加缓存判定、重试或额外限制。未发现需修改项。
 - 真实预览构建通过（退出 0）：Rust release 增量编译约 40 秒，Flutter Windows 构建约 44.7 秒（不含工具检查与依赖解析）；产物为 `apps/windows-flutter/build/windows/x64/runner/Release/patchhub.exe`。首次沙盒运行在 Flutter 用户目录遥测文件写入处失败，使用获准的沙盒外构建完成验证。
 - 运行目录的应用、Flutter DLL、Flutter 资产及 catalog/trust-keys 文件存在；复制的核心/worker 与本次 `target/release` 二进制 SHA-256 一致。尚未执行界面交互验收，本轮不运行测试和完整发行构建。
+- 按用户要求合并至本地 `main`，未推送；合并无冲突且不新增实现改动，沿用上述验证结果。
