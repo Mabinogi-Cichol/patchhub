@@ -70,7 +70,7 @@ class Probe {
     def tearDown(self):
         self.tmp.cleanup()
 
-    def apply(self, corrupt=False):
+    def apply(self, corrupt=False, work=None):
         prepare(self.bundle, '0.4.0')
         archive = self.work / 'package.zip'
         with zipfile.ZipFile(archive, 'w', zipfile.ZIP_DEFLATED) as bundle:
@@ -80,8 +80,22 @@ class Probe {
         (self.work / 'request.json').write_text(json.dumps({'target': str(self.target), 'version':'0.4.0', 'sha256':'0'*64 if corrupt else digest}), encoding='utf-8')
         (self.work / 'apply.json').write_text('{}')
         process = subprocess.run(['powershell.exe', '-NoProfile', '-NonInteractive', '-ExecutionPolicy','Bypass',
-            '-File', str(SCRIPT), '-Target', str(self.target), '-Work', str(self.work)], capture_output=True, text=True)
+            '-File', str(SCRIPT), '-Target', str(self.target), '-Work', work or str(self.work)], capture_output=True, text=True)
         return process
+
+    def test_zip_update_from_short_transaction_path(self):
+        import ctypes
+        short_path = ctypes.create_unicode_buffer(32768)
+        length = ctypes.windll.kernel32.GetShortPathNameW(str(self.work), short_path, len(short_path))
+        self.assertGreater(length, 0)
+        self.assertLess(length, len(short_path))
+        if short_path.value == str(self.work):
+            self.skipTest('Temporary volume does not provide short path aliases')
+        result = self.apply(work=short_path.value)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((self.target / 'patchhub-core.exe').read_text(), '0.4.0')
+        self.assertEqual((self.target / 'user.txt').read_text(), 'preserve')
+        self.assertFalse(self.work.exists())
 
     def test_zip_update_preserves_extra_files_and_removes_obsolete_files(self):
         result = self.apply()

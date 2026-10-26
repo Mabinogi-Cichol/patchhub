@@ -20,6 +20,7 @@ function Write-Json($Path, $Value) {
     Move-Item -LiteralPath $taskTemp -Destination $Path -Force
 }
 function Safe-Path($Root, [string]$Relative) {
+    $Root = [IO.Path]::GetFullPath($Root).TrimEnd('\','/')
     if (-not $Relative -or $Relative.Contains('\') -or $Relative.Contains(':') -or
         $Relative.StartsWith('/') -or ($Relative.Split('/') | Where-Object { $_ -in @('','..','.') }) -or
         $Relative -match '[<>"|?*]' -or $Relative.Split('/')[0] -in @('install.ini','uninstall.exe','.patchhub-update.json','.patchhub-maintenance.lock')) {

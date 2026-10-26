@@ -94,7 +94,7 @@ class FakeLoader(m.Loader):
         if op == "probe":
             present = self.plugin.exists()
             version = m.json_read(self.plugin / "package.json")["version"] if present else None
-            return {"plugins": [{"version": version, "disabled": any(name in self.settings["disabled_plugins"] for name in m.PLUGIN_NAMES)}] if present else [],
+            return {"plugins": [{"version": version, "disabled": m.NAME in self.settings["disabled_plugins"]}] if present else [],
                     "settings": {key: list(value) for key, value in self.settings.items()},
                     "instances": [{"version": version, "valid": True}] if present else [], "user": {"path": str(Path.home())}}
         if op == "tasks":
@@ -123,7 +123,7 @@ class FakeLoader(m.Loader):
                 unpack_fixture(source, self.plugin)
                 # Simulate Loader's uninstall resetting just this plugin's settings.
                 for key in m.SETTINGS:
-                    self.settings[key] = [item for item in self.settings[key] if item not in m.PLUGIN_NAMES]
+                    self.settings[key] = [item for item in self.settings[key] if item != m.NAME]
                 if self.fail_install == "after" and not rollback:
                     job.update(ok=False, error="reload_failed")
                 if self.fail_install == "lost" and not rollback:
@@ -134,7 +134,7 @@ class FakeLoader(m.Loader):
                 for key in m.SETTINGS:
                     name = args.get("name", m.NAME)
                     own = name in args["settings"][key]
-                    self.settings[key] = [item for item in self.settings[key] if item not in m.PLUGIN_NAMES]
+                    self.settings[key] = [item for item in self.settings[key] if item != m.NAME]
                     if own:
                         self.settings[key].append(name)
             elif kind == "uninstall":
