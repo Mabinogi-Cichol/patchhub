@@ -586,18 +586,7 @@ fn project_instance_impl(
                 candidate_id: Some(candidate.candidate_id.clone()),
                 release_id,
                 selection_id: Some(selection_id.clone()),
-                name: if manual {
-                    let mirror = candidate.mirrors.iter().find(|m| {
-                        installer::manual_selection::selection_id(&candidate, &query, m).as_deref()
-                            == Some(&selection_id)
-                    });
-                    let file = mirror
-                        .map(|m| m.url.rsplit('/').next().unwrap_or(&m.url))
-                        .unwrap_or("");
-                    format!("{} · 手动选择 · {}", candidate.patch_title, file)
-                } else {
-                    candidate.patch_title
-                },
+                name: candidate.patch_title,
                 source_page: candidate.source_page,
                 support_level: if has_zip {
                     SupportLevel::PublisherZip
