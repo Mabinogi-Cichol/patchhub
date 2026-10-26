@@ -147,3 +147,10 @@ RustSec 提示：RUSTSEC-2024-0429（glib 0.18.5，unsound）与 RUSTSEC-2024-03
 | steam-patch-manager-decky.zip | 7003317 | `59f3c713d3b735c54fbb8c1be936b416ddd05b3f6ac44b9bd7711c7377a76d62` |
 | steam-patch-manager-windows-portable.zip | 19199825 | `6cadfe5cbd9f8bc0126ff85ce483973dd2f3e9e5e95c0519d1881787fc001604` |
 | Steam.Hentai.Patch_0.3.0_x64-setup.exe | 14551300 | `57aee4da5bf891cb40af6210b60292246d5c50214a4d6f12c8ab3faee3eb2fd3` |
+
+## v0.4.0 发布准备（2026-10-27）
+
+- 用户要求以 v0.4.0 发布。本地 `main` 已包含 v0.3.0 之后的 PatchHub 品牌统一、双端客户端自更新、Windows 来源布局/主题/下拉选择修复、补丁候选交互修复与分平台构建入口等改动。
+- Cargo workspace 与 Cargo.lock、Flutter pubspec、Decky 与共享 UI 的 npm 版本、package-lock、SBOM 应用版本及 NSIS 默认版本已统一为 0.4.0。更新清单版本一致性、`cargo metadata --locked` 与 npm 锁文件检查通过，SBOM、Windows 更新与打包脚本共 18 项测试通过。
+- 正式发行以 Tag 对应 CI 新构建为准，不上传本地旧版本候选。标题严格为 v0.4.0，中文正文来自 [发行说明](releases/v0.4.0.md)。
+- CI 运行与公开附件核验尚待执行；本次不执行设备部署或真实游戏补丁安装。
