@@ -209,7 +209,7 @@ class _PatchManagementPageState extends State<PatchManagementPage> {
         ? null
         : ExpansionTile(
             key: PageStorageKey(
-              '${widget.row.id}:${widget.entry.key}:technical',
+              '${widget.row.id}:${widget.entry.selectionKey}:technical',
             ),
             title: const Text('文件与技术详情'),
             expandedCrossAxisAlignment: CrossAxisAlignment.stretch,
@@ -263,12 +263,15 @@ class _PatchManagementPageState extends State<PatchManagementPage> {
       if (patch != null && installables.length > 1) ...[
         Text('补丁选择', style: fieldTitleStyle),
         DropdownButtonFormField<String>(
-          initialValue: widget.entry.key,
+          initialValue: widget.entry.selectionKey,
           isExpanded: true,
           decoration: const InputDecoration(),
           items: [
             for (final entry in installables)
-              DropdownMenuItem(value: entry.key, child: Text(entry.title)),
+              DropdownMenuItem(
+                value: entry.selectionKey,
+                child: Text(entry.title),
+              ),
           ],
           onChanged: (value) {
             if (value != null) widget.onEntry(value);
@@ -361,7 +364,7 @@ class _PatchManagementPageState extends State<PatchManagementPage> {
         ] else if (patch['actions']['local_archive']['available'] == true)
           ExpansionTile(
             key: PageStorageKey(
-              '${widget.row.id}:${widget.entry.key}:local-zip',
+              '${widget.row.id}:${widget.entry.selectionKey}:local-zip',
             ),
             title: const Text('使用本地 ZIP'),
             children: [
@@ -390,7 +393,7 @@ class _PatchManagementPageState extends State<PatchManagementPage> {
         if (candidate != null)
           ExpansionTile(
             key: PageStorageKey(
-              '${widget.row.id}:${widget.entry.key}:source-details',
+              '${widget.row.id}:${widget.entry.selectionKey}:source-details',
             ),
             title: const Text('来源技术详情'),
             children: [
@@ -518,7 +521,7 @@ class _PatchManagementPageState extends State<PatchManagementPage> {
               child: buildContent(
                 ListView(
                   key: PageStorageKey(
-                    '${widget.row.id}:${widget.entry.key}:management',
+                    '${widget.row.id}:${widget.entry.selectionKey}:management',
                   ),
                   padding: EdgeInsets.fromLTRB(inset, 12, inset, 0),
                   children: [

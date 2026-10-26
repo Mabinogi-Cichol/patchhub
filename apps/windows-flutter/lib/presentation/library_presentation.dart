@@ -90,6 +90,10 @@ class DisplayEntry {
   final Map<String, dynamic>? patch;
   final List<Map<String, dynamic>> choices;
   final Map<String, dynamic>? candidate;
+  // Discovery and installable entries represent the same source candidate.
+  String get selectionKey => candidate != null
+      ? 'candidate:${candidate!['source_id'] ?? ''}:${candidate!['candidate_id']}'
+      : key;
   bool get installable => patch != null;
   String get title => (patch?['name'] ?? candidate!['patch_title']) as String;
 }

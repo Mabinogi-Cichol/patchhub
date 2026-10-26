@@ -63,13 +63,13 @@ class _LibraryPageState extends State<LibraryPage> {
     } else if (row != null) {
       final entries = displayEntries(row, widget.model.preferredLanguage);
       if (selectedKey != null &&
-          !entries.any((entry) => entry.key == selectedKey)) {
-        selectedKey = entries.firstOrNull?.key;
+          !entries.any((entry) => entry.selectionKey == selectedKey)) {
+        selectedKey = entries.firstOrNull?.selectionKey;
         mirror = null;
         selectionNotice = '原补丁已不在当前来源结果中，请重新核对选择。';
       }
       final entry = entries
-          .where((entry) => entry.key == selectedKey)
+          .where((entry) => entry.selectionKey == selectedKey)
           .firstOrNull;
       if (mirror != null &&
           entry != null &&
@@ -88,7 +88,7 @@ class _LibraryPageState extends State<LibraryPage> {
     selectedKey = displayEntries(
       row,
       widget.model.preferredLanguage,
-    ).firstOrNull?.key;
+    ).firstOrNull?.selectionKey;
     mirror = null;
     tab = 0;
     globalSources = false;
@@ -514,7 +514,9 @@ class _LibraryPageState extends State<LibraryPage> {
   Widget gameDetails(GameRow row) {
     final entries = displayEntries(row, widget.model.preferredLanguage);
     final entry =
-        entries.where((entry) => entry.key == selectedKey).firstOrNull ??
+        entries
+            .where((entry) => entry.selectionKey == selectedKey)
+            .firstOrNull ??
         entries.firstOrNull;
     final patch =
         entry?.choices
@@ -696,7 +698,7 @@ class _LibraryPageState extends State<LibraryPage> {
               ? tabs(const Center(child: Text('当前没有补丁条目，请查看游戏订阅并重新匹配')))
               : PatchManagementPage(
                   key: ValueKey(
-                    '${row.id}:${entry.key}:${patch?['selection_id'] ?? patch?['release_id']}',
+                    '${row.id}:${entry.selectionKey}:${patch?['selection_id'] ?? patch?['release_id']}',
                   ),
                   model: widget.model,
                   artwork: artwork.load(row.game['appid'] as int),
@@ -804,7 +806,7 @@ class _LibraryPageState extends State<LibraryPage> {
             ),
             Text(candidateConditions(candidate)),
             TextButton(
-              onPressed: () => selectEntry(entry.key),
+              onPressed: () => selectEntry(entry.selectionKey),
               child: Text(entry.installable ? '查看并安装' : '查看条件与来源'),
             ),
           ],
