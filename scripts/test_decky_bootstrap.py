@@ -12,20 +12,18 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 URL = "https://raw.githubusercontent.com/Mabinogi-Cichol/patchhub/main/scripts/install-decky.py"
 ENTRY_URL = "https://raw.githubusercontent.com/Mabinogi-Cichol/patchhub/main/install.sh"
-SHORT_URL = "https://ba.sh/tz4y"
 
 
 def read_command(path):
     commands = re.findall(r"```bash[ \t]*\n[ \t]*(curl [^\n]+?)[ \t]*\n[ \t]*```", path.read_text(encoding="utf-8"))
-    return next(command for command in commands if command == f"curl -fsSL {SHORT_URL} | bash")
+    return next(command for command in commands if command == f"curl -fsSL {ENTRY_URL} | bash")
 
 
 class DocumentationTests(unittest.TestCase):
     def test_root_and_client_readme_share_one_complete_command(self):
         command = read_command(ROOT / "README.md")
         self.assertEqual(command, read_command(ROOT / "apps/decky/README.md"))
-        self.assertEqual(shlex.split(command), ["curl", "-fsSL", SHORT_URL, "|", "bash"])
-        self.assertLess(len(command), 50)
+        self.assertEqual(shlex.split(command), ["curl", "-fsSL", ENTRY_URL, "|", "bash"])
 
 
 @unittest.skipUnless(sys.platform == "linux", "README bootstrap targets SteamOS Bash")
@@ -46,7 +44,7 @@ class BootstrapTests(unittest.TestCase):
 for target; do :; done
 printf '%s\\n' "$target" >> "$BOOTSTRAP_CURL_ARGS"
 case "$target" in
-    "$BOOTSTRAP_SHORT_URL"|"$BOOTSTRAP_ENTRY_URL")
+    "$BOOTSTRAP_ENTRY_URL")
         cat -- "$BOOTSTRAP_ENTRY_SCRIPT"
         exit 0 ;;
     "$BOOTSTRAP_SOURCE_URL")
@@ -60,14 +58,14 @@ esac
         self.env = {**os.environ, "PATH": str(self.bin) + os.pathsep + os.environ["PATH"],
                     "BOOTSTRAP_PAYLOAD": str(self.payload), "BOOTSTRAP_CURL_ARGS": str(self.curl_args),
                     "BOOTSTRAP_CURL_STATUS": "0", "BOOTSTRAP_ENTRY_SCRIPT": str(self.entry),
-                    "BOOTSTRAP_SOURCE_URL": URL, "BOOTSTRAP_SHORT_URL": SHORT_URL, "BOOTSTRAP_ENTRY_URL": ENTRY_URL}
+                    "BOOTSTRAP_SOURCE_URL": URL, "BOOTSTRAP_ENTRY_URL": ENTRY_URL}
 
     def tearDown(self):
         self.temporary.cleanup()
 
-    def run_command(self, source, args=(), command=None):
+    def run_command(self, source, args=()):
         self.payload.write_text(source, encoding="utf-8")
-        command = command or read_command(ROOT / "README.md")
+        command = read_command(ROOT / "README.md")
         if args:
             command += " -s -- " + shlex.join(args)
         return subprocess.run(["bash", "-c", command], cwd=self.work, env=self.env,
@@ -78,7 +76,7 @@ esac
         result = self.run_command("import json,sys; print(json.dumps(sys.argv[1:]))", args)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(json.loads(result.stdout), args)
-        self.assertEqual(self.curl_args.read_text().splitlines(), [SHORT_URL, URL])
+        self.assertEqual(self.curl_args.read_text().splitlines(), [ENTRY_URL, URL])
         self.assertEqual(list(self.work.iterdir()), [])
 
     def test_download_failure_never_executes_partial_script(self):
@@ -137,17 +135,8 @@ esac
         marker = self.work / "must-not-execute"
         result = self.run_command(f"from pathlib import Path; Path({str(marker)!r}).write_text('bad')")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(self.curl_args.read_text().splitlines(), [SHORT_URL])
+        self.assertEqual(self.curl_args.read_text().splitlines(), [ENTRY_URL])
         self.assertFalse(marker.exists())
-
-    def test_documented_raw_github_fallback_runs_the_same_entry(self):
-        command = f"curl -fsSL {ENTRY_URL} | bash"
-        self.assertIn(command, (ROOT / "apps/decky/README.md").read_text(encoding="utf-8"))
-        result = self.run_command("print('same entry')", command=command)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout, "same entry\n")
-        self.assertEqual(self.curl_args.read_text().splitlines(), [ENTRY_URL, URL])
-
 
 if __name__ == "__main__":
     unittest.main()
