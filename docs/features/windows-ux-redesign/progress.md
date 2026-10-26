@@ -4,6 +4,30 @@
 
 ## 当前状态
 
+2026-10-27 下拉选择框修复已实现，分支 `fix/windows-source-theme-layout`：补丁、镜像与语言偏好统一改为锚定式只选菜单；独立边框、勾选与选中背景，保留原选择框。相关自动化与深浅主题渲染检查通过，原生窗口待验收，不改变下方历史验收结论。
+
+### 2026-10-27 下拉选择框验证
+
+#### 动效补充（本轮）
+
+- 用户认可现有排版但反馈展开没有动效。确认 Flutter 3.47.7 DropdownMenu 内部创建的 MenuAnchor 默认 animated=false，且 DropdownMenu 未提供对应参数。
+- 保留原有菜单与选择框外观，改为直接使用官方 MenuAnchor(animated)、MenuItemButton 与按钮入口，菜单展开/收起使用框架 Material 淡入与高度过渡，箭头采用 AnimatedRotation；遵从系统减少动画设置，不添加自定义动画控制器、SDK 副本或依赖。
+- 动画覆盖的浮层第一帧会排除焦点，开启动画时立即请求焦点不能生效；改为浮层挂载后的下一帧聚焦当前项，方向键从当前选择继续，在上下展开方向保持一致。
+- 七个相关测试文件共 47 项通过，包含真实淡入中间帧与收起过程、减少动画、点击外部关闭、深浅主题/上下展开/文字放大与长标题、选择和安装链；移除框架已自动处理的重复关闭调用后，十项控件及六项安装回归再次通过。
+- 减少动画首轮断言错误地统计了按钮的水波纹/焦点动画，改为检查菜单 FadeTransition 与箭头过渡，未因此修改全局按钮动效。
+- 按 overengineering-review 复核：直接复用框架动画、定位、键盘遍历和 MenuItemButton 自动关闭；额外状态仅为控制器与入口/选中项焦点，不保存选择副本。帧后聚焦针对已复现的初始 ExcludeFocus，保留 mounted/菜单仍打开的异步边界检查，无任意等待、重试或 SDK 拷贝。
+- 最终 `flutter analyze` 无问题，`git diff --check` 通过；`scripts/build-windows-flutter.ps1 -Preview -SkipRust` 构建通过，本地 `apps/windows-flutter/build/windows/x64/runner/Release/patchhub.exe` 已更新。原生窗口现场动效验收和安装版替换未执行。
+
+#### 上一轮静态菜单验证
+
+- 新增 `DesktopSelect` 统一三个实际入口，复用 Flutter DropdownMenu 的只选模式、MenuAnchor 边界定位、键盘导航和列表滚动；不引入额外选择状态、定位算法或选项数量/长度限制。
+- 新增八项控件回归，覆盖深浅主题、窗口顶部/底部和 1.0/1.5 文字比例，确认浮层与原框无重叠、选中勾选、鼠标选择、Escape 取消、Tab 聚焦、空格展开、方向键与回车选取及长标题。
+- 控件 8 项、安装流程 6 项、补丁选择 2 项、Modern 布局 18 项、来源模型 3 项、缩放 4 项、来源布局 4 项共 45 项通过。原安装回归迁移到新 DropdownMenu 后仍验证实际选择标识传到安装任务。
+- 键盘测试首轮错误地假设 Escape 后仍有焦点、且首次向下从已选项继续；补查框架行为后改为 Tab 聚焦并从菜单首项开始导航，未增加产品状态或键盘事件覆写。
+- 临时渲染测试加载 Windows 字体与 MaterialIcons，检查 `.artifacts/dropdown-dark-preview.png` 与 `.artifacts/dropdown-light-preview.png`。初次真实阴影预览未在测试结束前恢复调试开关导致验证失败，修正临时测试后通过；临时文件已移除，仅保留预览图片。
+- 按 overengineering-review 复核：封装仅服务三个现有重复入口，沿选择回调仍使用现有补丁/镜像/语言值；样式和定位交由框架，无新增防御分支、依赖或配置，未发现需修改项。
+- 最终 `flutter analyze` 无问题，`git diff --check` 通过；`scripts/build-windows-flutter.ps1 -Preview -SkipRust` 构建通过，本地预览 `apps/windows-flutter/build/windows/x64/runner/Release/patchhub.exe` 已更新。未替换安装版，未执行原生窗口现场验收。
+
 2026-10-24 已按用户反馈补齐悬浮底栏、右侧补丁状态与整行技术详情；相关自动化、原生截图及正式 v0.3.0 发行包验证通过，已获用户合并发布授权。此前 Modern 视觉迭代已完成主体实现，见 [Modern 视觉重设计方案](visual-design.md)。自动化、原生窗口与候选构建结果见文末施工记录；本轮状态不改变下方原 Flutter 重写的历史验收结论。
 
 2026-10-22：P0–P7 实施及本地/用户实机验收已完成，系统/浅色/深色主题、Flutter 宿主、来源、安装/恢复和发行迁移均已落地；旧 React/Tauri 端已退役。用户确认系统交互全部通过，并明确将官方 ZIP 的 Cloudflare HTTP 403 作为外部遗留项接受，授权完成并合回 main。下方保留施工历史，最终证据与遗留项以末节为准；未推送或发布。
