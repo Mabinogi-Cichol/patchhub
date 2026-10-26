@@ -409,3 +409,9 @@ flutter test integration_test/windows_acceptance_test.dart -d windows "--dart-de
 - 对最终 Release 使用独立 APPDATA 启动/正常 WM_CLOSE 验证通过，退出码 0、关闭 884ms、无残留直属子进程；未使用强制终止。记录 `release-smoke/result.json`。没有使用现有客户端数据执行安装或更新。
 - 原生布局集成测试通过：三种尺寸、深浅主题共 30 张截图，覆盖概览与文件详情展开、四个 Tab 和全局来源；原生更新弹窗检查最新版本且 LibraryPage 矩形不变；原生标题栏最大化/还原及关闭路径通过。证据 `native-ui/result.json`、`native-ui/metrics.json`、`.artifacts/windows-ui-fixes-native.log`。首轮测试在小窗口未先滚动生成懒加载项，已修正测试定位并重跑通过，未因此修改产品逻辑。
 - 人工查看了原生文件详情、概览展开和订阅页截图：无灰块，操作栏可见。原生截图使用夹具数据；真实游戏安装、正式跨版本更新不属于本次构建验证。未提交或发布版本。
+
+### 2026-10-27 v0.4.0 发布完成
+
+- 来源布局、主题图标与下拉选择修复随 `chore/release-v0-4-0` 合并入 `main`（发行提交 `c3bcc00`），注解 Tag `v0.4.0` 指向该提交；正式 [Release v0.4.0](https://github.com/Mabinogi-Cichol/patchhub/releases/tag/v0.4.0) 由 Tag CI 40388618121 生成，8 个任务全部成功。
+- Windows 任务 Flutter 238 项通过、1 项跳过，`flutter analyze` 无问题；Decky 前端 68 项与安装器桥接 9 项通过。9 个公开附件的哈希、ZIP 内容/CRC/白名单、SBOM、PE/ELF 平台与 Tag 来源一致性核验通过；Windows 便携包 `0.4.0+1` 隔离启动与正常关闭通过（退出码 0、关闭 1151ms）。
+- 附件表、CI 证据与未验证边界见[发行检查](../../release-checklist.md#v040-发布记录2026-10-27)及[发行说明](../../releases/v0.4.0.md)。本次未新增设备部署、真实游戏安装、实体手柄或系统 DPI 验收结论。

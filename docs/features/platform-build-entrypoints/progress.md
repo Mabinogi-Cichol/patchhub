@@ -26,3 +26,4 @@
 - 真实预览构建通过（退出 0）：Rust release 增量编译约 40 秒，Flutter Windows 构建约 44.7 秒（不含工具检查与依赖解析）；产物为 `apps/windows-flutter/build/windows/x64/runner/Release/patchhub.exe`。首次沙盒运行在 Flutter 用户目录遥测文件写入处失败，使用获准的沙盒外构建完成验证。
 - 运行目录的应用、Flutter DLL、Flutter 资产及 catalog/trust-keys 文件存在；复制的核心/worker 与本次 `target/release` 二进制 SHA-256 一致。尚未执行界面交互验收，本轮不运行测试和完整发行构建。
 - 按用户要求合并至本地 `main`，未推送；合并无冲突且不新增实现改动，沿用上述验证结果。
+- 2026-10-27 随 v0.4.0 推送至远端 `main` 并发布（入口为开发工具，不随安装包分发；见[发行检查](../../release-checklist.md#v040-发布记录2026-10-27)）。

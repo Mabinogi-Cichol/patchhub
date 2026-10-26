@@ -154,3 +154,26 @@ RustSec 提示：RUSTSEC-2024-0429（glib 0.18.5，unsound）与 RUSTSEC-2024-03
 - Cargo workspace 与 Cargo.lock、Flutter pubspec、Decky 与共享 UI 的 npm 版本、package-lock、SBOM 应用版本及 NSIS 默认版本已统一为 0.4.0。更新清单版本一致性、`cargo metadata --locked` 与 npm 锁文件检查通过，SBOM、Windows 更新与打包脚本共 18 项测试通过。
 - 正式发行以 Tag 对应 CI 新构建为准，不上传本地旧版本候选。标题严格为 v0.4.0，中文正文来自 [发行说明](releases/v0.4.0.md)。
 - CI 运行与公开附件核验尚待执行；本次不执行设备部署或真实游戏补丁安装。
+
+## v0.4.0 发布记录（2026-10-27）
+
+- 版本更新 `16a1143`、发行说明与准备 `4cee264` 分别提交，合并提交 `c3bcc00`；注解 Tag `v0.4.0` 对象 `08637a4b5b595c66d1019fb3a4f3546577722349` 指向该提交。本地 `main` 与 Tag 一并推送，未改写其他分支。
+- [Tag 运行 40388618121](https://github.com/Mabinogi-Cichol/patchhub/actions/runs/40388618121) 的 changes、core（Windows/Linux）、windows、decky、release 与 ci 共 8 个任务全部成功。Windows 任务 Flutter 238 项通过、1 项跳过，`flutter analyze` 无问题，Release 构建与 NSIS 生成通过；Decky 前端 68 项与安装器桥接 9 项通过；两端 core 全部 cargo 测试套件 0 失败。
+- [正式 Release v0.4.0](https://github.com/Mabinogi-Cichol/patchhub/releases/tag/v0.4.0) 由工作流于 UTC 2026-10-26 19:51:19（北京时间 2026-10-27 03:51:19）发布。标题与 Tag 均为 `v0.4.0`，非草稿、非预发行，共 9 个附件；正文已替换为[发行说明](releases/v0.4.0.md)并逐字符读回一致。
+- 从公开 Release 下载全部 9 个附件（合计 43,516,700 字节）并核对：名称、大小与 GitHub digest 一致；`SHA256SUMS.txt` 的 8 个内容文件及两端 checksums JSON 与下载文件一致。ZIP CRC、无重复及越界条目、条目白名单通过（Windows 42 文件 / Decky 26 文件）；Windows `update-manifest.json` 的 files 集合等于 ZIP 条目且版本 0.4.0。
+- 来源一致性：ZIP 内目录、协议 schema、品牌图、客户指南、隐私说明、许可、`windows-update.ps1` 及 Decky 生产后端模块与 `install-decky.py` 均与 Tag 字节一致。Windows 程序与 DLL 为 PE x86_64，NSIS 引导桩为 x86；Decky `bin/patchhub-core` 与 `bin/patchhub-worker` 为 ELF64 x86_64，runtime 哈希、大小与执行位正确。
+- 两份 CycloneDX 1.6 SBOM 为 0.4.0；Windows 505 组件、Decky 437 组件；Cargo/npm/Dart 锁摘要与 Tag 匹配，ZIP 内外 SBOM 字节一致，`patchhub-rust-installer` 组件源文件摘要匹配。
+- 正式 Windows 便携包在独立 APPDATA 中启动并正常关闭，FileVersion/ProductVersion 为 `0.4.0+1`，退出码 0、关闭 1151ms；未操作用户配置或真实游戏安装，未运行安装包（NSIS 版本字符串位于压缩载荷内，版本由 Tag 构建脚本与 `app-version.json` 一致性步骤及 CI 日志佐证）。
+- 未对最终附件执行 Steam Deck 部署、真实游戏安装/卸载矩阵、实体手柄、系统 DPI 与真实自定义图验收；Windows 安装包未配置 Authenticode 签名。证据：`.artifacts/release-v0.4.0/`（release.json、tag-run.json、tag-jobs.json、tag-ci-logs.zip、verification.json、portable-smoke-result.json 及 downloads/、logs/）。
+
+| 附件 | 字节 | SHA-256 |
+| --- | --- | --- |
+| checksums-decky.json | 148 | `82e208a42e385a75a67c7dd6db273790297e8bcd54d74b405d5a6688f698e15e` |
+| checksums-windows.json | 167 | `8bb47e79beb46d05ffe225c457ba444a1479e33be51d0c567ff1845f758b7ebf` |
+| dependencies-decky.cdx.json | 206466 | `87d587dd159141e8fd141eb997eecda1b14c47d4aa649af23257008b6e687dc7` |
+| dependencies-windows.cdx.json | 1698451 | `97dce0e3c5d967a4444123fe46c00b5e13706a34a305fc481d52f51da42a1d02` |
+| install-decky.py | 46499 | `3181f30199276b85a5d884c58cc0debadf6ba16ee519a2f217824fac2adeba7f` |
+| SHA256SUMS.txt | 727 | `8c27c08ad72c7b71ec4fce2c58ce0db073390bd78d14031aaf8a5b11ec5aa2b8` |
+| patchhub-decky.zip | 7673533 | `a94695d3b78ce929e7f8a4b37cebee68f7fe1d18ddbb2f6d71e7cd43e2faba9e` |
+| patchhub-windows-portable.zip | 19322437 | `df6e73125a41f14ec5b49ad6ba505ee60179514b4b1760c65ec13a933de9a05a` |
+| patchhub-windows-x64-setup.exe | 14568272 | `740442b445779a904c5acf0d0109af624cde7031aa43ac8af8fd7b84c1c9cca2` |
