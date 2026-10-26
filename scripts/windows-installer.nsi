@@ -5,7 +5,7 @@ Unicode true
   !error "BUNDLE must point to the complete Flutter Release directory"
 !endif
 !ifndef VERSION
-  !define VERSION "0.3.0"
+  !define VERSION "0.4.0"
 !endif
 Name "PatchHub"
 OutFile "${OUTPUT}"
