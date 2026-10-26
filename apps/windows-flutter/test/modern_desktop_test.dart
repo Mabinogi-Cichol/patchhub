@@ -111,6 +111,49 @@ void main() {
         contrast(scheme.surfaceContainer, scheme.onSurfaceVariant),
         greaterThanOrEqualTo(4.5),
       );
+      if (brightness == Brightness.dark) {
+        final theme = Theme.of(tester.element(find.text('contrast')));
+        for (final color in [
+          theme.scaffoldBackgroundColor,
+          scheme.surface,
+          scheme.surfaceDim,
+          scheme.surfaceBright,
+          scheme.surfaceContainerLowest,
+          scheme.surfaceContainerLow,
+          scheme.surfaceContainer,
+          scheme.surfaceContainerHigh,
+          scheme.surfaceContainerHighest,
+          scheme.primaryContainer,
+          scheme.secondaryContainer,
+          scheme.onSurface,
+          scheme.onSurfaceVariant,
+          scheme.outline,
+          scheme.outlineVariant,
+        ]) {
+          expect(color.r, closeTo(color.g, 1 / 255));
+          expect(color.g, closeTo(color.b, 1 / 255));
+        }
+        expect(
+          theme.scaffoldBackgroundColor.computeLuminance(),
+          lessThan(scheme.surface.computeLuminance()),
+        );
+        expect(
+          scheme.surface.computeLuminance(),
+          lessThan(scheme.surfaceContainer.computeLuminance()),
+        );
+        for (final background in [
+          scheme.surfaceContainerLowest,
+          scheme.surfaceContainerLow,
+          scheme.surfaceContainerHigh,
+          scheme.surfaceContainerHighest,
+          scheme.primaryContainer,
+        ]) {
+          expect(
+            contrast(background, scheme.onSurfaceVariant),
+            greaterThanOrEqualTo(4.5),
+          );
+        }
+      }
     });
   }
 }
