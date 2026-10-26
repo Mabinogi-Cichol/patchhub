@@ -44,6 +44,14 @@ try {
     Invoke-Checked $Flutter @('pub','get','--enforce-lockfile')
     Invoke-Checked $Flutter @('analyze')
     Invoke-Checked $Flutter @('test')
+    # Flutter 3.47.7 can reuse a font subset after app.dill changes because the
+    # Windows asset target does not list app.dill as an input. Rebuild assets so
+    # newly referenced icons are included in the release font.
+    $taskFlutterCache = Join-Path $taskApp '.dart_tool/flutter_build'
+    if (Test-Path -LiteralPath $taskFlutterCache) {
+        Get-ChildItem -LiteralPath $taskFlutterCache -Filter 'release_bundle_windows-x64_assets.stamp' -File -Recurse |
+            Remove-Item -Force
+    }
     Invoke-Checked $Flutter @('build','windows','--release')
     $taskDeps = & $Flutter pub deps --json
     if ($LASTEXITCODE -ne 0) { throw 'Unable to collect Flutter dependencies' }

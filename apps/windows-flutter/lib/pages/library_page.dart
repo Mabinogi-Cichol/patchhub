@@ -12,6 +12,36 @@ import 'patch_management_page.dart';
 import 'records_page.dart';
 import 'source_pages.dart';
 
+Widget _themeIcon(ThemeMode mode) => switch (mode) {
+  ThemeMode.light => const Icon(Icons.light_mode_outlined, size: 20),
+  ThemeMode.dark => const Icon(Icons.dark_mode_outlined, size: 20),
+  ThemeMode.system => const SizedBox(
+    key: ValueKey('system-theme-icon'),
+    width: 20,
+    height: 20,
+    child: Row(
+      children: [
+        ClipRect(
+          child: Align(
+            widthFactor: 0.5,
+            heightFactor: 1,
+            alignment: Alignment.centerLeft,
+            child: Icon(Icons.light_mode_outlined, size: 20),
+          ),
+        ),
+        ClipRect(
+          child: Align(
+            widthFactor: 0.5,
+            heightFactor: 1,
+            alignment: Alignment.centerRight,
+            child: Icon(Icons.dark_mode_outlined, size: 20),
+          ),
+        ),
+      ],
+    ),
+  ),
+};
+
 class LibraryPage extends StatefulWidget {
   const LibraryPage({super.key, required this.model, this.artwork});
   final AppModel model;
@@ -144,6 +174,7 @@ class _LibraryPageState extends State<LibraryPage> {
     final row = rows.where((row) => row.id == selectedId).firstOrNull;
     final scheme = Theme.of(context).colorScheme;
     final width = MediaQuery.sizeOf(context).width;
+    final themeMode = PatchHubApp.themeModeOf(context);
     return Scaffold(
       body: Column(
         children: [
@@ -159,8 +190,10 @@ class _LibraryPageState extends State<LibraryPage> {
               ),
               PopupMenuButton<ThemeMode>(
                 tooltip: '外观',
-                icon: const Icon(Icons.tune_outlined, size: 20),
-                onSelected: (mode) => PatchHubApp.setThemeMode(context, mode),
+                icon: _themeIcon(themeMode),
+                onSelected: (mode) => setState(() {
+                  PatchHubApp.setThemeMode(context, mode);
+                }),
                 itemBuilder: (context) => [
                   for (final entry in const {
                     ThemeMode.system: '跟随系统',
@@ -170,7 +203,13 @@ class _LibraryPageState extends State<LibraryPage> {
                     CheckedPopupMenuItem(
                       value: entry.key,
                       checked: PatchHubApp.themeModeOf(context) == entry.key,
-                      child: Text(entry.value),
+                      child: Row(
+                        children: [
+                          _themeIcon(entry.key),
+                          const SizedBox(width: 12),
+                          Text(entry.value),
+                        ],
+                      ),
                     ),
                 ],
               ),
