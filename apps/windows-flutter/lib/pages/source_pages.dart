@@ -150,9 +150,11 @@ class _GlobalSourcesPageState extends State<GlobalSourcesPage> {
           sourceCard(source, fallback),
       ],
       ExpansionTile(
+        key: const PageStorageKey('global-sources:add-rule'),
         title: const Text('高级：添加来源规则'),
         children: [
           TextField(
+            key: const PageStorageKey('global-sources:rule-input'),
             controller: rule,
             minLines: 5,
             maxLines: null,
@@ -227,14 +229,16 @@ class _GlobalSourcesPageState extends State<GlobalSourcesPage> {
                 if (errors[id] != null) SelectableText('保存失败：${errors[id]}'),
                 if (task != null) TaskSummary(task: task),
                 if (!fallback) ...[
+                  const SizedBox(height: 12),
+                  const Text('自动更新间隔（小时，0 表示关闭）'),
+                  const SizedBox(height: 8),
                   TextFormField(
-                    key: ValueKey('$id:${source['interval_hours']}'),
+                    key: PageStorageKey(
+                      '$id:interval:${source['interval_hours']}',
+                    ),
                     initialValue: '${source['interval_hours']}',
                     keyboardType: TextInputType.number,
                     enabled: !saving,
-                    decoration: const InputDecoration(
-                      labelText: '自动更新间隔（小时，0 表示关闭）',
-                    ),
                     onChanged: (value) => intervals[id] = value,
                   ),
                   Wrap(
@@ -275,10 +279,12 @@ class _GlobalSourcesPageState extends State<GlobalSourcesPage> {
                   '索引：${source['entry_count']} 条 · ${source['complete'] == true ? '覆盖完整' : '覆盖不完整'}',
                 ),
                 ExpansionTile(
+                  key: PageStorageKey('source:$id:details'),
                   title: const Text('调度与地址详情'),
                   children: [
                     SelectableText(
                       '最近成功：${sourceTime(source['cached_at'])}\n下次到期：${sourceTime(source['next_due_at'])}\n来源版本：${source['revision']}\n设置版本：${widget.model.settingsRevision ?? '未知'}',
+                      key: PageStorageKey('source:$id:details-text'),
                     ),
                     for (final page in source['pages'] as List)
                       TextButton(
