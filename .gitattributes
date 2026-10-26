@@ -7,3 +7,8 @@
 *.ts text eol=lf
 *.tsx text eol=lf
 *.sh text eol=lf
+
+# Flutter regenerates these Windows plugin files with LF line endings.
+apps/windows-flutter/windows/flutter/generated_plugin_registrant.cc text eol=lf
+apps/windows-flutter/windows/flutter/generated_plugin_registrant.h text eol=lf
+apps/windows-flutter/windows/flutter/generated_plugins.cmake text eol=lf

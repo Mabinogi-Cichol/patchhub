@@ -298,7 +298,6 @@ function GameManager({ item, seg, panel }: { item: Install; seg: string; panel?:
   const [archive, setArchive] = useState("");
   const [preview, setPreview] = useState<Preview | null>(null);
   const [manual, setManual] = useState(false);
-  const [manualConfirmation, setManualConfirmation] = useState("");
   const panelScroll = useRef<Record<string, number>>({});
   const contentRef = useRef<HTMLDivElement>(null);
   const mounted = useRef(true);
@@ -307,7 +306,7 @@ function GameManager({ item, seg, panel }: { item: Install; seg: string; panel?:
   const patch = selected?.kind === "installable" ? selected.choices.find(p => (p.selection_id ?? p.release_id) === selectedDownload) ?? selected.patch : undefined;
   const candidate = selected?.kind === "discovery" ? selected.candidate : undefined;
   const identity = patch?.selection_id ?? patch?.release_id ?? "";
-  useEffect(() => { setPreview(null); setArchive(""); setManualConfirmation(""); }, [item.game.instance_id, identity]);
+  useEffect(() => { setPreview(null); setArchive(""); }, [item.game.instance_id, identity]);
   const primaryAction = primaryInstallAction(patch, !!archive.trim());
   const primaryInput = primaryAction.input;
   const primaryAvailable = primaryAction.available;
@@ -355,7 +354,7 @@ function GameManager({ item, seg, panel }: { item: Install; seg: string; panel?:
     // registers on the first render.
     if (navigate.current) navigate.current(target); else Navigation.Navigate(target);
   }
-  function chooseRelease(next: string) { setSelectedKey(next); setSelectedDownload(""); setManualConfirmation(""); setArchive(""); setPreview(null); }
+  function chooseRelease(next: string) { setSelectedKey(next); setSelectedDownload(""); setArchive(""); setPreview(null); }
   function changeGameSource(sourceId: string, subscribed: boolean) {
     void session.work("正在更新此游戏的订阅源…", async () => {
       await setGameSource(item.game.appid, sourceId, subscribed);
@@ -390,7 +389,7 @@ function GameManager({ item, seg, panel }: { item: Install; seg: string; panel?:
   }
   async function beginInstall(localArchive?: string) {
     const input = installInput(patch, localArchive);
-    if (input === null || !patch || busy || tasks.isBusy() || (patch.compatibility === "manual_selection_required" && manualConfirmation !== identity)) return;
+    if (input === null || !patch || busy || tasks.isBusy()) return;
     try {
       const operation = primaryAction.operation;
       const key = `${item.game.instance_id}\0${identity}\0${operation}\0${input}`;
@@ -466,7 +465,7 @@ function GameManager({ item, seg, panel }: { item: Install; seg: string; panel?:
     {common}
     {selection}
     {candidate ? <CandidateDetails candidate={candidate} /> : !patch ? <PanelSection><Row><Status>{discoveryStatus(item.discovery?.status)}</Status></Row></PanelSection> : <>
-      {selected?.kind === "installable" && selected.choices.length > 1 && <PanelSection title="下载文件与镜像"><Row><DropdownItem label="选择下载项" layout="below" selectedOption={patch.selection_id ?? patch.release_id} rgOptions={selected.choices.map(p => ({ data: p.selection_id ?? p.release_id, label: `${p.download_label || "来源下载"} · ${p.download_url ? downloadFileName(p.download_url) : p.name}` }))} onChange={option => { setSelectedDownload(option.data); setManualConfirmation(""); setPreview(null); setArchive(""); }} /></Row></PanelSection>}
+      {selected?.kind === "installable" && selected.choices.length > 1 && <PanelSection title="下载文件与镜像"><Row><DropdownItem label="选择下载项" layout="below" selectedOption={patch.selection_id ?? patch.release_id} rgOptions={selected.choices.map(p => ({ data: p.selection_id ?? p.release_id, label: `${p.download_label || "来源下载"} · ${p.download_url ? downloadFileName(p.download_url) : p.name}` }))} onChange={option => { setSelectedDownload(option.data); setPreview(null); setArchive(""); }} /></Row></PanelSection>}
       <PanelSection title="选择补丁"><InfoRow label="补丁">{patch.name}</InfoRow>
         <InfoRow label="匹配源">{sourceInfo(patch, report?.sources)}</InfoRow>
       </PanelSection>
@@ -488,11 +487,10 @@ function GameManager({ item, seg, panel }: { item: Install; seg: string; panel?:
       </PanelSection>
       <PanelSection title={installed ? "覆盖安装" : "安装补丁"}>
         <Row><Status>安装时请关闭游戏并暂停 Steam 更新。</Status></Row>
-        {patch.compatibility === "manual_selection_required" && <Row><ToggleField label="我选择将此候选安装到当前游戏" description="自动匹配未确认。请核对来源、语言和 DLC；版本或条件未标明时由你选择。" checked={manualConfirmation === identity} onChange={value => setManualConfirmation(value ? identity : "")} /></Row>}
         {actionBlockers.map((blocker, i) => <Row key={`action-${blocker.code}-${i}`}><Status warning>{reason(blocker.code)}{blocker.detail ? ` · ${blocker.detail}` : ""}</Status></Row>)}
         <Row><Action disabled={!!busy || tasks.isBusy()} onClick={viewPreview}>查看文件变更（只读）</Action></Row>
         {preview && <Row><Status>{preview.changes.length ? preview.changes.map(change => `${change.action}：${change.path}`).join("；") : preview.blockers.length ? preview.blockers.map(reason).join("；") : "暂无文件变更。"}</Status></Row>}
-        <Row><Action disabled={!primaryAvailable || !!busy || tasks.isBusy() || (patch.compatibility === "manual_selection_required" && manualConfirmation !== identity)} onClick={() => void beginInstall(primaryInput === "local_archive" ? archive : undefined)}>{patch.compatibility === "manual_selection_required" ? "安装手动选择的补丁" : primaryAction.label === "overwrite" ? "覆盖安装补丁" : "安装补丁"}</Action></Row>
+        <Row><Action disabled={!primaryAvailable || !!busy || tasks.isBusy()} onClick={() => void beginInstall(primaryInput === "local_archive" ? archive : undefined)}>{primaryAction.label === "overwrite" ? "覆盖安装补丁" : "安装补丁"}</Action></Row>
         {patch.actions.local_archive.available && primaryInput === "automatic" && <Row><Action onClick={() => setManual(value => !value)}>使用本地 ZIP（高级）{manual ? " ▴" : " ▾"}</Action></Row>}
         {(manual || (primaryInput === "local_archive" && patch.actions.local_archive.available)) && <><Row><TextField label="Downloads 内的 ZIP 路径" value={archive} onChange={e => setArchive(e.target.value)} /></Row>
           {primaryInput !== "local_archive" && <Row><Action disabled={!archive.trim() || !patch.actions.local_archive.available || !!busy || tasks.isBusy()} onClick={() => void beginInstall(archive)}>使用本地 ZIP {primaryAction.label === "overwrite" ? "覆盖安装" : "安装"}</Action></Row>}</>}

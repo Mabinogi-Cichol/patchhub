@@ -6,6 +6,7 @@
 
 | 功能 | 状态 | 设计文档 | 施工记录 | 附加文档 |
 | --- | --- | --- | --- | --- |
+| 补丁选择状态与候选安装交互修复 | 选择身份修复已提交；补充标题清理与双端候选统一交互已实现，Flutter 26/核心投影 24/Decky 68 项及静态检查通过，安装版更新和实机待验证 | [设计](windows-patch-selection/design.md) | [施工记录](windows-patch-selection/progress.md) | — |
 | PatchHub 合并后 CI 修复 | 首轮已合并推送；线上后续失败已补充修复，普通/短 TEMP 的 Windows 各 9 项、WSL 启动入口 8 项通过；补充修复按要求提交并合并本地 main，未推送，完整在线 CI 待验证 | [设计](patchhub-ci-fix/design.md) | [施工记录](patchhub-ci-fix/progress.md) | — |
 | PatchHub 品牌与全面改名 | 全面改名与双端构建/打包、Windows 原生更新链通过；GitHub 已改名，源码未推送，系统安装/Decky 实机与正式发布待验收 | [设计与改名计划](patchhub-branding/design.md) | [施工记录](patchhub-branding/progress.md) | [实现复核](patchhub-branding/review.md) |
 | Windows 与 Decky 客户端自更新 | 已实现；双端本地 Release 夹具完整更新链、自动化与 Decky 实机部署/检测页面/失败恢复通过；正式发布、Windows 安装版完整矩阵及实体手柄待验收 | [设计](client-self-update/design.md) | [施工记录](client-self-update/progress.md) | [实现复核](client-self-update/review.md) |

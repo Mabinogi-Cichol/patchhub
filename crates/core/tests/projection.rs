@@ -1326,6 +1326,7 @@ fn manual_unknown_candidate_binds_download_and_instance_without_faking_metadata(
             .filter(|p| p.compatibility == "manual_selection_required")
             .collect();
         assert_eq!(manual.len(), 2);
+        assert!(manual.iter().all(|p| p.name == candidate.patch_title));
         assert!(manual.iter().all(|p| p.actions.automatic.available));
         let mut source = sources::Sources::open(&state).unwrap();
         source

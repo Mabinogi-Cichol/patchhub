@@ -56,18 +56,9 @@ String rowSummary(GameRow row) {
     return '补丁文件不完整，可覆盖安装';
   }
   if (row.patches.any(
-    (patch) =>
-        patch['actions']['automatic']['available'] == true &&
-        patch['compatibility'] != 'manual_selection_required',
+    (patch) => patch['actions']['automatic']['available'] == true,
   )) {
     return '有可用补丁';
-  }
-  if (row.patches.any(
-    (patch) =>
-        patch['actions']['automatic']['available'] == true &&
-        patch['compatibility'] == 'manual_selection_required',
-  )) {
-    return '可手动选择补丁';
   }
   if (row.matched) return '找到补丁来源';
   return switch (row.discovery?['status']) {
@@ -90,6 +81,10 @@ class DisplayEntry {
   final Map<String, dynamic>? patch;
   final List<Map<String, dynamic>> choices;
   final Map<String, dynamic>? candidate;
+  // Discovery and installable entries represent the same source candidate.
+  String get selectionKey => candidate != null
+      ? 'candidate:${candidate!['source_id'] ?? ''}:${candidate!['candidate_id']}'
+      : key;
   bool get installable => patch != null;
   String get title => (patch?['name'] ?? candidate!['patch_title']) as String;
 }
@@ -263,7 +258,7 @@ String statusLabel(dynamic value) =>
           '安装已取消，但已写入的文件未恢复。可重新安装补丁；如需恢复游戏本体，请使用 Steam 验证游戏文件。',
       'install_incomplete':
           '安装未完成，已写入的文件未恢复。可重新安装补丁；如需恢复游戏本体，请使用 Steam 验证游戏文件。',
-      'manual_selection_required': '需要人工确认适用条件',
+      'manual_selection_required': '按所选下载项安装',
       'check_required': '安装时检查条件',
       'verified_metadata': '目录条件已核对',
       'verified': '条件已核对',

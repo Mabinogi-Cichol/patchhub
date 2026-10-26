@@ -47,7 +47,6 @@ class PatchManagementPage extends StatefulWidget {
 }
 
 class _PatchManagementPageState extends State<PatchManagementPage> {
-  bool confirmed = false;
   bool localRoute = false;
   bool reading = false;
   String? archive;
@@ -123,8 +122,7 @@ class _PatchManagementPageState extends State<PatchManagementPage> {
         : input == 'local_archive' &&
               patch['actions']['local_archive']['available'] == true &&
               archive != null;
-    return allowed &&
-        (patch['compatibility'] != 'manual_selection_required' || confirmed);
+    return allowed;
   }
 
   Future<void> install() async {
@@ -209,7 +207,7 @@ class _PatchManagementPageState extends State<PatchManagementPage> {
         ? null
         : ExpansionTile(
             key: PageStorageKey(
-              '${widget.row.id}:${widget.entry.key}:technical',
+              '${widget.row.id}:${widget.entry.selectionKey}:technical',
             ),
             title: const Text('文件与技术详情'),
             expandedCrossAxisAlignment: CrossAxisAlignment.stretch,
@@ -263,12 +261,15 @@ class _PatchManagementPageState extends State<PatchManagementPage> {
       if (patch != null && installables.length > 1) ...[
         Text('补丁选择', style: fieldTitleStyle),
         DropdownButtonFormField<String>(
-          initialValue: widget.entry.key,
+          initialValue: widget.entry.selectionKey,
           isExpanded: true,
           decoration: const InputDecoration(),
           items: [
             for (final entry in installables)
-              DropdownMenuItem(value: entry.key, child: Text(entry.title)),
+              DropdownMenuItem(
+                value: entry.selectionKey,
+                child: Text(entry.title),
+              ),
           ],
           onChanged: (value) {
             if (value != null) widget.onEntry(value);
@@ -339,14 +340,6 @@ class _PatchManagementPageState extends State<PatchManagementPage> {
               if (value != null) widget.onMirror(value);
             },
           ),
-        if (patch['compatibility'] == 'manual_selection_required')
-          CheckboxListTile(
-            contentPadding: EdgeInsets.zero,
-            controlAffinity: ListTileControlAffinity.leading,
-            title: const Text('我已核对来源、语言与 DLC 条件，选择将此候选安装到当前游戏'),
-            value: confirmed,
-            onChanged: (value) => setState(() => confirmed = value!),
-          ),
         for (final blocker in blockers)
           SelectableText(
             '${statusLabel(blocker['code'])}${blocker['detail'] == null ? '' : '\n${blocker['detail']}'}',
@@ -361,7 +354,7 @@ class _PatchManagementPageState extends State<PatchManagementPage> {
         ] else if (patch['actions']['local_archive']['available'] == true)
           ExpansionTile(
             key: PageStorageKey(
-              '${widget.row.id}:${widget.entry.key}:local-zip',
+              '${widget.row.id}:${widget.entry.selectionKey}:local-zip',
             ),
             title: const Text('使用本地 ZIP'),
             children: [
@@ -390,7 +383,7 @@ class _PatchManagementPageState extends State<PatchManagementPage> {
         if (candidate != null)
           ExpansionTile(
             key: PageStorageKey(
-              '${widget.row.id}:${widget.entry.key}:source-details',
+              '${widget.row.id}:${widget.entry.selectionKey}:source-details',
             ),
             title: const Text('来源技术详情'),
             children: [
@@ -420,8 +413,6 @@ class _PatchManagementPageState extends State<PatchManagementPage> {
         ? (installed ? '已安装补丁' : '可安装补丁')
         : input == 'local_archive' && archive == null
         ? '需要本地 ZIP'
-        : patch['compatibility'] == 'manual_selection_required' && !confirmed
-        ? '待确认适用条件'
         : '暂不可安装';
     final statusDescription = patch == null
         ? '此来源线索尚不能用于安装'
@@ -518,7 +509,7 @@ class _PatchManagementPageState extends State<PatchManagementPage> {
               child: buildContent(
                 ListView(
                   key: PageStorageKey(
-                    '${widget.row.id}:${widget.entry.key}:management',
+                    '${widget.row.id}:${widget.entry.selectionKey}:management',
                   ),
                   padding: EdgeInsets.fromLTRB(inset, 12, inset, 0),
                   children: [
