@@ -8,6 +8,7 @@
 
 | 功能 | 状态 | 设计文档 | 施工记录 | 附加文档 |
 | --- | --- | --- | --- | --- |
+| 分平台 BAT 构建入口 | 已实现，入口与模拟流水线、Windows 快速预览实际构建通过，完整发行构建待验证 | [设计](platform-build-entrypoints/design.md) | [施工记录](platform-build-entrypoints/progress.md) | — |
 | 补丁选择状态与候选安装交互修复 | 选择身份修复已提交；补充标题清理与双端候选统一交互已实现，Flutter 26/核心投影 24/Decky 68 项及静态检查通过，安装版更新和实机待验证 | [设计](windows-patch-selection/design.md) | [施工记录](windows-patch-selection/progress.md) | — |
 | Windows 全局来源布局修复 | 状态键修复已合并；补充来源卡片分组与三态主题图标已实现，13 项回归、静态分析与深浅渲染检查通过，原生界面待验收 | [设计](windows-global-sources-layout/design.md) | [施工记录](windows-global-sources-layout/progress.md) | — |
 | PatchHub 合并后 CI 修复 | 首轮已合并推送；线上后续失败已补充修复，普通/短 TEMP 的 Windows 各 9 项、WSL 启动入口 8 项通过；补充修复按要求提交并合并本地 main，未推送，完整在线 CI 待验证 | [设计](patchhub-ci-fix/design.md) | [施工记录](patchhub-ci-fix/progress.md) | — |

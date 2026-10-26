@@ -33,6 +33,13 @@ curl -fsSL https://raw.githubusercontent.com/Mabinogi-Cichol/patchhub/main/insta
 2. 打开 Decky 设置，通过本地 ZIP 安装入口选择该文件；部分版本需先启用开发者模式。
 3. 返回游戏模式，按 **“…” → Decky → PatchHub** 打开插件。
 
+## 本地构建
+
+- Windows 快速预览：双击 `build-windows.bat`，增量构建 Rust 核心与 Flutter 应用后自动打开，跳过测试、静态分析和发行打包。应用位于 `apps/windows-flutter/build/windows/x64/runner/Release/patchhub.exe`。需要安装包、便携 ZIP、SBOM 和校验文件时使用原有 `build.bat`。
+- Decky：双击 `build-decky.bat`，通过默认 WSL 发行版构建 Linux 核心，再生成插件 ZIP、SBOM、校验文件及安装脚本。需 Windows Node.js/npm、Python 3.11+，以及已配置 Linux Rust 工具链和原生编译依赖的 WSL；工具链目录沿用 `scripts/build-linux.sh` 的 `.tools/linux-cargo`、`.tools/linux-rustup`。
+
+发行产物位于 `.artifacts`。命令行运行可加 `--no-pause` 禁用结束暂停，加 `--help --no-pause` 查看说明。发行构建请依次运行，共用的 SBOM 和总校验表由最近一次发行构建生成。
+
 ## 实机截图
 
 Steam Deck 游戏模式：
