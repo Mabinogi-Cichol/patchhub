@@ -83,15 +83,18 @@ class Probe {
             '-File', str(SCRIPT), '-Target', str(self.target), '-Work', work or str(self.work)], capture_output=True, text=True)
         return process
 
-    def test_zip_update_from_short_transaction_path(self):
+    def short_path(self, path):
         import ctypes
         short_path = ctypes.create_unicode_buffer(32768)
-        length = ctypes.windll.kernel32.GetShortPathNameW(str(self.work), short_path, len(short_path))
+        length = ctypes.windll.kernel32.GetShortPathNameW(str(path), short_path, len(short_path))
         self.assertGreater(length, 0)
         self.assertLess(length, len(short_path))
-        if short_path.value == str(self.work):
+        if short_path.value == str(path):
             self.skipTest('Temporary volume does not provide short path aliases')
-        result = self.apply(work=short_path.value)
+        return short_path.value
+
+    def test_zip_update_from_short_transaction_path(self):
+        result = self.apply(work=self.short_path(self.work))
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual((self.target / 'patchhub-core.exe').read_text(), '0.4.0')
         self.assertEqual((self.target / 'user.txt').read_text(), 'preserve')
@@ -133,14 +136,22 @@ class Probe {
         self.assertEqual((self.target / 'patchhub-core.exe').read_text(), '0.3.0')
 
     def test_interrupted_transaction_restores_old_files_before_next_launch(self):
+        self.recover_interrupted()
+
+    def test_interrupted_transaction_with_short_saved_paths(self):
+        self.recover_interrupted(target=self.short_path(self.target), work=self.short_path(self.work))
+
+    def recover_interrupted(self, target=None, work=None):
+        target = target or str(self.target)
+        work = work or str(self.work)
         backup = self.work / 'backup'
         backup.mkdir()
         shutil.copyfile(self.target / 'patchhub-core.exe', backup / 'patchhub-core.exe')
         (self.target / 'patchhub-core.exe').write_text('partially replaced')
         (self.target / 'new-file.dll').write_text('partial new file')
-        (self.work / 'journal.json').write_text(json.dumps({'target':str(self.target), 'phase':'applying', 'registry':None,
+        (self.work / 'journal.json').write_text(json.dumps({'target':target, 'phase':'applying', 'registry':None,
             'entries':[{'path':'patchhub-core.exe', 'existed':True}, {'path':'new-file.dll','existed':False}]}), encoding='utf-8')
-        (self.target / '.patchhub-update.json').write_text(json.dumps({'target':str(self.target),'work':str(self.work)}), encoding='utf-8')
+        (self.target / '.patchhub-update.json').write_text(json.dumps({'target':target,'work':work}), encoding='utf-8')
         result = subprocess.run(['powershell.exe','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass',
             '-File',str(SCRIPT),'-Mode','Recover','-Target',str(self.target)], capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)

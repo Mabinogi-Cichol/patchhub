@@ -8,6 +8,8 @@ param(
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 $taskTarget = [IO.Path]::GetFullPath($Target).TrimEnd('\','/')
+# Resolve existing short-name ancestors before appending stage/backup paths.
+if ($Work) { $Work = [IO.Path]::GetFullPath($Work).TrimEnd('\','/') }
 $taskMarker = Join-Path $taskTarget '.patchhub-update.json'
 $taskLockPath = Join-Path $taskTarget '.patchhub-maintenance.lock'
 $taskLock = $null
@@ -87,7 +89,8 @@ function Clear-Transaction {
     }
     if (Test-Path -LiteralPath $taskMarker) {
         $taskSavedMarker = Get-Content -LiteralPath $taskMarker -Raw -Encoding UTF8 | ConvertFrom-Json
-        if ($taskSavedMarker.work -eq $Work -and $taskSavedMarker.target -eq $taskTarget) { Remove-Item -LiteralPath $taskMarker -Force }
+        if ([IO.Path]::GetFullPath($taskSavedMarker.work).TrimEnd('\','/') -eq $Work -and
+            [IO.Path]::GetFullPath($taskSavedMarker.target).TrimEnd('\','/') -eq $taskTarget) { Remove-Item -LiteralPath $taskMarker -Force }
     }
 }
 function Finish-Transaction($Result) {
@@ -129,10 +132,10 @@ try {
             if ($taskParent) { $taskParent.WaitForExit() }
         }
         $taskSaved = Get-Content -LiteralPath $taskMarker -Raw -Encoding UTF8 | ConvertFrom-Json
-        if ($taskSaved.target -ne $taskTarget) { throw 'Transaction target mismatch' }
-        $Work = $taskSaved.work
+        if ([IO.Path]::GetFullPath($taskSaved.target).TrimEnd('\','/') -ne $taskTarget) { throw 'Transaction target mismatch' }
+        $Work = [IO.Path]::GetFullPath($taskSaved.work).TrimEnd('\','/')
         $taskJournal = Get-Content -LiteralPath (Join-Path $Work 'journal.json') -Raw -Encoding UTF8 | ConvertFrom-Json
-        if ($taskJournal.target -ne $taskTarget) { throw 'Journal target mismatch' }
+        if ([IO.Path]::GetFullPath($taskJournal.target).TrimEnd('\','/') -ne $taskTarget) { throw 'Journal target mismatch' }
         if ($taskJournal.phase -notin @('committed','restored')) { Restore-Update }
         Finish-Transaction @{state=$taskJournal.phase; message='Update recovery completed'}
         if ($ParentId) { Start-Process -FilePath (Join-Path $taskTarget 'patchhub.exe') -WindowStyle Hidden }
