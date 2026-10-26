@@ -1,7 +1,8 @@
 [CmdletBinding()]
 param(
     [string]$Flutter = '',
-    [switch]$SkipRust
+    [switch]$SkipRust,
+    [switch]$Preview
 )
 $ErrorActionPreference = 'Stop'
 $taskRoot = Split-Path -Parent $PSScriptRoot
@@ -42,8 +43,10 @@ Copy-Item -LiteralPath (Join-Path $taskRoot 'packages/contracts/generated/v5.sch
 Push-Location $taskApp
 try {
     Invoke-Checked $Flutter @('pub','get','--enforce-lockfile')
-    Invoke-Checked $Flutter @('analyze')
-    Invoke-Checked $Flutter @('test')
+    if (-not $Preview) {
+        Invoke-Checked $Flutter @('analyze')
+        Invoke-Checked $Flutter @('test')
+    }
     # Flutter 3.47.7 can reuse a font subset after app.dill changes because the
     # Windows asset target does not list app.dill as an input. Rebuild assets so
     # newly referenced icons are included in the release font.
@@ -53,8 +56,10 @@ try {
             Remove-Item -Force
     }
     Invoke-Checked $Flutter @('build','windows','--release')
-    $taskDeps = & $Flutter pub deps --json
-    if ($LASTEXITCODE -ne 0) { throw 'Unable to collect Flutter dependencies' }
+    if (-not $Preview) {
+        $taskDeps = & $Flutter pub deps --json
+        if ($LASTEXITCODE -ne 0) { throw 'Unable to collect Flutter dependencies' }
+    }
 } finally { Pop-Location }
 $taskOutput = Join-Path $taskApp 'build/windows/x64/runner/Release'
 foreach ($taskBinary in @('patchhub-core.exe','patchhub-worker.exe')) {
@@ -70,12 +75,13 @@ New-Item -ItemType Directory -Path (Join-Path $taskResources 'licenses') -Force 
 Copy-Item -LiteralPath (Join-Path $taskRoot 'scripts/licenses/sfextract-MIT.txt') -Destination (Join-Path $taskResources 'licenses')
 Write-Output "Flutter Windows candidate: $taskOutput"
 
+$taskFlutterRoot = Split-Path -Parent (Split-Path -Parent (Resolve-Path $Flutter).Path)
+Copy-Item -LiteralPath (Join-Path $taskFlutterRoot 'LICENSE') -Destination (Join-Path $taskResources 'licenses/Flutter-LICENSE')
+Copy-Item -LiteralPath (Join-Path $taskFlutterRoot 'bin/cache/dart-sdk/LICENSE') -Destination (Join-Path $taskResources 'licenses/Dart-LICENSE')
+if ($Preview) { return }
 $taskEvidence = Join-Path $taskRoot '.artifacts/windows-flutter'
 New-Item -ItemType Directory -Path $taskEvidence -Force | Out-Null
 $taskVersionJson | Set-Content -Encoding utf8 (Join-Path $taskEvidence 'flutter-version.json')
 $taskDeps | Set-Content -Encoding utf8 (Join-Path $taskEvidence 'pub-deps.json')
-$taskFlutterRoot = Split-Path -Parent (Split-Path -Parent (Resolve-Path $Flutter).Path)
-Copy-Item -LiteralPath (Join-Path $taskFlutterRoot 'LICENSE') -Destination (Join-Path $taskResources 'licenses/Flutter-LICENSE')
-Copy-Item -LiteralPath (Join-Path $taskFlutterRoot 'bin/cache/dart-sdk/LICENSE') -Destination (Join-Path $taskResources 'licenses/Dart-LICENSE')
 & python (Join-Path $PSScriptRoot 'update_manifest.py') $taskOutput
 if ($LASTEXITCODE -ne 0) { throw 'Update manifest generation failed' }
