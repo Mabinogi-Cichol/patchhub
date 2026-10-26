@@ -19,6 +19,7 @@ test("install summary consumes required backend actions", () => {
   const available = patch({ actions: actions({ automatic: availability(true), primary: { operation: "overwrite", label: "install", input: "automatic" } }) });
   assert.equal(installSummary(row([guidance])), "找到补丁来源");
   assert.equal(installSummary(row([guidance, available])), "有可用补丁");
+  assert.equal(installSummary(row([{ ...available, compatibility: "manual_selection_required" }])), "有可用补丁");
   assert.equal(installSummary(row([{ ...available, detection: { status: "installed_managed", files: [] } }])), "已安装补丁");
   assert.equal(installSummary(row([{ ...available, actions: actions({ overwrite: availability(true) }), detection: { status: "partial_or_conflict", files: [] } }])), "补丁文件不完整，可覆盖安装");
 });

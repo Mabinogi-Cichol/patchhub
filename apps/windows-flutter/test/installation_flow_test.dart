@@ -73,6 +73,68 @@ Future<void> mountPatch(
 
 void main() {
   testWidgets(
+    'selecting another candidate installs without extra confirmation',
+    (tester) async {
+      final model = InstallFixtureModel('chunked');
+      final row = model.snapshot!.rows.single;
+      final original = {...row.patches.single};
+      row.patches
+        ..clear()
+        ..addAll([
+          {...original, 'name': '推荐补丁', 'candidate_id': 'preferred'},
+          {
+            ...original,
+            'name': '其他补丁',
+            'candidate_id': 'alternative',
+            'selection_id': 'selected-alternative',
+            'compatibility': 'manual_selection_required',
+          },
+        ]);
+      final entries = displayEntries(row);
+      var selected = entries.first;
+      await tester.pumpWidget(
+        PatchHubApp(
+          home: StatefulBuilder(
+            builder: (context, update) => Scaffold(
+              body: PatchManagementPage(
+                key: ValueKey(selected.selectionKey),
+                model: model,
+                desktop: FixtureDesktop(),
+                row: row,
+                entry: selected,
+                entries: entries,
+                patch: selected.patch,
+                onEntry: (key) => update(() {
+                  selected = entries.singleWhere((e) => e.selectionKey == key);
+                }),
+                onMirror: (_) {},
+                onRecords: () {},
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byType(DropdownButtonFormField<String>));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('其他补丁').last);
+      await tester.pumpAndSettle();
+      expect(find.byType(CheckboxListTile), findsNothing);
+      expect(find.text('可安装补丁'), findsOneWidget);
+      await tester.runAsync(() => tester.tap(find.text('安装补丁')));
+      await tester.pump();
+      final task = model.tasks.installation!;
+      expect(task.arguments['selection_id'], 'selected-alternative');
+      expect(task.arguments.containsKey('release_id'), isFalse);
+      await tester.runAsync(() => task.done);
+      await tester.pumpAndSettle();
+      expect(find.text('安装完成'), findsOneWidget);
+      await tester.pumpWidget(const SizedBox.shrink());
+      model.dispose();
+    },
+  );
+
+  testWidgets(
     'local file cancel does not start installation; selected ZIP uses only release identity',
     (tester) async {
       final model = InstallFixtureModel('chunked');

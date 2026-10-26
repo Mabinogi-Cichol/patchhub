@@ -47,7 +47,6 @@ class PatchManagementPage extends StatefulWidget {
 }
 
 class _PatchManagementPageState extends State<PatchManagementPage> {
-  bool confirmed = false;
   bool localRoute = false;
   bool reading = false;
   String? archive;
@@ -123,8 +122,7 @@ class _PatchManagementPageState extends State<PatchManagementPage> {
         : input == 'local_archive' &&
               patch['actions']['local_archive']['available'] == true &&
               archive != null;
-    return allowed &&
-        (patch['compatibility'] != 'manual_selection_required' || confirmed);
+    return allowed;
   }
 
   Future<void> install() async {
@@ -342,14 +340,6 @@ class _PatchManagementPageState extends State<PatchManagementPage> {
               if (value != null) widget.onMirror(value);
             },
           ),
-        if (patch['compatibility'] == 'manual_selection_required')
-          CheckboxListTile(
-            contentPadding: EdgeInsets.zero,
-            controlAffinity: ListTileControlAffinity.leading,
-            title: const Text('我已核对来源、语言与 DLC 条件，选择将此候选安装到当前游戏'),
-            value: confirmed,
-            onChanged: (value) => setState(() => confirmed = value!),
-          ),
         for (final blocker in blockers)
           SelectableText(
             '${statusLabel(blocker['code'])}${blocker['detail'] == null ? '' : '\n${blocker['detail']}'}',
@@ -423,8 +413,6 @@ class _PatchManagementPageState extends State<PatchManagementPage> {
         ? (installed ? '已安装补丁' : '可安装补丁')
         : input == 'local_archive' && archive == null
         ? '需要本地 ZIP'
-        : patch['compatibility'] == 'manual_selection_required' && !confirmed
-        ? '待确认适用条件'
         : '暂不可安装';
     final statusDescription = patch == null
         ? '此来源线索尚不能用于安装'

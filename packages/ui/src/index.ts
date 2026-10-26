@@ -47,8 +47,7 @@ export function hasMatchedPatch(row: Install): boolean {
 export function installSummary(row: Install, scanning = false): string {
   if (row.patches.some(p => isManaged(p.detection.status) || isExternal(p.detection.status))) return "已安装补丁";
   if (row.patches.some(p => p.actions.overwrite.available && p.detection.status === "partial_or_conflict")) return "补丁文件不完整，可覆盖安装";
-  if (row.patches.some(p => p.actions.automatic.available && p.compatibility !== "manual_selection_required")) return "有可用补丁";
-  if (row.patches.some(p => p.actions.automatic.available && p.compatibility === "manual_selection_required")) return "可手动选择补丁";
+  if (row.patches.some(p => p.actions.automatic.available)) return "有可用补丁";
   if (row.patches.length || row.discovery?.candidates.some(candidateMatched)) return "找到补丁来源";
   // `discovery.status` is the persisted six-state match (p1-contract §7.1).
   const status = row.discovery?.status;
@@ -316,7 +315,7 @@ export function reason(code: string): string {
 
 export function workflowState(value: string): string {
   const labels: Record<string, string> = {
-    manual_selection_required: "人工选择，适用性尚未自动确认",
+    manual_selection_required: "按所选下载项安装",
     discover_only: "查看补丁来源", manual_download: "手动下载导入", managed_zip: "审核 ZIP 安装", unsupported: "暂不支持",
     publisher_zip: "ZIP · 默认解压至游戏根目录", publisher_exe: "自动提取并安装", publisher_default: "按根目录生成计划，效果待验证",
     check_required: "安装时自动检查条件", conditions_checked: "安装条件已核验", verified_metadata: "目录条件已核对", needs_review: "尚待审核", signed: "已验证签名", unsigned_development: "未签名开发目录",

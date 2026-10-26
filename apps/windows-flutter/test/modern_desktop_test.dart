@@ -30,7 +30,7 @@ void main() {
       final patch = model.snapshot!.rows.single.patches.single;
       final expected = switch (scenario) {
         'installed' => '已安装补丁',
-        'confirmation' => '待确认适用条件',
+        'confirmation' => '可安装补丁',
         'archive' => '需要本地 ZIP',
         _ => '暂不可安装',
       };
@@ -54,7 +54,11 @@ void main() {
         findsOneWidget,
       );
       final button = tester.widget<FilledButton>(find.byType(FilledButton));
-      expect(button.onPressed != null, scenario == 'installed');
+      expect(
+        button.onPressed != null,
+        scenario == 'installed' || scenario == 'confirmation',
+      );
+      expect(find.byType(CheckboxListTile), findsNothing);
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox.shrink());
       model.dispose();
