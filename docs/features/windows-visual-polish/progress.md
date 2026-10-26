@@ -6,6 +6,15 @@
 
 视觉、下载速度及关窗迟缓修复已实现，完整179项测试、真实数据渲染和release正常退出实测通过。2026-10-23 已按用户要求在 feature/windows-visual-polish 分别本地提交；未合并或发布。中性主题随后由 [Windows Modern 视觉迭代](../windows-ux-redesign/design.md)替代，原验证与修改事实保留为历史记录，不冒充用户实机验收。
 
+## 2026-10-27 深色主题中性化（本轮）
+
+- 分支沿用当前界面修复 `fix/windows-source-theme-layout`；按用户反馈调整 Modern 深色主题的蓝灰表面为黑与深灰，设计见对应补充章节。
+- 已实现：深色采用 monochrome 基础表面，页面背景 #101010、卡片/标题栏/侧栏 #191919、输入容器 #242424、选中背景 #303030，文字与边框使用中性灰。蓝色保留为小面积操作、链接、焦点、进度强调；浅色方案保持。
+- `flutter test test/modern_desktop_test.dart test/library_page_test.dart test/scaled_layout_test.dart test/global_sources_layout_test.dart test/modern_layout_test.dart`：38 项通过，包含所有深色 Material 3 表面灰阶、背景/卡片/输入层次、正文与次级文字在各容器上至少 4.5:1 对比度，以及深浅主题、窗口与文字缩放回归。
+- 使用临时 Flutter 渲染测试加载 Windows 字体与 MaterialIcons，生成并检查 `.artifacts/dark-neutral-preview.png`（1400×900、夹具来源数据）；背景、侧栏、卡片、输入区均为黑灰，图标及蓝色小面积强调正常。临时测试已移除。
+- 过度设计复核：变更集中于统一 ColorScheme 和已有对比度测试，无逐页颜色分支、主题状态、配置或依赖新增；未发现需修改项。
+- 相关文件 `flutter analyze` 无问题，`git diff --check` 通过；`scripts/build-windows-flutter.ps1 -Preview -SkipRust` 构建通过，本地预览位于 `apps/windows-flutter/build/windows/x64/runner/Release/patchhub.exe`。原生窗口验收、安装版替换未执行，历史验证记录保留。
+
 ## 2026-10-22 实现
 
 - 下载速度：新增 DownloadRate，以相邻已接受下载事件的bytes_done增量除以Stopwatch单调时间差；接入CoreTask事件验证/序列去重之后，避免重复事件影响采样。首次下载样本显示“下载速度：计算中…”，随后显示B/s、KB/s、MB/s或GB/s。事件字节不增长时显示0 B/s；计数重置重新采样，离开下载阶段清空速度。没有改Rust或v5协议、没有额外定时器、重试、平滑窗口或大小上限。速度随既有进度事件刷新，表示相邻采样间的速率。
