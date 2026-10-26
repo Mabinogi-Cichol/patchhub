@@ -14,10 +14,12 @@
 - 用户明确要求提交本项目 Git 改动时，使用 [steam-patch-git-commit](.agents/skills/steam-patch-git-commit/SKILL.md)（可显式调用 `$steam-patch-git-commit`）。项目版本已从个人记忆迁入并纳入 Git，后续以仓库文件为准。
 - Steam Deck 远程连接、Decky 插件部署、重载与实机验证使用 [decky-deploy-verify](.agents/skills/decky-deploy-verify/SKILL.md)（可显式调用 `$decky-deploy-verify`）。仅创建技能或编写方案时不操作设备；实际部署沿用用户当前授权范围。
 
-## 功能分支
+## 开发分支
 
-- 需要新增 `docs/features/<feature-name>/` 文档的功能开发，先从 `main` 创建 `feature/<feature-name>` 分支，分支名与功能目录名一致。
-- 设计文档、施工记录、功能代码及对应验证都在功能分支上完成；开发完毕并完成 `progress.md` 记录的验证后，再合并回 `main`，不直接在 `main` 上开发新功能。
+- 分支类型按实际任务性质选择：新增功能使用 `feature/<feature-name>`，已有功能的缺陷修复使用 `fix/<fix-name>`；均先从 `main` 创建，不直接在 `main` 上开发。
+- 是否需要新增或更新 `docs/features/` 文档，不决定分支类型；修复即使需要独立设计、施工记录或功能目录，也使用 `fix/`，不能仅因文档要求归为 `feature/`。
+- 分支后缀采用小写英文与连字符。新增功能的分支后缀与功能目录名一致；修复优先复用所属功能目录，需建立独立修复目录时，目录名与修复分支后缀一致。
+- 设计文档、施工记录、代码及对应验证都在相应开发分支上完成；开发完毕并完成 `progress.md` 记录的验证后，再合并回 `main`。
 
 ## 功能文档归类
 
