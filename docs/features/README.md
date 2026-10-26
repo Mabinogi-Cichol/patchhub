@@ -1,17 +1,20 @@
 # 功能开发文档
 
+2026-10-27：Windows 下拉选择框统一为保留原框的锚定式菜单，补丁/镜像/语言三处及展开收起动效已实现，47 项相关回归通过，深浅主题渲染已检查，原生窗口待验收。详见 [设计](windows-ux-redesign/design.md) 与 [施工记录](windows-ux-redesign/progress.md)。
+
 2026-10-07：Decky UX 前台安装与独立结果面板已实现并部署，自动化、真实 RPC / 页面与合成任务渲染验证通过；真实下载 / 恢复与实体手柄待验证。详见 [设计](decky-ux/design.md) 与 [施工记录](decky-ux/progress.md)。
 
 每个功能在本目录下建立独立文件夹，设计文档与施工记录分别存放。文档状态为“方案”时，不代表功能已经实现或通过实机验证。开发规则见仓库根目录的 [AGENTS.md](../../AGENTS.md)。
 
 | 功能 | 状态 | 设计文档 | 施工记录 | 附加文档 |
 | --- | --- | --- | --- | --- |
+| 分平台 BAT 构建入口 | 已实现并合并本地 main（未推送），入口与模拟流水线、Windows 快速预览实际构建通过，完整发行构建待验证 | [设计](platform-build-entrypoints/design.md) | [施工记录](platform-build-entrypoints/progress.md) | — |
 | 补丁选择状态与候选安装交互修复 | 选择身份修复已提交；补充标题清理与双端候选统一交互已实现，Flutter 26/核心投影 24/Decky 68 项及静态检查通过，安装版更新和实机待验证 | [设计](windows-patch-selection/design.md) | [施工记录](windows-patch-selection/progress.md) | — |
-| Windows 全局来源布局修复 | 已修复状态存储键冲突及间隔标题排版；相关 11 项测试与静态分析通过，原生界面待验收 | [设计](windows-global-sources-layout/design.md) | [施工记录](windows-global-sources-layout/progress.md) | — |
+| Windows 全局来源布局修复 | 状态键修复已合并；补充来源卡片分组与三态主题图标已实现并合并本地 main（未推送），13 项回归、静态分析与深浅渲染检查通过，原生界面待验收 | [设计](windows-global-sources-layout/design.md) | [施工记录](windows-global-sources-layout/progress.md) | — |
 | PatchHub 合并后 CI 修复 | 首轮已合并推送；线上后续失败已补充修复，普通/短 TEMP 的 Windows 各 9 项、WSL 启动入口 8 项通过；补充修复按要求提交并合并本地 main，未推送，完整在线 CI 待验证 | [设计](patchhub-ci-fix/design.md) | [施工记录](patchhub-ci-fix/progress.md) | — |
 | PatchHub 品牌与全面改名 | 全面改名与双端构建/打包、Windows 原生更新链通过；GitHub 已改名，源码未推送，系统安装/Decky 实机与正式发布待验收 | [设计与改名计划](patchhub-branding/design.md) | [施工记录](patchhub-branding/progress.md) | [实现复核](patchhub-branding/review.md) |
 | Windows 与 Decky 客户端自更新 | 已实现；双端本地 Release 夹具完整更新链、自动化与 Decky 实机部署/检测页面/失败恢复通过；正式发布、Windows 安装版完整矩阵及实体手柄待验收 | [设计](client-self-update/design.md) | [施工记录](client-self-update/progress.md) | [实现复核](client-self-update/review.md) |
-| Windows 视觉与下载进度完善 | 已实现：下载速度、品牌图标、中性主题及关窗卡顿修复；179项测试、真实数据渲染及release关窗880ms/exit0通过 | [设计](windows-visual-polish/design.md) | [施工记录](windows-visual-polish/progress.md) | — |
+| Windows 视觉与下载进度完善 | 历史下载速度/图标/关窗修复已验证；2026-10-27 Modern 深色底色改为中性黑灰，38 项主题/对比度/布局回归与渲染检查通过，本轮原生窗口待验收 | [设计](windows-visual-polish/design.md) | [施工记录](windows-visual-polish/progress.md) | — |
 | Windows 交互重设计 | 2026-10-24 三项UI反馈已修复，Flutter 219项通过/1项跳过，Release构建/隔离启动退出与30张原生截图验证通过；P0–P7原重写已验收，旧端退役；官方ZIP 403按用户确认保留外部遗留。2026-10-24 已补齐悬浮操作栏、右侧补丁状态、整行技术详情及选择器标题排版，相关回归与18张原生截图通过（此前205项完整回归通过）；v0.3.0已合并发布，正式210项Flutter回归及公开附件核验通过，真实自定义图和系统DPI切换未实测 | [设计](windows-ux-redesign/design.md) | [施工记录](windows-ux-redesign/progress.md) | [实施计划](windows-ux-redesign/implementation-plan.md) · [Modern 视觉方案](windows-ux-redesign/visual-design.md) |
 | 项目统一命名 | 已实现，类型/前端构建/桥接及当前平台 Python 检查通过；POSIX 与实机升级待验证 | [设计](unified-project-naming/design.md) | [施工记录](unified-project-naming/progress.md) | — |
 | 来源缓存与游戏匹配重构 | P1–P5 已实现并通过自动化门禁；P6 自动化验收与过度设计复核完成，真实网站关键链路（HGamer live、Kagura 列表结构与 EN 多入口）已修复并通过；Steam Deck 已完成编译部署、RPC/真实界面冒烟；Windows 实机、完整实机矩阵与安装链回归待验收；用户已要求合并 main 并发布 v0.2.0 | [设计](source-cache-matching-refactor/design.md) | [施工记录](source-cache-matching-refactor/progress.md) | [P0 基线](source-cache-matching-refactor/p0-baseline.md) · [P1 契约](source-cache-matching-refactor/p1-contract.md) · [P4 测绘](source-cache-matching-refactor/p4-host-map.md) · [P6 验收](source-cache-matching-refactor/p6-acceptance.md) · [VenusBlood 修复](source-cache-matching-refactor/vbf-matching-fix.md) |

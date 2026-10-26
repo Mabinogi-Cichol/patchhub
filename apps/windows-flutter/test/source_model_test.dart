@@ -104,13 +104,14 @@ void main() {
           home: Scaffold(body: GlobalSourcesPage(model: model)),
         ),
       );
-      expect(find.text('启用此来源').hitTestable(), findsNothing);
+      expect(find.byTooltip('启用此来源').hitTestable(), findsOneWidget);
+      expect(find.text('自动更新').hitTestable(), findsNothing);
       await tester.tap(find.text('测试发布方'));
       await tester.pumpAndSettle();
-      expect(find.text('启用此来源').hitTestable(), findsOneWidget);
+      expect(find.text('自动更新').hitTestable(), findsOneWidget);
       await tester.tap(find.text('测试发布方'));
       await tester.pumpAndSettle();
-      expect(find.text('启用此来源').hitTestable(), findsNothing);
+      expect(find.text('自动更新').hitTestable(), findsNothing);
       expect(client.calls, isEmpty);
       await tester.pumpWidget(const SizedBox.shrink());
       model.dispose();

@@ -6,6 +6,20 @@
 
 ## 1. 目标与依据
 
+### 2026-10-27 下拉选择框修复
+
+- 补丁、下载项/镜像和会话语言偏好统一使用 Material 3 的只选 DropdownMenu，替代覆盖当前选中项的旧 DropdownButtonFormField。
+- 菜单锚定在输入框下方并留 8 像素间隔，窗口底部不足时交由框架 MenuAnchor 翻到上方；不自建定位或滚动逻辑。
+- 原框保留当前选择，菜单与原框同宽，使用清晰边框、浮层阴影与独立表面；当前项同时显示勾选与背景，悬停/焦点有反馈。
+- 复用 DesktopSelect 封装三个实际重复入口的样式与选择行为，不新增搜索、筛选或业务状态；长标题自然换行，不截断业务选项。
+- 验收：深浅主题、窗口上下边缘、文字放大与长标题下展开/选择/取消/键盘可用；补丁选择和镜像身份传递、语言偏好保持原逻辑。真实原生窗口验收单列。
+
+#### 下拉动效补充
+
+- 当前 SDK DropdownMenu 内部未开启 MenuAnchor.animated，且未向外暴露设置，导致菜单瞬间出现/消失。
+- 保持现有选择框、菜单样式和布局，直接组合 Flutter 官方 MenuAnchor（animated）、MenuItemButton 与按钮作为入口，使用框架 Material 展开/收起动画和定位、滚动、键盘导航，不复制 SDK 或自行实现动画控制器。
+- 箭头随展开状态旋转；遵从系统减少动画设置。选择后关闭、外部点击、Escape、键盘聚焦回到入口均纳入回归，选中项仍由原调用方管理。
+
 以 Decky 的任务分层为参照，改善 Windows 找游戏、选补丁、安装、查看结果与管理来源的完整路径。保留桌面端快速切换游戏的优势，不照搬手柄导航。
 
 原方案静态检查基线：main `4079692`。历史依据为该提交中的 `apps/windows/src/main.tsx`（Windows 页面）、`apps/windows/src/style.css`（样式）、`apps/windows/src/SourcePanel.tsx`（来源面板）、`apps/windows/src-tauri/src/main.rs`（宿主）；这些旧端文件已随 Flutter 重写退役，需在历史提交中查看。另见 [Decky 页面](../../../apps/decky/src/index.tsx)、[Decky 设计](../decky-ux/design.md)、[来源折叠设计](../source-cache-matching-refactor/collapsible-source-cards/design.md)。原方案判断来自源码，不是 Windows 实机体验验收。

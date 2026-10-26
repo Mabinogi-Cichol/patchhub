@@ -8,9 +8,8 @@ class PatchHubApp extends StatefulWidget {
   static ThemeMode themeModeOf(BuildContext context) =>
       context.findAncestorStateOfType<_PatchHubAppState>()!.themeMode;
 
-  static void setThemeMode(BuildContext context, ThemeMode mode) => context
-      .findAncestorStateOfType<_PatchHubAppState>()!
-      .setThemeMode(mode);
+  static void setThemeMode(BuildContext context, ThemeMode mode) =>
+      context.findAncestorStateOfType<_PatchHubAppState>()!.setThemeMode(mode);
 
   @override
   State<PatchHubApp> createState() => _PatchHubAppState();
@@ -30,35 +29,38 @@ class _PatchHubAppState extends State<PatchHubApp> {
         ColorScheme.fromSeed(
           seedColor: const Color(0xff3b75ee),
           brightness: brightness,
+          dynamicSchemeVariant: dark
+              ? DynamicSchemeVariant.monochrome
+              : DynamicSchemeVariant.tonalSpot,
         ).copyWith(
           primary: dark ? const Color(0xff346be0) : const Color(0xff245dd8),
           onPrimary: Colors.white,
           primaryContainer: dark
-              ? const Color(0xff1c3557)
+              ? const Color(0xff303030)
               : const Color(0xffe3edff),
           onPrimaryContainer: dark
-              ? const Color(0xffb9d3ff)
+              ? const Color(0xffeeeeee)
               : const Color(0xff18489f),
           secondary: accent,
-          onSecondary: dark ? const Color(0xff102a51) : Colors.white,
+          onSecondary: dark ? const Color(0xff161616) : Colors.white,
           secondaryContainer: dark
-              ? const Color(0xff182230)
+              ? const Color(0xff242424)
               : const Color(0xffeaf0f6),
           onSecondaryContainer: dark
               ? const Color(0xffeeeeee)
               : const Color(0xff202020),
           tertiary: accent,
-          surface: dark ? const Color(0xff111923) : Colors.white,
+          surface: dark ? const Color(0xff191919) : Colors.white,
           surfaceContainer: dark
-              ? const Color(0xff182230)
+              ? const Color(0xff242424)
               : const Color(0xffeaf0f6),
-          onSurface: dark ? const Color(0xfff3f6fa) : const Color(0xff172333),
+          onSurface: dark ? const Color(0xffeeeeee) : const Color(0xff172333),
           onSurfaceVariant: dark
-              ? const Color(0xffa9b7c9)
+              ? const Color(0xffb8b8b8)
               : const Color(0xff526176),
-          outline: dark ? const Color(0xff43546b) : const Color(0xff8695aa),
+          outline: dark ? const Color(0xff626262) : const Color(0xff8695aa),
           outlineVariant: dark
-              ? const Color(0xff293647)
+              ? const Color(0xff363636)
               : const Color(0xffd5dee9),
           surfaceTint: Colors.transparent,
         );
@@ -66,7 +68,7 @@ class _PatchHubAppState extends State<PatchHubApp> {
       useMaterial3: true,
       colorScheme: scheme,
       scaffoldBackgroundColor: dark
-          ? const Color(0xff0c1118)
+          ? const Color(0xff101010)
           : const Color(0xfff3f5f8),
       fontFamily: 'Segoe UI',
       fontFamilyFallback: const ['Microsoft YaHei UI', 'Microsoft YaHei'],
