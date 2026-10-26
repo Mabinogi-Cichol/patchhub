@@ -115,7 +115,7 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
-      await tester.tap(find.byType(DropdownButtonFormField<String>));
+      await tester.tap(find.byKey(const ValueKey('desktop-select-field')));
       await tester.pumpAndSettle();
       await tester.tap(find.text('其他补丁').last);
       await tester.pumpAndSettle();

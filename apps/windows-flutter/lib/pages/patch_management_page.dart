@@ -2,6 +2,8 @@ import 'dart:convert';
 
 import 'package:flutter/material.dart';
 
+import '../presentation/desktop_select.dart';
+
 import '../host/core_client.dart';
 import '../host/desktop_services.dart';
 import '../host/steam_artwork.dart';
@@ -260,20 +262,14 @@ class _PatchManagementPageState extends State<PatchManagementPage> {
     final details = <Widget>[
       if (patch != null && installables.length > 1) ...[
         Text('补丁选择', style: fieldTitleStyle),
-        DropdownButtonFormField<String>(
-          initialValue: widget.entry.selectionKey,
-          isExpanded: true,
-          decoration: const InputDecoration(),
-          items: [
+        DesktopSelect(
+          label: '补丁选择',
+          value: widget.entry.selectionKey,
+          options: [
             for (final entry in installables)
-              DropdownMenuItem(
-                value: entry.selectionKey,
-                child: Text(entry.title),
-              ),
+              (value: entry.selectionKey, label: entry.title),
           ],
-          onChanged: (value) {
-            if (value != null) widget.onEntry(value);
-          },
+          onSelected: widget.onEntry,
         ),
         const SizedBox(height: 4),
       ],
@@ -320,25 +316,20 @@ class _PatchManagementPageState extends State<PatchManagementPage> {
             ),
           ),
         if (widget.entry.choices.length > 1)
-          DropdownButtonFormField<String>(
-            initialValue:
-                (patch['selection_id'] ?? patch['release_id']) as String,
-            isExpanded: true,
-            decoration: const InputDecoration(),
-            items: [
+          DesktopSelect(
+            label: '下载项 / 镜像',
+            value: (patch['selection_id'] ?? patch['release_id']) as String,
+            options: [
               for (final choice in widget.entry.choices)
-                DropdownMenuItem(
+                (
                   value:
                       (choice['selection_id'] ?? choice['release_id'])
                           as String,
-                  child: Text(
-                    '${choice['download_label'] ?? '来源下载'} · ${choice['download_url'] != null ? Uri.parse(choice['download_url'] as String).pathSegments.lastOrNull ?? '下载文件' : choice['name']}',
-                  ),
+                  label:
+                      '${choice['download_label'] ?? '来源下载'} · ${choice['download_url'] != null ? Uri.parse(choice['download_url'] as String).pathSegments.lastOrNull ?? '下载文件' : choice['name']}',
                 ),
             ],
-            onChanged: (value) {
-              if (value != null) widget.onMirror(value);
-            },
+            onSelected: widget.onMirror,
           ),
         for (final blocker in blockers)
           SelectableText(

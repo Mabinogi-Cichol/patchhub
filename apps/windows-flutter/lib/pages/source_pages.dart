@@ -2,6 +2,8 @@ import 'dart:convert';
 
 import 'package:flutter/material.dart';
 
+import '../presentation/desktop_select.dart';
+
 import '../host/desktop_services.dart';
 import '../host/core_task.dart';
 import '../models/app_model.dart';
@@ -424,10 +426,13 @@ class _GameSourcesPageState extends State<GameSourcesPage> {
                 ? null
                 : (value) => toggle(source['id'] as String, value),
           ),
-        DropdownButtonFormField<String>(
-          initialValue: widget.model.preferredLanguage ?? '',
-          decoration: const InputDecoration(labelText: '语言偏好（本次会话）'),
-          items: [
+        const SizedBox(height: 12),
+        const Text('语言偏好（本次会话）'),
+        const SizedBox(height: 8),
+        DesktopSelect(
+          label: '语言偏好（本次会话）',
+          value: widget.model.preferredLanguage ?? '',
+          options: [
             for (final entry in const {
               '': '不限语言',
               'zh-CN': '简体中文',
@@ -435,9 +440,9 @@ class _GameSourcesPageState extends State<GameSourcesPage> {
               'en': '英文',
               'ja': '日文',
             }.entries)
-              DropdownMenuItem(value: entry.key, child: Text(entry.value)),
+              (value: entry.key, label: entry.value),
           ],
-          onChanged: (value) {
+          onSelected: (value) {
             widget.model.setPreferredLanguage(value == '' ? null : value);
             setState(() {});
           },
