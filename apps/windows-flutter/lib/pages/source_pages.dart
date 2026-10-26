@@ -115,15 +115,19 @@ class _GlobalSourcesPageState extends State<GlobalSourcesPage> {
       const Text('管理所有游戏使用的来源；单个游戏的订阅请进入“游戏订阅”。'),
       if (widget.model.sourceError != null)
         SelectableText('来源读取或状态刷新失败：${widget.model.sourceError}'),
-      TextButton.icon(
-        onPressed: widget.model.tasks.closing
-            ? null
-            : () => widget.model.startSource('match_games', {
-                if (widget.model.preferredLanguage != null)
-                  'preferred_language': widget.model.preferredLanguage,
-              }),
-        icon: const Icon(Icons.manage_search),
-        label: const Text('重新匹配整个游戏库'),
+      const SizedBox(height: 12),
+      Align(
+        alignment: Alignment.centerLeft,
+        child: TextButton.icon(
+          onPressed: widget.model.tasks.closing
+              ? null
+              : () => widget.model.startSource('match_games', {
+                  if (widget.model.preferredLanguage != null)
+                    'preferred_language': widget.model.preferredLanguage,
+                }),
+          icon: const Icon(Icons.manage_search),
+          label: const Text('重新匹配整个游戏库'),
+        ),
       ),
       for (final task in widget.model.tasks.sources.values.where(
         (task) => task.method != 'update_source',
@@ -141,6 +145,7 @@ class _GlobalSourcesPageState extends State<GlobalSourcesPage> {
           style: Theme.of(context).textTheme.titleMedium,
         ),
         if (fallback) const Text('补查来源按游戏查询，不参与定时索引更新。'),
+        const SizedBox(height: 12),
         for (final source in widget.model.sources.where(
           (source) =>
               (source['role'] == 'fallback_indexer' ||
@@ -189,6 +194,9 @@ class _GlobalSourcesPageState extends State<GlobalSourcesPage> {
     final running = task?.running == true;
     return Card(
       child: ExpansionTile(
+        shape: const Border(),
+        collapsedShape: const Border(),
+        tilePadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
         key: PageStorageKey('source:$id'),
         initiallyExpanded: expanded.contains(id),
         maintainState: true,
@@ -200,6 +208,25 @@ class _GlobalSourcesPageState extends State<GlobalSourcesPage> {
           }
         }),
         title: Text(source['name'] as String),
+        trailing: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Tooltip(
+              message: '启用此来源',
+              child: Switch(
+                value: source['enabled'] as bool,
+                onChanged: saving
+                    ? null
+                    : (value) => save(id, 'set_source_enabled', {
+                        'source_id': id,
+                        'enabled': value,
+                      }),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Icon(expanded.contains(id) ? Icons.expand_less : Icons.expand_more),
+          ],
+        ),
         subtitle: Text(
           '${source['enabled'] == true ? '已启用' : '已停用'} · '
           '${running
@@ -211,39 +238,40 @@ class _GlobalSourcesPageState extends State<GlobalSourcesPage> {
         ),
         children: [
           Padding(
-            padding: const EdgeInsets.all(16),
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                SwitchListTile(
-                  contentPadding: EdgeInsets.zero,
-                  title: const Text('启用此来源'),
-                  value: source['enabled'] as bool,
-                  onChanged: saving
-                      ? null
-                      : (value) => save(id, 'set_source_enabled', {
-                          'source_id': id,
-                          'enabled': value,
-                        }),
-                ),
+                const Divider(height: 24),
                 if (errors[id] != null) SelectableText('保存失败：${errors[id]}'),
                 if (task != null) TaskSummary(task: task),
                 if (!fallback) ...[
-                  const SizedBox(height: 12),
-                  const Text('自动更新间隔（小时，0 表示关闭）'),
+                  const Text('自动更新'),
                   const SizedBox(height: 8),
-                  TextFormField(
-                    key: PageStorageKey(
-                      '$id:interval:${source['interval_hours']}',
-                    ),
-                    initialValue: '${source['interval_hours']}',
-                    keyboardType: TextInputType.number,
-                    enabled: !saving,
-                    onChanged: (value) => intervals[id] = value,
-                  ),
                   Wrap(
                     spacing: 12,
+                    runSpacing: 8,
+                    crossAxisAlignment: WrapCrossAlignment.center,
                     children: [
+                      SizedBox(
+                        width: 200,
+                        child: Semantics(
+                          label: '自动更新间隔（小时）',
+                          child: TextFormField(
+                            key: PageStorageKey(
+                              '$id:interval:${source['interval_hours']}',
+                            ),
+                            initialValue: '${source['interval_hours']}',
+                            keyboardType: TextInputType.number,
+                            decoration: const InputDecoration(
+                              suffixText: '小时',
+                              hintText: '更新间隔',
+                            ),
+                            enabled: !saving,
+                            onChanged: (value) => intervals[id] = value,
+                          ),
+                        ),
+                      ),
                       TextButton(
                         onPressed: saving
                             ? null
@@ -263,22 +291,43 @@ class _GlobalSourcesPageState extends State<GlobalSourcesPage> {
                               },
                         child: const Text('保存间隔'),
                       ),
-                      OutlinedButton(
+                      Text(
+                        '0 表示关闭自动更新',
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                ],
+                Wrap(
+                  spacing: 16,
+                  runSpacing: 8,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: [
+                    Text(
+                      '索引：${source['entry_count']} 条 · ${source['complete'] == true ? '覆盖完整' : '覆盖不完整'}',
+                    ),
+                    if (!fallback)
+                      OutlinedButton.icon(
                         onPressed: running || saving
                             ? null
                             : () => widget.model.startSource('update_source', {
                                 'source_id': id,
                                 'force': false,
                               }),
-                        child: const Text('更新来源索引'),
+                        icon: const Icon(Icons.refresh, size: 18),
+                        label: const Text('更新来源索引'),
                       ),
-                    ],
-                  ),
-                ],
-                Text(
-                  '索引：${source['entry_count']} 条 · ${source['complete'] == true ? '覆盖完整' : '覆盖不完整'}',
+                  ],
                 ),
+                const SizedBox(height: 8),
                 ExpansionTile(
+                  tilePadding: EdgeInsets.zero,
+                  childrenPadding: const EdgeInsets.only(bottom: 8),
+                  expandedAlignment: Alignment.centerLeft,
+                  expandedCrossAxisAlignment: CrossAxisAlignment.start,
+                  shape: const Border(),
+                  collapsedShape: const Border(),
                   key: PageStorageKey('source:$id:details'),
                   title: const Text('调度与地址详情'),
                   children: [

@@ -18,7 +18,7 @@ void main() {
           addTearDown(
             tester.platformDispatcher.clearPlatformBrightnessTestValue,
           );
-          tester.view.physicalSize = const Size(850, 560);
+          tester.view.physicalSize = const Size(580, 560);
           tester.view.devicePixelRatio = 1;
           addTearDown(tester.view.resetPhysicalSize);
           addTearDown(tester.view.resetDevicePixelRatio);
@@ -60,7 +60,7 @@ void main() {
           await tester.pumpAndSettle();
           expect(tester.takeException(), isNull);
           expect(find.textContaining('最近成功：').hitTestable(), findsNothing);
-          final title = find.text('自动更新间隔（小时，0 表示关闭）');
+          final title = find.text('自动更新');
           await tester.ensureVisible(title);
           await tester.pumpAndSettle();
           final interval = find.byType(TextFormField).first;
@@ -68,6 +68,8 @@ void main() {
             tester.getRect(title).bottom,
             lessThan(tester.getRect(interval).top),
           );
+          expect(tester.getSize(interval).width, lessThanOrEqualTo(200));
+          expect(find.byTooltip('启用此来源'), findsWidgets);
           await tester.enterText(interval, '48');
           FocusManager.instance.primaryFocus?.unfocus();
           await tester.pumpAndSettle();
