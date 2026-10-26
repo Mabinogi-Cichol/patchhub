@@ -6,7 +6,7 @@
 
 | 功能 | 状态 | 设计文档 | 施工记录 | 附加文档 |
 | --- | --- | --- | --- | --- |
-| PatchHub 合并后 CI 修复 | 已实现；Windows 更新 8 项、WSL 安装 30 项及桥接 9 项通过；本地提交与 main 合并按用户要求进行，未推送，完整在线 CI 待验证 | [设计](patchhub-ci-fix/design.md) | [施工记录](patchhub-ci-fix/progress.md) | — |
+| PatchHub 合并后 CI 修复 | 首轮已合并推送；线上后续失败已补充修复，普通/短 TEMP 的 Windows 各 9 项、WSL 启动入口 8 项通过；补充修复按要求提交并合并本地 main，未推送，完整在线 CI 待验证 | [设计](patchhub-ci-fix/design.md) | [施工记录](patchhub-ci-fix/progress.md) | — |
 | PatchHub 品牌与全面改名 | 全面改名与双端构建/打包、Windows 原生更新链通过；GitHub 已改名，源码未推送，系统安装/Decky 实机与正式发布待验收 | [设计与改名计划](patchhub-branding/design.md) | [施工记录](patchhub-branding/progress.md) | [实现复核](patchhub-branding/review.md) |
 | Windows 与 Decky 客户端自更新 | 已实现；双端本地 Release 夹具完整更新链、自动化与 Decky 实机部署/检测页面/失败恢复通过；正式发布、Windows 安装版完整矩阵及实体手柄待验收 | [设计](client-self-update/design.md) | [施工记录](client-self-update/progress.md) | [实现复核](client-self-update/review.md) |
 | Windows 视觉与下载进度完善 | 已实现：下载速度、品牌图标、中性主题及关窗卡顿修复；179项测试、真实数据渲染及release关窗880ms/exit0通过 | [设计](windows-visual-polish/design.md) | [施工记录](windows-visual-polish/progress.md) | — |

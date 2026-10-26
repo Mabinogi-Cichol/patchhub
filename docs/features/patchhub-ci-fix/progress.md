@@ -4,7 +4,7 @@
 
 ## 状态
 
-已实现并通过针对性自动化验证；按用户要求进行本地提交与 main 合并，实际提交 ID 以 Git 历史为准；未推送，完整在线 CI 待验证。
+首轮修复已提交、合并 main 并由用户推送；线上暴露的后续问题已补充修复，本轮按用户要求分别提交并合并本地 main，未推送，完整在线 CI 待验证。
 
 ## 2026-10-26
 
@@ -28,8 +28,19 @@
 - 按 overengineering-review 沿 Safe-Path 调用与 FakeLoader 设置变更路径复核：改动仅统一路径表示和清理夹具旧身份引用，未新增兼容层、重试或硬限制，未发现需修改项。
 - git diff --check 通过。
 
+## 2026-10-26：后续 push 失败调查与补充修复
+
+- 首轮代码提交 `7c2c465`、`2e48a3f`，文档 `391ff80`，合并提交 `fb232c9`。用户随后推送，触发 [run 40346092622](https://github.com/Mabinogi-Cichol/patchhub/actions/runs/40346092622)。
+- [changes](https://github.com/Mabinogi-Cichol/patchhub/actions/runs/40346092622/job/121653274276) 成功，实际选择 `core=false, windows=true, decky=true`；改动范围与输出一致。
+- [ci](https://github.com/Mabinogi-Cichol/patchhub/actions/runs/40346092622/job/121653949474) 实际创建并失败，用于汇总 Windows/Decky 失败。这两项并未删除；未操作用户浏览器，无法确认用户所见列表未显示它们的具体原因。
+- [Decky](https://github.com/Mabinogi-Cichol/patchhub/actions/runs/40346092622/job/121653349683) 安装测试已通过，后续 test_decky_bootstrap.py 为 9 项中 8 个错误：仍查找已删除的旧短链接，触发 StopIteration。WSL 修复前复现一致；改用现有完整 ENTRY_URL，删除短链接专属夹具、命令长度限制及重复 fallback 用例后，8 项全部通过。
+- [Windows](https://github.com/Mabinogi-Cichol/patchhub/actions/runs/40346092622/job/121653349439) 为 8 项中 2 项失败：恢复报 Transaction target mismatch，短事务路径报 Path escapes target。本机将 TEMP/TMP 指向专用临时目录的 8.3 别名后，修复前精确复现相同两项失败，说明首轮普通 TEMP 验证覆盖不足。
+- 脚本补充规范化 Work 和持久化事务路径比较；增加短路径恢复记录回归。短 TEMP 与普通 TEMP 各 9 项全部通过，无跳过。
+- 使用 overengineering-review 复核路径入口、恢复、清理与 README 启动测试：只统一同一路径的表示并移除过时测试契约，无新增防御机制、兼容路径或限制。workflow 未修改，沿用已成功的 changes 在线证据。
+- git diff --check 通过。构建、打包与上传在本次线上仍未执行，不将本地针对性测试等同于完整 CI 通过。
+
 ## 待办
 
-- 用户已要求本地提交并合并 main；Windows 更新修复、Decky 测试夹具修复分别提交，文档独立提交，沿用本 session 验证，不重复运行。
-- [ ] 推送后检查新 head 的完整在线 CI（本轮未要求推送）。
+- 首轮已按要求分别提交并合并 main；本轮 Windows 补充修复提交 `119d49c`，Decky 启动入口测试提交 `386b051`，文档独立提交后合并本地 main；合并提交 ID 以 Git 历史为准。沿用本轮有效验证，无新增功能代码，不重复测试，未推送。
+- [ ] 补充修复提交并推送后检查新 head 的完整在线 CI。
 - [ ] 完整在线构建、打包及附件上传待验证；本轮未部署或发布。
