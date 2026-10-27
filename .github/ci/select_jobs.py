@@ -27,6 +27,7 @@ RULES = (
         "scripts/windows-installer.nsi", "scripts/flutter_sbom.py",
         "scripts/test_flutter_sbom.py",
         "scripts/windows-update.ps1", "scripts/update_manifest.py", "scripts/test_windows_update.py",
+        "scripts/test_windows_single_instance.py",
         "scripts/fixtures/app-update.json",
         "catalog/catalog.json", "catalog/signed-catalog.json",
         "docs/client-guide.md", "docs/privacy.md",

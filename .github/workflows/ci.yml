@@ -66,6 +66,7 @@ jobs:
       - run: python -m unittest discover -s scripts -p test_build_sbom.py -v
       - run: python -m unittest discover -s scripts -p test_flutter_sbom.py -v
       - run: python -m unittest discover -s scripts -p test_windows_update.py -v
+      - run: python -m unittest discover -s scripts -p test_windows_single_instance.py -v
       - run: cargo run --locked -p patchhub-contract-gen -- check
       - run: npm ci
       - run: npm run test:contracts

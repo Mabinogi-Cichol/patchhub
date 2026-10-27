@@ -23,6 +23,7 @@ class SelectionTests(unittest.TestCase):
             ("apps/windows-flutter/pubspec.lock", ("windows",)),
             ("scripts/build-windows-installer.ps1", ("windows",)),
             ("scripts/flutter_sbom.py", ("windows",)),
+            ("scripts/test_windows_single_instance.py", ("windows",)),
             ("apps/decky/backend/tasks.py", ("decky",)),
             ("install.sh", ("decky",)),
             ("scripts/test-install-decky-bridge.mjs", ("decky",)),
