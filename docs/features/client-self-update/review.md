@@ -1,5 +1,23 @@
 # 自更新实现复核
 
+## 2026-10-28 Windows 单实例增量复核
+
+- 结论：本次实现符合追加需求，无需新增框架或兜底。范围为原生入口、`SingleInstance`、构建清单、真实进程测试和 CI 接线；沿用当前修复分支的此前验证。
+- 路径：`wWinMain → 立即获取命名互斥量 → 主实例创建 Flutter/窗口，重复实例还原已有窗口后退出`。零等待获取是判断“已占用”的系统契约，不是任意任务超时；互斥量持有至窗口/引擎析构，内核在异常退出后回收。入口不按参数豁免，因此更新探针不能产生重复窗口。
+- 窗口匹配使用本应用专属属性，避免通用 Flutter 类名或相同标题误匹配其他应用。初始化期间已有互斥量但尚无 HWND 时，重复进程退出，由第一个进程完成正常展示；没有为这个短暂阶段添加轮询/重试。还原/激活使用 Win32 API，不等待其他进程消息处理。
+- 证据：6 项直接编译生产模块的原生进程/窗口回归、9 项 CI 选择回归、完整原生构建通过；隔离真实 Flutter 重复启动与助手替换/启动/提交链通过。在线 CI、真实 GitHub 跨正式版本和系统安装版验收未执行；本地夹具范围见[施工记录](progress.md)。
+- API 契约参考：[CreateMutexW](https://learn.microsoft.com/en-us/windows/win32/api/synchapi/nf-synchapi-createmutexw)、[WaitForSingleObject](https://learn.microsoft.com/en-us/windows/win32/api/synchapi/nf-synchapi-waitforsingleobject)、[ShowWindowAsync](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-showwindowasync)、[SetForegroundWindow](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setforegroundwindow)。前台激活仍受 Windows 前台窗口规则约束，不强制绕过系统规则。
+
+## 2026-10-28 Windows 修复增量复核
+
+- 结论：未发现本次修复需继续精简的机制。基线 `main@2bf0dda`，范围仅 `fix/windows-self-update` 的 Windows 更新服务、弹窗、PowerShell 助手和对应测试；不替代原双端复核或完整发行验收。
+- 从 `AppUpdatePanel.apply → AppUpdate.prepare → prepared.json → AppTasks.shutdown → apply.json → finishExit` 沿实际路径核对：助手新增检查在 prepared 之前拒绝同目录其他 GUI，发起者窗口保持打开并显示错误；准备期间允许 ParentId 与其 Core 工作，未把正常扫描误判为阻塞。退出后仍调用原 `Assert-Idle` 检查全部目标进程，随后才备份/替换；已避免为解决已知占用而强杀其他窗口或盲等固定时长。
+- 下载继续沿原附件冻结、流式读取、哈希校验路径执行，只新增阶段文字与计数重置；进度值归一化满足 Flutter 控件契约，不限制合法包大小。TLS 只解释并保留原始错误，重新检查由用户触发，未关闭证书验证或加入自动重试。
+- 验证：14 项 Flutter 回归、12 项真实 PowerShell 回归通过，analyze 无问题。双实例回归保持调用者与另一实例均存活，实际证明准备被拒绝；单实例退出后替换/探针握手成功，不同目录实例不阻塞。相同 Dart 客户端的官方 API/清单请求当前均 200；此前 TLS 中断根因未复现。
+- 未构建修复包，未操作用户已有窗口或安装目录；原生 Flutter 界面截图、正式跨版本更新与系统安装版完整验收仍待执行。详见[本次修复](fix-plan.md)和[施工记录](progress.md)。
+
+## 2026-10-24 原始功能复核
+
 - 日期：2026-10-24；范围：本功能分支相对 `main@81a2965` 的双端更新路径及打包、安装/卸载和 CI 改动。
 - 依据：[设计](design.md)、[施工记录](progress.md) 和 [overengineering-review](../../../.agents/skills/overengineering-review/SKILL.md)。这是主 Agent 的代码路径与设计对照复核，未创建独立审阅 Agent。
 
