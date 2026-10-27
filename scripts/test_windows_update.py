@@ -28,6 +28,10 @@ using System.Collections.Generic;
 using System.Web.Script.Serialization;
 class Probe {
  static int Main(string[] args) {
+  if (args.Length == 2 && args[0] == "--hold") {
+   while (!File.Exists(args[1])) Thread.Sleep(20);
+   return 0;
+  }
   var json = new JavaScriptSerializer();
   var request = json.Deserialize<Dictionary<string,object>>(File.ReadAllText(args[1]));
   string work = (string)request["work"];
@@ -70,7 +74,7 @@ class Probe {
     def tearDown(self):
         self.tmp.cleanup()
 
-    def apply(self, corrupt=False, work=None):
+    def apply(self, corrupt=False, work=None, parent_id=0, timeout=None):
         prepare(self.bundle, '0.4.0')
         archive = self.work / 'package.zip'
         with zipfile.ZipFile(archive, 'w', zipfile.ZIP_DEFLATED) as bundle:
@@ -80,8 +84,54 @@ class Probe {
         (self.work / 'request.json').write_text(json.dumps({'target': str(self.target), 'version':'0.4.0', 'sha256':'0'*64 if corrupt else digest}), encoding='utf-8')
         (self.work / 'apply.json').write_text('{}')
         process = subprocess.run(['powershell.exe', '-NoProfile', '-NonInteractive', '-ExecutionPolicy','Bypass',
-            '-File', str(SCRIPT), '-Target', str(self.target), '-Work', work or str(self.work)], capture_output=True, text=True)
+            '-File', str(SCRIPT), '-Target', str(self.target), '-Work', work or str(self.work),
+            '-ParentId', str(parent_id)], capture_output=True, text=True, timeout=timeout)
         return process
+
+    def test_other_client_blocks_preparation_before_current_client_exits(self):
+        caller = subprocess.Popen([str(self.target / 'patchhub.exe'), '--hold', str(self.root / 'stop-caller')])
+        process = subprocess.Popen([str(self.target / 'patchhub.exe'), '--hold', str(self.root / 'stop')])
+        try:
+            result = self.apply(parent_id=caller.pid, timeout=15)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn('Application still running in target directory', result.stderr)
+            self.assertIn(f'PID {process.pid}', result.stderr)
+            self.assertIn('Close other PatchHub windows and retry', result.stderr)
+            self.assertFalse((self.work / 'prepared.json').exists())
+            self.assertFalse((self.target / '.patchhub-update.json').exists())
+            self.assertEqual((self.target / 'patchhub-core.exe').read_text(), '0.3.0')
+            self.assertIsNone(caller.poll())
+            self.assertIsNone(process.poll())
+        finally:
+            (self.root / 'stop').touch()
+            (self.root / 'stop-caller').touch()
+            process.wait(timeout=10)
+            caller.wait(timeout=10)
+
+    def test_current_client_is_allowed_during_preparation_and_waited_before_apply(self):
+        process = subprocess.Popen([str(self.target / 'patchhub.exe'), '--hold', str(self.work / 'prepared.json')])
+        try:
+            result = self.apply(parent_id=process.pid)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(process.wait(timeout=10), 0)
+            self.assertEqual((self.target / 'patchhub-core.exe').read_text(), '0.4.0')
+        finally:
+            if process.poll() is None:
+                process.terminate()
+                process.wait(timeout=10)
+
+    def test_client_in_another_directory_does_not_block_update(self):
+        other = self.root / 'other'
+        other.mkdir()
+        shutil.copyfile(self.executable, other / 'patchhub.exe')
+        process = subprocess.Popen([str(other / 'patchhub.exe'), '--hold', str(self.root / 'stop')])
+        try:
+            result = self.apply()
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIsNone(process.poll())
+        finally:
+            (self.root / 'stop').touch()
+            process.wait(timeout=10)
 
     def short_path(self, path):
         import ctypes

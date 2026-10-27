@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -65,4 +66,41 @@ void main() {
       root.deleteSync(recursive: true);
     }
   });
+
+  test(
+    'new download clears stale progress before release revalidation',
+    () async {
+      final root = Directory.systemTemp.createTempSync('app-update-');
+      final release = Completer<Map<String, dynamic>>();
+      final fetching = Completer<void>();
+      final update = AppUpdate(
+        directory: root,
+        current: '0.3.0',
+        stateFile: File('${root.path}/state.json'),
+        fetchRelease: () {
+          fetching.complete();
+          return release.future;
+        },
+      );
+      try {
+        update.result = {'state': 'available'};
+        update.bytes = 100;
+        update.total = 200;
+        final download = update.download();
+        expect(update.bytes, 0);
+        expect(update.total, 0);
+        expect(update.downloadLabel, '正在核对发行信息…');
+        await fetching.future;
+        release.completeError(
+          const HandshakeException('Connection terminated during handshake'),
+        );
+        await download;
+        expect(update.result['state'], 'failed');
+        expect(update.result['error'], contains('HandshakeException'));
+      } finally {
+        update.dispose();
+        root.deleteSync(recursive: true);
+      }
+    },
+  );
 }

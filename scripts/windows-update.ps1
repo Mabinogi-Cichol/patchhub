@@ -51,10 +51,14 @@ function Read-Manifest($Root) {
     }
     return $taskManifest
 }
-function Assert-Idle {
-    foreach ($taskProcess in Get-Process -Name patchhub,patchhub-core,patchhub-worker -ErrorAction SilentlyContinue) {
+function Assert-Idle([switch]$Preparing) {
+    # During preparation the caller and its Core work are still allowed to run.
+    # Other GUI instances must close before we tell the caller it can exit.
+    $taskNames = if ($Preparing) { @('patchhub') } else { @('patchhub','patchhub-core','patchhub-worker') }
+    foreach ($taskProcess in Get-Process -Name $taskNames -ErrorAction SilentlyContinue) {
+        if ($Preparing -and $taskProcess.Id -eq $ParentId) { continue }
         if ($taskProcess.Path -and [IO.Path]::GetDirectoryName($taskProcess.Path).Equals($taskTarget, [StringComparison]::OrdinalIgnoreCase)) {
-            throw 'Application still running in target directory'
+            throw "Application still running in target directory: $($taskProcess.ProcessName) (PID $($taskProcess.Id)). Close other PatchHub windows and retry."
         }
     }
 }
@@ -141,6 +145,7 @@ try {
         if ($ParentId) { Start-Process -FilePath (Join-Path $taskTarget 'patchhub.exe') -WindowStyle Hidden }
         exit 0
     }
+    Assert-Idle -Preparing
     $taskRequest = Get-Content -LiteralPath (Join-Path $Work 'request.json') -Raw -Encoding UTF8 | ConvertFrom-Json
     if ([IO.Path]::GetFullPath($taskRequest.target).TrimEnd('\','/') -ne $taskTarget) { throw 'Request target mismatch' }
     $taskPackage = Join-Path $Work 'package.zip'

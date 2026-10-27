@@ -92,18 +92,35 @@ class _AppUpdatePanelState extends State<AppUpdatePanel> {
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       Text('当前版本 ${u.current}'),
-                      if (u.outcome != null)
+                      if (u.outcome != null) ...[
+                        const SizedBox(height: 12),
                         SelectableText(
                           u.outcome!['state'] == 'completed'
                               ? '上次更新已完成：${u.outcome!['version']}'
-                              : '上次更新结果：${u.outcome!['error'] ?? u.outcome!['message']}',
+                              : '上次安装结果：${appUpdateErrorText(u.outcome!['error'] ?? u.outcome!['message'])}',
                         ),
+                        const Divider(height: 24),
+                      ],
                       if (state == 'checking')
                         const Text('正在检查 GitHub Release…'),
                       if (state == 'up_to_date') const Text('当前已是最新正式版。'),
-                      if (state == 'failed' || state == 'unavailable')
-                        SelectableText('${u.result['error']}'),
-                      if (error != null) SelectableText('$error'),
+                      if (state == 'failed' || state == 'unavailable') ...[
+                        SelectableText(
+                          state == 'failed'
+                              ? '本次更新操作失败：${appUpdateErrorText(u.result['error'])}'
+                              : '${u.result['error']}',
+                        ),
+                        if (state == 'failed')
+                          TextButton(
+                            onPressed: () {
+                              refresh(() => error = null);
+                              unawaited(u.check(manual: true));
+                            },
+                            child: const Text('重新检查'),
+                          ),
+                      ],
+                      if (error != null && state != 'failed')
+                        SelectableText(appUpdateErrorText(error)),
                       if (state == 'available' || state == 'ready') ...[
                         Text(
                           '${u.current} → ${u.result['tag']} · ${u.result['published_at'] ?? ''}',
@@ -157,8 +174,20 @@ class _AppUpdatePanelState extends State<AppUpdatePanel> {
                         ),
                       ],
                       if (state == 'downloading') ...[
+                        const SizedBox(height: 16),
+                        Text(u.downloadLabel),
+                        const SizedBox(height: 8),
+                        LinearProgressIndicator(
+                          value: u.total > 0
+                              ? (u.bytes / u.total).clamp(0.0, 1.0)
+                              : null,
+                          semanticsLabel: u.downloadLabel,
+                        ),
+                        const SizedBox(height: 8),
                         Text(
-                          '已下载 ${u.bytes} 字节${u.total > 0 ? ' / ${u.total}' : ''}',
+                          u.total > 0
+                              ? '${(u.bytes / u.total * 100).clamp(0, 100).toStringAsFixed(0)}% · ${_downloadSize(u.bytes)} / ${_downloadSize(u.total)}'
+                              : '已下载 ${_downloadSize(u.bytes)}',
                         ),
                         TextButton(
                           onPressed: u.cancelDownload,
@@ -242,4 +271,10 @@ class _AppUpdatePanelState extends State<AppUpdatePanel> {
       );
     },
   );
+}
+
+String _downloadSize(int bytes) {
+  if (bytes < 1024) return '$bytes B';
+  if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
+  return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
 }

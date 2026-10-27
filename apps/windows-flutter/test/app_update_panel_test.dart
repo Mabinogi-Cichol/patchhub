@@ -29,15 +29,22 @@ class PanelUpdate extends AppUpdate {
     await pending!.future;
   }
 
-  void complete(String state) {
+  void complete(String state, {String error = '无法连接更新服务'}) {
     result = {
       'state': state,
       'tag': 'v0.4.0',
       'notes': '版本说明\n' * 50,
-      'error': '无法连接更新服务',
+      'error': error,
     };
     pending?.complete();
     pending = null;
+    notifyListeners();
+  }
+
+  void progress(int downloaded, int length) {
+    bytes = downloaded;
+    total = length;
+    result = {...result, 'state': 'downloading'};
     notifyListeners();
   }
 
@@ -93,6 +100,79 @@ void main() {
       update.dispose();
     });
   }
+
+  testWidgets('download progress tracks bytes and supports unknown length', (
+    tester,
+  ) async {
+    final update = PanelUpdate();
+    await mount(tester, update);
+    await tester.tap(find.text('检查更新'));
+    await tester.pumpAndSettle();
+    update.complete('available');
+    update.progress(5 * 1024 * 1024, 20 * 1024 * 1024);
+    await tester.pump();
+    expect(
+      tester
+          .widget<LinearProgressIndicator>(find.byType(LinearProgressIndicator))
+          .value,
+      0.25,
+    );
+    expect(find.text('25% · 5.0 MB / 20.0 MB'), findsOneWidget);
+    update.progress(10 * 1024 * 1024, 20 * 1024 * 1024);
+    await tester.pump();
+    expect(
+      tester
+          .widget<LinearProgressIndicator>(find.byType(LinearProgressIndicator))
+          .value,
+      0.5,
+    );
+    update.progress(1024, -1);
+    await tester.pump();
+    expect(
+      tester
+          .widget<LinearProgressIndicator>(find.byType(LinearProgressIndicator))
+          .value,
+      isNull,
+    );
+    expect(find.text('已下载 1.0 KB'), findsOneWidget);
+    expect(find.text('取消下载'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    await tester.tap(find.text('关闭'));
+    await tester.pumpAndSettle();
+    await tester.pumpWidget(const SizedBox.shrink());
+    update.dispose();
+  });
+
+  testWidgets(
+    'previous installation failure is separate from current TLS failure and can retry',
+    (tester) async {
+      final update = PanelUpdate();
+      update.outcome = {
+        'state': 'failed',
+        'error': 'Application still running in target directory',
+      };
+      await mount(tester, update);
+      await tester.tap(find.text('检查更新'));
+      await tester.pumpAndSettle();
+      update.complete(
+        'failed',
+        error: 'HandshakeException: Connection terminated during handshake',
+      );
+      await tester.pumpAndSettle();
+      expect(find.textContaining('上次安装结果：更新目录中还有 PatchHub 进程'), findsOneWidget);
+      expect(find.textContaining('本次更新操作失败：连接更新服务时 TLS 握手中断'), findsOneWidget);
+      await tester.tap(find.text('重新检查'));
+      await tester.pumpAndSettle();
+      expect(update.checks, 2);
+      expect(find.text('正在检查 GitHub Release…'), findsOneWidget);
+      update.complete('up_to_date');
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('关闭'));
+      await tester.pumpAndSettle();
+      await tester.pumpWidget(const SizedBox.shrink());
+      update.dispose();
+    },
+  );
 
   testWidgets(
     'automatic notification opens details and preserves ready download',

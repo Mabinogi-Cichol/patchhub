@@ -7,6 +7,17 @@ import 'package:flutter/foundation.dart';
 const updateRepository = 'Mabinogi-Cichol/patchhub';
 const windowsUpdateAsset = 'patchhub-windows-portable.zip';
 
+String appUpdateErrorText(Object? error) {
+  final detail = '$error';
+  if (detail.contains('Application still running in target directory')) {
+    return '更新目录中还有 PatchHub 进程在运行，请关闭其他 PatchHub 窗口后重试。\n$detail';
+  }
+  if (detail.contains('HandshakeException')) {
+    return '连接更新服务时 TLS 握手中断，请检查网络连接后重试。\n$detail';
+  }
+  return detail;
+}
+
 class AppVersion implements Comparable<AppVersion> {
   AppVersion(String value) {
     final match = RegExp(
@@ -107,6 +118,7 @@ class AppUpdate extends ChangeNotifier {
   bool cancelled = false;
   bool lastCheckWasManual = false;
   int bytes = 0, total = 0;
+  String downloadLabel = '正在下载更新包…';
   bool get busy =>
       ['checking', 'downloading', 'applying'].contains(result['state']);
   bool get skipped => data['skipped_tag'] == result['tag'];
@@ -301,6 +313,8 @@ class AppUpdate extends ChangeNotifier {
     if (candidate['state'] != 'available') throw StateError('请重新检查更新');
     cancelled = false;
     bytes = 0;
+    total = 0;
+    downloadLabel = '正在核对发行信息…';
     package = null;
     result = {...candidate, 'state': 'downloading'};
     notifyListeners();
@@ -339,6 +353,10 @@ class AppUpdate extends ChangeNotifier {
         (candidate['sums'], sums),
         (candidate['asset'], target),
       ]) {
+        downloadLabel = entry.$2 == sums ? '正在下载校验清单…' : '正在下载更新包…';
+        bytes = 0;
+        total = 0;
+        notifyListeners();
         final request = await _download!.getUrl(
           Uri.parse(entry.$1['browser_download_url'] as String),
         );
@@ -350,7 +368,7 @@ class AppUpdate extends ChangeNotifier {
           throw HttpException('附件下载失败：${response.statusCode}');
         }
         total = response.contentLength;
-        bytes = 0;
+        notifyListeners();
         final sink = entry.$2.openWrite();
         try {
           await for (final block in response) {
@@ -364,6 +382,8 @@ class AppUpdate extends ChangeNotifier {
         }
       }
       if (cancelled) throw StateError('已取消下载');
+      downloadLabel = '正在校验更新包…';
+      notifyListeners();
       final lines = const LineSplitter().convert(await sums.readAsString());
       final pattern = RegExp(
         r'^([0-9a-fA-F]{64}) [ *]' + RegExp.escape(windowsUpdateAsset) + r'$',
