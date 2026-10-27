@@ -122,16 +122,11 @@ jobs:
           set -euo pipefail
           mkdir release-assets
           cp release-input/windows-portable/patchhub-windows-portable.zip release-assets/
-          cp release-input/windows-portable/checksums-windows.json release-assets/
-          cp release-input/windows-portable/dependencies.cdx.json release-assets/dependencies-windows.cdx.json
           for installer in release-input/windows-nsis/*.exe; do
             filename="$(basename "$installer")"
             cp "$installer" "release-assets/${filename// /.}"
           done
           cp release-input/decky-plugin/patchhub-decky.zip release-assets/
-          cp release-input/decky-plugin/checksums-decky.json release-assets/
-          cp release-input/decky-plugin/dependencies.cdx.json release-assets/dependencies-decky.cdx.json
-          cp release-input/decky-plugin/install-decky.py release-assets/
           cd release-assets
           sha256sum -- * > SHA256SUMS.txt
       - name: Publish GitHub Release
@@ -192,7 +187,6 @@ jobs:
       - run: cargo metadata --locked --format-version 1 > .artifacts/cargo-metadata.json
       - run: python scripts/build-sbom.py .artifacts/cargo-metadata.json
       - run: python scripts/package-artifacts.py --platform decky
-      - run: cp scripts/install-decky.py .artifacts/install-decky.py
       - run: git diff --exit-code -- Cargo.lock package-lock.json packages/contracts/generated packages/contracts/fixtures
       - uses: actions/upload-artifact@v4
         with:
@@ -201,7 +195,6 @@ jobs:
             .artifacts/patchhub-decky.zip
             .artifacts/checksums-decky.json
             .artifacts/dependencies.cdx.json
-            .artifacts/install-decky.py
           if-no-files-found: error
 
   ci:
