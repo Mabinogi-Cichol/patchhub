@@ -2,6 +2,12 @@
 
 [施工记录](progress.md)
 
+## 2026-10-27：发行附件精简
+
+在 `fix/release-assets` 分支调整发布工作流：公开附件仅保留 Windows 安装版、Windows 便携版、Decky ZIP 及覆盖三个安装包的 `SHA256SUMS.txt`。分平台校验 JSON 和 SBOM 继续作为 CI 产物，包内依赖清单与仓库安装脚本保持原样；删除仅为单独分发服务的安装脚本复制与 artifact 上传。
+
+用户授权同步精简 v0.4.0：保留 Tag、三个二进制包、发布说明与发行状态，备份后移除五个冗余附件并重建校验清单。验收包括工作流暂存夹具、三包实测哈希、在线安装/自更新候选选择，以及公开附件清单读回；不重复执行与本次修改无关的构建或实机操作。
+
 ## 目标与范围
 
 修复提交 `c0501b3bc5c1e6136a7df05a76f756ef1fba3a4e` 的 [push CI #70](https://github.com/Mabinogi-Cichol/patchhub/actions/runs/40121256739) 暴露的两处失败。分支为 `feature/patchhub-ci-fix`，从当前 main 创建。

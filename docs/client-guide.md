@@ -47,7 +47,7 @@ git tag -a v0.1.0-alpha.1 -m "Release v0.1.0-alpha.1"
 git push origin v0.1.0-alpha.1
 ```
 
-Tag 名含 `-` 时标记为预发行版，其余标记为正式发行版。Release 自动生成说明，包含 Windows 便携 ZIP、NSIS 安装包、Decky ZIP、各平台校验与依赖清单，以及覆盖所有附件的 `SHA256SUMS.txt`。Windows、Decky 的外部依赖清单分别命名为 `dependencies-windows.cdx.json` 和 `dependencies-decky.cdx.json`，避免同名覆盖。
+Tag 名含 `-` 时标记为预发行版，其余标记为正式发行版。Release 公开附件仅包含 Windows 便携 ZIP、NSIS 安装包、Decky ZIP，以及覆盖这三个安装包的 `SHA256SUMS.txt`，供自动更新和在线安装校验。依赖清单保留在安装包内，分平台校验 JSON 保留为 CI 产物；不再单独上传这些 JSON 或 `install-decky.py`。终端一键安装通过仓库 `install.sh` 下载仓库中的 Python 安装脚本。发布说明按“新增与优化”和“问题修复”分类，无变更的分类省略。
 
 发布使用 GitHub 自动提供的 `GITHUB_TOKEN`，仅发布任务授予 `contents: write`，无需配置个人访问令牌。同一 Tag 的发布任务串行执行；失败后可重新运行该次 Actions，若 Release 已存在则覆盖同名附件。已发布 Tag 应保持指向不变；新版本使用新 Tag。
 

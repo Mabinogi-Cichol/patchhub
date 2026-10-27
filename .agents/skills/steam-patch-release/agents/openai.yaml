@@ -1,6 +1,6 @@
 interface:
   display_name: "Steam 补丁管理版本发布"
   short_description: "发布本项目版本并核验发行附件，维护仅含版本号的 Release 标题与中文说明"
-  default_prompt: "使用 $steam-patch-release 按本次授权范围发布或维护版本，确保 Release 标题与版本 Tag 完全一致并核验结果。"
+  default_prompt: "使用 $steam-patch-release 按本次授权范围发布或维护版本，确保 Release 标题与版本 Tag 完全一致，中文正文按新增与优化、问题修复分类简要列出变更，无变更的分类省略，并核验结果。"
 policy:
   allow_implicit_invocation: true

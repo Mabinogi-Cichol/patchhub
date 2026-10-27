@@ -10,6 +10,7 @@
 
 | 功能 | 状态 | 设计文档 | 施工记录 | 附加文档 |
 | --- | --- | --- | --- | --- |
+| 发行附件精简 | 工作流已改为 3 个安装包及 SHA256SUMS.txt；暂存夹具及安装/更新 46 项回归通过，v0.4.0 已精简并通过公开清单、哈希及安装入口校验 | [设计](patchhub-ci-fix/design.md#2026-10-27发行附件精简) | [施工记录](patchhub-ci-fix/progress.md#2026-10-27发行附件精简) | — |
 | 分平台 BAT 构建入口 | 已实现并合入 v0.4.0 发行（入口为开发工具，不随安装包分发），入口与模拟流水线、Windows 快速预览实际构建通过，完整发行构建待验证 | [设计](platform-build-entrypoints/design.md) | [施工记录](platform-build-entrypoints/progress.md) | — |
 | 补丁选择状态与候选安装交互修复 | 选择身份与候选交互修复已随 v0.4.0 发布；Flutter 26/核心投影 24/Decky 68 项及静态检查通过，安装版更新和实机待验证 | [设计](windows-patch-selection/design.md) | [施工记录](windows-patch-selection/progress.md) | — |
 | Windows 全局来源布局修复 | 状态键修复已合并；补充来源卡片分组与三态主题图标已实现并随 v0.4.0 发布，13 项回归、静态分析与深浅渲染检查通过，原生界面待验收 | [设计](windows-global-sources-layout/design.md) | [施工记录](windows-global-sources-layout/progress.md) | — |

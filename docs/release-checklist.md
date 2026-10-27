@@ -20,14 +20,14 @@ Windows 当前未配置 Authenticode 证书，安装包没有发行者身份认�
 ## 每次发布前
 
 - 自更新版本校验需确认 Cargo、Flutter、Decky、Windows `app-version.json` 与 Release Tag 一致。Windows ZIP 与 NSIS 使用相同受管理文件清单；验证更新多次后仍可正确卸载，且不删除用户额外文件。
-- 先创建草稿 Release，完整上传双端 ZIP、NSIS、校验清单和其他附件，下载核对 `SHA256SUMS.txt` 后再公开；不自动覆盖已有公开附件。自动检查不依赖 NSIS 附件。
+- 先创建草稿 Release，仅上传双端 ZIP、NSIS 和覆盖三个安装包的 `SHA256SUMS.txt`，下载核对后再公开；不单独上传校验 JSON、SBOM 或 Python 脚本，不自动覆盖已有公开附件。自动检查不依赖 NSIS 附件。
 
 1. 核对公开目录的 AppID、来源链接、包哈希、游戏 build、语言、许可条件和平台验证证据。未知平台或版本保持禁用自动安装。
 2. 完成 fmt、Clippy、核心事务与恢复测试、Python 薄桥接模块测试（生产 backend allowlist）、双端前端构建；记录实际执行结果。
 3. 审查依赖变更、许可及已披露漏洞；保留工具版本和可复查报告。2026-10-01 npm 官方安全接口对当前锁定依赖返回 0 条已披露漏洞。cargo-audit 0.22.2 使用 RustSec 数据库 commit 9b3a3b73a7f42606494c943e95f8196e9994df46 检查当时的锁文件 528 个 Rust 依赖，无漏洞命中，另有下方两个提示；该记录早于后续依赖变更，当前 Cargo.lock 为 545 个包，正式发布前需重跑 cargo-audit 并更新记录。scripts/build-sbom.py 生成 744 个组件的 CycloneDX 依赖清单（2026-10-11 P6 重建实测），包括开发及其他平台依赖；清单与审计均不代表依赖没有未知漏洞，也不替代许可证法律审查。
 4. 重新构建核心、刷新客户端 sidecar / 目录资源，再打包；检查 ZIP 不含 .local、私钥、个人游戏库路径、备份或游戏资产。
 5. 在目标平台核对包哈希并测试首次运行、签名目录、安装与覆盖、下载取消、异常恢复；Decky 另测控制器导航、宿主重载和 SD 卡离线。
-6. 更新 docs/progress.md 中的已完成与未完成项目，发布说明明确缺失验收及已知限制。
+6. 更新 docs/progress.md 中的已完成与未完成项目，将缺失验收及已知限制记录在发布检查记录中；公开说明按“新增与优化”和“问题修复”简要列出变更，无变更的分类省略。
 
 当前重要限制：不提供补丁卸载入口或同目标增量升级，覆盖安装不会删除上一版本多出的文件。从 v0.2.0 起，新 ZIP/EXE 直接安装不创建备份、暂存或授权文件，也不回滚；写入后取消、失败或中断保留已写内容，需要时重新安装。历史事务仍按其原有记录恢复，冲突报告 `needs_recovery`。下载取消可能留下 `.partial` 缓存。文件写入不构成整个游戏目录的原子替换；对同一用户恶意改变路径与日志的防御仍有限。UI 在已知总量时显示字节与文件进度，未知总量不伪造百分比。
 
@@ -177,3 +177,16 @@ RustSec 提示：RUSTSEC-2024-0429（glib 0.18.5，unsound）与 RUSTSEC-2024-03
 | patchhub-decky.zip | 7673533 | `a94695d3b78ce929e7f8a4b37cebee68f7fe1d18ddbb2f6d71e7cd43e2faba9e` |
 | patchhub-windows-portable.zip | 19322437 | `df6e73125a41f14ec5b49ad6ba505ee60179514b4b1760c65ec13a933de9a05a` |
 | patchhub-windows-x64-setup.exe | 14568272 | `740442b445779a904c5acf0d0109af624cde7031aa43ac8af8fd7b84c1c9cca2` |
+
+### 2026-10-27：精简 v0.4.0 发布说明
+
+- 将[仓库说明](releases/v0.4.0.md)与 [GitHub Release](https://github.com/Mabinogi-Cichol/patchhub/releases/tag/v0.4.0) 正文统一为“新增与优化”和“问题修复”，保留旧版本需手动升级的提示。
+- API 读回确认正文与仓库文件逐字符一致；标题、Tag、目标分支、公开/预发行状态及发布时间保持不变，9 个附件的 ID、名称、大小和摘要保持不变；正文更新时间为 `2026-10-27T15:22:07Z`。
+- 本次仅修改说明，未重新构建或执行实机验证；原说明及更新前后 API 记录保存在 `.artifacts/release-v0.4.0/description-rewrite-20261027/`。
+
+### 2026-10-27：精简 v0.4.0 公开附件
+
+- 经用户授权移除两份 `checksums-*.json`、两份 `dependencies-*.cdx.json` 及 `install-decky.py`，重建并上传 `SHA256SUMS.txt`，公开附件由 9 个减为 4 个；保留 Windows NSIS、Windows 便携 ZIP、Decky ZIP。
+- 更新前全部 9 个附件已备份并逐个与当前公开 API 大小及 SHA-256 核对；更新后公开清单仅有三个安装包，哈希与原包一致。三个安装包的 ID/名称/大小/哈希/下载 URL、Tag 引用、正文、发布时间与发行状态均保持不变，未重建安装包或移动 Tag。
+- 实际 Release 数据通过 Decky 自更新候选识别及安装器下载校验；工作流实际 Bash 暂存夹具通过，WSL 安装入口 8 项、WSL 安装器 30 项及原生 Decky 自更新 8 项回归全部通过。没有新增实机验收结论。
+- 证据和可恢复附件：`.artifacts/release-v0.4.0/assets-simplification-20261027/`，包括更新前后 API、原附件、新清单及 `verification.json`。
