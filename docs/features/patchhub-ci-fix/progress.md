@@ -2,6 +2,44 @@
 
 [设计](design.md)
 
+## 2026-10-29：Windows CI 再次失败与构建精简
+
+状态：已实现，本地验证通过；完整在线 CI、缓存命中与耗时改善待验证。用户明确要求直接在 `main` 修复；基线 `48be014`，随后授权按功能代码与文档拆分本地提交，未推送。
+
+- [push #82](https://github.com/Mabinogi-Cichol/patchhub/actions/runs/40557800912)、[#83](https://github.com/Mabinogi-Cichol/patchhub/actions/runs/40729708845)、[#84](https://github.com/Mabinogi-Cichol/patchhub/actions/runs/40746465376)、[#85](https://github.com/Mabinogi-Cichol/patchhub/actions/runs/40751223704) 均在 `test_other_client_blocks_preparation_before_current_client_exits` 触发 15 秒超时；Flutter 与打包步骤未执行。
+- 原生复现：普通 TEMP 的该测试通过，真实短 TEMP 触发相同超时；诊断确认目标目录为长名、进程目录含短名，直接比较为 false。临时脚本副本规范化进程路径后，短 TEMP 的 12 项更新测试通过；这仅为上一轮调查证据，不代表仓库已修改。
+- 完整成功 [#81](https://github.com/Mabinogi-Cichol/patchhub/actions/runs/40532281883) 耗时：Windows 698 秒、Decky 221 秒。Rust 契约检查 111/54 秒，Release 构建 206/132 秒；Windows 另有 Flutter 环境 89 秒、分析/测试/构建 178 秒、NSIS 准备/生成 29 秒。Flutter SDK 约 1.84 GB 缓存已命中，不能将准备耗时归为缓存失效；两平台未使用 Rust 构建缓存。
+- Decky 真实桥接测试在构建前查找 `target/debug`，日志显示 `core binary not built` 并跳过；CI 实际输出为 `target/linux/release`。
+
+### 实际修改
+
+- `Assert-Idle` 对进程路径也执行 `GetFullPath` 后比较；复用原有拒绝断言，新增真实短路径启动另一客户端的回归，不修改 15 秒测试超时或业务等待逻辑。
+- Rust 生成物检查收敛到 Core 的 Linux matrix，删除 Windows/Decky 的重复检查；补充生成器与协议夹具输入的选择器回归。各平台消费者测试及最终汇总保持覆盖。
+- 三个构建 job 使用 Rust 依赖缓存，Decky 显式指定 `target/linux`；删除重复 Chocolatey NSIS 安装，Flutter 后续命令使用 `--no-pub`。
+- Decky 后端测试移到 Release 构建之后，以 `PATCHHUB_TEST_CORE` 指定本次程序；显式缺失程序不再跳过，真实扫描使用临时状态目录。
+
+### 验证与复核
+
+- 新增短路径启动回归在旧仓库脚本上失败，精确触发 15 秒超时；修复后普通 TEMP 的 13 项更新测试全部通过（50.146 秒），真实短 TEMP 的 13 项全部通过（60.466 秒），均无跳过。
+- actionlint 通过；CI 选择器 9 项全部通过，包括生成器/协议输入必选 Core 的检查。Windows 沙箱 TEMP ACL 最初阻止临时 Git 仓库操作，原生环境重跑通过；未改代码绕过沙箱限制。
+- 完整 `build-windows-flutter.ps1 -SkipRust` 通过：只执行一次依赖解析，analyze 无问题，265 项测试通过、1 项跳过，Windows Release 构建成功。记录：`.artifacts/ci-flutter-validation-20261029.log`。本地 Rust 二进制复用，未重建 Windows Rust 或生成新安装包。
+- WSL 当前源码 Release Core/worker 构建通过（1 分 13 秒）。初次 WSL 默认 Python 3.10.12 在取消夹具报错后卡于模拟回滚清理；最小诊断确认该版本的 `IsolatedAsyncioTestCase` 不将 setUp 的 ContextVar 带入异步用例，随后仅终止本轮该测试进程。未为本地旧 Python 增加产品兼容逻辑。
+- 使用发布方 SHA-256 校验的隔离 Linux Python 3.12.16 匹配 CI 的 3.12 系列，重新执行全部 Decky 后端测试：111 项全部通过（39.536 秒），无跳过，真实 Release Core 桥接用例实际执行。记录：`.artifacts/ci-decky-linux312-validation-20261029.log`。Windows Python 3.12 的补充运行也通过（111 项中 3 项因 POSIX/Unix 身份/符号链接权限跳过），不将其等同于 Linux 验证。
+- 显式设置不存在的 `PATCHHUB_TEST_CORE` 时，真实桥接用例按预期以 `FileNotFoundError` 失败且不跳过。
+- 按 overengineering-review 沿更新准备/拒绝/等待路径、生成物输入选择、缓存目录映射和桥接测试失败传播复核：只统一路径表示、删除重复工作并修复真实测试覆盖；未增加重试、硬限制或状态恢复分支。`git diff --check` 通过，锁文件与生成物未漂移。
+
+### 本地提交
+
+- `86e8234`：Windows 短路径进程识别修复及回归。
+- `fed8e9a`：Decky 后端测试顺序、Release Core 路径及状态隔离。
+- `d69d8e7`：CI 构建精简、Rust 缓存与消费者构建脚本。配套设计、施工记录、功能索引和 CI 指南另作文档提交。沿用上方已完成验证，没有重复运行；本轮未推送。
+
+### 待在线验收
+
+- [ ] 推送后核验新 head 的完整 CI，确认 Windows 已通过原失败步骤，并完成构建、打包和上传。
+- [ ] 通过后续运行确认 Rust 缓存保存/命中，并对比各阶段实际耗时；本地测试不代表缓存效果已验收。
+- 本轮未发布、部署或操作 Steam Deck，未进行新安装包或真实游戏验收。
+
 ## 2026-10-27：发行附件精简
 
 - 已移除 Release 暂存阶段的两份校验 JSON、两份外置 SBOM 和 Python 安装脚本，删除仅供外置分发的脚本复制及 CI artifact 条目。
@@ -12,7 +50,7 @@
 
 ## 状态
 
-首轮修复已提交、合并 main 并由用户推送；线上暴露的后续问题已补充修复，本轮按用户要求分别提交并合并本地 main，未推送，完整在线 CI 待验证。
+2026-10-26 的修复与当时待办记录保留如下；后续完整成功运行 #81 已提供构建耗时基线。2026-10-29 本轮修复与当前待验收状态以上方记录为准。
 
 ## 2026-10-26
 

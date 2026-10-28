@@ -24,6 +24,17 @@ checkout 获取完整历史，Git 差异计算失败直接失败，不返回空�
 `core` 保留 Rust 和 SF 参考实现检查；Decky 后端和安装测试移到 `decky`；
 Flutter SBOM 测试移到 `windows`；公共打包和 SBOM 测试在两个平台分别执行。
 
+Rust 契约生成物一致性只在 `core` 的 Linux matrix 中检查一次；生成器、协议、
+Core 与生成物输入变更均会选择 `core`。Windows/Decky 继续执行消费者契约测试，
+不再为了重复的一致性检查编译 debug Core。三个构建 job 均使用 Rust 依赖缓存，
+Decky 的 target 映射为 `target/linux`。
+
+Decky 后端测试在 Release 构建之后执行，通过 `PATCHHUB_TEST_CORE` 指向本次构建的
+`target/linux/release/patchhub-core`；显式指定的程序缺失时测试失败，不能跳过真实桥接。
+本地未设置此变量时仍可使用 `target/debug/patchhub-core`，未构建则明确跳过。
+Windows 直接使用 `windows-2022` 镜像已有的 NSIS；Flutter 先解析一次锁定依赖，
+后续分析、测试和构建不重复执行 pub get。
+
 纯文档提交也会有轻量的 `changes` 和汇总 `ci`，但不会安装 Rust/Flutter/npm 依赖或构建客户端。
 `ci` 在检测或所选模块失败、取消时失败，允许未选中的模块跳过。
 若配置 PR 必需检查，建议使用 `ci`；分支保护需在 GitHub 上单独设置，本次不自动修改。

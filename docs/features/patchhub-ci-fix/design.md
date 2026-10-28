@@ -2,6 +2,18 @@
 
 [施工记录](progress.md)
 
+## 2026-10-29：Windows 短路径进程识别与 CI 精简
+
+本轮按用户明确要求直接在 `main` 修复，不创建开发分支；用户随后授权本地 Git 提交，按功能代码与文档拆分，不推送。
+
+- push #82–#85 均在同目录多客户端更新测试中超时。原生 Windows 已复现：`GetFullPath(Target)` 展开短名，而 `Get-Process.Path` 保留启动时的短名，导致 `Assert-Idle` 漏检并进入等待调用者退出的路径。比较前对进程路径使用相同的 `GetFullPath`；新增用真实短路径启动第二客户端的回归，保留现有拒绝行为及超时值。
+- Rust 生成物一致性检查只在 Core 的 Linux matrix 中执行。生成器、协议、Core 和生成物输入均由现有规则触发 Core；Windows/Decky 保留消费者契约测试，汇总 `ci` 继续覆盖 Core 失败。不为客户端检查重复编译 debug Core。
+- Core、Windows、Decky 使用 `Swatinem/rust-cache@v2` 缓存 Cargo 依赖及依赖构建产物，Decky 显式映射 `. -> target/linux`；保留默认按 job、平台和 Rust 环境区分的缓存，不增加自定义失效或重试机制。
+- Flutter 保留一次 `pub get --enforce-lockfile`，后续 analyze/test/build 使用 `--no-pub`；保留完整分析、测试、构建和打包校验。删除在当前 `windows-2022` 镜像中重复安装已存在 NSIS 的 Chocolatey 步骤，沿用实际 makensis 路径。
+- Decky 后端测试移到 Release 二进制构建之后。通过测试专用 `PATCHHUB_TEST_CORE` 明确指定本次构建的程序；显式指定的文件缺失必须失败，本地未指定时沿用可选 debug 二进制测试。真实扫描以独立临时状态目录运行。
+
+验收：普通 TEMP、短 TEMP 的全部 Windows 更新测试；新增回归在旧脚本失败；CI 选择器、工作流 actionlint；Flutter 完整脚本构建；Decky 在 `target/linux/release` 二进制上执行全部后端测试，真实桥接用例不得跳过。缓存命中、完整在线 CI 及耗时改善必须在推送后另行核验，不以本地验证代替。
+
 ## 2026-10-27：发行附件精简
 
 在 `fix/release-assets` 分支调整发布工作流：公开附件仅保留 Windows 安装版、Windows 便携版、Decky ZIP 及覆盖三个安装包的 `SHA256SUMS.txt`。分平台校验 JSON 和 SBOM 继续作为 CI 产物，包内依赖清单与仓库安装脚本保持原样；删除仅为单独分发服务的安装脚本复制与 artifact 上传。

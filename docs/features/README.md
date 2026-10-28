@@ -20,7 +20,7 @@
 | 分平台 BAT 构建入口 | 已实现并合入 v0.4.0 发行（入口为开发工具，不随安装包分发），入口与模拟流水线、Windows 快速预览实际构建通过，完整发行构建待验证 | [设计](platform-build-entrypoints/design.md) | [施工记录](platform-build-entrypoints/progress.md) | — |
 | 补丁选择状态与候选安装交互修复 | 选择身份与候选交互修复已随 v0.4.0 发布；Flutter 26/核心投影 24/Decky 68 项及静态检查通过，安装版更新和实机待验证 | [设计](windows-patch-selection/design.md) | [施工记录](windows-patch-selection/progress.md) | — |
 | Windows 全局来源布局修复 | 状态键修复已合并；补充来源卡片分组与三态主题图标已实现并随 v0.4.0 发布，13 项回归、静态分析与深浅渲染检查通过，原生界面待验收 | [设计](windows-global-sources-layout/design.md) | [施工记录](windows-global-sources-layout/progress.md) | — |
-| PatchHub 合并后 CI 修复 | 首轮已合并推送；线上后续失败已补充修复，普通/短 TEMP 的 Windows 各 9 项、WSL 启动入口 8 项通过；补充修复按要求提交并合并本地 main，未推送，完整在线 CI 待验证 | [设计](patchhub-ci-fix/design.md) | [施工记录](patchhub-ci-fix/progress.md) | — |
+| PatchHub 合并后 CI 修复 | 2026-10-29 短路径进程漏检修复、CI 精简及 Rust 缓存已实现；普通/短 TEMP 各 13 项、Flutter 265 项及构建、Linux Python 3.12 后端 111 项通过；按用户要求拆分本地提交，在线 CI、缓存命中与提速待验证，未推送 | [设计](patchhub-ci-fix/design.md) | [施工记录](patchhub-ci-fix/progress.md) | — |
 | PatchHub 品牌与全面改名 | 全面改名与双端构建/打包、Windows 原生更新链通过；GitHub 已改名，源码已随 v0.4.0 发布；系统安装/Decky 实机待验收 | [设计与改名计划](patchhub-branding/design.md) | [施工记录](patchhub-branding/progress.md) | [实现复核](patchhub-branding/review.md) |
 | Windows 与 Decky 客户端自更新 | 已实现并随 v0.4.0 发布；Windows 进度/多实例修复及启动单实例已实现，本地原生候选和更新夹具链通过、未发布；原双端及 Decky 实机证据保留，Windows 安装版完整矩阵、跨正式版本真实更新及实体手柄待验收 | [设计](client-self-update/design.md) | [施工记录](client-self-update/progress.md) | [实现复核](client-self-update/review.md) / [Windows 修复](client-self-update/fix-plan.md) |
 | Windows 视觉与下载进度完善 | 历史主题 / 图标 / 速度随 v0.4.0 发布；2026-10-29 空闲关窗优化已本地提交，生命周期 / 取消 11 项、analyze、release 构建与原生 30 图通过，标题栏清理分发 4ms（不代表进程退出耗时），候选已更新，未合并 / 发布 | [设计](windows-visual-polish/design.md) | [施工记录](windows-visual-polish/progress.md) | — |
