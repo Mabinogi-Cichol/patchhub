@@ -38,6 +38,19 @@ function discovery(status: string, candidates: RowDiscovery["candidates"], diagn
   };
 }
 
+// Failed queries retain their real status/diagnostics while keeping the last
+// usable result on screen. A successful empty result still clears old matches.
+function retainQueryResults(previous: Install | undefined, next: Install): Install {
+  if (!previous || !next.discovery || !["pending", "incomplete", "failed"].includes(next.discovery.status)) return next;
+  const activeSources = next.sources == null ? null
+    : new Set(next.sources.filter(source => source.enabled && source.subscribed).map(source => source.id));
+  const permitted = (sourceId: string | null | undefined) => activeSources == null || !!sourceId && activeSources.has(sourceId);
+  const candidates = new Map((previous.discovery?.candidates ?? []).filter(candidate => permitted(candidate.source_id)).map(candidate => [candidate.candidate_id, candidate]));
+  for (const candidate of next.discovery.candidates) candidates.set(candidate.candidate_id, candidate);
+  return { ...next, patches: next.patches.length ? next.patches : previous.patches.filter(patch => permitted(patch.source_id)),
+    discovery: { ...next.discovery, candidates: [...candidates.values()] } };
+}
+
 export function feedbackFor(state: Pick<SessionState, "error" | "note" | "errorInstance" | "noteInstance">, instance: string | null = null) {
   return {
     error: state.errorInstance === null || state.errorInstance === instance ? state.error : null,
@@ -74,7 +87,10 @@ export function createManagerSession(readSnapshot: () => Promise<Snapshot>, sour
     finally { update({ busy: null, busySince: null }); }
   }
   function acceptSnapshot(snapshot: Snapshot) {
-    update(snapshot);
+    const previous = new Map(state.report?.installs.map(row => [row.game.instance_id, row]) ?? []);
+    const installs = snapshot.report.installs.map(row => retainQueryResults(previous.get(row.game.instance_id), row));
+    update(installs.some((row, index) => row !== snapshot.report.installs[index])
+      ? { ...snapshot, report: { ...snapshot.report, installs } } : snapshot);
   }
   function refresh() {
     if (state.busy) return Promise.resolve();
@@ -86,12 +102,15 @@ export function createManagerSession(readSnapshot: () => Promise<Snapshot>, sour
   function mergeInstances(instances: Install[]) {
     if (!state.report || !instances.length) return;
     const byInstance = new Map(instances.map(instance => [instance.game.instance_id, instance]));
-    update({ report: { ...state.report, installs: state.report.installs.map(row => byInstance.get(row.game.instance_id) ?? row) } });
+    update({ report: { ...state.report, installs: state.report.installs.map(row => {
+      const next = byInstance.get(row.game.instance_id);
+      return next ? retainQueryResults(row, next) : row;
+    }) } });
   }
   function mergeMatch(appid: number, status: string, candidates: RowDiscovery["candidates"], diagnostics: Diagnostics) {
     if (!state.report) return;
     update({ report: { ...state.report, installs: state.report.installs.map(row => row.game.appid === appid
-      ? { ...row, discovery: discovery(status, candidates, diagnostics) }
+      ? retainQueryResults(row, { ...row, discovery: discovery(status, candidates, diagnostics) })
       : row) } });
   }
   async function refreshSources() {
@@ -110,15 +129,12 @@ export function createManagerSession(readSnapshot: () => Promise<Snapshot>, sour
     }
   }
   async function finishSourceTask(task: SourceTaskSnapshot) {
-    const instance = task.instances[0] ?? null;
     if (task.state === "failed") {
-      const detail = task.error_detail ? ` · ${task.error_detail}` : "";
-      let message = `${reason(task.error ?? "source_refresh_failed")}${detail}`;
+      console.error("PatchHub source task failed", task.task_id, task.error, task.error_detail);
       if (task.kind === "update_source") {
         try { await refreshSources(); }
-        catch (error) { message += ` · 来源状态读取失败：${reason(String(error))}`; }
+        catch (error) { console.error("PatchHub source status read failed", error); }
       }
-      setFeedback({ error: message }, instance);
       return;
     }
     if (task.state !== "completed") return;
@@ -137,7 +153,7 @@ export function createManagerSession(readSnapshot: () => Promise<Snapshot>, sour
       for (const match of matches) mergeMatch(match.appid, match.status, match.candidates, match.diagnostics);
       await projectRows(matches.flatMap((match: GameMatch) => match.instance_id ? [match.instance_id] : []));
     } catch (error) {
-      setFeedback({ error: reason(String(error)) }, instance);
+      console.error("PatchHub source result read failed", error);
     }
   }
   function mergeTaskMatches(task: SourceTaskSnapshot) {
@@ -197,7 +213,7 @@ export function createManagerSession(readSnapshot: () => Promise<Snapshot>, sour
       schedulePoll();
       return task.task_id;
     } catch (error) {
-      setFeedback({ error: reason(String(error)) }, scope);
+      console.error("PatchHub source task start failed", error);
       return null;
     }
   }
@@ -217,7 +233,7 @@ export function createManagerSession(readSnapshot: () => Promise<Snapshot>, sour
       update({ sourceTasks: { ...state.sourceTasks, [task.task_id]: task } });
       schedulePoll();
     } catch (error) {
-      setFeedback({ error: reason(String(error)) });
+      console.error("PatchHub source task cancellation failed", error);
     }
   }
   async function setSourceInterval(sourceId: string, intervalHours: number) {

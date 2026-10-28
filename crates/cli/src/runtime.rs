@@ -32,6 +32,7 @@ pub struct Params {
     /// Dynamic content-route selection (`exe-selection-*`), mutually exclusive
     /// with `release_id` (p1-host-contract §1.1 A).
     pub selection_id: Option<String>,
+    pub manual_download: Option<installer::service::ManualDownloadInput>,
     pub operation: install::InstallOperation,
     pub request_id: Option<String>,
     pub cleanup_policy: installer::service::CleanupPolicy,
@@ -69,6 +70,9 @@ impl Params {
             appid: v.get("appid").and_then(Value::as_u64).map(|n| n as u32),
             release_id: text("release_id"),
             selection_id: text("selection_id"),
+            manual_download: v.get("manual_download").filter(|v| !v.is_null()).map(|v| {
+                serde_json::from_value(v.clone()).expect("validated manual download input")
+            }),
             plan_id: text("plan_id"),
             archive: text("archive").map(PathBuf::from),
             source_id: text("source_id"),
@@ -179,7 +183,6 @@ impl ProgressCursor {
 /// `get_capabilities` v5 payload (p1-host-contract §3.1, p1-contract §9.2):
 /// installer and source sub-objects merged with the full 21-method whitelist.
 fn capabilities(_params: &Params) -> Value {
-    let availability = exe_sandbox_availability();
     let mut methods: Vec<&str> = Vec::with_capacity(METHODS.len());
     methods.extend(METHODS.iter().copied());
     json!({
@@ -196,8 +199,8 @@ fn capabilities(_params: &Params) -> Value {
             "links": {
                 "zip": { "available": installer::host_identity_blocker().is_none(),
                     "blockers": installer::host_identity_blocker().map(|code|json!([{"code":code}])).unwrap_or_else(||json!([])) },
-                "exe": {"available": availability.available, "blockers": if availability.available {json!([])}else{
-                    json!([{"code":"exe_sandbox_unavailable","detail":availability.reason}])}},
+                "exe": {"available": installer::host_identity_blocker().is_none(),
+                    "blockers": installer::host_identity_blocker().map(|code|json!([{"code":code}])).unwrap_or_else(||json!([]))},
             },
         },
         "sources": {
@@ -226,83 +229,9 @@ fn bundled_worker() -> Option<PathBuf> {
     }))
 }
 
-fn worker_runtime(stage: &Path) -> Result<patchhub_core::installer::WorkerRuntime, DomainError> {
-    state_safe(stage)?;
-    fs::create_dir_all(stage).map_err(err)?;
-    state_safe(stage)?;
+fn worker_runtime() -> Result<patchhub_core::installer::WorkerRuntime, DomainError> {
     let worker = bundled_worker().ok_or_else(|| DomainError::code("bundled_worker_missing"))?;
-    installer::WorkerRuntime::new(worker, stage, None)
-        .map_err(|e| failed("exe_sandbox_unavailable", e.to_string()))
-}
-
-/// Process-cached EXE sandbox availability for read-only callers
-/// (`get_capabilities`/`scan`/`preview`). The probe really executes the bundled
-/// worker, but in a private OS-temp staging root that is removed afterwards, so
-/// read-only methods never create or write the installer state (p0-contracts
-/// §4.1). The install route re-probes at runtime with its state-rooted staging.
-fn exe_sandbox_availability() -> installer::SandboxAvailability {
-    if let Some(reason) = installer::host_identity_blocker() {
-        return installer::SandboxAvailability {
-            available: false,
-            reason: reason.into(),
-        };
-    }
-    let Some(worker) = bundled_worker() else {
-        return installer::SandboxAvailability {
-            available: false,
-            reason: "bundled_worker_missing".into(),
-        };
-    };
-    let key = match fs::metadata(&worker) {
-        Ok(metadata) => format!(
-            "{}|{}|{}",
-            worker.display(),
-            metadata.len(),
-            metadata
-                .modified()
-                .ok()
-                .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
-                .map(|age| age.as_nanos())
-                .unwrap_or(0)
-        ),
-        Err(error) => {
-            return installer::SandboxAvailability {
-                available: false,
-                reason: format!("bundled_worker_missing: {error}"),
-            };
-        }
-    };
-    type ProbeCache = std::sync::OnceLock<
-        std::sync::Mutex<std::collections::HashMap<String, installer::SandboxAvailability>>,
-    >;
-    static CACHE: ProbeCache = std::sync::OnceLock::new();
-    let mut cache = CACHE
-        .get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
-        .lock()
-        .unwrap();
-    if let Some(hit) = cache.get(&key).cloned() {
-        return hit;
-    }
-    let availability = probe_in_temp_staging(&worker);
-    cache.insert(key, availability.clone());
-    availability
-}
-
-/// One real probe in a private temp staging root (never the installer state).
-fn probe_in_temp_staging(worker: &Path) -> installer::SandboxAvailability {
-    let root = std::env::temp_dir().join(format!("patchhub-probe-{}", std::process::id()));
-    let availability = match fs::create_dir_all(&root).map_err(err).and_then(|_| {
-        installer::WorkerRuntime::new(worker, &root, None)
-            .map_err(|e| failed("exe_sandbox_unavailable", e.to_string()))
-    }) {
-        Ok(runtime) => runtime.probe(),
-        Err(reason) => installer::SandboxAvailability {
-            available: false,
-            reason: reason.to_string(),
-        },
-    };
-    let _ = fs::remove_dir_all(&root);
-    availability
+    installer::WorkerRuntime::new(worker).map_err(|e| failed("worker_start_failed", e.to_string()))
 }
 
 /// Preserve exact machine codes. Only established diagnostic prefixes are split;
@@ -611,7 +540,6 @@ pub fn execute_controlled(
         .transpose()
         .map_err(err)?
         .flatten();
-    let availability = exe_sandbox_availability();
     let capabilities = projection::HostCapabilities {
         zip: projection::LinkCapability {
             available: installer::host_identity_blocker().is_none(),
@@ -621,15 +549,11 @@ pub fn execute_controlled(
                 .collect(),
         },
         exe: projection::LinkCapability {
-            available: availability.available,
-            blockers: if availability.available {
-                vec![]
-            } else {
-                vec![projection::DomainError::new(
-                    "exe_sandbox_unavailable",
-                    availability.reason,
-                )]
-            },
+            available: installer::host_identity_blocker().is_none(),
+            blockers: installer::host_identity_blocker()
+                .map(projection::DomainError::code)
+                .into_iter()
+                .collect(),
         },
     };
     let inputs = projection::ProjectionInputs {
@@ -1303,29 +1227,39 @@ fn install_patch(
             .ok_or_else(|| DomainError::code("instance_required"))?,
     )
     .map_err(projection_error)?;
-    let target = match (params.release_id.as_deref(), params.selection_id.as_deref()) {
-        (Some(_), Some(_)) => return Err(DomainError::code("invalid_request")),
-        (None, None) => return Err(DomainError::code("selection_or_release_required")),
-        (Some(release), None) => InstallTarget::SignedRelease {
-            release_id: ReleaseId::new(release).map_err(projection_error)?,
-            archive: params
-                .archive
-                .as_deref()
-                .map(LocalArchive::new)
-                .transpose()
-                .map_err(projection_error)?,
-        },
-        (None, Some(selection)) => {
-            if params.archive.is_some() {
-                return Err(DomainError::code("archive_not_allowed_for_selection"));
-            }
-            if selection.starts_with("zip-selection-") {
-                InstallTarget::PublisherZipSelection {
-                    selection_id: ZipSelectionId::new(selection).map_err(projection_error)?,
+    let target = if let Some(input) = &params.manual_download {
+        if params.release_id.is_some() || params.selection_id.is_some() || params.archive.is_some()
+        {
+            return Err(DomainError::code("invalid_request"));
+        }
+        InstallTarget::ManualDownload {
+            input: input.clone(),
+        }
+    } else {
+        match (params.release_id.as_deref(), params.selection_id.as_deref()) {
+            (Some(_), Some(_)) => return Err(DomainError::code("invalid_request")),
+            (None, None) => return Err(DomainError::code("selection_or_release_required")),
+            (Some(release), None) => InstallTarget::SignedRelease {
+                release_id: ReleaseId::new(release).map_err(projection_error)?,
+                archive: params
+                    .archive
+                    .as_deref()
+                    .map(LocalArchive::new)
+                    .transpose()
+                    .map_err(projection_error)?,
+            },
+            (None, Some(selection)) => {
+                if params.archive.is_some() {
+                    return Err(DomainError::code("archive_not_allowed_for_selection"));
                 }
-            } else {
-                InstallTarget::PublisherExeSelection {
-                    selection_id: ExeSelectionId::new(selection).map_err(projection_error)?,
+                if selection.starts_with("zip-selection-") {
+                    InstallTarget::PublisherZipSelection {
+                        selection_id: ZipSelectionId::new(selection).map_err(projection_error)?,
+                    }
+                } else {
+                    InstallTarget::PublisherExeSelection {
+                        selection_id: ExeSelectionId::new(selection).map_err(projection_error)?,
+                    }
                 }
             }
         }
@@ -1338,10 +1272,11 @@ fn install_patch(
         trust::revision::SqliteTrustRevisionStore::new_for_games(&state, &games.installs)
             .map_err(projection_error)?;
     let transport = installer::https_transport().map_err(err)?;
-    let runtime_result = if matches!(target, InstallTarget::PublisherExeSelection { .. }) {
-        Some(worker_runtime(
-            &host.installer_paths().root().join("runtime"),
-        ))
+    let runtime_result = if matches!(
+        target,
+        InstallTarget::PublisherExeSelection { .. } | InstallTarget::ManualDownload { .. }
+    ) {
+        Some(worker_runtime())
     } else {
         None
     };
@@ -1368,7 +1303,7 @@ fn install_patch(
         },
     )
     .map_err(|error| {
-        if error.code == "exe_sandbox_unavailable" {
+        if error.code == "bundled_worker_missing" {
             runtime_result
                 .as_ref()
                 .and_then(|result| result.as_ref().err())
@@ -1470,13 +1405,13 @@ mod sources_tests {
             !state.exists(),
             "read-only capabilities must not create the installer root"
         );
-        // Repeated calls stay read-only through the process probe cache.
+        // Repeated calls remain read-only.
         let second = Params {
             state_dir: Some(state.clone()),
             ..Default::default()
         };
         execute("get_capabilities", second).unwrap();
-        assert!(!state.exists(), "cached sandbox probe must stay read-only");
+        assert!(!state.exists(), "capabilities must stay read-only");
     }
 
     #[test]
@@ -2880,17 +2815,7 @@ mod dynamic_projection_tests {
                 .any(|blocker| blocker == "exe_download_ambiguous"),
             "homogeneous mirrors must not block resolution: {blockers:?}"
         );
-        // Resolution succeeded, so availability is only ever held back by the
-        // environment's EXE sandbox probe (`bundled_worker_missing` in this
-        // harness, where the unit-test binary sits in `target/debug/deps`
-        // without the worker) — never by a download-availability error.
-        let sandbox_blocked = blockers
-            .iter()
-            .any(|blocker| blocker == "exe_sandbox_unavailable");
-        assert_eq!(
-            dynamic["actions"]["automatic"]["available"],
-            !sandbox_blocked
-        );
+        assert_eq!(dynamic["actions"]["automatic"]["available"], true);
     }
 
     #[test]

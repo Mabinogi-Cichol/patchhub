@@ -184,7 +184,8 @@ test("update_source completion refreshes sources and projects the affected insta
   assert.equal(session.getSnapshot().sourceTasks.update, undefined);
 });
 
-test("a failed source task reports its domain error on the owning game and projects nothing", async () => {
+test("a failed query logs its domain error without publishing game feedback or projecting empty results", async t => {
+  const log = t.mock.method(console, "error", () => {});
   const initial = rowReport();
   const failed = task({ state: "failed", error: "source_refresh_failed", error_detail: "offline" });
   const { api, calls } = fakeApi([[failed], []]);
@@ -192,10 +193,61 @@ test("a failed source task reports its domain error on the owning game and proje
   await session.refresh();
   await session.rematchGame("a", 1227890);
   await session.pollSourceTasks();
-  assert.match(feedbackFor(session.getSnapshot(), "a").error!, /查询失败/);
-  assert.match(feedbackFor(session.getSnapshot(), "a").error!, /offline/);
+  assert.equal(feedbackFor(session.getSnapshot(), "a").error, null);
+  assert.deepEqual(session.getSnapshot().sourceTasks, {});
   assert.equal(feedbackFor(session.getSnapshot(), "other").error, null);
   assert.deepEqual(calls.projectInstances, []);
+  assert.match(log.mock.calls.map(call => call.arguments.join(" ")).join("\n"), /source_refresh_failed.*offline/);
+});
+
+test("query failure retains patches and source candidates across live updates and projection refresh", async t => {
+  t.mock.method(console, "error", () => {});
+  const original = { ...game("a"), patches: [{ release_id: "previous-patch" }] as Install["patches"],
+    discovery: { status: "publisher_match", candidates: match().candidates, diagnostics: [] } };
+  const initial = { ...rowReport(), installs: [original] };
+  const failedMatch = match({ status: "failed", candidates: [], diagnostics: [{ code: "source_refresh_failed", detail: "offline", source_id: null }] });
+  const running = task({ matches: { "1227890": { ...failedMatch } } });
+  const completed = task({ state: "completed", result: { settings_revision: 9, source_revisions: {}, results: [failedMatch] } });
+  const { api } = fakeApi([[running], [completed]], {
+    projectInstances: async () => ({ settings_revision: 9, instances: [{ ...game("a"), discovery: { status: "failed", candidates: [], diagnostics: failedMatch.diagnostics } }] }),
+  });
+  const session = createManagerSession(async () => ({ report: initial, transactions: [] }), api);
+  await session.refresh();
+  await session.pollSourceTasks();
+  await session.pollSourceTasks();
+  const retained = session.getSnapshot().report!.installs[0];
+  assert.equal(retained.discovery!.status, "failed");
+  assert.deepEqual(retained.discovery!.candidates, original.discovery.candidates);
+  assert.deepEqual(retained.discovery!.diagnostics, failedMatch.diagnostics);
+  assert.deepEqual(retained.patches, original.patches);
+  assert.deepEqual(session.getSnapshot().sourceTasks, {});
+  assert.equal(feedbackFor(session.getSnapshot(), "a").error, null);
+  session.acceptSnapshot({ report: { ...initial, installs: [{ ...game("a"), discovery: { status: "no_match", candidates: [], diagnostics: [] } }] }, transactions: [] });
+  assert.deepEqual(session.getSnapshot().report!.installs[0].patches, []);
+  assert.deepEqual(session.getSnapshot().report!.installs[0].discovery!.candidates, []);
+});
+
+test("incomplete snapshots cannot restore a disabled or unsubscribed source or its executable actions", async () => {
+  const sources = [
+    { id: "patchmoe", enabled: true, subscribed: true },
+    { id: "retained", enabled: true, subscribed: true },
+  ] as Install["sources"];
+  const previous = { ...game("a"), sources,
+    patches: [{ release_id: "old-patch", source_id: "patchmoe", actions: { automatic: { available: true } } }, { release_id: "retained-patch", source_id: "retained" }, { release_id: "old-signed-without-source" }] as Install["patches"],
+    discovery: { status: "publisher_match", candidates: [match().candidates[0], { ...match().candidates[0], candidate_id: "retained-candidate", source_id: "retained" }], diagnostics: [] } };
+  for (const changed of [{ enabled: false, subscribed: true }, { enabled: true, subscribed: false }]) {
+    const session = createManagerSession(async () => ({ report, transactions: [] }));
+    session.acceptSnapshot({ report: { ...rowReport(), installs: [previous] }, transactions: [] });
+    const next = { ...game("a"), sources: [{ ...sources![0], ...changed }, sources![1]],
+      discovery: { status: "incomplete", candidates: [], diagnostics: [] } };
+    session.acceptSnapshot({ report: { ...rowReport(), installs: [next] }, transactions: [] });
+    const retained = session.getSnapshot().report!.installs[0];
+    assert.deepEqual(retained.patches.map(patch => patch.release_id), ["retained-patch"]);
+    assert.deepEqual(retained.discovery!.candidates.map(candidate => candidate.source_id), ["retained"]);
+    session.acceptSnapshot({ report: { ...rowReport(), installs: [{ ...next, sources: [] }] }, transactions: [] });
+    assert.deepEqual(session.getSnapshot().report!.installs[0].patches, []);
+    assert.deepEqual(session.getSnapshot().report!.installs[0].discovery!.candidates, []);
+  }
 });
 
 test("match_games tasks update rows for every reported AppID", async () => {
@@ -340,19 +392,19 @@ test("failed source updates refresh the latest attempt without opening the card 
   assert.equal(session.getSnapshot().report!.sources, summaries);
   assert.equal(calls.listSources, 1);
   assert.deepEqual(session.getSnapshot().expandedSources, {});
-  assert.match(session.getSnapshot().error!, /HTTP 503/);
+  assert.equal(session.getSnapshot().error, null);
   assert.deepEqual(session.getSnapshot().sourceTasks, {});
   await session.pollSourceTasks();
   assert.equal(calls.listSources, 1);
 });
 
-test("a failed attempt and a failed status read are both visible", async () => {
+test("a failed attempt and status read stay out of page feedback", async () => {
   const { api } = fakeApi([[task({ kind: "update_source", instances: [], state: "failed", error_detail: "HTTP 503" })]],
     { listSources: async () => { throw Error("status unavailable"); } });
   const session = createManagerSession(async () => ({ report, transactions: [] }), api);
   await session.pollSourceTasks();
-  assert.match(session.getSnapshot().error!, /HTTP 503/);
-  assert.match(session.getSnapshot().error!, /来源状态读取失败.*status unavailable/);
+  assert.equal(session.getSnapshot().error, null);
+  assert.equal(feedbackFor(session.getSnapshot(), "a").error, null);
 });
 
 test("retrying a failed rematch clears its previous error and sends one game selector", async () => {
@@ -368,7 +420,7 @@ test("retrying a failed rematch clears its previous error and sends one game sel
   const session = createManagerSession(async () => ({ report: rowReport(), transactions: [] }), api);
   await session.refresh();
   assert.equal(await session.rematchGame("a", 1227890), null);
-  assert.match(feedbackFor(session.getSnapshot(), "a").error!, /Python Exception/);
+  assert.equal(feedbackFor(session.getSnapshot(), "a").error, null);
   assert.equal(await session.rematchGame("a", 1227890), "task-1");
   assert.equal(feedbackFor(session.getSnapshot(), "a").error, null);
 });

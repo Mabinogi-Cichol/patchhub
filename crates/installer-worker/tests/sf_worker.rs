@@ -161,7 +161,7 @@ fn descriptor_rejects_out_of_range_member_ranges() {
     );
 }
 #[test]
-fn binary_rejects_paths_commands_and_unknown_actions() {
+fn binary_rejects_extra_arguments() {
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_patchhub-worker"))
         .arg("--input")
         .arg("anything.exe")

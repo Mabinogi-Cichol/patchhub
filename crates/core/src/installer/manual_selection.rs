@@ -87,3 +87,62 @@ pub fn resolve(
     }
     Err(ResolveError::code("selection_not_found"))
 }
+
+/// Resolve an explicitly supplied URL against the actual selected source candidate.
+/// No synthetic mirror is added to publisher metadata.
+pub(crate) fn resolve_download(
+    registry: &SourceRegistry,
+    game: &GameQuery,
+    input: &super::service::ManualDownloadInput,
+) -> ResolveResult<ResolvedZipCandidate> {
+    let candidate = registry
+        .dynamic_zip_candidates(game)
+        .into_iter()
+        .find(|c| c.source_id == input.source_id && c.candidate_id == input.candidate_id)
+        .ok_or_else(|| ResolveError::code("selection_not_found"))?;
+    if candidate
+        .game_appid
+        .is_some_and(|appid| appid != game.appid)
+    {
+        return Err(ResolveError::code("selection_not_found"));
+    }
+    if let Some(code) = source_admission_blocker(registry, &candidate, game.appid) {
+        return Err(ResolveError::code(code));
+    }
+    let rule = registry
+        .rules()
+        .iter()
+        .find(|r| r.id == candidate.source_id)
+        .ok_or_else(|| ResolveError::code("source_not_enabled"))?;
+    let download_url = super::acquire::validate_manual_download(&input.url)
+        .map_err(|_| ResolveError::code("invalid_download_url"))?;
+    let binding = json!({"manual_download":true,"instance_id":game.instance_id,"appid":game.appid,
+        "candidate":canonical::fingerprint(&serde_json::to_value(&candidate).map_err(|_| ResolveError::code("invalid_candidate"))?),
+        "source_id":input.source_id,"candidate_id":input.candidate_id,"url":download_url});
+    let selection_id = format!(
+        "manual-download-{}-{}",
+        &canonical::canonical_sha256(&binding)[..24],
+        game.appid
+    );
+    let language = candidate
+        .languages
+        .iter()
+        .find(|x| x.eq_ignore_ascii_case("zh-CN"))
+        .or(candidate.languages.first())
+        .cloned()
+        .unwrap_or_default();
+    Ok(ResolvedZipCandidate {
+        selection_id,
+        release_id: source_release_id(rule, game.appid),
+        appid: game.appid,
+        source_id: rule.id.clone(),
+        source_record_id: candidate.source_record_id.clone(),
+        candidate_sha256: candidate.fingerprint.clone(),
+        rule_fingerprint: crate::sources::Sources::rule_fingerprint(rule),
+        settings_revision: registry.settings_revision(),
+        candidate,
+        rule: rule.clone(),
+        download_url,
+        language,
+    })
+}

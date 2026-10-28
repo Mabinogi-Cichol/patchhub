@@ -1004,6 +1004,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "tempfile",
+ "tokio",
  "ts-rs",
  "unicode-general-category",
  "unicode-normalization",
@@ -1040,7 +1041,6 @@ dependencies = [
  "sha2",
  "tempfile",
  "windows",
- "winreg",
 ]
 
 [[package]]

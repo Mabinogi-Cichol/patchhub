@@ -2,7 +2,7 @@
 use crate::*;
 use serde_json::{json, Value};
 pub fn capabilities() -> Value {
-    json!({"protocol_version":5,"methods":METHODS,"contracts":ContractVersions::default(),"installer":{"schema_version":1,"selection_version":1,"content_version":1,"adapter_version":1,"policy_schema_version":1,"report_schema_version":1,"formats":{"zip":"supported","exe":"supported"},"strategies":["managed_zip","publisher_zip","publisher_exe"],"links":{"zip":{"available":true,"blockers":[]},"exe":{"available":false,"blockers":[{"code":"exe_sandbox_unavailable"}]}}},"sources":{"index_schema_version":1,"detail_schema_version":1,"match_schema_version":1,"schedule_schema_version":1,"adapter_version":1,"parser_version":patchhub_core::sources::PARSER_VERSION,"encoding_version":1,"methods":SOURCE_METHODS}})
+    json!({"protocol_version":5,"methods":METHODS,"contracts":ContractVersions::default(),"installer":{"schema_version":1,"selection_version":1,"content_version":1,"adapter_version":1,"policy_schema_version":1,"report_schema_version":1,"formats":{"zip":"supported","exe":"supported"},"strategies":["managed_zip","publisher_zip","publisher_exe"],"links":{"zip":{"available":true,"blockers":[]},"exe":{"available":true,"blockers":[]}}},"sources":{"index_schema_version":1,"detail_schema_version":1,"match_schema_version":1,"schedule_schema_version":1,"adapter_version":1,"parser_version":patchhub_core::sources::PARSER_VERSION,"encoding_version":1,"methods":SOURCE_METHODS}})
 }
 pub fn host() -> Value {
     json!({"roots":[],"catalog":null,"signed_catalog":null,"trust_keys":null,"state_dir":null,"platform":"windows"})
@@ -603,6 +603,28 @@ pub fn cases() -> Value {
         early_errors.push(json!({"name":name,"json":raw,"task_channel":false,"response":{"protocol_version":5,"request_id":null,"ok":false,"error":{"code":code}}}));
     }
     early_errors.push(json!({"name":"invalid-utf8","hex":"ff","task_channel":false,"response":{"protocol_version":5,"request_id":null,"ok":false,"error":{"code":"invalid_request"}}}));
+    let mut manual = request(Method::InstallPatch);
+    manual["params"]
+        .as_object_mut()
+        .unwrap()
+        .remove("release_id");
+    manual["params"]["manual_download"] = json!({"source_id":"fixture","candidate_id":"candidate-0123456789abcdef01234567","url":"https://user-download.example/download?id=42"});
+    requests.push(json!({"name":"manual-download","request":manual.clone(),"task_channel":true}));
+    for (field, value) in [
+        ("release_id", json!("release")),
+        (
+            "selection_id",
+            json!("zip-selection-0123456789abcdef01234567-42"),
+        ),
+        ("archive", json!("local.zip")),
+    ] {
+        let mut invalid = manual.clone();
+        invalid["params"][field] = value;
+        requests.push(json!({"name":format!("manual-download-conflict-{field}"),"request":invalid,"task_channel":true,"error":"invalid_request"}));
+    }
+    let mut invalid = manual.clone();
+    invalid["params"]["manual_download"]["url"] = json!("file:///patch.zip");
+    requests.push(json!({"name":"manual-download-non-network","request":invalid,"task_channel":true,"error":"invalid_download_url"}));
     let mut e1 = install_event();
     e1["sequence"] = json!(1);
     let mut e2 = install_event();

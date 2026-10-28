@@ -4,18 +4,18 @@ import { Button, ButtonItem, DropdownItem, Field, Focusable, Navigation, PanelSe
 import { FaGamepad } from "react-icons/fa";
 import brandLogo from "../../../docs/images/branding/logo.png";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ComponentProps, type ReactNode } from "react";
-import { downloadFileName, candidateMatched, displayPatches, filterInstalls, gameDisplayName, gameMatchStatusLabel, gameMatchStatusTone, installSummary, patchState, reason, sourceCoverageText, sourceIntervalOptions, sourceLastAttemptText, sourceLastSuccessText, sourceNextDueText, workflowState, type Filter, type Install, type Patch, type Preview, type ProjectInstancesResult, type ScanResult, type SourceCandidate, type SourceSubscription, type Transaction } from "@patchhub/ui";
+import { downloadFileName, candidateMatched, displayPatches, filterInstalls, gameDisplayName, installSummary, patchState, reason, sourceCoverageText, sourceIntervalOptions, sourceLastAttemptText, sourceLastSuccessText, sourceNextDueText, workflowState, type Filter, type Install, type Patch, type Preview, type ProjectInstancesResult, type ScanResult, type SourceCandidate, type SourceSubscription, type Transaction } from "@patchhub/ui";
 import { getListPreferences, setListPreferences, subscribeListPreferences } from "./preferences";
 import { gamePresentation, matchesGameQuery, transactionGameName } from "./steam";
 import { installationResult } from "@patchhub/ui";
-import { installInput, primaryActionBlockers, primaryInstallAction } from "./actions";
+import { installInput, manualDownloadInput, manualDownloadRequestKey, primaryActionBlockers, primaryInstallAction } from "./actions";
 import { createManagerSession, feedbackFor, needsRecovery } from "./session";
 import { sourceCardSummary, sourceTaskStatusText, sourceTaskTargets, sourceTaskTerminal, type SourceTaskApi, type SourceTaskSnapshot } from "./source-tasks";
 import { decodeInstance, encodeInstance, settingsPage, settingsRoutes } from "./route";
 import { backupSummary, backupClearNote, type BackupInventory, type BackupCleanupResult, autoCleanupNote, cacheClearNote, cacheSummary, type CacheInventory, type CacheStatus, type CleanupResult, type Settings } from "./cache";
 import { tasks, taskIsTerminal, type TaskSnapshot } from "./tasks";
 import { TaskProgressView, TaskResultView } from "./task-progress-view";
-import { candidateConditions, candidateLanguage, candidateSource, discoveryNotice, discoveryStatus, safeSourceUrl, unqueriedCount } from "./discovery";
+import { candidateConditions, candidateLanguage, candidateSource, safeSourceUrl } from "./discovery";
 
 const scan = callable<[], ScanResult>("scan");
 const previewRpc = callable<[string, string | null, string | null], Preview>("preview");
@@ -60,7 +60,7 @@ async function readSnapshot() {
 const session = createManagerSession(readSnapshot, sourceApi);
 const route = "/patchhub/:instance/:panel?";
 const sourceRoute = "sources";
-const panelKeys = ["overview", "patches", "records", "sources"] as const;
+const panelKeys = ["patches", "records", "sources"] as const;
 const filterOptions: { data: Filter; label: string }[] = [
   { data: "all", label: "全部" }, { data: "matched", label: "有补丁" },
   { data: "installed", label: "已安装补丁" }, { data: "attention", label: "需要处理" },
@@ -84,6 +84,9 @@ function Action({ children, ...props }: ComponentProps<typeof ButtonItem>) {
 function Status({ children, warning = false }: { children: ReactNode; warning?: boolean }) {
   return <p className={warning ? "patch-warning" : undefined}>{children}</p>;
 }
+function QueryProgress({ task }: { task: SourceTaskSnapshot }) {
+  return <p className="patch-query" role="status">{task.state === "running" && <span className="patch-query-spinner" aria-hidden="true" />}{sourceTaskStatusText(task)}</p>;
+}
 function Row({ children }: { children: ReactNode }) { return <PanelSectionRow>{children}</PanelSectionRow>; }
 // Native left-label / right-value row. Long values opt into a stacked layout.
 function InfoRow({ label, children, below = false }: { label: ReactNode; children: ReactNode; below?: boolean }) {
@@ -91,10 +94,7 @@ function InfoRow({ label, children, below = false }: { label: ReactNode; childre
 }
 function sourceInfo(patch: Patch, sources: SourceSubscription[] | null = []) {
   const subscription = sources?.find(source => source.id === patch.source_id);
-  const name = subscription?.name || "匹配源未知";
-  const state = subscription?.status;
-  const cached = subscription?.cached_at;
-  return `${name} · ${state ? reason(state) : "查询状态未知"}${cached && ["cached", "source_offline_cached"].includes(state ?? "") ? ` · 缓存于 ${new Date(cached * 1000).toLocaleString()}` : ""}`;
+  return subscription?.name || "匹配源未知";
 }
 function openSource(url: string) {
   if (!safeSourceUrl(url)) { session.update({ error: "来源地址不是可用的公开 HTTPS 网页，已阻止打开。" }); return; }
@@ -128,6 +128,9 @@ const css = `
   .patch-full { height:100%; min-height:0; }
   .patch-page { box-sizing:border-box; height:100%; min-height:0; overflow-y:auto; overflow-x:hidden; padding:0 24px 48px; }
   .patch-page h2 { margin:14px 0 6px; font-size:20px; overflow-wrap:anywhere; }
+  .patch-query { display:flex; align-items:center; gap:8px; }
+  .patch-query-spinner { width:14px; height:14px; flex:none; border:2px solid #687a8c; border-top-color:#fff; border-radius:50%; animation:patch-spin .8s linear infinite; }
+  @keyframes patch-spin { to { transform:rotate(360deg); } }
   .patch-page p { line-height:1.4; overflow-wrap:anywhere; }
   .patch-page .patch-warning { color:#ffb28d; }
   .patch-page button { max-width:100%; }
@@ -155,7 +158,7 @@ const css = `
 
 function matchSummary(item: Install): string {
   const matching = Object.values(session.getSnapshot().sourceTasks).some(task =>
-    task.kind !== "update_source" && !sourceTaskTerminal(task.state));
+    task.state === "running" && sourceTaskTargets(task, item.game.instance_id, item.game.appid));
   return installSummary(item, matching);
 }
 function CandidateDetails({ candidate }: { candidate: SourceCandidate }) {
@@ -168,12 +171,7 @@ function CandidateDetails({ candidate }: { candidate: SourceCandidate }) {
     <InfoRow label="补丁版本">{candidate.version_raw || "版本待确认"}</InfoRow>
     <InfoRow label="适用条件" below>{candidateConditions(candidate)}</InfoRow>
     <InfoRow label="文件格式">{format}{conflict ? `（页面标示 ${candidate.format_reported}，上游为 ${candidate.format_observed}）` : ""}</InfoRow>
-    {candidate.cache_status && <InfoRow label="来源记录">{reason(candidate.cache_status)}</InfoRow>}
     {!!candidate.version_evidence?.length && candidate.warnings?.includes("version_conflict") && <InfoRow label="页面版本描述" below>{candidate.version_evidence.filter(value => typeof value === "string").join("、")}</InfoRow>}
-    <Row><Status>此来源线索用于核对游戏语言、版本与 DLC 条件。可安装补丁会单独列出，安装时自动检查实际文件和条件。</Status></Row>
-    {!candidateMatched(candidate) && <Row><Status warning>此线索的游戏身份尚待确认，请核对来源中的游戏信息。</Status></Row>}
-    {conflict && <Row><Status warning>索引标示与上游文件格式不一致，不能按 ZIP 安装。</Status></Row>}
-    {candidate.warnings?.filter(warning => !conflict || warning !== "artifact_format_conflict").map((warning, index) => <Row key={index}><Status warning>{reason(warning)}</Status></Row>)}
     <Row><Action onClick={() => openSource(candidate.source_page)}>{candidate.source_id === "hgamer" ? "打开补丁详情 ↗" : "打开补丁来源页 ↗"}</Action></Row>
     {candidate.upstream_page && candidate.upstream_page !== candidate.source_page && <Row><Action onClick={() => openSource(candidate.upstream_page!)}>打开上游发布页 ↗</Action></Row>}
   </PanelSection>;
@@ -227,19 +225,15 @@ function QuickAccess() {
       <Row><TextField label="搜索游戏名称或编号" value={query} onChange={e => setListPreferences({ query: e.target.value })} /></Row>
       <Row><DropdownItem label="筛选" layout="below" rgOptions={filterOptions} selectedOption={filter} onChange={option => setListPreferences({ filter: option.data })} /></Row>
       {busy && <Row><Status>{busy}</Status></Row>}{error && <Row><Status warning>{error}</Status></Row>}
-      {running.map(task => <Row key={task.task_id}><Status>{sourceTaskStatusText(task)}</Status><Action onClick={() => void session.cancelSourceTask(task.task_id)}>取消</Action></Row>)}
+      {running.map(task => <Row key={task.task_id}><QueryProgress task={task} /><Action onClick={() => void session.cancelSourceTask(task.task_id)}>取消</Action></Row>)}
       {note && <Row><Status>{note}</Status></Row>}
-      {filter === "matched" && unqueriedCount(report?.installs ?? []) > 0 && <>
-        <Row><Status>还有 {unqueriedCount(report?.installs ?? [])} 款尚未匹配。</Status></Row>
-        <Row><Action onClick={() => setListPreferences({ filter: "all", query: "" })}>查看全部游戏</Action></Row>
-      </>}
     </PanelSection></div>
     <div className="patch-qam-list" ref={listRef} onScroll={e => { listScroll = e.currentTarget.scrollTop; }}>
       <PanelSection title={`游戏列表 · ${shown.length}`}>
         {shown.map(item => <Row key={item.game.instance_id}><GameButton item={item} /></Row>)}
         {report && report.installs.length > 0 && !shown.length && <Row><Status>没有符合条件的游戏。</Status><Action onClick={() => setListPreferences({ filter: "all", query: "" })}>清除筛选</Action></Row>}
         {report && !report.installs.length && <Row><Status>未找到 Steam 游戏。请检查游戏库或 SD 卡。</Status></Row>}
-        {report?.diagnostics.filter(d => d.code !== "library_unavailable").map((d, i) => <Row key={i}><Status warning>{reason(d.code)}{d.path ? ` · ${d.path}` : ""}</Status></Row>)}
+        {report?.diagnostics.filter(d => d.code !== "library_unavailable" && !/^(source_|discovery_|invalid_source_)/.test(d.code)).map((d, i) => <Row key={i}><Status warning>{reason(d.code)}{d.path ? ` · ${d.path}` : ""}</Status></Row>)}
       </PanelSection>
     </div>
     <div className="patch-qam-controls"><PanelSection>
@@ -288,7 +282,7 @@ function GameManager({ item, seg, panel }: { item: Install; seg: string; panel?:
   // The decky SidebarNavigation is route-driven: it renders the page whose
   // `route` matches the URL and switches by replacing the URL. Keep one
   // sub-route per panel so selection and content follow the URL.
-  const activePanel = panel && (panelKeys as readonly string[]).includes(panel) ? panel : "overview";
+  const activePanel = panel && (panelKeys as readonly string[]).includes(panel) ? panel : "patches";
   const base = `/patchhub/${seg}`;
   const navigate = useRef<((route: string) => void) | null>(null);
   const [preferredLanguage, setPreferredLanguage] = useState<string | null>(null);
@@ -298,6 +292,9 @@ function GameManager({ item, seg, panel }: { item: Install; seg: string; panel?:
   const [archive, setArchive] = useState("");
   const [preview, setPreview] = useState<Preview | null>(null);
   const [manual, setManual] = useState(false);
+  const [manualUrl, setManualUrl] = useState("");
+  const [manualLinkExpanded, setManualLinkExpanded] = useState(false);
+  const [pathsExpanded, setPathsExpanded] = useState(false);
   const panelScroll = useRef<Record<string, number>>({});
   const contentRef = useRef<HTMLDivElement>(null);
   const mounted = useRef(true);
@@ -306,9 +303,8 @@ function GameManager({ item, seg, panel }: { item: Install; seg: string; panel?:
   const patch = selected?.kind === "installable" ? selected.choices.find(p => (p.selection_id ?? p.release_id) === selectedDownload) ?? selected.patch : undefined;
   const candidate = selected?.kind === "discovery" ? selected.candidate : undefined;
   const identity = patch?.selection_id ?? patch?.release_id ?? "";
-  useEffect(() => { setPreview(null); setArchive(""); }, [item.game.instance_id, identity]);
+  useEffect(() => { setPreview(null); setArchive(""); setManual(false); setManualUrl(""); setManualLinkExpanded(false); }, [item.game.instance_id, selectedKey, identity]);
   const primaryAction = primaryInstallAction(patch, !!archive.trim());
-  const primaryInput = primaryAction.input;
   const primaryAvailable = primaryAction.available;
   const actionBlockers = primaryActionBlockers(patch);
   const owned = transactions.filter(t => t.instance_id === item.game.instance_id).reverse();
@@ -403,6 +399,24 @@ function GameManager({ item, seg, panel }: { item: Install; seg: string; panel?:
     }
     catch (e) { hideTask(); session.setFeedback({ error: reason(String(e)) }, item.game.instance_id); }
   }
+  async function copyPath(path: string) {
+    try { await navigator.clipboard.writeText(path); }
+    catch (error) { session.setFeedback({ error: `复制失败：${String(error)}` }, item.game.instance_id); }
+  }
+  async function beginManualInstall() {
+    const input = manualDownloadInput(candidate, manualUrl);
+    if (!input || !candidate || busy || tasks.isBusy()) return;
+    const key = manualDownloadRequestKey(item.game.instance_id, input);
+    const requestId = pendingRequestIds.get(key) ?? crypto.randomUUID();
+    pendingRequestIds.set(key, requestId);
+    try {
+      hideTask();
+      const pending = tasks.startInstall(item.game.instance_id, null, null, "overwrite", requestId, "", input);
+      showTask(game, candidate.patch_title, finishTask);
+      await pending;
+      pendingRequestIds.delete(key);
+    } catch (error) { hideTask(); session.setFeedback({ error: reason(String(error)) }, item.game.instance_id); }
+  }
   function viewPreview() {
     if (!patch || busy) return;
     setPreview(null);
@@ -411,60 +425,48 @@ function GameManager({ item, seg, panel }: { item: Install; seg: string; panel?:
   const gameTask = Object.values(sourceTasks).find(task => !sourceTaskTerminal(task.state)
     && sourceTaskTargets(task, item.game.instance_id, item.game.appid));
   const matchStatus = item.discovery?.status;
-  const matchNotice = discoveryNotice(item);
   function rematch() {
     const hints = [item.game.localized_name, item.game.name, game].map(value => value?.trim() ?? "").filter(Boolean);
     void session.rematchGame(item.game.instance_id, item.game.appid, [...new Set(hints)].slice(0, 3), preferredLanguage);
   }
   const common = <>{busy && <Status>{busy}</Status>}{error && <Status warning>{error}</Status>}{note && <Status>{note}</Status>}
-    {gameTask && <Status>{sourceTaskStatusText(gameTask)}</Status>}</>;
+    </>;
   const selection = entries.length > 1 ? <PanelSection title="选择补丁"><Row><DropdownItem label="补丁" layout="below"
     rgOptions={entries.map(entry => ({ data: entry.key, label: entry.kind === "installable" ? entry.patch.name : `${entry.candidate.patch_title} · ${entry.candidate.version_raw || "版本待确认"} · ${candidateLanguage(entry.candidate)} · ${candidateSource(entry.candidate)}` }))}
     selectedOption={selectedKey} onChange={option => chooseRelease(option.data)} /></Row></PanelSection> : null;
-  const overview = <div className="patch-page" ref={activePanel === "overview" ? contentRef : undefined} onScroll={e => panelScroll.current.overview = e.currentTarget.scrollTop}>
-    {common}
-    <PanelSection>
-      <InfoRow label="补丁状态">{matchSummary(item)}</InfoRow>
-      <InfoRow label="匹配来源">{entries.length ? [...new Set(entries.map(entry => entry.kind === "installable" ? report?.sources?.find(s => s.id === entry.patch.source_id)?.name || "匹配源未知" : candidateSource(entry.candidate)))].join("、") : "—"}</InfoRow>
-      {owned.some(needsRecovery) && <Row><Status warning>有未完成的操作需要处理。</Status><Action onClick={() => navigatePanel("records")}>查看操作记录</Action></Row>}
-    </PanelSection>
-    <PanelSection title="查找来源">
-      <InfoRow label="匹配状态">{gameMatchStatusLabel(matchStatus)}</InfoRow>
-      {matchNotice && <Row><Status warning={gameMatchStatusTone(matchStatus) !== "fallback"}>{matchNotice}</Status></Row>}
-      {gameTask && <Row><Status>{sourceTaskStatusText(gameTask)}</Status><Action onClick={() => void session.cancelSourceTask(gameTask.task_id)}>取消匹配</Action></Row>}
-      <Row><DropdownItem label="偏好的补丁语言" layout="below" rgOptions={[{ data: "", label: "未指定" }, { data: "zh-CN", label: "简体中文" }, { data: "zh-TW", label: "繁体中文" }, { data: "en", label: "英文" }, { data: "ja", label: "日文" }]}
-        selectedOption={preferredLanguage ?? ""} onChange={option => setPreferredLanguage(option.data || null)} /></Row>
-      <Row><Status>重新匹配只使用已更新的来源索引；缺少索引时请先在全局设置更新来源。</Status></Row>
-      <Row><Action disabled={!!busy} onClick={rematch}>重新匹配</Action></Row>
-      {item.discovery?.diagnostics.map((diagnostic, index) => <Row key={index}><Status warning>{diagnostic.detail || reason(diagnostic.code)}{diagnostic.detail && diagnostic.detail !== diagnostic.code ? ` · ${reason(diagnostic.detail)}` : ""}</Status></Row>)}
-    </PanelSection>
-    {(!!item.patches.length || !item.discovery?.candidates.length) && <PanelSection title="匹配到的补丁">{item.patches.length ? entries.filter(e => e.kind === "installable").map(entry => entry.kind === "installable" && <PanelSectionRow key={entry.key}>
-      <div className="patch-patch">
-        <div className="patch-patch-name">{entry.patch.name}</div>
-        <div className="patch-patch-source">匹配源：{sourceInfo(entry.patch, report?.sources)}</div>
-        <div className="patch-actions">
-          <Button onClick={() => { chooseRelease(entry.key); navigatePanel("patches"); }}>查看补丁</Button>
-          <Button onClick={() => openSource(entry.patch.source_page)}>打开来源网页 ↗</Button>
-        </div>
-      </div>
-    </PanelSectionRow>) : <Row><Status>{discoveryStatus(item.discovery?.status)}</Status><Action onClick={() => navigatePanel("sources")}>管理订阅源</Action></Row>}</PanelSection>}
-    {entries.some(entry => entry.kind === "discovery") && <PanelSection title="来源候选">{entries.filter(entry => entry.kind === "discovery").map(entry => entry.kind === "discovery" && <Row key={entry.key}>
-      <div className="patch-patch"><div className="patch-patch-name">{entry.candidate.patch_title}</div>
-        <div className="patch-patch-source">{candidateSource(entry.candidate)} · {entry.candidate.version_raw || "版本待确认"} · {candidateLanguage(entry.candidate)}</div>
-        <div className="patch-patch-source">{candidateConditions(entry.candidate)}</div>
-        <Action onClick={() => { chooseRelease(entry.key); navigatePanel("patches"); }}>查看补丁条件与来源</Action>
-      </div></Row>)}</PanelSection>}
-    <PanelSection title="游戏信息">
-      <InfoRow label="游戏编号">{item.game.appid}</InfoRow>
-      <InfoRow label="游戏版本">{item.game.buildid ?? "未知"}</InfoRow>
-      <InfoRow label="安装位置" below>{item.game.install_path}</InfoRow>
-    </PanelSection>
-  </div>;
   const patchCandidate = item.discovery?.candidates.find(value => value.candidate_id === patch?.candidate_id);
   const patches = <div className="patch-page" ref={activePanel === "patches" ? contentRef : undefined} onScroll={e => panelScroll.current.patches = e.currentTarget.scrollTop}>
     {common}
+    <PanelSection title="游戏信息">
+      <InfoRow label="游戏">{game}</InfoRow>
+      <InfoRow label="AppID">{item.game.appid}</InfoRow>
+      <InfoRow label="Build">{item.game.buildid ?? "未知"}</InfoRow>
+      <Row><Action onClick={() => setPathsExpanded(value => !value)}>安装路径与游戏库{pathsExpanded ? " ▴" : " ▾"}</Action></Row>
+      {pathsExpanded && <>
+        <InfoRow label="安装路径" below>{item.game.install_path}</InfoRow>
+        <Row><Action onClick={() => void copyPath(item.game.install_path)}>复制安装路径</Action></Row>
+        <InfoRow label="游戏库" below>{item.game.library_path}</InfoRow>
+        <Row><Action onClick={() => void copyPath(item.game.library_path)}>复制游戏库路径</Action></Row>
+      </>}
+      {owned.some(needsRecovery) && <Row><Status warning>有未完成的操作需要处理。</Status><Action onClick={() => navigatePanel("records")}>查看操作记录</Action></Row>}
+    </PanelSection>
+    <PanelSection title="查找补丁">
+      {gameTask && <Row><QueryProgress task={gameTask} /><Action onClick={() => void session.cancelSourceTask(gameTask.task_id)}>取消查询</Action></Row>}
+      <Row><DropdownItem label="偏好的补丁语言" layout="below" rgOptions={[{ data: "", label: "未指定" }, { data: "zh-CN", label: "简体中文" }, { data: "zh-TW", label: "繁体中文" }, { data: "en", label: "英文" }, { data: "ja", label: "日文" }]}
+        selectedOption={preferredLanguage ?? ""} onChange={option => setPreferredLanguage(option.data || null)} /></Row>
+      <Row><Action disabled={!!busy || !!gameTask} onClick={rematch}>重新查询</Action></Row>
+    </PanelSection>
     {selection}
-    {candidate ? <CandidateDetails candidate={candidate} /> : !patch ? <PanelSection><Row><Status>{discoveryStatus(item.discovery?.status)}</Status></Row></PanelSection> : <>
+    {candidate ? <><CandidateDetails candidate={candidate} />
+      <PanelSection title="安装补丁">
+        <Row><Status>未找到下载链接</Status></Row>
+        <Row><Action onClick={() => setManualLinkExpanded(value => !value)}>手动输入下载链接{manualLinkExpanded ? " ▴" : " ▾"}</Action></Row>
+        {manualLinkExpanded && <>
+          <Row><TextField label="ZIP / EXE 下载直链" value={manualUrl} onChange={e => setManualUrl(e.target.value)} /></Row>
+          <Row><Status>请输入可直接下载 ZIP / EXE 文件的 HTTP 或 HTTPS 链接；不支持网盘分享页和提取码。安装时请关闭游戏并暂停 Steam 更新。</Status></Row>
+          <Row><Action disabled={!manualDownloadInput(candidate, manualUrl) || !!busy || tasks.isBusy()} onClick={() => void beginManualInstall()}>下载安装补丁</Action></Row>
+        </>}
+      </PanelSection></> : !patch ? <PanelSection><Row><Status>暂无补丁结果</Status><Action onClick={() => navigatePanel("sources")}>游戏订阅</Action></Row></PanelSection> : <>
       {selected?.kind === "installable" && selected.choices.length > 1 && <PanelSection title="下载文件与镜像"><Row><DropdownItem label="选择下载项" layout="below" selectedOption={patch.selection_id ?? patch.release_id} rgOptions={selected.choices.map(p => ({ data: p.selection_id ?? p.release_id, label: `${p.download_label || "来源下载"} · ${p.download_url ? downloadFileName(p.download_url) : p.name}` }))} onChange={option => { setSelectedDownload(option.data); setPreview(null); setArchive(""); }} /></Row></PanelSection>}
       <PanelSection title="选择补丁"><InfoRow label="补丁">{patch.name}</InfoRow>
         <InfoRow label="匹配源">{sourceInfo(patch, report?.sources)}</InfoRow>
@@ -490,10 +492,11 @@ function GameManager({ item, seg, panel }: { item: Install; seg: string; panel?:
         {actionBlockers.map((blocker, i) => <Row key={`action-${blocker.code}-${i}`}><Status warning>{reason(blocker.code)}{blocker.detail ? ` · ${blocker.detail}` : ""}</Status></Row>)}
         <Row><Action disabled={!!busy || tasks.isBusy()} onClick={viewPreview}>查看文件变更（只读）</Action></Row>
         {preview && <Row><Status>{preview.changes.length ? preview.changes.map(change => `${change.action}：${change.path}`).join("；") : preview.blockers.length ? preview.blockers.map(reason).join("；") : "暂无文件变更。"}</Status></Row>}
-        <Row><Action disabled={!primaryAvailable || !!busy || tasks.isBusy()} onClick={() => void beginInstall(primaryInput === "local_archive" ? archive : undefined)}>{primaryAction.label === "overwrite" ? "覆盖安装补丁" : "安装补丁"}</Action></Row>
-        {patch.actions.local_archive.available && primaryInput === "automatic" && <Row><Action onClick={() => setManual(value => !value)}>使用本地 ZIP（高级）{manual ? " ▴" : " ▾"}</Action></Row>}
-        {(manual || (primaryInput === "local_archive" && patch.actions.local_archive.available)) && <><Row><TextField label="Downloads 内的 ZIP 路径" value={archive} onChange={e => setArchive(e.target.value)} /></Row>
-          {primaryInput !== "local_archive" && <Row><Action disabled={!archive.trim() || !patch.actions.local_archive.available || !!busy || tasks.isBusy()} onClick={() => void beginInstall(archive)}>使用本地 ZIP {primaryAction.label === "overwrite" ? "覆盖安装" : "安装"}</Action></Row>}</>}
+        <Row><Action disabled={!primaryAvailable || !!busy || tasks.isBusy()} onClick={() => void beginInstall()}>{primaryAction.label === "overwrite" ? "覆盖安装补丁" : "安装补丁"}</Action></Row>
+        {!patch.download_url && !primaryAvailable && <Row><Status>未找到下载链接</Status></Row>}
+        {patch.actions.local_archive.available && <Row><Action onClick={() => setManual(value => !value)}>导入本地 ZIP（可选）{manual ? " ▴" : " ▾"}</Action></Row>}
+        {(manual && patch.actions.local_archive.available) && <><Row><TextField label="Downloads 内的 ZIP 路径" value={archive} onChange={e => setArchive(e.target.value)} /></Row>
+          <Row><Action disabled={!archive.trim() || !patch.actions.local_archive.available || !!busy || tasks.isBusy()} onClick={() => void beginInstall(archive)}>使用本地 ZIP {primaryAction.label === "overwrite" ? "覆盖安装" : "安装"}</Action></Row></>}
       </PanelSection>
     </>}
   </div>;
@@ -512,9 +515,6 @@ function GameManager({ item, seg, panel }: { item: Install; seg: string; panel?:
   const sources = <div className="patch-page" ref={activePanel === "sources" ? contentRef : undefined} onScroll={e => { panelScroll.current.sources = e.currentTarget.scrollTop; }}>
     {common}
     <Status>选择用于此游戏的订阅源。关闭后不再从该源匹配补丁；选择按游戏编号保存。</Status>
-    {(matchStatus === "incomplete" || matchStatus === "pending") && <Row><Status warning>{matchStatus === "incomplete"
-      ? "普通来源覆盖不完整，HGamer 不会在来源不完整时补查；请先在全局设置更新来源。"
-      : "此游戏尚未匹配；请重新匹配或先在全局设置更新来源。"}</Status></Row>}
     {matchStatus === "fallback_match" && <Row><Status>普通来源未命中，补丁由 HGamer 补查得到。</Status></Row>}
     {matchStatus === "no_match" && <Row><Status>已启用来源中未找到补丁。</Status></Row>}
     {item.sources?.length ? item.sources.map(source => <PanelSection key={source.id} title={source.name}>
@@ -523,18 +523,15 @@ function GameManager({ item, seg, panel }: { item: Install; seg: string; panel?:
       <InfoRow label="游戏匹配">{source.matched || item.discovery?.candidates.some(candidate => candidate.source_id === source.id && candidateMatched(candidate))
         ? "已找到此游戏的补丁"
         : source.role === "fallback_indexer" ? "本次未在此来源找到候选" : "未在此来源找到候选"}</InfoRow>
-      <InfoRow label="索引覆盖">{sourceCoverageText(source)}</InfoRow>
       {source.role === "fallback_indexer" && <Row><Status>补查来源：仅在重新匹配时按游戏查询，不参与自动更新。</Status></Row>}
       {!source.enabled && <Row><Status warning>此源已在全局设置中停用，当前不会参与匹配。</Status></Row>}
-      <InfoRow label="查询状态">{source.status ? reason(source.status) : "待查询"}</InfoRow>
       <Row><Action onClick={() => openSource(source.pages[0])}>打开来源网页 ↗</Action></Row>
     </PanelSection>) : <PanelSection><Row><Status>尚未配置订阅源，请从主面板的全局设置添加。</Status></Row></PanelSection>}
   </div>;
   const navPages: ComponentProps<typeof SidebarNavigation>["pages"] = [
-    { identifier: `${base}/overview`, route: `${base}/overview`, title: "概览", visible: true, content: overview },
     { identifier: `${base}/patches`, route: `${base}/patches`, title: "补丁管理", visible: true, content: patches },
     { identifier: `${base}/records`, route: `${base}/records`, title: "操作记录", visible: true, content: records },
-    "separator", { identifier: `${base}/sources`, route: `${base}/sources`, title: "订阅源管理", visible: true, content: sources },
+    "separator", { identifier: `${base}/sources`, route: `${base}/sources`, title: "游戏订阅", visible: true, content: sources },
   ];
   // The decky SidebarNavigation resolves the visible page from page.route
   // against the URL and switches by replacing the URL. `fnSetNavigateToPage`
@@ -703,7 +700,7 @@ function GlobalSources() {
   const { report, busy, sourceTasks } = state;
   const { error, note } = feedbackFor(state);
   const [rule, setRule] = useState("");
-  const tasks = Object.values(sourceTasks);
+  const tasks = Object.values(sourceTasks).filter(task => !sourceTaskTerminal(task.state));
   useEffect(() => session.startSourcePolling(), []);
   const changeSources = (action: () => Promise<SourceSubscription[]>) => void session.work("正在更新补丁源…", async () => {
     const sources = await action();

@@ -96,12 +96,21 @@ class CoreBridge:
         return await self._call("scan", {})
 
     @classmethod
-    def selection(cls, instance_id, release_id=None, selection_id=None):
-        if release_id is not None and selection_id is not None:
+    def selection(cls, instance_id, release_id=None, selection_id=None, manual_download=None):
+        if sum(value is not None for value in (release_id, selection_id, manual_download)) > 1:
             raise ValueError("invalid_request")
-        if release_id is None and selection_id is None:
+        if release_id is None and selection_id is None and manual_download is None:
             raise ValueError("selection_or_release_required")
         params = {"instance_id": validate_id(instance_id, MAX_INSTANCE_ID_BYTES)}
+        if manual_download is not None:
+            if not isinstance(manual_download, dict) or set(manual_download) != {"source_id", "candidate_id", "url"}:
+                raise ValueError("invalid_request")
+            cls._id(manual_download["source_id"])
+            cls._id(manual_download["candidate_id"])
+            if not isinstance(manual_download["url"], str) or not manual_download["url"]:
+                raise ValueError("invalid_download_url")
+            params["manual_download"] = dict(manual_download)
+            return params
         key, value = ("selection_id", selection_id) if selection_id is not None else ("release_id", release_id)
         params[key] = cls._id(value)
         return params
@@ -111,13 +120,15 @@ class CoreBridge:
 
     async def install_patch(self, instance_id, release_id=None, selection_id=None,
                             archive=None, operation=None, request_id=None,
-                            cleanup_policy="disabled"):
-        params = self.selection(instance_id, release_id, selection_id)
+                            cleanup_policy="disabled", manual_download=None):
+        params = self.selection(instance_id, release_id, selection_id, manual_download)
         if operation not in ("install", "reinstall", "overwrite"):
             raise ValueError("invalid_operation")
         if cleanup_policy not in ("disabled", "after_commit"):
             raise ValueError("invalid_cleanup_policy")
         if archive is not None:
+            if manual_download is not None:
+                raise ValueError("invalid_request")
             if selection_id is not None:
                 raise ValueError("archive_not_allowed_for_selection")
             params["archive"] = str(archive)

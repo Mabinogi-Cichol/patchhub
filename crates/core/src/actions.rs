@@ -33,7 +33,6 @@ pub enum ActionBlockerCode {
     InvalidDownloadUrl,
     ExeCandidateAmbiguous,
     ExeCandidateVariantUnsupported,
-    ExeSandboxUnavailable,
     InstallerHostRequiresNonRoot,
     UnprivilegedUserRequired,
     ReinstallUnownedOrIncomplete,
@@ -173,8 +172,6 @@ impl PatchActions {
         let reinstall = ActionAvailability::from_blockers(reinstall);
         let input = if automatic.available {
             InstallInputKind::Automatic
-        } else if local_archive.available {
-            InstallInputKind::LocalArchive
         } else {
             InstallInputKind::Unavailable
         };
@@ -244,8 +241,6 @@ mod tests {
                             actions.primary.input,
                             if automatic_ok && !recovery {
                                 InstallInputKind::Automatic
-                            } else if local_ok && !recovery {
-                                InstallInputKind::LocalArchive
                             } else {
                                 InstallInputKind::Unavailable
                             }

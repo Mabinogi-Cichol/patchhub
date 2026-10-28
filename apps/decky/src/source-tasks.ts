@@ -76,7 +76,9 @@ export function sourceTaskStatusText(task: SourceTaskSnapshot): string {
 
 /** Whether a match task targets the given instance/AppID row. */
 export function sourceTaskTargets(task: SourceTaskSnapshot, instanceId: string, appid: number): boolean {
+  if (Object.values(task.matches).some(match => match.appid === appid)) return true;
   if (task.kind === "update_source") return false;
+  if (task.kind === "match_games" && !task.instances.length && task.appid == null) return true;
   if (task.instances.includes(instanceId)) return true;
   return task.appid != null && task.appid === appid;
 }

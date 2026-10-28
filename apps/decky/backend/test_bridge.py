@@ -381,3 +381,19 @@ class BridgeJournalReadTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaisesRegex(RuntimeError, "installer_busy"):
                 await bridge.scan()
             self.assertEqual(await bridge.list_transactions(), [])
+
+
+class ManualDownloadBridgeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_explicit_input_uses_the_existing_install_request(self):
+        with tempfile.TemporaryDirectory() as directory:
+            binary = Path(directory) / "patchhub-core"
+            binary.touch()
+            bridge = CoreBridge(binary, binary)
+            bridge._call = AsyncMock(return_value={"state": "committed"})
+            link = {"source_id": "fixture", "candidate_id": "candidate-a", "url": "https://user.example/download"}
+            await bridge.install_patch("instance", operation="overwrite", request_id="manual", manual_download=link)
+            bridge._call.assert_awaited_once_with("install_patch", {"instance_id": "instance", "manual_download": link, "operation": "overwrite", "cleanup_policy": "disabled"}, request_id="manual")
+            with self.assertRaisesRegex(ValueError, "invalid_request"):
+                await bridge.install_patch("instance", release_id="signed", operation="overwrite", manual_download=link)
+            with self.assertRaisesRegex(ValueError, "invalid_request"):
+                await bridge.install_patch("instance", archive="local.zip", operation="overwrite", manual_download=link)

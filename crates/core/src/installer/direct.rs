@@ -8,7 +8,7 @@ use crate::{
     installer::exe_report::PayloadEntry,
     operation,
 };
-use patchhub_installer_worker::IsolationError;
+use patchhub_installer_worker::WorkerError;
 use serde_json::Value;
 use std::{
     collections::BTreeSet,
@@ -17,8 +17,8 @@ use std::{
     path::PathBuf,
 };
 
-fn err(message: impl Into<String>) -> IsolationError {
-    IsolationError::new("extract", None, message)
+fn err(message: impl Into<String>) -> WorkerError {
+    WorkerError::new("extract", None, message)
 }
 
 struct Current {
@@ -60,8 +60,8 @@ impl<'a> DirectWriter<'a> {
         }
     }
 
-    pub fn feed(&mut self, chunk: &[u8]) -> Result<(), IsolationError> {
-        operation::check().map_err(|e| IsolationError::new("cancelled", None, e.to_string()))?;
+    pub fn feed(&mut self, chunk: &[u8]) -> Result<(), WorkerError> {
+        operation::check().map_err(|e| WorkerError::new("cancelled", None, e.to_string()))?;
         if self.done {
             return Err(err("member data after done"));
         }
@@ -104,7 +104,7 @@ impl<'a> DirectWriter<'a> {
         Ok(())
     }
 
-    fn object(&mut self, line: &[u8]) -> Result<(), IsolationError> {
+    fn object(&mut self, line: &[u8]) -> Result<(), WorkerError> {
         let value: Value =
             serde_json::from_slice(line).map_err(|e| err(format!("bad frame: {e}")))?;
         let object = value
@@ -152,7 +152,7 @@ impl<'a> DirectWriter<'a> {
         &mut self,
         index: usize,
         object: &serde_json::Map<String, Value>,
-    ) -> Result<(), IsolationError> {
+    ) -> Result<(), WorkerError> {
         if self.current.is_some() {
             return Err(err("overlapping members"));
         }
@@ -188,7 +188,7 @@ impl<'a> DirectWriter<'a> {
         index: usize,
         object: &serde_json::Map<String, Value>,
         sha: &Value,
-    ) -> Result<(), IsolationError> {
+    ) -> Result<(), WorkerError> {
         let expected = self
             .expected
             .get(index)
@@ -226,7 +226,7 @@ impl<'a> DirectWriter<'a> {
         self.current.is_some() || self.next > 0
     }
 
-    pub fn finish(self) -> Result<Vec<(String, String)>, IsolationError> {
+    pub fn finish(self) -> Result<Vec<(String, String)>, WorkerError> {
         if !self.started || !self.done || self.current.is_some() || self.next != self.expected.len()
         {
             return Err(err("incomplete extract stream"));

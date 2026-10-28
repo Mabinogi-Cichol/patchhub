@@ -1,0 +1,164 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { readFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import { runInNewContext } from "node:vm";
+import ts from "typescript";
+import React from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import * as ui from "@patchhub/ui";
+import * as actions from "../src/actions.ts";
+import * as discovery from "../src/discovery.ts";
+import * as sourceTasks from "../src/source-tasks.ts";
+import * as route from "../src/route.ts";
+import { feedbackFor, needsRecovery } from "../src/session.ts";
+import type { Install, Patch, SourceCandidate } from "@patchhub/ui";
+
+const require = createRequire(import.meta.url);
+const source = readFileSync(new URL("../src/index.tsx", import.meta.url), "utf8");
+const output = ts.transpileModule(`${source}\nexport { GameManager, QuickAccess, GlobalSources };`, { compilerOptions: {
+  jsx: ts.JsxEmit.ReactJSX, module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022,
+} }).outputText;
+const game = (): Install => ({ game: { instance_id: "game", appid: 1, name: "测试游戏", library_path: "/library", install_path: "/library/game", buildid: "123", availability: "installed", kind: "game" }, patches: [], match_status: "no_catalog_match", discovery: { status: "failed", candidates: [], diagnostics: [{ code: "source_refresh_failed", detail: "query-secret", source_id: null }] } });
+const candidate = { source_id: "publisher", candidate_id: "candidate-1", patch_title: "来源补丁", source_page: "https://example.test/source", match_basis: "appid", warnings: ["language_unknown"], format_reported: "unknown", format_observed: "unknown" } as SourceCandidate;
+const available = { available: true, blockers: [] };
+const unavailable = { available: false, blockers: [] };
+const patch = (fields: Partial<Patch> = {}): Patch => ({ release_id: "release", name: "补丁", source_page: "https://example.test/source", support_level: "managed_zip", compatibility: "verified_metadata", blockers: [], detection: { status: "not_detected", files: [] }, actions: { automatic: available, local_archive: available, overwrite: available, reinstall: unavailable, primary: { input: "automatic", operation: "overwrite", label: "install" } }, ...fields });
+
+// Render the actual page JSX with native Decky controls represented by HTML.
+// Hook state is retained so native control callbacks can be exercised without Steam.
+function mount(item: Install, task?: sourceTasks.SourceTaskSnapshot) {
+  const values: unknown[] = [];
+  let hook = 0;
+  const controls: Array<{ name: string; props: any }> = [];
+  const installs: unknown[][] = [];
+  const state: any = { report: { installs: [item], sources: [], diagnostics: [] }, transactions: [], busy: null, sourceTasks: task ? { [task.task_id]: task } : {}, error: null, note: null, errorInstance: null, noteInstance: null };
+  const native: Record<string, any> = {};
+  for (const name of ["Button", "ButtonItem", "Field", "Focusable", "PanelSection", "PanelSectionRow", "DropdownItem", "TextField", "ToggleField"]) {
+    native[name] = (props: any) => {
+      controls.push({ name, props });
+      if (name === "Button" || name === "ButtonItem") return React.createElement("button", { disabled: props.disabled }, props.children);
+      if (name === "TextField") return React.createElement("input", { "aria-label": props.label, value: props.value, readOnly: true });
+      return React.createElement("div", { "data-control": name, "data-label": props.label }, props.label, props.children);
+    };
+  }
+  native.SidebarNavigation = (props: any) => {
+    controls.push({ name: "SidebarNavigation", props });
+    return props.pages.find((page: any) => page.route === props.page)?.content;
+  };
+  native.showModal = () => ({ Close() {} });
+  native.Navigation = {};
+  const exports: Record<string, any> = {};
+  const mockSession = { getSnapshot: () => state, subscribe() {}, setFeedback(value: any) { Object.assign(state, value); } };
+  const modules: Record<string, any> = {
+    "@decky/api": { callable: () => async () => {}, definePlugin: () => {}, routerHook: {} },
+    "@decky/ui": native,
+    "@patchhub/ui": ui,
+    "react-icons/fa": { FaGamepad: () => null },
+    "react": { ...React, useState(initial: unknown) { const index = hook++; if (!(index in values)) values[index] = initial; return [values[index], (next: unknown) => { values[index] = typeof next === "function" ? next(values[index]) : next; }]; }, useRef: (current: unknown) => ({ current }), useEffect() {}, useLayoutEffect() {}, useSyncExternalStore: (_subscribe: unknown, snapshot: () => unknown) => snapshot() },
+    "./session": { createManagerSession: () => mockSession, feedbackFor, needsRecovery },
+    "./actions": actions, "./discovery": discovery, "./source-tasks": sourceTasks, "./route": route,
+    "./steam": { gamePresentation: (_appid: number, name: string) => ({ name }), transactionGameName: () => "游戏", matchesGameQuery: () => true },
+    "./tasks": { tasks: { isBusy: () => false, startInstall: async (...args: unknown[]) => { installs.push(args); } } },
+    "./preferences": { getListPreferences: () => ({ filter: "all", query: "" }) },
+    "./app-update": {}, "./cache": {}, "./task-progress-view": {},
+  };
+  runInNewContext(output, { exports, crypto: { randomUUID: () => "request-1" }, URL, console,
+    require: (id: string) => id.endsWith(".png") ? "logo" : modules[id] ?? require(id) });
+  const render = (panel?: string) => { hook = 0; controls.length = 0; return renderToStaticMarkup(React.createElement(exports.GameManager, { item, seg: "game", panel })); };
+  const renderList = () => { hook = 0; controls.length = 0; return renderToStaticMarkup(React.createElement(exports.QuickAccess)); };
+  const renderSources = () => { hook = 0; controls.length = 0; return renderToStaticMarkup(React.createElement(exports.GlobalSources)); };
+  const button = (label: string) => controls.find(control => control.name === "ButtonItem" && React.Children.toArray(control.props.children).join("") === label)!.props;
+  return { render, renderList, renderSources, controls, button, installs, state };
+}
+
+test("the default page has three native panels and neutral empty results with query controls", () => {
+  const page = mount(game());
+  const html = page.render();
+  const nav = page.controls.find(control => control.name === "SidebarNavigation")!.props;
+  assert.equal(nav.page, "/patchhub/game/patches");
+  assert.deepEqual(Array.from(nav.pages.filter((entry: any) => typeof entry === "object"), (entry: any) => entry.title), ["补丁管理", "操作记录", "游戏订阅"]);
+  assert.match(html, /AppID.*1.*Build.*123/);
+  assert.match(html, /暂无补丁结果/);
+  assert.match(html, /重新查询/);
+  assert.doesNotMatch(html, /概览|query-secret|查询失败|覆盖不完整|尚未完成/);
+  assert.ok(page.controls.some(control => control.name === "DropdownItem" && control.props.label === "偏好的补丁语言"));
+  page.button("安装路径与游戏库 ▾").onClick();
+  assert.match(page.render(), /\/library\/game.*复制安装路径.*\/library.*复制游戏库路径/);
+});
+
+test("query animation follows a running task and ends for failed or cancelled tasks", () => {
+  const task: sourceTasks.SourceTaskSnapshot = { task_id: "query", kind: "rematch_game", key: "game", instances: ["game"], appid: 1, state: "running", progress: null, matches: {}, result: null, error: null };
+  const page = mount(game(), task);
+  assert.match(page.render(), /class="patch-query-spinner"/);
+  for (const state of ["failed", "cancelled", "completed"] as const) {
+    page.state.sourceTasks = { query: { ...task, state } };
+    assert.doesNotMatch(page.render(), /class="patch-query-spinner"/);
+  }
+});
+
+test("the game list omits source query diagnostics and retains bottom settings and scan controls", () => {
+  const page = mount(game());
+  page.state.report.diagnostics = [{ code: "source_refresh_failed", message: "query-secret" }, { code: "discovery_http_503", message: "query-secret" }, { code: "game_write_failed", path: "/game" }];
+  const html = page.renderList();
+  assert.doesNotMatch(html, /查询失败|HTTP 503|query-secret|来源覆盖不完整/);
+  assert.match(html, /暂无补丁结果/);
+  assert.match(html, /写入游戏文件失败/);
+  assert.equal(page.button("全局设置 ›").disabled, undefined);
+  assert.equal(page.button("重新扫描").disabled, false);
+});
+
+test("a retained failed rematch does not surface its error in global source tasks", () => {
+  const task: sourceTasks.SourceTaskSnapshot = { task_id: "query", kind: "rematch_game", key: "game", instances: ["game"], appid: 1, state: "failed", progress: null, matches: {}, result: null, error: "source_refresh_failed", error_detail: "query-secret" };
+  const page = mount(game(), task);
+  const html = page.renderSources();
+  assert.doesNotMatch(html, /来源任务|query-secret|查询失败|来源覆盖不完整/);
+  assert.match(html, /匹配全部游戏/);
+});
+
+test("eligible local ZIP import stays optional even with no automatic download", async () => {
+  const item = game();
+  item.patches = [patch({ actions: { automatic: unavailable, local_archive: available, overwrite: available, reinstall: unavailable, primary: { input: "unavailable", operation: "overwrite", label: "install" } } })];
+  const page = mount(item);
+  const html = page.render();
+  assert.match(html, /未找到下载链接/);
+  assert.equal(page.button("安装补丁").disabled, true);
+  assert.doesNotMatch(html, /ZIP 路径|请先选择本地/);
+  page.button("导入本地 ZIP（可选） ▾").onClick();
+  page.render();
+  page.controls.find(control => control.name === "TextField")!.props.onChange({ target: { value: "/home/deck/Downloads/p.zip" } });
+  page.render();
+  await page.button("使用本地 ZIP 安装").onClick();
+  assert.deepEqual(Array.from(page.installs[0]), ["game", "release", null, "overwrite", "request-1", "/home/deck/Downloads/p.zip"]);
+});
+
+test("source-only candidates accept a manual URL and use the same installation task", async () => {
+  const item = game(); item.discovery!.candidates = [candidate];
+  const page = mount(item);
+  const html = page.render();
+  assert.match(html, /未找到下载链接/);
+  assert.match(html, /打开补丁来源页/);
+  assert.doesNotMatch(html, /尚待确认|线索用于核对|待核对来源/);
+  page.button("手动输入下载链接 ▾").onClick();
+  page.render();
+  page.controls.find(control => control.name === "TextField")!.props.onChange({ target: { value: "https://downloads.example.test/download?id=1" } });
+  page.render();
+  assert.equal(page.button("下载安装补丁").disabled, false);
+  await page.button("下载安装补丁").onClick();
+  const args = page.installs[0];
+  assert.deepEqual(Array.from(args.slice(0, 6)), ["game", null, null, "overwrite", "request-1", ""]);
+  assert.equal(JSON.stringify(args[6]), JSON.stringify({ source_id: "publisher", candidate_id: "candidate-1", url: "https://downloads.example.test/download?id=1" }));
+});
+
+test("patch and exact mirror selectors remain native Decky dropdowns", () => {
+  const item = game();
+  item.patches = [patch({ release_id: "first", candidate_id: "candidate-1", selection_id: "mirror-a", download_url: "https://a.example.test/p.zip" }), patch({ release_id: "first", candidate_id: "candidate-1", selection_id: "mirror-b", download_url: "https://b.example.test/p.zip" }), patch({ release_id: "second" })];
+  const page = mount(item); page.render();
+  const dropdowns = page.controls.filter(control => control.name === "DropdownItem");
+  assert.equal(dropdowns.find(control => control.props.label === "补丁")!.props.rgOptions.length, 2);
+  const mirrors = dropdowns.find(control => control.props.label === "选择下载项")!.props;
+  assert.deepEqual(Array.from(mirrors.rgOptions, (entry: any) => entry.data), ["mirror-a", "mirror-b"]);
+  mirrors.onChange({ data: "mirror-b" });
+  page.render();
+  assert.equal(page.controls.find(control => control.name === "DropdownItem" && control.props.label === "选择下载项")!.props.selectedOption, "mirror-b");
+});

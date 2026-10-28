@@ -94,8 +94,8 @@ impl Default for HostCapabilities {
                 blockers: vec![],
             },
             exe: LinkCapability {
-                available: false,
-                blockers: vec![DomainError::code("exe_sandbox_unavailable")],
+                available: true,
+                blockers: vec![],
             },
         }
     }
@@ -420,7 +420,7 @@ fn project_instance_impl(
         if release.recipe.is_none() {
             common.push(ActionBlocker::code(ActionBlockerCode::RecipeMissing));
         }
-        common.extend(capability_blockers(&inputs.capabilities.zip, false));
+        common.extend(capability_blockers(&inputs.capabilities.zip));
         common.extend(unsafe_evidence_blockers(&patch.detection, &diagnostics));
         let mut automatic = common.clone();
         if release.artifact.is_none() {
@@ -547,7 +547,7 @@ fn project_instance_impl(
             } else {
                 &inputs.capabilities.exe
             };
-            let capability = capability_blockers(link, !has_zip);
+            let capability = capability_blockers(link);
             blockers.extend(capability.iter().map(|b| {
                 serde_json::to_value(b.code)
                     .unwrap()
@@ -657,7 +657,7 @@ fn installed_evidence(detection: &catalog::Detection) -> bool {
         .iter()
         .any(|f| matches!(f.status.as_str(), "match" | "mismatch"))
 }
-fn capability_blockers(link: &LinkCapability, exe: bool) -> Vec<ActionBlocker> {
+fn capability_blockers(link: &LinkCapability) -> Vec<ActionBlocker> {
     if link.available && link.blockers.is_empty() {
         return vec![];
     }
@@ -668,16 +668,8 @@ fn capability_blockers(link: &LinkCapability, exe: bool) -> Vec<ActionBlocker> {
         .collect();
     if !link.available && blockers.is_empty() {
         blockers.push(ActionBlocker::new(
-            if exe {
-                ActionBlockerCode::ExeSandboxUnavailable
-            } else {
-                ActionBlockerCode::SourceRequiresGuidance
-            },
-            if exe {
-                "exe_sandbox_unavailable"
-            } else {
-                "zip_runtime_unavailable"
-            },
+            ActionBlockerCode::SourceRequiresGuidance,
+            "runtime_unavailable",
         ));
     }
     blockers
@@ -1025,14 +1017,7 @@ pub fn preview(
                 },
             )?;
             report.selection_id = Some(id);
-            report.blockers.push(
-                if inputs.capabilities.exe.available {
-                    "exe_check_required"
-                } else {
-                    "exe_sandbox_unavailable"
-                }
-                .into(),
-            );
+            report.blockers.push("exe_check_required".into());
         }
     }
     check_cancel(inputs)?;

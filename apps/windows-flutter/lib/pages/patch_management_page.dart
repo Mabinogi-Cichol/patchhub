@@ -52,11 +52,13 @@ class _PatchManagementPageState extends State<PatchManagementPage> {
   bool localRoute = false;
   bool reading = false;
   String? archive;
+  final manualUrl = TextEditingController();
   Object? error;
   Map<String, dynamic>? preview;
   final installFocus = FocusNode();
   @override
   void dispose() {
+    manualUrl.dispose();
     installFocus.dispose();
     super.dispose();
   }
@@ -116,9 +118,7 @@ class _PatchManagementPageState extends State<PatchManagementPage> {
   }
 
   bool available(Map<String, dynamic> patch) {
-    final input = localRoute
-        ? 'local_archive'
-        : patch['actions']['primary']['input'];
+    final input = localRoute ? 'local_archive' : 'automatic';
     final allowed = input == 'automatic'
         ? patch['actions']['automatic']['available'] == true
         : input == 'local_archive' &&
@@ -127,33 +127,54 @@ class _PatchManagementPageState extends State<PatchManagementPage> {
     return allowed;
   }
 
+  bool get manualReady {
+    final uri = Uri.tryParse(manualUrl.text.trim());
+    return uri != null &&
+        ['https', 'http'].contains(uri.scheme) &&
+        uri.host.isNotEmpty;
+  }
+
   Future<void> install() async {
     try {
       final row = widget.model.snapshot?.rows
           .where((row) => row.id == widget.row.id)
           .firstOrNull;
-      final identity =
-          widget.patch!['selection_id'] ?? widget.patch!['release_id'];
-      final latest = row?.patches
-          .where(
-            (patch) =>
-                (patch['selection_id'] ?? patch['release_id']) == identity,
-          )
-          .firstOrNull;
-      if (latest == null) {
-        throw const CoreError('selection_stale', '补丁选择已变化，请重新选择');
+      final Map<String, Object?> arguments;
+      if (widget.patch == null) {
+        if (!manualReady) return;
+        final candidate = widget.entry.candidate!;
+        arguments = {
+          'instance_id': widget.row.id,
+          'manual_download': {
+            'source_id': candidate['source_id'],
+            'candidate_id': candidate['candidate_id'],
+            'url': manualUrl.text.trim(),
+          },
+          'operation': 'overwrite',
+          'cleanup_policy': 'disabled',
+        };
+      } else {
+        final identity =
+            widget.patch!['selection_id'] ?? widget.patch!['release_id'];
+        final latest = row?.patches
+            .where(
+              (patch) =>
+                  (patch['selection_id'] ?? patch['release_id']) == identity,
+            )
+            .firstOrNull;
+        if (latest == null) {
+          throw const CoreError('selection_stale', '补丁选择已变化，请重新选择');
+        }
+        if (!available(latest)) return;
+        arguments = {
+          'instance_id': widget.row.id,
+          ...selectionArguments(latest),
+          'operation': latest['actions']['primary']['operation'],
+          'cleanup_policy': 'disabled',
+          if (localRoute) 'archive': archive,
+        };
       }
-      if (!available(latest)) return;
-      final input = localRoute
-          ? 'local_archive'
-          : latest['actions']['primary']['input'];
-      final task = widget.model.tasks.startInstall({
-        'instance_id': widget.row.id,
-        ...selectionArguments(latest),
-        'operation': latest['actions']['primary']['operation'],
-        'cleanup_policy': 'disabled',
-        if (input == 'local_archive') 'archive': archive,
-      });
+      final task = widget.model.tasks.startInstall(arguments);
       final action = await showInstallDialog(
         context,
         model: widget.model,
@@ -186,14 +207,11 @@ class _PatchManagementPageState extends State<PatchManagementPage> {
     final sourceId =
         (patch?['source_id'] ?? candidate?['source_id']) as String?;
     final url = (patch?['source_page'] ?? candidate?['source_page']) as String?;
-    final installables = widget.entries
-        .where((entry) => entry.installable)
-        .toList();
     final input = patch == null
         ? 'unavailable'
         : localRoute
         ? 'local_archive'
-        : patch['actions']['primary']['input'];
+        : 'automatic';
     final blockers = patch == null
         ? <dynamic>[]
         : input == 'automatic'
@@ -260,20 +278,20 @@ class _PatchManagementPageState extends State<PatchManagementPage> {
       fontWeight: FontWeight.w600,
     );
     final details = <Widget>[
-      if (patch != null && installables.length > 1) ...[
+      if (widget.entries.length > 1) ...[
         Text('补丁选择', style: fieldTitleStyle),
         DesktopSelect(
           label: '补丁选择',
           value: widget.entry.selectionKey,
           options: [
-            for (final entry in installables)
+            for (final entry in widget.entries)
               (value: entry.selectionKey, label: entry.title),
           ],
           onSelected: widget.onEntry,
         ),
         const SizedBox(height: 4),
       ],
-      if (patch == null || installables.length <= 1)
+      if (widget.entries.length <= 1)
         SelectableText(
           widget.entry.title,
           style: Theme.of(context).textTheme.titleLarge
@@ -335,19 +353,12 @@ class _PatchManagementPageState extends State<PatchManagementPage> {
           SelectableText(
             '${statusLabel(blocker['code'])}${blocker['detail'] == null ? '' : '\n${blocker['detail']}'}',
           ),
-        if (input == 'local_archive') ...[
-          const Text('主要安装路线需要本地 ZIP，请先选择文件。'),
-          OutlinedButton(
-            onPressed: busy ? null : chooseArchive,
-            child: const Text('选择本地 ZIP'),
-          ),
-          if (archive != null) SelectableText('已选择：$archive'),
-        ] else if (patch['actions']['local_archive']['available'] == true)
+        if (patch['actions']['local_archive']['available'] == true)
           ExpansionTile(
             key: PageStorageKey(
               '${widget.row.id}:${widget.entry.selectionKey}:local-zip',
             ),
-            title: const Text('使用本地 ZIP'),
+            title: const Text('使用本地 ZIP（可选）'),
             children: [
               OutlinedButton(
                 onPressed: busy ? null : chooseArchive,
@@ -360,17 +371,30 @@ class _PatchManagementPageState extends State<PatchManagementPage> {
                 ),
             ],
           ),
-        if (localRoute && patch['actions']['primary']['input'] == 'automatic')
+        if (localRoute)
           TextButton(
             onPressed: () => setState(() {
               localRoute = false;
               archive = null;
             }),
-            child: const Text('改用自动下载'),
+            child: const Text('取消本地文件选择'),
           ),
       ] else ...[
         const SizedBox(height: 16),
-        const Text('此条目是待核对的来源线索，不能据此启动安装。请核对来源网页的语言、版本和 DLC 条件。'),
+        const Text('未找到下载链接'),
+        const Text('可打开来源网页，复制 ZIP 或 EXE 下载直链后在下方安装。'),
+        TextField(
+          controller: manualUrl,
+          enabled: !busy,
+          onChanged: (_) => setState(() => error = null),
+          decoration: InputDecoration(
+            labelText: '手动输入下载链接',
+            hintText: 'ZIP 或 EXE 的 HTTP(S) 下载直链',
+            errorText: manualUrl.text.trim().isNotEmpty && !manualReady
+                ? '请输入完整的 HTTP(S) 下载链接'
+                : null,
+          ),
+        ),
         if (candidate != null)
           ExpansionTile(
             key: PageStorageKey(
@@ -388,7 +412,7 @@ class _PatchManagementPageState extends State<PatchManagementPage> {
       if (error != null) SelectableText('操作失败：$error'),
     ];
     final scheme = Theme.of(context).colorScheme;
-    final ready = patch != null && available(patch);
+    final ready = patch == null ? manualReady : available(patch);
     final installed =
         patch != null && installedStatus(patch['detection']['status']);
     final statusColor = !busy && ready
@@ -396,24 +420,20 @@ class _PatchManagementPageState extends State<PatchManagementPage> {
               ? const Color(0xff75ddb0)
               : const Color(0xff176b48))
         : scheme.onSurfaceVariant;
-    final statusTitle = patch == null
-        ? '待核对来源'
-        : busy
+    final statusTitle = busy
         ? '操作进行中'
+        : patch == null
+        ? (manualReady ? '已补充下载链接' : '未找到下载链接')
         : ready
         ? (installed ? '已安装补丁' : '可安装补丁')
-        : input == 'local_archive' && archive == null
-        ? '需要本地 ZIP'
         : '暂不可安装';
-    final statusDescription = patch == null
-        ? '此来源线索尚不能用于安装'
-        : busy
+    final statusDescription = busy
         ? '请等待当前任务完成'
+        : patch == null
+        ? (manualReady ? '安装时读取下载文件' : '可从来源网页补充下载直链')
         : ready
         ? (installed ? '可按当前安装路线覆盖安装' : '可按当前安装路线安装此补丁')
-        : input == 'local_archive' && archive == null
-        ? '选择文件后检查安装条件'
-        : '请核对适用条件及阻断原因';
+        : '当前没有可用的自动下载项，可查看其他输入方式';
     final summary = Container(
       key: const ValueKey('patch-status-panel'),
       padding: const EdgeInsets.all(20),
@@ -484,6 +504,18 @@ class _PatchManagementPageState extends State<PatchManagementPage> {
             style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 12),
           ),
           SelectableText('${widget.row.game['buildid'] ?? '未知'}'),
+          const SizedBox(height: 12),
+          ExpansionTile(
+            key: PageStorageKey('${widget.row.id}:game-paths'),
+            tilePadding: EdgeInsets.zero,
+            title: const Text('更多游戏信息'),
+            children: [
+              SelectableText(
+                '安装路径：${widget.row.game['install_path']}\n库位置：${widget.row.game['library_path']}',
+                key: const PageStorageKey('game-paths-text'),
+              ),
+            ],
+          ),
         ],
       ),
     );
@@ -577,104 +609,94 @@ class _PatchManagementPageState extends State<PatchManagementPage> {
                 ),
               ),
             ),
-            if (patch != null)
-              Padding(
-                padding: EdgeInsets.fromLTRB(inset, 8, inset, 20),
-                child: Container(
-                  key: const ValueKey('patch-floating-actions'),
-                  padding: EdgeInsets.symmetric(
-                    horizontal: inset,
-                    vertical: 20,
-                  ),
-                  decoration: BoxDecoration(
-                    color: scheme.surface,
-                    borderRadius: BorderRadius.circular(16),
-                    border: Border.all(color: scheme.outlineVariant),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withValues(alpha: .16),
-                        blurRadius: 24,
-                        offset: const Offset(0, 6),
-                      ),
-                    ],
-                  ),
-                  child: LayoutBuilder(
-                    builder: (context, footer) {
-                      final notice = Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(
-                            Icons.info_outline,
-                            color: scheme.brightness == Brightness.dark
-                                ? const Color(0xffffc75b)
-                                : const Color(0xff875d00),
-                            size: 20,
+            Padding(
+              padding: EdgeInsets.fromLTRB(inset, 8, inset, 20),
+              child: Container(
+                key: const ValueKey('patch-floating-actions'),
+                padding: EdgeInsets.symmetric(horizontal: inset, vertical: 20),
+                decoration: BoxDecoration(
+                  color: scheme.surface,
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(color: scheme.outlineVariant),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: .16),
+                      blurRadius: 24,
+                      offset: const Offset(0, 6),
+                    ),
+                  ],
+                ),
+                child: LayoutBuilder(
+                  builder: (context, footer) {
+                    final notice = Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          Icons.info_outline,
+                          color: scheme.brightness == Brightness.dark
+                              ? const Color(0xffffc75b)
+                              : const Color(0xff875d00),
+                          size: 20,
+                        ),
+                        const SizedBox(width: 10),
+                        const Flexible(
+                          child: Text(
+                            '安装时请关闭游戏并暂停 Steam 更新',
+                            style: TextStyle(fontSize: 13),
                           ),
-                          const SizedBox(width: 10),
-                          const Flexible(
-                            child: Text(
-                              '安装时请关闭游戏并暂停 Steam 更新',
-                              style: TextStyle(fontSize: 13),
-                            ),
+                        ),
+                      ],
+                    );
+                    final buttons = Wrap(
+                      alignment: WrapAlignment.end,
+                      spacing: 12,
+                      runSpacing: 8,
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      children: [
+                        OutlinedButton.icon(
+                          onPressed: openDirectory,
+                          icon: const Icon(
+                            Icons.folder_open_outlined,
+                            size: 18,
                           ),
-                        ],
+                          label: const Text('打开游戏目录'),
+                        ),
+                        FilledButton.icon(
+                          focusNode: installFocus,
+                          onPressed: !busy && ready ? install : null,
+                          icon: const Icon(Icons.download_outlined, size: 20),
+                          label: Text(
+                            patch == null
+                                ? '下载并安装'
+                                : localRoute
+                                ? '使用本地 ZIP 安装'
+                                : patch['actions']['primary']['label'] ==
+                                      'overwrite'
+                                ? '覆盖安装补丁'
+                                : '安装补丁',
+                          ),
+                        ),
+                      ],
+                    );
+                    final textScale =
+                        MediaQuery.textScalerOf(context).scale(14) / 14;
+                    if (footer.maxWidth < 720 * textScale) {
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [notice, const SizedBox(height: 12), buttons],
                       );
-                      final buttons = Wrap(
-                        alignment: WrapAlignment.end,
-                        spacing: 12,
-                        runSpacing: 8,
-                        crossAxisAlignment: WrapCrossAlignment.center,
-                        children: [
-                          OutlinedButton.icon(
-                            onPressed: openDirectory,
-                            icon: const Icon(
-                              Icons.folder_open_outlined,
-                              size: 18,
-                            ),
-                            label: const Text('打开游戏目录'),
-                          ),
-                          FilledButton.icon(
-                            focusNode: installFocus,
-                            onPressed: !busy && available(patch)
-                                ? install
-                                : null,
-                            icon: const Icon(Icons.download_outlined, size: 20),
-                            label: Text(
-                              input == 'local_archive' && archive == null
-                                  ? '需要选择本地 ZIP'
-                                  : localRoute
-                                  ? '使用本地 ZIP 安装'
-                                  : patch['actions']['primary']['label'] ==
-                                        'overwrite'
-                                  ? '覆盖安装补丁'
-                                  : '安装补丁',
-                            ),
-                          ),
-                        ],
-                      );
-                      final textScale =
-                          MediaQuery.textScalerOf(context).scale(14) / 14;
-                      if (footer.maxWidth < 720 * textScale) {
-                        return Column(
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
-                          children: [
-                            notice,
-                            const SizedBox(height: 12),
-                            buttons,
-                          ],
-                        );
-                      }
-                      return Row(
-                        children: [
-                          Expanded(child: notice),
-                          const SizedBox(width: 16),
-                          buttons,
-                        ],
-                      );
-                    },
-                  ),
+                    }
+                    return Row(
+                      children: [
+                        Expanded(child: notice),
+                        const SizedBox(width: 16),
+                        buttons,
+                      ],
+                    );
+                  },
                 ),
               ),
+            ),
           ],
         );
       },

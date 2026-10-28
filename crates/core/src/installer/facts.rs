@@ -1,7 +1,7 @@
 //! Bounded, read-only Steam instance facts and reviewed preconditions
 //! (design §4.1/§5.2; port of `exe_facts.py::read_file`/`game_facts`).
 //!
-//! Everything here runs **outside** the sandboxed worker and never writes to the
+//! Everything here runs in the host, outside the parser worker, and never writes to the
 //! game tree. Each observed item carries its own evidence and, when a check
 //! fails, a [`FactFailure`] with a stable code. The resulting [`GameFacts`] is a
 //! deterministic snapshot evaluated once at the install entry.

@@ -18,9 +18,9 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text(model.snapshot!.rows.single.name));
     await tester.pumpAndSettle();
-    await tester.ensureVisible(find.text('游戏信息'));
+    await tester.ensureVisible(find.text('更多游戏信息'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('游戏信息'));
+    await tester.tap(find.text('更多游戏信息'));
     await tester.pumpAndSettle();
     expect(tester.takeException(), isNull);
     expect(find.textContaining('安装路径：'), findsOneWidget);

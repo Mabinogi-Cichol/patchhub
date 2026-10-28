@@ -109,7 +109,7 @@ class TaskManager:
                 raise ValueError("invalid_request_id")
             previous = self.tasks.get(self.requests.get(request_id))
             if previous:
-                if any(previous.value.get(k) != metadata.get(k) for k in ("instance_id", "release_id", "selection_id", "operation", "archive_path")):
+                if any(previous.value.get(k) != metadata.get(k) for k in ("instance_id", "release_id", "selection_id", "operation", "archive_path", "manual_download")):
                     raise ValueError("request_identity_changed")
                 return {"task_id": previous.value["task_id"]}
         if self.busy():

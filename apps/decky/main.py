@@ -331,8 +331,11 @@ class Plugin:
         return path
 
     async def start_patch_install_task(self, instance_id, release_id=None, selection_id=None,
-                                       archive=None, operation=None, request_id=None):
-        self.bridge.selection(instance_id, release_id, selection_id)
+                                       archive=None, operation=None, request_id=None, manual_download=None):
+        self.bridge.selection(instance_id, release_id, selection_id, manual_download)
+        manual_download = dict(manual_download) if manual_download is not None else None
+        if manual_download is not None and archive is not None:
+            raise ValueError("invalid_request")
         if operation not in ("install", "reinstall", "overwrite"):
             raise ValueError("invalid_operation")
         if selection_id is not None and archive is not None:
@@ -343,20 +346,20 @@ class Plugin:
 
         async def work(task):
             task.check()
-            result = await self.bridge.install_patch(instance_id, release_id, selection_id,
-                local, operation, request_id, cleanup_policy)
+            args = (instance_id, release_id, selection_id, local, operation, request_id, cleanup_policy)
+            result = await self.bridge.install_patch(*args, manual_download=manual_download) if manual_download is not None else await self.bridge.install_patch(*args)
             if isinstance(result.get("cleanup"), dict):
                 self._cache_result = result["cleanup"]
             return result
 
         return self.tasks.start("install", work, instance_id=instance_id, release_id=release_id,
             selection_id=selection_id, operation=operation, request_id=request_id,
-            archive_path=str(local) if local is not None else None)
+            archive_path=str(local) if local is not None else None, manual_download=manual_download)
 
     async def start_install(self, instance_id, release_id=None, selection_id=None,
-                            archive=None, operation=None, request_id=None):
+                            archive=None, operation=None, request_id=None, manual_download=None):
         return await self.start_patch_install_task(instance_id, release_id, selection_id,
-            archive, operation, request_id)
+            archive, operation, request_id, manual_download)
 
     async def task_status(self, task_id):
         return self.tasks.status(task_id)

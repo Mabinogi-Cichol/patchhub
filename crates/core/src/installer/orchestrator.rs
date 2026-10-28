@@ -432,6 +432,13 @@ pub(crate) fn execute_zip(
     inputs: ZipInstallInputs<'_>,
     deps: ZipInstallDeps<'_>,
 ) -> ZipTaskResult<super::InstallExecution> {
+    execute_zip_acquired(inputs, deps, None)
+}
+pub(crate) fn execute_zip_acquired(
+    inputs: ZipInstallInputs<'_>,
+    deps: ZipInstallDeps<'_>,
+    acquired: Option<acquire::AcquiredArchive>,
+) -> ZipTaskResult<super::InstallExecution> {
     if let Some(code) = super::host_identity_blocker() {
         return Err(ZipTaskError::code(code));
     }
@@ -450,7 +457,7 @@ pub(crate) fn execute_zip(
             cancel: &control.cancel,
             ..deps
         };
-        install_zip_inner(inputs, deps, &control, requested)
+        install_zip_inner(inputs, deps, &control, requested, acquired)
     })
 }
 
@@ -459,6 +466,7 @@ fn install_zip_inner(
     deps: ZipInstallDeps<'_>,
     control: &super::task::TaskControl,
     requested: &AtomicBool,
+    acquired: Option<acquire::AcquiredArchive>,
 ) -> ZipTaskResult<super::InstallExecution> {
     let binding = request_binding(
         &inputs.game.instance_id,
@@ -482,9 +490,11 @@ fn install_zip_inner(
         expected_sha256: None,
         expected_size: None,
     };
-    let acquired =
-        acquire::acquire_with(deps.transport, &request, deps.paths, deps.cancel, |_, _| {})
-            .map_err(map_download_error)?;
+    let acquired = match acquired {
+        Some(archive) => archive,
+        None => acquire::acquire_with(deps.transport, &request, deps.paths, deps.cancel, |_, _| {})
+            .map_err(map_download_error)?,
+    };
     control
         .check_requested_with_cause(requested, deps.cancel_reason)
         .map_err(|_| ZipTaskError::code("download_cancelled"))?;

@@ -1,4 +1,4 @@
-//! P3 production EXE install: sandbox reports, trusted facts and direct extraction.
+//! Production EXE install: parser reports, trusted facts and direct extraction.
 use super::{
     acquire, exe_report, exe_resolve, facts, orchestrator as common, outcome::CancellationCause,
     space, store, task::TaskControl, InstallerPaths,
@@ -59,6 +59,13 @@ pub(crate) fn execute_exe(
     inputs: ExeInstallInputs<'_>,
     deps: ExeInstallDeps<'_>,
 ) -> Result<super::InstallExecution> {
+    execute_exe_acquired(inputs, deps, None)
+}
+pub(crate) fn execute_exe_acquired(
+    inputs: ExeInstallInputs<'_>,
+    deps: ExeInstallDeps<'_>,
+    acquired: Option<acquire::AcquiredArchive>,
+) -> Result<super::InstallExecution> {
     if let Some(code) = super::host_identity_blocker() {
         return Err(Error::code(code));
     }
@@ -82,7 +89,7 @@ pub(crate) fn execute_exe(
     )
     .map_err(error)?;
     control.run_with_cause(deps.cancel, deps.cancel_reason, || {
-        run(&inputs, &deps, &control, &binding).map(super::InstallExecution::fresh)
+        run(&inputs, &deps, &control, &binding, acquired).map(super::InstallExecution::fresh)
     })
 }
 fn boundary(deps: &ExeInstallDeps<'_>, control: &TaskControl) -> Result<()> {
@@ -94,7 +101,7 @@ fn boundary(deps: &ExeInstallDeps<'_>, control: &TaskControl) -> Result<()> {
         .map_err(error)
 }
 
-fn worker_error(control: &TaskControl, e: patchhub_installer_worker::IsolationError) -> Error {
+fn worker_error(control: &TaskControl, e: patchhub_installer_worker::WorkerError) -> Error {
     if control.cancel.load(std::sync::atomic::Ordering::Acquire)
         || e.stage == "cancelled"
         || matches!(
@@ -126,6 +133,7 @@ fn run(
     deps: &ExeInstallDeps<'_>,
     control: &TaskControl,
     binding: &super::requests::RequestBinding,
+    acquired: Option<acquire::AcquiredArchive>,
 ) -> Result<Transaction> {
     boundary(deps, control)?;
     operation::stage("connecting", None, None);
@@ -135,30 +143,18 @@ fn run(
         expected_sha256: None,
         expected_size: None,
     };
-    let acquired = acquire::acquire_exe_with(
-        deps.transport,
-        &request,
-        deps.paths,
-        &control.cancel,
-        |_, _| {},
-    )
-    .map_err(common::map_download_error)?;
+    let acquired = match acquired {
+        Some(archive) => archive,
+        None => acquire::acquire_exe_with(
+            deps.transport,
+            &request,
+            deps.paths,
+            &control.cancel,
+            |_, _| {},
+        )
+        .map_err(common::map_download_error)?,
+    };
     boundary(deps, control)?;
-    // The cached download already exists. Analysis needs one more copy in the
-    // sandbox, so require that copy plus the single metadata/margin allowance.
-    let state_needed = acquired
-        .size
-        .checked_add(space::SPACE_MARGIN_BYTES)
-        .ok_or_else(|| Error::code("exe_space_budget_overflow"))?;
-    if space::inspect_volume(deps.paths.root())
-        .map_err(error)?
-        .available_bytes
-        < state_needed
-    {
-        return Err(Error::code("insufficient_space"));
-    }
-    // One session copies the EXE once; analysis and extraction share it. The
-    // worker still streams no incremental progress during analysis.
     operation::stage("analyzing_installer", None, None);
     let session = deps
         .runtime
@@ -218,10 +214,8 @@ fn run(
     }
     let sizes =
         space::original_sizes(&inputs.game.install_path, report.payload()).map_err(error)?;
-    let budget = space::SpaceBudget::for_direct(acquired.size, &sizes).map_err(error)?;
-    // The sandbox input copy already exists; only target growth remains.
+    let budget = space::SpaceBudget::for_direct(&sizes).map_err(error)?;
     let evidence = budget
-        .after_input_copy()
         .inspect(deps.paths.root(), &inputs.game.install_path)
         .map_err(error)?;
     store::write_atomic(
@@ -410,15 +404,8 @@ mod tests {
     fn runtime(stage: &Path) -> WorkerRuntime {
         let exe = std::env::var_os("SF_WORKER_TEST_BIN")
             .expect("set SF_WORKER_TEST_BIN to the built bundled worker (release profile)");
-        #[cfg(target_os = "linux")]
-        let uid = if patchhub_installer_worker::linux::euid() == 0 {
-            Some((1000, 1000))
-        } else {
-            None
-        };
-        #[cfg(not(target_os = "linux"))]
-        let uid = None;
-        WorkerRuntime::new(PathBuf::from(exe), stage, uid).unwrap()
+        let _ = stage;
+        WorkerRuntime::new(PathBuf::from(exe)).unwrap()
     }
     fn task_dir_entries(paths: &InstallerPaths) -> usize {
         fs::read_dir(paths.tasks_dir())
@@ -457,12 +444,11 @@ mod tests {
         )
     }
     #[test]
-    #[ignore = "three existing local SF packages; release SF_WORKER_TEST_BIN and the actual sandbox required"]
+    #[ignore = "three existing local SF packages; release SF_WORKER_TEST_BIN and the bundled parser required"]
     fn production_available_real_samples_admitted_and_extracted() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let stage = tempfile::tempdir().unwrap();
         let runtime = runtime(stage.path());
-        assert!(runtime.probe().available);
         let cancel = AtomicBool::new(false);
         let mut evidence = Vec::new();
         for appid in [2303800u32, 3606360, 3721970] {

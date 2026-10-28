@@ -99,7 +99,7 @@ void main() {
             await tester.sendKeyEvent(LogicalKeyboardKey.tab);
             await tester.pump();
             expect(installButton.focusNode!.hasFocus, isTrue);
-            for (final tab in ['概览', '操作记录', '游戏订阅', '补丁管理']) {
+            for (final tab in ['操作记录', '游戏订阅', '补丁管理']) {
               await tester.tap(find.text(tab));
               await tester.pumpAndSettle();
               expect(find.text('打开游戏目录').hitTestable(), findsOneWidget);

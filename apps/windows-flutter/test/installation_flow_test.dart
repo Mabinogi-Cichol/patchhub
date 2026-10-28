@@ -139,9 +139,15 @@ void main() {
     (tester) async {
       final model = InstallFixtureModel('chunked');
       final patch = model.snapshot!.rows.single.patches.single;
-      patch['actions']['primary']['input'] = 'local_archive';
+      patch['actions']['primary']['input'] = 'unavailable';
+      patch['actions']['automatic']['available'] = false;
       final desktop = FixtureDesktop();
       await mountPatch(tester, model, desktop);
+      expect(find.text('需要选择本地 ZIP'), findsNothing);
+      await tester.ensureVisible(find.text('使用本地 ZIP（可选）'));
+      await tester.tap(find.text('使用本地 ZIP（可选）'));
+      await tester.pumpAndSettle();
+      await tester.ensureVisible(find.text('选择本地 ZIP'));
       await tester.tap(find.text('选择本地 ZIP'));
       await tester.pumpAndSettle();
       expect(model.tasks.installation, isNull);

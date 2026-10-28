@@ -7,6 +7,7 @@ import 'package:patchhub_windows/app.dart';
 import 'package:patchhub_windows/pages/library_page.dart';
 import 'package:patchhub_windows/pages/patch_management_page.dart';
 import 'package:patchhub_windows/presentation/library_presentation.dart';
+import 'package:patchhub_windows/presentation/desktop_select.dart';
 
 import 'modern_layout_test.dart' show ModernFixtureModel;
 
@@ -54,8 +55,16 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text(row.name));
     await tester.pumpAndSettle();
-    await tester.ensureVisible(find.text('查看条件与来源').last);
-    await tester.tap(find.text('查看条件与来源').last);
+    final selector = find.descendant(
+      of: find.byWidgetPredicate(
+        (widget) => widget is DesktopSelect && widget.label == '补丁选择',
+      ),
+      matching: find.byKey(const ValueKey('desktop-select-field')),
+    );
+    await tester.ensureVisible(selector);
+    await tester.tap(selector);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('selected').last);
     await tester.pumpAndSettle();
 
     const notice = '原补丁已不在当前来源结果中，请重新核对选择。';

@@ -86,7 +86,6 @@
         "invalid_download_url",
         "exe_candidate_ambiguous",
         "exe_candidate_variant_unsupported",
-        "exe_sandbox_unavailable",
         "installer_host_requires_non_root",
         "unprivileged_user_required",
         "reinstall_unowned_or_incomplete",
@@ -1104,6 +1103,9 @@
       "oneOf": [
         {
           "properties": {
+            "manual_download": {
+              "type": "null"
+            },
             "release_id": {
               "type": "string"
             },
@@ -1117,6 +1119,9 @@
         },
         {
           "properties": {
+            "manual_download": {
+              "type": "null"
+            },
             "release_id": {
               "type": "null"
             },
@@ -1127,6 +1132,25 @@
           },
           "required": [
             "selection_id"
+          ]
+        },
+        {
+          "properties": {
+            "archive": {
+              "type": "null"
+            },
+            "manual_download": {
+              "$ref": "#/$defs/ManualDownloadInput"
+            },
+            "release_id": {
+              "type": "null"
+            },
+            "selection_id": {
+              "type": "null"
+            }
+          },
+          "required": [
+            "manual_download"
           ]
         }
       ],
@@ -1146,6 +1170,16 @@
         "instance_id": {
           "type": "string",
           "x-max-utf8-bytes": 16384
+        },
+        "manual_download": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ManualDownloadInput"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "operation": {
           "$ref": "#/$defs/InstallOperation"
@@ -1681,6 +1715,27 @@
       },
       "required": [
         "host"
+      ],
+      "type": "object"
+    },
+    "ManualDownloadInput": {
+      "additionalProperties": false,
+      "properties": {
+        "candidate_id": {
+          "type": "string"
+        },
+        "source_id": {
+          "type": "string"
+        },
+        "url": {
+          "pattern": "^[hH][tT][tT][pP][sS]?://[^/]+",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_id",
+        "candidate_id",
+        "url"
       ],
       "type": "object"
     },

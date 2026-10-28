@@ -43,3 +43,17 @@ class ExeRpcTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.plugin.list_transactions())[0]["state"], "needs_recovery")
         self.assertEqual((await self.plugin.recover())[0]["state"], "rolled_back")
         self.assertFalse(hasattr(self.plugin, "_dispatch_id"))
+
+    async def test_manual_download_snapshot_and_request_identity(self):
+        self.plugin.settings.auto_cleanup = True
+        link = {"source_id": "fixture", "candidate_id": "candidate-" + "a" * 24, "url": "https://user.example/download"}
+        start = await self.plugin.start_patch_install_task("instance", None, None, None, "overwrite", "manual", link)
+        snapshot = dict(link)
+        link["url"] = "https://user.example/changed"
+        task = self.plugin.tasks.get(start["task_id"])
+        await task.worker
+        self.plugin.bridge.install_patch.assert_awaited_once_with("instance", None, None, None, "overwrite", "manual", "after_commit", manual_download=snapshot)
+        with self.assertRaisesRegex(ValueError, "request_identity_changed"):
+            await self.plugin.start_patch_install_task("instance", None, None, None, "overwrite", "manual", link)
+        with self.assertRaisesRegex(ValueError, "invalid_request"):
+            await self.plugin.start_patch_install_task("instance", "signed", None, None, "overwrite", "conflict", link)

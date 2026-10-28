@@ -23,6 +23,8 @@ class TaskSummary extends StatelessWidget {
   final CoreTask task;
   @override
   Widget build(BuildContext context) {
+    final query = ['match_games', 'rematch_game'].contains(task.method);
+    if (query && !task.running) return const SizedBox.shrink();
     final progress = task.progress;
     final total = progress?['total'] as int?;
     final completed = progress?['completed'] as int?;
@@ -48,9 +50,9 @@ class TaskSummary extends StatelessWidget {
           SelectableText('任务结果：${task.error}')
         else
           const Text('任务已完成'),
-        if (task.controlError != null)
+        if (!query && task.controlError != null)
           SelectableText('取消通道错误：${task.controlError}'),
-        if (task.diagnostics.isNotEmpty)
+        if (!query && task.diagnostics.isNotEmpty)
           ExpansionTile(
             title: const Text('任务诊断'),
             children: [SelectableText(task.diagnostics)],
@@ -132,7 +134,7 @@ class _GlobalSourcesPageState extends State<GlobalSourcesPage> {
         ),
       ),
       for (final task in widget.model.tasks.sources.values.where(
-        (task) => task.method != 'update_source',
+        (task) => task.method != 'update_source' && task.running,
       ))
         Card(
           child: Padding(
@@ -246,7 +248,7 @@ class _GlobalSourcesPageState extends State<GlobalSourcesPage> {
               children: [
                 const Divider(height: 24),
                 if (errors[id] != null) SelectableText('保存失败：${errors[id]}'),
-                if (task != null) TaskSummary(task: task),
+                if (task?.running == true) TaskSummary(task: task!),
                 if (!fallback) ...[
                   const Text('自动更新'),
                   const SizedBox(height: 8),
@@ -454,7 +456,7 @@ class _GameSourcesPageState extends State<GameSourcesPage> {
               : () => widget.model.rematch(widget.row),
           child: const Text('重新匹配当前游戏'),
         ),
-        if (task != null) TaskSummary(task: task),
+        if (task?.running == true) TaskSummary(task: task!),
       ],
     );
   }

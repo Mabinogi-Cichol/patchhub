@@ -819,7 +819,7 @@ fn signed_actions_receipt_and_input_truth_table() {
         ));
         assert!(a.local_archive.available, "{case}");
         assert!(a.overwrite.available, "{case}");
-        assert_eq!(a.primary.input, InstallInputKind::LocalArchive);
+        assert_eq!(a.primary.input, InstallInputKind::Unavailable);
         assert_eq!(a.reinstall.available, case == "managed", "{case}");
         if matches!(case, "content" | "build") {
             assert!(has_action_blocker(
@@ -950,11 +950,11 @@ fn recovery_blocks_all_current_instance_patches_but_other_instances_are_independ
 #[test]
 fn publisher_actions_resolve_urls_and_distinguish_format_links_and_unknown_detection() {
     use patchhub_core::actions::{ActionBlockerCode::*, InstallInputKind};
-    for case in ["zip", "exe", "bad_url", "ambiguous", "zip_link", "exe_link"] {
+    for case in ["zip", "exe", "bad_url", "ambiguous", "zip_link"] {
         let (temp, steam) = fixture();
         let state = temp.path().join("state");
         let mut candidate = candidate();
-        let exe = matches!(case, "exe" | "exe_link");
+        let exe = case == "exe";
         if exe {
             candidate.mirrors[0].format = "exe".into();
             candidate.mirrors[0].url = "https://kaguraserver.com/a.exe".into();
@@ -972,7 +972,6 @@ fn publisher_actions_resolve_urls_and_distinguish_format_links_and_unknown_detec
         let c = catalog();
         let tx = TransactionSnapshot::default();
         let mut caps = HostCapabilities::default();
-        caps.exe.available = !matches!(case, "exe_link");
         caps.exe.blockers.clear();
         if case == "zip_link" {
             caps.zip.available = false;
@@ -1003,9 +1002,6 @@ fn publisher_actions_resolve_urls_and_distinguish_format_links_and_unknown_detec
         }
         if case == "zip_link" {
             assert!(has_action_blocker(&a.automatic, UnprivilegedUserRequired));
-        }
-        if case == "exe_link" {
-            assert!(has_action_blocker(&a.automatic, ExeSandboxUnavailable));
         }
         assert_eq!(
             a.primary.input,

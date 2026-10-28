@@ -1,6 +1,6 @@
-//! Development-only parity runner using the production LPAC/bwrap session.
+//! Development-only parity runner using the bundled parser process.
 //! Every output stays below the caller's disposable .artifacts/p2 case.
-use patchhub_installer_worker::{production::WorkerRuntime, sf::Descriptor, IsolationError};
+use patchhub_installer_worker::{production::WorkerRuntime, sf::Descriptor, WorkerError};
 use std::{fs, io::Write, path::PathBuf, sync::atomic::AtomicBool, time::Instant};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -37,9 +37,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         } else {
             "patchhub-worker"
         });
-    let stage = root.join("stage");
-    fs::create_dir_all(&stage)?;
-    let runtime = WorkerRuntime::new(worker, stage, None)?;
+    let runtime = WorkerRuntime::new(worker)?;
     let cancel = AtomicBool::new(false);
     let start = Instant::now();
     let session = runtime.open_session(&root.join("input/archive.exe"), hash, size, &cancel)?;
@@ -50,7 +48,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .open(root.join("members.stream"))?;
         session.extract(&descriptor, &cancel, &mut |chunk| {
             sink.write_all(chunk)
-                .map_err(|e| IsolationError::new("parity-output", None, e.to_string()))
+                .map_err(|e| WorkerError::new("parity-output", None, e.to_string()))
         })?;
         serde_json::Value::Null
     } else {

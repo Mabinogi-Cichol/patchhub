@@ -1,4 +1,4 @@
-//! Fixed-action SF worker protocol. The caller must launch this code in the platform sandbox.
+//! Fixed-action SF worker protocol for the bundled parser process.
 //! This module never authorizes installation or opens a game/state directory.
 use memmap2::MmapOptions;
 use patchhub_installer_format::{audit, require, Error, Result};
@@ -153,8 +153,7 @@ pub fn open_input(path: &Path) -> Result<File> {
 
 pub fn encode_response(value: &Value) -> Result<Vec<u8>> {
     // No artificial response/report ceiling: the report grows with a legitimate
-    // installer's file table. The worker's own sandbox memory limit bounds it,
-    // and consumers bound memory by the actual document (design D08).
+    // installer's file table; consumers use the actual document (design D08).
     let mut out = Vec::new();
     serde_json::to_writer(&mut out, value).map_err(|_| Error("invalid_report".into()))?;
     out.push(b'\n');
@@ -174,9 +173,9 @@ pub fn process(file: &File, descriptor: &Descriptor) -> Result<Value> {
     let before = identity(file)?;
     let (exe_sha, exe_size) = descriptor.binding();
     require(before.len == exe_size, "exe_size_mismatch")?;
-    // SAFETY: the fixed input is a regular read-only sandbox file. Windows denies
-    // write/delete sharing; Linux production binds it read-only. The host must keep
-    // the input immutable for this invocation. Identity and digest are rechecked.
+    // SAFETY: the input is a regular read-only file. Windows denies write/delete
+    // sharing. The host keeps the input immutable for this invocation.
+    // Identity and digest are rechecked.
     let data = unsafe { MmapOptions::new().map(file)? };
     let behavior = matches!(descriptor, Descriptor::AnalyzeBehavior { .. });
     let report = audit::audit_metadata(&data, behavior)?;
@@ -211,7 +210,7 @@ pub fn extract(file: &File, descriptor: &Descriptor, out: &mut dyn Write) -> Res
     let before = identity(file)?;
     let (exe_sha, exe_size) = descriptor.binding();
     require(before.len == exe_size, "exe_size_mismatch")?;
-    // SAFETY: see process(): the sandboxed input is immutable for this session.
+    // SAFETY: see process(): the host keeps the input immutable for this session.
     let data = unsafe { MmapOptions::new().map(file)? };
     require(
         format!("{:x}", Sha256::digest(&data[..])) == exe_sha,

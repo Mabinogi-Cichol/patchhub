@@ -17,6 +17,7 @@ rusqlite.workspace = true
 fs2.workspace = true
 uuid.workspace = true
 reqwest.workspace = true
+tokio = { version = "1", features = ["rt", "time", "net"] }
 schemars.workspace = true
 ts-rs.workspace = true
 url.workspace = true

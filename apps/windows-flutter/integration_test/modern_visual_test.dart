@@ -87,10 +87,7 @@ void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
   const dataPath = String.fromEnvironment('PATCHHUB_VISUAL_DATA');
   const outputPath = String.fromEnvironment('PATCHHUB_VISUAL_OUTPUT');
-  const appid = int.fromEnvironment(
-    'PATCHHUB_VISUAL_APPID',
-    defaultValue: 42,
-  );
+  const appid = int.fromEnvironment('PATCHHUB_VISUAL_APPID', defaultValue: 42);
 
   testWidgets(
     'native art, responsive pages and caption close use the real Windows host',
@@ -226,29 +223,19 @@ void main() {
             }
           }
 
-          await capture('overview');
-          final info = find.widgetWithText(ExpansionTile, '游戏信息');
-          await tester.scrollUntilVisible(
-            info,
-            150,
-            scrollable: find
-                .descendant(
-                  of: find.byKey(PageStorageKey('${row.id}:overview')),
-                  matching: find.byType(Scrollable),
-                )
-                .first,
-          );
+          expect(find.text('概览'), findsNothing);
+          await capture('management');
+          final info = find.widgetWithText(ExpansionTile, '更多游戏信息');
+          await tester.ensureVisible(info);
           await tester.pumpAndSettle();
           await tester.tap(
-            find.descendant(of: info, matching: find.text('游戏信息')),
+            find.descendant(of: info, matching: find.text('更多游戏信息')),
           );
           await tester.pumpAndSettle();
           expect(find.textContaining('安装路径：'), findsOneWidget);
           await tester.ensureVisible(find.textContaining('安装路径：'));
           await tester.pumpAndSettle();
-          await capture('overview-expanded');
-          await tester.tap(find.text('补丁管理'));
-          await tester.pumpAndSettle();
+          await capture('management-game-info');
           await capture('patch');
           final technical = find.text('文件与技术详情');
           await tester.ensureVisible(technical);

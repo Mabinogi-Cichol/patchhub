@@ -1,5 +1,6 @@
 // Wire DTOs are generated from the Rust protocol/core types.
 import type { ActionBlocker, InstallerOutcome, PatchMatch, InstanceProjection, ScanReport, SourceCandidate, SourceSummary } from "../../contracts/generated/protocol";
+export type { ManualDownloadInput } from "../../contracts/generated/protocol";
 export type { ActionBlockerCode, ActionBlocker, ActionAvailability, PatchActions, SourceCandidate, DiscoveryDiagnostic, GameDiscovery, DiscoveryResult, GameMatch, GameMatchStatus, MatchGamesResult, MatchProgressEvent, MatchUpdateEvent, ProjectInstancesResult, SetSourceIntervalResult, SourceMatch, SourceProgressEvent, SourceRole, SourceStatus, SourceUpdateEvent, SourceUpdateResult, Transaction, InstallerOutcome, CacheInventory, BackupInventory, BackupCleanupResult, CleanupResult, InstallStage, DomainError } from "../../contracts/generated/protocol";
 export type { PatchMatch as Patch, InstanceProjection as Install, SourceSummary as SourceSubscription, GameSourceSummary as GameSourceSubscription, PreviewReport as Preview, ProposedChange as Change } from "../../contracts/generated/protocol";
 type Patch = PatchMatch;
@@ -48,16 +49,9 @@ export function installSummary(row: Install, scanning = false): string {
   if (row.patches.some(p => isManaged(p.detection.status) || isExternal(p.detection.status))) return "已安装补丁";
   if (row.patches.some(p => p.actions.overwrite.available && p.detection.status === "partial_or_conflict")) return "补丁文件不完整，可覆盖安装";
   if (row.patches.some(p => p.actions.automatic.available)) return "有可用补丁";
-  if (row.patches.length || row.discovery?.candidates.some(candidateMatched)) return "找到补丁来源";
-  // `discovery.status` is the persisted six-state match (p1-contract §7.1).
-  const status = row.discovery?.status;
-  if (status === "publisher_match") return "找到补丁来源";
-  if (status === "fallback_match") return "补丁索引（HGamer）找到来源";
-  if (status === "no_match") return "已启用来源中未找到补丁";
-  if (status === "incomplete") return "来源覆盖不完整，尚需更新来源";
-  if (status === "failed") return "来源查询失败";
+  if (row.patches.length || row.discovery?.candidates.length) return "找到补丁来源";
   if (scanning) return "正在匹配补丁";
-  return "尚未匹配，请重新匹配";
+  return "暂无补丁结果";
 }
 
 export type Filter = "all" | "matched" | "installed" | "attention";
@@ -164,8 +158,7 @@ export function reason(code: string): string {
     recovery_conflict: "检测到恢复冲突，已保留后续修改。",
     unsupported_method: "当前核心版本尚不支持此操作。",
     no_archive_selected: "请先选择本地 ZIP 文件。",
-    archive_required: "请先导入从补丁来源下载的 ZIP。",
-    artifact_requires_manual_download: "此来源需要浏览器下载；打开补丁来源后导入 ZIP。",
+    artifact_requires_manual_download: "未找到下载链接",
     build_not_verified: "当前游戏 build 尚未审核，自动安装已禁用。",
     platform_not_verified: "当前平台尚未审核，自动安装已禁用。",
     source_requires_guidance: "此条目提供补丁来源引导，尚不能自动安装。",
@@ -233,7 +226,6 @@ export function reason(code: string): string {
     exe_dlc_mismatch: "当前 DLC 状态不符合此补丁的适用条件。",
     exe_conditions_required: "请确认游戏语言、版本与 DLC 适用条件。",
     exe_insufficient_space: "检查或安装此补丁所需空间不足，请清理空间后重试。",
-    exe_sandbox_unavailable: "安全提取环境不可用，暂不能自动安装此补丁。",
     game_not_ready: "游戏尚未完整安装或库不可访问，请检查 Steam 下载状态。",
     signed_catalog_required: "需要有效的签名目录才能安装。",
     catalog_expired: "签名目录已到期，请更新目录后重新生成计划。",
@@ -270,7 +262,6 @@ export function reason(code: string): string {
     ,download_http_error: "下载服务返回错误，请稍后重试。"
     ,download_network_error: "补丁下载网络连接失败，请检查网络后重试。"
     ,download_not_zip: "下载内容不是有效 ZIP，未执行安装。"
-    ,local_archive_search_limit: "下载目录文件过多，请使用手动 ZIP 备用方式。"
      ,task_cancelled: "已取消安装，未提交更改。"
      ,install_in_progress: "已有安装任务正在进行，请等待完成。"
      ,request_id_required: "安装请求缺少标识，请重试。"
@@ -339,7 +330,7 @@ export function patchState(status: string): string {
 /** Input choice uses authoritative snapshot facts; archive selection remains local UI state. */
 export function primaryInstallAction(patch: Patch | null | undefined, archiveSelected: boolean, route: "primary" | "local_archive" = "primary") {
   const primary = patch?.actions.primary;
-  const input = route === "local_archive" ? "local_archive" : primary?.input ?? "unavailable";
+  const input = route === "local_archive" ? "local_archive" : primary?.input === "automatic" ? "automatic" : "unavailable";
   const available = !!patch && (input === "automatic" ? patch.actions.automatic.available
     : input === "local_archive" ? patch.actions.local_archive.available && archiveSelected : false);
   return { operation: primary?.operation ?? "overwrite", label: primary?.label ?? "install", input, available };
@@ -352,9 +343,7 @@ export function installInput(patch: Patch | null | undefined, localArchive?: str
 export function actionBlockers(patch: Patch | null | undefined): ActionBlocker[] {
   if (!patch) return [];
   const input = patch.actions.primary.input;
-  const selected = input === "automatic" ? patch.actions.automatic.blockers
-    : input === "local_archive" ? [...patch.actions.automatic.blockers, ...patch.actions.local_archive.blockers]
-      : patch.actions.overwrite.blockers;
+  const selected = input === "automatic" ? patch.actions.automatic.blockers : patch.actions.overwrite.blockers;
   const seen = new Set<string>();
   return selected.filter(blocker => { const key = `${blocker.code}\0${blocker.detail ?? ""}`;
     if (seen.has(key)) return false; seen.add(key); return true; });
@@ -410,43 +399,6 @@ export function downloadFileName(value: string): string {
 
 // -- v5 game match / source schedule display (shared by both host UIs) ------
 
-export type MatchStatusTone = "ok" | "fallback" | "warning" | "error" | "pending";
-
-export function gameMatchStatusTone(status: string | null | undefined): MatchStatusTone {
-  switch (status) {
-    case "publisher_match": return "ok";
-    case "fallback_match": return "fallback";
-    case "no_match": return "warning";
-    case "incomplete": return "warning";
-    case "failed": return "error";
-    default: return "pending";
-  }
-}
-
-export function gameMatchStatusLabel(status: string | null | undefined): string {
-  switch (status) {
-    case "publisher_match": return "发行商来源命中";
-    case "fallback_match": return "补丁索引（HGamer）命中";
-    case "no_match": return "已启用来源中未找到补丁";
-    case "incomplete": return "来源覆盖不完整";
-    case "failed": return "来源查询失败";
-    case "pending": return "尚未匹配";
-    default: return "尚未匹配";
-  }
-}
-
-/** Extra explanation for statuses that still need user action or cache updates. */
-export function gameMatchStatusHint(status: string | null | undefined): string | null {
-  switch (status) {
-    case "pending": return "请点击重新匹配；尚未查询的来源不会显示为无补丁。";
-    case "incomplete": return "普通来源覆盖不完整，尚需更新来源；HGamer 不会在来源不完整时补查。";
-    case "no_match": return "已启用的普通来源覆盖完整且未找到补丁。";
-    case "failed": return "本次来源查询失败，显示上次成功结果。";
-    case "fallback_match": return "普通来源未命中，显示 HGamer 补查结果。";
-    default: return null;
-  }
-}
-
 export function sourceCoverageComplete(source: Pick<SourceSummary, "complete"> | null | undefined): boolean {
   return source?.complete === true;
 }
@@ -455,14 +407,6 @@ export function sourceCoverageText(source: Pick<SourceSummary, "complete" | "sta
   if (!source) return "来源状态未知";
   if (source.complete) return "索引覆盖完整";
   return "索引覆盖不完整，尚需更新来源";
-}
-
-export function fallbackDisplayStatus(matchStatus: string | null | undefined): string | null {
-  if (matchStatus === "publisher_match") return null;
-  if (matchStatus === "fallback_match") return "补丁索引（HGamer）命中";
-  if (matchStatus === "no_match") return "已启用来源中未找到补丁";
-  if (matchStatus === "incomplete") return "来源覆盖不完整，暂不补查 HGamer";
-  return null;
 }
 
 export const SOURCE_INTERVAL_PRESETS: { hours: number; label: string }[] = [

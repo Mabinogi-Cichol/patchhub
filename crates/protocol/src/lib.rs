@@ -6,7 +6,7 @@ pub use patchhub_core::{
         backup::{BackupCleanupResult, BackupInventory},
         cache::CacheInventory,
         outcome::{CleanupResult, InstallerOutcome},
-        service::CleanupPolicy,
+        service::{CleanupPolicy, ManualDownloadInput},
     },
     projection::{DomainError, InstanceProjection, PreviewReport, ScanReport},
     sources::{
@@ -171,7 +171,7 @@ macro_rules! params { ($name:ident {$($fields:tt)*}) => { #[derive(Debug,Clone,S
 params!(HostParams {});
 params!(ProjectInstancesParams{pub instance_ids:Vec<String>,});
 params!(PreviewParams{pub instance_id:String,#[ts(optional = nullable)]pub release_id:Option<String>,#[ts(optional = nullable)]pub selection_id:Option<String>,});
-params!(InstallPatchParams{pub instance_id:String,#[ts(optional = nullable)]pub release_id:Option<String>,#[ts(optional = nullable)]pub selection_id:Option<String>,#[ts(optional = nullable)]pub archive:Option<PathBuf>,pub operation:InstallOperation,pub cleanup_policy:CleanupPolicy,});
+params!(InstallPatchParams{pub instance_id:String,#[ts(optional = nullable)]pub release_id:Option<String>,#[ts(optional = nullable)]pub selection_id:Option<String>,#[ts(optional = nullable)]pub archive:Option<PathBuf>,#[ts(optional = nullable)]pub manual_download:Option<ManualDownloadInput>,pub operation:InstallOperation,pub cleanup_policy:CleanupPolicy,});
 params!(DiscardPlanParams{pub plan_id:String,});
 params!(ListGameSourcesParams{#[ts(optional = nullable)]pub instance_id:Option<String>,#[ts(optional = nullable)]pub appid:Option<u32>,});
 params!(SetSourceEnabledParams{pub source_id:String,pub enabled:bool,});
@@ -359,10 +359,34 @@ pub fn validate_request(
         if matches!(method, Method::Preview | Method::InstallPatch) {
             let release = p.get("release_id").and_then(Value::as_str);
             let selection = p.get("selection_id").and_then(Value::as_str);
-            if release.is_some() && selection.is_some() {
+            let manual = p.get("manual_download").filter(|v| !v.is_null());
+            if usize::from(release.is_some())
+                + usize::from(selection.is_some())
+                + usize::from(manual.is_some())
+                > 1
+            {
                 return Err(ProtocolError::code("invalid_request"));
             }
-            if release.is_none() && selection.is_none() {
+            if let Some(manual) = manual {
+                for key in ["source_id", "candidate_id"] {
+                    if !manual
+                        .get(key)
+                        .and_then(Value::as_str)
+                        .is_some_and(|s| validate_id(s, MAX_ID_BYTES))
+                    {
+                        return Err(ProtocolError::code("invalid_id"));
+                    }
+                }
+                if p.get("archive").is_some_and(|v| !v.is_null()) {
+                    return Err(ProtocolError::code("invalid_request"));
+                }
+                if !manual.get("url").and_then(Value::as_str).is_some_and(|s| {
+                    patchhub_core::installer::acquire::validate_manual_download(s).is_ok()
+                }) {
+                    return Err(ProtocolError::code("invalid_download_url"));
+                }
+            }
+            if release.is_none() && selection.is_none() && manual.is_none() {
                 return Err(ProtocolError::code("selection_or_release_required"));
             }
             if let Some(s) = selection {
@@ -1245,6 +1269,8 @@ pub struct ContractSchema {
 pub fn schema() -> Value {
     let mut v = serde_json::to_value(schemars::schema_for!(ContractSchema)).unwrap();
     let defs = v["$defs"].as_object_mut().unwrap();
+    defs.get_mut("ManualDownloadInput").unwrap()["properties"]["url"]["pattern"] =
+        serde_json::json!("^[hH][tT][tT][pP][sS]?://[^/]+");
     defs.get_mut("HostInputs").unwrap()["required"] = serde_json::json!([
         "roots",
         "catalog",
@@ -1278,6 +1304,10 @@ pub fn schema() -> Value {
         {"required":["selection_id"],"properties":{"selection_id":{"type":"string","pattern":"^(zip|exe)-selection-[0-9a-f]{24}-[1-9][0-9]*$"},"release_id":{"type":"null"}}}
         ]);
         if name == "InstallPatchParams" {
+            d["oneOf"][0]["properties"]["manual_download"] = serde_json::json!({"type":"null"});
+            d["oneOf"][1]["properties"]["manual_download"] = serde_json::json!({"type":"null"});
+            d["oneOf"].as_array_mut().unwrap().push(serde_json::json!({"required":["manual_download"],"properties":{
+                "manual_download":{"$ref":"#/$defs/ManualDownloadInput"},"release_id":{"type":"null"},"selection_id":{"type":"null"},"archive":{"type":"null"}}}));
             d["allOf"] = serde_json::json!([{"anyOf":[{"properties":{"selection_id":{"type":"null"}}},{"properties":{"archive":{"type":"null"}}}]}]);
         }
     }

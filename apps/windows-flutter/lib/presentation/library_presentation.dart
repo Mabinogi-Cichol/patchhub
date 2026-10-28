@@ -60,15 +60,11 @@ String rowSummary(GameRow row) {
   )) {
     return '有可用补丁';
   }
-  if (row.matched) return '找到补丁来源';
-  return switch (row.discovery?['status']) {
-    'publisher_match' => '找到补丁来源',
-    'fallback_match' => '补丁索引（HGamer）找到来源',
-    'no_match' => '已启用来源中未找到补丁',
-    'incomplete' => '来源覆盖不完整，尚需更新来源',
-    'failed' => '来源查询失败',
-    _ => '尚未匹配，请重新匹配',
-  };
+  if (row.patches.isNotEmpty ||
+      (row.discovery?['candidates'] as List? ?? []).isNotEmpty) {
+    return '找到补丁来源';
+  }
+  return '暂无补丁结果';
 }
 
 class DisplayEntry {
@@ -270,7 +266,6 @@ String statusLabel(dynamic value) =>
       'local_archive_signed_only': '此来源不支持导入本地 ZIP',
       'source_not_subscribed': '尚未订阅此来源',
       'source_not_enabled': '来源已停用',
-      'exe_sandbox_unavailable': '本机 EXE 安装隔离不可用',
     }[value] ??
     '$value';
 

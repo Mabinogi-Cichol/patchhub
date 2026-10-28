@@ -1156,7 +1156,7 @@ fn stale_local_actions_cannot_bypass_a_revoked_release_or_changed_build() {
         let mut provider = f.provider();
         let snapshot = f.projected_actions(&provider);
         assert_eq!(snapshot["local_archive"]["available"], true);
-        assert_eq!(snapshot["primary"]["input"], "local_archive");
+        assert_eq!(snapshot["primary"]["input"], "unavailable");
         if changed_build {
             f.manifest("101");
         } else {

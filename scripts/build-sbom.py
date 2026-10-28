@@ -64,7 +64,7 @@ if args.flutter_deps:
 # The Python oracle remains developer-only; disclose the shipped Rust engine.
 rust_installer = component('generic', 'patchhub-rust-installer', '1', 'MIT')
 rust_installer['properties'] = [
-    {'name': 'patchhub:implementation', 'value': 'Rust SF9 format library and fixed sandbox worker; Python developer oracles are not bundled.'},
+    {'name': 'patchhub:implementation', 'value': 'Rust SF9 format library and direct parser worker; Python developer oracles are not bundled.'},
     {'name': 'patchhub:reference-commit', 'value': '21f5c5595a70e9284fff83476c0e307d5b92f573'},
 ]
 for source, destination, prefix in (

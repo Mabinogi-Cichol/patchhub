@@ -9,14 +9,6 @@ license.workspace = true
 name = "patchhub_installer_worker"
 path = "src/lib.rs"
 
-[[bin]]
-name = "patchhub-probe-runner"
-path = "src/bin/probe_runner.rs"
-
-[[bin]]
-name = "patchhub-probe-worker"
-path = "src/bin/probe_worker.rs"
-
 [dependencies]
 serde.workspace = true
 serde_json.workspace = true
@@ -28,21 +20,11 @@ patchhub-installer-format = { path = "../installer-format" }
 windows = { version = "0.62", features = [
     "Win32_Foundation",
     "Win32_Security",
-    "Win32_Security_Isolation",
-    "Win32_Security_Authorization",
-    "Win32_System_Threading",
     "Win32_System_JobObjects",
-    "Win32_System_Console",
-    "Win32_System_Environment",
-    "Win32_System_Memory",
-    "Win32_System_SystemServices",
-    "Win32_System_Pipes",
-    "Win32_System_WindowsProgramming",
-    "Win32_Networking_WinSock",
+    "Win32_System_Threading",
 ] }
-winreg = "0.56"
 
-[dependencies.tempfile]
+[dev-dependencies.tempfile]
 workspace = true
 
 [[bin]]

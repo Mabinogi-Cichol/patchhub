@@ -520,10 +520,10 @@ mod tests {
         assert_eq!(result["installer"]["selection_version"], 1);
         assert_eq!(result["installer"]["formats"]["zip"], "supported");
         assert_eq!(result["installer"]["links"]["zip"]["available"], true);
-        assert_eq!(result["installer"]["links"]["exe"]["available"], false);
+        assert_eq!(result["installer"]["links"]["exe"]["available"], true);
         assert_eq!(
-            result["installer"]["links"]["exe"]["blockers"][0]["code"],
-            "exe_sandbox_unavailable"
+            result["installer"]["links"]["exe"]["blockers"],
+            serde_json::json!([])
         );
         assert_eq!(result["sources"]["index_schema_version"], 1);
         assert_eq!(result["sources"]["detail_schema_version"], 1);

@@ -142,20 +142,58 @@ pub fn acquire_with(
 enum ArchiveKind {
     Zip,
     Exe,
+    Manual,
 }
 impl ArchiveKind {
     fn extension(self) -> &'static str {
         match self {
             Self::Zip => "zip",
             Self::Exe => "exe",
+            Self::Manual => "zip_or_exe",
         }
     }
     fn url(self, url: &str, hosts: &[String]) -> Result<String> {
+        if matches!(self, Self::Manual) {
+            return validate_manual_download(url);
+        }
         crate::sources::validate::allowed_url(url, hosts, matches!(self, Self::Zip))
             .map_err(|_| invalid("invalid_download_url"))
     }
 }
-/// Only bytes with MZ magic are accepted here; all PE/SF parsing runs in the sandbox.
+/// Explicit user input uses network URL semantics without publisher host admission.
+pub fn validate_manual_download(url: &str) -> Result<String> {
+    let mut parsed = reqwest::Url::parse(url).map_err(|_| invalid("invalid_download_url"))?;
+    if !matches!(parsed.scheme(), "https" | "http")
+        || parsed.host_str().is_none()
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+    {
+        return Err(invalid("invalid_download_url"));
+    }
+    parsed.set_fragment(None);
+    Ok(parsed.to_string())
+}
+pub(crate) fn acquire_manual_with(
+    transport: &dyn Transport,
+    url: &str,
+    paths: &InstallerPaths,
+    cancel: &AtomicBool,
+) -> Result<AcquiredArchive> {
+    acquire_kind(
+        transport,
+        &DownloadRequest {
+            url,
+            download_hosts: &[],
+            expected_sha256: None,
+            expected_size: None,
+        },
+        paths,
+        cancel,
+        &mut |_, _| {},
+        ArchiveKind::Manual,
+    )
+}
+/// Only bytes with MZ magic are accepted here; all PE/SF parsing uses the bundled parser.
 pub fn acquire_exe_with(
     transport: &dyn Transport,
     request: &DownloadRequest<'_>,
@@ -307,7 +345,7 @@ fn download_and_persist(
         total_hint,
         space_dir: dir,
     };
-    let (digest, size) = copy_verified(&mut body, &mut file, &expected, cancel, progress)?;
+    let (digest, size, kind) = copy_verified(&mut body, &mut file, &expected, cancel, progress)?;
     file.sync_all()?;
     drop(file);
 
@@ -356,7 +394,7 @@ fn copy_verified(
     expected: &Expected<'_>,
     cancel: &AtomicBool,
     progress: &mut dyn FnMut(u64, u64),
-) -> Result<(String, u64)> {
+) -> Result<(String, u64, ArchiveKind)> {
     let mut hasher = Sha256::new();
     let mut total = 0u64;
     let mut magic = [0u8; 4];
@@ -401,11 +439,19 @@ fn copy_verified(
             return Err(invalid("download_size_mismatch"));
         }
     }
+    let detected = if magic_len == 4 && (magic == ZIP_MAGIC_LOCAL || magic == ZIP_MAGIC_EMPTY) {
+        Some(ArchiveKind::Zip)
+    } else if magic_len >= 2 && &magic[..2] == b"MZ" {
+        Some(ArchiveKind::Exe)
+    } else {
+        None
+    };
     let valid = match expected.kind {
         ArchiveKind::Zip => {
             magic_len == 4 && (magic == ZIP_MAGIC_LOCAL || magic == ZIP_MAGIC_EMPTY)
         }
         ArchiveKind::Exe => magic_len >= 2 && &magic[..2] == b"MZ",
+        ArchiveKind::Manual => detected.is_some(),
     };
     if !valid {
         return Err(invalid(format!(
@@ -419,7 +465,7 @@ fn copy_verified(
             return Err(invalid("download_hash_mismatch"));
         }
     }
-    Ok((digest, total))
+    Ok((digest, total, detected.unwrap()))
 }
 
 /// Content-addressed download manifest (one per `<sha256>.zip`).
@@ -469,7 +515,8 @@ fn load_cached(
         let Ok(meta) = serde_json::from_slice::<CacheEntry>(&bytes) else {
             continue;
         };
-        if meta.format != kind.extension()
+        if (!matches!(kind, ArchiveKind::Manual) && meta.format != kind.extension())
+            || !matches!(meta.format.as_str(), "zip" | "exe")
             || meta.url != request.url
             || !valid_sha256(&meta.sha256)
             || request
@@ -481,7 +528,7 @@ fn load_cached(
         {
             continue;
         }
-        let archive = dir.join(format!("{}.{}", meta.sha256, kind.extension()));
+        let archive = dir.join(format!("{}.{}", meta.sha256, meta.format));
         if !zip_recipe::no_links(&archive) || !archive.is_file() {
             continue;
         }
@@ -568,34 +615,21 @@ impl Transport for ReqwestTransport {
         etag: Option<&str>,
         last_modified: Option<&str>,
     ) -> Result<HttpResponse> {
-        use std::net::ToSocketAddrs;
         let parsed = reqwest::Url::parse(url).map_err(|_| invalid("invalid_download_url"))?;
-        let host = parsed
-            .host_str()
-            .ok_or_else(|| invalid("invalid_download_url"))?;
-        if parsed.scheme() != "https"
-            || parsed.port_or_known_default() != Some(443)
+        if !matches!(parsed.scheme(), "https" | "http")
+            || parsed.host_str().is_none()
             || !parsed.username().is_empty()
             || parsed.password().is_some()
         {
             return Err(invalid("invalid_download_url"));
         }
-        let addresses: Vec<_> = (host, 443)
-            .to_socket_addrs()
-            .map_err(|_| invalid("download_dns_failed"))?
-            .collect();
-        if addresses.is_empty() {
-            return Err(invalid("download_dns_failed"));
-        }
-        // Use the system's resolved addresses without classifying the user's network
-        // (for example, a TUN may intentionally return non-public addresses).
-        // Resolve once per hop and pin connections, preserving TLS hostname verification.
-        let client = reqwest::blocking::Client::builder()
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?;
+        let client = reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
             .no_proxy()
-            .resolve_to_addrs(host, &addresses)
             .connect_timeout(Duration::from_secs(15))
-            .timeout(Duration::from_secs(15))
             .user_agent("patchhub/0.1")
             .no_gzip()
             .no_deflate()
@@ -608,9 +642,7 @@ impl Transport for ReqwestTransport {
         if let Some(value) = last_modified {
             request = request.header(reqwest::header::IF_MODIFIED_SINCE, value);
         }
-        let response = request
-            .send()
-            .map_err(|_| invalid("download_network_error"))?;
+        let response = runtime.block_on(cancellable_network(request.send()))?;
         let status = response.status().as_u16();
         let header = |name: reqwest::header::HeaderName| {
             response
@@ -633,8 +665,71 @@ impl Transport for ReqwestTransport {
             etag,
             last_modified,
             final_url,
-            body: Box::new(response),
+            body: Box::new(NetworkBody {
+                runtime,
+                response,
+                pending: Vec::new(),
+                offset: 0,
+            }),
         })
+    }
+}
+
+/// Polling is only a cancellation wake-up interval, never a download deadline.
+/// Dropping a pending reqwest future aborts its I/O on this task-owned runtime.
+async fn cancellable_network<T>(
+    future: impl std::future::Future<Output = std::result::Result<T, reqwest::Error>>,
+) -> Result<T> {
+    use std::{
+        future::{poll_fn, Future},
+        task::Poll,
+    };
+    let mut future = std::pin::pin!(future);
+    let mut wake = std::pin::pin!(tokio::time::sleep(Duration::from_millis(25)));
+    poll_fn(|context| {
+        if let Err(error) = operation::check() {
+            return Poll::Ready(Err(error));
+        }
+        if let Poll::Ready(result) = future.as_mut().poll(context) {
+            return Poll::Ready(
+                result.map_err(|error| invalid(format!("download_network_error: {error}"))),
+            );
+        }
+        if wake.as_mut().poll(context).is_ready() {
+            wake.as_mut()
+                .reset(tokio::time::Instant::now() + Duration::from_millis(25));
+            context.waker().wake_by_ref();
+        }
+        Poll::Pending
+    })
+    .await
+}
+struct NetworkBody {
+    runtime: tokio::runtime::Runtime,
+    response: reqwest::Response,
+    pending: Vec<u8>,
+    offset: usize,
+}
+impl Read for NetworkBody {
+    fn read(&mut self, buffer: &mut [u8]) -> Result<usize> {
+        if buffer.is_empty() {
+            return Ok(0);
+        }
+        operation::check()?;
+        while self.offset == self.pending.len() {
+            let Some(chunk) = self
+                .runtime
+                .block_on(cancellable_network(self.response.chunk()))?
+            else {
+                return Ok(0);
+            };
+            self.pending = chunk.to_vec();
+            self.offset = 0;
+        }
+        let length = buffer.len().min(self.pending.len() - self.offset);
+        buffer[..length].copy_from_slice(&self.pending[self.offset..self.offset + length]);
+        self.offset += length;
+        Ok(length)
     }
 }
 
@@ -727,6 +822,104 @@ mod tests {
         }
     }
 
+    #[test]
+    fn real_transport_waits_for_uncancelled_headers_and_streams_body() {
+        use std::net::TcpListener;
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/extensionless", listener.local_addr().unwrap());
+        let bytes = data(&[b'x'; 64]);
+        let expected = bytes.clone();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = Vec::new();
+            let mut buffer = [0u8; 1024];
+            while !request.windows(4).any(|bytes| bytes == b"\r\n\r\n") {
+                let length = stream.read(&mut buffer).unwrap();
+                assert!(length > 0);
+                request.extend_from_slice(&buffer[..length]);
+            }
+            std::thread::sleep(Duration::from_millis(75));
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                bytes.len()
+            )
+            .unwrap();
+            for chunk in bytes.chunks(4) {
+                stream.write_all(chunk).unwrap();
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        });
+        let (_temp, paths) = setup();
+        let archive = acquire_manual_with(
+            &ReqwestTransport::new().unwrap(),
+            &url,
+            &paths,
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        assert_eq!(fs::read(archive.path).unwrap(), expected);
+        server.join().unwrap();
+    }
+    #[test]
+    fn explicit_manual_urls_sniff_bytes_and_preserve_real_failures() {
+        let (_temp, paths) = setup();
+        let url = "http://user.example:8080/payload";
+        for (bytes, extension) in [(data(b"zip"), "zip"), (b"MZ parser input".to_vec(), "exe")] {
+            let mut r = response(200, bytes, None);
+            r.final_url = url.into();
+            let transport = FakeTransport::new(vec![r]);
+            let acquired =
+                acquire_manual_with(&transport, url, &paths, &AtomicBool::new(false)).unwrap();
+            assert_eq!(acquired.path.extension().unwrap(), extension);
+        }
+        let mut r = response(200, b"<html>share page</html>".to_vec(), None);
+        r.final_url = url.into();
+        assert_eq!(
+            acquire_manual_with(
+                &FakeTransport::new(vec![r]),
+                url,
+                &paths,
+                &AtomicBool::new(false)
+            )
+            .unwrap_err()
+            .to_string(),
+            "download_not_zip_or_exe"
+        );
+        assert_eq!(
+            acquire_manual_with(
+                &FakeTransport::new(vec![]),
+                url,
+                &paths,
+                &AtomicBool::new(false)
+            )
+            .unwrap_err()
+            .to_string(),
+            "no_fake_response"
+        );
+        assert_eq!(
+            acquire_manual_with(
+                &FakeTransport::new(vec![]),
+                url,
+                &paths,
+                &AtomicBool::new(true)
+            )
+            .unwrap_err()
+            .to_string(),
+            "download_cancelled"
+        );
+        for url in [
+            "file:///tmp/patch.zip",
+            "javascript:alert(1)",
+            "https://user:secret@example.com/payload",
+        ] {
+            assert!(validate_manual_download(url).is_err());
+        }
+        assert!(
+            validate_download(url, &hosts()).is_err(),
+            "automatic publisher admission is unchanged"
+        );
+    }
     #[test]
     fn exe_magic_and_redirect_policy_are_bound() {
         let (_temp, paths) = setup();

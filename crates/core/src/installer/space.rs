@@ -36,31 +36,19 @@ pub struct SpaceEvidence {
     pub same_volume: bool,
 }
 impl SpaceBudget {
-    /// Direct EXE extraction budget. The cached download already exists, so the
-    /// only new state material is the sandbox input copy (`D`); the target
-    /// volume needs the peak net growth produced by writing members in order.
-    /// `T` is supplied by [`ZipSpaceBudget::for_archive`] (same write order).
-    pub fn for_direct(download: u64, files: &[(u64, u64)]) -> Result<Self> {
-        let transaction = ZipSpaceBudget::for_archive(files)?;
+    /// The downloaded input already exists. Direct extraction only needs
+    /// target growth plus the existing volume metadata margin.
+    pub fn for_direct(files: &[(u64, u64)]) -> Result<Self> {
+        let transaction = ZipSpaceBudget::for_direct_overwrite(files)?;
         let target = transaction.target_peak_bytes.unwrap();
-        let add = |a: u64, b: u64| {
-            a.checked_add(b)
-                .ok_or_else(|| invalid("exe_space_budget_overflow"))
-        };
+        let target_bytes = target
+            .checked_add(SPACE_MARGIN_BYTES)
+            .ok_or_else(|| invalid("exe_space_budget_overflow"))?;
         Ok(Self {
-            state_bytes: add(download, SPACE_MARGIN_BYTES)?,
-            target_bytes: add(target, SPACE_MARGIN_BYTES)?,
-            same_volume_bytes: Some(add(add(download, target)?, SPACE_MARGIN_BYTES)?),
-        })
-    }
-    /// Re-check after the session has copied the input into staging: that copy
-    /// already occupies its volume, so only target growth and the margin remain.
-    pub fn after_input_copy(&self) -> Self {
-        Self {
             state_bytes: SPACE_MARGIN_BYTES,
-            target_bytes: self.target_bytes,
-            same_volume_bytes: Some(self.target_bytes),
-        }
+            target_bytes,
+            same_volume_bytes: Some(target_bytes),
+        })
     }
     pub fn check_available(
         &self,
@@ -215,13 +203,12 @@ mod tests {
     use super::*;
     #[test]
     fn combined_volume_budget() {
-        let b = SpaceBudget::for_direct(100, &[(300, 0)]).unwrap();
+        let b = SpaceBudget::for_direct(&[(300, 0)]).unwrap();
         let combined = b.same_volume_bytes.unwrap();
         // Separate volumes satisfy the per-volume budgets.
         b.check_available(b.state_bytes, b.target_bytes, false)
             .unwrap();
-        // A shared volume must additionally cover the sandbox input copy of D,
-        // so the split per-volume figures are no longer sufficient.
+        // A shared volume must cover target growth on both volume observations.
         assert!(b
             .check_available(b.state_bytes, b.target_bytes, true)
             .is_err());
@@ -230,19 +217,19 @@ mod tests {
         assert!(b.check_available(combined, combined - 1, true).is_err());
     }
     #[test]
-    fn direct_same_volume_peak_covers_sandbox_input_copy() {
+    fn direct_same_volume_peak_only_counts_target_growth() {
         let margin = SPACE_MARGIN_BYTES;
         // Replacing three equal files has no net growth; a new 300-byte file
         // peaks at 300 while it is written.
-        let b = SpaceBudget::for_direct(10_000, &[(50, 50), (50, 50), (300, 0)]).unwrap();
-        assert_eq!(b.state_bytes, 10_000 + margin);
+        let b = SpaceBudget::for_direct(&[(50, 50), (50, 50), (300, 0)]).unwrap();
+        assert_eq!(b.state_bytes, margin);
         assert_eq!(b.target_bytes, 300 + margin);
-        assert_eq!(b.same_volume_bytes, Some(10_000 + 300 + margin));
-        assert!(SpaceBudget::for_direct(u64::MAX, &[(0, 0)]).is_err());
+        assert_eq!(b.same_volume_bytes, Some(300 + margin));
+        assert!(SpaceBudget::for_direct(&[(u64::MAX, 0)]).is_err());
     }
     #[test]
     fn checked_arithmetic() {
-        assert!(SpaceBudget::for_direct(u64::MAX, &[(0, 0)]).is_err());
+        assert!(SpaceBudget::for_direct(&[(u64::MAX, 0)]).is_err());
         let b = SpaceBudget {
             state_bytes: u64::MAX,
             target_bytes: 1,

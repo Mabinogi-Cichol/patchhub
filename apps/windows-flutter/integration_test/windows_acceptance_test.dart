@@ -122,7 +122,7 @@ void main() {
         image.dispose();
       }
 
-      await screenshot('windows-light-overview');
+      await screenshot('windows-light-management');
       await tester.tap(find.byTooltip('外观'));
       await tester.pumpAndSettle();
       await tester.tap(

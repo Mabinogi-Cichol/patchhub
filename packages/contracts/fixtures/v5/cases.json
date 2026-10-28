@@ -1813,6 +1813,148 @@
         "request_id": "fixture"
       },
       "task_channel": false
+    },
+    {
+      "name": "manual-download",
+      "request": {
+        "method": "install_patch",
+        "params": {
+          "cleanup_policy": "disabled",
+          "host": {
+            "catalog": null,
+            "platform": "windows",
+            "roots": [],
+            "signed_catalog": null,
+            "state_dir": null,
+            "trust_keys": null
+          },
+          "instance_id": "instance",
+          "manual_download": {
+            "candidate_id": "candidate-0123456789abcdef01234567",
+            "source_id": "fixture",
+            "url": "https://user-download.example/download?id=42"
+          },
+          "operation": "overwrite"
+        },
+        "protocol_version": 5,
+        "request_id": "fixture"
+      },
+      "task_channel": true
+    },
+    {
+      "error": "invalid_request",
+      "name": "manual-download-conflict-release_id",
+      "request": {
+        "method": "install_patch",
+        "params": {
+          "cleanup_policy": "disabled",
+          "host": {
+            "catalog": null,
+            "platform": "windows",
+            "roots": [],
+            "signed_catalog": null,
+            "state_dir": null,
+            "trust_keys": null
+          },
+          "instance_id": "instance",
+          "manual_download": {
+            "candidate_id": "candidate-0123456789abcdef01234567",
+            "source_id": "fixture",
+            "url": "https://user-download.example/download?id=42"
+          },
+          "operation": "overwrite",
+          "release_id": "release"
+        },
+        "protocol_version": 5,
+        "request_id": "fixture"
+      },
+      "task_channel": true
+    },
+    {
+      "error": "invalid_request",
+      "name": "manual-download-conflict-selection_id",
+      "request": {
+        "method": "install_patch",
+        "params": {
+          "cleanup_policy": "disabled",
+          "host": {
+            "catalog": null,
+            "platform": "windows",
+            "roots": [],
+            "signed_catalog": null,
+            "state_dir": null,
+            "trust_keys": null
+          },
+          "instance_id": "instance",
+          "manual_download": {
+            "candidate_id": "candidate-0123456789abcdef01234567",
+            "source_id": "fixture",
+            "url": "https://user-download.example/download?id=42"
+          },
+          "operation": "overwrite",
+          "selection_id": "zip-selection-0123456789abcdef01234567-42"
+        },
+        "protocol_version": 5,
+        "request_id": "fixture"
+      },
+      "task_channel": true
+    },
+    {
+      "error": "invalid_request",
+      "name": "manual-download-conflict-archive",
+      "request": {
+        "method": "install_patch",
+        "params": {
+          "archive": "local.zip",
+          "cleanup_policy": "disabled",
+          "host": {
+            "catalog": null,
+            "platform": "windows",
+            "roots": [],
+            "signed_catalog": null,
+            "state_dir": null,
+            "trust_keys": null
+          },
+          "instance_id": "instance",
+          "manual_download": {
+            "candidate_id": "candidate-0123456789abcdef01234567",
+            "source_id": "fixture",
+            "url": "https://user-download.example/download?id=42"
+          },
+          "operation": "overwrite"
+        },
+        "protocol_version": 5,
+        "request_id": "fixture"
+      },
+      "task_channel": true
+    },
+    {
+      "error": "invalid_download_url",
+      "name": "manual-download-non-network",
+      "request": {
+        "method": "install_patch",
+        "params": {
+          "cleanup_policy": "disabled",
+          "host": {
+            "catalog": null,
+            "platform": "windows",
+            "roots": [],
+            "signed_catalog": null,
+            "state_dir": null,
+            "trust_keys": null
+          },
+          "instance_id": "instance",
+          "manual_download": {
+            "candidate_id": "candidate-0123456789abcdef01234567",
+            "source_id": "fixture",
+            "url": "file:///patch.zip"
+          },
+          "operation": "overwrite"
+        },
+        "protocol_version": 5,
+        "request_id": "fixture"
+      },
+      "task_channel": true
     }
   ],
   "responses": [
@@ -1839,12 +1981,8 @@
             },
             "links": {
               "exe": {
-                "available": false,
-                "blockers": [
-                  {
-                    "code": "exe_sandbox_unavailable"
-                  }
-                ]
+                "available": true,
+                "blockers": []
               },
               "zip": {
                 "available": true,
@@ -4205,12 +4343,8 @@
             },
             "links": {
               "exe": {
-                "available": false,
-                "blockers": [
-                  {
-                    "code": "exe_sandbox_unavailable"
-                  }
-                ]
+                "available": true,
+                "blockers": []
               },
               "zip": {
                 "available": true,
@@ -4298,12 +4432,8 @@
             },
             "links": {
               "exe": {
-                "available": false,
-                "blockers": [
-                  {
-                    "code": "exe_sandbox_unavailable"
-                  }
-                ]
+                "available": true,
+                "blockers": []
               },
               "zip": {
                 "available": true,
@@ -4368,12 +4498,8 @@
             },
             "links": {
               "exe": {
-                "available": false,
-                "blockers": [
-                  {
-                    "code": "exe_sandbox_unavailable"
-                  }
-                ]
+                "available": true,
+                "blockers": []
               },
               "zip": {
                 "available": true,
@@ -4461,12 +4587,8 @@
             },
             "links": {
               "exe": {
-                "available": false,
-                "blockers": [
-                  {
-                    "code": "exe_sandbox_unavailable"
-                  }
-                ]
+                "available": true,
+                "blockers": []
               },
               "zip": {
                 "available": true,
@@ -4554,12 +4676,8 @@
             },
             "links": {
               "exe": {
-                "available": false,
-                "blockers": [
-                  {
-                    "code": "exe_sandbox_unavailable"
-                  }
-                ]
+                "available": true,
+                "blockers": []
               },
               "zip": {
                 "available": true,
@@ -4647,12 +4765,8 @@
             },
             "links": {
               "exe": {
-                "available": false,
-                "blockers": [
-                  {
-                    "code": "exe_sandbox_unavailable"
-                  }
-                ]
+                "available": true,
+                "blockers": []
               },
               "zip": {
                 "available": true,
@@ -4739,12 +4853,8 @@
             },
             "links": {
               "exe": {
-                "available": false,
-                "blockers": [
-                  {
-                    "code": "exe_sandbox_unavailable"
-                  }
-                ]
+                "available": true,
+                "blockers": []
               },
               "zip": {
                 "available": true,
@@ -4832,12 +4942,8 @@
             },
             "links": {
               "exe": {
-                "available": false,
-                "blockers": [
-                  {
-                    "code": "exe_sandbox_unavailable"
-                  }
-                ]
+                "available": true,
+                "blockers": []
               },
               "zip": {
                 "available": true,
@@ -4921,12 +5027,8 @@
             },
             "links": {
               "exe": {
-                "available": false,
-                "blockers": [
-                  {
-                    "code": "exe_sandbox_unavailable"
-                  }
-                ]
+                "available": true,
+                "blockers": []
               },
               "zip": {
                 "available": true,

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { installInput, primaryActionBlockers, primaryInstallAction } from "../src/actions.ts";
-import { installationResult, installSummary, type InstallerOutcome, type ActionBlockerCode, type Patch, type PatchActions, type Transaction } from "@patchhub/ui";
+import { installInput, manualDownloadInput, manualDownloadRequestKey, primaryActionBlockers, primaryInstallAction } from "../src/actions.ts";
+import { installationResult, installSummary, type InstallerOutcome, type ActionBlockerCode, type Patch, type PatchActions, type SourceCandidate, type Transaction } from "@patchhub/ui";
 
 const availability = (available: boolean, blockers: { code: ActionBlockerCode; detail?: string }[] = []) => ({ available, blockers });
 const actions = (values: Partial<PatchActions> = {}): PatchActions => ({
@@ -34,13 +34,14 @@ test("automatic primary input is enabled only by automatic action and wins over 
   assert.equal(installInput(value, "C:/Downloads/patch.zip"), "C:/Downloads/patch.zip");
 });
 
-test("archive primary requires a selected path while automatic may be blocked", () => {
+test("optional archive never becomes primary when automatic download is unavailable", () => {
   const value = patch({ actions: actions({
     automatic: availability(false, [{ code: "artifact_requires_manual_download" }]), local_archive: availability(true),
-    primary: { operation: "overwrite", label: "install", input: "local_archive" },
+    primary: { operation: "overwrite", label: "install", input: "unavailable" },
   }) });
   assert.equal(primaryInstallAction(value, false).available, false);
-  assert.equal(primaryInstallAction(value, true).available, true);
+  assert.equal(primaryInstallAction(value, true).available, false);
+  assert.equal(primaryInstallAction(value, true, "local_archive").available, true);
   assert.equal(installInput(value), null);
   assert.equal(installInput(value, "C:/Downloads/local.zip"), "C:/Downloads/local.zip");
   assert.equal(installInput(value, "  "), null);
@@ -53,6 +54,19 @@ test("unavailable external overwrite keeps its label but remains disabled", () =
   assert.deepEqual(primaryInstallAction(value, true), { operation: "overwrite", label: "overwrite", input: "unavailable", available: false });
   assert.equal(installInput(value), null);
   assert.equal(installInput(null), null);
+});
+
+test("manual downloads bind the candidate and complete URL without requiring a filename extension", () => {
+  const candidate = { source_id: "publisher", candidate_id: "candidate-1" } as SourceCandidate;
+  for (const url of ["https://downloads.example.test/file.zip", "https://other.example.test/file.exe", "https://example.test/download?id=1", "http://example.test/download"]) {
+    const input = manualDownloadInput(candidate, ` ${url} `)!;
+    assert.deepEqual(input, { source_id: candidate.source_id, candidate_id: candidate.candidate_id, url });
+    assert.notEqual(manualDownloadRequestKey("game", input), manualDownloadRequestKey("other", input));
+    assert.notEqual(manualDownloadRequestKey("game", input), manualDownloadRequestKey("game", { ...input, url: `${url}#changed` }));
+    assert.notEqual(manualDownloadRequestKey("game", input), manualDownloadRequestKey("game", { ...input, candidate_id: "candidate-2" }));
+  }
+  for (const input of ["", "   ", "not a URL", "file:///tmp/p.zip", "javascript:alert(1)"]) assert.equal(manualDownloadInput(candidate, input), null);
+  assert.equal(manualDownloadInput(undefined, "https://example.test/download"), null);
 });
 
 test("blocker display follows the selected path and omits unrelated reinstall advice", () => {

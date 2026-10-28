@@ -113,16 +113,32 @@ test("install, reinstall and overwrite preserve request ID and optional archive"
   await tick();
   controller.clear();
   await controller.startInstall("game", "zip-release", null, "reinstall", "req-zip", "local.zip");
-  assert.deepEqual(calls[0], ["game", null, "exe-selection-1", null, "install", "req-exe"]);
-  assert.deepEqual(calls[1], ["game", "zip-release", null, "local.zip", "reinstall", "req-zip"]);
+  assert.deepEqual(calls[0], ["game", null, "exe-selection-1", null, "install", "req-exe", null]);
+  assert.deepEqual(calls[1], ["game", "zip-release", null, "local.zip", "reinstall", "req-zip", null]);
   await tick();
   controller.clear();
   await controller.startInstall("game", null, "zip-selection-1", "install", "req-dynamic-zip");
-  assert.deepEqual(calls[2], ["game", null, "zip-selection-1", null, "install", "req-dynamic-zip"]);
+  assert.deepEqual(calls[2], ["game", null, "zip-selection-1", null, "install", "req-dynamic-zip", null]);
   await tick();
   controller.clear();
   await controller.startInstall("game", null, "exe-selection-2", "overwrite", "req-overwrite");
-  assert.deepEqual(calls[3], ["game", null, "exe-selection-2", null, "overwrite", "req-overwrite"]);
+  assert.deepEqual(calls[3], ["game", null, "exe-selection-2", null, "overwrite", "req-overwrite", null]);
+  controller.dismount();
+});
+
+test("a manual URL uses the same foreground task with no release, selection or archive target", async () => {
+  const calls: unknown[][] = [];
+  const controller = createTaskController(api({
+    install: async (...args) => { calls.push(args); return { task_id: "manual-task" }; },
+    status: async () => ({ ...snapshot("failed"), task_id: "manual-task", error: "download_failed" }),
+  }));
+  const input = { source_id: "publisher", candidate_id: "candidate-1", url: "https://example.test/download?id=1" };
+  await controller.startInstall("game", null, null, "overwrite", "manual-request", "", input);
+  await tick();
+  assert.deepEqual(calls, [["game", null, null, null, "overwrite", "manual-request", input]]);
+  assert.equal(controller.getSnapshot()?.state, "failed");
+  assert.equal(controller.getSnapshot()?.error, "download_failed");
+  assert.equal(controller.claimTerminal(controller.getSnapshot()!), true);
   controller.dismount();
 });
 

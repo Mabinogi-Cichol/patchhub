@@ -5,6 +5,7 @@ import '../host/steam_artwork.dart';
 import '../presentation/game_artwork.dart';
 import '../presentation/game_status.dart';
 import '../presentation/desktop_toolbar.dart';
+import '../presentation/desktop_select.dart';
 import '../models/app_model.dart';
 import '../models/library.dart';
 import '../presentation/library_presentation.dart';
@@ -127,7 +128,7 @@ class _LibraryPageState extends State<LibraryPage> {
   void selectEntry(String key) => setState(() {
     if (selectedKey != key) mirror = null;
     selectedKey = key;
-    tab = 1;
+    tab = 0;
     selectionNotice = null;
   });
 
@@ -574,8 +575,7 @@ class _LibraryPageState extends State<LibraryPage> {
     Widget tabs(Widget management) => IndexedStack(
       index: tab,
       children: [
-        overview(row, entries),
-        management,
+        managementContent(row, management),
         RecordsPage(
           key: ValueKey('${row.id}:records'),
           model: widget.model,
@@ -702,21 +702,16 @@ class _LibraryPageState extends State<LibraryPage> {
                       segments: const [
                         ButtonSegment(
                           value: 0,
-                          icon: Icon(Icons.explore_outlined, size: 18),
-                          label: Text('概览'),
-                        ),
-                        ButtonSegment(
-                          value: 1,
                           icon: Icon(Icons.build_outlined, size: 18),
                           label: Text('补丁管理'),
                         ),
                         ButtonSegment(
-                          value: 2,
+                          value: 1,
                           icon: Icon(Icons.receipt_long_outlined, size: 18),
                           label: Text('操作记录'),
                         ),
                         ButtonSegment(
-                          value: 3,
+                          value: 2,
                           icon: Icon(Icons.bookmark_outline, size: 18),
                           label: Text('游戏订阅'),
                         ),
@@ -734,7 +729,7 @@ class _LibraryPageState extends State<LibraryPage> {
 
         Expanded(
           child: entry == null
-              ? tabs(const Center(child: Text('当前没有补丁条目，请查看游戏订阅并重新匹配')))
+              ? tabs(emptyManagement(row))
               : PatchManagementPage(
                   key: ValueKey(
                     '${row.id}:${entry.selectionKey}:${patch?['selection_id'] ?? patch?['release_id']}',
@@ -750,7 +745,7 @@ class _LibraryPageState extends State<LibraryPage> {
                     mirror = value;
                     selectionNotice = null;
                   }),
-                  onRecords: () => setState(() => tab = 2),
+                  onRecords: () => setState(() => tab = 1),
                   contentBuilder: tabs,
                 ),
         ),
@@ -758,99 +753,114 @@ class _LibraryPageState extends State<LibraryPage> {
     );
   }
 
-  Widget overview(GameRow row, List<DisplayEntry> entries) => ListView(
-    key: PageStorageKey('${row.id}:overview'),
+  Widget managementContent(GameRow row, Widget management) {
+    final running = widget.model.queryRunning(row);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
+          child: Wrap(
+            spacing: 16,
+            runSpacing: 8,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              SizedBox(
+                width: 210,
+                child: DesktopSelect(
+                  label: '偏好的补丁语言',
+                  value: widget.model.preferredLanguage ?? '',
+                  options: const [
+                    (value: '', label: '未指定语言'),
+                    (value: 'zh-CN', label: '简体中文'),
+                    (value: 'zh-TW', label: '繁体中文'),
+                    (value: 'en', label: '英文'),
+                    (value: 'ja', label: '日文'),
+                  ],
+                  onSelected: (value) => widget.model.setPreferredLanguage(
+                    value.isEmpty ? null : value,
+                  ),
+                ),
+              ),
+              OutlinedButton.icon(
+                onPressed: running ? null : () => widget.model.rematch(row),
+                icon: const Icon(Icons.refresh, size: 18),
+                label: const Text('重新匹配'),
+              ),
+              if (running)
+                const Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    ),
+                    SizedBox(width: 10),
+                    Text('正在查找补丁'),
+                  ],
+                ),
+            ],
+          ),
+        ),
+        if (widget.model.transactions.any(
+          (record) => record['instance_id'] == row.id && needsRecovery(record),
+        ))
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20),
+            child: Card(
+              child: ListTile(
+                leading: const Icon(Icons.info_outline),
+                title: const Text('此游戏存在未完成操作'),
+                trailing: TextButton(
+                  onPressed: () => setState(() => tab = 1),
+                  child: const Text('查看异常记录'),
+                ),
+              ),
+            ),
+          ),
+        Expanded(child: management),
+      ],
+    );
+  }
+
+  Widget emptyManagement(GameRow row) => ListView(
+    key: PageStorageKey('${row.id}:management-empty'),
     padding: const EdgeInsets.all(20),
     children: [
-      if (widget.model.transactions.any(
-        (record) => record['instance_id'] == row.id && needsRecovery(record),
-      ))
+      if (!widget.model.queryRunning(row))
         Card(
-          child: ListTile(
-            title: const Text('此游戏存在未完成操作'),
-            trailing: TextButton(
-              onPressed: () => setState(() => tab = 2),
-              child: const Text('查看异常记录'),
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              children: [
+                const Icon(Icons.search, size: 40),
+                const SizedBox(height: 12),
+                const Text('暂无补丁结果'),
+                TextButton(
+                  onPressed: () => setState(() => tab = 2),
+                  child: const Text('查看游戏订阅'),
+                ),
+              ],
             ),
           ),
         ),
-      for (final diagnostic in row.value['diagnostics'] as List)
-        SelectableText('${diagnostic['message']}'),
-      for (final diagnostic in row.discovery?['diagnostics'] as List? ?? [])
-        SelectableText(
-          '${diagnostic['code']}${diagnostic['detail'] == null ? '' : '：${diagnostic['detail']}'}',
-        ),
-      if (entries.where((entry) => entry.installable).isNotEmpty)
-        Text('可安装补丁', style: Theme.of(context).textTheme.titleMedium),
-      for (final entry in entries.where((entry) => entry.installable))
-        entryCard(row, entry),
-      if (entries.where((entry) => !entry.installable).isNotEmpty) ...[
-        const SizedBox(height: 16),
-        Text('待核对的来源', style: Theme.of(context).textTheme.titleMedium),
-        for (final entry in entries.where((entry) => !entry.installable))
-          entryCard(row, entry),
-      ],
-      if (entries.isEmpty) ...[
-        const Text('已启用来源中未找到补丁；这不代表游戏无需补丁。'),
-        Wrap(
-          spacing: 12,
-          children: [
-            OutlinedButton(
-              onPressed: () => widget.model.rematch(row),
-              child: const Text('重新匹配'),
-            ),
-            TextButton(
-              onPressed: () => setState(() => tab = 3),
-              child: const Text('查看游戏订阅'),
-            ),
-          ],
-        ),
-      ],
-      ExpansionTile(
-        key: PageStorageKey('${row.id}:game-info'),
-        title: const Text('游戏信息'),
-        children: [
-          Padding(
-            padding: const EdgeInsets.all(16),
-            child: SelectableText(
-              'AppID：${row.game['appid']}\nbuild：${row.game['buildid'] ?? '未知'}\n安装路径：${row.game['install_path']}\n库位置：${row.game['library_path']}',
-              key: const PageStorageKey('game-info-text'),
-            ),
+      Card(
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('游戏信息', style: Theme.of(context).textTheme.titleMedium),
+              const SizedBox(height: 12),
+              SelectableText(
+                'AppID：${row.game['appid']}\n游戏 Build：${row.game['buildid'] ?? '未知'}\n安装路径：${row.game['install_path']}\n库位置：${row.game['library_path']}',
+                key: const PageStorageKey('empty-game-info-text'),
+              ),
+            ],
           ),
-        ],
+        ),
       ),
     ],
   );
-
-  Widget entryCard(GameRow row, DisplayEntry entry) {
-    final candidate =
-        entry.candidate ??
-        ((row.discovery?['candidates'] as List?) ?? [])
-            .cast<Map<String, dynamic>>()
-            .where(
-              (candidate) =>
-                  candidate['candidate_id'] == entry.patch?['candidate_id'],
-            )
-            .firstOrNull;
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(entry.title, style: Theme.of(context).textTheme.titleMedium),
-            Text(
-              '${sourceName((entry.patch?['source_id'] ?? candidate?['source_id']) as String?, widget.model.sources)} · '
-              '${languageLabel(candidate?['languages'] as List?)} · ${formatLabel(candidate, entry.patch)}',
-            ),
-            Text(candidateConditions(candidate)),
-            TextButton(
-              onPressed: () => selectEntry(entry.selectionKey),
-              child: Text(entry.installable ? '查看并安装' : '查看条件与来源'),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
 }

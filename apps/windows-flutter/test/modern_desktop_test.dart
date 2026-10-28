@@ -31,7 +31,7 @@ void main() {
       final expected = switch (scenario) {
         'installed' => '已安装补丁',
         'confirmation' => '可安装补丁',
-        'archive' => '需要本地 ZIP',
+        'archive' => '暂不可安装',
         _ => '暂不可安装',
       };
       switch (scenario) {
@@ -40,7 +40,8 @@ void main() {
         case 'confirmation':
           patch['compatibility'] = 'manual_selection_required';
         case 'archive':
-          patch['actions']['primary']['input'] = 'local_archive';
+          patch['actions']['primary']['input'] = 'unavailable';
+          patch['actions']['automatic']['available'] = false;
         case 'blocked':
           patch['actions']['automatic']['available'] = false;
         case 'installed_blocked':

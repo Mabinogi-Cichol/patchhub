@@ -15,27 +15,13 @@ fn unhex(s: &str) -> Vec<u8> {
         .collect()
 }
 fn new_runtime(root: &std::path::Path) -> WorkerRuntime {
-    #[cfg(target_os = "linux")]
-    let run_as = if patchhub_installer_worker::linux::euid() == 0 {
-        Some((1000, 1000))
-    } else {
-        None
-    };
-    #[cfg(not(target_os = "linux"))]
-    let run_as = None;
-    WorkerRuntime::new(
-        PathBuf::from(env!("CARGO_BIN_EXE_patchhub-worker")),
-        root,
-        run_as,
-    )
-    .unwrap()
+    let _ = root;
+    WorkerRuntime::new(PathBuf::from(env!("CARGO_BIN_EXE_patchhub-worker"))).unwrap()
 }
 #[test]
-fn production_probe_and_all_synthetic_behavior_extractions() {
+fn production_analyzes_and_streams_all_synthetic_behavior_extractions() {
     let stage = tempfile::tempdir().unwrap();
     let runtime = new_runtime(stage.path());
-    let availability = runtime.probe();
-    assert!(availability.available, "{}", availability.reason);
     assert_eq!(fs::read_dir(stage.path()).unwrap().count(), 0);
     for case in cases() {
         let input = tempfile::tempdir().unwrap();
@@ -95,7 +81,7 @@ fn production_probe_and_all_synthetic_behavior_extractions() {
         assert_eq!(
             fs::read_dir(stage.path()).unwrap().count(),
             0,
-            "no staging/profile residue"
+            "direct parser creates no staging copies"
         );
     }
 }
@@ -138,7 +124,7 @@ fn production_rejects_binding_paths_and_precancel_without_output() {
     for (raw, stage_name) in [
         (
             json!({"action":"analyze","exe_size":1,"exe_sha256":"0".repeat(64)}),
-            "input",
+            "worker",
         ),
         (
             json!({"action":"analyze","exe_size":1,"exe_sha256":"0".repeat(64),"path":"C:/game"}),
@@ -162,17 +148,72 @@ fn production_rejects_binding_paths_and_precancel_without_output() {
     assert_eq!(fs::read_dir(stage.path()).unwrap().count(), 0);
 }
 #[test]
-fn production_missing_runtime_fails_closed() {
-    let stage = tempfile::tempdir().unwrap();
-    assert!(WorkerRuntime::new(stage.path().join("missing-worker"), stage.path(), None).is_err());
-    assert!(WorkerRuntime::new("relative-worker", stage.path(), None).is_err());
-    #[cfg(target_os = "linux")]
-    if patchhub_installer_worker::linux::euid() == 0 {
-        assert!(WorkerRuntime::new(
-            PathBuf::from(env!("CARGO_BIN_EXE_patchhub-worker")),
-            stage.path(),
-            None
+fn production_missing_worker_reports_actual_spawn_error() {
+    let root = tempfile::tempdir().unwrap();
+    let runtime = WorkerRuntime::new(root.path().join("missing-worker")).unwrap();
+    let archive = root.path().join("input.exe");
+    fs::write(&archive, b"x").unwrap();
+    let raw = json!({"action":"analyze","exe_size":1,"exe_sha256":"0".repeat(64)});
+    let error = runtime
+        .execute(
+            &archive,
+            &serde_json::to_vec(&raw).unwrap(),
+            &AtomicBool::new(false),
         )
-        .is_err());
-    }
+        .unwrap_err();
+    assert_eq!(error.stage, "spawn");
+    assert!(error.code.is_some());
+    assert!(WorkerRuntime::new("relative-worker").is_err());
+}
+
+#[test]
+fn production_parser_error_is_reported_without_executing_the_input() {
+    use sha2::{Digest, Sha256};
+    let root = tempfile::tempdir().unwrap();
+    let runtime = new_runtime(root.path());
+    let archive = root.path().join("not a program 中文.exe");
+    fs::write(&archive, b"not an executable").unwrap();
+    let raw = json!({"action":"analyze","exe_size":17,"exe_sha256":format!("{:x}", Sha256::digest(b"not an executable"))});
+    let error = runtime
+        .execute(
+            &archive,
+            &serde_json::to_vec(&raw).unwrap(),
+            &AtomicBool::new(false),
+        )
+        .unwrap_err();
+    assert_eq!(error.stage, "worker");
+    assert_eq!(error.message, "not_pe");
+}
+
+#[test]
+fn production_stream_consumer_error_preserves_the_error() {
+    let root = tempfile::tempdir().unwrap();
+    let runtime = new_runtime(root.path());
+    let case = &cases()[0];
+    let archive = root.path().join("archive.exe");
+    fs::write(&archive, unhex(case["data_hex"].as_str().unwrap())).unwrap();
+    let sha = case["descriptor"]["exe_sha256"].as_str().unwrap();
+    let size = case["descriptor"]["exe_size"].as_u64().unwrap();
+    let cancel = AtomicBool::new(false);
+    let session = runtime.open_session(&archive, sha, size, &cancel).unwrap();
+    let members: Vec<_> = case["report"]["files"].as_array().unwrap().iter().map(|f| json!({
+        "path":f["destination"],"size":f["unpacked_size"],"crc32":f["crc32"],
+        "payload_offset":f["payload_offset"],"packed_size":f["packed_size"],"compressed":f["compressed"]
+    })).collect();
+    let raw =
+        json!({"action":"extract_behavior","exe_sha256":sha,"exe_size":size,"payload":members});
+    let error = session
+        .extract(&serde_json::to_vec(&raw).unwrap(), &cancel, &mut |_| {
+            Err(patchhub_installer_worker::WorkerError::new(
+                "destination",
+                None,
+                "write failed",
+            ))
+        })
+        .unwrap_err();
+    assert_eq!(error.stage, "destination");
+    assert_eq!(error.message, "write failed");
+    // The subprocess has exited and released its input before returning.
+    drop(session);
+    fs::remove_file(archive).unwrap();
 }

@@ -58,7 +58,7 @@ pub fn invalid(code: impl Into<String>) -> std::io::Error {
     std::io::Error::new(std::io::ErrorKind::InvalidData, code.into())
 }
 
-pub use patchhub_installer_worker::production::{SandboxAvailability, WorkerRuntime};
+pub use patchhub_installer_worker::production::WorkerRuntime;
 
 /// The trusted Linux host must launch the whole core under its chosen non-root user.
 pub fn host_identity_blocker() -> Option<&'static str> {

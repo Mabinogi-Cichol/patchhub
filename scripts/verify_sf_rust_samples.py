@@ -1,4 +1,4 @@
-"""Offline Rust/Python parity through the production LPAC/bwrap session.
+"""Offline Rust/Python parity through the production direct parser session.
 
 Analyze metadata, then compare each streamed payload byte, CRC and SHA against
 Python's independent decoder. No installer code or game directory is executed.
@@ -67,7 +67,7 @@ def main():
     parser.add_argument('--appid', action='append')
     parser.add_argument('--sample', action='append', default=[], metavar='APPID=PATH')
     args = parser.parse_args()
-    runner = ROOT / ('target/release/examples/sf_sandbox_check.exe' if args.platform == 'windows' else 'target/linux/release/examples/sf_sandbox_check')
+    runner = ROOT / ('target/release/examples/sf_worker_check.exe' if args.platform == 'windows' else 'target/linux/release/examples/sf_worker_check')
     worker = runner.parent.parent / ('patchhub-worker.exe' if args.platform == 'windows' else 'patchhub-worker')
     run = f'{args.platform}-{time.time_ns()}'
     P2.mkdir(parents=True, exist_ok=True)

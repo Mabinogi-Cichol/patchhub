@@ -265,7 +265,7 @@
     ],
     "matched": false,
     "attention": false,
-    "summary": "尚未匹配，请重新匹配",
+    "summary": "找到补丁来源",
     "filters": {
       "matched": [],
       "all": [
@@ -389,7 +389,7 @@
     "entries": [],
     "matched": false,
     "attention": false,
-    "summary": "已启用来源中未找到补丁",
+    "summary": "暂无补丁结果",
     "filters": {
       "matched": [],
       "all": [

@@ -20,8 +20,8 @@
 .PREREQUISITES
   - Real SF/generic-EXE samples under .artifacts\generic-exe-local (appids
     2303800, 3606360, 3721970 as *-archive.exe); the ignored tests read them.
-  - The RELEASE worker is mandatory: a debug worker cannot finish the ~1.2 GiB
-    conversion within the 300s CPU sandbox limit.
+  - Use the RELEASE worker for parity with the packaged parser and realistic
+    throughput on the ~1.2 GiB samples.
 
 .NOTES
   Usage: pwsh -NoProfile -File scripts\run-windows-check.ps1 [-Clippy]

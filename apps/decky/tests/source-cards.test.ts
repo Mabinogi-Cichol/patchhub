@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { sourceCardSummary, type SourceTaskSnapshot } from "../src/source-tasks.ts";
+import { sourceCardSummary, sourceTaskTargets, sourceTaskTerminal, type SourceTaskSnapshot } from "../src/source-tasks.ts";
 
 const updating: SourceTaskSnapshot = {
   task_id: "update-1", kind: "update_source", key: "patchmoe", state: "running", instances: [], appid: null,
@@ -22,4 +22,14 @@ test("finished tasks use the source's latest attempt and keep fallback wording d
     { text: "最近补查失败", warning: true });
   assert.equal(sourceCardSummary({ role: "publisher", status: "source_refreshed" }, { ...updating, state: "completed" }), null);
   assert.equal(sourceCardSummary({ role: "publisher", status: null }), null);
+});
+
+test("game progress follows real task ownership including all-game matches and source backfill", () => {
+  const task = { ...updating, kind: "match_games" as const };
+  assert.equal(sourceTaskTargets(task, "game", 1), true);
+  assert.equal(sourceTaskTargets({ ...task, instances: ["other"] }, "game", 1), false);
+  assert.equal(sourceTaskTargets({ ...task, instances: ["game"] }, "game", 1), true);
+  assert.equal(sourceTaskTargets(updating, "game", 1), false);
+  assert.equal(sourceTaskTargets({ ...updating, matches: { "1": { appid: 1, instance_id: "game", status: "incomplete", candidates: [], diagnostics: [] } } }, "game", 1), true);
+  for (const state of ["completed", "failed", "cancelled"] as const) assert.equal(sourceTaskTerminal(state), true);
 });

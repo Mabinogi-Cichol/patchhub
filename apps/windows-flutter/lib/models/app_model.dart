@@ -45,6 +45,59 @@ class AppModel extends ChangeNotifier {
   Timer? _scheduler;
   final _watched = <CoreTask>{};
 
+  bool queryRunning(GameRow row) => tasks.sources.values.any((task) {
+    if (!task.running) return false;
+    return switch (task.method) {
+      'match_games' =>
+        (task.arguments['instances'] as List? ?? []).isEmpty ||
+            (task.arguments['instances'] as List).contains(row.id),
+      'rematch_game' =>
+        task.arguments['instance_id'] == row.id ||
+            task.arguments['appid'] == row.game['appid'],
+      'update_source' => (row.value['sources'] as List? ?? []).any(
+        (source) =>
+            source['id'] == task.arguments['source_id'] &&
+            source['enabled'] == true &&
+            source['subscribed'] != false,
+      ),
+      _ => false,
+    };
+  });
+
+  GameRow _queryResult(GameRow previous, GameRow incoming) {
+    final status = incoming.discovery?['status'];
+    if (status != 'failed' && status != 'incomplete') return incoming;
+    final candidates = incoming.discovery?['candidates'] as List? ?? [];
+    final oldCandidates = previous.discovery?['candidates'] as List? ?? [];
+    final sources = incoming.value['sources'] as List?;
+    bool sourceActive(Map<String, dynamic> entry) =>
+        sources == null ||
+        sources.any(
+          (source) =>
+              source['id'] == entry['source_id'] &&
+              source['enabled'] == true &&
+              source['subscribed'] == true,
+        );
+    final oldPatches = previous.patches
+        .where((patch) => patch['source_id'] != null && sourceActive(patch))
+        .toList();
+    final retainedCandidates = oldCandidates
+        .cast<Map<String, dynamic>>()
+        .where(sourceActive)
+        .toList();
+    return GameRow({
+      ...incoming.value,
+      if (incoming.patches.isEmpty && oldPatches.isNotEmpty)
+        'patches': oldPatches,
+      if (incoming.discovery != null)
+        'discovery': {
+          ...incoming.discovery!,
+          if (candidates.isEmpty && retainedCandidates.isNotEmpty)
+            'candidates': retainedCandidates,
+        },
+    });
+  }
+
   Future<void> initialize() async {
     if (_initialized) return;
     _initialized = true;
@@ -100,7 +153,18 @@ class AppModel extends ChangeNotifier {
     try {
       final value = await client.call('scan') as Map<String, dynamic>;
       if (tasks.closing) return false;
-      snapshot = ScanSnapshot(value);
+      final previous = snapshot;
+      final next = ScanSnapshot(value);
+      if (previous != null) {
+        for (var index = 0; index < next.rows.length; index++) {
+          final row = next.rows[index];
+          final old = previous.rows
+              .where((item) => item.id == row.id)
+              .firstOrNull;
+          if (old != null) next.rows[index] = _queryResult(old, row);
+        }
+      }
+      snapshot = next;
       stateRefreshError = null;
       settingsRevision = value['settings_revision'] as int?;
       notifyListeners();
@@ -196,7 +260,9 @@ class AppModel extends ChangeNotifier {
     for (final row in rows) {
       final index =
           snapshot?.rows.indexWhere((item) => item.id == row.id) ?? -1;
-      if (index >= 0) snapshot!.rows[index] = row;
+      if (index >= 0) {
+        snapshot!.rows[index] = _queryResult(snapshot!.rows[index], row);
+      }
     }
     stateRefreshError = null;
     notifyListeners();
@@ -214,14 +280,17 @@ class AppModel extends ChangeNotifier {
               row.game['appid'] == event['appid']) {
             touched.add(row.id);
             final index = snapshot!.rows.indexOf(row);
-            snapshot!.rows[index] = GameRow({
-              ...row.value,
-              'discovery': {
-                'status': event['status'],
-                'candidates': event['candidates'],
-                'diagnostics': event['diagnostics'],
-              },
-            });
+            snapshot!.rows[index] = _queryResult(
+              row,
+              GameRow({
+                ...row.value,
+                'discovery': {
+                  'status': event['status'],
+                  'candidates': event['candidates'],
+                  'diagnostics': event['diagnostics'],
+                },
+              }),
+            );
           }
         }
       }
@@ -229,6 +298,8 @@ class AppModel extends ChangeNotifier {
     });
     task.done.then((_) async {
       try {
+        if (task.error != null) debugPrint('来源查询：${task.error}');
+        if (task.diagnostics.isNotEmpty) debugPrint(task.diagnostics);
         if (task.result case final Map result) {
           settingsRevision =
               result['settings_revision'] as int? ?? settingsRevision;
@@ -246,10 +317,7 @@ class AppModel extends ChangeNotifier {
         await project(touched);
         await loadSources();
       } catch (failure) {
-        stateRefreshError = CoreError(
-          'state_refresh_failed',
-          '来源任务已结束，安装能力刷新失败：$failure',
-        );
+        debugPrint('来源任务结束后的状态刷新失败：$failure');
       } finally {
         _watched.remove(task);
         notifyListeners();
