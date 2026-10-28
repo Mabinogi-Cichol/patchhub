@@ -181,6 +181,7 @@ class _PatchManagementPageState extends State<PatchManagementPage> {
         task: task,
         game: widget.row.name,
         patch: widget.entry.title,
+        artwork: widget.artwork,
       );
       if (mounted) {
         if (action == 'records') {

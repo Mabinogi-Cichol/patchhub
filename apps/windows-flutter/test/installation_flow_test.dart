@@ -251,6 +251,7 @@ void main() {
     task.progress = {
       ...task.progress!,
       'stage': 'downloading',
+      'substage': null,
       'bytes_done': 4000000,
       'total_bytes': 8000000,
     };
@@ -292,6 +293,49 @@ void main() {
     );
     expect(find.text('下载速度：1.5 MB/s'), findsOneWidget);
     expect(find.text('4.0 MB / 8.0 MB'), findsOneWidget);
+    expect(find.text('50%'), findsOneWidget);
+    expect(find.text('补丁：测试补丁'), findsOneWidget);
+    expect(find.text('下载完成后将继续校验与安装'), findsOneWidget);
+    expect(find.textContaining('个文件'), findsNothing);
+
+    Future<void> rebuild() => tester.pumpWidget(
+      PatchHubApp(
+        home: Scaffold(
+          body: InstallDialog(
+            model: model,
+            task: task,
+            game: '测试游戏',
+            patch: '测试补丁',
+          ),
+        ),
+      ),
+    );
+    // A download with an unknown byte total must not use unrelated file totals.
+    task.progress = {...task.progress!, 'total_bytes': null, 'total_files': 10};
+    await rebuild();
+    expect(
+      tester
+          .widget<LinearProgressIndicator>(find.byType(LinearProgressIndicator))
+          .value,
+      isNull,
+    );
+    expect(find.text('50%'), findsNothing);
+    expect(find.text('已处理 4.0 MB'), findsOneWidget);
+
+    task.progress = {
+      ...task.progress!,
+      'stage': 'applying',
+      'substage': 'writing',
+      'bytes_done': 0,
+      'files_done': 3,
+      'total_files': 10,
+      'current_file': '游戏目录/补丁文件.dat',
+    };
+    await rebuild();
+    expect(find.text('30%'), findsOneWidget);
+    expect(find.text('3 / 10 个文件'), findsOneWidget);
+    expect(find.text('游戏目录/补丁文件.dat'), findsOneWidget);
+    expect(find.textContaining('下载速度：'), findsNothing);
     await tester.runAsync(() async {
       await task.cancel();
       await task.done;
@@ -301,4 +345,27 @@ void main() {
     await tester.pumpWidget(const SizedBox.shrink());
     model.dispose();
   });
+
+  testWidgets(
+    'header close waits for cancellation receipt and then closes result',
+    (tester) async {
+      final model = InstallFixtureModel('cancel_wait');
+      await mountPatch(tester, model, FixtureDesktop());
+      await tester.runAsync(() => tester.tap(find.text('安装补丁')));
+      await tester.pump();
+      final task = model.tasks.installation!;
+      await tester.runAsync(() => tester.tap(find.byTooltip('取消安装')));
+      expect(task.cancelRequested, isTrue);
+      expect(find.byType(InstallDialog), findsOneWidget);
+      await tester.runAsync(() => task.done);
+      await tester.pumpAndSettle();
+      expect(find.text('已取消安装'), findsOneWidget);
+      expect(task.diagnostics, contains('cancel_count=1'));
+      await tester.tap(find.byTooltip('关闭结果'));
+      await tester.pumpAndSettle();
+      expect(find.byType(InstallDialog), findsNothing);
+      await tester.pumpWidget(const SizedBox.shrink());
+      model.dispose();
+    },
+  );
 }
