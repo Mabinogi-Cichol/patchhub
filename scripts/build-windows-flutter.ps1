@@ -44,8 +44,8 @@ Push-Location $taskApp
 try {
     Invoke-Checked $Flutter @('pub','get','--enforce-lockfile')
     if (-not $Preview) {
-        Invoke-Checked $Flutter @('analyze')
-        Invoke-Checked $Flutter @('test')
+        Invoke-Checked $Flutter @('analyze','--no-pub')
+        Invoke-Checked $Flutter @('test','--no-pub')
     }
     # Flutter 3.47.7 can reuse a font subset after app.dill changes because the
     # Windows asset target does not list app.dill as an input. Rebuild assets so
@@ -55,7 +55,7 @@ try {
         Get-ChildItem -LiteralPath $taskFlutterCache -Filter 'release_bundle_windows-x64_assets.stamp' -File -Recurse |
             Remove-Item -Force
     }
-    Invoke-Checked $Flutter @('build','windows','--release')
+    Invoke-Checked $Flutter @('build','windows','--release','--no-pub')
     if (-not $Preview) {
         $taskDeps = & $Flutter pub deps --json
         if ($LASTEXITCODE -ne 0) { throw 'Unable to collect Flutter dependencies' }

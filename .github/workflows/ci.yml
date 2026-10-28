@@ -36,10 +36,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.94.0
         with:
           components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: cargo run --locked -p patchhub-contract-gen -- check
+      - if: runner.os == 'Linux'
+        run: cargo run --locked -p patchhub-contract-gen -- check
       - run: cargo test --locked -p patchhub-protocol
       - run: cargo fmt --all -- --check
       - run: cargo clippy -p patchhub-core -p patchhub-cli -p patchhub-protocol -p patchhub-contract-gen --all-targets --locked -- -D warnings
@@ -55,6 +57,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.94.0
+      - uses: Swatinem/rust-cache@v2
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
@@ -67,7 +70,6 @@ jobs:
       - run: python -m unittest discover -s scripts -p test_flutter_sbom.py -v
       - run: python -m unittest discover -s scripts -p test_windows_update.py -v
       - run: python -m unittest discover -s scripts -p test_windows_single_instance.py -v
-      - run: cargo run --locked -p patchhub-contract-gen -- check
       - run: npm ci
       - run: npm run test:contracts
       - run: cargo build --release --locked -p patchhub-cli -p patchhub-installer-worker --bin patchhub-core --bin patchhub-worker
@@ -81,7 +83,6 @@ jobs:
       - run: cargo metadata --locked --format-version 1 > .artifacts/cargo-metadata.json
       - run: python scripts/build-sbom.py .artifacts/cargo-metadata.json --flutter-deps .artifacts/windows-flutter/pub-deps.json --flutter-version .artifacts/windows-flutter/flutter-version.json
       - run: python scripts/package-artifacts.py --platform windows
-      - run: choco install nsis --yes --no-progress
       - run: ./scripts/build-windows-installer.ps1 -Makensis 'C:/Program Files (x86)/NSIS/makensis.exe'
       - run: git diff --exit-code -- Cargo.lock package-lock.json packages/contracts/generated packages/contracts/fixtures apps/windows-flutter/pubspec.lock apps/windows-flutter/assets/protocol-v5.schema.json
       - uses: actions/upload-artifact@v4
@@ -164,6 +165,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.94.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: . -> target/linux
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
@@ -175,7 +179,6 @@ jobs:
       - run: python -m unittest discover -s scripts -p test_build_sbom.py -v
       - run: python -m unittest discover -s scripts -p test_install_decky.py -v
       - run: python -m unittest discover -s scripts -p test_decky_bootstrap.py -v
-      - run: cargo run --locked -p patchhub-contract-gen -- check
       - run: npm ci
       - run: npm run test:contracts
       - run: npm run typecheck

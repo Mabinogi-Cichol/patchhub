@@ -28,6 +28,8 @@ class SelectionTests(unittest.TestCase):
             ("install.sh", ("decky",)),
             ("scripts/test-install-decky-bridge.mjs", ("decky",)),
             ("crates/core/src/lib.rs", JOBS),
+            ("crates/contract-gen/src/main.rs", JOBS),
+            ("crates/protocol/src/fixtures.rs", JOBS),
             ("crates/installer-worker/src/main.rs", JOBS),
             ("packages/contracts/fixtures/v5/cases.json", JOBS),
             ("catalog/trust-keys.json", JOBS),
