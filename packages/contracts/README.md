@@ -6,6 +6,8 @@
 
 生成：`cargo run --locked -p patchhub-contract-gen -- generate`；检查：`cargo run --locked -p patchhub-contract-gen -- check`。生成器不打入插件，core 不依赖 wire 协议。
 
+当前仍使用 v5 信封；`projection_version=2`、`request_validation_version=2`，其余契约版本为 1。`scan.steam_languages` 按规范化 Steam 根路径返回界面语言，供游戏图片与名称共享语言依据；它不依赖某款游戏是否具有本地化名称。补丁匹配不再接受语言偏好，安装不再读取或比较 appmanifest 语言，补丁来源语言元数据和内容身份继续保留。
+
 ## 传输与信封
 
 - stdin/stdout **单行 JSON-lines**，一行一个对象；单行错误不终止后续请求。包含行末一个 LF，不设固定整行大小上限。
@@ -35,8 +37,8 @@
 - `project_instances {instance_ids: string[]}` → `{settings_revision: number|null, instances: InstanceProjection[]}`（只投影请求的实例，缺失实例 `instance_not_found`）。
 - `set_source_update_interval {source_id, interval_hours}`（`0`=关闭）→ `{settings_revision, source_id, interval_hours}`。
 - `update_source {source_id, force?}`（仅 `serve-task`）→ `SourceUpdateResult{source_id, settings_revision, status: SourceStatus, revision, complete, affected_appids}`。
-- `match_games {instances?, name_hints?, preferred_language?, force_details?}`（仅 `serve-task`；instances 缺省=当前库全部 installed）→ `{settings_revision, source_revisions, results: GameMatch[]}`。
-- `rematch_game {instance_id?|appid?, name_hints?, preferred_language?}`（仅 `serve-task`，二者至少一个）→ 同上；未安装游戏可用 appid+空名。
+- `match_games {instances?, name_hints?, force_details?}`（仅 `serve-task`；instances 缺省=当前库全部 installed）→ `{settings_revision, source_revisions, results: GameMatch[]}`。
+- `rematch_game {instance_id?|appid?, name_hints?}`（仅 `serve-task`，二者至少一个）→ 同上；未安装游戏可用 appid+空名。
 - `GameMatch{appid, instance_id?, status, candidates, diagnostics, source_revisions}`，status 六态：`pending|publisher_match|fallback_match|no_match|incomplete|failed`。
 - `list_sources` 的 `SourceSummary` 新增 `revision`、`complete`、`interval_hours`、`next_due_at?`；到期时间只由 `checked_at + interval_hours*3600` 派生，不单独持久化。
 

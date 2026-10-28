@@ -116,3 +116,69 @@
 - 预览版本修复独立提交为 `118ba12`；构建文档另行归档，不混入功能代码提交。
 - 功能设计、施工记录、审阅和相关文档引用单独提交；提交前核对已有验证证据、文件清单、工作区与暂存区空白检查，沿用上文验证结果，不重复执行产品测试。
 - 只创建本地提交，未合并 main、推送、发布或操作设备；真实游戏安装和 Steam Deck 实机验收仍待执行。
+
+## 2026-10-28：补丁语种选择盘点与移除方案
+
+- 状态：调研与方案完成，**待实现、待验证**。专项方案见[补丁语种选择盘点与移除计划](language-selection-removal-plan.md)，所属[设计](design.md)。
+- 从干净 `main`（`cd71c21`）创建 `fix/remove-patch-language-selection`，本轮只编写计划文档。
+- 静态盘点确认 3 处可操作控件（Windows 2、Decky 1），以及状态、排序、RPC / CLI、宿主桥接、查询上下文、两种生产缓存摘要和无生产调用的旧兜底函数。
+- 将来源多语言采集、6 处内部简中优先、安装语言事实 / 门禁、补丁语言元数据和 Steam 本地化展示单列，推荐保留，明确扩大删除范围的影响。
+- 沿真实调用核实：当前 `decide_fallback` 不使用旧 `needs_fallback`；HGamer 固定搜索路径不随用户偏好改变；偏好不是安装请求的语言参数。
+- 已按 overengineering-review 审阅方案，采用直接删链路和旧摘要自然失效，不增加兼容开关、配置迁移或整库清理。
+- 本轮验证仅为源码调用检索、文档链接目标和 diff 空白检查；未执行产品测试、构建、原生 UI 或 Steam Deck 验收。P1–P5 全部待执行，未提交 Git、合并、推送或发布。
+
+### 用户补充：安装语言事实与校验也删除
+
+- 用户在了解“安装语言事实与校验：3 条入口”的用途后明确要求“这个也删除”。原先建议保留该项已被本次决定替代；[专项计划](language-selection-removal-plan.md) 增加 P1b，状态仍为待实现。
+- 删除范围包括 ZIP / EXE / signed 的语言预期、事实类型 / 成员、Steam 游戏语言读取、比较和兜底、`exe_language_mismatch` 分支 / 文案及专属测试；不采用固定关闭开关或始终通过的空壳事实。
+- 补充核实 EXE 主编排没有整体事实有效性门禁，实际以文件条件选择 payload；计划区分语言失败事实与实际阻断，仍清理无用途的语言收集逻辑。
+- 补丁来源语言仍用于展示与内容身份。ZIP mapping_identity / EXE content_id 使用所选补丁语言，不依赖 GameFacts.language，因此本轮不改内容身份算法或安装记录格式。保留版本、DLC、基线和真实文件条件。
+- 同步修订验收矩阵：覆盖三条入口的语言不符、缺失和配置冲突不再触发语言拒绝，以及非语言校验 / 旧安装记录仍有效；以上均待执行。
+- 本次只更新计划、设计和索引；文档链接与 diff 空白检查通过，未修改功能代码或运行产品测试。
+
+### 用户澄清：游戏信息跟随 Steam 语言
+
+- 用户明确“跟随 Steam”指游戏名、游戏封面等信息，不是修改 Flutter 应用界面 locale。专项计划第 13 类与 P2b 已按此修订，保持待实现 / 待验证。
+- 游戏名已使用 Steam 界面语言解析；Decky 已使用 Steam display_name / 图标 API，沿用现有路径。Windows SteamArtworkStore 仍固定优先并限定匹配 `_schinese`，需要改为按当前 Steam 界面语言选默认缓存图，保留自定义图优先及默认图片回退。
+- 游戏名的 name_language 可能因翻译缺失而为空，不能将其作为图片语言的唯一来源；计划要求传入图片所属 Steam 根的界面语言，刷新时同步清理语言 / 图片缓存，不新增后台监听或下载。
+- appmanifest 安装语言事实的删除与 Steam 界面语言读取分开；补丁语言元数据和内容身份仍保持原语义。
+- 本次只修改文档；相对链接与空白检查通过，未修改代码或执行产品验收。
+
+## 2026-10-29：语种流程移除与 Steam 游戏信息语言实施
+
+状态：P1 / P1b / P2 / P2b / P3 / P4 已实施并完成相关自动化；P5 候选构建与协议冒烟通过，原生界面启动未完成、真实游戏 / Steam Deck 验收待执行。专项[设计与移除计划](language-selection-removal-plan.md)及所属[设计](design.md)已同步；分支 `fix/remove-patch-language-selection`，基线 `cd71c21`，未提交、合并、推送或发布。
+
+### 实际变更
+
+- Windows 两处及 Decky 一处语言选择控件、会话状态、候选排序权重全部删除；名称提示、来源开关、查询 / 取消和补丁 / 下载项选择保留。
+- `preferred_language` 从两个协议 Params、CLI、Rust 匹配调用链、Flutter 与 Decky / Python 宿主移除；同步前移 Decky forceDetails，删除专属语言格式校验、旧 needs_fallback 及其测试。
+- 匹配 input_key / fallback_query_key 不再含偏好。旧摘要自然失效，沿原路径重算；持久回归覆盖旧值 null / zh-CN，以及仅兜底摘要过期，证明重算后稳定复用且索引未清除。
+- 删除 LanguageFacts、GameFacts.language、FactsExpectation 的语言 / 开关、current_language、映射 / 比较和兜底、exe_language_mismatch 分支及文案。ZIP、EXE、signed 全部接入无语言事实的预期；版本、DLC、身份、基线及实际文件条件保留。调整混合测试，删除旧专属断言，新增实际 ZIP / signed 安装与 EXE 共用事实路径回归。
+- `scan.steam_languages` 返回规范化 Steam 根到界面语言的映射，与游戏名共享 Rust 已有 config / 同根注册表读取结果。Windows 图片按所属根的 Steam 语言选取缓存图，无对应图时取默认图；保留自定义图优先，沿原刷新失效图片缓存；name_language 为空也不丢失选图语言。
+- v5 信封保留，projection_version / request_validation_version 改为 2，其余契约版本为 1；Rust 生成的 TS / Python / schema / cases、Flutter 内置 schema 和宿主能力检查同步更新。
+- 补丁语言元数据、简中代表行策略及 candidate / selection / content 身份算法保留；应用界面 locale 与中文文案保持原范围，清理安装错误中已不适用的“检查游戏语言”建议。
+
+### 验证与证据
+
+- Flutter 静态分析无问题；完整回归 **246 项通过、1 项原有跳过**。随后新增同根语言接线断言，图片定向 **6/6** 通过，覆盖英 / 日 / 简中、缺少名称翻译、默认图、自定义图、刷新和 Windows 规范化根路径。日志 `.artifacts/language-removal/flutter-analyze.log`、`flutter-tests.log`、`artwork-tests.log`。
+- Decky 前端 **80/80**、typecheck、Rollup build 通过；Python 后端 **111 项运行、3 项原有跳过，其余通过**。共享 UI 契约与 Flutter 展示夹具一致性通过；日志 `python-tests.log`、`decky-build.log`。
+- Rust：核心单元 **370 项通过、5 项原有忽略**；新增 EXE 事实回归单独 **1/1** 通过。CLI 单元 **57/57** 及两个 smoke 套件通过；投影 **24/24**、signed 安装 **22/22** 通过。日志 `rust-tests.log`、`exe-facts-test.log`。整组执行在一条遗留语言摘要断言处停止；该断言已清理后，source_data_v2 **11/11**、source_matching **24/24**、localized_game_names **5/5** 定向通过，见 `rust-focused-tests.log`，不将未执行的其余套件记为通过。
+- 协议 **2 项单元 + 3 项夹具**通过；encoding golden 已按 Rust 生成器刷新；contract-gen check、workspace all-target Clippy（`-D warnings`）、Rust fmt 和 diff 空白检查通过。日志 `protocol-tests.log`、`contract-check.log`、`rust-clippy.log`。首次 Rust 锁权限和 Flutter 遥测目录错误按正常权限重跑；未修改产品锁。
+- Windows Rust / Flutter **release 构建通过**，本地候选位于 `apps/windows-flutter/build/windows/x64/runner/Release`；已同步新 core 与现有 worker，刷新 app-version / update-manifest，三个 EXE 哈希见 `windows-candidate-hashes.json`。候选真实 JSONL 冒烟证明 scan 输出 Steam 界面语言、两个旧语言请求和 CLI 参数均拒绝，见 `candidate-smoke.json`。构建日志 `windows-rust-release.log`、`windows-flutter-release.log`。
+- 原生 UI 矩阵：Debug 原生构建通过，但 Flutter 报 `Error waiting for a debug connection` / `Unable to start the app on the device`，未产生截图，**不计为通过**。随后使用 computer-use 检查未发现 PatchHub 错误窗口，直接启动测试候选超时，复查仍无窗口；未据此认定单实例、权限或业务代码为根因。日志 `native-ui.log`。
+- 按 overengineering-review 沿实际调用与差异复核，无新增默认语种 / 兼容开关 / 监听 / 迁移器；失败与取消继续走既有路径。Python 首轮暴露误删通用 re 导入，已恢复并完整重跑；ZIP 新夹具的响应域名与来源不符已修正，未改产品域名校验。
+
+### 待验收
+
+- Windows 原生 UI 成功启动后的矩阵与真实 Steam 语言切换展示。
+- 真实远程 ZIP / EXE 安装、语言不同情况下游戏内生效、Steam Deck 部署 / 游戏模式 / 实体手柄。
+- 本地候选验证不代表正式安装版、线上 CI 或发行验收；未操作 Steam 设备。
+
+2026-10-29 后续补记：关窗优化阶段已在当前代码上完成 Windows 原生深浅主题 / 三种尺寸的 30 图矩阵，先前“原生 UI 未能完成启动”的记录保留为历史失败，本轮矩阵通过。详见[关窗施工记录](../windows-visual-polish/progress.md#原生验证补记)。实际 Steam 语言切换、真实安装和 Steam Deck 仍待验收。
+
+### 2026-10-29 本地提交
+
+- 用户要求“提交 GIT”；语种流程代码与必要测试提交为 `2b409bb`（`fix(language): 移除补丁语种偏好与安装语言校验并跟随Steam展示游戏信息`）。
+- 施工期间为后续关窗优化切换到从 main 创建的 `fix/windows-idle-close-latency`，本轮待提交内容均保留并在该分支分别提交；文档与代码拆分，功能索引按对应行暂存。
+- 沿用本 session 已有验证，提交前核对文件清单、工作区 / 暂存区空白和文档链接；未重复执行产品测试。真实游戏、Steam 语言切换与 Steam Deck 仍待验收。
+- 仅本地提交，未合并 main、推送、打 tag 或发布。
