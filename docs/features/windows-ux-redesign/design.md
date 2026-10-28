@@ -1,5 +1,7 @@
 # Windows 交互重设计
 
+2026-10-28：双端概览移除、可选 ZIP、手动直链与查询呈现由[补丁管理整合方案](../patch-management-flow-simplification/design.md)替代本文对应旧要求；实际实施与验证见该功能[施工记录](../patch-management-flow-simplification/progress.md)。本文原有四页、本地 ZIP 默认路线和待核对来源说明保留为历史设计。
+
 2026-10-23 补充：[Modern 视觉重设计方案](visual-design.md)，按用户参考图实现 Steam 艺术作品横幅、封面列表与补丁信息布局；自动化、原生视觉矩阵及本地候选检查通过，待用户视觉验收。以下保留原 Flutter 交互与迁移设计，历史实施及验收以 [progress.md](progress.md) 为准。
 
 状态：整体交互方案已获用户认可；按用户要求改为 Flutter 重写，技术实施于 2026-10-22 开始，P0/P1 进行中，整端待实现与验收。施工记录见 [progress.md](progress.md)。

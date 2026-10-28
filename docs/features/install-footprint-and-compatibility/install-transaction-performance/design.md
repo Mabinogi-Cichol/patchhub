@@ -1,5 +1,7 @@
 # EXE 无备份直接安装设计
 
+2026-10-28：解析器执行方式采用[普通子进程直接解析方案](../../patch-management-flow-simplification/design.md#32-exe-直接解析技术方案)，移除本文对应的 LPAC / bwrap、隔离探测和输入副本要求；流式解析与直接写入继续沿用。实际验证见[整合施工记录](../../patch-management-flow-simplification/progress.md)。下文保留本轮之前的设计依据。
+
 日期：2026-10-17（Asia/Shanghai）。状态：**D1–D4 已按本设计实施并通过本地自动化验证；D5 双平台实机验收待执行**。关联：[施工记录](progress.md) · [父功能设计](../design.md) · [取证记录](evidence-20261017.md)。
 
 ## 1. 产品决定与范围

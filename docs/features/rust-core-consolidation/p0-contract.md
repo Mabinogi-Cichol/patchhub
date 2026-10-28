@@ -1,5 +1,7 @@
 # P0 领域接口与 v4 wire 契约冻结
 
+2026-10-28：当前 v5 安装输入新增与 release / selection / archive 互斥的 `manual_download: {source_id, candidate_id, url}`；默认输入不再回退为本地 ZIP，可选导入字段保留；EXE 隔离能力和探测退出。相关新行为见[补丁管理整合方案](../patch-management-flow-simplification/design.md)，以下旧契约保留为迁移历史，当前 wire 字段以生成契约为准。
+
 日期：2026-10-11。状态：**契约决策冻结；目标类型、生成器、v4 与新增锁均待实现**，以下签名不是现有 API 或已运行的代码。
 
 关联：[设计](design.md)、[施工记录](progress.md)、[动作与终态真值表](p0-behavior.md)。本文冻结字段、接口、生成与拒绝边界；真值表冻结证据组合。后续必要变更须同步两份 P0 文档及设计。

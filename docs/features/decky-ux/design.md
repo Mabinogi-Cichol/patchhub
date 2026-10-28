@@ -1,5 +1,7 @@
 # Decky 游戏补丁管理 UX 方案
 
+2026-10-28：游戏页面收敛为补丁管理 / 操作记录 / 游戏订阅，手动直链、可选 ZIP 和查询反馈采用[补丁管理整合方案](../patch-management-flow-simplification/design.md)；本文对应旧概览与状态要求由该方案替代，实施与实机边界见[施工记录](../patch-management-flow-simplification/progress.md)。
+
 ## 2026-10-07 安装交互修订（已实现并部署，自动化与合成渲染验证通过，真实下载 / 恢复与手柄待验证）
 
 本节替代此前安装进度的底部按钮与结果展示要求；调查记录见 [progress.md](./progress.md)。
