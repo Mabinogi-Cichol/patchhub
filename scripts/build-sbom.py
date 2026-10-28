@@ -11,6 +11,7 @@ from pathlib import Path
 import sys
 import tomllib
 from urllib.parse import quote
+from project_version import project_version
 
 root = Path(__file__).resolve().parents[1]
 parser = argparse.ArgumentParser(description=__doc__)
@@ -88,7 +89,7 @@ if args.flutter_deps:
     extra_properties.append({'name': 'patchhub:dart-lock-sha256', 'value': hashlib.sha256((root / 'apps/windows-flutter/pubspec.lock').read_bytes()).hexdigest()})
 output.write_text(json.dumps({
     'bomFormat': 'CycloneDX', 'specVersion': '1.6', 'version': 1,
-    'metadata': {'component': {'type': 'application', 'name': 'PatchHub', 'version': '0.4.0'},
+    'metadata': {'component': {'type': 'application', 'name': 'PatchHub', 'version': project_version(root)},
                  'properties': [{'name': 'patchhub:inventory-scope',
                                  'value': 'All resolved Rust and locked npm dependencies, including build, development and target-specific packages, plus the bundled Rust installer and its reference license; Flutter/Dart when requested; no reachability analysis.'},
                                 {'name': 'patchhub:cargo-lock-sha256', 'value': hashlib.sha256((root / 'Cargo.lock').read_bytes()).hexdigest()},

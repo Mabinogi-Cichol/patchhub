@@ -2,6 +2,9 @@ import { cpSync, copyFileSync, existsSync, mkdirSync, rmSync, statSync, readFile
 import { createHash } from "node:crypto";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { syncProjectVersion } from "../../../scripts/sync-project-version.mjs";
+
+syncProjectVersion();
 
 const here = dirname(fileURLToPath(import.meta.url));
 const app = resolve(here, "..");

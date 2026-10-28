@@ -54,6 +54,11 @@ if not defined PYTHON (
     goto finish
 )
 
+echo Synchronizing project versions...
+set "STEP=scripts/project_version.py --sync"
+call %PYTHON% "scripts\project_version.py" --sync
+if errorlevel 1 goto build_failed
+
 echo [1/5] Installing locked npm dependencies...
 set "STEP=npm ci"
 call npm ci

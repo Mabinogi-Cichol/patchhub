@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "rollup -c",
+    "build": "node ../../scripts/sync-project-version.mjs && rollup -c",
     "typecheck": "tsc --noEmit",
     "test": "node --experimental-strip-types --test tests/*.test.ts",
     "package:plugin": "npm run build && node scripts/package-plugin.mjs"

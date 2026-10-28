@@ -13,6 +13,8 @@ RULES = (
         "crates/**", "packages/contracts/**", "catalog/trust-keys.json",
         "Cargo.toml", "Cargo.lock", "rust-toolchain.toml", ".cargo/**",
         ".github/workflows/**", ".github/ci/**", ".gitattributes",
+        "scripts/project_version.py", "scripts/test_project_version.py",
+        "scripts/sync-project-version.mjs",
     )),
     (("windows", "decky"), (
         "packages/ui/**", "package.json", "package-lock.json", ".npmrc",

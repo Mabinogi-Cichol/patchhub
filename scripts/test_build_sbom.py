@@ -2,6 +2,7 @@
 import base64
 import hashlib
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -21,6 +22,8 @@ class BuildSbomTests(unittest.TestCase):
             licenses = scripts / 'licenses'
             licenses.mkdir(parents=True)
             shutil.copyfile(SCRIPT, scripts / 'build-sbom.py')
+            shutil.copyfile(SCRIPT.with_name('project_version.py'), scripts / 'project_version.py')
+            (root / 'Cargo.toml').write_text('[workspace.package]\nversion = "9.8.7-rc.1"\n', encoding='utf-8')
             for name in ('installer-format', 'installer-worker'):
                 manifest = root / 'crates' / name / 'Cargo.toml'
                 manifest.parent.mkdir(parents=True)
@@ -48,10 +51,12 @@ checksum = "{cargo_checksum}"
                 'source': 'registry+https://example.test', 'license': 'MIT'}]}), encoding='utf-8')
 
             result = subprocess.run([sys.executable, str(scripts / 'build-sbom.py'), str(metadata)],
-                                    cwd=root, capture_output=True, text=True, check=True)
+                                    cwd=root, capture_output=True, text=True, check=True,
+                                    env={**os.environ, 'GITHUB_REF': ''})
             summary = json.loads(result.stdout)
             inventory = json.loads((root / '.artifacts/dependencies.cdx.json').read_text(encoding='utf-8'))
             components = {entry['name']: entry for entry in inventory['components']}
+            self.assertEqual(inventory['metadata']['component']['version'], '9.8.7-rc.1')
             self.assertEqual(summary['components'], 3)
             self.assertEqual(set(components), {'locked-rust', 'locked-npm', 'patchhub-rust-installer'})
             self.assertEqual(components['locked-rust']['hashes'][0]['content'], 'ab' * 32)

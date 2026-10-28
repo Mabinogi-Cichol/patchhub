@@ -5,6 +5,7 @@ import hashlib
 import json
 import zipfile
 from update_manifest import prepare as prepare_update
+from project_version import project_version
 
 ROOT = Path(__file__).resolve().parents[1]
 OUTPUT = ROOT / '.artifacts'
@@ -21,10 +22,13 @@ PRODUCTION_BACKEND = {'bridge.py', 'source_service.py', 'tasks.py', 'plugin_sett
 def validate_sbom(sbom, plugin, decky):
     data = json.loads(sbom.read_text(encoding='utf-8'))
     try:
+        application_version = data['metadata']['component']['version']
         properties = {item['name']: item['value'] for item in data['metadata']['properties']}
         matches = [item for item in data['components'] if item.get('name') == 'patchhub-rust-installer']
     except (KeyError, TypeError) as error:
         raise ValueError('Regenerate SBOM for current dependencies before packaging') from error
+    if application_version != project_version(ROOT):
+        raise ValueError('Regenerate SBOM: application version differs from Cargo.toml')
     for name, path in [('cargo', 'Cargo.lock'), ('npm', 'package-lock.json')]:
         if properties.get(f'patchhub:{name}-lock-sha256') != hashlib.sha256((ROOT / path).read_bytes()).hexdigest():
             raise ValueError('Regenerate SBOM for current lockfiles before packaging')
@@ -48,6 +52,9 @@ def validate_sbom(sbom, plugin, decky):
 
 
 def validate_decky(plugin):
+    package = json.loads((plugin / 'package.json').read_text(encoding='utf-8'))
+    if package['version'] != project_version(ROOT):
+        raise ValueError('Rebuild Decky plugin: application version differs from Cargo.toml')
     actual = {path.name for path in (plugin / 'backend').iterdir()}
     if actual != PRODUCTION_BACKEND:
         raise ValueError('Rebuild Decky plugin: unexpected or missing production backend modules')
@@ -102,7 +109,7 @@ def main():
             shutil.copyfile(source, bundle / name)
         (bundle / 'licenses').mkdir(exist_ok=True)
         shutil.copyfile(ROOT / 'scripts/licenses/sfextract-MIT.txt', bundle / 'licenses/sfextract-MIT.txt')
-        windows_files = set(prepare_update(bundle))
+        windows_files = set(prepare_update(bundle, root=ROOT))
     windows = [(path, path.relative_to(bundle).as_posix(), path.suffix == '.exe')
                for path in sorted(bundle.rglob('*')) if path.is_file()
                and (windows_files is None or path.relative_to(bundle).as_posix() in windows_files)

@@ -2,6 +2,7 @@
 import hashlib
 import importlib.util
 import json
+import os
 from pathlib import Path
 import sys
 import tempfile
@@ -15,6 +16,11 @@ spec.loader.exec_module(packager)
 
 
 class PackagingTests(unittest.TestCase):
+    def setUp(self):
+        environment = patch.dict(os.environ, {'GITHUB_REF': ''})
+        environment.start()
+        self.addCleanup(environment.stop)
+
     def write(self, root, path, data=b'fixture'):
         target = root / path
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -25,9 +31,12 @@ class PackagingTests(unittest.TestCase):
             packager.main()
 
     def fixture(self, root, windows=False):
+        self.write(root, 'Cargo.toml', b'[workspace.package]\nversion = "1.2.3"\n')
+        self.write(root, 'scripts/windows-update.ps1', Path(__file__).with_name('windows-update.ps1').read_bytes())
         self.write(root, 'Cargo.lock', b'cargo lock')
         self.write(root, 'package-lock.json', b'npm lock')
         plugin = root / 'apps/decky/plugin-output'
+        self.write(plugin, 'package.json', b'{"version":"1.2.3"}')
         for name in packager.PRODUCTION_BACKEND:
             self.write(plugin, 'backend/' + name)
         for name in ('protocol.py', 'v5.schema.json'):
@@ -47,7 +56,7 @@ class PackagingTests(unittest.TestCase):
                 properties.append({'name': f'patchhub:{prefix}-path', 'value': dest})
             properties.extend([{'name': f'patchhub:{prefix}-source', 'value': source},
                                {'name': f'patchhub:{prefix}-sha256', 'value': hashlib.sha256(data).hexdigest()}])
-        inventory = {'metadata': {'properties': [
+        inventory = {'metadata': {'component': {'version': '1.2.3'}, 'properties': [
             {'name': f'patchhub:{name}-lock-sha256', 'value': hashlib.sha256((root / path).read_bytes()).hexdigest()}
             for name, path in [('cargo', 'Cargo.lock'), ('npm', 'package-lock.json')]]},
             'components': [{'name': 'patchhub-rust-installer', 'version': '1', 'licenses': [{'expression': 'MIT'}], 'properties': properties}]}
@@ -70,6 +79,26 @@ class PackagingTests(unittest.TestCase):
                 'value': hashlib.sha256(b'dart lock').hexdigest()})
             self.write(root, '.artifacts/dependencies.cdx.json', json.dumps(inventory).encode())
         return plugin
+
+    def test_old_decky_package_version_refuses_before_zip(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); plugin = self.fixture(root)
+            self.write(plugin, 'package.json', b'{"version":"1.2.2"}')
+            with self.assertRaisesRegex(ValueError, 'Rebuild Decky plugin: application version'):
+                self.run_package(root, 'decky')
+            self.assertFalse(list((root / '.artifacts').glob('*.zip')))
+
+    def test_old_sbom_application_version_refuses_before_zip(self):
+        for platform in ('windows', 'decky'):
+            with self.subTest(platform=platform), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp); self.fixture(root, windows=True)
+                path = root / '.artifacts/dependencies.cdx.json'
+                data = json.loads(path.read_text(encoding='utf-8'))
+                data['metadata']['component']['version'] = '1.2.2'
+                path.write_text(json.dumps(data), encoding='utf-8')
+                with self.assertRaisesRegex(ValueError, 'Regenerate SBOM: application version'):
+                    self.run_package(root, platform)
+                self.assertFalse(list((root / '.artifacts').glob('*.zip')))
 
     def test_decky_runtime_permissions_and_provenance(self):
         with tempfile.TemporaryDirectory() as tmp:

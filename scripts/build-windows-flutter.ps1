@@ -18,6 +18,10 @@ function Invoke-Checked {
     & $Executable @Arguments
     if ($LASTEXITCODE -ne 0) { throw "$Executable failed with exit code $LASTEXITCODE" }
 }
+$taskPython = Get-Command python,py -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+if (-not $taskPython) { throw 'Python 3.11 or newer is required (python or py)' }
+[string[]]$taskPythonArgs = if ($taskPython.Name -eq 'py.exe') { @('-3') } else { @() }
+Invoke-Checked $taskPython.Source ($taskPythonArgs + @((Join-Path $PSScriptRoot 'project_version.py'), '--sync'))
 $taskExpected = (Get-Content (Join-Path $taskApp '.flutter-version') -Raw).Trim()
 # A fresh SDK bootstraps its tool before machine output is usable as JSON.
 Invoke-Checked $Flutter @('--version')
@@ -80,7 +84,7 @@ Copy-Item -LiteralPath (Join-Path $taskFlutterRoot 'LICENSE') -Destination (Join
 Copy-Item -LiteralPath (Join-Path $taskFlutterRoot 'bin/cache/dart-sdk/LICENSE') -Destination (Join-Path $taskResources 'licenses/Dart-LICENSE')
 # The running UI reads app-version.json, which Flutter does not regenerate.
 # Preview builds need the same current version metadata as packaged builds.
-& python (Join-Path $PSScriptRoot 'update_manifest.py') $taskOutput
+& $taskPython.Source @taskPythonArgs (Join-Path $PSScriptRoot 'update_manifest.py') $taskOutput
 if ($LASTEXITCODE -ne 0) { throw 'Update manifest generation failed' }
 if ($Preview) { return }
 $taskEvidence = Join-Path $taskRoot '.artifacts/windows-flutter'

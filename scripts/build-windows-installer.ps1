@@ -3,9 +3,13 @@ param([string]$Makensis = '', [string]$Version = '')
 $ErrorActionPreference = 'Stop'
 $taskRoot = Split-Path -Parent $PSScriptRoot
 $taskBundle = Join-Path $taskRoot 'apps/windows-flutter/build/windows/x64/runner/Release'
-if (-not $Version) {
-    $Version = [regex]::Match((Get-Content -LiteralPath (Join-Path $taskRoot 'Cargo.toml') -Raw), '(?m)^version = "([^"]+)"').Groups[1].Value
-}
+$taskPython = Get-Command python,py -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+if (-not $taskPython) { throw 'Python 3.11 or newer is required (python or py)' }
+[string[]]$taskPythonArgs = if ($taskPython.Name -eq 'py.exe') { @('-3') } else { @() }
+$taskVersion = & $taskPython.Source @taskPythonArgs (Join-Path $PSScriptRoot 'project_version.py')
+if ($LASTEXITCODE -ne 0) { throw 'Unable to read application version' }
+if ($Version -and $Version -ne $taskVersion) { throw 'NSIS version differs from Cargo.toml' }
+$Version = $taskVersion
 if (-not $Makensis) {
     $taskCached = Join-Path $env:LOCALAPPDATA 'tauri/NSIS/makensis.exe'
     $Makensis = if (Test-Path -LiteralPath $taskCached) { $taskCached } else { (Get-Command makensis -ErrorAction Stop).Source }
@@ -22,7 +26,7 @@ foreach ($taskName in @('dependencies.cdx.json','client-guide.md','privacy.md','
 }
 New-Item -ItemType Directory -Path (Join-Path $taskBundle 'licenses') -Force | Out-Null
 Copy-Item -LiteralPath (Join-Path $taskRoot 'scripts/licenses/sfextract-MIT.txt') -Destination (Join-Path $taskBundle 'licenses')
-& python (Join-Path $PSScriptRoot 'update_manifest.py') $taskBundle
+& $taskPython.Source @taskPythonArgs (Join-Path $PSScriptRoot 'update_manifest.py') $taskBundle
 if ($LASTEXITCODE -ne 0) { throw 'Update manifest generation failed' }
 if ((Get-Content -LiteralPath (Join-Path $taskBundle 'app-version.json') -Raw | ConvertFrom-Json).version -ne $Version) { throw 'NSIS version differs from application' }
 $taskInstaller = Join-Path $taskArtifacts 'patchhub-windows-x64-setup.exe'

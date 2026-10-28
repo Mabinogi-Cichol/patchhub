@@ -20,6 +20,11 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python scripts/project_version.py --check
+      - run: python -m unittest discover -s scripts -p test_project_version.py -v
       - run: python3 -m unittest discover -s .github/ci -p 'test_*.py' -v
       - id: select
         run: python3 .github/ci/select_jobs.py
@@ -66,6 +71,7 @@ jobs:
         with:
           python-version: '3.12'
       - run: python -m unittest discover -s scripts -p test_package_artifacts.py -v
+      - run: python -m unittest discover -s scripts -p test_project_version.py -v
       - run: python -m unittest discover -s scripts -p test_build_sbom.py -v
       - run: python -m unittest discover -s scripts -p test_flutter_sbom.py -v
       - run: python -m unittest discover -s scripts -p test_windows_update.py -v
@@ -84,7 +90,7 @@ jobs:
       - run: python scripts/build-sbom.py .artifacts/cargo-metadata.json --flutter-deps .artifacts/windows-flutter/pub-deps.json --flutter-version .artifacts/windows-flutter/flutter-version.json
       - run: python scripts/package-artifacts.py --platform windows
       - run: ./scripts/build-windows-installer.ps1 -Makensis 'C:/Program Files (x86)/NSIS/makensis.exe'
-      - run: git diff --exit-code -- Cargo.lock package-lock.json packages/contracts/generated packages/contracts/fixtures apps/windows-flutter/pubspec.lock apps/windows-flutter/assets/protocol-v5.schema.json
+      - run: git diff --exit-code -- Cargo.lock package-lock.json apps/decky/package.json packages/ui/package.json apps/windows-flutter/pubspec.yaml apps/windows-flutter/pubspec.lock packages/contracts/generated packages/contracts/fixtures apps/windows-flutter/assets/protocol-v5.schema.json
       - uses: actions/upload-artifact@v4
         with:
           name: windows-portable
@@ -193,7 +199,7 @@ jobs:
       - run: cargo metadata --locked --format-version 1 > .artifacts/cargo-metadata.json
       - run: python scripts/build-sbom.py .artifacts/cargo-metadata.json
       - run: python scripts/package-artifacts.py --platform decky
-      - run: git diff --exit-code -- Cargo.lock package-lock.json packages/contracts/generated packages/contracts/fixtures
+      - run: git diff --exit-code -- Cargo.lock package-lock.json apps/decky/package.json packages/ui/package.json apps/windows-flutter/pubspec.yaml apps/windows-flutter/pubspec.lock packages/contracts/generated packages/contracts/fixtures
       - uses: actions/upload-artifact@v4
         with:
           name: decky-plugin
