@@ -311,12 +311,13 @@ class BridgeStreamTests(unittest.IsolatedAsyncioTestCase):
 class BridgeIntegrationTests(unittest.IsolatedAsyncioTestCase):
     async def test_real_core_v5_scan_and_error(self):
         root = Path(__file__).resolve().parents[3]
-        binary = root / "target/debug" / ("patchhub-core.exe" if os.name == "nt" else "patchhub-core")
-        if not binary.exists(): self.skipTest("core binary not built")
+        configured_binary = os.environ.get("PATCHHUB_TEST_CORE")
+        binary = Path(configured_binary) if configured_binary else root / "target/debug" / ("patchhub-core.exe" if os.name == "nt" else "patchhub-core")
+        if not configured_binary and not binary.exists(): self.skipTest("core binary not built")
         with tempfile.TemporaryDirectory() as temporary:
             catalog = Path(temporary) / "catalog.json"
             catalog.write_text(json.dumps({"schema_version": 1, "revision": 0, "releases": []}))
-            bridge = CoreBridge(binary, catalog)
+            bridge = CoreBridge(binary, catalog, state_dir=Path(temporary) / "state")
             await bridge.preflight()
             self.assertEqual((await bridge.scan())["catalog_trust"], "unsigned_development")
             with self.assertRaisesRegex(CoreError, "instance_not_found"):
