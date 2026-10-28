@@ -1,5 +1,7 @@
 # Windows 视觉与下载进度施工记录
 
+2026-10-29 追加空闲关窗视觉停顿修复，状态与验证结果见本文末节。
+
 设计：[design.md](design.md)。
 
 ## 当前状态
@@ -67,3 +69,36 @@
 - `ca62c44`：三项昂贵读取的协作取消、正常窗口关闭及必要测试。
 - `aed058a`：程序与安装/卸载器共用品牌图标。
 - 文档独立提交，既有 179 项和后续 Modern UI 的 205 项回归记录继续有效，没有新增代码修改或重跑无关验证；没有合并、推送或发布。
+
+## 2026-10-29 空闲关窗视觉停顿
+
+用户确认空闲时关闭仍有约一秒停顿。在 `main` 基线 `cd71c21` 新建 `fix/windows-idle-close-latency`，保留前一轮全部未提交语种改动，不重置文件、不提交或合并。设计见 [design.md](design.md#2026-10-29-空闲关窗视觉停顿)。
+
+### 调查与实施
+
+- 隔离 APPDATA、只操作本轮启动的候选，以正常 WM_CLOSE 测量窗口隐藏与进程退出；原三轮窗口仍可见 2.62 / 2.68 / 5.09 秒，进程均 exit 0。该初始观察点可能仍有启动工作，不能当作用户空闲卡顿的精确复现值。
+- 先让业务清理结束后 hide，再正常 close，窗口能先于引擎退出消失，但真正无核心子进程的复测仍观察到约 0.95–1.28 秒隐藏前等待，因此继续定位，没有将这一步写成问题已完全解决。
+- 临时阶段探针测得：WM_CLOSE 发出后 809.21ms 才进入 Dart onWindowClose；业务清理到 810.71ms，隐藏调用到 820.31ms 完成；整个进程约 1.99 秒后 exit 0、无残留子进程。证据 `.artifacts/windows-idle-close/profile-idle.json`。这定位了通知分发等待，不将它泛化成所有设备固定延时。
+- 标题栏按钮改为直接调用 main 注入 PatchHubApp 的生命周期回调，跳过原有 Dart → Windows close → Dart listener 路径。系统关闭事件继续使用同一 AppLifecycle；closing / readyToExit 保留重复事件保护。
+- 任务取消 / 写入恢复等待、异常确认都结束后才隐藏窗口，再走正常 WM_CLOSE / WM_DESTROY；原生 close 失败会重新 show 并报告错误。未使用 destroy / 强杀 / 固定超时 / 引擎重试，也没有提前结束安装。
+- 临时 CLOSE_PHASE 日志已从产品代码移除。候选中变化的是 Dart AOT `data/app.so`，原生 patchhub.exe 因 C++ 未修改而哈希保持一致；最终两者哈希保存于 `final-candidate-hashes.json`。
+
+### 已执行验证
+
+- 生命周期 / 读取取消 **11 项通过**，覆盖标题栏不调用原生 close 中转、空闲 hide → close、有活动安装时等待、失败 / 恢复结果保留窗口、原生关闭失败恢复窗口，以及在预检阶段取消读取、等待现有恢复写入。日志 `tests.log`。
+- Flutter analyze 无问题；最终 Windows release 构建通过，日志 `analyze.log`、`build.log`。候选目录仍为 `apps/windows-flutter/build/windows/x64/runner/Release`，保留前一轮语种改动及已同步的 core / worker。
+- 系统关闭路线前后共 9 次正常进程退出，均 exit 0，补充空闲观察无残留核心子进程。证据 `before.json`、`after.json`、`after-idle.json`。这些测量走 WM_CLOSE，不代表最终标题栏回调的实际点击耗时；退出后的引擎释放仍可晚于窗口消失。
+- overengineering-review 复核：仅增加一个应用级关闭回调和既有关闭末尾的 hide / 失败恢复，没有新增 native 状态同步、关闭超时、强杀或通用生命周期框架。未改变游戏文件、系统设置或窗口销毁机制。
+
+### 原生验证补记
+
+- Windows 原生集成矩阵通过，深浅主题 / 三种尺寸共 **30 张截图**；真实窗口宿主中点击标题栏进入生命周期清理回调 **4ms**。结果 `.artifacts/windows-idle-close/native-ui/result.json`，日志 `native-ui.log`。原生 fixture 使用 VisualCloseObserver 在销毁前截取回执，因此 4ms 是分发 / 业务清理耗时，**不是进程退出或窗口消失耗时**。
+- 正常销毁、exit 0 与无残留子进程的证据来自前述独立 release 进程测试。系统 WM_CLOSE 的分发等待仍可能存在，标题栏直接回调绕过这一段；不承诺所有关闭入口和设备均在 4ms 退出。
+- 当前 release 候选已更新，可从原目录重新启动；原生截图矩阵包含此前语种移除后的当前界面。真实游戏安装和 Steam Deck 验收仍未执行。
+
+### 2026-10-29 本地提交
+
+- 用户要求“提交 GIT”；关窗代码、生命周期回归与原生关闭分发测量提交为 `1a90a53`（`fix(windows): 缩短标题栏关闭分发并在清理后隐藏窗口`）。
+- 当前分支 `fix/windows-idle-close-latency`。本节设计 / 施工记录和功能索引的对应行单独提交，不混入语种代码或其他功能。
+- 沿用 11 项回归、analyze、release 与原生 30 图验证记录，提交前仅检查 diff、暂存范围及文档链接；未重复执行产品测试。
+- 仅本地提交，未合并 main、推送或发布。
