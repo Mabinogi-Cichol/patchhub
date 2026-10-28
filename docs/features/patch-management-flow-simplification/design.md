@@ -8,6 +8,8 @@
 
 2026-10-29 后续实施：[补丁语种选择与安装语言校验移除计划](language-selection-removal-plan.md) 的偏好链路、三条安装入口的语言事实与校验删除，以及游戏信息跟随 Steam 语言均已实现，验证结果见施工记录。通过 scan 的 `steam_languages` 共享现有 Rust 元数据读取结果，Windows 原生图片上下文仍只负责 root / activeUser，避免重复解析配置；应用界面 locale 不变。
 
+2026-10-29 布局修复已实现：[Windows 补丁管理页布局修复方案](windows-layout-fix-plan.md) 将重新匹配并入页签工具栏，拓宽右侧状态栏，并将完整路径移至通栏折叠区。Flutter 定向与全量回归、静态分析、Windows 原生深浅主题 / 四种尺寸验证通过，实际证据与剩余验收见 [progress.md](progress.md)。
+
 ## 1. 目标与已确定的产品决策
 
 - Windows 和 Decky 均删除独立概览页签，选择游戏后直接进入补丁管理。

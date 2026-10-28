@@ -8,6 +8,8 @@
 
 每个功能在本目录下建立独立文件夹，设计文档与施工记录分别存放。文档状态为“方案”时，不代表功能已经实现或通过实机验证。开发规则见仓库根目录的 [AGENTS.md](../../AGENTS.md)。
 
+2026-10-29：Windows 补丁管理页三处布局修复已实现：重新匹配并入页签工具栏、拓宽状态栏、完整游戏路径改为通栏折叠区；37 项定向 / 全量 264 项通过（1 项原有跳过）、静态分析、Windows 原生 38 图矩阵及 release 候选构建通过，用户视觉验收待完成。详见[设计](patch-management-flow-simplification/design.md)、[施工记录](patch-management-flow-simplification/progress.md)及[专项方案](patch-management-flow-simplification/windows-layout-fix-plan.md)。
+
 | 功能 | 状态 | 设计文档 | 施工记录 | 附加文档 |
 | --- | --- | --- | --- | --- |
 | 补丁管理整合与流程精简 | 原整合已本地提交；后续语种选择 / 安装语言校验移除及游戏信息跟随 Steam 语言已实现，Flutter 全量 246 项 / 补充图片 6 项、Decky 80 项、Python 与核心相关回归通过，Windows release 候选及协议冒烟通过；后续原生 30 图通过；真实游戏和 Steam Deck 待验 | [设计与施工计划](patch-management-flow-simplification/design.md) | [施工记录](patch-management-flow-simplification/progress.md) | [实现审阅](patch-management-flow-simplification/review.md) · [语种选择与安装语言校验移除计划](patch-management-flow-simplification/language-selection-removal-plan.md) |
