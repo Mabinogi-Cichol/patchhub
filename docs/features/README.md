@@ -14,6 +14,7 @@
 
 | 功能 | 状态 | 设计文档 | 施工记录 | 附加文档 |
 | --- | --- | --- | --- | --- |
+| 应用版本号单一来源 | 已实现，版本同步 / 检查、隔离 Cargo/npm 锁验证与本地 Windows / Decky 构建打包通过；在线 CI、实机与正式跨版本更新待验证，未发布 | [设计与调研](version-single-source/design.md) | [施工记录](version-single-source/progress.md) | — |
 | Windows 安装进度界面 | 已实现，13 项相关回归、静态分析、12 张 Windows 原生夹具截图与 Release 构建通过；真实游戏安装和用户视觉验收待完成 | [设计](windows-install-progress/design.md) | [施工记录](windows-install-progress/progress.md) | — |
 | 补丁管理整合与流程精简 | 原整合已本地提交；后续语种选择 / 安装语言校验移除及游戏信息跟随 Steam 语言已实现，Flutter 全量 246 项 / 补充图片 6 项、Decky 80 项、Python 与核心相关回归通过，Windows release 候选及协议冒烟通过；后续原生 30 图通过；真实游戏和 Steam Deck 待验 | [设计与施工计划](patch-management-flow-simplification/design.md) | [施工记录](patch-management-flow-simplification/progress.md) | [实现审阅](patch-management-flow-simplification/review.md) · [语种选择与安装语言校验移除计划](patch-management-flow-simplification/language-selection-removal-plan.md) |
 | 发行附件精简 | 工作流已改为 3 个安装包及 SHA256SUMS.txt；暂存夹具及安装/更新 46 项回归通过，v0.4.0 已精简并通过公开清单、哈希及安装入口校验 | [设计](patchhub-ci-fix/design.md#2026-10-27发行附件精简) | [施工记录](patchhub-ci-fix/progress.md#2026-10-27发行附件精简) | — |

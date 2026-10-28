@@ -19,7 +19,7 @@ Windows 当前未配置 Authenticode 证书，安装包没有发行者身份认�
 
 ## 每次发布前
 
-- 自更新版本校验需确认 Cargo、Flutter、Decky、Windows `app-version.json` 与 Release Tag 一致。Windows ZIP 与 NSIS 使用相同受管理文件清单；验证更新多次后仍可正确卸载，且不删除用户额外文件。
+- 应用升版只修改根 `Cargo.toml` 的 `workspace.package.version`，运行 `python scripts/project_version.py --sync` 并提交派生清单与锁字段；`--check` 和 CI 在编译前核对同步状态及 Tag。核验最终 Windows EXE / `app-version.json` / 更新清单 / NSIS、Decky 包内 package.json / Loader / 后端读取值、SBOM 应用版本与 Release Tag 按既定格式一致（Flutter 默认额外构建号 `+1`，已有 metadata 按 SDK 规则投影）。详见[版本管理](features/version-single-source/design.md)。Windows ZIP 与 NSIS 使用相同受管理文件清单；验证更新多次后仍可正确卸载，且不删除用户额外文件。
 - 先创建草稿 Release，仅上传双端 ZIP、NSIS 和覆盖三个安装包的 `SHA256SUMS.txt`，下载核对后再公开；不单独上传校验 JSON、SBOM 或 Python 脚本，不自动覆盖已有公开附件。自动检查不依赖 NSIS 附件。
 
 1. 核对公开目录的 AppID、来源链接、包哈希、游戏 build、语言、许可条件和平台验证证据。未知平台或版本保持禁用自动安装。

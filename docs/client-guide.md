@@ -18,6 +18,14 @@ Decky 点击“安装补丁 / 重新安装补丁”即开始自动获取、校�
 
 仓库固定 Rust 1.94，使用 Cargo.lock 和 package-lock.json。共享 TS/Decky 使用 `npm ci`、`npm run typecheck` 与 `npm run build:decky`；Windows 使用固定 Flutter 3.47.7 和 `npm run build:windows`。Flutter 依赖由 `apps/windows-flutter/pubspec.lock` 固定。
 
+### 应用版本
+
+应用版本只人工修改根 `Cargo.toml` 的 `[workspace.package].version`。Windows / Decky 构建入口自动同步 Flutter、Decky、共享 UI 和两个锁文件中的项目版本；SBOM、NSIS 与更新元数据读取同一来源。派生清单仍需随版本变更一同提交，不再逐个手改。构建工具需要 Python 3.11+（Windows 可使用 `python` 或 `py`，Linux 使用 `python3`）。
+
+不构建而仅准备版本变更时，执行 `python scripts/project_version.py --sync`；`python scripts/project_version.py --check` 只读检查同步状态及当前 Tag。直接使用底层 `cargo build --locked`、`npm ci` 或 `flutter build windows` 前也先执行同步；标准 BAT、Flutter PS1、Linux 构建脚本和 Decky npm build / 暂存入口已自动接入。规则和验证边界见[版本方案](features/version-single-source/design.md)与[施工记录](features/version-single-source/progress.md)。
+
+普通版本 `0.4.0` 派生 Flutter 版本 `0.4.0+1`；预发行版同样保留 `+1`。主版本已有 `+metadata` 时原样传递，不重复追加；Flutter 保留完整字符串，Windows 数字资源中的第四段由 Flutter SDK 映射，复杂非数字 metadata 对应 `0`。协议、依赖、数据格式版本及历史测试中的版本不随应用升版修改。
+
 ### Windows 一键构建
 
 准备 Flutter 3.47.7、PowerShell 7、NSIS 3、Node.js 22（共享检查）、Rust 1.94 MSVC 工具链、Python 3.11 或更新版本，以及 Visual Studio 2022 Build Tools 的“使用 C++ 的桌面开发”和 Windows SDK。将 node、npm、cargo、rustc、python（或 py）加入 PATH；已有仓库隔离工具链 `.tools/cargo` 和 `.tools/rustup` 时，脚本优先使用它。首次构建需要联网下载依赖和 NSIS 工具。
@@ -40,7 +48,7 @@ build.bat --no-pause
 
 推送以 `v` 开头的 Tag（例如 `v0.1.0`、`v0.1.0-alpha.1`）会触发构建；只有 core、windows、decky 三个任务全部成功后，才自动创建对应 Tag 的 GitHub Release。分支推送、PR 和手动运行仅构建，不发布。非 `v` 开头的 Tag 不触发此工作流。
 
-先确保要发布的提交包含最新工作流，并手动将 Cargo workspace、Flutter pubspec.yaml 与 Windows runner/NSIS 等版本字段更新为计划发布的版本。Tag 不会自动改写程序内版本。将提交推送后，再创建并推送 Tag，例如：
+先确保要发布的提交包含最新工作流，只修改根 Cargo workspace 的主版本并执行同步，检查生成差异后一并提交。CI 在编译前检查派生字段和 `v<主版本>` Tag，一致性检查不会替提交自动修复版本。Tag 不会自动改写程序内版本。获得推送与发布授权后，再创建并推送 Tag，例如：
 
 ```powershell
 git tag -a v0.1.0-alpha.1 -m "Release v0.1.0-alpha.1"

@@ -40,6 +40,8 @@ curl -fsSL https://raw.githubusercontent.com/Mabinogi-Cichol/patchhub/main/insta
 
 发行产物位于 `.artifacts`。命令行运行可加 `--no-pause` 禁用结束暂停，加 `--help --no-pause` 查看说明。发行构建请依次运行，共用的 SBOM 和总校验表由最近一次发行构建生成。
 
+应用升版只修改根 `Cargo.toml` 的 `workspace.package.version`，构建入口自动同步其他清单；不构建时运行 `python scripts/project_version.py --sync`。生成的清单与锁文件需一并提交，详情见[版本管理](docs/client-guide.md#应用版本)。
+
 ## 实机截图
 
 Steam Deck 游戏模式：

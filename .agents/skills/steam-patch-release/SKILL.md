@@ -44,7 +44,7 @@ gh release view v0.1.0 --repo OWNER/REPO --json name,tagName,url
 ## 发布新版本
 
 1. 核实实际仓库、`git remote -v`、分支、工作区、目标提交和已有 Tag/Release。用户要求“最新”时先 fetch 并确认发布提交；保留不属于本次发布的未提交内容。明确发布范围后继续，不重复索取已给出的授权。
-2. 核对 Cargo workspace、Windows/Decky package.json、Tauri 配置及共享 UI 的版本字段。Tag 不会自动更新程序内版本。沿用对应且未过期的验证证据，只有新改动或未解决问题才补检查。
+2. 应用版本只人工修改根 `Cargo.toml` 的 `workspace.package.version`；执行 `python scripts/project_version.py --sync`，检查并提交自动生成的 Flutter / Decky / 共享 UI 清单及 Cargo/npm 项目锁字段，再运行 `--check`。Windows EXE（默认额外构建号 `+1`）、更新 JSON、NSIS、Decky 包内 package.json 与 SBOM 应用版本须按格式映射对应同一主版本。CI 在编译前核对派生字段及 `v<主版本>` Tag；Tag 不会自动改写程序内版本。沿用对应且未过期的验证证据，只有新改动或未解决问题才补检查。
 3. 本仓库 [CI 工作流](../../../.github/workflows/ci.yml) 在推送 `v*` Tag 后运行双平台检查和打包，只有 core、windows、decky 全部成功才发布。以 Tag 对应运行作为发行证据，不能用旧安装包代替最新源码构建。
 4. Git 改动需要提交时使用 [项目提交技能](../steam-patch-git-commit/SKILL.md)，按仓库规则拆分。只有用户授权发布或推送时才推送；已发布 Tag 保持不变，新代码版本使用新 Tag。
 5. Release 标题只用 Tag；正文遵循上述“发布描述”格式。多行正文存入临时文件，通过 `--notes-file` 传入；工作流自动生成的正文也要替换为此格式。版本 Tag 含 `-` 时，现有工作流将其标记为预发行版。
