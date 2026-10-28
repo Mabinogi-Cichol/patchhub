@@ -89,8 +89,14 @@ class Probe {
         return process
 
     def test_other_client_blocks_preparation_before_current_client_exits(self):
+        self.assert_other_client_blocks_preparation(self.target / 'patchhub.exe')
+
+    def test_other_client_started_from_short_path_blocks_preparation(self):
+        self.assert_other_client_blocks_preparation(Path(self.short_path(self.target)) / 'patchhub.exe')
+
+    def assert_other_client_blocks_preparation(self, executable):
         caller = subprocess.Popen([str(self.target / 'patchhub.exe'), '--hold', str(self.root / 'stop-caller')])
-        process = subprocess.Popen([str(self.target / 'patchhub.exe'), '--hold', str(self.root / 'stop')])
+        process = subprocess.Popen([str(executable), '--hold', str(self.root / 'stop')])
         try:
             result = self.apply(parent_id=caller.pid, timeout=15)
             self.assertNotEqual(result.returncode, 0)

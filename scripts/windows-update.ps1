@@ -57,7 +57,8 @@ function Assert-Idle([switch]$Preparing) {
     $taskNames = if ($Preparing) { @('patchhub') } else { @('patchhub','patchhub-core','patchhub-worker') }
     foreach ($taskProcess in Get-Process -Name $taskNames -ErrorAction SilentlyContinue) {
         if ($Preparing -and $taskProcess.Id -eq $ParentId) { continue }
-        if ($taskProcess.Path -and [IO.Path]::GetDirectoryName($taskProcess.Path).Equals($taskTarget, [StringComparison]::OrdinalIgnoreCase)) {
+        # Process paths can retain the 8.3 alias used to launch the executable.
+        if ($taskProcess.Path -and [IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($taskProcess.Path)).Equals($taskTarget, [StringComparison]::OrdinalIgnoreCase)) {
             throw "Application still running in target directory: $($taskProcess.ProcessName) (PID $($taskProcess.Id)). Close other PatchHub windows and retry."
         }
     }
