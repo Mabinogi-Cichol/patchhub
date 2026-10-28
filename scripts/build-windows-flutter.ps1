@@ -78,10 +78,12 @@ Write-Output "Flutter Windows candidate: $taskOutput"
 $taskFlutterRoot = Split-Path -Parent (Split-Path -Parent (Resolve-Path $Flutter).Path)
 Copy-Item -LiteralPath (Join-Path $taskFlutterRoot 'LICENSE') -Destination (Join-Path $taskResources 'licenses/Flutter-LICENSE')
 Copy-Item -LiteralPath (Join-Path $taskFlutterRoot 'bin/cache/dart-sdk/LICENSE') -Destination (Join-Path $taskResources 'licenses/Dart-LICENSE')
+# The running UI reads app-version.json, which Flutter does not regenerate.
+# Preview builds need the same current version metadata as packaged builds.
+& python (Join-Path $PSScriptRoot 'update_manifest.py') $taskOutput
+if ($LASTEXITCODE -ne 0) { throw 'Update manifest generation failed' }
 if ($Preview) { return }
 $taskEvidence = Join-Path $taskRoot '.artifacts/windows-flutter'
 New-Item -ItemType Directory -Path $taskEvidence -Force | Out-Null
 $taskVersionJson | Set-Content -Encoding utf8 (Join-Path $taskEvidence 'flutter-version.json')
 $taskDeps | Set-Content -Encoding utf8 (Join-Path $taskEvidence 'pub-deps.json')
-& python (Join-Path $PSScriptRoot 'update_manifest.py') $taskOutput
-if ($LASTEXITCODE -ne 0) { throw 'Update manifest generation failed' }
