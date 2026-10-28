@@ -1,5 +1,7 @@
 # 功能开发文档
 
+2026-10-29：Windows 安装进度弹窗已按用户图例重设计，13 项相关回归与深浅主题 / 大字体 12 张原生夹具截图通过，用户视觉验收待完成。详见[设计](windows-install-progress/design.md)与[施工记录](windows-install-progress/progress.md)。
+
 2026-10-27：v0.4.0 已发布，包含 PatchHub 品牌统一、Windows 与 Decky 客户端自更新、Windows 全局来源布局与主题/下拉选择修复、补丁候选交互修复及分平台构建入口。Tag 运行 8 个任务全部成功，Flutter 238 项通过/1 项跳过；9 个公开附件完成哈希、ZIP 内容、SBOM、平台架构与 Tag 来源核验。详见[发行检查](../release-checklist.md#v040-发布记录2026-10-27)与[发行说明](../releases/v0.4.0.md)。
 
 2026-10-27：Windows 下拉选择框统一为保留原框的锚定式菜单，补丁/镜像/语言三处及展开收起动效已实现，47 项相关回归通过，深浅主题渲染已检查，原生窗口待验收。详见 [设计](windows-ux-redesign/design.md) 与 [施工记录](windows-ux-redesign/progress.md)。
@@ -12,6 +14,7 @@
 
 | 功能 | 状态 | 设计文档 | 施工记录 | 附加文档 |
 | --- | --- | --- | --- | --- |
+| Windows 安装进度界面 | 已实现，13 项相关回归、静态分析、12 张 Windows 原生夹具截图与 Release 构建通过；真实游戏安装和用户视觉验收待完成 | [设计](windows-install-progress/design.md) | [施工记录](windows-install-progress/progress.md) | — |
 | 补丁管理整合与流程精简 | 原整合已本地提交；后续语种选择 / 安装语言校验移除及游戏信息跟随 Steam 语言已实现，Flutter 全量 246 项 / 补充图片 6 项、Decky 80 项、Python 与核心相关回归通过，Windows release 候选及协议冒烟通过；后续原生 30 图通过；真实游戏和 Steam Deck 待验 | [设计与施工计划](patch-management-flow-simplification/design.md) | [施工记录](patch-management-flow-simplification/progress.md) | [实现审阅](patch-management-flow-simplification/review.md) · [语种选择与安装语言校验移除计划](patch-management-flow-simplification/language-selection-removal-plan.md) |
 | 发行附件精简 | 工作流已改为 3 个安装包及 SHA256SUMS.txt；暂存夹具及安装/更新 46 项回归通过，v0.4.0 已精简并通过公开清单、哈希及安装入口校验 | [设计](patchhub-ci-fix/design.md#2026-10-27发行附件精简) | [施工记录](patchhub-ci-fix/progress.md#2026-10-27发行附件精简) | — |
 | 分平台 BAT 构建入口 | 已实现并合入 v0.4.0 发行（入口为开发工具，不随安装包分发），入口与模拟流水线、Windows 快速预览实际构建通过，完整发行构建待验证 | [设计](platform-build-entrypoints/design.md) | [施工记录](platform-build-entrypoints/progress.md) | — |
