@@ -436,7 +436,7 @@ class _PatchManagementPageState extends State<PatchManagementPage> {
         : '当前没有可用的自动下载项，可查看其他输入方式';
     final summary = Container(
       key: const ValueKey('patch-status-panel'),
-      padding: const EdgeInsets.all(20),
+      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(12),
         border: Border.all(color: scheme.outlineVariant),
@@ -454,6 +454,7 @@ class _PatchManagementPageState extends State<PatchManagementPage> {
               borderRadius: BorderRadius.circular(10),
             ),
             child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Icon(
                   busy
@@ -504,25 +505,38 @@ class _PatchManagementPageState extends State<PatchManagementPage> {
             style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 12),
           ),
           SelectableText('${widget.row.game['buildid'] ?? '未知'}'),
-          const SizedBox(height: 12),
-          ExpansionTile(
-            key: PageStorageKey('${widget.row.id}:game-paths'),
-            tilePadding: EdgeInsets.zero,
-            title: const Text('更多游戏信息'),
-            children: [
-              SelectableText(
-                '安装路径：${widget.row.game['install_path']}\n库位置：${widget.row.game['library_path']}',
-                key: const PageStorageKey('game-paths-text'),
-              ),
-            ],
-          ),
         ],
       ),
+    );
+    final gamePaths = ExpansionTile(
+      key: PageStorageKey('${widget.row.id}:game-paths'),
+      tilePadding: EdgeInsets.zero,
+      childrenPadding: const EdgeInsets.only(bottom: 16),
+      expandedCrossAxisAlignment: CrossAxisAlignment.stretch,
+      title: const Text('更多游戏信息'),
+      children: [
+        Text('安装路径：', style: fieldTitleStyle),
+        const SizedBox(height: 4),
+        SelectionArea(
+          child: Text(
+            widget.row.game['install_path'] as String,
+            key: const ValueKey('game-install-path'),
+          ),
+        ),
+        const SizedBox(height: 16),
+        Text('库位置：', style: fieldTitleStyle),
+        const SizedBox(height: 4),
+        SelectionArea(
+          child: Text(
+            widget.row.game['library_path'] as String,
+            key: const ValueKey('game-library-path'),
+          ),
+        ),
+      ],
     );
     return LayoutBuilder(
       builder: (context, constraints) {
         final textScale = MediaQuery.textScalerOf(context).scale(14) / 14;
-        final wide = constraints.maxWidth >= 880 * textScale;
         final showCover = constraints.maxWidth >= 660;
         final inset = constraints.maxWidth < 660 ? 16.0 : 24.0;
         return Column(
@@ -539,69 +553,96 @@ class _PatchManagementPageState extends State<PatchManagementPage> {
                     Card(
                       child: Padding(
                         padding: EdgeInsets.all(inset),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              '补丁信息',
-                              style: Theme.of(context).textTheme.titleMedium
-                                  ?.copyWith(fontWeight: FontWeight.w600),
-                            ),
-                            const SizedBox(height: 20),
-                            Row(
-                              crossAxisAlignment: CrossAxisAlignment.start,
+                        child: LayoutBuilder(
+                          builder: (context, card) {
+                            final summaryWidth = (card.maxWidth * .32).clamp(
+                              320.0 * textScale,
+                              360.0 * textScale,
+                            );
+                            final coverSpace =
+                                showCover && widget.artwork != null
+                                ? 144.0 + 24
+                                : 0.0;
+                            final wide =
+                                card.maxWidth >=
+                                coverSpace +
+                                    360 * textScale +
+                                    24 +
+                                    summaryWidth;
+                            return Column(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
                               children: [
-                                if (showCover && widget.artwork != null) ...[
-                                  ClipRRect(
-                                    borderRadius: BorderRadius.circular(12),
-                                    child: SizedBox(
-                                      width: wide ? 144 : 112,
-                                      height: wide ? 216 : 168,
-                                      child: GameArtwork(
-                                        artwork: widget.artwork!,
-                                        kind: ArtworkKind.cover,
+                                Text(
+                                  '补丁信息',
+                                  style: Theme.of(context).textTheme.titleMedium
+                                      ?.copyWith(fontWeight: FontWeight.w600),
+                                ),
+                                const SizedBox(height: 20),
+                                Row(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    if (showCover &&
+                                        widget.artwork != null) ...[
+                                      ClipRRect(
+                                        borderRadius: BorderRadius.circular(12),
+                                        child: SizedBox(
+                                          width: wide ? 144 : 112,
+                                          height: wide ? 216 : 168,
+                                          child: GameArtwork(
+                                            artwork: widget.artwork!,
+                                            kind: ArtworkKind.cover,
+                                          ),
+                                        ),
+                                      ),
+                                      const SizedBox(width: 24),
+                                    ],
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.stretch,
+                                        children: [
+                                          for (final detail in details)
+                                            Padding(
+                                              padding: const EdgeInsets.only(
+                                                bottom: 8,
+                                              ),
+                                              child: detail,
+                                            ),
+                                        ],
                                       ),
                                     ),
-                                  ),
-                                  const SizedBox(width: 24),
-                                ],
-                                Expanded(
-                                  child: Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.stretch,
-                                    children: [
-                                      for (final detail in details)
-                                        Padding(
-                                          padding: const EdgeInsets.only(
-                                            bottom: 8,
-                                          ),
-                                          child: detail,
-                                        ),
+                                    if (wide) ...[
+                                      const SizedBox(width: 24),
+                                      SizedBox(
+                                        width: summaryWidth,
+                                        child: summary,
+                                      ),
                                     ],
-                                  ),
+                                  ],
                                 ),
-                                if (wide) ...[
-                                  const SizedBox(width: 24),
-                                  SizedBox(width: 240, child: summary),
+                                if (!wide) ...[
+                                  const SizedBox(height: 20),
+                                  summary,
+                                ],
+                                const SizedBox(height: 16),
+                                gamePaths,
+                                if (technicalDetails != null) ...[
+                                  const SizedBox(height: 16),
+                                  Material(
+                                    color: scheme.surfaceContainer,
+                                    clipBehavior: Clip.antiAlias,
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(12),
+                                      side: BorderSide(
+                                        color: scheme.outlineVariant,
+                                      ),
+                                    ),
+                                    child: technicalDetails,
+                                  ),
                                 ],
                               ],
-                            ),
-                            if (!wide) ...[const SizedBox(height: 20), summary],
-                            if (technicalDetails != null) ...[
-                              const SizedBox(height: 16),
-                              Material(
-                                color: scheme.surfaceContainer,
-                                clipBehavior: Clip.antiAlias,
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(12),
-                                  side: BorderSide(
-                                    color: scheme.outlineVariant,
-                                  ),
-                                ),
-                                child: technicalDetails,
-                              ),
-                            ],
-                          ],
+                            );
+                          },
                         ),
                       ),
                     ),

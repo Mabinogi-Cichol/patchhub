@@ -685,42 +685,13 @@ class _LibraryPageState extends State<LibraryPage> {
                   ),
                 ),
                 Padding(
-                  padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
-                  child: SingleChildScrollView(
-                    scrollDirection: Axis.horizontal,
-                    child: SegmentedButton<int>(
-                      showSelectedIcon: false,
-                      style: SegmentedButton.styleFrom(
-                        selectedBackgroundColor: scheme.primaryContainer,
-                        selectedForegroundColor: scheme.onPrimaryContainer,
-                        side: BorderSide(color: scheme.outlineVariant),
-                        visualDensity: VisualDensity.compact,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                      ),
-                      segments: const [
-                        ButtonSegment(
-                          value: 0,
-                          icon: Icon(Icons.build_outlined, size: 18),
-                          label: Text('补丁管理'),
-                        ),
-                        ButtonSegment(
-                          value: 1,
-                          icon: Icon(Icons.receipt_long_outlined, size: 18),
-                          label: Text('操作记录'),
-                        ),
-                        ButtonSegment(
-                          value: 2,
-                          icon: Icon(Icons.bookmark_outline, size: 18),
-                          label: Text('游戏订阅'),
-                        ),
-                      ],
-                      selected: {tab},
-                      onSelectionChanged: (value) =>
-                          setState(() => tab = value.single),
-                    ),
+                  padding: EdgeInsets.fromLTRB(
+                    constraints.maxWidth < 660 ? 16 : 24,
+                    0,
+                    constraints.maxWidth < 660 ? 16 : 24,
+                    8,
                   ),
+                  child: gameToolbar(row),
                 ),
               ],
             );
@@ -753,39 +724,92 @@ class _LibraryPageState extends State<LibraryPage> {
     );
   }
 
-  Widget managementContent(GameRow row, Widget management) {
+  Widget gameToolbar(GameRow row) {
+    final scheme = Theme.of(context).colorScheme;
     final running = widget.model.queryRunning(row);
+    final textScale = MediaQuery.textScalerOf(context).scale(14) / 14;
+    final navigation = SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: SegmentedButton<int>(
+        showSelectedIcon: false,
+        style: SegmentedButton.styleFrom(
+          selectedBackgroundColor: scheme.primaryContainer,
+          selectedForegroundColor: scheme.onPrimaryContainer,
+          side: BorderSide(color: scheme.outlineVariant),
+          visualDensity: VisualDensity.compact,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+          ),
+        ),
+        segments: const [
+          ButtonSegment(
+            value: 0,
+            icon: Icon(Icons.build_outlined, size: 18),
+            label: Text('补丁管理'),
+          ),
+          ButtonSegment(
+            value: 1,
+            icon: Icon(Icons.receipt_long_outlined, size: 18),
+            label: Text('操作记录'),
+          ),
+          ButtonSegment(
+            value: 2,
+            icon: Icon(Icons.bookmark_outline, size: 18),
+            label: Text('游戏订阅'),
+          ),
+        ],
+        selected: {tab},
+        onSelectionChanged: (value) => setState(() => tab = value.single),
+      ),
+    );
+    final rematch = Visibility(
+      visible: tab == 0,
+      maintainSize: true,
+      maintainState: true,
+      maintainAnimation: true,
+      child: SizedBox(
+        width: 144 * textScale,
+        child: OutlinedButton.icon(
+          key: const ValueKey('game-rematch'),
+          onPressed: running ? null : () => widget.model.rematch(row),
+          icon: running
+              ? const SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Icon(Icons.refresh, size: 18),
+          label: Text(running ? '正在匹配' : '重新匹配'),
+        ),
+      ),
+    );
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        if (constraints.maxWidth < 560 * textScale) {
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              navigation,
+              const SizedBox(height: 8),
+              Align(alignment: Alignment.centerRight, child: rematch),
+            ],
+          );
+        }
+        return Row(
+          children: [
+            Expanded(child: navigation),
+            const SizedBox(width: 16),
+            rematch,
+          ],
+        );
+      },
+    );
+  }
+
+  Widget managementContent(GameRow row, Widget management) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
-          child: Wrap(
-            spacing: 16,
-            runSpacing: 8,
-            crossAxisAlignment: WrapCrossAlignment.center,
-            children: [
-              OutlinedButton.icon(
-                onPressed: running ? null : () => widget.model.rematch(row),
-                icon: const Icon(Icons.refresh, size: 18),
-                label: const Text('重新匹配'),
-              ),
-              if (running)
-                const Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    SizedBox(
-                      width: 16,
-                      height: 16,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    ),
-                    SizedBox(width: 10),
-                    Text('正在查找补丁'),
-                  ],
-                ),
-            ],
-          ),
-        ),
         if (widget.model.transactions.any(
           (record) => record['instance_id'] == row.id && needsRecovery(record),
         ))

@@ -143,6 +143,7 @@ void main() {
       for (final dark in [true, false]) {
         for (final size in [
           const Size(1440, 900),
+          const Size(1382, 1169),
           const Size(1180, 760),
           const Size(850, 560),
         ]) {
@@ -177,6 +178,12 @@ void main() {
           final row = model.snapshot!.rows.firstWhere(
             (r) => r.game['appid'] == appid,
           );
+          if (dataPath.isEmpty) {
+            row.game['install_path'] =
+                r'\\?\F:\Steam Library\steamapps\common\'
+                '用于排版验收的中文游戏目录${List.filled(4, 'LongDirectoryName').join()}';
+            row.game['library_path'] = r'\\?\F:\Steam Library\用于排版验收的游戏库';
+          }
           if (find.text(row.name).evaluate().isEmpty && output != null) {
             debugPrint(
               'Visible text: ${tester.widgetList<Text>(find.byType(Text)).map((t) => t.data).toList()}',
@@ -233,8 +240,21 @@ void main() {
           );
           await tester.pumpAndSettle();
           expect(find.textContaining('安装路径：'), findsOneWidget);
-          await tester.ensureVisible(find.textContaining('安装路径：'));
+          final libraryPath = find.byKey(const ValueKey('game-library-path'));
+          expect(libraryPath, findsOneWidget);
+          await Scrollable.ensureVisible(
+            tester.element(libraryPath),
+            alignment: 1,
+          );
           await tester.pumpAndSettle();
+          expect(
+            tester.getRect(libraryPath).bottom,
+            lessThanOrEqualTo(
+              tester
+                  .getRect(find.byKey(const ValueKey('patch-floating-actions')))
+                  .top,
+            ),
+          );
           await capture('management-game-info');
           await capture('patch');
           final technical = find.text('文件与技术详情');

@@ -30,6 +30,7 @@ class ModernFixtureModel extends AppModel {
 void main() {
   for (final size in [
     const Size(1440, 900),
+    const Size(1382, 1169),
     const Size(1180, 760),
     const Size(850, 560),
   ]) {
@@ -59,6 +60,14 @@ void main() {
             await tester.pumpAndSettle();
             await tester.tap(find.text('补丁管理'));
             await tester.pumpAndSettle();
+            final rematch = find.byKey(const ValueKey('game-rematch'));
+            expect(rematch.hitTestable(), findsOneWidget);
+            final tabs = tester.getRect(find.byType(SegmentedButton<int>));
+            final rematchBounds = tester.getRect(rematch);
+            if (size.width >= 1382 && scale == 1) {
+              expect(rematchBounds.center.dy, closeTo(tabs.center.dy, 1));
+              expect(rematchBounds.left, greaterThan(tabs.right));
+            }
             expect(find.text('打开游戏目录').hitTestable(), findsOneWidget);
             expect(find.text('安装补丁').hitTestable(), findsOneWidget);
             final footer = tester.getRect(
@@ -68,6 +77,7 @@ void main() {
             expect(page.right - footer.right, greaterThanOrEqualTo(16));
             expect(page.bottom - footer.bottom, greaterThanOrEqualTo(16));
             final status = find.byKey(const ValueKey('patch-status-panel'));
+            expect(tester.getSize(status).width, greaterThanOrEqualTo(320));
             await tester.ensureVisible(find.text('补丁状态'));
             await tester.pumpAndSettle();
             expect(
@@ -102,6 +112,10 @@ void main() {
             for (final tab in ['操作记录', '游戏订阅', '补丁管理']) {
               await tester.tap(find.text(tab));
               await tester.pumpAndSettle();
+              expect(
+                rematch.hitTestable(),
+                tab == '补丁管理' ? findsOneWidget : findsNothing,
+              );
               expect(find.text('打开游戏目录').hitTestable(), findsOneWidget);
               expect(find.text('安装补丁').hitTestable(), findsOneWidget);
               expect(

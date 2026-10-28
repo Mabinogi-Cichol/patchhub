@@ -182,12 +182,16 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.text(row.name));
       await tester.pumpAndSettle();
+      final rematch = find.byKey(const ValueKey('game-rematch'));
+      final idleBounds = tester.getRect(rematch);
       late CoreTask task;
       await tester.runAsync(() async {
         task = model.startSource('rematch_game', {'instance_id': row.id});
       });
       await tester.pump();
-      expect(find.text('正在查找补丁'), findsOneWidget);
+      expect(find.text('正在匹配'), findsOneWidget);
+      expect(tester.widget<OutlinedButton>(rematch).onPressed, isNull);
+      expect(tester.getRect(rematch), idleBounds);
       expect(model.queryRunning(row), isTrue);
       await tester.runAsync(() async {
         await task.cancel();
@@ -196,7 +200,9 @@ void main() {
       });
       await tester.pumpAndSettle();
       expect(model.queryRunning(row), isFalse);
-      expect(find.text('正在查找补丁'), findsNothing);
+      expect(find.text('正在匹配'), findsNothing);
+      expect(tester.widget<OutlinedButton>(rematch).onPressed, isNotNull);
+      expect(tester.getRect(rematch), idleBounds);
       expect(model.snapshot!.rows.single.patches, isNotEmpty);
       await tester.runAsync(() async {
         final partial = model.startSource('match_games', {
