@@ -1074,57 +1074,6 @@ fn dedupe_json<T: serde::Serialize + Clone>(items: Vec<T>) -> Vec<T> {
     out
 }
 
-/// Port of `discovery.py::needs_fallback`.
-pub fn needs_fallback(candidates: &[SourceCandidate], query: &QueryContext) -> bool {
-    let official: Vec<&SourceCandidate> = candidates
-        .iter()
-        .filter(|candidate| {
-            candidate.source_id != "hgamer"
-                && matched_basis(candidate.match_basis)
-                && candidate.cache_status != CacheStatus::Stale
-                && candidate.variant == Variant::Base
-                && !candidate
-                    .warnings
-                    .iter()
-                    .any(|warning| warning == "dlc_conditions_unknown")
-        })
-        .collect();
-    let official: Vec<&SourceCandidate> =
-        if let Some(preferred) = query.preferred_language.as_deref() {
-            official
-                .into_iter()
-                .filter(|candidate| {
-                    candidate
-                        .languages
-                        .iter()
-                        .any(|language| language == preferred)
-                })
-                .collect()
-        } else {
-            official
-        };
-    if official.is_empty() {
-        return true;
-    }
-    let mut counts: HashMap<(String, Vec<String>), usize> = HashMap::new();
-    for candidate in &official {
-        *counts
-            .entry((candidate.source_id.clone(), candidate.languages.clone()))
-            .or_insert(0) += 1;
-    }
-    if counts.values().any(|count| *count > 1) {
-        return true;
-    }
-    candidates.iter().any(|candidate| {
-        candidate.source_id != "hgamer"
-            && (candidate.variant == Variant::Dlc
-                || candidate
-                    .warnings
-                    .iter()
-                    .any(|warning| warning == "dlc_conditions_unknown"))
-    })
-}
-
 fn matched_basis(basis: MatchBasis) -> bool {
     matches!(
         basis,
@@ -1317,7 +1266,7 @@ mod tests {
             appid,
             name: name.to_string(),
             name_hints: Vec::new(),
-            preferred_language: None,
+
             legacy_match: false,
             force: false,
             source_context: Vec::new(),
@@ -1770,40 +1719,5 @@ mod tests {
         assert!(merged
             .iter()
             .all(|item| validate_candidate(item, &rule).is_ok()));
-    }
-
-    #[test]
-    fn needs_fallback_matches_python() {
-        let query = query(42, "Game");
-        assert!(needs_fallback(&[], &query));
-        let official = sample(
-            'a',
-            "kagura-cn",
-            Some(42),
-            MatchBasis::Appid,
-            Variant::Base,
-            Vec::new(),
-        );
-        assert!(!needs_fallback(std::slice::from_ref(&official), &query));
-        let dlc = sample(
-            'b',
-            "kagura-cn",
-            Some(42),
-            MatchBasis::Appid,
-            Variant::Dlc,
-            Vec::new(),
-        );
-        assert!(needs_fallback(&[official.clone(), dlc], &query));
-        // A gated official (dlc_conditions_unknown) always needs fallback.
-        let gated = sample(
-            'c',
-            "kagura-cn",
-            Some(42),
-            MatchBasis::Appid,
-            Variant::Base,
-            vec!["dlc_conditions_unknown".to_string()],
-        );
-        assert!(!needs_fallback(&[official], &query));
-        assert!(needs_fallback(&[gated], &query));
     }
 }

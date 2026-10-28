@@ -14,8 +14,8 @@ const original = corpus.responses.find(c => c.name === 'scan-success').response.
 const candidate = corpus.events.find(c => c.name === 'match_update').event.candidates[0];
 const clone = value => structuredClone(value);
 const scenarios = [];
-const add = (name, row, language = null) => scenarios.push({name, row, language,
-  entries: ui.displayPatches(row, language).map(entry => ({kind: entry.kind, key: entry.key,
+const add = (name, row) => scenarios.push({name, row,
+  entries: ui.displayPatches(row).map(entry => ({kind: entry.kind, key: entry.key,
     title: entry.kind === 'installable' ? entry.patch.name : entry.candidate.patch_title,
     choices: entry.kind === 'installable' ? entry.choices.map(patch => patch.selection_id ?? patch.release_id) : []})),
   matched: ui.hasMatchedPatch(row), attention: ui.needsAttention(row), summary: ui.installSummary(row),
@@ -38,7 +38,7 @@ add('variant-order', row);
 row = clone(original); row.patches = [];
 row.discovery.candidates = [{...candidate, candidate_id: 'english', languages: ['en']}, {...candidate, candidate_id: 'chinese', languages: ['zh-CN']},
   {...candidate, candidate_id: 'fallback', source_id: 'hgamer', languages: ['zh-CN']}];
-add('language-preference', row, 'zh-CN');
+add('language-variants', row);
 const output = `${JSON.stringify(scenarios, null, 2)}\n`;
 const destination = resolve(root, 'apps/windows-flutter/test/fixtures/presentation.json');
 if (process.argv.includes('--check')) {

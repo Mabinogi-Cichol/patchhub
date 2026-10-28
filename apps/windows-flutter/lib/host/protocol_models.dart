@@ -61,7 +61,12 @@ void _validateCapabilities(Map<String, dynamic> value) {
     'outcome_version',
     'request_validation_version',
   ]) {
-    if (contracts[key] != 1) throw const CoreError('capability_mismatch');
+    if (contracts[key] !=
+        (key == 'request_validation_version' || key == 'projection_version'
+            ? 2
+            : 1)) {
+      throw const CoreError('capability_mismatch');
+    }
   }
   final installer = value['installer'] as Map<String, dynamic>;
   final sources = value['sources'] as Map<String, dynamic>;

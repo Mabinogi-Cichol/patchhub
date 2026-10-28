@@ -26,7 +26,7 @@ fn run(appid: u32, name: &str) {
         appid,
         name: name.to_string(),
         name_hints: Vec::new(),
-        preferred_language: Some("zh-CN".to_string()),
+
         legacy_match: false,
         force: true,
         source_context: Vec::new(),

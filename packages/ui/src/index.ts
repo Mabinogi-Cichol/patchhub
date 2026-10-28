@@ -12,15 +12,14 @@ export type DisplayPatch = { kind: "installable"; key: string; patch: Patch; cho
 export function candidateMatched(candidate: SourceCandidate): boolean {
   return ["appid", "verified_alias", "official_title"].includes(candidate.match_basis ?? "");
 }
-export function displayPatches(row: Install, preferredLanguage: string | null = null): DisplayPatch[] {
+export function displayPatches(row: Install): DisplayPatch[] {
   // A trusted publisher match is the display basis; the fallback indexer's
   // candidates must not be shown next to it (p1-contract §7.1 rule 1).
   const candidates = (row.discovery?.candidates ?? [])
     .filter(candidate => row.discovery?.status !== "publisher_match" || candidate.source_id !== "hgamer");
   const discovery: DisplayPatch[] = [...candidates]
     .filter(candidate => !row.patches.some(patch => patch.candidate_id === candidate.candidate_id))
-    .sort((a, b) => Number(a.source_id === "hgamer") - Number(b.source_id === "hgamer")
-      || Number(!!preferredLanguage && !a.languages?.includes(preferredLanguage)) - Number(!!preferredLanguage && !b.languages?.includes(preferredLanguage)))
+    .sort((a, b) => Number(a.source_id === "hgamer") - Number(b.source_id === "hgamer"))
     .map(candidate => ({ kind: "discovery", key: candidate.candidate_id, candidate }));
   const patches = row.patches.filter(patch => patch.compatibility === "manual_selection_required" || patch.actions.overwrite.available
     || !row.patches.some(other => other.candidate_id === patch.candidate_id && other.compatibility === "manual_selection_required" && other.actions.overwrite.available)).sort((a, b) => {
@@ -178,7 +177,7 @@ export function reason(code: string): string {
     exe_confirmation_invalid: "安装状态已失效，请重新安装。",
     exe_confirmation_changed: "安装确认已失效，请重新准备安装。",
     exe_conditions_confirmation_required: "当前游戏的安装条件未能自动核验。",
-    exe_installer_condition_mismatch: "当前游戏文件不满足安装器的前置条件，请检查游戏版本、语言及 DLC。",
+    exe_installer_condition_mismatch: "当前游戏文件不满足安装器的前置条件，请检查游戏版本与 DLC。",
     exe_analysis_required: "需要重新检查官方安装包后才能安装或重装。",
     exe_event_order_unsupported: "安装器事件结构暂未支持。",
     exe_object_class_unsupported: "安装器使用了暂未支持的对象类型。",
@@ -186,7 +185,6 @@ export function reason(code: string): string {
     exe_file_actions_or_options_unsupported: "安装器文件动作或覆盖设置暂未支持。",
     exe_user_data_target_unsupported: "安装包包含存档或用户数据覆盖，已停止安装。",
     exe_terms_changed: "安装包已变化，请重新安装。",
-    exe_language_mismatch: "游戏语言与此补丁的适用语言不符。",
     exe_dlc_required: "此补丁需要指定的 DLC，当前游戏不符合条件。",
     exe_dlc_excluded: "此补丁不适用于当前安装的 DLC。",
     exe_manifest_unavailable: "无法读取游戏版本信息，请检查 Steam 游戏安装。",
@@ -224,7 +222,7 @@ export function reason(code: string): string {
     exe_descriptor_limit: "无法安全限制检查任务，暂不能自动安装。",
     exe_baseline_mismatch: "游戏版本或原文件与已审核版本不符，请核对游戏版本。",
     exe_dlc_mismatch: "当前 DLC 状态不符合此补丁的适用条件。",
-    exe_conditions_required: "请确认游戏语言、版本与 DLC 适用条件。",
+    exe_conditions_required: "请确认游戏版本与 DLC 适用条件。",
     exe_insufficient_space: "检查或安装此补丁所需空间不足，请清理空间后重试。",
     game_not_ready: "游戏尚未完整安装或库不可访问，请检查 Steam 下载状态。",
     signed_catalog_required: "需要有效的签名目录才能安装。",
@@ -291,7 +289,7 @@ export function reason(code: string): string {
      ,exe_candidate_variant_unsupported: "此补丁的版本类型暂不支持自动安装，请查看来源说明。"
      ,exe_candidate_ambiguous: "来源为此补丁提供了多个可下载项，无法唯一确定。"
      ,exe_download_ambiguous: "来源提供了多个 EXE 下载地址，无法唯一确定。"
-     ,exe_conditions_not_satisfied: "当前游戏不满足安装器的条件，请检查游戏版本、语言与 DLC。"
+     ,exe_conditions_not_satisfied: "当前游戏不满足安装器的条件，请检查游戏版本与 DLC。"
      ,exe_route_unimplemented: "此平台暂不支持 EXE 自动安装，请查看来源说明。"
      ,download_hash_mismatch: "下载文件与来源记录不一致，已停止安装。"
      ,download_failed: "补丁下载失败，请检查网络后重试。"

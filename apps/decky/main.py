@@ -179,14 +179,13 @@ class Plugin:
     async def update_source(self, source_id, force=False):
         return self.sources.start_update_source(source_id, force)
 
-    async def match_games(self, instances=None, name_hints=None, preferred_language=None,
+    async def match_games(self, instances=None, name_hints=None,
                           force_details=False):
-        return self.sources.start_match_games(instances, name_hints, preferred_language,
+        return self.sources.start_match_games(instances, name_hints,
                                               force_details)
 
-    async def rematch_game(self, instance_id=None, appid=None, name_hints=None,
-                           preferred_language=None):
-        return self.sources.start_rematch_game(instance_id, appid, name_hints, preferred_language)
+    async def rematch_game(self, instance_id=None, appid=None, name_hints=None):
+        return self.sources.start_rematch_game(instance_id, appid, name_hints)
 
     async def source_task_status(self, task_id=None):
         return self.sources.task_status(task_id)

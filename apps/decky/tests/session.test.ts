@@ -141,8 +141,8 @@ test("rematch task merges live match updates into every row sharing the AppID, t
   });
   const session = createManagerSession(async () => ({ report: initial, transactions: [] }), api);
   await session.refresh();
-  assert.equal(await session.rematchGame("a", 1227890, ["Summer Memories"], "zh-CN"), "task-1");
-  assert.deepEqual(calls.rematchGame[0], ["a", null, ["Summer Memories"], "zh-CN"]);
+  assert.equal(await session.rematchGame("a", 1227890, ["Summer Memories"]), "task-1");
+  assert.deepEqual(calls.rematchGame[0], ["a", null, ["Summer Memories"]]);
   await session.pollSourceTasks();
   for (const instance of ["a", "a-dlc"]) {
     assert.equal(session.getSnapshot().report!.installs.find(row => row.game.instance_id === instance)!.discovery!.status, "publisher_match");
@@ -258,7 +258,7 @@ test("match_games tasks update rows for every reported AppID", async () => {
   const { api } = fakeApi([[running], []]);
   const session = createManagerSession(async () => ({ report: initial, transactions: [] }), api);
   await session.refresh();
-  await session.matchGames(null, [], null, false);
+  await session.matchGames(null, [], false);
   await session.pollSourceTasks();
   for (const instance of ["a", "b"]) {
     assert.deepEqual(session.getSnapshot().report!.installs.find(row => row.game.instance_id === instance)!.discovery,

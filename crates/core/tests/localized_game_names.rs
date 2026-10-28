@@ -204,3 +204,26 @@ fn old_json_deserializes_with_optional_fields_and_serializes_nulls() {
     assert!(report["localized_name"].is_null());
     assert!(report["name_language"].is_null());
 }
+
+#[test]
+fn interface_language_survives_missing_localized_names_and_changes_on_rescan() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("Steam");
+    write_manifest(&root, 42);
+    language(&root, "japanese");
+    let canonical = fs::canonicalize(&root).unwrap();
+    let report = scan(std::slice::from_ref(&root));
+    assert!(report.installs[0].name_language.is_none());
+    assert_eq!(
+        report.steam_languages.get(&canonical).map(String::as_str),
+        Some("japanese")
+    );
+    language(&root, "english");
+    assert_eq!(
+        scan(&[root])
+            .steam_languages
+            .get(&canonical)
+            .map(String::as_str),
+        Some("english")
+    );
+}

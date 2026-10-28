@@ -86,7 +86,7 @@ class DisplayEntry {
 }
 
 /// Port of packages/ui displayPatches: preserve candidates, variants and mirrors.
-List<DisplayEntry> displayEntries(GameRow row, [String? preferredLanguage]) {
+List<DisplayEntry> displayEntries(GameRow row) {
   final candidates = ((row.discovery?['candidates'] as List?) ?? [])
       .cast<Map<String, dynamic>>();
   final discovery = candidates
@@ -103,12 +103,7 @@ List<DisplayEntry> displayEntries(GameRow row, [String? preferredLanguage]) {
     for (var i = 0; i < discovery.length; i++) discovery[i]: i,
   };
   discovery.sort((a, b) {
-    int rank(Map<String, dynamic> c) =>
-        (c['source_id'] == 'hgamer' ? 2 : 0) +
-        (preferredLanguage != null &&
-                !(c['languages'] as List).contains(preferredLanguage)
-            ? 1
-            : 0);
+    int rank(Map<String, dynamic> c) => c['source_id'] == 'hgamer' ? 2 : 0;
     final compare = rank(a).compareTo(rank(b));
     return compare != 0
         ? compare

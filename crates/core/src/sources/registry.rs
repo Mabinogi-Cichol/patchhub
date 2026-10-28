@@ -556,12 +556,8 @@ impl SourceRegistry {
         }
     }
 
-    /// Match-task query bounds (design §2.6): AppID/name/hint/language limits.
-    pub fn validate_query(
-        game: &GameQuery,
-        name_hints: &[String],
-        preferred_language: Option<&str>,
-    ) -> Result<()> {
+    /// Match-task query bounds (design §2.6): AppID/name/hint limits.
+    pub fn validate_query(game: &GameQuery, name_hints: &[String]) -> Result<()> {
         if game.appid == 0 || game.name.trim().is_empty() || game.name.len() > 1024 {
             return Err(invalid("invalid_discovery_game"));
         }
@@ -572,28 +568,7 @@ impl SourceRegistry {
         {
             return Err(invalid("invalid_discovery_query"));
         }
-        if let Some(language) = preferred_language {
-            if !valid_language_code(language) {
-                return Err(invalid("invalid_discovery_query"));
-            }
-        }
         Ok(())
-    }
-}
-
-fn valid_language_code(value: &str) -> bool {
-    let parts: Vec<&str> = value.split('-').collect();
-    match parts.as_slice() {
-        [primary] => {
-            (2..=3).contains(&primary.len()) && primary.bytes().all(|b| b.is_ascii_alphabetic())
-        }
-        [primary, region] => {
-            (2..=3).contains(&primary.len())
-                && primary.bytes().all(|b| b.is_ascii_alphabetic())
-                && (2..=4).contains(&region.len())
-                && region.bytes().all(|b| b.is_ascii_alphabetic())
-        }
-        _ => false,
     }
 }
 

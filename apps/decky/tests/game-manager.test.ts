@@ -82,7 +82,7 @@ test("the default page has three native panels and neutral empty results with qu
   assert.match(html, /暂无补丁结果/);
   assert.match(html, /重新查询/);
   assert.doesNotMatch(html, /概览|query-secret|查询失败|覆盖不完整|尚未完成/);
-  assert.ok(page.controls.some(control => control.name === "DropdownItem" && control.props.label === "偏好的补丁语言"));
+  assert.ok(!page.controls.some(control => control.name === "DropdownItem" && control.props.label === "偏好的补丁语言"));
   page.button("安装路径与游戏库 ▾").onClick();
   assert.match(page.render(), /\/library\/game.*复制安装路径.*\/library.*复制游戏库路径/);
 });

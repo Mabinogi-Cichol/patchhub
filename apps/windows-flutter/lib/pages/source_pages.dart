@@ -2,7 +2,6 @@ import 'dart:convert';
 
 import 'package:flutter/material.dart';
 
-import '../presentation/desktop_select.dart';
 
 import '../host/desktop_services.dart';
 import '../host/core_task.dart';
@@ -125,10 +124,7 @@ class _GlobalSourcesPageState extends State<GlobalSourcesPage> {
         child: TextButton.icon(
           onPressed: widget.model.tasks.closing
               ? null
-              : () => widget.model.startSource('match_games', {
-                  if (widget.model.preferredLanguage != null)
-                    'preferred_language': widget.model.preferredLanguage,
-                }),
+              : () => widget.model.startSource('match_games', {}),
           icon: const Icon(Icons.manage_search),
           label: const Text('重新匹配整个游戏库'),
         ),
@@ -429,26 +425,6 @@ class _GameSourcesPageState extends State<GameSourcesPage> {
                 : (value) => toggle(source['id'] as String, value),
           ),
         const SizedBox(height: 12),
-        const Text('语言偏好（本次会话）'),
-        const SizedBox(height: 8),
-        DesktopSelect(
-          label: '语言偏好（本次会话）',
-          value: widget.model.preferredLanguage ?? '',
-          options: [
-            for (final entry in const {
-              '': '不限语言',
-              'zh-CN': '简体中文',
-              'zh-TW': '繁体中文',
-              'en': '英文',
-              'ja': '日文',
-            }.entries)
-              (value: entry.key, label: entry.value),
-          ],
-          onSelected: (value) {
-            widget.model.setPreferredLanguage(value == '' ? null : value);
-            setState(() {});
-          },
-        ),
         const SizedBox(height: 12),
         OutlinedButton(
           onPressed: saving || task?.running == true

@@ -31,10 +31,7 @@ pub fn parse_exe_selection_id(id: &str) -> Option<u32> {
 pub fn expectation(selection: &ResolvedExeCandidate) -> FactsExpectation {
     FactsExpectation {
         appid: selection.appid,
-        language: selection.language.clone(),
         verified_buildids: Vec::new(),
-        // EXE publisher sources keep the language gate (legacy behaviour).
-        require_language: !selection.language.is_empty() && !selection.is_manual(),
         requires_dlc: selection.candidate.requires_dlc.clone().unwrap_or_default(),
         excludes_dlc: selection.candidate.excludes_dlc.clone().unwrap_or_default(),
         baselines: Vec::new(),
@@ -285,8 +282,6 @@ mod tests {
         )
         .unwrap();
         assert_eq!(resolved.download_url, "https://kaguraserver.com/a.exe");
-        // EXE publisher candidates keep the language gate.
-        assert!(expectation(&resolved).require_language);
     }
 
     #[test]

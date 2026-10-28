@@ -21,7 +21,6 @@ NAME_HINT_LIMIT = 256
 # Finished task snapshots are retained for UI polling and may carry full
 # candidate lists; keep that history bounded over long-running plugin sessions.
 RETAINED_FINISHED_TASKS = 64
-LANGUAGE_PATTERN = re.compile(r"[A-Za-z]{2,3}(?:-[A-Za-z]{2,4})?")
 
 
 def due_source_ids(summaries, now):
@@ -52,14 +51,6 @@ def _name_hints(value):
                    for name in value)):
         raise ValueError("invalid_discovery_query")
     return list(value)
-
-
-def _language(value):
-    if value is None:
-        return None
-    if not isinstance(value, str) or not LANGUAGE_PATTERN.fullmatch(value):
-        raise ValueError("invalid_discovery_query")
-    return value
 
 
 class SourceService:
@@ -203,7 +194,7 @@ class SourceService:
         return self._start("update_source", source_id, "update_source",
                            {"source_id": source_id, "force": force}, [], None)
 
-    def start_match_games(self, instances=None, name_hints=None, preferred_language=None,
+    def start_match_games(self, instances=None, name_hints=None,
                           force_details=False):
         selected = [] if instances is None else instances
         if not isinstance(selected, list):
@@ -211,7 +202,6 @@ class SourceService:
         for instance in selected:
             validate_id(instance, MAX_INSTANCE_ID_BYTES)
         hints = _name_hints(name_hints)
-        language = _language(preferred_language)
         if type(force_details) is not bool:
             raise ValueError("invalid_request")
         params = {}
@@ -219,14 +209,11 @@ class SourceService:
             params["instances"] = list(selected)
         if hints:
             params["name_hints"] = hints
-        if language is not None:
-            params["preferred_language"] = language
         if force_details:
             params["force_details"] = True
         return self._start("match_games", "match", "match_games", params, selected, None)
 
-    def start_rematch_game(self, instance_id=None, appid=None, name_hints=None,
-                           preferred_language=None):
+    def start_rematch_game(self, instance_id=None, appid=None, name_hints=None):
         if (instance_id is None) == (appid is None):
             raise ValueError("instance_required")
         if instance_id is not None:
@@ -234,12 +221,9 @@ class SourceService:
         if appid is not None and (type(appid) is not int or not 0 <= appid <= 0xFFFFFFFF):
             raise ValueError("invalid_request")
         hints = _name_hints(name_hints)
-        language = _language(preferred_language)
         params = {"instance_id": instance_id} if instance_id is not None else {"appid": appid}
         if hints:
             params["name_hints"] = hints
-        if language is not None:
-            params["preferred_language"] = language
         key = instance_id if instance_id is not None else f"appid:{appid}"
         return self._start("rematch_game", key, "rematch_game", params,
                            [instance_id] if instance_id is not None else [], appid)

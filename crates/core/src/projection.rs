@@ -138,6 +138,8 @@ pub struct ScanReport {
     pub catalog_error: Option<DomainError>,
     pub platform: Platform,
     pub roots: Vec<PathBuf>,
+    /// Steam interface language by canonical install root, including roots with no localized names.
+    pub steam_languages: std::collections::BTreeMap<PathBuf, String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional = nullable)]
     pub settings_revision: Option<u64>,
@@ -321,6 +323,7 @@ pub fn scan(inputs: ProjectionInputs<'_>) -> Result<ScanReport, DomainError> {
         catalog_error,
         platform: inputs.platform,
         roots: inputs.roots.to_vec(),
+        steam_languages: inputs.steam.steam_languages.clone(),
         settings_revision: inputs.sources.map(|s| s.settings_revision()),
         sources: inputs.sources.map(|s| s.registry().list_sources()),
         installs,

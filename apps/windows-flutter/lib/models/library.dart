@@ -33,8 +33,29 @@ class ScanSnapshot {
           .map((row) => GameRow(row as Map<String, dynamic>))
           .toList(),
       diagnostics = (value['diagnostics'] as List).cast<Map<String, dynamic>>(),
+      steamLanguages = (value['steam_languages'] as Map? ?? {})
+          .cast<String, String>(),
       catalogError = value['catalog_error'] as Map<String, dynamic>?;
   final List<GameRow> rows;
   final List<Map<String, dynamic>> diagnostics;
   final Map<String, dynamic>? catalogError;
+  final Map<String, String> steamLanguages;
+
+  String? steamLanguage(String root) {
+    String normalize(String path) {
+      var value = path
+          .replaceAll('\\', '/')
+          .replaceAll(RegExp(r'/+$'), '')
+          .toLowerCase();
+      if (value.startsWith('//?/unc/')) return '//${value.substring(8)}';
+      if (value.startsWith('//?/')) value = value.substring(4);
+      return value;
+    }
+
+    final target = normalize(root);
+    return steamLanguages.entries
+        .where((entry) => normalize(entry.key) == target)
+        .firstOrNull
+        ?.value;
+  }
 }

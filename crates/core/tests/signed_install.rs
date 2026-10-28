@@ -432,6 +432,32 @@ fn signed_precheck_accepts_installed_dlc_beyond_the_former_manifest_limit() {
 }
 
 #[test]
+fn signed_install_accepts_missing_or_conflicting_steam_language() {
+    if !can_install() {
+        return;
+    }
+    for language in [
+        "",
+        r#""UserConfig" { "language" "japanese" } "MountedConfig" { "language" "english" }"#,
+    ] {
+        let f = Fixture::new();
+        fs::write(f.library.join("steamapps/appmanifest_42.acf"), format!(r#""AppState" {{ "appid" "42" "name" "Signed Test" "installdir" "Signed Test" "buildid" "100" "StateFlags" "4" {language} }}"#)).unwrap();
+        let result = f
+            .run(
+                &f.provider(),
+                &Lease::default(),
+                &Offline,
+                "signed-language-free",
+                true,
+                InstallOperation::Overwrite,
+            )
+            .unwrap();
+        assert_eq!(result.disposition, Disposition::Completed);
+        assert_eq!(fs::read(f.game.join("original.dat")).unwrap(), b"patched");
+    }
+}
+
+#[test]
 fn signed_auto_download_uses_injected_transport_and_accepts_extensionless_url() {
     if !can_install() {
         return;

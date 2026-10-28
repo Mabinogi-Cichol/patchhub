@@ -1772,12 +1772,6 @@
             "type": "string"
           },
           "type": "array"
-        },
-        "preferred_language": {
-          "type": [
-            "string",
-            "null"
-          ]
         }
       },
       "required": [
@@ -2626,12 +2620,6 @@
             "type": "string"
           },
           "type": "array"
-        },
-        "preferred_language": {
-          "type": [
-            "string",
-            "null"
-          ]
         }
       },
       "required": [
@@ -3221,6 +3209,13 @@
             "array",
             "null"
           ]
+        },
+        "steam_languages": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Steam interface language by canonical install root, including roots with no localized names.",
+          "type": "object"
         }
       },
       "required": [
@@ -3228,6 +3223,7 @@
         "catalog_trust",
         "platform",
         "roots",
+        "steam_languages",
         "installs",
         "diagnostics"
       ],

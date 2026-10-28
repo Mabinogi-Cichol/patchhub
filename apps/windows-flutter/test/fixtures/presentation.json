@@ -69,7 +69,6 @@
         }
       ]
     },
-    "language": null,
     "entries": [
       {
         "kind": "installable",
@@ -164,7 +163,6 @@
         }
       ]
     },
-    "language": null,
     "entries": [
       {
         "kind": "installable",
@@ -254,7 +252,6 @@
       "match_status": "matched",
       "patches": []
     },
-    "language": null,
     "entries": [
       {
         "kind": "discovery",
@@ -338,7 +335,6 @@
       "match_status": "matched",
       "patches": []
     },
-    "language": null,
     "entries": [
       {
         "kind": "discovery",
@@ -385,7 +381,6 @@
       "match_status": "matched",
       "patches": []
     },
-    "language": null,
     "entries": [],
     "matched": false,
     "attention": false,
@@ -462,7 +457,6 @@
       "match_status": "matched",
       "patches": []
     },
-    "language": null,
     "entries": [],
     "matched": true,
     "attention": false,
@@ -689,7 +683,6 @@
         }
       ]
     },
-    "language": null,
     "entries": [
       {
         "kind": "installable",
@@ -996,7 +989,6 @@
         }
       ]
     },
-    "language": null,
     "entries": [
       {
         "kind": "installable",
@@ -1038,7 +1030,7 @@
     }
   },
   {
-    "name": "language-preference",
+    "name": "language-variants",
     "row": {
       "diagnostics": [],
       "discovery": {
@@ -1176,17 +1168,16 @@
       "match_status": "matched",
       "patches": []
     },
-    "language": "zh-CN",
     "entries": [
       {
         "kind": "discovery",
-        "key": "chinese",
+        "key": "english",
         "title": "Patch",
         "choices": []
       },
       {
         "kind": "discovery",
-        "key": "english",
+        "key": "chinese",
         "title": "Patch",
         "choices": []
       },

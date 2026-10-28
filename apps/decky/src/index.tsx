@@ -23,15 +23,15 @@ const projectInstancesRpc = callable<[string[]], ProjectInstancesResult>("projec
 const listSourcesRpc = callable<[], SourceSubscription[]>("list_sources");
 const setSourceUpdateIntervalRpc = callable<[string, number], { interval_hours: number }>("set_source_update_interval");
 const updateSourceRpc = callable<[string, boolean], SourceTaskSnapshot>("update_source");
-const matchGamesRpc = callable<[string[] | null, string[], string | null, boolean], SourceTaskSnapshot>("match_games");
-const rematchGameRpc = callable<[string | null, number | null, string[], string | null], SourceTaskSnapshot>("rematch_game");
+const matchGamesRpc = callable<[string[] | null, string[], boolean], SourceTaskSnapshot>("match_games");
+const rematchGameRpc = callable<[string | null, number | null, string[]], SourceTaskSnapshot>("rematch_game");
 const sourceTaskStatusRpc = callable<[], SourceTaskSnapshot[]>("source_task_status");
 const cancelSourceTaskRpc = callable<[string], SourceTaskSnapshot>("cancel_source_task");
 const sourceApi: SourceTaskApi = {
   listSources: () => listSourcesRpc(),
   updateSource: (sourceId, force = false) => updateSourceRpc(sourceId, force),
-  matchGames: (instances, nameHints, language, forceDetails) => matchGamesRpc(instances, nameHints, language, forceDetails),
-  rematchGame: (instance, appid, nameHints, language) => rematchGameRpc(instance, appid, nameHints, language),
+  matchGames: (instances, nameHints, forceDetails) => matchGamesRpc(instances, nameHints, forceDetails),
+  rematchGame: (instance, appid, nameHints) => rematchGameRpc(instance, appid, nameHints),
   setInterval: (sourceId, intervalHours) => setSourceUpdateIntervalRpc(sourceId, intervalHours),
   projectInstances: instanceIds => projectInstancesRpc(instanceIds),
   taskStatus: () => sourceTaskStatusRpc(),
@@ -285,8 +285,7 @@ function GameManager({ item, seg, panel }: { item: Install; seg: string; panel?:
   const activePanel = panel && (panelKeys as readonly string[]).includes(panel) ? panel : "patches";
   const base = `/patchhub/${seg}`;
   const navigate = useRef<((route: string) => void) | null>(null);
-  const [preferredLanguage, setPreferredLanguage] = useState<string | null>(null);
-  const entries = displayPatches(item, preferredLanguage);
+  const entries = displayPatches(item);
   const [selectedDownload, setSelectedDownload] = useState("");
   const [selectedKey, setSelectedKey] = useState(entries[0]?.key ?? "");
   const [archive, setArchive] = useState("");
@@ -427,7 +426,7 @@ function GameManager({ item, seg, panel }: { item: Install; seg: string; panel?:
   const matchStatus = item.discovery?.status;
   function rematch() {
     const hints = [item.game.localized_name, item.game.name, game].map(value => value?.trim() ?? "").filter(Boolean);
-    void session.rematchGame(item.game.instance_id, item.game.appid, [...new Set(hints)].slice(0, 3), preferredLanguage);
+    void session.rematchGame(item.game.instance_id, item.game.appid, [...new Set(hints)].slice(0, 3));
   }
   const common = <>{busy && <Status>{busy}</Status>}{error && <Status warning>{error}</Status>}{note && <Status>{note}</Status>}
     </>;
@@ -452,8 +451,6 @@ function GameManager({ item, seg, panel }: { item: Install; seg: string; panel?:
     </PanelSection>
     <PanelSection title="查找补丁">
       {gameTask && <Row><QueryProgress task={gameTask} /><Action onClick={() => void session.cancelSourceTask(gameTask.task_id)}>取消查询</Action></Row>}
-      <Row><DropdownItem label="偏好的补丁语言" layout="below" rgOptions={[{ data: "", label: "未指定" }, { data: "zh-CN", label: "简体中文" }, { data: "zh-TW", label: "繁体中文" }, { data: "en", label: "英文" }, { data: "ja", label: "日文" }]}
-        selectedOption={preferredLanguage ?? ""} onChange={option => setPreferredLanguage(option.data || null)} /></Row>
       <Row><Action disabled={!!busy || !!gameTask} onClick={rematch}>重新查询</Action></Row>
     </PanelSection>
     {selection}

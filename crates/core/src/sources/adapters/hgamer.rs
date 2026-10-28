@@ -409,7 +409,7 @@ mod tests {
             appid,
             name: name.to_string(),
             name_hints: Vec::new(),
-            preferred_language: None,
+
             legacy_match: false,
             force: false,
             source_context: Vec::new(),

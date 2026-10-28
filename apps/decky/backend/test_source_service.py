@@ -211,7 +211,7 @@ class SourceServiceTests(unittest.IsolatedAsyncioTestCase):
             "results": [{"appid": 42, "instance_id": "i1", "status": "publisher_match",
                          "candidates": [{"candidate_id": "c1"}], "diagnostics": [],
                          "source_revisions": {"patchmoe": 3}}]}
-        task = self.service.start_match_games(["i1"], ["Game"], "zh-CN", True)
+        task = self.service.start_match_games(["i1"], ["Game"], True)
         self.assertEqual((task["kind"], task["key"]), ("match_games", "match"))
         final = await self.settle(task["task_id"])
         self.assertEqual(final["state"], "completed")
@@ -220,7 +220,7 @@ class SourceServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(final["result"]["results"][0]["appid"], 42)
         self.assertEqual(self.bridge.stream_calls,
                          [("match_games", {"instances": ["i1"], "name_hints": ["Game"],
-                                           "preferred_language": "zh-CN", "force_details": True})])
+                                           "force_details": True})])
 
     async def test_match_games_and_rematch_deduplicate_by_kind_and_key(self):
         await self.service.initialize()
@@ -251,13 +251,12 @@ class SourceServiceTests(unittest.IsolatedAsyncioTestCase):
                 with self.assertRaises(ValueError):
                     self.service.start_rematch_game(**kwargs)
         for kwargs in ({"instance_id": "i1", "name_hints": ["a"] * 4},
-                       {"instance_id": "i1", "preferred_language": "../../path"},
                        {"appid": -1}, {"appid": 2 ** 32}):
             with self.subTest(kwargs=kwargs):
                 with self.assertRaises(ValueError):
                     self.service.start_rematch_game(**kwargs)
         with self.assertRaises(ValueError):
-            self.service.start_match_games(["i1"], None, None, 1)
+            self.service.start_match_games(["i1"], None, 1)
         self.assertEqual(self.bridge.stream_calls, [])
 
     async def test_cancel_sets_cancelling_and_core_cancellation_is_terminal(self):

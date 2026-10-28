@@ -27,20 +27,6 @@ pub const MAX_MANIFEST_BYTES: u64 = 1024 * 1024;
 /// Read chunk size (`exe_facts.py` reads 1 MiB at a time).
 const CHUNK_BYTES: usize = 1024 * 1024;
 
-/// Steam UI language key to the value persisted in `appmanifest_*.acf`
-/// (`exe_facts.py::LANGUAGES`).
-const LANGUAGES: &[(&str, &str)] = &[
-    ("en", "english"),
-    ("zh-CN", "schinese"),
-    ("zh-TW", "tchinese"),
-    ("ja", "japanese"),
-    ("ko", "koreana"),
-    ("de", "german"),
-    ("fr", "french"),
-    ("es", "spanish"),
-    ("ru", "russian"),
-];
-
 /// A single item's failure: stable code plus bounded human-readable detail.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -130,15 +116,6 @@ pub struct BuildFacts {
     pub verified: bool,
 }
 
-/// `UserConfig` / `MountedConfig` language state.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct LanguageFacts {
-    pub user: Option<String>,
-    pub mounted: Option<String>,
-    pub selected: Option<String>,
-}
-
 /// Installed depot/DLC evidence (installation evidence, never ownership proof).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -164,7 +141,7 @@ pub struct GameFacts {
     pub instance: InstanceFacts,
     pub manifest: Fact<ManifestFacts>,
     pub build: Fact<BuildFacts>,
-    pub language: Fact<LanguageFacts>,
+
     pub dlc: Fact<DlcFacts>,
     pub baselines: Vec<BaselineFact>,
 }
@@ -176,7 +153,6 @@ impl GameFacts {
         for fact in [
             self.manifest.failure.as_ref(),
             self.build.failure.as_ref(),
-            self.language.failure.as_ref(),
             self.dlc.failure.as_ref(),
         ]
         .into_iter()
@@ -202,7 +178,7 @@ impl GameFacts {
             instance,
             manifest: Fact::failed(failure.clone()),
             build: Fact::failed(failure.clone()),
-            language: Fact::failed(failure.clone()),
+
             dlc: Fact::failed(failure),
             baselines: Vec::new(),
         }
@@ -214,22 +190,14 @@ impl GameFacts {
 #[serde(deny_unknown_fields)]
 pub struct FactsExpectation {
     pub appid: u32,
-    pub language: String,
+
     pub verified_buildids: Vec<String>,
-    /// Whether the manifest language is a gate. Publisher sources keep the
-    /// gate; index sources record the selected language as evidence only.
-    #[serde(default = "default_true")]
-    pub require_language: bool,
     #[serde(default)]
     pub requires_dlc: Vec<u32>,
     #[serde(default)]
     pub excludes_dlc: Vec<u32>,
     #[serde(default)]
     pub baselines: Vec<BaselineExpectation>,
-}
-
-fn default_true() -> bool {
-    true
 }
 
 /// One baseline to hash and compare against the reviewed value.
@@ -477,7 +445,6 @@ fn game_facts_inner(
     } else {
         build_fact(game, &parsed.state, expectation)
     };
-    let language = language_fact(&parsed.state, expectation);
     let dlc = if unreviewed
         && ["installeddepots", "installeddlc", "installdlc"]
             .iter()
@@ -502,35 +469,10 @@ fn game_facts_inner(
         instance,
         manifest,
         build,
-        language,
+
         dlc,
         baselines,
     }
-}
-
-/// Best-effort current selected Steam UI language for a game, read from
-/// `UserConfig.language` then `MountedConfig.language` (the same fields
-/// [`game_facts`] compares). Used to make a source that carries no language
-/// self-consistent instead of wrongly blocking with `exe_language_mismatch`.
-pub fn current_language(game: &GameInstall, cancel: &AtomicBool) -> Option<String> {
-    let manifest_path = game
-        .library_path
-        .join("steamapps")
-        .join(format!("appmanifest_{}.acf", game.appid));
-    let parsed = read_manifest(&manifest_path, cancel).ok()?;
-    let state = &parsed.state;
-    nested(state, "userconfig")
-        .ok()
-        .flatten()
-        .and_then(|object| field_text(object, "language"))
-        .map(str::to_owned)
-        .or_else(|| {
-            nested(state, "mountedconfig")
-                .ok()
-                .flatten()
-                .and_then(|object| field_text(object, "language"))
-                .map(str::to_owned)
-        })
 }
 
 struct ParsedManifest {
@@ -651,56 +593,6 @@ fn build_fact(
             failure: Some(FactFailure::new("build_not_verified", "buildid mismatch")),
         },
         None => Fact::failed_code("build_not_verified", "missing buildid"),
-    }
-}
-
-fn language_fact(
-    state: &BTreeMap<String, Value>,
-    expectation: &FactsExpectation,
-) -> Fact<LanguageFacts> {
-    let user = match nested(state, "userconfig") {
-        Ok(value) => value,
-        Err(failure) => return Fact::failed(failure),
-    };
-    let mounted = match nested(state, "mountedconfig") {
-        Ok(value) => value,
-        Err(failure) => return Fact::failed(failure),
-    };
-    let user_language = user
-        .and_then(|object| field_text(object, "language"))
-        .map(str::to_owned);
-    let mounted_language = mounted
-        .and_then(|object| field_text(object, "language"))
-        .map(str::to_owned);
-    let selected = user_language.clone().or_else(|| mounted_language.clone());
-    let expected = expected_language(&expectation.language);
-
-    let mut failure = None;
-    let gate = expectation.require_language;
-    if gate && selected.as_deref() != Some(expected) {
-        failure = Some(FactFailure::new(
-            "exe_language_mismatch",
-            format!("expected language {expected}"),
-        ));
-    } else if gate
-        && user_language.is_some()
-        && mounted_language.is_some()
-        && user_language != mounted_language
-    {
-        failure = Some(FactFailure::new(
-            "exe_language_mismatch",
-            "UserConfig and MountedConfig disagree",
-        ));
-    }
-    // `evidence` records the observed/selected language regardless of whether it
-    // is a gate, so the language stays part of the content identity.
-    Fact {
-        evidence: Some(LanguageFacts {
-            user: user_language,
-            mounted: mounted_language,
-            selected,
-        }),
-        failure,
     }
 }
 
@@ -839,14 +731,6 @@ fn read_failure_code(error: &std::io::Error, fallback: &str) -> String {
     } else {
         fallback.to_string()
     }
-}
-
-fn expected_language(key: &str) -> &str {
-    LANGUAGES
-        .iter()
-        .find(|(language, _)| *language == key)
-        .map(|(_, value)| *value)
-        .unwrap_or(key)
 }
 
 /// `exe_facts.py::_number`: `[1-9][0-9]{0,9}` only (no leading zero, ≤10 digits).
@@ -1145,9 +1029,9 @@ mod tests {
     fn expectation(baselines: Vec<BaselineExpectation>) -> FactsExpectation {
         FactsExpectation {
             appid: APPID,
-            language: "zh-CN".into(),
+
             verified_buildids: vec!["12345".into()],
-            require_language: true,
+
             requires_dlc: vec![2303802],
             excludes_dlc: vec![2303999],
             baselines,
@@ -1252,16 +1136,6 @@ mod tests {
             Some("12345")
         );
         assert_eq!(
-            facts
-                .language
-                .evidence
-                .as_ref()
-                .unwrap()
-                .selected
-                .as_deref(),
-            Some("schinese")
-        );
-        assert_eq!(
             facts.dlc.evidence.as_ref().unwrap().installed,
             vec![2303802]
         );
@@ -1318,7 +1192,7 @@ mod tests {
     }
 
     #[test]
-    fn game_facts_surfaces_identity_build_language_dlc_and_baseline_failures() {
+    fn game_facts_surfaces_identity_build_dlc_and_baseline_failures() {
         let temp = tempfile::tempdir().unwrap();
         let (game, install) = instance(
             temp.path(),
@@ -1336,64 +1210,9 @@ mod tests {
         );
         let codes: Vec<&str> = facts.failures().iter().map(|f| f.code.as_str()).collect();
         assert!(codes.contains(&"build_not_verified"));
-        assert!(codes.contains(&"exe_language_mismatch"));
         assert!(codes.contains(&"exe_dlc_excluded"));
         assert!(codes.contains(&"exe_baseline_mismatch"));
         assert!(!facts.is_valid());
-    }
-
-    #[test]
-    fn facts_language_is_evidence_only_when_not_required() {
-        let temp = tempfile::tempdir().unwrap();
-        let (game, _) = instance(temp.path(), &manifest("english", "4", "12345", ""));
-        let mut relaxed = expectation(Vec::new());
-        relaxed.require_language = false;
-        let facts = game_facts(&game, &relaxed, &AtomicBool::new(false));
-        assert!(facts.is_valid(), "{:?}", facts.failures());
-        assert!(facts.language.failure.is_none());
-        let evidence = facts.language.evidence.as_ref().unwrap();
-        assert_eq!(evidence.user.as_deref(), Some("english"));
-        assert_eq!(evidence.mounted.as_deref(), Some("english"));
-        assert_eq!(evidence.selected.as_deref(), Some("english"));
-    }
-
-    #[test]
-    fn facts_language_mismatch_between_configs_is_suppressed_when_not_required() {
-        let temp = tempfile::tempdir().unwrap();
-        let manifest = format!(
-            r#""AppState"
-{{
-    "appid"        "{APPID}"
-    "name"         "Test Game"
-    "installdir"   "TestGame"
-    "StateFlags"   "4"
-    "buildid"      "12345"
-    "UserConfig"   {{ "language" "schinese" }}
-    "MountedConfig" {{ "language" "english" }}
-    "InstalledDepots"
-    {{
-        "2303801" {{ "dlcappid" "2303802" }}
-    }}
-}}"#
-        );
-        let (game, _) = instance(temp.path(), &manifest);
-        let mut relaxed = expectation(Vec::new());
-        relaxed.require_language = false;
-        let facts = game_facts(&game, &relaxed, &AtomicBool::new(false));
-        assert!(facts.is_valid(), "{:?}", facts.failures());
-        assert!(facts.language.failure.is_none());
-        let evidence = facts.language.evidence.as_ref().unwrap();
-        assert_eq!(evidence.user.as_deref(), Some("schinese"));
-        assert_eq!(evidence.mounted.as_deref(), Some("english"));
-        assert_eq!(evidence.selected.as_deref(), Some("schinese"));
-
-        // The same manifest still fails under the publisher gate.
-        let strict = expectation(Vec::new());
-        let facts = game_facts(&game, &strict, &AtomicBool::new(false));
-        assert_eq!(
-            facts.language.failure.as_ref().unwrap().code,
-            "exe_language_mismatch"
-        );
     }
 
     #[test]
@@ -1473,9 +1292,9 @@ mod generic_current_tests {
     fn expectation() -> FactsExpectation {
         FactsExpectation {
             appid: 42,
-            language: "zh-CN".into(),
+
             verified_buildids: vec![],
-            require_language: true,
+
             requires_dlc: vec![],
             excludes_dlc: vec![],
             baselines: vec![],
@@ -1499,14 +1318,31 @@ mod generic_current_tests {
         assert!(!game_facts_unreviewed(&changed, &expectation(), &cancel).is_valid());
     }
     #[test]
-    fn unknown_language_or_dlc_never_satisfies_constraints() {
+    fn unknown_dlc_never_satisfies_constraints() {
         let t = tempfile::tempdir().unwrap();
         let g = game(t.path(), "", " ");
         let mut expected = expectation();
         expected.requires_dlc = vec![99];
         let f = game_facts_unreviewed(&g, &expected, &AtomicBool::new(false));
-        assert_eq!(f.language.failure.unwrap().code, "exe_language_mismatch");
         assert_eq!(f.dlc.failure.unwrap().code, "exe_dlc_unknown");
+    }
+    #[test]
+    fn exe_facts_ignore_missing_and_conflicting_game_language() {
+        for language in ["", r#""language" "japanese""#] {
+            let temp = tempfile::tempdir().unwrap();
+            let game = game(temp.path(), language, r#""InstalledDepots" {}"#);
+            let manifest = game.library_path.join("steamapps/appmanifest_42.acf");
+            if !language.is_empty() {
+                let text = fs::read_to_string(&manifest).unwrap();
+                fs::write(
+                    &manifest,
+                    text.replacen(language, r#""language" "english""#, 1),
+                )
+                .unwrap();
+            }
+            let facts = game_facts_unreviewed(&game, &expectation(), &AtomicBool::new(false));
+            assert!(facts.is_valid(), "{:?}", facts.failures());
+        }
     }
     #[cfg(windows)]
     #[test]

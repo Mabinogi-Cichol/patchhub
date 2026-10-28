@@ -493,7 +493,7 @@ mod tests {
             appid: 42,
             name: "Game".to_string(),
             name_hints: Vec::new(),
-            preferred_language: None,
+
             legacy_match: false,
             force: false,
             source_context: Vec::new(),

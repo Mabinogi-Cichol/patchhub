@@ -883,34 +883,15 @@ fn content_revision_ignores_timestamps_but_tracks_real_changes() {
 #[test]
 fn input_key_changes_only_with_matching_inputs() {
     let subscriptions = BTreeMap::from([("patchmoe".to_string(), true)]);
-    let base = input_key("Game", Some("游戏"), &[], None, &subscriptions);
-    assert_eq!(
-        base,
-        input_key("Game", Some("游戏"), &[], None, &subscriptions)
-    );
+    let base = input_key("Game", Some("游戏"), &[], &subscriptions);
+    assert_eq!(base, input_key("Game", Some("游戏"), &[], &subscriptions));
+    assert_ne!(base, input_key("Game 2", Some("游戏"), &[], &subscriptions));
+    assert_ne!(base, input_key("Game", None, &[], &subscriptions));
+    assert_ne!(base, input_key("Game", Some("Game"), &[], &subscriptions));
+    // Name hints participate in the digest.
     assert_ne!(
         base,
-        input_key("Game 2", Some("游戏"), &[], None, &subscriptions)
-    );
-    assert_ne!(base, input_key("Game", None, &[], None, &subscriptions));
-    assert_ne!(
-        base,
-        input_key("Game", Some("Game"), &[], None, &subscriptions)
-    );
-    // Name hints and the preferred patch language participate in the digest.
-    assert_ne!(
-        base,
-        input_key(
-            "Game",
-            Some("游戏"),
-            &["Alias".to_string()],
-            None,
-            &subscriptions
-        )
-    );
-    assert_ne!(
-        base,
-        input_key("Game", Some("游戏"), &[], Some("zh-CN"), &subscriptions)
+        input_key("Game", Some("游戏"), &["Alias".to_string()], &subscriptions)
     );
     assert_ne!(
         base,
@@ -918,7 +899,6 @@ fn input_key_changes_only_with_matching_inputs() {
             "Game",
             Some("游戏"),
             &[],
-            None,
             &BTreeMap::from([("patchmoe".to_string(), false)])
         )
     );
@@ -927,19 +907,18 @@ fn input_key_changes_only_with_matching_inputs() {
     other.insert("hgamer".to_string(), false);
     other.insert("patchmoe".to_string(), true);
     assert_eq!(
-        input_key("Game", Some("游戏"), &[], None, &other),
+        input_key("Game", Some("游戏"), &[], &other),
         input_key(
             "Game",
             Some("游戏"),
             &[],
-            None,
             &BTreeMap::from([
                 ("hgamer".to_string(), false),
                 ("patchmoe".to_string(), true),
             ])
         )
     );
-    assert_ne!(base, input_key("Game", Some("游戏"), &[], None, &other));
+    assert_ne!(base, input_key("Game", Some("游戏"), &[], &other));
 }
 
 // ---- 6. schedule ---------------------------------------------------------

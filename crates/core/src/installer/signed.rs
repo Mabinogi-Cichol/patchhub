@@ -164,16 +164,10 @@ fn ready_release<'a>(
     Ok(release)
 }
 
-fn expectation(
-    release: &crate::catalog::PatchRelease,
-    game: &GameInstall,
-    cancel: &AtomicBool,
-) -> facts::FactsExpectation {
+fn expectation(release: &crate::catalog::PatchRelease) -> facts::FactsExpectation {
     facts::FactsExpectation {
         appid: release.appid,
-        language: facts::current_language(game, cancel).unwrap_or_else(|| release.language.clone()),
         verified_buildids: release.verified_buildids.clone(),
-        require_language: true,
         requires_dlc: Vec::new(),
         excludes_dlc: Vec::new(),
         baselines: Vec::new(),
@@ -271,7 +265,7 @@ fn install_signed_inner(
     let members =
         zip_recipe::plan_mapped(&mut zip, &inputs.game.install_path, &mappings, deps.cancel)
             .map_err(io_error)?;
-    let expected = expectation(release, inputs.game, deps.cancel);
+    let expected = expectation(release);
     let game_facts = facts::game_facts(inputs.game, &expected, deps.cancel);
     require_facts(&game_facts)?;
     let files: Vec<(String, u64)> = members

@@ -48,7 +48,7 @@ pub struct Params {
     /// Declarative rule for `add_source` (validated against `RawSourceRule`).
     pub rule: Option<Value>,
     pub name_hints: Vec<String>,
-    pub preferred_language: Option<String>,
+
     pub force: bool,
     pub force_details: Option<bool>,
 }
@@ -92,7 +92,7 @@ impl Params {
             instance_ids: string_list(&v, "instance_ids"),
             rule: v.get("rule").cloned(),
             name_hints: string_list(&v, "name_hints"),
-            preferred_language: text("preferred_language"),
+
             force: v.get("force").and_then(Value::as_bool).unwrap_or(false),
             force_details: v.get("force_details").and_then(Value::as_bool),
         }
@@ -214,7 +214,7 @@ fn capabilities(_params: &Params) -> Value {
             "methods": SOURCE_METHODS,
         },
         "methods": methods,
-        "contracts": {"projection_version":1,"actions_version":1,"outcome_version":1,"request_validation_version":1},
+        "contracts": {"projection_version":2,"actions_version":1,"outcome_version":1,"request_validation_version":2},
     })
 }
 
@@ -956,12 +956,7 @@ fn selected_games(
 
 fn validate_match_query(games: &[sources::GameQuery], params: &Params) -> Result<(), DomainError> {
     for game in games {
-        sources::registry::SourceRegistry::validate_query(
-            game,
-            &params.name_hints,
-            params.preferred_language.as_deref(),
-        )
-        .map_err(err)?;
+        sources::registry::SourceRegistry::validate_query(game, &params.name_hints).map_err(err)?;
     }
     Ok(())
 }
@@ -1036,7 +1031,6 @@ fn update_source_impl(
             &games,
             source_id,
             &params.name_hints,
-            params.preferred_language.as_deref(),
             &mut ctx,
             cancel,
             now,
@@ -1094,7 +1088,6 @@ fn match_games_impl(
         &overrides,
         &games,
         &params.name_hints,
-        params.preferred_language.as_deref(),
         params.force_details.unwrap_or(false),
         &mut ctx,
         cancel,
@@ -1148,7 +1141,6 @@ fn rematch_game_impl(
         &overrides,
         &game,
         &params.name_hints,
-        params.preferred_language.as_deref(),
         &mut ctx,
         cancel,
         now,

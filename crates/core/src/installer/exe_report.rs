@@ -837,9 +837,7 @@ fn file_policy(row: &Value, _installer: &str) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::facts::{
-        BuildFacts, DlcFacts, Fact, InstanceFacts, LanguageFacts, ManifestFacts,
-    };
+    use super::super::facts::{BuildFacts, DlcFacts, Fact, InstanceFacts, ManifestFacts};
     use super::*;
     fn golden() -> Value {
         serde_json::from_str(include_str!(
@@ -884,11 +882,6 @@ mod tests {
             build: Fact::evidence(BuildFacts {
                 buildid: Some("1".into()),
                 verified: false,
-            }),
-            language: Fact::evidence(LanguageFacts {
-                user: Some("schinese".into()),
-                mounted: Some("schinese".into()),
-                selected: Some("schinese".into()),
             }),
             dlc: Fact::evidence(DlcFacts { installed: vec![] }),
             baselines: vec![],

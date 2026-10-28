@@ -165,13 +165,7 @@ impl ResolvedZipCandidate {
     pub fn expectation(&self, _buildid: Option<&str>) -> FactsExpectation {
         FactsExpectation {
             appid: self.appid,
-            language: self.language.clone(),
             verified_buildids: Vec::new(),
-            // Language gates publisher discoveries only; index sources record it
-            // as evidence so the selected patch language is not a blocker.
-            require_language: self.rule.discovery_only
-                && !self.language.is_empty()
-                && !self.is_manual(),
             requires_dlc: self.candidate.requires_dlc.clone().unwrap_or_default(),
             excludes_dlc: self.candidate.excludes_dlc.clone().unwrap_or_default(),
             baselines: Vec::new(),
@@ -183,7 +177,6 @@ impl ResolvedZipCandidate {
     /// evaluator is not yet implemented; this is the caller-provided placeholder.
     pub fn conditions_sha256(&self, buildid: Option<&str>) -> String {
         let conditions = serde_json::json!({
-            "language": self.language,
             "requires_dlc": self.candidate.requires_dlc.clone().unwrap_or_default(),
             "excludes_dlc": self.candidate.excludes_dlc.clone().unwrap_or_default(),
             "verified_buildids": buildid.map(str::to_string).into_iter().collect::<Vec<_>>(),
@@ -750,8 +743,6 @@ mod tests {
         let sources = crate::sources::Sources::open(temp.path()).unwrap();
         let resolved = resolve_zip(sources.registry(), &game(), &selection_id).unwrap();
         assert_eq!(resolved.download_url, "https://kaguraserver.com/a.zip");
-        // Publisher discovery keeps the language gate.
-        assert!(resolved.expectation(None).require_language);
     }
 
     #[test]
@@ -889,8 +880,6 @@ mod tests {
         assert_eq!(resolved.release_id, "patchmoe-42");
         // `choose_language` prefers zh-CN.
         assert_eq!(resolved.language, "zh-CN");
-        // Index sources record the language as content identity, not a gate.
-        assert!(!resolved.expectation(None).require_language);
     }
 
     #[test]

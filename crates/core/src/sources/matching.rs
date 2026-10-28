@@ -46,7 +46,7 @@ pub struct MatchProgress {
 
 /// Matches a batch of installed games incrementally.
 ///
-/// `name_hints`/`preferred_language` are the untrusted frontend query inputs
+/// `name_hints` are the untrusted frontend query inputs
 /// merged into the per-game [`QueryContext`] and the matching-input digest.
 /// Games whose persisted record still matches the current matching inputs and
 /// source revisions are returned from disk without any network request. The
@@ -59,7 +59,6 @@ pub fn match_games(
     overrides: &Overrides,
     games: &[GameQuery],
     name_hints: &[String],
-    preferred_language: Option<&str>,
     force_details: bool,
     ctx: &mut RequestContext,
     cancel: &AtomicBool,
@@ -80,15 +79,7 @@ pub fn match_games(
         let previous = store.load_match(game.appid)?;
         let reused = !force_details
             && match &previous {
-                Some(record) => record_reusable(
-                    store,
-                    record,
-                    game,
-                    name_hints,
-                    preferred_language,
-                    rules,
-                    overrides,
-                )?,
+                Some(record) => record_reusable(store, record, game, name_hints, rules, overrides)?,
                 None => false,
             };
         if reused {
@@ -104,7 +95,6 @@ pub fn match_games(
                     overrides,
                     game,
                     name_hints,
-                    preferred_language,
                     previous.as_ref(),
                     MatchOptions {
                         force_details,
@@ -147,7 +137,6 @@ pub fn rematch_game(
     overrides: &Overrides,
     game: &GameQuery,
     name_hints: &[String],
-    preferred_language: Option<&str>,
     ctx: &mut RequestContext,
     cancel: &AtomicBool,
     now: u64,
@@ -160,7 +149,6 @@ pub fn rematch_game(
         overrides,
         game,
         name_hints,
-        preferred_language,
         previous.as_ref(),
         MatchOptions {
             force_details: true,
@@ -191,7 +179,6 @@ pub fn rematch_source(
     games: &[GameQuery],
     source_id: &str,
     name_hints: &[String],
-    preferred_language: Option<&str>,
     ctx: &mut RequestContext,
     cancel: &AtomicBool,
     now: u64,
@@ -217,7 +204,6 @@ pub fn rematch_source(
             overrides,
             game,
             name_hints,
-            preferred_language,
             previous.as_ref(),
             MatchOptions {
                 force_details: true,
@@ -302,7 +288,6 @@ fn match_one(
     overrides: &Overrides,
     game: &GameQuery,
     name_hints: &[String],
-    preferred_language: Option<&str>,
     previous: Option<&GameMatchRecord>,
     options: MatchOptions<'_>,
     ctx: &mut RequestContext,
@@ -314,19 +299,12 @@ fn match_one(
     let fallback_rule = active_fallback(rules, overrides, game.appid);
     let publisher_ids: Vec<String> = publishers.iter().map(|rule| rule.id.clone()).collect();
     let hints = merged_hints(game, name_hints);
-    let query = query_context(
-        game,
-        &hints,
-        preferred_language,
-        options.force_details,
-        publisher_ids,
-    );
+    let query = query_context(game, &hints, options.force_details, publisher_ids);
     let subscriptions = subscriptions_snapshot(rules, overrides, game.appid);
     let key = input_key(
         &game.name,
         game.localized_name.as_deref(),
         &hints,
-        preferred_language,
         &subscriptions,
     );
     // The host writes settings from another process; `load_settings` reads the
@@ -491,15 +469,7 @@ fn match_one(
     // Commit-time binding (design §4.3, p1-contract §7.2): if the persisted
     // matching inputs changed while details/fallback were being fetched, do not
     // write this attempt and keep the previous record for the next pass.
-    if settings_binding_changed(
-        store,
-        settings_revision,
-        &key,
-        game,
-        name_hints,
-        preferred_language,
-        rules,
-    )? {
+    if settings_binding_changed(store, settings_revision, &key, game, name_hints, rules)? {
         return Ok(previous
             .cloned()
             .unwrap_or_else(|| pending_record(game, key, now)));
@@ -518,7 +488,6 @@ fn settings_binding_changed(
     key: &str,
     game: &GameQuery,
     name_hints: &[String],
-    preferred_language: Option<&str>,
     rules: &[SourceRule],
 ) -> Result<bool> {
     let settings = store.load_settings()?;
@@ -536,7 +505,6 @@ fn settings_binding_changed(
         &game.name,
         game.localized_name.as_deref(),
         &hints,
-        preferred_language,
         &subscriptions,
     ) != key)
 }
@@ -566,7 +534,6 @@ fn record_reusable(
     record: &GameMatchRecord,
     game: &GameQuery,
     name_hints: &[String],
-    preferred_language: Option<&str>,
     rules: &[SourceRule],
     overrides: &Overrides,
 ) -> Result<bool> {
@@ -579,7 +546,6 @@ fn record_reusable(
             &game.name,
             game.localized_name.as_deref(),
             &hints,
-            preferred_language,
             &subscriptions,
         )
     {
@@ -621,13 +587,7 @@ fn record_reusable(
         Some(fallback) => match fallback.status {
             FallbackMatchStatus::Matched | FallbackMatchStatus::NoMatch => fallback_rule
                 .is_some_and(|rule| {
-                    let query = query_context(
-                        game,
-                        &hints,
-                        preferred_language,
-                        false,
-                        publisher_ids.clone(),
-                    );
+                    let query = query_context(game, &hints, false, publisher_ids.clone());
                     fallback.query_key == fallback_query_key(&query, rule)
                 }),
             FallbackMatchStatus::Disabled => fallback_rule.is_none() && !publishers.is_empty(),
@@ -1397,7 +1357,7 @@ fn fallback_query_key(query: &QueryContext, rule: &SourceRule) -> String {
     struct FallbackQuery<'a> {
         name: &'a str,
         name_hints: &'a [String],
-        preferred_language: Option<&'a str>,
+
         rule_fingerprint: String,
         parser_version: u32,
         query_version: u32,
@@ -1406,7 +1366,7 @@ fn fallback_query_key(query: &QueryContext, rule: &SourceRule) -> String {
     canonical::canonical_sha256(&FallbackQuery {
         name: &query.name,
         name_hints: &query.name_hints,
-        preferred_language: query.preferred_language.as_deref(),
+
         rule_fingerprint: rule_fingerprint(rule),
         parser_version: PARSER_VERSION,
         query_version: QUERY_VERSION,
@@ -1610,7 +1570,6 @@ fn push_hint(hints: &mut Vec<String>, value: &str) {
 fn query_context(
     game: &GameQuery,
     name_hints: &[String],
-    preferred_language: Option<&str>,
     force: bool,
     publisher_ids: Vec<String>,
 ) -> QueryContext {
@@ -1618,7 +1577,7 @@ fn query_context(
         appid: game.appid,
         name: game.name.clone(),
         name_hints: name_hints.to_vec(),
-        preferred_language: preferred_language.map(str::to_string),
+
         legacy_match: false,
         force,
         source_context: publisher_ids,

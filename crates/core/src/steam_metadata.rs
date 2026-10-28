@@ -195,13 +195,20 @@ fn language_for_root(root: &Path, registry: Option<RegistryLanguage>) -> Option<
     })
 }
 
-pub(crate) fn names_for_root(root: &Path, targets: &HashSet<u32>) -> HashMap<u32, ResolvedName> {
+pub(crate) fn interface_language(root: &Path) -> Option<String> {
+    language_for_root(root, registry_language())
+}
+
+pub(crate) fn names_for_root(
+    root: &Path,
+    targets: &HashSet<u32>,
+    language: Option<&str>,
+) -> HashMap<u32, ResolvedName> {
     if targets.is_empty() {
         return HashMap::new();
     }
-    let language = language_for_root(root, registry_language());
     read_metadata(root, "appcache", "appinfo.vdf", MAX_APPINFO_BYTES, |file| {
-        appinfo::parse_names(file, targets, language.as_deref())
+        appinfo::parse_names(file, targets, language)
     })
     .unwrap_or_default()
 }

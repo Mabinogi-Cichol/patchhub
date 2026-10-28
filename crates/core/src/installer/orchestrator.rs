@@ -506,12 +506,7 @@ fn install_zip_inner(
         .map_err(map_recipe_error)?;
 
     let buildid = inputs.game.buildid.as_deref();
-    let mut expectation = inputs.selection.expectation(buildid);
-    if expectation.language.is_empty() {
-        if let Some(language) = facts::current_language(inputs.game, deps.cancel) {
-            expectation.language = language;
-        }
-    }
+    let expectation = inputs.selection.expectation(buildid);
     let facts = facts::game_facts_unreviewed(inputs.game, &expectation, deps.cancel);
     if !facts.is_valid() {
         return Err(match facts.failures().first() {
@@ -812,7 +807,7 @@ pub(crate) mod tests {
     }
 
     /// Seeds the patchmoe index snapshot and resolves an index-source candidate
-    /// (`rule.discovery_only == false`, language recorded as evidence only).
+    /// (`rule.discovery_only == false`).
     fn seed_and_resolve_patchmoe(state: &Path) -> crate::installer::ResolvedZipCandidate {
         let handle = Sources::open(state).unwrap();
         handle
@@ -1305,7 +1300,7 @@ pub(crate) mod tests {
             appid: selection.appid,
             name: selection.candidate.patch_title.clone(),
             version: "0".to_string(),
-            language: expectation.language.clone(),
+            language: selection.language.clone(),
             category: "publisher_zip".to_string(),
             source_page: selection.candidate.source_page.clone(),
             support_level: SupportLevel::ManagedZip,
@@ -1486,79 +1481,62 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn facts_language_mismatch_blocks_without_a_transaction() {
-        // Publisher sources only: `rule.discovery_only == true` keeps the
-        // language gate (index sources record language as evidence instead).
-        let (temp, game, archive) = setup();
-        let (state, paths) = dynamic_paths(&temp);
-        write_manifest(&game, "english", "4", Some("100"), None);
-        let selection = manual_selection(None, None);
-        let transport = transport(archive);
-        let cancel = AtomicBool::new(false);
-        let error = run_install(
-            &game,
-            &selection,
-            &paths,
-            &state,
-            &transport,
-            &cancel,
-            "req-language",
-            InstallOperation::Install,
-        )
-        .unwrap_err();
-        assert_eq!(error.code, "exe_language_mismatch");
-        assert_no_transactions(&paths);
-    }
-
-    #[test]
-    fn index_source_language_is_not_a_gate() {
-        let (temp, game, archive) = setup();
-        let (state, paths) = dynamic_paths(&temp);
-        // Manifest is English while the advertised patch language is zh-CN.
-        write_manifest(&game, "english", "4", Some("100"), None);
-        let cancel = AtomicBool::new(false);
-
-        // Index source (patchmoe): language is evidence only, so the install
-        // commits despite the manifest mismatch.
-        let index = seed_and_resolve_patchmoe(&state);
-        let index_transport = FakeTransport::new(vec![HttpResponse {
-            status: 200,
-            location: None,
-            content_type: Some("application/octet-stream".to_string()),
-            content_length: Some(archive.len() as u64),
-            etag: None,
-            last_modified: None,
-            final_url: index.download_url.clone(),
-            body: Box::new(std::io::Cursor::new(archive.clone())),
-        }]);
-        let transaction = run_install(
-            &game,
-            &index,
-            &paths,
-            &state,
-            &index_transport,
-            &cancel,
-            "req-index-language",
-            InstallOperation::Install,
-        )
-        .unwrap();
-        assert_eq!(transaction.state, "committed");
-
-        // Publisher source (kagura) against the same manifest still blocks.
-        let publisher_transport = transport(archive);
-        let publisher = manual_selection(None, None);
-        let error = run_install(
-            &game,
-            &publisher,
-            &paths,
-            &state,
-            &publisher_transport,
-            &cancel,
-            "req-publisher-language",
-            InstallOperation::Install,
-        )
-        .unwrap_err();
-        assert_eq!(error.code, "exe_language_mismatch");
+    fn zip_installs_with_different_missing_or_conflicting_manifest_languages() {
+        for language in ["english", "", "conflicting"] {
+            for index_source in [false, true] {
+                let (temp, game, archive) = setup();
+                let (state, paths) = dynamic_paths(&temp);
+                write_manifest(&game, language, "4", Some("100"), None);
+                let manifest = game
+                    .library_path
+                    .join(format!("steamapps/appmanifest_{APPID}.acf"));
+                if language == "conflicting" {
+                    let value = fs::read_to_string(&manifest)
+                        .unwrap()
+                        .replace("\"language\" \"conflicting\"", "\"language\" \"english\"");
+                    fs::write(
+                        &manifest,
+                        value.replacen("\"language\" \"english\"", "\"language\" \"schinese\"", 1),
+                    )
+                    .unwrap();
+                } else if language.is_empty() {
+                    fs::write(
+                        &manifest,
+                        fs::read_to_string(&manifest)
+                            .unwrap()
+                            .replace("\"language\" \"\"", ""),
+                    )
+                    .unwrap();
+                }
+                let selection = if index_source {
+                    seed_and_resolve_patchmoe(&state)
+                } else {
+                    manual_selection(None, None)
+                };
+                let transport = FakeTransport::new(vec![HttpResponse {
+                    status: 200,
+                    location: None,
+                    content_type: Some("application/octet-stream".into()),
+                    content_length: Some(archive.len() as u64),
+                    etag: None,
+                    last_modified: None,
+                    final_url: selection.download_url.clone(),
+                    body: Box::new(std::io::Cursor::new(archive)),
+                }]);
+                let result = run_install(
+                    &game,
+                    &selection,
+                    &paths,
+                    &state,
+                    &transport,
+                    &AtomicBool::new(false),
+                    "language-free",
+                    InstallOperation::Install,
+                )
+                .unwrap();
+                assert_eq!(result.state, "committed", "{language} index={index_source}");
+            }
+        }
     }
 
     #[test]

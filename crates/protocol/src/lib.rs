@@ -179,8 +179,8 @@ params!(SetGameSourceParams{pub source_id:String,pub subscribed:bool,#[ts(option
 params!(AddSourceParams{pub rule:RawSourceRule,});
 params!(SetSourceUpdateIntervalParams{pub source_id:String,#[ts(type="number")]pub interval_hours:u64,});
 params!(UpdateSourceParams{pub source_id:String,#[serde(default)]#[ts(as="Option<bool>", optional)]pub force:bool,});
-params!(MatchGamesParams{#[serde(default)]#[ts(as="Option<Vec<String>>", optional)]pub instances:Vec<String>,#[serde(default)]#[ts(as="Option<Vec<String>>", optional)]pub name_hints:Vec<String>,#[ts(optional = nullable)]pub preferred_language:Option<String>,#[serde(default)]#[ts(as="Option<bool>", optional)]pub force_details:bool,});
-params!(RematchGameParams{#[ts(optional = nullable)]pub instance_id:Option<String>,#[ts(optional = nullable)]pub appid:Option<u32>,#[serde(default)]#[ts(as="Option<Vec<String>>", optional)]pub name_hints:Vec<String>,#[ts(optional = nullable)]pub preferred_language:Option<String>,});
+params!(MatchGamesParams{#[serde(default)]#[ts(as="Option<Vec<String>>", optional)]pub instances:Vec<String>,#[serde(default)]#[ts(as="Option<Vec<String>>", optional)]pub name_hints:Vec<String>,#[serde(default)]#[ts(as="Option<bool>", optional)]pub force_details:bool,});
+params!(RematchGameParams{#[ts(optional = nullable)]pub instance_id:Option<String>,#[ts(optional = nullable)]pub appid:Option<u32>,#[serde(default)]#[ts(as="Option<Vec<String>>", optional)]pub name_hints:Vec<String>,});
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(tag = "method", content = "params", rename_all = "snake_case")]
 pub enum RequestParams {
@@ -443,10 +443,10 @@ pub struct ContractVersions {
 impl Default for ContractVersions {
     fn default() -> Self {
         Self {
-            projection_version: 1,
+            projection_version: 2,
             actions_version: 1,
             outcome_version: 1,
-            request_validation_version: 1,
+            request_validation_version: 2,
         }
     }
 }

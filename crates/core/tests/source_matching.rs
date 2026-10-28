@@ -253,7 +253,6 @@ fn run(
         overrides,
         games,
         &[],
-        None,
         fake,
         force_details,
         now,
@@ -267,7 +266,7 @@ fn run_input(
     overrides: &Overrides,
     games: &[GameQuery],
     name_hints: &[String],
-    preferred_language: Option<&str>,
+
     fake: &Arc<FakeFetcher>,
     force_details: bool,
     now: u64,
@@ -279,7 +278,6 @@ fn run_input(
         overrides,
         games,
         name_hints,
-        preferred_language,
         force_details,
         &mut ctx,
         &AtomicBool::new(false),
@@ -296,7 +294,7 @@ fn rematch(
     overrides: &Overrides,
     game: &GameQuery,
     name_hints: &[String],
-    preferred_language: Option<&str>,
+
     fake: &Arc<FakeFetcher>,
     now: u64,
 ) -> std::io::Result<GameMatch> {
@@ -307,7 +305,6 @@ fn rematch(
         overrides,
         game,
         name_hints,
-        preferred_language,
         &mut ctx,
         &AtomicBool::new(false),
         now,
@@ -370,7 +367,6 @@ fn index_hits_stay_offline_and_only_hit_detail_pages_are_fetched() {
         &Overrides::default(),
         &[game(42, "Game")],
         &[],
-        None,
         false,
         &mut ctx,
         &AtomicBool::new(false),
@@ -758,7 +754,6 @@ fn fallback_match_and_complete_no_match() {
         &Overrides::default(),
         &game(42, "Game"),
         &[],
-        None,
         &empty,
         300,
     )
@@ -1070,7 +1065,6 @@ fn rematch_game_refreshes_hit_details_without_touching_the_index() {
         &Overrides::default(),
         &game(42, "Game"),
         &[],
-        None,
         &refreshed,
         300,
     )
@@ -1131,7 +1125,6 @@ fn rematch_game_requeries_fallback_for_a_no_match_game() {
         &Overrides::default(),
         &game(42, "Game"),
         &[],
-        None,
         &again,
         300,
     )
@@ -1215,7 +1208,6 @@ fn rematch_source_recomputes_only_that_source_and_reuses_fallback() {
         &[game(42, "Game")],
         "kagura-cn",
         &[],
-        None,
         &mut ctx,
         &AtomicBool::new(false),
         400,
@@ -1293,7 +1285,6 @@ fn rematch_source_recomputes_only_that_source_and_reuses_fallback() {
         &[game(43, "Missing")],
         "kagura-cn",
         &[],
-        None,
         &mut ctx,
         &AtomicBool::new(false),
         700,
@@ -1352,7 +1343,6 @@ fn detail_failure_keeps_previous_candidates_and_reports_incomplete() {
         &hgamer_disabled(),
         &game(42, "Game"),
         &[],
-        None,
         &failing,
         300,
     )
@@ -1421,7 +1411,6 @@ fn cancellation_saves_finished_games_and_returns_task_cancelled() {
         &Overrides::default(),
         &[game(42, "Game A"), game(43, "Game B")],
         &[],
-        None,
         false,
         &mut ctx,
         &cancel,
@@ -1582,7 +1571,6 @@ fn matching_input_changes_trigger_a_rematch_but_unrelated_settings_do_not() {
         &Overrides::default(),
         &[game(42, "Game")],
         &hints,
-        None,
         &no_network,
         false,
         800,
@@ -1597,7 +1585,6 @@ fn matching_input_changes_trigger_a_rematch_but_unrelated_settings_do_not() {
         &Overrides::default(),
         &[game(42, "Game")],
         &hints,
-        None,
         &no_network,
         false,
         900,
@@ -1609,133 +1596,99 @@ fn matching_input_changes_trigger_a_rematch_but_unrelated_settings_do_not() {
         "unchanged hints reuse the persisted record"
     );
 
-    // Preferred patch language is a matching input too; it must not filter the
-    // publisher candidates, only the query context/digest.
-    run_input(
-        &store,
-        rules,
-        &Overrides::default(),
-        &[game(42, "Game")],
-        &hints,
-        Some("zh-CN"),
-        &no_network,
-        false,
-        1000,
-    )
-    .unwrap();
-    let localized_language = record(&store, 42);
-    assert_eq!(localized_language.updated_at, 1000);
-    let summary = game_match_summary(&store, 42);
-    assert_eq!(summary.status, GameMatchStatus::PublisherMatch);
-    assert!(summary
-        .candidates
-        .iter()
-        .all(|candidate| candidate.source_id == "kagura-cn"));
-    run_input(
-        &store,
-        rules,
-        &Overrides::default(),
-        &[game(42, "Game")],
-        &hints,
-        Some("zh-CN"),
-        &no_network,
-        false,
-        1100,
-    )
-    .unwrap();
-    assert_eq!(
-        record(&store, 42).updated_at,
-        1000,
-        "unchanged language reuses the persisted record"
-    );
     assert_eq!(no_network.call_count(), 0);
 }
 
-#[test]
-fn rematch_game_language_reaches_the_fallback_query_key() {
-    let temp = tempfile::tempdir().unwrap();
-    let store = SourceStore::open(temp.path()).unwrap();
-    let rules = [kagura_rule(), hgamer_rule()];
-    store
-        .save_index(&index(
-            &rules[0].id,
-            1,
-            true,
-            vec![entry(
-                "Other Game",
-                "https://kagurafan.com/other/",
-                "article",
-            )],
-        ))
-        .unwrap();
-    let first = Arc::new(FakeFetcher::new());
-    first.push(response(
-        200,
-        &hgamer_search("Game", 0, &[]),
-        "https://hgamer.tw/zh-CN/search?q=Game",
-    ));
-    run(
-        &store,
-        &rules,
-        &Overrides::default(),
-        &[game(42, "Game")],
-        &first,
-        false,
-        200,
-    )
-    .unwrap();
-    let without_language = record(&store, 42)
-        .fallback
-        .expect("fallback queried")
-        .query_key;
-
-    let again = Arc::new(FakeFetcher::new());
-    again.push(response(
-        200,
-        &hgamer_search("Game", 0, &[]),
-        "https://hgamer.tw/zh-CN/search?q=Game",
-    ));
-    let summary = rematch(
-        &store,
-        &rules,
-        &Overrides::default(),
-        &game(42, "Game"),
-        &[],
-        Some("zh-CN"),
-        &again,
-        300,
-    )
-    .unwrap();
-    assert_eq!(again.call_count(), 1, "rematch re-queries the fallback");
-    assert_eq!(summary.status, GameMatchStatus::NoMatch);
-    let with_language = record(&store, 42)
-        .fallback
-        .expect("fallback queried")
-        .query_key;
-    assert_ne!(
-        with_language, without_language,
-        "the preferred language participates in the fallback query key"
-    );
-
-    // Same language + hints: the recomputed record is reused afterwards.
-    let warm = Arc::new(FakeFetcher::new());
-    run_input(
-        &store,
-        &rules,
-        &Overrides::default(),
-        &[game(42, "Game")],
-        &[],
-        Some("zh-CN"),
-        &warm,
-        false,
-        400,
-    )
-    .unwrap();
-    assert_eq!(warm.call_count(), 0);
-    assert_eq!(record(&store, 42).updated_at, 300);
-}
-
 // ---- entry (patch.moe / table) sources ----------------------------------
+
+#[test]
+fn legacy_language_digests_are_recomputed_then_reused_without_clearing_sources() {
+    use patchhub_core::sources::{
+        canonical::canonical_sha256, rule_fingerprint, PARSER_VERSION, QUERY_VERSION,
+        SOURCES_ENCODING_VERSION,
+    };
+    for preferred in [serde_json::Value::Null, serde_json::json!("zh-CN")] {
+        let temp = tempfile::tempdir().unwrap();
+        let store = SourceStore::open(temp.path()).unwrap();
+        let rules = [kagura_rule(), hgamer_rule()];
+        store
+            .save_index(&index(&rules[0].id, 1, true, vec![]))
+            .unwrap();
+        let fake = Arc::new(FakeFetcher::new());
+        fake.push(response(
+            200,
+            &hgamer_search("Game", 0, &[]),
+            "https://hgamer.tw/zh-CN/search?q=Game",
+        ));
+        run(
+            &store,
+            &rules,
+            &Overrides::default(),
+            &[game(42, "Game")],
+            &fake,
+            false,
+            100,
+        )
+        .unwrap();
+        let mut old = record(&store, 42);
+        let current_input = old.input_key.clone();
+        old.input_key = canonical_sha256(
+            &serde_json::json!({"name":"Game","localized_name":null,"name_hints":[],"preferred_language":preferred,
+            "subscriptions":{rules[0].id.clone():true,rules[1].id.clone():true}}),
+        );
+        let legacy_fallback = canonical_sha256(
+            &serde_json::json!({"name":"Game","name_hints":[],"preferred_language":preferred,
+            "rule_fingerprint":rule_fingerprint(&rules[1]),"parser_version":PARSER_VERSION,"query_version":QUERY_VERSION,"encoding_version":SOURCES_ENCODING_VERSION}),
+        );
+        old.fallback.as_mut().unwrap().query_key = legacy_fallback.clone();
+        store.save_match(&old).unwrap();
+        assert_ne!(old.input_key, current_input);
+        for now in [200, 400] {
+            let network = Arc::new(FakeFetcher::new());
+            network.push(response(
+                200,
+                &hgamer_search("Game", 0, &[]),
+                "https://hgamer.tw/zh-CN/search?q=Game",
+            ));
+            run(
+                &store,
+                &rules,
+                &Overrides::default(),
+                &[game(42, "Game")],
+                &network,
+                false,
+                now,
+            )
+            .unwrap();
+            assert_eq!(network.call_count(), 1);
+            let updated = record(&store, 42);
+            assert_eq!(updated.input_key, current_input);
+            assert_ne!(
+                updated.fallback.as_ref().unwrap().query_key,
+                legacy_fallback
+            );
+            let warm = Arc::new(FakeFetcher::new());
+            run(
+                &store,
+                &rules,
+                &Overrides::default(),
+                &[game(42, "Game")],
+                &warm,
+                false,
+                now + 1,
+            )
+            .unwrap();
+            assert_eq!(warm.call_count(), 0);
+            assert_eq!(record(&store, 42).updated_at, now);
+            assert_eq!(store.load_index(&rules[0].id).unwrap().unwrap().revision, 1);
+            if now == 200 {
+                let mut stale_fallback = record(&store, 42);
+                stale_fallback.fallback.as_mut().unwrap().query_key = legacy_fallback.clone();
+                store.save_match(&stale_fallback).unwrap();
+            }
+        }
+    }
+}
 
 #[test]
 fn entry_sources_match_offline_and_flag_conflicting_urls() {
@@ -2002,7 +1955,7 @@ fn vbf_upstream(appid: u32, page: &str) -> SourceCandidate {
         appid,
         name: "VenusBlood FRONTIER International".into(),
         name_hints: vec![],
-        preferred_language: None,
+
         legacy_match: false,
         force: false,
         source_context: vec![],

@@ -137,7 +137,7 @@
   "note": "Golden values produced by the frozen Rust deterministic encoding (P0 contract v0.5 §1). Byte/ID parity with the former Python implementation is explicitly NOT required. URL normalization keeps the path raw and the port as-is (port 443 is NOT folded); percent-encoding normalization remains 待调研 (p0-contracts §1.1).",
   "query_key": [
     {
-      "expected": "bdda1f4104a0568aba5f1dc12b63bcdc8429996b8dfc8fcae8b4b5644d5645ae",
+      "expected": "c08a967847fc50bf610128c11dc9bfad3cd7caa2681d3c521faa09d55a25a945",
       "input": {
         "appid": 42,
         "encoding_version": 1,
@@ -145,7 +145,6 @@
         "name": "A Game",
         "name_hints": [],
         "parser_version": 2,
-        "preferred_language": null,
         "query_version": 1,
         "source_context": [
           "official"

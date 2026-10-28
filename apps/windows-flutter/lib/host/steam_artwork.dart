@@ -19,10 +19,13 @@ class SteamArtwork {
 
 /// Reads only the selected Steam account and the requested app's image folder.
 class SteamArtworkStore {
-  SteamArtworkStore({Future<Map<String, dynamic>?> Function()? context})
-    : _context = context ?? _nativeContext;
+  SteamArtworkStore({
+    Future<Map<String, dynamic>?> Function()? context,
+    this.languageForRoot,
+  }) : _context = context ?? _nativeContext;
 
   final Future<Map<String, dynamic>?> Function() _context;
+  final String? Function(String root)? languageForRoot;
   Future<({String? root, String? user, List<String> diagnostics})>? _location;
   final _apps = <int, Future<SteamArtwork>>{};
   int _revision = 0;
@@ -127,24 +130,27 @@ class SteamArtworkStore {
     custom.removeWhere((file) => !image(file));
     defaults.removeWhere((file) => !image(file));
     defaults.sort((a, b) {
-      final locale = (basename(a).contains('_schinese') ? 0 : 1).compareTo(
-        basename(b).contains('_schinese') ? 0 : 1,
-      );
-      return locale != 0 ? locale : a.path.compareTo(b.path);
+      return a.path.compareTo(b.path);
     });
     String? findCustom(String suffix) => custom
         .where((file) => basename(file).split('.').first == '$appid$suffix')
         .firstOrNull
         ?.uri
         .toFilePath();
-    String? findDefault(String stem) => defaults
+    final language = languageForRoot?.call(root)?.trim().toLowerCase();
+    String? exactDefault(String stem) => defaults
         .where((file) {
           final name = basename(file).split('.').first;
-          return name == stem || name == '${stem}_schinese';
+          return name == stem;
         })
         .firstOrNull
         ?.uri
         .toFilePath();
+    String? findDefault(String stem) =>
+        (language == null || language.isEmpty
+            ? null
+            : exactDefault('${stem}_$language')) ??
+        exactDefault(stem);
     final customCover = findCustom('p');
     final customHeader = findCustom('');
     final cover =

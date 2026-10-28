@@ -12,7 +12,7 @@ void main() {
   for (final item in cases) {
     test('TypeScript parity: ${item['name']}', () {
       final row = GameRow(item['row'] as Map<String, dynamic>);
-      final entries = displayEntries(row, item['language'] as String?);
+      final entries = displayEntries(row);
       expect([
         for (final entry in entries)
           {

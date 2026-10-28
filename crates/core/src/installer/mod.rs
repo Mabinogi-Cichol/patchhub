@@ -34,8 +34,8 @@ pub use acquire::{
 };
 pub use facts::{
     digest_file, game_facts, read_file, BaselineExpectation, BaselineFact, BuildFacts, DlcFacts,
-    Fact, FactFailure, FactsExpectation, FileDigest, GameFacts, InstanceFacts, LanguageFacts,
-    ManifestFacts, MAX_MANIFEST_BYTES,
+    Fact, FactFailure, FactsExpectation, FileDigest, GameFacts, InstanceFacts, ManifestFacts,
+    MAX_MANIFEST_BYTES,
 };
 pub use orchestrator::{
     begin_request, content_conflict, record_plan, record_terminal, request_binding, ZipTaskError,

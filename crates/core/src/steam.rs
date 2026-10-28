@@ -13,6 +13,7 @@ const MAX_FILE_BYTES: u64 = 4 * 1024 * 1024;
 pub struct ScanReport {
     pub installs: Vec<GameInstall>,
     pub diagnostics: Vec<Diagnostic>,
+    pub steam_languages: BTreeMap<PathBuf, String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, ts_rs::TS)]
@@ -89,6 +90,7 @@ pub fn scan(roots: &[PathBuf]) -> ScanReport {
     let mut report = ScanReport {
         installs: Vec::new(),
         diagnostics: Vec::new(),
+        steam_languages: BTreeMap::new(),
     };
     let roots = if roots.is_empty() {
         discover_roots()
@@ -113,6 +115,9 @@ pub fn scan(roots: &[PathBuf]) -> ScanReport {
                 continue;
             }
         };
+        if let Some(language) = steam_metadata::interface_language(&root) {
+            report.steam_languages.insert(root.clone(), language);
+        }
         add_library(&mut libraries, &mut seen, &mut report, &root, &root);
         let primary = root.join("steamapps/libraryfolders.vdf");
         let fallback = root.join("config/libraryfolders.vdf");
@@ -163,7 +168,8 @@ pub fn scan(roots: &[PathBuf]) -> ScanReport {
     }
     for (root, indices) in root_installs {
         let targets = indices.iter().map(|&i| report.installs[i].appid).collect();
-        let names = steam_metadata::names_for_root(&root, &targets);
+        let language = report.steam_languages.get(&root).map(String::as_str);
+        let names = steam_metadata::names_for_root(&root, &targets, language);
         for i in indices {
             let game = &mut report.installs[i];
             if let Some(name) = names.get(&game.appid) {

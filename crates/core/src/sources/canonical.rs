@@ -223,7 +223,7 @@ pub fn fingerprint(candidate: &serde_json::Value) -> String {
     sha256_hex(&canonical_bytes(&value).expect("candidate fingerprint must not contain floats"))
 }
 
-/// `sha256(canonical_bytes(query))`; `query` carries the eight §5.1 keys plus
+/// `sha256(canonical_bytes(query))`; `query` carries the matching-input keys plus
 /// `encoding_version` (contract §1.2).
 ///
 /// The input must not contain floats (guaranteed by the fixed query shape);
@@ -509,7 +509,6 @@ mod tests {
             "appid": 42,
             "name": "A Game",
             "name_hints": [],
-            "preferred_language": null,
             "legacy_match": false,
             "source_context": ["official"],
             "parser_version": 2,

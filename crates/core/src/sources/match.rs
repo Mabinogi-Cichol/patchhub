@@ -12,11 +12,9 @@ use super::model::{
 };
 use std::collections::BTreeMap;
 
-/// `sha256(canonical_json({name, localized_name, name_hints,
-/// preferred_language, subscriptions}))`.
+/// `sha256(canonical_json({name, localized_name, name_hints, subscriptions}))`.
 ///
-/// `name_hints`/`preferred_language` are real matching inputs: the trusted
-/// localized name, frontend name hints and the preferred patch language change
+/// The trusted localized name and frontend name hints change
 /// the publisher/fallback query context, so a change must trigger a rematch.
 /// `subscriptions` is the per-game, matching-relevant source snapshot
 /// (`source_id -> active`), not the full settings document. `BTreeMap` keeps the
@@ -25,7 +23,6 @@ pub fn input_key(
     name: &str,
     localized_name: Option<&str>,
     name_hints: &[String],
-    preferred_language: Option<&str>,
     subscriptions: &BTreeMap<String, bool>,
 ) -> String {
     #[derive(serde::Serialize)]
@@ -33,14 +30,14 @@ pub fn input_key(
         name: &'a str,
         localized_name: Option<&'a str>,
         name_hints: &'a [String],
-        preferred_language: Option<&'a str>,
+
         subscriptions: &'a BTreeMap<String, bool>,
     }
     canonical::canonical_sha256(&MatchingInput {
         name,
         localized_name,
         name_hints,
-        preferred_language,
+
         subscriptions,
     })
 }
@@ -167,39 +164,29 @@ mod tests {
     #[test]
     fn input_key_changes_only_with_matching_inputs() {
         let subscriptions = BTreeMap::from([("patchmoe".to_string(), true)]);
-        let base = input_key("Game", Some("游戏"), &[], None, &subscriptions);
-        assert_eq!(
-            base,
-            input_key("Game", Some("游戏"), &[], None, &subscriptions)
-        );
-        assert_ne!(
-            base,
-            input_key("Game 2", Some("游戏"), &[], None, &subscriptions)
-        );
-        assert_ne!(base, input_key("Game", None, &[], None, &subscriptions));
-        // Frontend name hints and the preferred language are matching inputs.
+        let base = input_key("Game", Some("游戏"), &[], &subscriptions);
+        assert_eq!(base, input_key("Game", Some("游戏"), &[], &subscriptions));
+        assert_ne!(base, input_key("Game 2", Some("游戏"), &[], &subscriptions));
+        assert_ne!(base, input_key("Game", None, &[], &subscriptions));
+        // Frontend name hints are matching inputs.
         let hints = vec!["Alias".to_string()];
         assert_ne!(
             base,
-            input_key("Game", Some("游戏"), &hints, None, &subscriptions)
-        );
-        assert_ne!(
-            base,
-            input_key("Game", Some("游戏"), &[], Some("en"), &subscriptions)
+            input_key("Game", Some("游戏"), &hints, &subscriptions)
         );
         let other = BTreeMap::from([("patchmoe".to_string(), false)]);
-        assert_ne!(base, input_key("Game", Some("游戏"), &[], None, &other));
+        assert_ne!(base, input_key("Game", Some("游戏"), &[], &other));
         // A source added to the snapshot changes the key; map order does not.
         let mut reordered = BTreeMap::from([
             ("patchmoe".to_string(), true),
             ("hgamer".to_string(), false),
         ]);
         assert_eq!(
-            input_key("Game", Some("游戏"), &[], None, &reordered),
-            input_key("Game", Some("游戏"), &[], None, &reordered.clone())
+            input_key("Game", Some("游戏"), &[], &reordered),
+            input_key("Game", Some("游戏"), &[], &reordered.clone())
         );
         reordered.remove("hgamer");
-        assert_eq!(base, input_key("Game", Some("游戏"), &[], None, &reordered));
+        assert_eq!(base, input_key("Game", Some("游戏"), &[], &reordered));
     }
 
     #[test]

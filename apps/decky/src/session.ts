@@ -220,11 +220,11 @@ export function createManagerSession(readSnapshot: () => Promise<Snapshot>, sour
   async function updateSource(sourceId: string, force = false) {
     return beginSourceTask(null, () => sourceApi!.updateSource(sourceId, force));
   }
-  async function matchGames(instances: string[] | null, nameHints: string[] = [], language: string | null = null, forceDetails = false) {
-    return beginSourceTask(null, () => sourceApi!.matchGames(instances, nameHints, language, forceDetails));
+  async function matchGames(instances: string[] | null, nameHints: string[] = [], forceDetails = false) {
+    return beginSourceTask(null, () => sourceApi!.matchGames(instances, nameHints, forceDetails));
   }
-  async function rematchGame(instance: string, _appid: number, nameHints: string[] = [], language: string | null = null) {
-    return beginSourceTask(instance, () => sourceApi!.rematchGame(instance, null, nameHints, language));
+  async function rematchGame(instance: string, _appid: number, nameHints: string[] = []) {
+    return beginSourceTask(instance, () => sourceApi!.rematchGame(instance, null, nameHints));
   }
   async function cancelSourceTask(taskId: string) {
     if (!sourceApi) return;

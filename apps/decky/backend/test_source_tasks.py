@@ -75,10 +75,10 @@ class SourceTasksRpcTests(unittest.IsolatedAsyncioTestCase):
         plugin = self.plugin()
         self.assertEqual((await plugin.update_source("patchmoe", True))["task_id"], "task-1")
         plugin.sources.start_update_source.assert_called_once_with("patchmoe", True)
-        await plugin.match_games(["local"], ["Game"], "zh-CN", True)
-        plugin.sources.start_match_games.assert_called_once_with(["local"], ["Game"], "zh-CN", True)
-        await plugin.rematch_game("local", 123, ["Game"], "zh-CN")
-        plugin.sources.start_rematch_game.assert_called_once_with("local", 123, ["Game"], "zh-CN")
+        await plugin.match_games(["local"], ["Game"], True)
+        plugin.sources.start_match_games.assert_called_once_with(["local"], ["Game"], True)
+        await plugin.rematch_game("local", 123, ["Game"])
+        plugin.sources.start_rematch_game.assert_called_once_with("local", 123, ["Game"])
         self.assertFalse(plugin.tasks.busy())
 
     async def test_task_status_and_cancel_are_keyed_by_task_id(self):

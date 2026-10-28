@@ -43,8 +43,8 @@ export type SourceTaskSnapshot = {
 export type SourceTaskApi = {
   listSources(): Promise<SourceSubscription[]>;
   updateSource(sourceId: string, force?: boolean): Promise<SourceTaskSnapshot>;
-  matchGames(instances: string[] | null, nameHints: string[], language: string | null, forceDetails: boolean): Promise<SourceTaskSnapshot>;
-  rematchGame(instance: string | null, appid: number | null, nameHints: string[], language: string | null): Promise<SourceTaskSnapshot>;
+  matchGames(instances: string[] | null, nameHints: string[], forceDetails: boolean): Promise<SourceTaskSnapshot>;
+  rematchGame(instance: string | null, appid: number | null, nameHints: string[]): Promise<SourceTaskSnapshot>;
   setInterval(sourceId: string, intervalHours: number): Promise<unknown>;
   projectInstances(instanceIds: string[]): Promise<ProjectInstancesResult>;
   taskStatus(): Promise<SourceTaskSnapshot[]>;

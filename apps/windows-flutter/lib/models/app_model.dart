@@ -38,7 +38,6 @@ class AppModel extends ChangeNotifier {
   Object? transactionError;
   Object? stateRefreshError;
   int? settingsRevision;
-  String? preferredLanguage;
   bool scanning = false;
   bool _initialized = false;
   bool _ticking = false;
@@ -326,15 +325,8 @@ class AppModel extends ChangeNotifier {
     return task;
   }
 
-  void setPreferredLanguage(String? value) {
-    preferredLanguage = value;
-    notifyListeners();
-  }
-
-  void rematch(GameRow row) => startSource('rematch_game', {
-    'instance_id': row.id,
-    if (preferredLanguage != null) 'preferred_language': preferredLanguage,
-  });
+  void rematch(GameRow row) =>
+      startSource('rematch_game', {'instance_id': row.id});
 
   @override
   void dispose() {

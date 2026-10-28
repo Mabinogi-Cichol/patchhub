@@ -537,8 +537,6 @@ pub struct QueryContext {
     /// `<= 3` entries, each `<= 256`.
     #[serde(default)]
     pub name_hints: Vec<String>,
-    #[serde(default)]
-    pub preferred_language: Option<String>,
     pub legacy_match: bool,
     pub force: bool,
     #[serde(default)]

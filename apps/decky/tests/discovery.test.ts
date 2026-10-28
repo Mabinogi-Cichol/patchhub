@@ -26,7 +26,6 @@ test("display union keeps candidate identities out of installation IDs and order
   assert.equal("patch" in entries[1], false);
   assert.match(candidateSource(game.discovery!.candidates[0]), /HGamer.*索引/);
   game.discovery!.candidates.push(candidate({ candidate_id: "english", languages: ["en"] }), candidate({ candidate_id: "chinese", languages: ["zh-CN"] }));
-  assert.deepEqual(displayPatches(game, "zh-CN").map(entry => entry.key), ["source-patchmoe-1227890", "chinese", "official", "english", "index"]);
 });
 
 test("DLC conditions remain visible as source facts", () => {

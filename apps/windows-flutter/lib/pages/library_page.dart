@@ -5,7 +5,6 @@ import '../host/steam_artwork.dart';
 import '../presentation/game_artwork.dart';
 import '../presentation/game_status.dart';
 import '../presentation/desktop_toolbar.dart';
-import '../presentation/desktop_select.dart';
 import '../models/app_model.dart';
 import '../models/library.dart';
 import '../presentation/library_presentation.dart';
@@ -61,7 +60,11 @@ class _LibraryPageState extends State<LibraryPage> {
   bool globalSources = false;
   int tab = 0;
   final scroll = ScrollController();
-  late final artwork = widget.artwork ?? SteamArtworkStore();
+  late final artwork =
+      widget.artwork ??
+      SteamArtworkStore(
+        languageForRoot: (root) => widget.model.snapshot?.steamLanguage(root),
+      );
   ScanSnapshot? artworkSnapshot;
 
   @override
@@ -92,7 +95,7 @@ class _LibraryPageState extends State<LibraryPage> {
       mirror = null;
       tab = 0;
     } else if (row != null) {
-      final entries = displayEntries(row, widget.model.preferredLanguage);
+      final entries = displayEntries(row);
       if (selectedKey != null &&
           !entries.any((entry) => entry.selectionKey == selectedKey)) {
         selectedKey = entries.firstOrNull?.selectionKey;
@@ -116,10 +119,7 @@ class _LibraryPageState extends State<LibraryPage> {
 
   void selectGame(GameRow row) => setState(() {
     selectedId = row.id;
-    selectedKey = displayEntries(
-      row,
-      widget.model.preferredLanguage,
-    ).firstOrNull?.selectionKey;
+    selectedKey = displayEntries(row).firstOrNull?.selectionKey;
     mirror = null;
     tab = 0;
     globalSources = false;
@@ -552,7 +552,7 @@ class _LibraryPageState extends State<LibraryPage> {
   }
 
   Widget gameDetails(GameRow row) {
-    final entries = displayEntries(row, widget.model.preferredLanguage);
+    final entries = displayEntries(row);
     final entry =
         entries
             .where((entry) => entry.selectionKey == selectedKey)
@@ -765,23 +765,6 @@ class _LibraryPageState extends State<LibraryPage> {
             runSpacing: 8,
             crossAxisAlignment: WrapCrossAlignment.center,
             children: [
-              SizedBox(
-                width: 210,
-                child: DesktopSelect(
-                  label: '偏好的补丁语言',
-                  value: widget.model.preferredLanguage ?? '',
-                  options: const [
-                    (value: '', label: '未指定语言'),
-                    (value: 'zh-CN', label: '简体中文'),
-                    (value: 'zh-TW', label: '繁体中文'),
-                    (value: 'en', label: '英文'),
-                    (value: 'ja', label: '日文'),
-                  ],
-                  onSelected: (value) => widget.model.setPreferredLanguage(
-                    value.isEmpty ? null : value,
-                  ),
-                ),
-              ),
               OutlinedButton.icon(
                 onPressed: running ? null : () => widget.model.rematch(row),
                 icon: const Icon(Icons.refresh, size: 18),

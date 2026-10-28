@@ -2,8 +2,23 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:patchhub_windows/host/steam_artwork.dart';
+import 'package:patchhub_windows/models/library.dart';
 
 void main() {
+  test('artwork language follows its Steam root even without a localized game name', () {
+    final snapshot = ScanSnapshot({
+      'installs': [],
+      'diagnostics': [],
+      'catalog_error': null,
+      'steam_languages': {
+        r'\\?\C:\Steam': 'japanese',
+        r'D:\OtherSteam': 'schinese',
+      },
+    });
+    expect(snapshot.steamLanguage('c:/Steam/'), 'japanese');
+    expect(snapshot.steamLanguage(r'D:\OtherSteam'), 'schinese');
+    expect(snapshot.steamLanguage(r'E:\Unknown'), isNull);
+  });
   late Directory root;
   setUp(
     () async => root = await Directory.systemTemp.createTemp('steam-artwork-'),
@@ -16,9 +31,11 @@ void main() {
     return target.uri.toFilePath();
   }
 
-  SteamArtworkStore store({int activeUser = 12}) => SteamArtworkStore(
-    context: () async => {'root': root.path, 'activeUser': activeUser},
-  );
+  SteamArtworkStore store({int activeUser = 12, String? language}) =>
+      SteamArtworkStore(
+        context: () async => {'root': root.path, 'activeUser': activeUser},
+        languageForRoot: (_) => language,
+      );
 
   test(
     'current account custom art wins; never mixes another account',
@@ -36,7 +53,7 @@ void main() {
     },
   );
   test(
-    'nested default art prefers Chinese and excludes blurred hero',
+    'nested default art follows Steam language and excludes blurred hero',
     () async {
       await file('appcache/librarycache/42/library_600x900.jpg');
       final cover = await file(
@@ -48,13 +65,42 @@ void main() {
       final hero = await file(
         'appcache/librarycache/42/hero-hash/library_hero_schinese.jpg',
       );
-      final images = await store().load(42);
+      final images = await store(language: 'schinese').load(42);
       expect(images.cover, cover);
       expect(images.hero, hero);
       expect(images.thumbnail, cover);
       expect(images.diagnostics, isEmpty);
     },
   );
+  test('Steam language refresh changes all default artwork and falls back to neutral art', () async {
+    final neutral = await file('appcache/librarycache/42/library_600x900.jpg');
+    final english = await file(
+      'appcache/librarycache/42/library_600x900_english.jpg',
+    );
+    final japanese = await file(
+      'appcache/librarycache/42/hash/library_600x900_japanese.jpg',
+    );
+    final hero = await file(
+      'appcache/librarycache/42/library_hero_japanese.jpg',
+    );
+    await file('appcache/librarycache/42/library_600x900_schinese.jpg');
+    var language = 'english';
+    final source = SteamArtworkStore(
+      context: () async => {'root': root.path, 'activeUser': 12},
+      languageForRoot: (_) => language,
+    );
+    expect((await source.load(42)).cover, english);
+    language = 'japanese';
+    source.refresh();
+    final images = await source.load(42);
+    expect(images.cover, japanese);
+    expect(images.hero, hero);
+    expect(images.thumbnail, japanese);
+    expect((await store(language: 'german').load(42)).cover, neutral);
+    expect((await store().load(42)).cover, neutral);
+    final custom = await file('userdata/12/config/grid/42p.png');
+    expect((await store(language: 'japanese').load(42)).cover, custom);
+  });
   test('Steam stopped: resolve MostRecent account from loginusers', () async {
     await file(
       'config/loginusers.vdf',
