@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:window_manager/window_manager.dart';
 
+import '../app.dart';
+
 class DesktopToolbar extends StatelessWidget {
   const DesktopToolbar({super.key, required this.actions});
   final List<Widget> actions;
@@ -71,7 +73,8 @@ class DesktopToolbar extends StatelessWidget {
               message: '关闭',
               child: WindowCaptionButton.close(
                 brightness: brightness,
-                onPressed: windowManager.close,
+                onPressed:
+                    PatchHubApp.closeHandlerOf(context) ?? windowManager.close,
               ),
             ),
           ],

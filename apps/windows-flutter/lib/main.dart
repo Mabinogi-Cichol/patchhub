@@ -147,6 +147,7 @@ Future<void> main(List<String> arguments) async {
   });
   runApp(
     PatchHubApp(
+      onClose: lifecycle.onWindowClose,
       home: ListenableBuilder(
         listenable: Listenable.merge([lifecycle, ?tasks]),
         builder: (context, _) {

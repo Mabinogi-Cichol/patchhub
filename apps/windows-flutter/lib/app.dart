@@ -2,8 +2,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 
 class PatchHubApp extends StatefulWidget {
-  const PatchHubApp({super.key, required this.home});
+  const PatchHubApp({super.key, required this.home, this.onClose});
   final Widget home;
+  final VoidCallback? onClose;
+
+  static VoidCallback? closeHandlerOf(BuildContext context) =>
+      context.findAncestorWidgetOfExactType<PatchHubApp>()?.onClose;
 
   static ThemeMode themeModeOf(BuildContext context) =>
       context.findAncestorStateOfType<_PatchHubAppState>()!.themeMode;

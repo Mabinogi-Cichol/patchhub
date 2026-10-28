@@ -44,11 +44,15 @@ class AppLifecycle extends ChangeNotifier with WindowListener {
       // Use the normal WM_CLOSE -> WM_DESTROY path after cleanup. On Windows,
       // plugin destroy() posts WM_QUIT and skips the runner's window teardown.
       await windowManager.setPreventClose(false);
+      // Business cleanup is complete. Stop displaying the window while the
+      // native Flutter engine finishes its synchronous teardown.
+      await windowManager.hide();
       await windowManager.close();
     } catch (failure) {
       error = failure;
       closing = false;
       notifyListeners();
+      await windowManager.show();
     }
   }
 

@@ -298,18 +298,23 @@ void main() {
       await tester.pumpWidget(const SizedBox.shrink());
       updateModel.dispose();
       update.dispose();
-      // A real WM_CLOSE changes native window activation. Verify it only after
-      // the screenshot matrix, rather than reusing that window for another size.
+      // Verify the caption's direct lifecycle dispatch after the screenshot
+      // matrix. The observer keeps the test host alive for its final receipt.
       await windowManager.setSize(const Size(1180, 760));
       final closeModel = VisualReadModel(jsonDecode(jsonEncode(data)));
-      await tester.pumpWidget(
-        PatchHubApp(home: LibraryPage(model: closeModel)),
-      );
-      await tester.pumpAndSettle();
       final lifecycle = VisualCloseObserver(tasks: closeModel.tasks);
       await lifecycle.initialize();
+      await tester.pumpWidget(
+        PatchHubApp(
+          onClose: lifecycle.onWindowClose,
+          home: LibraryPage(model: closeModel),
+        ),
+      );
+      await tester.pumpAndSettle();
+      final closeWatch = Stopwatch()..start();
       await tester.tap(find.byTooltip('关闭'));
       await lifecycle.completed.future;
+      closeWatch.stop();
       await tester.pumpAndSettle();
       expect(lifecycle.closed, isTrue);
       lifecycle.dispose();
@@ -320,7 +325,11 @@ void main() {
         await File('${output.path}/metrics.json')
             .writeAsString(jsonEncode(metrics));
         await File('${output.path}/result.json').writeAsString(
-          jsonEncode({'passed': true, 'screenshots': metrics.length}),
+          jsonEncode({
+            'passed': true,
+            'screenshots': metrics.length,
+            'caption_close_dispatch_ms': closeWatch.elapsedMilliseconds,
+          }),
         );
       }
     },
