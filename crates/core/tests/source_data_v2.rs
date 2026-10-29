@@ -941,6 +941,7 @@ fn schedule_boundaries_match_the_p1_contract() {
         added: Vec::new(),
         games: BTreeMap::new(),
         intervals: BTreeMap::from([("patchmoe".to_string(), 12)]),
+        names: BTreeMap::new(),
     };
     assert_eq!(interval_hours(&settings, "patchmoe"), 12);
     assert_eq!(interval_hours(&settings, "kagura-cn"), 0);

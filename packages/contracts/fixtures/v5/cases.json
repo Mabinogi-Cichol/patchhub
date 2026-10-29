@@ -978,6 +978,27 @@
       "task_channel": false
     },
     {
+      "name": "set_source_name-request",
+      "request": {
+        "method": "set_source_name",
+        "params": {
+          "host": {
+            "catalog": null,
+            "platform": "windows",
+            "roots": [],
+            "signed_catalog": null,
+            "state_dir": null,
+            "trust_keys": null
+          },
+          "name": "发行商名称",
+          "source_id": "fixture"
+        },
+        "protocol_version": 5,
+        "request_id": "fixture"
+      },
+      "task_channel": false
+    },
+    {
       "name": "set_game_source-request",
       "request": {
         "method": "set_game_source",
@@ -2063,6 +2084,7 @@
             "list_sources",
             "list_game_sources",
             "set_source_enabled",
+            "set_source_name",
             "set_game_source",
             "add_source",
             "set_source_update_interval",
@@ -2081,6 +2103,7 @@
               "list_sources",
               "list_game_sources",
               "set_source_enabled",
+              "set_source_name",
               "set_game_source",
               "add_source",
               "set_source_update_interval",
@@ -2728,6 +2751,33 @@
     {
       "method": "set_source_enabled",
       "name": "set_source_enabled-failure",
+      "response": {
+        "error": {
+          "code": "io_error",
+          "detail": "固定诊断"
+        },
+        "ok": false,
+        "protocol_version": 5,
+        "request_id": "fixture"
+      }
+    },
+    {
+      "method": "set_source_name",
+      "name": "set_source_name-success",
+      "response": {
+        "ok": true,
+        "protocol_version": 5,
+        "request_id": "fixture",
+        "result": {
+          "name": "发行商名称",
+          "settings_revision": 1,
+          "source_id": "fixture"
+        }
+      }
+    },
+    {
+      "method": "set_source_name",
+      "name": "set_source_name-failure",
       "response": {
         "error": {
           "code": "io_error",
@@ -4429,6 +4479,7 @@
             "list_sources",
             "list_game_sources",
             "set_source_enabled",
+            "set_source_name",
             "set_game_source",
             "add_source",
             "set_source_update_interval",
@@ -4447,6 +4498,7 @@
               "list_sources",
               "list_game_sources",
               "set_source_enabled",
+              "set_source_name",
               "set_game_source",
               "add_source",
               "set_source_update_interval",
@@ -4513,6 +4565,7 @@
               "list_sources",
               "list_game_sources",
               "set_source_enabled",
+              "set_source_name",
               "set_game_source",
               "add_source",
               "set_source_update_interval",
@@ -4584,6 +4637,7 @@
             "list_sources",
             "list_game_sources",
             "set_source_enabled",
+            "set_source_name",
             "set_game_source",
             "add_source",
             "set_source_update_interval",
@@ -4602,6 +4656,7 @@
               "list_sources",
               "list_game_sources",
               "set_source_enabled",
+              "set_source_name",
               "set_game_source",
               "add_source",
               "set_source_update_interval",
@@ -4673,6 +4728,7 @@
             "list_sources",
             "list_game_sources",
             "set_source_enabled",
+            "set_source_name",
             "set_game_source",
             "add_source",
             "set_source_update_interval",
@@ -4691,6 +4747,7 @@
               "list_sources",
               "list_game_sources",
               "set_source_enabled",
+              "set_source_name",
               "set_game_source",
               "add_source",
               "set_source_update_interval",
@@ -4762,6 +4819,7 @@
             "list_sources",
             "list_game_sources",
             "set_source_enabled",
+            "set_source_name",
             "set_game_source",
             "add_source",
             "set_source_update_interval",
@@ -4780,6 +4838,7 @@
               "list_sources",
               "list_game_sources",
               "set_source_enabled",
+              "set_source_name",
               "set_game_source",
               "add_source",
               "set_source_update_interval",
@@ -4851,6 +4910,7 @@
             "list_sources",
             "list_game_sources",
             "set_source_enabled",
+            "set_source_name",
             "set_game_source",
             "add_source",
             "set_source_update_interval",
@@ -4869,11 +4929,11 @@
               "list_sources",
               "list_game_sources",
               "set_source_enabled",
+              "set_source_name",
               "set_game_source",
               "add_source",
               "set_source_update_interval",
-              "update_source",
-              "match_games"
+              "update_source"
             ],
             "parser_version": 2,
             "schedule_schema_version": 1
@@ -4939,6 +4999,7 @@
             "list_sources",
             "list_game_sources",
             "set_source_enabled",
+            "set_source_name",
             "set_game_source",
             "add_source",
             "set_source_update_interval",
@@ -4957,6 +5018,7 @@
               "list_sources",
               "list_game_sources",
               "set_source_enabled",
+              "set_source_name",
               "set_game_source",
               "add_source",
               "set_source_update_interval",
@@ -5024,6 +5086,7 @@
             "list_sources",
             "list_game_sources",
             "set_source_enabled",
+            "set_source_name",
             "set_game_source",
             "add_source",
             "set_source_update_interval",
@@ -5042,6 +5105,7 @@
               "list_sources",
               "list_game_sources",
               "set_source_enabled",
+              "set_source_name",
               "set_game_source",
               "add_source",
               "set_source_update_interval",
@@ -5117,6 +5181,7 @@
             "list_sources",
             "list_game_sources",
             "set_source_enabled",
+            "set_source_name",
             "set_game_source",
             "add_source",
             "set_source_update_interval",
@@ -5135,6 +5200,7 @@
               "list_sources",
               "list_game_sources",
               "set_source_enabled",
+              "set_source_name",
               "set_game_source",
               "add_source",
               "set_source_update_interval",

@@ -58,6 +58,7 @@ class SourceTasksRpcTests(unittest.IsolatedAsyncioTestCase):
             cancel_task=Mock(return_value={**TASK, "state": "cancelling"}),
             set_update_interval=AsyncMock(return_value={"settings_revision": 3, "source_id": "patchmoe",
                                                          "interval_hours": 6}),
+            set_name=AsyncMock(),
             reload_sources=AsyncMock(return_value=[dict(PUBLISHER)]),
             list_sources=Mock(return_value=[dict(PUBLISHER)]),
             prime=Mock(),
@@ -81,6 +82,14 @@ class SourceTasksRpcTests(unittest.IsolatedAsyncioTestCase):
         plugin.sources.start_rematch_game.assert_called_once_with("local", 123, ["Game"])
         self.assertFalse(plugin.tasks.busy())
 
+    async def test_name_write_returns_reloaded_source_names(self):
+        plugin = self.plugin()
+        plugin.sources.list_sources.return_value = [{**PUBLISHER, "name": "Shiravune"}]
+        result = await plugin.set_source_name("patchmoe", "Shiravune")
+        plugin.sources.set_name.assert_awaited_once_with("patchmoe", "Shiravune")
+        self.assertEqual(result[0]["name"], "Shiravune")
+        plugin.bridge.scan.assert_not_awaited()
+
     async def test_task_status_and_cancel_are_keyed_by_task_id(self):
         plugin = self.plugin()
         self.assertEqual((await plugin.source_task_status("task-1"))["task_id"], "task-1")
@@ -102,6 +111,9 @@ class SourceTasksRpcTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaisesRegex(RuntimeError, "installer_busy"):
                 await plugin.set_source_update_interval("patchmoe", 6)
             plugin.sources.set_update_interval.assert_not_awaited()
+            with self.assertRaisesRegex(RuntimeError, "installer_busy"):
+                await plugin.set_source_name("patchmoe", "Shiravune")
+            plugin.sources.set_name.assert_not_awaited()
             # Source tasks and reads stay available while the installer runs.
             await plugin.update_source("patchmoe")
             await plugin.project_instances(["local"])

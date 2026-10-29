@@ -24,6 +24,7 @@ pub struct SourceRegistry {
     builtins: Vec<SourceRule>,
     rules: Vec<SourceRule>,
     overrides: Overrides,
+    names: BTreeMap<String, String>,
     revision: u64,
     status: BTreeMap<String, SourceStatus>,
     /// Published index snapshots, keyed by source id.
@@ -51,6 +52,7 @@ impl SourceRegistry {
             builtins,
             rules: Vec::new(),
             overrides: Overrides::default(),
+            names: BTreeMap::new(),
             revision: 0,
             status: BTreeMap::new(),
             indexes: BTreeMap::new(),
@@ -154,6 +156,7 @@ impl SourceRegistry {
         }
 
         self.rules = rules;
+        self.names = settings.names;
         self.overrides = overrides;
         self.status.clear();
         self.indexes.clear();
@@ -237,8 +240,12 @@ impl SourceRegistry {
                     interval_hours,
                     status.map(|status| status.checked_at).unwrap_or(0),
                 );
+                let mut display_rule = rule.clone();
+                if let Some(name) = self.names.get(&rule.id) {
+                    display_rule.name = name.clone();
+                }
                 SourceSummary {
-                    rule: rule.clone(),
+                    rule: display_rule,
                     origin: self.source_origin(&rule.id).unwrap_or("added").to_string(),
                     status: code,
                     entry_count,
@@ -426,6 +433,20 @@ impl SourceRegistry {
         self.store.apply_overrides(&overrides)?;
         self.store.bump_revision()?;
         self.reload()
+    }
+
+    pub fn set_name(&mut self, source_id: &str, name: &str) -> Result<String> {
+        if !self.rules.iter().any(|rule| rule.id == source_id) {
+            return Err(invalid("unknown_source"));
+        }
+        let name = name.trim();
+        if name.is_empty() {
+            return Err(invalid("invalid_source_name"));
+        }
+        self.store.set_name(source_id, name)?;
+        self.store.bump_revision()?;
+        self.reload()?;
+        Ok(name.to_string())
     }
 
     pub fn add_source(&mut self, raw: &RawSourceRule) -> Result<SourceRule> {
@@ -762,6 +783,100 @@ mod tests {
         let store = SourceStore::open(dir).unwrap();
         SourceRegistry::load_with_clock(store, builtins(), Box::new(FakeClock::new(1_700_000_000)))
             .unwrap()
+    }
+
+    #[test]
+    fn display_names_persist_without_changing_rules_or_subscriptions() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut registry = registry_at(temp.path());
+        assert_eq!(registry.list_sources()[0].rule.name, "Shiravune");
+        let mut raw: RawSourceRule = serde_json::from_value(serde_json::json!({
+            "id": "custom", "name": "Custom", "adapter": "patchmoe", "enabled": true,
+            "pages": ["https://www.patch.moe/"], "page_hosts": ["www.patch.moe"],
+            "download_hosts": ["download.patch.moe"], "root_layout": "game_root"
+        }))
+        .unwrap();
+        registry.add_source(&raw).unwrap();
+        registry.set_enabled("patchmoe", false).unwrap();
+        registry.set_game_source(42, "patchmoe", false).unwrap();
+        registry.set_update_interval("patchmoe", 24).unwrap();
+        let rules = registry.rules().to_vec();
+        let names = [
+            ("patchmoe", "我的发行商".repeat(80)),
+            ("custom", "自定义来源".to_string()),
+            ("hgamer", "补查来源".to_string()),
+        ];
+        for (id, name) in &names {
+            assert_eq!(
+                registry.set_name(id, &format!("  {name}  ")).unwrap(),
+                *name
+            );
+        }
+        assert_eq!(registry.rules(), rules);
+        let revision = registry.settings_revision();
+        drop(registry);
+        // Simulate an app upgrade: compiled rules still update under a display name.
+        raw.pages = vec!["https://www.patch.moe/updated".to_string()];
+        let mut updated_builtins = builtins();
+        updated_builtins[0].pages = raw.pages;
+        let registry =
+            SourceRegistry::load(SourceStore::open(temp.path()).unwrap(), updated_builtins)
+                .unwrap();
+        assert_eq!(registry.settings_revision(), revision);
+        assert_eq!(registry.rules()[0].pages, ["https://www.patch.moe/updated"]);
+        for (id, name) in &names {
+            let source = registry
+                .list_game_sources(&game(42))
+                .into_iter()
+                .find(|source| &source.source.rule.id == id)
+                .unwrap();
+            assert_eq!(&source.source.rule.name, name);
+        }
+        assert!(!registry.game_subscribed(42, "patchmoe"));
+        let source = registry
+            .list_sources()
+            .into_iter()
+            .find(|s| s.rule.id == "patchmoe")
+            .unwrap();
+        assert!(!source.rule.enabled);
+        assert_eq!(source.interval_hours, 24);
+    }
+
+    #[test]
+    fn invalid_display_name_does_not_write_settings_and_old_settings_load() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut registry = registry_at(temp.path());
+        let before = std::fs::read(registry.store().paths().settings()).unwrap();
+        assert_eq!(
+            registry
+                .set_name("missing", "Name")
+                .unwrap_err()
+                .to_string(),
+            "unknown_source"
+        );
+        assert_eq!(
+            registry
+                .set_name("patchmoe", " \t\n ")
+                .unwrap_err()
+                .to_string(),
+            "invalid_source_name"
+        );
+        assert_eq!(
+            std::fs::read(registry.store().paths().settings()).unwrap(),
+            before
+        );
+        let mut old: serde_json::Value = serde_json::from_slice(&before).unwrap();
+        old.as_object_mut().unwrap().remove("names");
+        std::fs::write(
+            registry.store().paths().settings(),
+            serde_json::to_vec(&old).unwrap(),
+        )
+        .unwrap();
+        drop(registry);
+        assert_eq!(
+            registry_at(temp.path()).list_sources()[0].rule.name,
+            "Shiravune"
+        );
     }
 
     fn game(appid: u32) -> GameQuery {

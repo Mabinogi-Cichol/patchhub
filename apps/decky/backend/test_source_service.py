@@ -133,6 +133,24 @@ class SourceServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(("set_game_source", {"appid": 42, "source_id": "patchmoe", "subscribed": False}),
                       self.bridge.sync_calls)
 
+    async def test_set_name_reloads_summary_and_preserves_snapshot_on_failure(self):
+        await self.service.initialize()
+        self.bridge.sync_results["set_source_name"] = {
+            "settings_revision": 7, "source_id": "patchmoe", "name": "自定义发行商"}
+        self.bridge.sync_results["list_sources"] = [
+            {**SUMMARIES[0], "name": "自定义发行商"}, SUMMARIES[1]]
+        await self.service.set_name("patchmoe", "自定义发行商")
+        self.assertEqual(self.service.settings_revision, 7)
+        self.assertEqual(self.service.list_sources()[0]["name"], "自定义发行商")
+        self.assertIn(("set_source_name", {"source_id": "patchmoe", "name": "自定义发行商"}),
+                      self.bridge.sync_calls)
+        def reject(_params):
+            raise ValueError("invalid_source_name")
+        self.bridge.sync_results["set_source_name"] = reject
+        with self.assertRaisesRegex(ValueError, "invalid_source_name"):
+            await self.service.set_name("patchmoe", " ")
+        self.assertEqual(self.service.list_sources()[0]["name"], "自定义发行商")
+
     async def test_update_interval_validates_generated_bounds_and_reloads(self):
         await self.service.initialize()
         self.bridge.sync_results["set_source_update_interval"] = {

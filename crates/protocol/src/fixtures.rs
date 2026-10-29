@@ -96,6 +96,9 @@ pub fn success_result(method: Method) -> Value {
         Method::SetSourceEnabled => {
             json!({"settings_revision":1,"source_id":"fixture","enabled":true})
         }
+        Method::SetSourceName => {
+            json!({"settings_revision":1,"source_id":"fixture","name":"发行商名称"})
+        }
         Method::SetGameSource => {
             json!({"settings_revision":1,"source_id":"fixture","subscribed":true})
         }
@@ -128,6 +131,10 @@ pub fn request(method: Method) -> Value {
         Method::SetSourceEnabled => {
             p["source_id"] = json!("fixture");
             p["enabled"] = json!(true);
+        }
+        Method::SetSourceName => {
+            p["source_id"] = json!("fixture");
+            p["name"] = json!("发行商名称");
         }
         Method::SetGameSource => {
             p["source_id"] = json!("fixture");

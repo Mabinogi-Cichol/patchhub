@@ -6,7 +6,83 @@ import 'package:patchhub_windows/pages/source_pages.dart';
 
 import 'library_page_test.dart' show FixtureClient;
 
+class NameClient extends FixtureClient {
+  String name = 'Shiravune';
+  bool rejectName = false;
+  final writes = <Map<String, Object?>>[];
+
+  Map<String, dynamic> get source => {
+    'id': 'patchmoe',
+    'name': name,
+    'enabled': true,
+    'role': 'publisher',
+    'status': 'not_refreshed',
+    'interval_hours': 0,
+    'entry_count': 0,
+    'complete': false,
+    'pages': <String>[],
+  };
+
+  @override
+  Future<Object?> call(
+    String method, [
+    Map<String, Object?> args = const {},
+  ]) async {
+    if (method == 'set_source_name') {
+      writes.add(Map.of(args));
+      if (rejectName) throw StateError('保存被拒绝');
+      name = (args['name'] as String).trim();
+      return {'settings_revision': 2, 'source_id': 'patchmoe', 'name': name};
+    }
+    if (method == 'list_sources') return [source];
+    return super.call(method, args);
+  }
+}
+
 void main() {
+  testWidgets(
+    'source name saves, rejects blank input and preserves failed drafts',
+    (tester) async {
+      final client = NameClient();
+      final model = AppModel(client)..sources = [client.source];
+      await tester.pumpWidget(
+        PatchHubApp(
+          home: Scaffold(body: GlobalSourcesPage(model: model)),
+        ),
+      );
+      await tester.tap(find.text('Shiravune'));
+      await tester.pumpAndSettle();
+      final input = find.widgetWithText(TextFormField, '来源名称');
+      final save = find.widgetWithText(TextButton, '保存名称');
+      await tester.ensureVisible(input);
+      await tester.enterText(input, '  ');
+      await tester.pump();
+      expect(find.text('请输入来源名称'), findsOneWidget);
+      expect(tester.widget<TextButton>(save).onPressed, isNull);
+      await tester.enterText(input, '  我的发行商  ');
+      await tester.pump();
+      await tester.ensureVisible(save);
+      await tester.tap(save);
+      await tester.pumpAndSettle();
+      expect(client.writes.single, {
+        'source_id': 'patchmoe',
+        'name': '  我的发行商  ',
+      });
+      expect(find.text('我的发行商'), findsWidgets);
+      expect(tester.widget<TextButton>(save).onPressed, isNull);
+      client.rejectName = true;
+      await tester.enterText(input, '保留草稿');
+      await tester.pump();
+      await tester.tap(save);
+      await tester.pumpAndSettle();
+      expect(find.textContaining('保存被拒绝'), findsOneWidget);
+      expect(find.text('保留草稿'), findsOneWidget);
+      expect(model.sources.single['name'], '我的发行商');
+      await tester.pumpWidget(const SizedBox.shrink());
+      model.dispose();
+    },
+  );
+
   for (final brightness in Brightness.values) {
     for (final scale in [1.0, 1.5]) {
       testWidgets(
@@ -56,7 +132,7 @@ void main() {
           expect(tester.takeException(), isNull);
           tester.state<ScrollableState>(scrollable).position.jumpTo(0);
           await tester.pumpAndSettle();
-          await tester.tap(find.text('来源 0'));
+          await tester.tap(find.text('来源 0').first);
           await tester.pumpAndSettle();
           expect(tester.takeException(), isNull);
           expect(find.textContaining('最近成功：').hitTestable(), findsNothing);
@@ -80,11 +156,11 @@ void main() {
           expect(find.textContaining('最近成功：'), findsOneWidget);
           tester.state<ScrollableState>(scrollable).position.jumpTo(0);
           await tester.pumpAndSettle();
-          await tester.tap(find.text('来源 0'));
+          await tester.tap(find.text('来源 0').first);
           await tester.pumpAndSettle();
           tester.state<ScrollableState>(scrollable).position.jumpTo(0);
           await tester.pumpAndSettle();
-          await tester.tap(find.text('来源 0'));
+          await tester.tap(find.text('来源 0').first);
           await tester.pumpAndSettle();
           expect(find.textContaining('最近成功：'), findsOneWidget);
           expect(find.widgetWithText(TextFormField, '48'), findsOneWidget);

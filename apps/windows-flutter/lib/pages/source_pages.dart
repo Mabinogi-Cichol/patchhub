@@ -2,7 +2,6 @@ import 'dart:convert';
 
 import 'package:flutter/material.dart';
 
-
 import '../host/desktop_services.dart';
 import '../host/core_task.dart';
 import '../models/app_model.dart';
@@ -71,6 +70,7 @@ class GlobalSourcesPage extends StatefulWidget {
 class _GlobalSourcesPageState extends State<GlobalSourcesPage> {
   final expanded = <String>{};
   final intervals = <String, String>{};
+  final names = <String, String>{};
   final errors = <String, Object>{};
   final rule = TextEditingController();
   bool saving = false;
@@ -243,7 +243,11 @@ class _GlobalSourcesPageState extends State<GlobalSourcesPage> {
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 const Divider(height: 24),
-                if (errors[id] != null) SelectableText('保存失败：${errors[id]}'),
+                if (errors[id] != null)
+                  SelectableText(
+                    '保存失败：${errors[id]}',
+                    key: PageStorageKey('source:$id:save-error'),
+                  ),
                 if (task?.running == true) TaskSummary(task: task!),
                 if (!fallback) ...[
                   const Text('自动更新'),
@@ -299,6 +303,34 @@ class _GlobalSourcesPageState extends State<GlobalSourcesPage> {
                   ),
                   const SizedBox(height: 16),
                 ],
+                TextFormField(
+                  key: PageStorageKey('$id:name:${source['name']}'),
+                  initialValue: source['name'] as String,
+                  enabled: !saving,
+                  decoration: InputDecoration(
+                    labelText: '来源名称',
+                    errorText: names[id]?.trim().isEmpty == true
+                        ? '请输入来源名称'
+                        : null,
+                  ),
+                  onChanged: (value) => setState(() => names[id] = value),
+                ),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: TextButton(
+                    onPressed:
+                        saving ||
+                            (names[id] ?? '').trim().isEmpty ||
+                            names[id]?.trim() == source['name']
+                        ? null
+                        : () => save(id, 'set_source_name', {
+                            'source_id': id,
+                            'name': names[id],
+                          }),
+                    child: const Text('保存名称'),
+                  ),
+                ),
+                const SizedBox(height: 16),
                 Wrap(
                   spacing: 16,
                   runSpacing: 8,

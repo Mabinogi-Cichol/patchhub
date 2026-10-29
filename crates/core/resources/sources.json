@@ -3,7 +3,7 @@
   "sources": [
     {
       "id": "patchmoe",
-      "name": "patch.moe",
+      "name": "Shiravune",
       "adapter": "patchmoe",
       "enabled": true,
       "pages": ["https://www.patch.moe/?flag=1"],

@@ -61,6 +61,7 @@ mod tests {
             added: Vec::new(),
             games: BTreeMap::new(),
             intervals: BTreeMap::from([("patchmoe".to_string(), 24)]),
+            names: BTreeMap::new(),
         };
         assert_eq!(interval_hours(&settings, "patchmoe"), 24);
         assert_eq!(interval_hours(&settings, "kagura-cn"), 0);

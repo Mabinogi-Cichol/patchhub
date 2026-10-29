@@ -37,6 +37,7 @@ pub struct Params {
     pub request_id: Option<String>,
     pub cleanup_policy: installer::service::CleanupPolicy,
     pub source_id: Option<String>,
+    pub name: Option<String>,
     pub enabled: Option<bool>,
     pub subscribed: Option<bool>,
     /// Automatic update interval for `set_source_update_interval` (0 = off).
@@ -76,6 +77,7 @@ impl Params {
             plan_id: text("plan_id"),
             archive: text("archive").map(PathBuf::from),
             source_id: text("source_id"),
+            name: text("name"),
             operation: match text("operation").as_deref() {
                 Some("reinstall") => install::InstallOperation::Reinstall,
                 Some("overwrite") => install::InstallOperation::Overwrite,
@@ -181,7 +183,7 @@ impl ProgressCursor {
 }
 
 /// `get_capabilities` v5 payload (p1-host-contract §3.1, p1-contract §9.2):
-/// installer and source sub-objects merged with the full 21-method whitelist.
+/// installer and source sub-objects merged with the full 22-method whitelist.
 fn capabilities(_params: &Params) -> Value {
     let mut methods: Vec<&str> = Vec::with_capacity(METHODS.len());
     methods.extend(METHODS.iter().copied());
@@ -842,6 +844,26 @@ fn execute_source_method(
             let game = game_from_params(params, report)?;
             value(open_sources(params)?.registry().list_game_sources(&game))
         }
+        "set_source_name" => {
+            let source_id = params
+                .source_id
+                .as_deref()
+                .ok_or_else(|| DomainError::code("source_id_required"))?;
+            let name = params
+                .name
+                .as_deref()
+                .ok_or_else(|| DomainError::code("name_required"))?;
+            let mut handle = open_sources(params)?;
+            let name = handle
+                .registry_mut()
+                .set_name(source_id, name)
+                .map_err(err)?;
+            Ok(json!({
+                "settings_revision": handle.settings_revision(),
+                "source_id": source_id,
+                "name": name,
+            }))
+        }
         "set_source_enabled" => {
             let source_id = params
                 .source_id
@@ -1363,7 +1385,7 @@ mod sources_tests {
             .iter()
             .map(|method| method.as_str().unwrap())
             .collect();
-        assert_eq!(methods.len(), 21);
+        assert_eq!(methods.len(), 22);
         assert!(methods.contains(&"match_games"));
         assert!(methods.contains(&"project_instances"));
         assert_eq!(capabilities["sources"]["index_schema_version"], 1);
@@ -1374,7 +1396,7 @@ mod sources_tests {
         assert_eq!(capabilities["sources"]["encoding_version"], 1);
         assert_eq!(
             capabilities["sources"]["methods"].as_array().unwrap().len(),
-            9
+            10
         );
         assert_eq!(capabilities["installer"]["schema_version"], 1);
         assert_eq!(
@@ -1427,6 +1449,37 @@ mod sources_tests {
             assert_eq!(source["interval_hours"], 0);
             assert!(source["next_due_at"].is_null());
         }
+    }
+
+    #[test]
+    fn set_source_name_returns_saved_name_and_persists_across_calls() {
+        let temp = tempfile::tempdir().unwrap();
+        let params = Params {
+            roots: vec![fixture_root(temp.path())],
+            state_dir: Some(temp.path().join("state")),
+            source_id: Some("patchmoe".to_string()),
+            name: Some("  自定义发行商  ".to_string()),
+            ..Default::default()
+        };
+        let result = execute("set_source_name", params.clone()).unwrap();
+        assert_eq!(result["name"], "自定义发行商");
+        assert_eq!(result["source_id"], "patchmoe");
+        assert_eq!(result["settings_revision"], 2);
+        let sources = execute("list_sources", params.clone()).unwrap();
+        assert_eq!(sources[0]["name"], "自定义发行商");
+        assert_eq!(sources[0]["pages"][0], "https://www.patch.moe/?flag=1");
+        assert_eq!(
+            execute(
+                "set_source_name",
+                Params {
+                    name: Some("  ".into()),
+                    ..params
+                }
+            )
+            .unwrap_err()
+            .code,
+            "invalid_source_name"
+        );
     }
 
     #[test]

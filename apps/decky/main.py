@@ -157,6 +157,11 @@ class Plugin:
         await self.sources.set_enabled(source_id, enabled)
         return self.sources.list_sources()
 
+    async def set_source_name(self, source_id, name):
+        self._require_idle()
+        await self.sources.set_name(source_id, name)
+        return self.sources.list_sources()
+
     async def add_source(self, rule_json):
         self._require_idle()
         if not isinstance(rule_json, str) or len(rule_json) > 32768:

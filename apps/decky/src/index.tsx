@@ -40,6 +40,7 @@ const sourceApi: SourceTaskApi = {
 const listTransactions = callable<[], Transaction[]>("list_transactions");
 const recover = callable<[], Transaction[]>("recover");
 const setSourceEnabled = callable<[string, boolean], SourceSubscription[]>("set_source_enabled");
+const setSourceName = callable<[string, string], SourceSubscription[]>("set_source_name");
 const setGameSource = callable<[number, string, boolean], { appid: number }>("set_game_source");
 const addSource = callable<[string], SourceSubscription[]>("add_source");
 const backupStatus = callable<[], BackupInventory>("backup_status");
@@ -514,7 +515,7 @@ function GameManager({ item, seg, panel }: { item: Install; seg: string; panel?:
     <Status>选择用于此游戏的订阅源。关闭后不再从该源匹配补丁；选择按游戏编号保存。</Status>
     {matchStatus === "fallback_match" && <Row><Status>普通来源未命中，补丁由 HGamer 补查得到。</Status></Row>}
     {matchStatus === "no_match" && <Row><Status>已启用来源中未找到补丁。</Status></Row>}
-    {item.sources?.length ? item.sources.map(source => <PanelSection key={source.id} title={source.name}>
+    {item.sources?.length ? item.sources.map(source => <PanelSection key={source.id} title={report?.sources?.find(current => current.id === source.id)?.name ?? source.name}>
       <Row><ToggleField label="用于此游戏" checked={source.subscribed} disabled={!!busy}
         onChange={subscribed => changeGameSource(source.id, subscribed)} /></Row>
       <InfoRow label="游戏匹配">{source.matched || item.discovery?.candidates.some(candidate => candidate.source_id === source.id && candidateMatched(candidate))
@@ -544,12 +545,14 @@ function GameManager({ item, seg, panel }: { item: Install; seg: string; panel?:
 
 function SourceCard({ source, busy, expanded, onToggle, task, changeSources, onUpdateSource, onCancelTask, onInterval }: {
   source: SourceSubscription; busy: boolean; expanded: boolean; onToggle: () => void; task?: SourceTaskSnapshot;
-  changeSources: (action: () => Promise<SourceSubscription[]>) => void;
+  changeSources: (action: () => Promise<SourceSubscription[]>, affectsMatching?: boolean) => void;
   onUpdateSource: (sourceId: string, force: boolean) => void;
   onCancelTask: (taskId: string) => void;
   onInterval: (sourceId: string, hours: number) => void;
 }) {
   const publisher = source.role !== "fallback_indexer";
+  const [name, setName] = useState(source.name);
+  useEffect(() => setName(source.name), [source.name]);
   const summary = sourceCardSummary(source, task);
   const contentId = `patch-source-${encodeURIComponent(source.id)}`;
   return <div className="patch-source-card">
@@ -560,6 +563,9 @@ function SourceCard({ source, busy, expanded, onToggle, task, changeSources, onU
       {summary && <span className={`patch-source-heading-task${summary.warning ? " patch-warning" : ""}`}>{summary.text}</span>}
     </Button>
     {expanded && <div id={contentId} className="patch-source-body" role="group" aria-label={source.name}>
+      <Row><TextField label="来源名称" value={name} disabled={busy} onChange={e => setName(e.target.value)} /></Row>
+      <Row><Action disabled={busy || !name.trim() || name.trim() === source.name}
+        onClick={() => changeSources(() => setSourceName(source.id, name), false)}>保存名称</Action></Row>
       <InfoRow label="站点" below>{source.pages.join(" · ")}</InfoRow>
       {publisher && <>
         <InfoRow label="索引条目">{source.entry_count} 条 · 修订 {source.revision}</InfoRow>
@@ -584,7 +590,7 @@ function SourceCard({ source, busy, expanded, onToggle, task, changeSources, onU
 function SourcesPage({ report, busy, tasks, expandedSources, onToggleSource, rule, setRule, changeSources, onUpdateSource, onCancelTask, onInterval, onMatchGames }: {
   expandedSources: Record<string, boolean>; onToggleSource: (sourceId: string) => void;
   report: ScanResult | null; busy: boolean; tasks: SourceTaskSnapshot[]; rule: string; setRule: (value: string) => void;
-  changeSources: (action: () => Promise<SourceSubscription[]>) => void;
+  changeSources: (action: () => Promise<SourceSubscription[]>, affectsMatching?: boolean) => void;
   onUpdateSource: (sourceId: string, force: boolean) => void;
   onCancelTask: (taskId: string) => void;
   onInterval: (sourceId: string, hours: number) => void;
@@ -699,10 +705,10 @@ function GlobalSources() {
   const [rule, setRule] = useState("");
   const tasks = Object.values(sourceTasks).filter(task => !sourceTaskTerminal(task.state));
   useEffect(() => session.startSourcePolling(), []);
-  const changeSources = (action: () => Promise<SourceSubscription[]>) => void session.work("正在更新补丁源…", async () => {
+  const changeSources = (action: () => Promise<SourceSubscription[]>, affectsMatching = true) => void session.work("正在更新补丁源…", async () => {
     const sources = await action();
     session.commitSources(sources);
-    session.invalidateDiscovery();
+    if (affectsMatching) session.invalidateDiscovery();
     return sources;
   }, () => setRule(""));
   return <><div>{busy && <Status>{busy}</Status>}{error && <Status warning>{error}</Status>}{note && <Status>{note}</Status>}</div>

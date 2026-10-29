@@ -428,6 +428,16 @@ impl SourceStore {
         })
     }
 
+    /// Stores a display-name override, persisted by the next revision bump.
+    pub fn set_name(&self, source_id: &str, name: &str) -> Result<()> {
+        self.with_short_lock(|| {
+            self.settings_guard()?
+                .names
+                .insert(source_id.to_string(), name.to_string());
+            Ok(())
+        })
+    }
+
     /// Runs `f` while holding the independent `rust-v1/settings.lock`.
     ///
     /// Never uses `journal.lock` (design §4.1). `try_lock` with a 2s bound →
@@ -550,6 +560,7 @@ fn default_settings() -> SettingsFile {
         added: Vec::new(),
         games: BTreeMap::new(),
         intervals: BTreeMap::new(),
+        names: BTreeMap::new(),
     }
 }
 

@@ -32,6 +32,8 @@ function mount(item: Install, task?: sourceTasks.SourceTaskSnapshot) {
   let hook = 0;
   const controls: Array<{ name: string; props: any }> = [];
   const installs: unknown[][] = [];
+  const sourceWrites: unknown[][] = [];
+  let pending = Promise.resolve();
   const state: any = { report: { installs: [item], sources: [], diagnostics: [] }, transactions: [], busy: null, sourceTasks: task ? { [task.task_id]: task } : {}, error: null, note: null, errorInstance: null, noteInstance: null };
   const native: Record<string, any> = {};
   for (const name of ["Button", "ButtonItem", "Field", "Focusable", "PanelSection", "PanelSectionRow", "DropdownItem", "TextField", "ToggleField"]) {
@@ -49,9 +51,22 @@ function mount(item: Install, task?: sourceTasks.SourceTaskSnapshot) {
   native.showModal = () => ({ Close() {} });
   native.Navigation = {};
   const exports: Record<string, any> = {};
-  const mockSession = { getSnapshot: () => state, subscribe() {}, setFeedback(value: any) { Object.assign(state, value); } };
+  const mockSession = {
+    getSnapshot: () => state, subscribe() {}, setFeedback(value: any) { Object.assign(state, value); },
+    commitSources(sources: unknown[]) { state.report.sources = sources; },
+    invalidateDiscovery() { state.report.installs.forEach((row: any) => { row.discovery = { status: "pending", candidates: [] }; }); },
+    work(_label: string, action: () => Promise<any>, success: (value: any) => void) {
+      pending = (async () => { try { success(await action()); } catch (error) { state.error = String(error); } })();
+      return pending;
+    },
+  };
   const modules: Record<string, any> = {
-    "@decky/api": { callable: () => async () => {}, definePlugin: () => {}, routerHook: {} },
+    "@decky/api": { callable: (method: string) => async (...args: unknown[]) => {
+      if (method !== "set_source_name") return;
+      sourceWrites.push(args);
+      if (state.rejectName) throw Error("保存被拒绝");
+      return state.report.sources.map((source: any) => source.id === args[0] ? { ...source, name: (args[1] as string).trim() } : source);
+    }, definePlugin: () => {}, routerHook: {} },
     "@decky/ui": native,
     "@patchhub/ui": ui,
     "react-icons/fa": { FaGamepad: () => null },
@@ -69,8 +84,50 @@ function mount(item: Install, task?: sourceTasks.SourceTaskSnapshot) {
   const renderList = () => { hook = 0; controls.length = 0; return renderToStaticMarkup(React.createElement(exports.QuickAccess)); };
   const renderSources = () => { hook = 0; controls.length = 0; return renderToStaticMarkup(React.createElement(exports.GlobalSources)); };
   const button = (label: string) => controls.find(control => control.name === "ButtonItem" && React.Children.toArray(control.props.children).join("") === label)!.props;
-  return { render, renderList, renderSources, controls, button, installs, state };
+  return { render, renderList, renderSources, controls, button, installs, state, sourceWrites, settle: () => pending };
 }
+
+test("source names save through the RPC without discarding matches and failed edits stay visible", async () => {
+  const page = mount(game());
+  const previous = page.state.report.installs[0].discovery;
+  page.state.report.sources = [{ id: "patchmoe", name: "Shiravune", enabled: true,
+    role: "publisher", pages: [], interval_hours: 0, entry_count: 0, revision: 0 }];
+  page.state.expandedSources = { patchmoe: true };
+  page.renderSources();
+  const input = () => page.controls.find(control => control.name === "TextField" && control.props.label === "来源名称")!.props;
+  assert.equal(input().value, "Shiravune");
+  assert.equal(page.button("保存名称").disabled, true);
+  input().onChange({ target: { value: "  " } });
+  page.renderSources();
+  assert.equal(page.button("保存名称").disabled, true);
+  input().onChange({ target: { value: "  我的发行商  " } });
+  page.renderSources();
+  assert.equal(page.button("保存名称").disabled, false);
+  page.button("保存名称").onClick();
+  await page.settle();
+  assert.deepEqual(Array.from(page.sourceWrites[0]), ["patchmoe", "  我的发行商  "]);
+  assert.match(page.renderSources(), /我的发行商/);
+  assert.equal(page.state.report.installs[0].discovery, previous);
+  page.state.rejectName = true;
+  input().onChange({ target: { value: "保留草稿" } });
+  page.renderSources();
+  page.button("保存名称").onClick();
+  await page.settle();
+  assert.match(page.renderSources(), /保存被拒绝/);
+  assert.equal(input().value, "保留草稿");
+  assert.equal(page.state.report.sources[0].name, "我的发行商");
+});
+
+test("game subscriptions display the latest global source name without rescanning", () => {
+  const item = game();
+  item.sources = [{ id: "patchmoe", name: "Old name", enabled: true, subscribed: true,
+    matched: false, role: "publisher", pages: [] }] as Install["sources"];
+  const page = mount(item);
+  page.state.report.sources = [{ id: "patchmoe", name: "我的发行商" }];
+  page.render("sources");
+  assert.ok(page.controls.some(control => control.name === "PanelSection" && control.props.title === "我的发行商"));
+  assert.ok(!page.controls.some(control => control.name === "PanelSection" && control.props.title === "Old name"));
+});
 
 test("the default page has three native panels and neutral empty results with query controls", () => {
   const page = mount(game());

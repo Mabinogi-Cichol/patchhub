@@ -134,6 +134,9 @@ class SourceService:
         return await self._call_sync("set_source_enabled",
                                      {"source_id": source_id, "enabled": bool(enabled)})
 
+    async def set_name(self, source_id, name):
+        return await self._call_sync("set_source_name", {"source_id": source_id, "name": name})
+
     async def add_source(self, rule):
         return await self._call_sync("add_source", {"rule": rule})
 

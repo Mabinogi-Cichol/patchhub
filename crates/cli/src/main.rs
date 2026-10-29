@@ -219,9 +219,9 @@ Usage: patchhub-core scan [--steam-root PATH]... [--catalog PATH] [--platform wi
        patchhub-core serve  (versioned JSON-lines on stdin/stdout)\n\
 Installation requires a signed catalog. Close the game and pause Steam updates before installing.
 Methods: get_capabilities scan project_instances preview install_patch list_transactions recover discard_plan cleanup_cache cache_status backup_status cleanup_backups.
-Sources: list_sources list_game_sources set_source_enabled set_game_source add_source set_source_update_interval update_source match_games rematch_game.
+Sources: list_sources list_game_sources set_source_enabled set_source_name set_game_source add_source set_source_update_interval update_source match_games rematch_game.
 Options: --signed-catalog --trust-keys --state-dir --archive --operation install|reinstall --request-id ID.
-Source options: --source-id ID --appid N --enabled true|false --subscribed true|false --rule JSON --interval-hours N --name-hint TEXT --force --force-details --instance-id ID --match-instance ID.
+Source options: --source-id ID --name TEXT --appid N --enabled true|false --subscribed true|false --rule JSON --interval-hours N --name-hint TEXT --force --force-details --instance-id ID --match-instance ID.
 Maintenance: keygen PRIVATE PUBLIC KEY_ID; sign-catalog CATALOG PRIVATE KEY_ID OUTPUT LIFETIME_SECONDS; schema OUTPUT.";
 
 fn parse_bool(value: &str) -> Result<bool, String> {
@@ -288,6 +288,7 @@ fn run() -> Result<(), String> {
                 params.appid = Some(value.parse().map_err(|_| "invalid_appid".to_string())?)
             }
             "--enabled" => params.enabled = Some(parse_bool(&value)?),
+            "--name" => params.name = Some(value),
             "--subscribed" => params.subscribed = Some(parse_bool(&value)?),
             "--rule" => {
                 params.rule = Some(
@@ -476,6 +477,7 @@ mod tests {
         "list_sources",
         "list_game_sources",
         "set_source_enabled",
+        "set_source_name",
         "set_game_source",
         "add_source",
         "set_source_update_interval",
@@ -490,7 +492,7 @@ mod tests {
         expected.sort_unstable();
         let mut actual = runtime::METHODS.to_vec();
         actual.sort_unstable();
-        assert_eq!(runtime::METHODS.len(), 21);
+        assert_eq!(runtime::METHODS.len(), 22);
         assert_eq!(actual, expected);
 
         let capabilities = respond(
@@ -502,7 +504,7 @@ mod tests {
             .iter()
             .map(|method| method.as_str().unwrap())
             .collect();
-        assert_eq!(methods.len(), 21);
+        assert_eq!(methods.len(), 22);
         let mut sorted = methods.clone();
         sorted.sort_unstable();
         assert_eq!(sorted, expected);
@@ -530,7 +532,7 @@ mod tests {
         assert_eq!(result["sources"]["schedule_schema_version"], 1);
         assert_eq!(result["sources"]["parser_version"], 2);
         assert_eq!(result["sources"]["encoding_version"], 1);
-        assert_eq!(result["sources"]["methods"].as_array().unwrap().len(), 9);
+        assert_eq!(result["sources"]["methods"].as_array().unwrap().len(), 10);
     }
 
     #[test]

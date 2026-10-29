@@ -154,6 +154,9 @@ pub struct SettingsFile {
     /// `0` means automatic updates are off for that source.
     #[serde(default)]
     pub intervals: BTreeMap<String, u64>,
+    /// User display names, independent of source identity and compiled rules.
+    #[serde(default)]
+    pub names: BTreeMap<String, String>,
 }
 
 /// Output-only summary; injected with a flattened [`SourceRule`].

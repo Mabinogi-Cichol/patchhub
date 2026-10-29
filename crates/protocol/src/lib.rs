@@ -82,6 +82,7 @@ pub enum Method {
     ListSources,
     ListGameSources,
     SetSourceEnabled,
+    SetSourceName,
     SetGameSource,
     AddSource,
     SetSourceUpdateInterval,
@@ -89,7 +90,7 @@ pub enum Method {
     MatchGames,
     RematchGame,
 }
-pub const ALL_METHODS: [Method; 21] = [
+pub const ALL_METHODS: [Method; 22] = [
     Method::GetCapabilities,
     Method::Scan,
     Method::ProjectInstances,
@@ -105,6 +106,7 @@ pub const ALL_METHODS: [Method; 21] = [
     Method::ListSources,
     Method::ListGameSources,
     Method::SetSourceEnabled,
+    Method::SetSourceName,
     Method::SetGameSource,
     Method::AddSource,
     Method::SetSourceUpdateInterval,
@@ -112,7 +114,7 @@ pub const ALL_METHODS: [Method; 21] = [
     Method::MatchGames,
     Method::RematchGame,
 ];
-pub const METHODS: [&str; 21] = [
+pub const METHODS: [&str; 22] = [
     "get_capabilities",
     "scan",
     "project_instances",
@@ -128,6 +130,7 @@ pub const METHODS: [&str; 21] = [
     "list_sources",
     "list_game_sources",
     "set_source_enabled",
+    "set_source_name",
     "set_game_source",
     "add_source",
     "set_source_update_interval",
@@ -135,10 +138,11 @@ pub const METHODS: [&str; 21] = [
     "match_games",
     "rematch_game",
 ];
-pub const SOURCE_METHODS: [&str; 9] = [
+pub const SOURCE_METHODS: [&str; 10] = [
     "list_sources",
     "list_game_sources",
     "set_source_enabled",
+    "set_source_name",
     "set_game_source",
     "add_source",
     "set_source_update_interval",
@@ -175,6 +179,7 @@ params!(InstallPatchParams{pub instance_id:String,#[ts(optional = nullable)]pub 
 params!(DiscardPlanParams{pub plan_id:String,});
 params!(ListGameSourcesParams{#[ts(optional = nullable)]pub instance_id:Option<String>,#[ts(optional = nullable)]pub appid:Option<u32>,});
 params!(SetSourceEnabledParams{pub source_id:String,pub enabled:bool,});
+params!(SetSourceNameParams{pub source_id:String,pub name:String,});
 params!(SetGameSourceParams{pub source_id:String,pub subscribed:bool,#[ts(optional = nullable)]pub instance_id:Option<String>,#[ts(optional = nullable)]pub appid:Option<u32>,});
 params!(AddSourceParams{pub rule:RawSourceRule,});
 params!(SetSourceUpdateIntervalParams{pub source_id:String,#[ts(type="number")]pub interval_hours:u64,});
@@ -199,6 +204,7 @@ pub enum RequestParams {
     ListSources(HostParams),
     ListGameSources(ListGameSourcesParams),
     SetSourceEnabled(SetSourceEnabledParams),
+    SetSourceName(SetSourceNameParams),
     SetGameSource(SetGameSourceParams),
     AddSource(AddSourceParams),
     SetSourceUpdateInterval(SetSourceUpdateIntervalParams),
@@ -224,6 +230,7 @@ impl RequestParams {
             Self::DiscardPlan(p) => &p.host,
             Self::ListGameSources(p) => &p.host,
             Self::SetSourceEnabled(p) => &p.host,
+            Self::SetSourceName(p) => &p.host,
             Self::SetGameSource(p) => &p.host,
             Self::AddSource(p) => &p.host,
             Self::SetSourceUpdateInterval(p) => &p.host,
@@ -565,6 +572,14 @@ pub struct SourceEnabledResult {
 }
 #[derive(Debug, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(deny_unknown_fields)]
+pub struct SourceNameResult {
+    #[ts(type = "number")]
+    pub settings_revision: u64,
+    pub source_id: String,
+    pub name: String,
+}
+#[derive(Debug, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(deny_unknown_fields)]
 pub struct GameSourceResult {
     #[ts(type = "number")]
     pub settings_revision: u64,
@@ -632,6 +647,7 @@ pub enum MethodResult {
     Sources(Vec<SourceSummary>),
     GameSources(Vec<GameSourceSummary>),
     Enabled(SourceEnabledResult),
+    Named(SourceNameResult),
     GameSource(GameSourceResult),
     Added(AddSourceResult),
     SetInterval(SetSourceIntervalResult),
@@ -794,6 +810,9 @@ pub fn validate_response(
         }
         Some(Method::SetSourceEnabled) => {
             check!(SourceEnabledResult);
+        }
+        Some(Method::SetSourceName) => {
+            check!(SourceNameResult);
         }
         Some(Method::SetGameSource) => {
             check!(GameSourceResult);
@@ -1374,6 +1393,7 @@ pub fn schema() -> Value {
             Method::ProjectInstances => "ProjectInstancesParams",
             Method::ListGameSources => "ListGameSourcesParams",
             Method::SetSourceEnabled => "SetSourceEnabledParams",
+            Method::SetSourceName => "SetSourceNameParams",
             Method::SetGameSource => "SetGameSourceParams",
             Method::AddSource => "AddSourceParams",
             Method::SetSourceUpdateInterval => "SetSourceUpdateIntervalParams",
@@ -1557,6 +1577,7 @@ pub fn result_schema_name(method: Method) -> &'static str {
         Method::ListSources => "Sources",
         Method::ListGameSources => "GameSources",
         Method::SetSourceEnabled => "SourceEnabledResult",
+        Method::SetSourceName => "SourceNameResult",
         Method::SetGameSource => "GameSourceResult",
         Method::AddSource => "AddSourceResult",
         Method::SetSourceUpdateInterval => "SetSourceIntervalResult",

@@ -1963,6 +1963,7 @@
         "list_sources",
         "list_game_sources",
         "set_source_enabled",
+        "set_source_name",
         "set_game_source",
         "add_source",
         "set_source_update_interval",
@@ -2024,6 +2025,9 @@
         },
         {
           "$ref": "#/$defs/SourceEnabledResult"
+        },
+        {
+          "$ref": "#/$defs/SourceNameResult"
         },
         {
           "$ref": "#/$defs/GameSourceResult"
@@ -2993,6 +2997,30 @@
           "additionalProperties": false,
           "properties": {
             "method": {
+              "const": "set_source_name"
+            },
+            "params": {
+              "$ref": "#/$defs/SetSourceNameParams"
+            },
+            "protocol_version": {
+              "const": 5
+            },
+            "request_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "protocol_version",
+            "request_id",
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "method": {
               "const": "set_game_source"
             },
             "params": {
@@ -3328,6 +3356,26 @@
         "settings_revision",
         "source_id",
         "interval_hours"
+      ],
+      "type": "object"
+    },
+    "SetSourceNameParams": {
+      "additionalProperties": false,
+      "properties": {
+        "host": {
+          "$ref": "#/$defs/HostInputs"
+        },
+        "name": {
+          "type": "string"
+        },
+        "source_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "host",
+        "source_id",
+        "name"
       ],
       "type": "object"
     },
@@ -3700,6 +3748,28 @@
         "language",
         "source_id",
         "release_id"
+      ],
+      "type": "object"
+    },
+    "SourceNameResult": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "settings_revision": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "source_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "settings_revision",
+        "source_id",
+        "name"
       ],
       "type": "object"
     },
