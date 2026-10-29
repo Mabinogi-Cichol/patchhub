@@ -86,6 +86,34 @@ pub fn with_cancel<T>(cancel: Arc<AtomicBool>, work: impl FnOnce() -> T) -> T {
 pub fn cancel_flag() -> Option<Arc<AtomicBool>> {
     CONTROL.with(|c| c.borrow().as_ref().map(|c| c.cancel.clone()))
 }
+
+/// Poll only to observe cancellation; there is no total-operation deadline.
+/// Dropping the pending network future aborts its IO on the task's runtime.
+pub(crate) async fn cancellable<T>(
+    future: impl std::future::Future<Output = io::Result<T>>,
+) -> io::Result<T> {
+    use std::{
+        future::{poll_fn, Future},
+        task::Poll,
+    };
+    let mut future = std::pin::pin!(future);
+    let mut wake = std::pin::pin!(tokio::time::sleep(Duration::from_millis(25)));
+    poll_fn(|context| {
+        if let Err(error) = check() {
+            return Poll::Ready(Err(error));
+        }
+        if let Poll::Ready(result) = future.as_mut().poll(context) {
+            return Poll::Ready(result);
+        }
+        if wake.as_mut().poll(context).is_ready() {
+            wake.as_mut()
+                .reset(tokio::time::Instant::now() + Duration::from_millis(25));
+            context.waker().wake_by_ref();
+        }
+        Poll::Pending
+    })
+    .await
+}
 /// Host-owned durable gate runs synchronously at every copy/hash/write checkpoint.
 pub fn with_gate<T>(gate: impl Fn() -> io::Result<()> + 'static, work: impl FnOnce() -> T) -> T {
     struct Reset(Option<Box<dyn Fn() -> io::Result<()>>>);

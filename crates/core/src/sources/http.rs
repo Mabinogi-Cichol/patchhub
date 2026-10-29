@@ -7,10 +7,9 @@
 
 use super::validate;
 use super::{invalid, Result};
-use reqwest::blocking::Client;
 use reqwest::redirect::Policy;
+use reqwest::Client;
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::io::Read;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -326,9 +325,10 @@ pub trait Fetcher: Send + Sync {
     fn fetch(&self, request: &FetchRequest) -> Result<FetchResponse>;
 }
 
-/// Real HTTPS fetcher: no auto-redirect, bounded body, charset-aware decoding.
+/// Real HTTPS fetcher: validated redirects, complete body and cancellable IO.
 pub struct ReqwestFetcher {
     client: Client,
+    runtime: tokio::runtime::Runtime,
 }
 
 impl ReqwestFetcher {
@@ -339,7 +339,10 @@ impl ReqwestFetcher {
             .user_agent("PatchHubDiscovery/1")
             .build()
             .map_err(|_| invalid("discovery_client_failed"))?;
-        Ok(Self { client })
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?;
+        Ok(Self { client, runtime })
     }
 }
 
@@ -360,9 +363,12 @@ impl Fetcher for ReqwestFetcher {
         if let Some(body) = &request.body {
             builder = builder.body(body.clone());
         }
-        let mut response = builder
-            .send()
-            .map_err(|_| invalid("discovery_network_error"))?;
+        let mut response = self.runtime.block_on(crate::operation::cancellable(async {
+            builder
+                .send()
+                .await
+                .map_err(|_| invalid("discovery_network_error"))
+        }))?;
         let status = response.status().as_u16();
         let final_url = response.url().to_string();
         let headers: Vec<(String, String)> = response
@@ -383,8 +389,20 @@ impl Fetcher for ReqwestFetcher {
 
         // Full body read: no fixed byte cap, so a large legitimate page is
         // decoded and parsed completely instead of being rejected.
-        let mut body = Vec::new();
-        read_body_checked(&mut response, &mut body)?;
+        let body = self.runtime.block_on(async {
+            let mut body = Vec::new();
+            while let Some(chunk) = crate::operation::cancellable(async {
+                response
+                    .chunk()
+                    .await
+                    .map_err(|_| invalid("discovery_network_error"))
+            })
+            .await?
+            {
+                body.extend_from_slice(&chunk);
+            }
+            Ok::<_, std::io::Error>(body)
+        })?;
         Ok(FetchResponse {
             status,
             body,
@@ -396,22 +414,6 @@ impl Fetcher for ReqwestFetcher {
             location,
             headers,
         })
-    }
-}
-
-/// Reads the full body in fixed-size chunks, checking for cancellation before
-/// each chunk so a large transfer stays interruptible. No size cap is applied.
-fn read_body_checked(reader: &mut impl Read, body: &mut Vec<u8>) -> Result<()> {
-    let mut buffer = [0u8; 65536];
-    loop {
-        crate::operation::check()?;
-        let count = reader
-            .read(&mut buffer)
-            .map_err(|_| invalid("discovery_network_error"))?;
-        if count == 0 {
-            return Ok(());
-        }
-        body.extend_from_slice(&buffer[..count]);
     }
 }
 
@@ -1377,83 +1379,6 @@ mod tests {
 
     /// `Read` source that yields fixed data and can flip a cancel flag on a
     /// chosen read number.
-    struct ChunkedReader {
-        data: Vec<u8>,
-        position: usize,
-        reads: usize,
-        cancel_at: Option<(usize, Arc<AtomicBool>)>,
-    }
-
-    impl ChunkedReader {
-        fn new(data: Vec<u8>) -> Self {
-            Self {
-                data,
-                position: 0,
-                reads: 0,
-                cancel_at: None,
-            }
-        }
-
-        fn cancelling(mut self, at: usize, flag: Arc<AtomicBool>) -> Self {
-            self.cancel_at = Some((at, flag));
-            self
-        }
-    }
-
-    impl Read for ChunkedReader {
-        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-            self.reads += 1;
-            if let Some((at, flag)) = &self.cancel_at {
-                if self.reads == *at {
-                    flag.store(true, Ordering::Relaxed);
-                }
-            }
-            let remaining = &self.data[self.position..];
-            let count = remaining.len().min(buf.len());
-            buf[..count].copy_from_slice(&remaining[..count]);
-            self.position += count;
-            Ok(count)
-        }
-    }
-
-    #[test]
-    fn body_read_returns_full_body_without_operation_scope() {
-        let data: Vec<u8> = (0..9 * 1024 * 1024).map(|i| (i % 251) as u8).collect();
-        let mut reader = ChunkedReader::new(data.clone());
-        let mut body = Vec::new();
-        read_body_checked(&mut reader, &mut body).unwrap();
-        assert_eq!(body.len(), data.len());
-        assert_eq!(body, data);
-    }
-
-    #[test]
-    fn body_read_completes_under_active_uncancelled_scope() {
-        let flag = Arc::new(AtomicBool::new(false));
-        let data = vec![3u8; 200_000];
-        let mut reader = ChunkedReader::new(data.clone());
-        let mut body = Vec::new();
-        crate::operation::with_cancel(Arc::clone(&flag), || {
-            read_body_checked(&mut reader, &mut body)
-        })
-        .unwrap();
-        assert_eq!(body, data);
-    }
-
-    #[test]
-    fn body_read_stops_at_cancellation_without_partial_body() {
-        let flag = Arc::new(AtomicBool::new(false));
-        let data = vec![7u8; 4 * 1024 * 1024];
-        let mut reader = ChunkedReader::new(data.clone()).cancelling(2, Arc::clone(&flag));
-        let mut body = Vec::new();
-        let error = crate::operation::with_cancel(Arc::clone(&flag), || {
-            read_body_checked(&mut reader, &mut body)
-        })
-        .unwrap_err();
-        assert_eq!(error.to_string(), "task_cancelled");
-        assert!(reader.position < data.len());
-        assert!(body.len() < data.len());
-    }
-
     #[test]
     fn retry_after_parses_seconds_and_falls_back() {
         assert_eq!(parse_retry_after("0"), Duration::ZERO);
@@ -1463,6 +1388,96 @@ mod tests {
             Duration::from_secs(1)
         );
         assert_eq!(parse_retry_after("-1"), Duration::from_secs(1));
+    }
+
+    fn local_request(url: String) -> FetchRequest {
+        FetchRequest {
+            url,
+            method: "GET".into(),
+            headers: vec![],
+            body: None,
+            content_type: None,
+            timeout: Duration::from_secs(5),
+        }
+    }
+
+    fn local_fetcher() -> ReqwestFetcher {
+        let mut fetcher = ReqwestFetcher::new().unwrap();
+        // Test server only; production keeps its existing proxy policy.
+        fetcher.client = Client::builder().no_proxy().build().unwrap();
+        fetcher
+    }
+
+    fn read_request_headers(socket: &mut std::net::TcpStream) {
+        use std::io::{BufRead, BufReader};
+        let mut reader = BufReader::new(socket);
+        loop {
+            let mut line = String::new();
+            assert!(reader.read_line(&mut line).unwrap() > 0);
+            if line == "\r\n" {
+                break;
+            }
+        }
+    }
+
+    #[test]
+    fn real_transport_cancels_while_waiting_for_headers_or_body() {
+        use std::{io::Write, net::TcpListener, sync::mpsc};
+        for send_headers in [false, true] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let url = format!("http://{}/", listener.local_addr().unwrap());
+            let flag = Arc::new(AtomicBool::new(false));
+            let cancel = Arc::clone(&flag);
+            let (release, wait) = mpsc::channel();
+            let server = std::thread::spawn(move || {
+                let (mut socket, _) = listener.accept().unwrap();
+                read_request_headers(&mut socket);
+                if send_headers {
+                    socket
+                        .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\npart")
+                        .unwrap();
+                }
+                // Give the client its headers, then hold the response open.
+                // These durations belong to the fixture, not a product limit.
+                std::thread::sleep(Duration::from_millis(100));
+                cancel.store(true, Ordering::Relaxed);
+                let _ = wait.recv_timeout(Duration::from_secs(5));
+            });
+            let fetcher = local_fetcher();
+            let start = Instant::now();
+            let error = crate::operation::with_cancel(flag, || fetcher.fetch(&local_request(url)))
+                .unwrap_err();
+            release.send(()).unwrap();
+            server.join().unwrap();
+            assert_eq!(error.to_string(), "task_cancelled");
+            assert!(
+                start.elapsed() < Duration::from_secs(2),
+                "cancellation waited for request timeout"
+            );
+        }
+    }
+
+    #[test]
+    fn real_transport_reads_the_complete_large_body() {
+        use std::{io::Write, net::TcpListener};
+        let data: Vec<u8> = (0..9 * 1024 * 1024).map(|i| (i % 251) as u8).collect();
+        let payload = data.clone();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            read_request_headers(&mut socket);
+            write!(
+                socket,
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n",
+                payload.len()
+            )
+            .unwrap();
+            socket.write_all(&payload).unwrap();
+        });
+        let result = local_fetcher().fetch(&local_request(url)).unwrap();
+        server.join().unwrap();
+        assert_eq!(result.body, data);
     }
 
     #[test]

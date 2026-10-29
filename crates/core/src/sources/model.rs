@@ -703,6 +703,7 @@ pub struct SourceIndex {
 
 /// A link from a category listing to an article/detail page (P3 facts).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct FactLink {
     pub title: String,
     pub page: String,
@@ -713,6 +714,7 @@ pub struct FactLink {
 /// Built by [`super::adapters::kagura::resolve_page`] during a game match task,
 /// never during a source index update, and persisted inside [`DetailRecord`].
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PageFact {
     pub title: String,
     pub page: String,

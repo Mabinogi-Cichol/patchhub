@@ -1,6 +1,7 @@
-//! P0 feasibility gate. These tests do not register a production Lua adapter.
-#[path = "support/script_runtime.rs"]
-mod runtime;
+//! The original P0 regression corpus now exercises the production executor.
+use crate as patchhub_core;
+use crate::sources::adapters::script as runtime;
+use serde::de::DeserializeOwned;
 
 use mlua::{chunk::ChunkMode, HookTriggers, VmState};
 use patchhub_core::{
@@ -23,11 +24,41 @@ use std::{
     time::{Duration, Instant},
 };
 
-const CODE: &str = include_str!("fixtures/script-sources/kagura-en-prototype.lua");
-const LIST: &str = include_str!("fixtures/script-sources/kagura-en.html");
-const CATEGORY: &str = include_str!("fixtures/script-sources/kagura-en-category.html");
-const DETAIL: &str = include_str!("fixtures/script-sources/kagura-en-detail.html");
+const CODE: &str =
+    include_str!("../../../../tests/fixtures/script-sources/kagura-en-prototype.lua");
+const LIST: &str = include_str!("../../../../tests/fixtures/script-sources/kagura-en.html");
+const CATEGORY: &str =
+    include_str!("../../../../tests/fixtures/script-sources/kagura-en-category.html");
+const DETAIL: &str =
+    include_str!("../../../../tests/fixtures/script-sources/kagura-en-detail.html");
 const DETAIL_URL: &str = "https://www.kaguragames.com/product/sacrifice-sanctuary-the-ritual-maidens-life-with-monsters-patch/";
+
+fn invoke<T: DeserializeOwned>(
+    code: &str,
+    entry: &str,
+    rule: &SourceRule,
+    input: &Json,
+    ctx: &mut RequestContext,
+    cancel: Arc<AtomicBool>,
+    progress: &mut Vec<String>,
+) -> mlua::Result<runtime::Invocation<T>> {
+    runtime::execute(
+        code,
+        entry,
+        rule,
+        std::slice::from_ref(input),
+        ctx,
+        cancel,
+        |message| progress.push(message.to_owned()),
+        &std::cell::Cell::new("script_source_runtime_error"),
+    )
+}
+
+fn syntax_check(code: &[u8]) -> mlua::Result<()> {
+    crate::sources::script::validate_code("prototype", 1, code)
+        .map(|_| ())
+        .map_err(mlua::Error::external)
+}
 
 fn rule() -> SourceRule {
     let config: RulesConfig = serde_json::from_str(DEFAULT_RULES_JSON).unwrap();
@@ -55,7 +86,7 @@ fn context(fake: &Arc<FakeFetcher>) -> RequestContext {
 }
 
 fn execute(code: &str, input: Json, fake: &Arc<FakeFetcher>) -> mlua::Result<Json> {
-    runtime::invoke(
+    invoke(
         code,
         "run",
         &rule(),
@@ -82,7 +113,7 @@ fn recorded_non_table_list_matches_existing_rust_parser() {
     let fake = Arc::new(FakeFetcher::new());
     fake.push(response(LIST, &rule.pages[0]));
     let mut progress = Vec::new();
-    let actual = runtime::invoke::<IndexOutput>(
+    let actual = invoke::<IndexOutput>(
         CODE,
         "collect_index",
         &rule,
@@ -120,7 +151,7 @@ fn recorded_detail_matches_rust_with_no_invented_steam_id() {
     let rule = rule();
     let fake = Arc::new(FakeFetcher::new());
     fake.push(response(DETAIL, DETAIL_URL));
-    let actual = runtime::invoke::<PageFact>(
+    let actual = invoke::<PageFact>(
         CODE,
         "resolve_page",
         &rule,
@@ -155,7 +186,7 @@ fn synthetic_steam_link_on_recorded_detail_is_extracted() {
     );
     let fake = Arc::new(FakeFetcher::new());
     fake.push(response(&html, DETAIL_URL));
-    let fact = runtime::invoke::<PageFact>(
+    let fact = invoke::<PageFact>(
         CODE,
         "resolve_page",
         &rule(),
@@ -177,7 +208,7 @@ fn recorded_pagination_reaches_next_url_and_reports_network_failure() {
     fake.push(response(CATEGORY, &rule.pages[0]));
     fake.push_error("fixture_next_page_unavailable");
     fake.push_error("fixture_next_page_unavailable"); // Existing HTTP transport retries once.
-    let error = runtime::invoke::<IndexOutput>(
+    let error = invoke::<IndexOutput>(
         CODE,
         "collect_index",
         &rule,
@@ -211,7 +242,7 @@ fn multi_root_and_pagination_use_the_same_api_with_a_synthetic_terminal_page() {
         LIST,
         "https://www.kaguragames.com/product-category/patches/patch/page/2/",
     ));
-    let result = runtime::invoke::<IndexOutput>(
+    let result = invoke::<IndexOutput>(
         CODE,
         "collect_index",
         &rule,
@@ -249,12 +280,12 @@ fn explicit_environment_has_no_files_processes_or_loaders() {
 
 #[test]
 fn import_compilation_does_not_execute_top_level_and_rejects_bytecode() {
-    runtime::syntax_check(b"while true do end").unwrap();
-    runtime::syntax_check(b"error('must not execute during import')").unwrap();
-    assert!(runtime::syntax_check(b"return {").is_err());
+    syntax_check(b"while true do end").unwrap();
+    syntax_check(b"error('must not execute during import')").unwrap();
+    assert!(syntax_check(b"return {").is_err());
     let lua = runtime::vm().unwrap();
     let binary = lua.load("return {}").into_function().unwrap().dump(false);
-    assert!(runtime::syntax_check(&binary).is_err());
+    assert!(syntax_check(&binary).is_err());
 }
 
 #[test]
@@ -355,7 +386,7 @@ fn malformed_values_css_and_script_errors_are_explicit() {
         );
     }
     let fake = Arc::new(FakeFetcher::new());
-    let error = runtime::invoke::<PageFact>(
+    let error = invoke::<PageFact>(
         "return {resolve_page=function() return {steam_ids={'not an ID'}} end}",
         "resolve_page",
         &rule(),
@@ -500,7 +531,7 @@ fn caught_host_cancellation_cannot_publish_success() {
     ] {
         flag.store(false, Ordering::Relaxed);
         let mut ctx = RequestContext::with_settings(Box::new(CancelOnRequest(Arc::clone(&flag))), Duration::ZERO);
-        let error = runtime::invoke::<Json>(code, "run", &rule(), &Json::Null, &mut ctx,
+        let error = invoke::<Json>(code, "run", &rule(), &Json::Null, &mut ctx,
             Arc::clone(&flag), &mut Vec::new()).unwrap_err();
         assert!(error.to_string().contains("task_cancelled"), "{error}");
     }

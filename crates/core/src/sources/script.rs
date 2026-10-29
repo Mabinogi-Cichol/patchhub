@@ -39,6 +39,19 @@ pub fn validate_code(source_id: &str, api_version: u32, code: &[u8]) -> Result<S
 
 /// Reads only the captured rule/code pair. No compilation, execution or IO.
 pub(crate) fn document(rule: &SourceRule, code: Option<&String>) -> Result<ScriptSourceDocument> {
+    let (descriptor, code) = verify(rule, code.map(String::as_str))?;
+    Ok(ScriptSourceDocument {
+        rule: rule.into(),
+        api_version: descriptor.api_version,
+        code: code.to_owned(),
+        sha256: descriptor.sha256.clone(),
+    })
+}
+
+pub(crate) fn verify<'rule, 'code>(
+    rule: &'rule SourceRule,
+    code: Option<&'code str>,
+) -> Result<(&'rule ScriptDescriptor, &'code str)> {
     let descriptor = rule
         .script
         .as_ref()
@@ -55,10 +68,5 @@ pub(crate) fn document(rule: &SourceRule, code: Option<&String>) -> Result<Scrip
             rule.id
         )));
     }
-    Ok(ScriptSourceDocument {
-        rule: rule.into(),
-        api_version: descriptor.api_version,
-        code: code.clone(),
-        sha256: descriptor.sha256.clone(),
-    })
+    Ok((descriptor, code))
 }

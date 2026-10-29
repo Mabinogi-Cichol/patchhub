@@ -1,5 +1,4 @@
-//! P0 experiment only. Not registered in the production adapter dispatcher.
-//! Keep the borrowed HTTP context scoped; DOM handles own their document.
+//! Lua source execution. HTTP borrows the task context; DOM owns its document.
 
 use std::{
     cell::RefCell,
@@ -11,19 +10,364 @@ use std::{
     },
 };
 
-use mlua::{
-    chunk::ChunkMode, Function, HookTriggers, Lua, LuaOptions, LuaSerdeExt, MultiValue, StdLib,
-    Table, UserData, UserDataMethods, Value, VmState,
+use crate::sources::{
+    invalid,
+    model::{Diagnostic, PageFact, QueryContext, SourceIndex, SourceIndexEntry},
+    validate, Result,
 };
-use patchhub_core::{
+use crate::{
     operation,
     sources::{
         http::{FetchResponse, RequestContext},
         model::SourceRule,
     },
 };
+use mlua::{
+    chunk::ChunkMode, Function, HookTriggers, Lua, LuaOptions, LuaSerdeExt, MultiValue, StdLib,
+    Table, UserData, UserDataMethods, Value, VmState,
+};
 use scraper::{ElementRef, Html, Selector};
 use serde::de::DeserializeOwned;
+use serde::Deserialize;
+
+/// Host-bound progress; a script supplies only the message.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScriptProgress {
+    pub source_id: String,
+    pub entry: String,
+    pub message: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ScriptDiagnostic {
+    code: String,
+    #[serde(default)]
+    detail: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ScriptIndex {
+    #[serde(default)]
+    entries: Vec<SourceIndexEntry>,
+    #[serde(default)]
+    pending: Vec<String>,
+    #[serde(default)]
+    complete: bool,
+    #[serde(default)]
+    etag: Option<String>,
+    #[serde(default)]
+    modified: Option<String>,
+    #[serde(default)]
+    not_modified: bool,
+    #[serde(default)]
+    diagnostics: Vec<ScriptDiagnostic>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DiscoveryPage {
+    pub fact: PageFact,
+    #[serde(default = "unknown_format")]
+    pub reported_format: String,
+    #[serde(default)]
+    pub upstream_page: Option<String>,
+}
+fn unknown_format() -> String {
+    "unknown".into()
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IdentityFact {
+    pub appid: u32,
+    pub page: String,
+    #[serde(default)]
+    pub aliases: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ScriptDiscovery {
+    pub pages: Vec<DiscoveryPage>,
+    #[serde(default)]
+    pub identities: Vec<IdentityFact>,
+    pub complete: bool,
+    #[serde(default)]
+    diagnostics: Vec<ScriptDiagnostic>,
+}
+
+#[derive(Debug)]
+pub struct DiscoveryFacts {
+    pub pages: Vec<DiscoveryPage>,
+    pub identities: Vec<IdentityFact>,
+    pub complete: bool,
+    pub diagnostics: Vec<Diagnostic>,
+}
+
+fn failure(
+    rule: &SourceRule,
+    entry: &str,
+    code: &str,
+    detail: impl std::fmt::Display,
+) -> std::io::Error {
+    std::io::Error::new(
+        std::io::ErrorKind::InvalidData,
+        crate::projection::DomainError::new(
+            code,
+            format!("source={}, entry={entry}: {detail}", rule.id),
+        ),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run<T: DeserializeOwned>(
+    rule: &SourceRule,
+    code: &str,
+    entry: &str,
+    inputs: &[serde_json::Value],
+    ctx: &mut RequestContext,
+    cancel: Arc<AtomicBool>,
+    mut report: impl FnMut(ScriptProgress),
+) -> Result<T> {
+    if cancel.load(Ordering::Relaxed) {
+        return Err(invalid("task_cancelled"));
+    }
+    crate::sources::script::verify(rule, Some(code)).map_err(|error| {
+        let message = error.to_string();
+        let code = if message.starts_with("script_source_digest_mismatch") {
+            "script_source_digest_mismatch"
+        } else if message == "unsupported_script_api_version" {
+            "unsupported_script_api_version"
+        } else {
+            "script_source_contract_error"
+        };
+        failure(rule, entry, code, error)
+    })?;
+    let phase = std::cell::Cell::new("script_source_runtime_error");
+    let result = execute(
+        code,
+        entry,
+        rule,
+        inputs,
+        ctx,
+        Arc::clone(&cancel),
+        |message| {
+            report(ScriptProgress {
+                source_id: rule.id.clone(),
+                entry: entry.into(),
+                message: message.into(),
+            });
+        },
+        &phase,
+    );
+    if cancel.load(Ordering::Relaxed) {
+        return Err(invalid("task_cancelled"));
+    }
+    result
+        .map(|value| value.value)
+        .map_err(|error| failure(rule, entry, phase.get(), error))
+}
+
+fn diagnostics(rule: &SourceRule, values: Vec<ScriptDiagnostic>) -> Vec<Diagnostic> {
+    values
+        .into_iter()
+        .map(|item| Diagnostic {
+            source_id: Some(rule.id.clone()),
+            code: item.code,
+            detail: item.detail,
+        })
+        .collect()
+}
+
+fn contract<T>(rule: &SourceRule, entry: &str, result: Result<T>) -> Result<T> {
+    result.map_err(|error| failure(rule, entry, "script_source_contract_error", error))
+}
+
+/// Execute an imported publisher's index entry, without publishing state.
+pub fn collect_index(
+    rule: &SourceRule,
+    code: &str,
+    previous: Option<&SourceIndex>,
+    ctx: &mut RequestContext,
+    cancel: Arc<AtomicBool>,
+    report: impl FnMut(ScriptProgress),
+) -> Result<super::IndexOutcome> {
+    let previous_input = previous.map(|index| serde_json::json!({"entries":index.entries,
+        "pending":index.pending,"complete":index.complete,"etag":index.etag,"modified":index.modified}))
+        .unwrap_or(serde_json::Value::Null);
+    let mut output: ScriptIndex = run(
+        rule,
+        code,
+        "collect_index",
+        &[previous_input],
+        ctx,
+        Arc::clone(&cancel),
+        report,
+    )?;
+    contract(
+        rule,
+        "collect_index",
+        (|| {
+            if output.not_modified {
+                let previous = previous
+                    .filter(|index| index.complete)
+                    .ok_or_else(|| invalid("source_cache_missing"))?;
+                output.entries = previous.entries.clone();
+                output.pending = previous.pending.clone();
+                output.complete = true;
+            }
+            if output.complete && !output.pending.is_empty() {
+                return Err(invalid("complete_index_has_pending_pages"));
+            }
+            for entry in &output.entries {
+                if entry.title.trim().is_empty()
+                    || !matches!(
+                        entry.kind.as_str(),
+                        "entry" | "product" | "article" | "category"
+                    )
+                    || entry.appid == Some(0)
+                {
+                    return Err(invalid("invalid_source_entry"));
+                }
+                validate::allowed_url(&entry.page, &rule.page_hosts, false)?;
+                if entry.kind == "entry" {
+                    let url = entry
+                        .url
+                        .as_deref()
+                        .ok_or_else(|| invalid("invalid_source_entry"))?;
+                    validate::allowed_url(url, &rule.download_hosts, true)?;
+                }
+            }
+            for page in &output.pending {
+                validate::allowed_url(page, &rule.page_hosts, false)?;
+            }
+            Ok(())
+        })(),
+    )?;
+    if cancel.load(Ordering::Relaxed) {
+        return Err(invalid("task_cancelled"));
+    }
+    Ok(super::IndexOutcome {
+        entries: output.entries,
+        pending: output.pending,
+        complete: output.complete,
+        etag: output.etag,
+        modified: output.modified,
+        not_modified: output.not_modified,
+        checked_at: super::now_unix(),
+        diagnostics: diagnostics(rule, output.diagnostics),
+    })
+}
+
+fn validate_fact(rule: &SourceRule, fact: &mut PageFact) -> Result<()> {
+    // Use an explicit worklist for category inline facts, without a page quota.
+    let mut pending = vec![fact];
+    while let Some(fact) = pending.pop() {
+        if fact.title.trim().is_empty()
+            || !matches!(fact.kind.as_str(), "product" | "article" | "category")
+            || fact.steam_ids.contains(&0)
+        {
+            return Err(invalid("invalid_page_fact"));
+        }
+        validate::allowed_url(&fact.page, &rule.page_hosts, false)?;
+        for mirror in &mut fact.mirrors {
+            validate::navigation_url(&mirror.url)?;
+            mirror.format = crate::sources::identity::format(&mirror.url);
+        }
+        for link in &fact.article_links {
+            validate::allowed_url(&link.page, &rule.page_hosts, false)?;
+        }
+        if let Some(next) = &fact.next_page {
+            validate::allowed_url(next, &rule.page_hosts, false)?;
+        }
+        pending.extend(fact.article_facts.iter_mut());
+    }
+    Ok(())
+}
+
+pub fn resolve_page(
+    rule: &SourceRule,
+    code: &str,
+    page: &str,
+    ctx: &mut RequestContext,
+    cancel: Arc<AtomicBool>,
+    report: impl FnMut(ScriptProgress),
+) -> Result<PageFact> {
+    validate::allowed_url(page, &rule.page_hosts, false)?;
+    let mut fact: PageFact = run(
+        rule,
+        code,
+        "resolve_page",
+        &[serde_json::json!(page)],
+        ctx,
+        Arc::clone(&cancel),
+        report,
+    )?;
+    contract(rule, "resolve_page", validate_fact(rule, &mut fact))?;
+    if cancel.load(Ordering::Relaxed) {
+        return Err(invalid("task_cancelled"));
+    }
+    Ok(fact)
+}
+
+pub fn discover(
+    rule: &SourceRule,
+    code: &str,
+    query: &QueryContext,
+    previous: &super::DiscoverPrevious,
+    ctx: &mut RequestContext,
+    cancel: Arc<AtomicBool>,
+    report: impl FnMut(ScriptProgress),
+) -> Result<DiscoveryFacts> {
+    let query = serde_json::json!({"appid":query.appid,"name":query.name,"name_hints":query.name_hints,
+        "terms":crate::sources::identity::query_terms(&query.name, &query.name_hints),"force":query.force});
+    let previous = serde_json::json!({"known_candidates": previous.known_candidates});
+    let mut output: ScriptDiscovery = run(
+        rule,
+        code,
+        "discover",
+        &[query, previous],
+        ctx,
+        Arc::clone(&cancel),
+        report,
+    )?;
+    contract(
+        rule,
+        "discover",
+        (|| {
+            for page in &mut output.pages {
+                validate_fact(rule, &mut page.fact)?;
+                if !matches!(
+                    page.reported_format.as_str(),
+                    "unknown" | "zip" | "exe" | "web"
+                ) {
+                    return Err(invalid("invalid_reported_format"));
+                }
+                if let Some(upstream) = &page.upstream_page {
+                    validate::navigation_url(upstream)?;
+                }
+            }
+            for identity in &output.identities {
+                if identity.appid == 0 {
+                    return Err(invalid("invalid_source_appid"));
+                }
+                validate::allowed_url(&identity.page, &rule.page_hosts, false)?;
+            }
+            Ok(())
+        })(),
+    )?;
+    if cancel.load(Ordering::Relaxed) {
+        return Err(invalid("task_cancelled"));
+    }
+    Ok(DiscoveryFacts {
+        pages: output.pages,
+        identities: output.identities,
+        complete: output.complete,
+        diagnostics: diagnostics(rule, output.diagnostics),
+    })
+}
 
 #[derive(Clone)]
 struct Node {
@@ -86,7 +430,7 @@ impl UserData for Node {
     }
 }
 
-pub fn environment(lua: &Lua, cancel: &Arc<AtomicBool>) -> mlua::Result<Table> {
+fn environment(lua: &Lua, cancel: &Arc<AtomicBool>) -> mlua::Result<Table> {
     let globals = lua.globals();
     let environment = lua.create_table()?;
     for name in [
@@ -123,17 +467,11 @@ pub fn environment(lua: &Lua, cancel: &Arc<AtomicBool>) -> mlua::Result<Table> {
     Ok(environment)
 }
 
-pub fn vm() -> mlua::Result<Lua> {
+fn vm() -> mlua::Result<Lua> {
     Lua::new_with(
         StdLib::STRING | StdLib::TABLE | StdLib::MATH | StdLib::UTF8,
         LuaOptions::default(),
     )
-}
-
-pub fn syntax_check(code: &[u8]) -> mlua::Result<()> {
-    patchhub_core::sources::script::validate_code("prototype", 1, code)
-        .map(|_| ())
-        .map_err(mlua::Error::external)
 }
 
 // mlua's default conversion drops string keys on non-empty sequence tables;
@@ -213,7 +551,7 @@ fn response(lua: &Lua, response: FetchResponse) -> mlua::Result<Table> {
 }
 
 /// The host owns cancellation; a caught Lua error cannot authorize publication.
-pub fn call(
+fn call(
     function: Function,
     args: impl mlua::IntoLuaMulti,
     cancel: &AtomicBool,
@@ -230,19 +568,22 @@ pub fn call(
 }
 
 #[derive(Debug)]
-pub struct Invocation<T> {
+struct Invocation<T> {
     pub value: T,
+    #[cfg(test)]
     pub lua_bytes: usize,
 }
 
-pub fn invoke<T: DeserializeOwned>(
+#[allow(clippy::too_many_arguments)] // Explicit borrowed task context and script inputs.
+fn execute<T: DeserializeOwned>(
     code: &str,
     entry: &str,
     rule: &SourceRule,
-    input: &serde_json::Value,
+    inputs: &[serde_json::Value],
     ctx: &mut RequestContext,
     cancel: Arc<AtomicBool>,
-    progress: &mut Vec<String>,
+    mut progress: impl FnMut(&str),
+    phase: &std::cell::Cell<&'static str>,
 ) -> mlua::Result<Invocation<T>> {
     operation::with_cancel(Arc::clone(&cancel), || {
         let lua = vm()?;
@@ -364,32 +705,42 @@ pub fn invoke<T: DeserializeOwned>(
                 "progress",
                 scope.create_function_mut(|_, message: String| {
                     operation::check().map_err(mlua::Error::external)?;
-                    progress.push(message);
+                    progress(&message);
                     Ok(())
                 })?,
             )?;
+            phase.set("script_source_syntax_error");
             let module = lua
                 .load(code)
                 .set_name(format!("@source/{}.lua", rule.id))
                 .set_mode(ChunkMode::Text)
                 .set_environment(environment(&lua, &cancel)?)
                 .into_function()?;
+            phase.set("script_source_runtime_error");
             let exports = call(module, (), &cancel)?;
+            phase.set("script_source_contract_error");
             let Value::Table(exports) = exports else {
                 return Err(mlua::Error::runtime("script module must return a table"));
             };
             let function: Function = exports.get(entry)?;
-            let output = call(
-                function,
-                (host, lua.to_value(rule)?, lua.to_value(input)?),
-                &cancel,
-            )?;
+            let mut args = MultiValue::from_vec(vec![Value::Table(host), lua.to_value(rule)?]);
+            for input in inputs {
+                args.push_back(json_value(&lua, input)?);
+            }
+            phase.set("script_source_runtime_error");
+            let output = call(function, args, &cancel)?;
+            phase.set("script_source_contract_error");
             let value = from_value(&lua, output)?;
             operation::check().map_err(mlua::Error::external)?;
             Ok(Invocation {
                 value,
+                #[cfg(test)]
                 lua_bytes: lua.used_memory(),
             })
         })
     })
 }
+
+#[cfg(test)]
+#[path = "script/tests.rs"]
+mod tests;

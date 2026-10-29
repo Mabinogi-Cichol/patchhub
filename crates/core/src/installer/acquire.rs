@@ -680,27 +680,10 @@ impl Transport for ReqwestTransport {
 async fn cancellable_network<T>(
     future: impl std::future::Future<Output = std::result::Result<T, reqwest::Error>>,
 ) -> Result<T> {
-    use std::{
-        future::{poll_fn, Future},
-        task::Poll,
-    };
-    let mut future = std::pin::pin!(future);
-    let mut wake = std::pin::pin!(tokio::time::sleep(Duration::from_millis(25)));
-    poll_fn(|context| {
-        if let Err(error) = operation::check() {
-            return Poll::Ready(Err(error));
-        }
-        if let Poll::Ready(result) = future.as_mut().poll(context) {
-            return Poll::Ready(
-                result.map_err(|error| invalid(format!("download_network_error: {error}"))),
-            );
-        }
-        if wake.as_mut().poll(context).is_ready() {
-            wake.as_mut()
-                .reset(tokio::time::Instant::now() + Duration::from_millis(25));
-            context.waker().wake_by_ref();
-        }
-        Poll::Pending
+    operation::cancellable(async {
+        future
+            .await
+            .map_err(|error| invalid(format!("download_network_error: {error}")))
     })
     .await
 }

@@ -24,6 +24,7 @@ pub mod dom;
 pub mod hgamer;
 pub mod kagura;
 pub mod patchmoe;
+pub mod script;
 pub mod table;
 
 /// Result of a ZIP-index refresh, shaped for the registry's cache/status write.

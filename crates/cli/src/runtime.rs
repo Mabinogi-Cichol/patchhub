@@ -249,6 +249,11 @@ fn err(error: impl std::fmt::Display) -> DomainError {
         return DomainError::code(text);
     }
     for prefix in [
+        "script_source_syntax_error",
+        "script_source_runtime_error",
+        "script_source_contract_error",
+        "script_source_digest_mismatch",
+        "unsupported_script_api_version",
         "journal_error",
         "invalid_zip",
         "zip_member",
@@ -264,6 +269,28 @@ fn err(error: impl std::fmt::Display) -> DomainError {
 }
 fn value(data: impl Serialize) -> Result<Value, DomainError> {
     serde_json::to_value(data).map_err(err)
+}
+
+#[cfg(test)]
+mod script_error_tests {
+    #[test]
+    fn script_error_codes_keep_the_complete_lua_detail() {
+        for code in [
+            "script_source_syntax_error",
+            "script_source_runtime_error",
+            "script_source_contract_error",
+            "script_source_digest_mismatch",
+            "unsupported_script_api_version",
+        ] {
+            let detail = format!(
+                "source=custom, entry=resolve_page: source/custom.lua:7: {}",
+                "中文".repeat(1200)
+            );
+            let domain = super::err(format!("{code}: {detail}"));
+            assert_eq!(domain.code, code);
+            assert!(domain.detail.unwrap().contains(&detail));
+        }
+    }
 }
 fn projection_error(error: DomainError) -> DomainError {
     error
