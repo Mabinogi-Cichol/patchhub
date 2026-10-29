@@ -55,6 +55,7 @@ mod tests {
     #[test]
     fn interval_hours_reads_settings_and_defaults_to_off() {
         let settings = SettingsFile {
+            script_sources: BTreeMap::new(),
             schema_version: 2,
             revision: 3,
             enabled: BTreeMap::new(),

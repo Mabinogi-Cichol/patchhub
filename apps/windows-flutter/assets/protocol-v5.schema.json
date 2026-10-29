@@ -931,6 +931,16 @@
           ],
           "default": null
         },
+        "script": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ScriptDescriptor"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "status": {
           "type": "string"
         },
@@ -3257,6 +3267,24 @@
       ],
       "type": "object"
     },
+    "ScriptDescriptor": {
+      "additionalProperties": false,
+      "properties": {
+        "api_version": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "sha256": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "api_version",
+        "sha256"
+      ],
+      "type": "object"
+    },
     "SetGameSourceParams": {
       "additionalProperties": false,
       "anyOf": [
@@ -3920,6 +3948,16 @@
           ],
           "default": null
         },
+        "script": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ScriptDescriptor"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "table_id": {
           "type": [
             "string",
@@ -4102,6 +4140,16 @@
             }
           ],
           "default": null
+        },
+        "script": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ScriptDescriptor"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "status": {
           "type": "string"

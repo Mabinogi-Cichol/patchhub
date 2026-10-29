@@ -386,6 +386,7 @@ mod tests {
 
     fn rule() -> SourceRule {
         SourceRule {
+            script: None,
             id: "hgamer".to_string(),
             name: "HGamer".to_string(),
             adapter: "hgamer_html".to_string(),

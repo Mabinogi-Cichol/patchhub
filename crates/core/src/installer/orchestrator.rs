@@ -765,6 +765,7 @@ pub(crate) mod tests {
     /// not require a seeded registry (facts/acquire/reinstall-error paths).
     fn source_rule() -> SourceRule {
         SourceRule {
+            script: None,
             id: "kagura-cn".to_string(),
             name: "Kagura".to_string(),
             adapter: "kagura_wordpress".to_string(),

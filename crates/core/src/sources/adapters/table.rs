@@ -128,6 +128,7 @@ mod tests {
 
     fn rule(columns: Option<Columns>, table_id: Option<&str>) -> SourceRule {
         SourceRule {
+            script: None,
             id: "example".to_string(),
             name: "Example".to_string(),
             adapter: "table_html".to_string(),

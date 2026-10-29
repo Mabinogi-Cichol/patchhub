@@ -1243,6 +1243,7 @@ mod tests {
 
     fn rule() -> SourceRule {
         SourceRule {
+            script: None,
             id: "kagura-cn".to_string(),
             name: "Kagura".to_string(),
             adapter: "kagura_wordpress".to_string(),

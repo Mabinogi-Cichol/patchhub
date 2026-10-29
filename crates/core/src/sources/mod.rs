@@ -17,6 +17,7 @@ pub mod matching;
 pub mod model;
 pub mod registry;
 pub mod schedule;
+pub mod script;
 pub mod snapshot;
 pub mod store;
 pub mod update;
@@ -38,6 +39,8 @@ pub const QUERY_VERSION: u32 = 1;
 pub const SOURCES_ENCODING_VERSION: u32 = 1;
 pub const DEFAULT_RULES_SCHEMA: u32 = 2;
 pub const STORE_SCHEMA_VERSION: u32 = 2;
+/// Settings only: the index/detail/match namespace remains schema 2.
+pub const SOURCE_SETTINGS_SCHEMA_VERSION: u32 = 3;
 /// On-disk schema of `index/<source_id>.json` (p1-contract §1, §5).
 pub const SOURCE_INDEX_SCHEMA_VERSION: u32 = 1;
 /// On-disk schema of `details/<source_id>/<key>.json` (p1-contract §1, §6).
@@ -136,6 +139,21 @@ impl Sources {
 
     pub fn registry(&self) -> &registry::SourceRegistry {
         &self.registry
+    }
+
+    pub fn import_script_source(
+        &mut self,
+        rule: &RawSourceRule,
+        api_version: u32,
+        code: &str,
+        replace: bool,
+    ) -> Result<ImportedScriptSource> {
+        self.registry
+            .import_script_source(rule, api_version, code, replace)
+    }
+
+    pub fn get_script_source(&self, source_id: &str) -> Result<ScriptSourceDocument> {
+        self.registry.get_script_source(source_id)
     }
 
     pub fn registry_mut(&mut self) -> &mut registry::SourceRegistry {

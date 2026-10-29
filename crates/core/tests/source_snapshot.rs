@@ -28,6 +28,7 @@ fn snapshot_read_preserves_existing_state_bytes_and_uses_supplied_clock() {
     let schema_path = store.paths().schema();
     let before_settings = std::fs::read(&settings_path).unwrap();
     let before_schema = std::fs::read(&schema_path).unwrap();
+    let before_lock = store.paths().settings_lock().exists();
     drop(store);
 
     let snapshot = SourceSnapshot::load(&state, &[game(42)], 1_700_000_000)
@@ -37,7 +38,10 @@ fn snapshot_read_preserves_existing_state_bytes_and_uses_supplied_clock() {
     assert_eq!(snapshot.settings_revision(), 1);
     assert_eq!(std::fs::read(settings_path).unwrap(), before_settings);
     assert_eq!(std::fs::read(schema_path).unwrap(), before_schema);
-    assert!(!state.join("sources/rust-v1/settings.lock").exists());
+    assert_eq!(
+        state.join("sources/rust-v1/settings.lock").exists(),
+        before_lock
+    );
 }
 
 #[test]

@@ -11,7 +11,7 @@ use patchhub_core::sources::{
     snapshot::SourceSnapshot,
     store::{detail_key, SourceStore},
     Sources, GAME_MATCH_SCHEMA_VERSION, SOURCE_DETAIL_SCHEMA_VERSION, SOURCE_INDEX_SCHEMA_VERSION,
-    STORE_SCHEMA_VERSION,
+    SOURCE_SETTINGS_SCHEMA_VERSION, STORE_SCHEMA_VERSION,
 };
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
@@ -555,9 +555,9 @@ fn schema1_state_migrates_to_schema2_without_losing_old_files() {
 
     let store = SourceStore::open(&state).unwrap();
 
-    // --- settings v1 -> v2 -------------------------------------------------
+    // --- settings v1 -> v3 (index namespace remains v2) --------------------
     let settings = store.load_settings().unwrap();
-    assert_eq!(settings.schema_version, STORE_SCHEMA_VERSION);
+    assert_eq!(settings.schema_version, SOURCE_SETTINGS_SCHEMA_VERSION);
     assert_eq!(settings.revision, 7);
     assert!(
         settings.intervals.is_empty(),
@@ -575,7 +575,7 @@ fn schema1_state_migrates_to_schema2_without_losing_old_files() {
     assert_eq!(settings.added[0].id, "extra");
     assert_eq!(
         read_json(&root.join("settings.json"))["schema_version"],
-        json!(2)
+        json!(SOURCE_SETTINGS_SCHEMA_VERSION)
     );
 
     // --- cache/<source>.json -> index/<source>.json ------------------------
@@ -734,7 +734,7 @@ fn schema1_state_migrates_to_schema2_without_losing_old_files() {
     assert_eq!(reopened.revision().unwrap(), 7);
     assert_eq!(
         reopened.load_settings().unwrap().schema_version,
-        STORE_SCHEMA_VERSION
+        SOURCE_SETTINGS_SCHEMA_VERSION
     );
     let new_after = collect_files(&root);
     assert_eq!(
@@ -818,7 +818,7 @@ fn failed_migration_reports_a_specific_code_and_preserves_old_files() {
     let retried = SourceStore::open(&state).unwrap();
     assert_eq!(
         retried.load_settings().unwrap().schema_version,
-        STORE_SCHEMA_VERSION
+        SOURCE_SETTINGS_SCHEMA_VERSION
     );
     assert!(retried.load_match(42).unwrap().is_some());
 }
@@ -935,6 +935,7 @@ fn schedule_boundaries_match_the_p1_contract() {
     assert!(is_due(1_001, Some(1_000)));
 
     let settings = SettingsFile {
+        script_sources: BTreeMap::new(),
         schema_version: STORE_SCHEMA_VERSION,
         revision: 1,
         enabled: BTreeMap::new(),

@@ -440,6 +440,7 @@ mod tests {
         // Built through the real `Serialize` impl so re-serializing the
         // deserialized fixture reproduces the exact same bytes.
         let policy_rule = serde_json::to_value(crate::sources::model::SourceRule {
+            script: None,
             id: "patchmoe".to_string(),
             name: "PatchMoe".to_string(),
             adapter: "patchmoe".to_string(),

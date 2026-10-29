@@ -293,6 +293,7 @@ mod tests {
 
     fn rule() -> SourceRule {
         SourceRule {
+            script: None,
             id: "patchmoe".to_string(),
             name: "patch.moe".to_string(),
             adapter: "patchmoe".to_string(),

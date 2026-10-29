@@ -19,12 +19,25 @@ use super::{
 };
 use std::collections::{BTreeMap, HashSet};
 
+fn stored_rule<'a>(
+    builtins: &'a [SourceRule],
+    settings: &'a SettingsFile,
+    source_id: &str,
+) -> Option<&'a SourceRule> {
+    settings
+        .added
+        .iter()
+        .find(|rule| rule.id == source_id)
+        .or_else(|| builtins.iter().find(|rule| rule.id == source_id))
+}
+
 pub struct SourceRegistry {
     store: SourceStore,
     builtins: Vec<SourceRule>,
     rules: Vec<SourceRule>,
     overrides: Overrides,
     names: BTreeMap<String, String>,
+    script_sources: BTreeMap<String, String>,
     revision: u64,
     status: BTreeMap<String, SourceStatus>,
     /// Published index snapshots, keyed by source id.
@@ -53,6 +66,7 @@ impl SourceRegistry {
             rules: Vec::new(),
             overrides: Overrides::default(),
             names: BTreeMap::new(),
+            script_sources: BTreeMap::new(),
             revision: 0,
             status: BTreeMap::new(),
             indexes: BTreeMap::new(),
@@ -157,6 +171,7 @@ impl SourceRegistry {
 
         self.rules = rules;
         self.names = settings.names;
+        self.script_sources = settings.script_sources;
         self.overrides = overrides;
         self.status.clear();
         self.indexes.clear();
@@ -428,10 +443,10 @@ impl SourceRegistry {
         if !self.rules.iter().any(|rule| rule.id == source_id) {
             return Err(invalid("unknown_source"));
         }
-        let mut overrides = self.overrides.clone();
-        overrides.enabled.insert(source_id.to_string(), enabled);
-        self.store.apply_overrides(&overrides)?;
-        self.store.bump_revision()?;
+        self.store.update_settings(|settings| {
+            settings.enabled.insert(source_id.to_string(), enabled);
+            Ok(())
+        })?;
         self.reload()
     }
 
@@ -444,7 +459,6 @@ impl SourceRegistry {
             return Err(invalid("invalid_source_name"));
         }
         self.store.set_name(source_id, name)?;
-        self.store.bump_revision()?;
         self.reload()?;
         Ok(name.to_string())
     }
@@ -454,15 +468,72 @@ impl SourceRegistry {
         if !BUILTIN_ADAPTERS.contains(&rule.adapter.as_str()) {
             return Err(invalid("source_exists_or_adapter_unavailable"));
         }
-        if self.rules.iter().any(|existing| existing.id == rule.id) {
-            return Err(invalid("source_exists_or_adapter_unavailable"));
-        }
-        let mut overrides = self.overrides.clone();
-        overrides.added.push(rule.clone());
-        self.store.apply_overrides(&overrides)?;
-        self.store.bump_revision()?;
+        self.store.update_settings(|settings| {
+            if stored_rule(&self.builtins, settings, &rule.id).is_some() {
+                return Err(invalid("source_exists_or_adapter_unavailable"));
+            }
+            settings.added.push(rule.clone());
+            Ok(())
+        })?;
         self.reload()?;
         Ok(rule)
+    }
+
+    /// Compile only, then atomically store rule, raw UTF-8 source and digest.
+    pub fn import_script_source(
+        &mut self,
+        raw: &RawSourceRule,
+        api_version: u32,
+        code: &str,
+        replace: bool,
+    ) -> Result<ImportedScriptSource> {
+        let mut rule = validate::validate_rule(raw)?;
+        if rule.adapter != "lua" {
+            return Err(invalid("source_not_script"));
+        }
+        rule.script = Some(super::script::validate_code(
+            &rule.id,
+            api_version,
+            code.as_bytes(),
+        )?);
+        let revision = self.store.update_settings(|settings| {
+            let existing = stored_rule(&self.builtins, settings, &rule.id);
+            match (replace, existing) {
+                (false, Some(_)) => return Err(invalid("script_source_exists")),
+                (true, None) => return Err(invalid("unknown_source")),
+                (true, Some(existing)) => {
+                    if existing.adapter != "lua" || existing.script.is_none() {
+                        return Err(invalid("source_not_script"));
+                    }
+                    rule.enabled = settings
+                        .enabled
+                        .get(&rule.id)
+                        .copied()
+                        .unwrap_or(existing.enabled);
+                }
+                (false, None) => {}
+            }
+            settings.added.retain(|existing| existing.id != rule.id);
+            settings.added.push(rule.clone());
+            settings
+                .script_sources
+                .insert(rule.id.clone(), code.to_string());
+            Ok(settings.revision)
+        })?;
+        self.reload()?;
+        Ok(ImportedScriptSource {
+            rule,
+            settings_revision: revision,
+        })
+    }
+
+    pub fn get_script_source(&self, source_id: &str) -> Result<ScriptSourceDocument> {
+        let rule = self
+            .rules
+            .iter()
+            .find(|rule| rule.id == source_id)
+            .ok_or_else(|| invalid("unknown_source"))?;
+        super::script::document(rule, self.script_sources.get(source_id))
     }
 
     pub fn set_game_source(&mut self, appid: u32, source_id: &str, subscribed: bool) -> Result<()> {
@@ -472,30 +543,31 @@ impl SourceRegistry {
         if !self.rules.iter().any(|rule| rule.id == source_id) {
             return Err(invalid("unknown_source"));
         }
-        let mut overrides = self.overrides.clone();
-        overrides
-            .games
-            .entry(appid.to_string())
-            .or_default()
-            .insert(source_id.to_string(), subscribed);
-        self.store.apply_overrides(&overrides)?;
-        self.store.bump_revision()?;
+        self.store.update_settings(|settings| {
+            settings
+                .games
+                .entry(appid.to_string())
+                .or_default()
+                .insert(source_id.to_string(), subscribed);
+            Ok(())
+        })?;
         self.reload()
     }
 
     /// Sets a source's automatic update interval in hours (`0` = off). The
     /// fallback indexer is queried per game and never site-wide scheduled.
     pub fn set_update_interval(&mut self, source_id: &str, interval_hours: u64) -> Result<()> {
-        let rule = self
-            .rules
-            .iter()
-            .find(|rule| rule.id == source_id)
-            .ok_or_else(|| invalid("unknown_source"))?;
-        if rule.role == SourceRole::FallbackIndexer {
-            return Err(invalid("source_not_indexable"));
-        }
-        self.store.set_interval(source_id, interval_hours)?;
-        self.store.bump_revision()?;
+        self.store.update_settings(|settings| {
+            let rule = stored_rule(&self.builtins, settings, source_id)
+                .ok_or_else(|| invalid("unknown_source"))?;
+            if rule.role == SourceRole::FallbackIndexer {
+                return Err(invalid("source_not_indexable"));
+            }
+            settings
+                .intervals
+                .insert(source_id.to_string(), interval_hours);
+            Ok(())
+        })?;
         self.reload()
     }
 

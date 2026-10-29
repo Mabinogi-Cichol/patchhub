@@ -470,6 +470,7 @@ mod tests {
 
     fn rule(adapter: &str) -> SourceRule {
         SourceRule {
+            script: None,
             id: "example".to_string(),
             name: "Example".to_string(),
             adapter: adapter.to_string(),

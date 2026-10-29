@@ -131,11 +131,9 @@ pub fn vm() -> mlua::Result<Lua> {
 }
 
 pub fn syntax_check(code: &[u8]) -> mlua::Result<()> {
-    vm()?
-        .load(code)
-        .set_mode(ChunkMode::Text)
-        .into_function()
+    patchhub_core::sources::script::validate_code("prototype", 1, code)
         .map(|_| ())
+        .map_err(mlua::Error::external)
 }
 
 // mlua's default conversion drops string keys on non-empty sequence tables;

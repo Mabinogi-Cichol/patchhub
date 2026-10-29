@@ -53,6 +53,7 @@ const PATCHMOE_INDEX: &str = include_str!("fixtures/sources/patchmoe-index.html"
 
 fn kagura_rule() -> SourceRule {
     SourceRule {
+        script: None,
         id: "kagura-cn".to_string(),
         name: "Kagura CN".to_string(),
         adapter: "kagura_wordpress".to_string(),
@@ -73,6 +74,7 @@ fn kagura_rule() -> SourceRule {
 
 fn table_rule() -> SourceRule {
     SourceRule {
+        script: None,
         id: "table-source".to_string(),
         name: "Table".to_string(),
         adapter: "table_html".to_string(),
@@ -99,6 +101,7 @@ fn table_rule() -> SourceRule {
 
 fn patchmoe_rule() -> SourceRule {
     SourceRule {
+        script: None,
         id: "patchmoe".to_string(),
         name: "patch.moe".to_string(),
         adapter: "patchmoe".to_string(),
@@ -119,6 +122,7 @@ fn patchmoe_rule() -> SourceRule {
 
 fn hgamer_rule() -> SourceRule {
     SourceRule {
+        script: None,
         id: "hgamer".to_string(),
         name: "HGamer".to_string(),
         adapter: "hgamer_html".to_string(),
@@ -526,14 +530,19 @@ fn hooked_context(fake: &Arc<HookedFetcher>) -> RequestContext {
 }
 
 /// Persists "source disabled" exactly like the host RPC
-/// (`apply_overrides` + `bump_revision`).
+/// (one complete settings transaction).
 fn disable_source(store: &SourceStore, source_id: &str) {
     let overrides = Overrides {
         enabled: BTreeMap::from([(source_id.to_string(), false)]),
         ..Overrides::default()
     };
-    store.apply_overrides(&overrides).unwrap();
-    store.bump_revision().unwrap();
+    store
+        .update_settings(|settings| {
+            settings.enabled.extend(overrides.enabled);
+            settings.games.extend(overrides.games);
+            Ok(())
+        })
+        .unwrap();
 }
 
 /// Persists "game unsubscribed from this source".
@@ -545,14 +554,18 @@ fn unsubscribe_game(store: &SourceStore, appid: u32, source_id: &str) {
         )]),
         ..Overrides::default()
     };
-    store.apply_overrides(&overrides).unwrap();
-    store.bump_revision().unwrap();
+    store
+        .update_settings(|settings| {
+            settings.enabled.extend(overrides.enabled);
+            settings.games.extend(overrides.games);
+            Ok(())
+        })
+        .unwrap();
 }
 
 /// Persists an unrelated settings change (a different source's interval).
 fn change_unrelated_interval(store: &SourceStore) {
     store.set_interval("hgamer", 24).unwrap();
-    store.bump_revision().unwrap();
 }
 
 // ---- matrix 1: one source update, shared by 1/10/any games ---------------

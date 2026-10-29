@@ -74,6 +74,13 @@ pub struct RawSourceRule {
     pub url: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema, ts_rs::TS)]
+#[serde(deny_unknown_fields)]
+pub struct ScriptDescriptor {
+    pub api_version: u32,
+    pub sha256: String,
+}
+
 /// Validated canonical rule; field names match the Python rule dict.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema, ts_rs::TS)]
 #[serde(deny_unknown_fields)]
@@ -106,6 +113,55 @@ pub struct SourceRule {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional = nullable)]
     pub url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional = nullable)]
+    pub script: Option<ScriptDescriptor>,
+}
+
+/// Author-facing rule without the host-generated script descriptor.
+impl From<&SourceRule> for RawSourceRule {
+    fn from(rule: &SourceRule) -> Self {
+        Self {
+            id: rule.id.clone(),
+            name: rule.name.clone(),
+            adapter: rule.adapter.clone(),
+            role: Some(
+                match rule.role {
+                    SourceRole::Publisher => "publisher",
+                    SourceRole::FallbackIndexer => "fallback_indexer",
+                }
+                .into(),
+            ),
+            discovery_only: Some(rule.discovery_only),
+            priority: Some(rule.priority.into()),
+            enabled: rule.enabled,
+            pages: rule.pages.clone(),
+            page_hosts: rule.page_hosts.clone(),
+            download_hosts: Some(rule.download_hosts.clone()),
+            root_layout: rule.root_layout.map(|_| "game_root".into()),
+            columns: rule.columns.clone(),
+            table_id: rule.table_id.clone(),
+            language: rule.language.clone(),
+            url: rule.url.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, ts_rs::TS)]
+#[serde(deny_unknown_fields)]
+pub struct ScriptSourceDocument {
+    pub rule: RawSourceRule,
+    pub api_version: u32,
+    pub code: String,
+    pub sha256: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, ts_rs::TS)]
+#[serde(deny_unknown_fields)]
+pub struct ImportedScriptSource {
+    pub rule: SourceRule,
+    #[ts(type = "number")]
+    pub settings_revision: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema, ts_rs::TS)]
@@ -157,6 +213,9 @@ pub struct SettingsFile {
     /// User display names, independent of source identity and compiled rules.
     #[serde(default)]
     pub names: BTreeMap<String, String>,
+    /// Stored together with rules/descriptors/revision (settings schema 3).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub script_sources: BTreeMap<String, String>,
 }
 
 /// Output-only summary; injected with a flattened [`SourceRule`].

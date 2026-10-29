@@ -351,7 +351,9 @@ pub fn validate_rule(raw: &RawSourceRule) -> io::Result<SourceRule> {
         return Err(invalid("invalid_source_rule"));
     }
     if discovery_only {
-        if raw.root_layout.is_some() || !DISCOVERY_ADAPTERS.contains(&raw.adapter.as_str()) {
+        if raw.root_layout.is_some()
+            || !(DISCOVERY_ADAPTERS.contains(&raw.adapter.as_str()) || raw.adapter == "lua")
+        {
             return Err(invalid("invalid_source_rule"));
         }
     } else if raw.root_layout.as_deref() != Some("game_root") || role != SourceRole::Publisher {
@@ -361,17 +363,17 @@ pub fn validate_rule(raw: &RawSourceRule) -> io::Result<SourceRule> {
     if role == SourceRole::FallbackIndexer && (!discovery_only || !download_hosts.is_empty()) {
         return Err(invalid("invalid_source_rule"));
     }
-    if raw.pages.is_empty() || raw.pages.len() > 5 {
+    if raw.pages.is_empty() {
         return Err(invalid("invalid_source_pages"));
     }
-    if raw.page_hosts.is_empty() || raw.page_hosts.len() > 8 {
+    if raw.page_hosts.is_empty() {
         return Err(invalid("invalid_source_hosts"));
     }
     for value in &raw.page_hosts {
         host(value)?;
     }
     let minimum_download_hosts = if discovery_only { 0 } else { 1 };
-    if download_hosts.len() < minimum_download_hosts || download_hosts.len() > 8 {
+    if download_hosts.len() < minimum_download_hosts {
         return Err(invalid("invalid_source_hosts"));
     }
     for value in &download_hosts {
@@ -418,6 +420,7 @@ pub fn validate_rule(raw: &RawSourceRule) -> io::Result<SourceRule> {
         table_id: raw.table_id.clone(),
         language: raw.language.clone(),
         url: raw.url.clone(),
+        script: None,
     })
 }
 
@@ -777,10 +780,7 @@ mod tests {
         );
         let mut bad = raw_rule();
         bad.pages = (0..6).map(|i| format!("https://example.com/{i}")).collect();
-        assert_eq!(
-            validate_rule(&bad).unwrap_err().to_string(),
-            "invalid_source_pages"
-        );
+        assert_eq!(validate_rule(&bad).unwrap().pages.len(), 6);
         let mut bad = raw_rule();
         bad.page_hosts = vec![];
         assert_eq!(

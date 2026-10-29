@@ -58,6 +58,7 @@ fn run_update(
 
 fn patchmoe_rule() -> SourceRule {
     SourceRule {
+        script: None,
         id: "patchmoe".to_string(),
         name: "patch.moe".to_string(),
         adapter: "patchmoe".to_string(),
@@ -103,6 +104,7 @@ fn push_patchmoe_full(fake: &FakeFetcher, html: &str, etag: Option<&str>) {
 
 fn table_rule() -> SourceRule {
     SourceRule {
+        script: None,
         id: "table-source".to_string(),
         name: "Table".to_string(),
         adapter: "table_html".to_string(),
@@ -142,6 +144,7 @@ fn table_html(rows: &[String]) -> String {
 
 fn kagura_cn_rule() -> SourceRule {
     SourceRule {
+        script: None,
         id: "kagura-cn".to_string(),
         name: "Kagura CN".to_string(),
         adapter: "kagura_wordpress".to_string(),
@@ -162,6 +165,7 @@ fn kagura_cn_rule() -> SourceRule {
 
 fn kagura_en_rule() -> SourceRule {
     SourceRule {
+        script: None,
         id: "kagura-en".to_string(),
         name: "Kagura EN".to_string(),
         adapter: "kagura_woocommerce".to_string(),
@@ -182,6 +186,7 @@ fn kagura_en_rule() -> SourceRule {
 
 fn hgamer_rule() -> SourceRule {
     SourceRule {
+        script: None,
         id: "hgamer".to_string(),
         name: "HGamer".to_string(),
         adapter: "hgamer_html".to_string(),

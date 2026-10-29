@@ -8,12 +8,13 @@
 use super::index::{from_cache, from_discovery_index, normalize_entries};
 use super::model::{
     DetailRecord, Diagnostic, DiscoveryIndexRecord, DiscoveryRecord, FallbackMatchRecord,
-    FallbackMatchStatus, GameMatchRecord, GameMatchStatus, Overrides, RulesConfig, SettingsFile,
-    SourceCache, SourceIndex, SourceMatchRecord, SourceMatchStatus, SourceRole, SourceStatus,
+    FallbackMatchStatus, GameMatchRecord, GameMatchStatus, RulesConfig, SettingsFile, SourceCache,
+    SourceIndex, SourceMatchRecord, SourceMatchStatus, SourceRole, SourceStatus,
 };
 use super::r#match::{candidate_is_credible, derive_game_status};
 use super::{
-    canonical, invalid, Result, DEFAULT_RULES_JSON, GAME_MATCH_SCHEMA_VERSION, STORE_SCHEMA_VERSION,
+    canonical, invalid, Result, DEFAULT_RULES_JSON, GAME_MATCH_SCHEMA_VERSION,
+    SOURCE_SETTINGS_SCHEMA_VERSION, STORE_SCHEMA_VERSION,
 };
 use fs2::FileExt;
 use serde::{de::DeserializeOwned, Serialize};
@@ -141,26 +142,28 @@ impl SourceStore {
     pub fn open(state_dir: &Path) -> Result<Self> {
         let paths = StorePaths::new(state_dir);
         ensure_directory(paths.root())?;
-        let settings_present = paths.settings().exists();
         let mut store = Self {
             paths,
             settings: Mutex::new(default_settings()),
             lock: Mutex::new(()),
             migration_diagnostics: Vec::new(),
         };
+        // Serialize initialization/format upgrades with normal settings edits.
+        let _file = store.acquire_file_lock()?;
+        let settings_present = store.paths.settings().exists();
         // The completion marker is not the source of truth for user state: a
         // missing/corrupt `schema.json` must never discard an intact
         // `settings.json` (F7). Reuse persisted settings whenever they exist.
         let mut upgrade_settings = false;
         if settings_present {
             let mut settings = store.load_settings()?;
-            if !(1..=STORE_SCHEMA_VERSION).contains(&settings.schema_version) {
+            if !(1..=SOURCE_SETTINGS_SCHEMA_VERSION).contains(&settings.schema_version) {
                 return Err(invalid("invalid_source_schema"));
             }
-            if settings.schema_version != STORE_SCHEMA_VERSION {
-                // v1 -> v2: revision/enabled/added/games are preserved and
-                // `intervals` starts out empty (via `#[serde(default)]`).
-                settings.schema_version = STORE_SCHEMA_VERSION;
+            if settings.schema_version != SOURCE_SETTINGS_SCHEMA_VERSION {
+                // Additive settings upgrade; the schema-2 index/detail/match
+                // marker is independent, so v2 files are not migrated again.
+                settings.schema_version = SOURCE_SETTINGS_SCHEMA_VERSION;
                 upgrade_settings = true;
             }
             *store.settings_guard()? = settings;
@@ -215,7 +218,7 @@ impl SourceStore {
             default_settings()
         };
         // v1 settings have no `intervals`; `#[serde(default)]` leaves them off.
-        if (settings.schema_version != 1 && settings.schema_version != STORE_SCHEMA_VERSION)
+        if !(1..=SOURCE_SETTINGS_SCHEMA_VERSION).contains(&settings.schema_version)
             || settings.revision == 0
         {
             return Err(invalid("invalid_source_state"));
@@ -401,37 +404,57 @@ impl SourceStore {
     }
 
     /// Persists the in-memory settings atomically.
-    pub fn save_settings(&self) -> Result<()> {
+    fn save_settings(&self) -> Result<()> {
         let settings = self.settings()?;
         write_json(&self.paths.settings(), &settings)
     }
 
-    /// Applies user overrides to the in-memory settings (persisted by the next
-    /// [`Self::bump_revision`]).
-    pub fn apply_overrides(&self, overrides: &Overrides) -> Result<()> {
-        let mut guard = self.settings_guard()?;
-        guard.enabled = overrides.enabled.clone();
-        guard.added = overrides.added.clone();
-        guard.games = overrides.games.clone();
-        Ok(())
+    /// Commits an edit to the latest on-disk settings under the process/file
+    /// lock. The in-memory snapshot changes only after the entire file saves.
+    pub fn update_settings<T>(
+        &self,
+        edit: impl FnOnce(&mut SettingsFile) -> Result<T>,
+    ) -> Result<T> {
+        self.update_settings_with(edit, write_json)
     }
 
-    /// Sets one source's automatic update interval (hours, `0` = off) in the
-    /// in-memory settings (persisted by the next [`Self::bump_revision`]).
-    pub fn set_interval(&self, source_id: &str, interval_hours: u64) -> Result<()> {
+    fn update_settings_with<T>(
+        &self,
+        edit: impl FnOnce(&mut SettingsFile) -> Result<T>,
+        persist: impl FnOnce(&Path, &SettingsFile) -> Result<()>,
+    ) -> Result<T> {
         self.with_short_lock(|| {
-            let mut guard = self.settings_guard()?;
-            guard
+            let mut memory = self.settings_guard()?;
+            let mut next: SettingsFile =
+                read_json(&self.paths.settings())?.unwrap_or_else(|| memory.clone());
+            if !(1..=SOURCE_SETTINGS_SCHEMA_VERSION).contains(&next.schema_version)
+                || next.revision == 0
+            {
+                return Err(invalid("invalid_source_schema"));
+            }
+            next.schema_version = SOURCE_SETTINGS_SCHEMA_VERSION;
+            next.revision = next.revision.saturating_add(1);
+            let result = edit(&mut next)?;
+            persist(&self.paths.settings(), &next)?;
+            *memory = next;
+            Ok(result)
+        })
+    }
+
+    /// Persists one automatic update interval (hours, `0` = off).
+    pub fn set_interval(&self, source_id: &str, interval_hours: u64) -> Result<()> {
+        self.update_settings(|settings| {
+            settings
                 .intervals
                 .insert(source_id.to_string(), interval_hours);
             Ok(())
         })
     }
 
-    /// Stores a display-name override, persisted by the next revision bump.
+    /// Persists a display-name override without changing parsing identity.
     pub fn set_name(&self, source_id: &str, name: &str) -> Result<()> {
-        self.with_short_lock(|| {
-            self.settings_guard()?
+        self.update_settings(|settings| {
+            settings
                 .names
                 .insert(source_id.to_string(), name.to_string());
             Ok(())
@@ -442,25 +465,10 @@ impl SourceStore {
     ///
     /// Never uses `journal.lock` (design §4.1). `try_lock` with a 2s bound →
     /// `source_state_busy`; no lock is held during network activity.
-    pub fn with_short_lock<T>(&self, f: impl FnOnce() -> Result<T>) -> Result<T> {
+    fn with_short_lock<T>(&self, f: impl FnOnce() -> Result<T>) -> Result<T> {
         let _process = self.lock.lock().map_err(|_| invalid("source_state_busy"))?;
         let _file = self.acquire_file_lock()?;
         f()
-    }
-
-    /// Monotonic, persistent revision bump (R6). `load → +1 → save` under the
-    /// short lock.
-    pub fn bump_revision(&self) -> Result<u64> {
-        let _process = self.lock.lock().map_err(|_| invalid("source_state_busy"))?;
-        let _file = self.acquire_file_lock()?;
-        let revision = {
-            let mut guard = self.settings_guard()?;
-            let next = guard.revision.saturating_add(1);
-            guard.revision = next;
-            next
-        };
-        self.save_settings()?;
-        Ok(revision)
     }
 
     // --- status / index / detail / match (p1-contract §4–§7) --------------
@@ -554,13 +562,14 @@ impl SourceStore {
 
 fn default_settings() -> SettingsFile {
     SettingsFile {
-        schema_version: STORE_SCHEMA_VERSION,
+        schema_version: SOURCE_SETTINGS_SCHEMA_VERSION,
         revision: 1,
         enabled: BTreeMap::new(),
         added: Vec::new(),
         games: BTreeMap::new(),
         intervals: BTreeMap::new(),
         names: BTreeMap::new(),
+        script_sources: BTreeMap::new(),
     }
 }
 
@@ -968,7 +977,9 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let store = SourceStore::open(temp.path()).unwrap();
         assert_eq!(store.revision().unwrap(), 1);
-        let bumped = store.bump_revision().unwrap();
+        let bumped = store
+            .update_settings(|settings| Ok(settings.revision))
+            .unwrap();
         assert_eq!(bumped, 2);
         drop(store);
 
@@ -986,7 +997,7 @@ mod tests {
         assert!(store.paths().settings().exists());
         let settings = store.load_settings().unwrap();
         assert_eq!(settings.revision, 1);
-        assert_eq!(settings.schema_version, STORE_SCHEMA_VERSION);
+        assert_eq!(settings.schema_version, SOURCE_SETTINGS_SCHEMA_VERSION);
         assert!(settings.added.is_empty());
         assert!(settings.enabled.is_empty());
         assert!(settings.games.is_empty());
@@ -1014,8 +1025,14 @@ mod tests {
                 BTreeMap::from([("kagura-cn".to_string(), true)]),
             )]),
         };
-        store.apply_overrides(&overrides).unwrap();
-        store.bump_revision().unwrap();
+        store
+            .update_settings(|settings| {
+                settings.enabled = overrides.enabled;
+                settings.added = overrides.added;
+                settings.games = overrides.games;
+                Ok(())
+            })
+            .unwrap();
         let settings = store.load_settings().unwrap();
         assert!(!settings.added.is_empty());
         drop(store);
@@ -1207,11 +1224,50 @@ mod tests {
         let mut handles = Vec::new();
         for _ in 0..4 {
             let store = Arc::clone(&store);
-            handles.push(std::thread::spawn(move || store.bump_revision().unwrap()));
+            handles.push(std::thread::spawn(move || {
+                store
+                    .update_settings(|settings| Ok(settings.revision))
+                    .unwrap()
+            }));
         }
         for handle in handles {
             handle.join().unwrap();
         }
         assert_eq!(store.revision().unwrap(), start + 4);
+    }
+
+    #[test]
+    fn failed_full_settings_write_does_not_publish_partial_memory_or_disk() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = SourceStore::open(temp.path()).unwrap();
+        let before = store.settings().unwrap();
+        let bytes = fs::read(store.paths().settings()).unwrap();
+        let code = "return {}";
+        let mut rule = builtins().remove(0);
+        rule.id = "custom".into();
+        rule.adapter = "lua".into();
+        rule.script =
+            Some(crate::sources::script::validate_code(&rule.id, 1, code.as_bytes()).unwrap());
+        let expected = rule.clone();
+        let error = store
+            .update_settings_with(
+                |settings| {
+                    settings.added.push(rule);
+                    settings.script_sources.insert("custom".into(), code.into());
+                    Ok(())
+                },
+                |path, next| {
+                    assert_eq!(path, store.paths().settings());
+                    assert_eq!(next.added, [expected]);
+                    assert_eq!(next.script_sources["custom"], code);
+                    assert_eq!(next.revision, before.revision + 1);
+                    assert_eq!(next.schema_version, SOURCE_SETTINGS_SCHEMA_VERSION);
+                    Err(invalid("injected_settings_write_failure"))
+                },
+            )
+            .unwrap_err();
+        assert_eq!(error.to_string(), "injected_settings_write_failure");
+        assert_eq!(store.settings().unwrap(), before);
+        assert_eq!(fs::read(store.paths().settings()).unwrap(), bytes);
     }
 }
