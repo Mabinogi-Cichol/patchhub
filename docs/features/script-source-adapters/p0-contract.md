@@ -2,7 +2,7 @@
 
 [设计](design.md) · [施工记录](progress.md) · [迁移矩阵](migration-matrix.md)
 
-状态：**P0–P2 已完成核心导入/读取和类型化运行时；生产调度分派与客户端入口待后续阶段，当前客户端尚不能导入或运行脚本。** P0 原型在 P2 已迁为 [核心执行器](../../../crates/core/src/sources/adapters/script.rs)，原型回归迁入其 [单元测试](../../../crates/core/src/sources/adapters/script/tests.rs)，未保留第二套测试宿主。生产适配器分派仍待 P3。
+状态：**P0–P3 已实现核心导入/读取、类型化运行时及发行商更新/详情分派，P3 双平台自动化已通过。** P0 原型在 P2 已迁为 [核心执行器](../../../crates/core/src/sources/adapters/script.rs)，原型回归迁入其 [单元测试](../../../crates/core/src/sources/adapters/script/tests.rs)，未保留第二套测试宿主。已有任务入口可执行核心保存的发行商脚本；客户端导入/读取 RPC 和编辑界面仍待 P5，补查聚合待 P4。
 
 ## 已验证的运行时决策
 
@@ -79,11 +79,11 @@ P2 的 `collect_index` 校验完整/部分结果、条目与域名；`not_modifi
 
 接口参数：`import_script_source {rule: RawSourceRule, api_version: 1, code: UTF-8 string, replace: false}`；成功复用 `{rule: SourceRule, settings_revision}` 形状。`get_script_source {source_id}` 返回 `{rule: RawSourceRule, api_version, code, sha256}`，作者规则不含由核心生成的描述。导入者不能指定摘要。
 
-`SourceRule.script` 是可选 `{api_version, sha256}`，未脚本化的规则省略字段。`sha256` 为源码原始 UTF-8 字节摘要，不改换行或自动格式化。设置增加默认空的 `script_sources: source_id -> code`；规则、源码、摘要、revision 在锁内以一次完整文件替换提交，成功后才更换内存快照。现有 `apply_overrides → bump_revision` 是分开更新内存/落盘，不能直接当作完整设置事务。
+`SourceRule.script` 是可选 `{api_version, sha256}`，未脚本化的规则省略字段。`sha256` 为源码原始 UTF-8 字节摘要，不改换行或自动格式化。设置增加默认空的 `script_sources: source_id -> code`；规则、源码、摘要、revision 在锁内以一次完整文件替换提交，成功后才更换内存快照。P0 调研发现旧 `apply_overrides → bump_revision` 分开更新内存/落盘；P1 已将其替换为完整锁内事务。
 
 P1 已选定设置文件 schema **3**，命名空间 marker 保持 **2**，索引/详情/匹配文件不变。读写打开一次升级旧设置；只读快照不升级、不运行脚本。已验证旧缓存文件保留、写失败不改设置字节或内存，以及多个 writer 不覆盖新脚本。现有来源 schema-2 规则 JSON 与来源 ID 保持。旧二进制不能读取 v3 设置；P5 的能力校验和升级说明必须明确此边界。
 
-P3 至少给索引增加默认缺失的 `parser_fingerprint`，只在有效来源已脚本化时写入，值为包含脚本描述的规则解析标识；旧无标识索引不能授权脚本来源。`content_revision` 必须比较此标识，之后复用现有 `index_revision` 传播到详情与游戏匹配。无需给每种 DTO 另添代际或 TTL。已有名称覆盖只用于列表显示，不合并回运行规则，继续保持名称编辑不改变解析身份。
+P3 已给索引增加默认缺失的 `parser_fingerprint`，只在有效来源已脚本化时写入，值为包含脚本描述的规则解析标识；旧无标识索引不能授权脚本来源。发布修订同时比较此标识与条目内容，再复用现有 `index_revision` 传播到详情与游戏匹配。由于相同事实仍会产生相同选择 ID，候选增加同一可选 `parser_fingerprint`，核心绑定候选 ID、指纹与 ZIP/EXE 选择，人工选择和手动 URL 也据此失效。未脚本化来源省略字段，已有夹具/身份不变。无需给每种 DTO 另添独立代际或 TTL。已有名称覆盖只用于列表显示，不合并回运行规则，继续保持名称编辑不改变解析身份。
 
 JSONL 保持 **v5**，Lua API 单独为 **v1**。P1 已同步 `SourceRule.script` 可选描述的生成 TS/Python/JSON Schema 与 Flutter 资源，并验证现有契约；导入/读取 RPC 方法、两端编辑器与新能力表仍归 P5。当前 `validate_capabilities` 精确比较方法表，P5 新旧客户端/核心组合应报能力不兼容，不偷偷使用旧入口。
 
