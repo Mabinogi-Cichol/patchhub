@@ -1,12 +1,30 @@
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../host/desktop_services.dart';
 import '../host/core_task.dart';
 import '../models/app_model.dart';
 import '../models/library.dart';
 import '../presentation/library_presentation.dart';
+
+const sourceRuleExample = '''{
+  "id": "my-publisher",
+  "name": "发行商补丁站",
+  "adapter": "table_html",
+  "enabled": true,
+  "pages": ["https://patches.vendor.example/patches/"],
+  "page_hosts": ["patches.vendor.example"],
+  "download_hosts": ["downloads.vendor.example"],
+  "root_layout": "game_root",
+  "table_id": "patches",
+  "columns": {"title": 0, "appid": 1, "download": 2, "date": 3, "language": 4}
+}''';
+
+const sourceRuleExampleHelp =
+    '适用于表格形式的补丁列表。请替换示例 ID、名称和域名，并按实际网页调整表格 ID 和列号。'
+    '列号从 0 开始；title 和 download 必填，其他列可省略。';
 
 String sourceTime(dynamic seconds) => seconds == null
     ? '尚无记录'
@@ -109,6 +127,59 @@ class _GlobalSourcesPageState extends State<GlobalSourcesPage> {
     }
   }
 
+  void showRuleExample() {
+    showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('来源规则示例'),
+        content: const SizedBox(
+          width: 620,
+          child: SingleChildScrollView(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(sourceRuleExampleHelp),
+                SizedBox(height: 16),
+                SelectableText(
+                  sourceRuleExample,
+                  style: TextStyle(fontFamily: 'monospace'),
+                ),
+              ],
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('关闭'),
+          ),
+          TextButton(
+            onPressed: () async {
+              try {
+                await Clipboard.setData(
+                  const ClipboardData(text: sourceRuleExample),
+                );
+                if (!dialogContext.mounted) return;
+                Navigator.of(dialogContext).pop();
+                if (!mounted) return;
+                ScaffoldMessenger.of(
+                  context,
+                ).showSnackBar(const SnackBar(content: Text('示例已复制，请修改后添加')));
+              } catch (failure) {
+                if (dialogContext.mounted) Navigator.of(dialogContext).pop();
+                if (mounted) {
+                  ScaffoldMessenger.of(context)
+                      .showSnackBar(SnackBar(content: Text('复制失败：$failure')));
+                }
+              }
+            },
+            child: const Text('复制示例'),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) => ListView(
     key: const PageStorageKey('global-sources'),
@@ -156,7 +227,12 @@ class _GlobalSourcesPageState extends State<GlobalSourcesPage> {
       ],
       ExpansionTile(
         key: const PageStorageKey('global-sources:add-rule'),
-        title: const Text('高级：添加来源规则'),
+        title: Row(
+          children: [
+            const Expanded(child: Text('高级：添加来源规则')),
+            TextButton(onPressed: showRuleExample, child: const Text('示例')),
+          ],
+        ),
         children: [
           TextField(
             key: const PageStorageKey('global-sources:rule-input'),

@@ -1,4 +1,7 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:patchhub_windows/app.dart';
 import 'package:patchhub_windows/models/app_model.dart';
@@ -40,6 +43,72 @@ class NameClient extends FixtureClient {
 }
 
 void main() {
+  for (final brightness in Brightness.values) {
+    testWidgets(
+      'rule example copies JSON without replacing the draft in $brightness',
+      (tester) async {
+        tester.view.physicalSize = const Size(580, 560);
+        tester.view.devicePixelRatio = 1;
+        tester.platformDispatcher.textScaleFactorTestValue = 1.5;
+        tester.platformDispatcher.platformBrightnessTestValue = brightness;
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.view.resetDevicePixelRatio);
+        addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+        addTearDown(tester.platformDispatcher.clearPlatformBrightnessTestValue);
+        String? copied;
+        tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+          SystemChannels.platform,
+          (call) async {
+            if (call.method == 'Clipboard.setData') {
+              copied = (call.arguments as Map)['text'] as String;
+            }
+            return null;
+          },
+        );
+        addTearDown(
+          () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+            SystemChannels.platform,
+            null,
+          ),
+        );
+        final model = AppModel(FixtureClient());
+        await tester.pumpWidget(
+          PatchHubApp(
+            home: Scaffold(body: GlobalSourcesPage(model: model)),
+          ),
+        );
+        await tester.ensureVisible(find.text('高级：添加来源规则'));
+        await tester.tap(find.text('高级：添加来源规则'));
+        await tester.pumpAndSettle();
+        final ruleInput = find.byKey(
+          const PageStorageKey('global-sources:rule-input'),
+        );
+        await tester.enterText(ruleInput, '保留未完成规则');
+        FocusManager.instance.primaryFocus?.unfocus();
+        await tester.ensureVisible(find.text('示例'));
+        await tester.tap(find.text('示例'));
+        await tester.pumpAndSettle();
+        expect(find.byType(AlertDialog), findsOneWidget);
+        expect(find.text(sourceRuleExampleHelp), findsOneWidget);
+        await tester.tap(find.text('复制示例'));
+        await tester.pumpAndSettle();
+        final example = jsonDecode(copied!) as Map<String, dynamic>;
+        expect(example['adapter'], 'table_html');
+        expect(example['columns'], {
+          'title': 0,
+          'appid': 1,
+          'download': 2,
+          'date': 3,
+          'language': 4,
+        });
+        expect(tester.widget<TextField>(ruleInput).controller!.text, '保留未完成规则');
+        expect(tester.takeException(), isNull);
+        await tester.pumpWidget(const SizedBox.shrink());
+        model.dispose();
+      },
+    );
+  }
+
   testWidgets(
     'source name saves, rejects blank input and preserves failed drafts',
     (tester) async {

@@ -33,6 +33,7 @@ function mount(item: Install, task?: sourceTasks.SourceTaskSnapshot) {
   const controls: Array<{ name: string; props: any }> = [];
   const installs: unknown[][] = [];
   const sourceWrites: unknown[][] = [];
+  const copies: string[] = [];
   let pending = Promise.resolve();
   const state: any = { report: { installs: [item], sources: [], diagnostics: [] }, transactions: [], busy: null, sourceTasks: task ? { [task.task_id]: task } : {}, error: null, note: null, errorInstance: null, noteInstance: null };
   const native: Record<string, any> = {};
@@ -79,13 +80,31 @@ function mount(item: Install, task?: sourceTasks.SourceTaskSnapshot) {
     "./app-update": {}, "./cache": {}, "./task-progress-view": {},
   };
   runInNewContext(output, { exports, crypto: { randomUUID: () => "request-1" }, URL, console,
+    navigator: { clipboard: { writeText: async (text: string) => { copies.push(text); } } },
     require: (id: string) => id.endsWith(".png") ? "logo" : modules[id] ?? require(id) });
   const render = (panel?: string) => { hook = 0; controls.length = 0; return renderToStaticMarkup(React.createElement(exports.GameManager, { item, seg: "game", panel })); };
   const renderList = () => { hook = 0; controls.length = 0; return renderToStaticMarkup(React.createElement(exports.QuickAccess)); };
   const renderSources = () => { hook = 0; controls.length = 0; return renderToStaticMarkup(React.createElement(exports.GlobalSources)); };
   const button = (label: string) => controls.find(control => control.name === "ButtonItem" && React.Children.toArray(control.props.children).join("") === label)!.props;
-  return { render, renderList, renderSources, controls, button, installs, state, sourceWrites, settle: () => pending };
+  return { render, renderList, renderSources, controls, button, installs, state, sourceWrites, copies, settle: () => pending };
 }
+
+test("rule examples stay optional and copy JSON without replacing the draft", async () => {
+  const page = mount(game());
+  page.renderSources();
+  const input = () => page.controls.find(control => control.name === "TextField" && control.props.label === "源规则 JSON（高级）")!.props;
+  input().onChange({ target: { value: "保留未完成规则" } });
+  assert.doesNotMatch(page.renderSources(), /patches\.vendor\.example/);
+  page.button("查看规则示例").onClick();
+  assert.match(page.renderSources(), /table_html/);
+  await page.button("复制示例").onClick();
+  const example = JSON.parse(page.copies[0]);
+  assert.equal(example.adapter, "table_html");
+  assert.deepEqual(example.columns, { title: 0, appid: 1, download: 2, date: 3, language: 4 });
+  assert.equal(input().value, "保留未完成规则");
+  page.button("收起规则示例").onClick();
+  assert.doesNotMatch(page.renderSources(), /patches\.vendor\.example/);
+});
 
 test("source names save through the RPC without discarding matches and failed edits stay visible", async () => {
   const page = mount(game());

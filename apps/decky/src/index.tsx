@@ -43,6 +43,12 @@ const setSourceEnabled = callable<[string, boolean], SourceSubscription[]>("set_
 const setSourceName = callable<[string, string], SourceSubscription[]>("set_source_name");
 const setGameSource = callable<[number, string, boolean], { appid: number }>("set_game_source");
 const addSource = callable<[string], SourceSubscription[]>("add_source");
+const sourceRuleExample = JSON.stringify({
+  id: "my-publisher", name: "发行商补丁站", adapter: "table_html", enabled: true,
+  pages: ["https://patches.vendor.example/patches/"], page_hosts: ["patches.vendor.example"],
+  download_hosts: ["downloads.vendor.example"], root_layout: "game_root", table_id: "patches",
+  columns: { title: 0, appid: 1, download: 2, date: 3, language: 4 },
+}, null, 2);
 const backupStatus = callable<[], BackupInventory>("backup_status");
 const cleanupBackups = callable<[], BackupCleanupResult>("cleanup_backups");
 const cacheStatus = callable<[], CacheInventory>("cache_status");
@@ -596,6 +602,15 @@ function SourcesPage({ report, busy, tasks, expandedSources, onToggleSource, rul
   onInterval: (sourceId: string, hours: number) => void;
   onMatchGames: () => void;
 }) {
+  const [showExample, setShowExample] = useState(false);
+  async function copyExample() {
+    try {
+      await navigator.clipboard.writeText(sourceRuleExample);
+      session.setFeedback({ note: "示例已复制，请修改后添加", error: null });
+    } catch (error) {
+      session.setFeedback({ error: `复制失败：${String(error)}`, note: null });
+    }
+  }
   const sources = report?.sources ?? [];
   const publishers = sources.filter(source => source.role !== "fallback_indexer");
   const fallbacks = sources.filter(source => source.role === "fallback_indexer");
@@ -620,7 +635,14 @@ function SourcesPage({ report, busy, tasks, expandedSources, onToggleSource, rul
       {!fallbacks.length && <Row><Status>尚未配置补查来源。</Status></Row>}
     </PanelSection>
     <PanelSection title="添加源"><Row><TextField label="源规则 JSON（高级）" value={rule} onChange={e => setRule(e.target.value)} /></Row>
-      <Row><Action disabled={busy || !rule.trim()} onClick={() => changeSources(() => addSource(rule))}>添加补丁源</Action></Row></PanelSection>
+      <Row><Action disabled={busy || !rule.trim()} onClick={() => changeSources(() => addSource(rule))}>添加补丁源</Action>
+        <Action aria-expanded={showExample} aria-controls="source-rule-example" onClick={() => setShowExample(value => !value)}>{showExample ? "收起规则示例" : "查看规则示例"}</Action></Row>
+      {showExample && <div id="source-rule-example" role="group" aria-label="来源规则示例">
+        <Row><Status>适用于表格形式的补丁列表。请替换示例 ID、名称和域名，并按实际网页调整表格 ID 和列号。列号从 0 开始；title 和 download 必填，其他列可省略。</Status></Row>
+        <Row><pre style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere", margin: 0 }}>{sourceRuleExample}</pre></Row>
+        <Row><Action onClick={() => void copyExample()}>复制示例</Action></Row>
+      </div>}
+    </PanelSection>
   </div>;
 }
 
