@@ -1,0 +1,50 @@
+[
+  {
+    "fixture": "kagura-en.html",
+    "url": "https://www.kaguragames.com/patch/",
+    "status": 200,
+    "recorded_at": "2026-10-30",
+    "full_response_sha256": "72b5470271cfc9e3a9221fea6801aef6c9c6a336aa9936da1896ce510bdd4ff0",
+    "sections": {
+      "heading": 2,
+      "product": 229
+    },
+    "retained_product_cards": 2,
+    "fixture_sha256": "58b52afdced07a2c53d16178b50791d9a787e4ebd63fa6c0506adf62321aceac",
+    "full_response_file_sha256": "5bc3a66233cc31eaea4b593bf7726b652d3fc56cf4717a426d40557d41c338f5",
+    "full_response_sha256_encoding": "decoded UTF-8 with LF line endings"
+  },
+  {
+    "fixture": "kagura-en-category.html",
+    "url": "https://www.kaguragames.com/product-category/patches/patch/",
+    "status": 200,
+    "recorded_at": "2026-10-30",
+    "full_response_sha256": "79280217c73f35640835ab2815d6f37311d25e8c70664566c10c0f36793563e9",
+    "sections": {
+      "next": 1,
+      "product": 21,
+      "heading": 1
+    },
+    "retained_product_cards": 2,
+    "fixture_sha256": "3269c1f023171dd4d31f42d247f99ef5a86a2a12aba261a73086c07646d36bc9",
+    "retained_next_anchor": true,
+    "full_response_file_sha256": "beff7a645104bad3e7a22cffaf571b25961f166ad907251bd36f0e5cbcb97bf6",
+    "full_response_sha256_encoding": "decoded UTF-8 with LF line endings"
+  },
+  {
+    "fixture": "kagura-en-detail.html",
+    "url": "https://www.kaguragames.com/product/sacrifice-sanctuary-the-ritual-maidens-life-with-monsters-patch/",
+    "status": 200,
+    "recorded_at": "2026-10-30",
+    "full_response_sha256": "6968c032d50416fdfc1e767b409d1af22740e4b25849770a7d871ebe3dcccbb9",
+    "sections": {
+      "heading": 2,
+      "body": 1,
+      "product": 9
+    },
+    "retained_product_cards": 0,
+    "fixture_sha256": "d102b12e16c8616675df72248957f5664b28579f92eaf4a4dd4f1b49e1cf2cda",
+    "full_response_file_sha256": "86d7d0d92ab597cb6f53b4fadcec37a0db30452d2ab515a43a134f20dc9d2e7d",
+    "full_response_sha256_encoding": "decoded UTF-8 with LF line endings"
+  }
+]

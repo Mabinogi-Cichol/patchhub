@@ -35,3 +35,5 @@ libc = "0.2"
 
 [dev-dependencies]
 tempfile.workspace = true
+mlua = { version = "=0.12.2", features = ["lua54", "vendored", "serialize"] }
+ego-tree = "0.11"
