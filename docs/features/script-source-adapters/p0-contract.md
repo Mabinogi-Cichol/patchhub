@@ -2,12 +2,12 @@
 
 [设计](design.md) · [施工记录](progress.md) · [迁移矩阵](migration-matrix.md)
 
-状态：**P0 原型验证通过，P1 已实现核心导入/读取；执行分派与客户端入口待后续阶段，当前客户端尚不能导入或运行脚本。** 原型位于 [script_runtime_prototype.rs](../../../crates/core/tests/script_runtime_prototype.rs) 及其 [测试宿主](../../../crates/core/tests/support/script_runtime.rs)，没有注册到生产适配器。
+状态：**P0–P2 已完成核心导入/读取和类型化运行时；生产调度分派与客户端入口待后续阶段，当前客户端尚不能导入或运行脚本。** P0 原型在 P2 已迁为 [核心执行器](../../../crates/core/src/sources/adapters/script.rs)，原型回归迁入其 [单元测试](../../../crates/core/src/sources/adapters/script/tests.rs)，未保留第二套测试宿主。生产适配器分派仍待 P3。
 
 ## 已验证的运行时决策
 
 - 固定 `mlua = 0.12.2`，使用 `lua54/vendored/serialize`，不启用 `send/async/module`。锁定的 `mlua-sys 0.13.0` / `lua-src 551.0.2` 实际编译 Lua **5.4.9**；Rust 1.94 的 Windows MSVC、WSL Ubuntu x86_64 均能编译并运行同一组测试。
-- P0 时依赖仅放在 core 的 `dev-dependencies`；P1 已将 `mlua` 移为正常依赖用于语法检查，原型也复用同一编译检查。`ego-tree 0.11` 仍为开发依赖，是已有 `scraper` 树的节点类型，不是另一套 DOM 引擎。P2 再将测试宿主的执行能力移入产品模块，不能复制成两套长期维护的执行器。
+- P0 时依赖仅放在 core 的 `dev-dependencies`；P1 将 `mlua` 移为正常依赖用于语法检查，P2 将执行器及 `ego-tree 0.11` 移入核心正常依赖。`ego-tree` 是已有 `scraper` 树的节点类型，不是另一套 DOM 引擎；测试直接复用核心执行器。
 - 一次调用一个 VM。显式开放 `assert/error/ipairs/next/pairs/select/tonumber/tostring/type`、受控 `pcall/xpcall`、`string/table/math/utf8` 与 `_VERSION/_G`。去掉 `string.dump`；没有 `io/os/package/debug/ffi/require/dofile/loadfile/load/coroutine/collectgarbage/print`。
 - 代码只以 `ChunkMode::Text` 编译。导入只编译，不调用生成的函数；顶层报错和无限循环均不会在语法检查时执行。入口在实际任务中从模块返回表读取，缺失入口明确失败。
 - `scope` 借用当前 `RequestContext`，作用域退出后回调不可再调用；不延长引用生命周期、不增加线程共享网络栈。DOM 节点以 `Rc<Html> + NodeId` 保持原文档存活，不跨 VM 保存句柄，不依赖自引用或 `unsafe`。
@@ -71,7 +71,9 @@ Lua 整数为有符号 64 位，Steam `u32` ID 可精确往返。JSON 整数大�
 
 P0 发现 `mlua` 默认转换可能忽略数组表的字符串键，而 `detect_mixed_tables` 会将空对象识别为数组。宿主在边界检查表结构，再做类型转换：数组必须连续，混合键、循环、错误字段类型及非有限数明确报错。该检查对应实际序列化损失，不是限制合法条目数。JSON 空数组以 metatable 保留；对象、数组、中文、emoji、null、`u32::MAX/i64::MAX` 均有往返测试。上游 JSON/serde 的递归深度能力仍是底层解析器约束，不能据此声称支持任意深度树。
 
-P2 的外部错误固定为 `script_source_syntax_error`、`script_source_runtime_error`、`script_source_contract_error`、`script_source_digest_mismatch`、`unsupported_script_api_version`；`detail` 包含来源 ID、入口及底层 Lua 文件/行号和原因。取消统一为现有 `task_cancelled`。P0 测试宿主仍直接返回底层 `mlua::Error`，生产错误封装须在 P2 落实。
+P2 已实现外部错误 `script_source_syntax_error`、`script_source_runtime_error`、`script_source_contract_error`、`script_source_digest_mismatch`、`unsupported_script_api_version`；`detail` 保留来源 ID、入口及可取得的底层 Lua 文件/行号和完整原因。取消统一为现有 `task_cancelled`。底层执行函数为私有，类型化入口封装领域错误，经 `io::Error`、领域投影与 CLI 映射仍保留完整详情，不截断。普通列表/读取仍不执行脚本。
+
+P2 的 `collect_index` 校验完整/部分结果、条目与域名；`not_modified` 需已有完整索引。`resolve_page` 校验页面事实，镜像格式由核心重新判断。`discover` 只返回校验后的页面与身份事实，不产生候选授权；多源聚合和候选生成归 P4。脚本诊断/进度只能提供内容，来源 ID、入口由宿主绑定。HTTP 等待响应头及正文使用共用 `operation::cancellable`，取消会丢弃在途 future；沿用已有请求超时/网络策略，不增加脚本任务期限。
 
 ## P1/P3 持久化与 P5 传输决策
 

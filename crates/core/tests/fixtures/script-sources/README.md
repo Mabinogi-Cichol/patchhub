@@ -1,6 +1,7 @@
 # P0 script fixtures
 
-These fixtures exercise the experimental test host, not a production adapter.
+These P0 fixtures now exercise the shared core Lua executor (moved from the
+experimental test host in P2). Production source dispatch is still pending P3.
 
 `recording.json` records three public Kagura EN responses fetched on 2026-10-30
 (HTTP 200), their URLs, full decoded-response SHA-256, retained-section counts,
