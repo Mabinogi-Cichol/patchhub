@@ -15,10 +15,13 @@ pub fn exe_selection_id(candidate: &SourceCandidate) -> Option<String> {
     if !candidate.mirrors.iter().any(|m| m.format == "exe") {
         return None;
     }
-    let binding = json!({"source_id":candidate.source_id,"source_record_id":candidate.source_record_id,
+    let mut binding = json!({"source_id":candidate.source_id,"source_record_id":candidate.source_record_id,
         "game_appid":appid,"languages":candidate.languages,"variant":candidate.variant,
         "version_identity":candidate.version_identity,"source_page":candidate.source_page,
         "requires_dlc":candidate.requires_dlc,"excludes_dlc":candidate.excludes_dlc,"mirrors":candidate.mirrors});
+    if let Some(parser) = &candidate.parser_fingerprint {
+        binding["parser_fingerprint"] = json!(parser);
+    }
     Some(format!(
         "exe-selection-{}-{appid}",
         &canonical::canonical_sha256(&binding)[..24]

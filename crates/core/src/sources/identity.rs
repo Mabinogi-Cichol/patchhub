@@ -725,6 +725,7 @@ pub fn build_candidates(
             }
         };
         let mut candidate = SourceCandidate {
+            parser_fingerprint: None,
             candidate_id,
             source_id: rule.id.clone(),
             source_record_id: canonical::canonical_url(page),
@@ -1295,6 +1296,7 @@ mod tests {
         warnings: Vec<String>,
     ) -> SourceCandidate {
         SourceCandidate {
+            parser_fingerprint: None,
             candidate_id: format!("candidate-{}", id.to_string().repeat(24)),
             source_id: source_id.to_string(),
             source_record_id: "https://kagurafan.com/game/".to_string(),

@@ -290,6 +290,7 @@ fn conditional_requests_raw_post_and_legacy_chinese_encoding_use_existing_contex
     let code = "return {collect_index=function() return {not_modified=true} end}";
     assert!(index(code, &Arc::new(FakeFetcher::new())).is_err());
     let previous = SourceIndex {
+        parser_fingerprint: None,
         schema_version: 1,
         source_id: "custom".into(),
         revision: 1,

@@ -8,6 +8,7 @@ use patchhub_core::{
 };
 use serde::Serialize;
 use serde_json::{json, Value};
+use std::sync::Arc;
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -419,7 +420,7 @@ fn validate_state_boundary(
 }
 
 pub fn execute(method: &str, params: Params) -> Result<Value, DomainError> {
-    let cancel = AtomicBool::new(false);
+    let cancel = Arc::new(AtomicBool::new(false));
     execute_controlled(method, params, &cancel)
 }
 
@@ -437,7 +438,7 @@ pub fn failed(code: impl Into<String>, detail: impl Into<String>) -> DomainError
 pub fn execute_controlled(
     method: &str,
     params: Params,
-    cancel: &AtomicBool,
+    cancel: &Arc<AtomicBool>,
 ) -> Result<Value, DomainError> {
     if !METHODS.contains(&method) {
         return Err(DomainError::code("unsupported_method"));
@@ -971,7 +972,7 @@ fn execute_source_method(
 pub fn execute_streaming(
     method: &str,
     params: Params,
-    cancel: &AtomicBool,
+    cancel: &Arc<AtomicBool>,
     emit: &mut dyn FnMut(Value),
 ) -> Result<Value, DomainError> {
     match method {
@@ -1012,7 +1013,7 @@ fn validate_match_query(games: &[sources::GameQuery], params: &Params) -> Result
 
 fn update_source_impl(
     params: &Params,
-    cancel: &AtomicBool,
+    cancel: &Arc<AtomicBool>,
     emit: &mut dyn FnMut(Value),
 ) -> Result<Value, DomainError> {
     let state = state(params)?;
@@ -1112,7 +1113,7 @@ fn update_source_impl(
 
 fn match_games_impl(
     params: &Params,
-    cancel: &AtomicBool,
+    cancel: &Arc<AtomicBool>,
     emit: &mut dyn FnMut(Value),
 ) -> Result<Value, DomainError> {
     let state = state(params)?;
@@ -1166,7 +1167,7 @@ fn match_games_impl(
 
 fn rematch_game_impl(
     params: &Params,
-    cancel: &AtomicBool,
+    cancel: &Arc<AtomicBool>,
     emit: &mut dyn FnMut(Value),
 ) -> Result<Value, DomainError> {
     let state = state(params)?;
@@ -1251,7 +1252,7 @@ fn install_patch(
     params: &Params,
     _report: &steam::ScanReport,
     platform: Platform,
-    cancel: &AtomicBool,
+    cancel: &Arc<AtomicBool>,
 ) -> Result<Value, DomainError> {
     use installer::service::*;
     let request = RequestId::new(
@@ -1624,7 +1625,7 @@ mod sources_tests {
                 state_dir: Some(state),
                 ..Default::default()
             },
-            &AtomicBool::new(false),
+            &Arc::new(AtomicBool::new(false)),
             &mut |event| events.push(event),
         )
         .unwrap();
@@ -1647,7 +1648,7 @@ mod sources_tests {
                 state_dir: Some(state),
                 ..Default::default()
             },
-            &AtomicBool::new(false),
+            &Arc::new(AtomicBool::new(false)),
             &mut |_| {},
         )
         .unwrap_err();
@@ -1726,6 +1727,7 @@ mod sources_tests {
         let store = sources::store::SourceStore::open(&state).unwrap();
         store
             .save_index(&SourceIndex {
+                parser_fingerprint: None,
                 schema_version: 1,
                 source_id: "patchmoe".to_string(),
                 revision: 3,
@@ -1923,7 +1925,7 @@ mod sources_tests {
                 source_id: Some("missing".to_string()),
                 ..Default::default()
             },
-            &AtomicBool::new(false),
+            &Arc::new(AtomicBool::new(false)),
             &mut |_| {},
         )
         .unwrap_err();
@@ -1936,7 +1938,7 @@ mod sources_tests {
                 source_id: Some("hgamer".to_string()),
                 ..Default::default()
             },
-            &AtomicBool::new(false),
+            &Arc::new(AtomicBool::new(false)),
             &mut |_| {},
         )
         .unwrap_err();
@@ -2026,6 +2028,7 @@ mod sources_tests {
         handle
             .store()
             .save_index(&SourceIndex {
+                parser_fingerprint: None,
                 schema_version: 1,
                 source_id: "patchmoe".to_string(),
                 revision: 1,
@@ -2180,7 +2183,7 @@ mod sources_tests {
                 interval_hours: Some(24),
                 ..Default::default()
             },
-            &AtomicBool::new(false),
+            &Arc::new(AtomicBool::new(false)),
             &mut |event| events.push(event),
         )
         .unwrap();
@@ -2527,6 +2530,7 @@ mod dynamic_projection_tests {
 
     fn dynamic_candidate() -> SourceCandidate {
         SourceCandidate {
+            parser_fingerprint: None,
             candidate_id: "candidate-000000000000000000000000".to_string(),
             source_id: "kagura-cn".to_string(),
             source_record_id: "https://kagurafan.com/patches/game".to_string(),

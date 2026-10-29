@@ -3519,6 +3519,13 @@
             "null"
           ]
         },
+        "parser_fingerprint": {
+          "description": "Host-bound script identity, also binds install selections.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "patch_kind": {
           "description": "`\"adult_content\"`.",
           "type": "string"

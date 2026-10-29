@@ -70,3 +70,14 @@ pub(crate) fn verify<'rule, 'code>(
     }
     Ok((descriptor, code))
 }
+
+/// Compare a captured parser definition with the latest stored definition.
+/// Enablement is checked separately by the task's existing policy binding.
+pub(crate) fn rule_changed(rule: &SourceRule, settings: &super::model::SettingsFile) -> bool {
+    let Some(current) = settings.added.iter().find(|current| current.id == rule.id) else {
+        return false;
+    };
+    let mut current = current.clone();
+    current.enabled = rule.enabled;
+    super::rule_fingerprint(&current) != super::rule_fingerprint(rule)
+}

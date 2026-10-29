@@ -197,6 +197,7 @@ fn schema2_records_round_trip_and_failed_writes_keep_the_last_snapshot() {
     assert_eq!(STORE_SCHEMA_VERSION, 2);
 
     let index = SourceIndex {
+        parser_fingerprint: None,
         schema_version: SOURCE_INDEX_SCHEMA_VERSION,
         source_id: "patchmoe".to_string(),
         revision: 3,
@@ -828,6 +829,7 @@ fn failed_migration_reports_a_specific_code_and_preserves_old_files() {
 #[test]
 fn content_revision_ignores_timestamps_but_tracks_real_changes() {
     let previous = SourceIndex {
+        parser_fingerprint: None,
         schema_version: SOURCE_INDEX_SCHEMA_VERSION,
         source_id: "patchmoe".to_string(),
         revision: 4,
@@ -1060,6 +1062,7 @@ fn legacy_files_migrate_once_and_new_snapshots_win() {
     assert!(store.load_match(42).unwrap().is_some());
 
     let fresh = SourceIndex {
+        parser_fingerprint: None,
         schema_version: SOURCE_INDEX_SCHEMA_VERSION,
         source_id: "patchmoe".to_string(),
         revision: 9,
@@ -1168,6 +1171,7 @@ fn installer_resolve_works_from_a_published_index_before_any_match_task() {
     let store = SourceStore::open(&state).unwrap();
     store
         .save_index(&SourceIndex {
+            parser_fingerprint: None,
             schema_version: SOURCE_INDEX_SCHEMA_VERSION,
             source_id: "patchmoe".to_string(),
             revision: 1,

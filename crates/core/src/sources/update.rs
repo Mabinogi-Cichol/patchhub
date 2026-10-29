@@ -8,11 +8,14 @@
 use super::adapters::{self, IndexOutcome};
 use super::canonical;
 use super::http::RequestContext;
-use super::index::{content_revision, normalize_entries};
+use super::index::{self, content_revision, normalize_entries};
 use super::model::{SourceIndex, SourceIndexEntry, SourceRole, SourceRule, SourceStatus};
 use super::store::SourceStore;
 use super::{invalid, Result, SOURCE_INDEX_SCHEMA_VERSION};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 
 /// Non-wire result of one source update. `revision`/`complete` describe the
 /// currently published official snapshot; `SourceStatus` gains those fields
@@ -34,102 +37,124 @@ pub fn update_source(
     rule: &SourceRule,
     force: bool,
     ctx: &mut RequestContext,
-    cancel: &AtomicBool,
+    cancel: &Arc<AtomicBool>,
     mut on_progress: impl FnMut(&SourceIndex),
 ) -> Result<SourceUpdateOutcome> {
-    // HGamer is queried per game during matching; it is never updated site-wide.
-    if rule.role == SourceRole::FallbackIndexer {
-        return Err(invalid("source_not_indexable"));
-    }
-    let adapter = adapters::builtin_adapter(&rule.adapter)
-        .ok_or_else(|| invalid("unknown_source_adapter"))?;
-    let official = store.load_index(&rule.id)?;
-    let progress = store.load_index_progress(&rule.id)?;
-    // Resume unfinished work first; otherwise the published snapshot only
-    // supplies conditional validators. `force` disables those revalidators.
-    let mut previous = progress.clone().or_else(|| official.clone());
-    if force {
-        if let Some(previous) = previous.as_mut() {
-            previous.etag = None;
-            previous.modified = None;
+    crate::operation::with_cancel(Arc::clone(cancel), || {
+        // HGamer is queried per game during matching; it is never updated site-wide.
+        if rule.role == SourceRole::FallbackIndexer {
+            return Err(invalid("source_not_indexable"));
         }
-    }
-
-    let outcome = match adapter.collect_index(rule, previous.as_ref(), ctx, cancel) {
-        Ok(outcome) => outcome,
-        Err(error) => {
-            if cancelled(cancel) {
-                return Err(invalid("task_cancelled"));
-            }
-            // An unreachable source is a status, not a hard task failure; its
-            // last successful snapshot stays untouched. Malformed source data
-            // (columns/forms/structure) is a hard error.
-            if is_transport_failure(&error.to_string()) {
-                return finish_failure(store, rule, official.as_ref());
-            }
-            return Err(error);
+        let settings = store.load_settings()?;
+        if super::script::rule_changed(rule, &settings) {
+            return Err(invalid("source_rule_changed"));
         }
-    };
-
-    if cancelled(cancel) {
-        save_progress(store, rule, official.as_ref(), &outcome, &mut on_progress)?;
-        return Err(invalid("task_cancelled"));
-    }
-
-    // The host persists settings from another process, so the source may have
-    // been disabled while the network work was running. Publishing then would
-    // reintroduce a source the user just turned off (design §4.3); keep the
-    // collected pages as private progress instead.
-    if !source_enabled(store, rule)? {
-        if !outcome.not_modified {
-            save_progress(store, rule, official.as_ref(), &outcome, &mut on_progress)?;
-        }
-        return Err(invalid("source_not_enabled"));
-    }
-
-    if outcome.not_modified {
-        if progress.is_none() {
-            if let Some(current) = official.as_ref() {
-                return finish_not_modified(store, rule, current, &outcome, &mut on_progress);
-            }
-        }
-        // A 304 without a usable published snapshot cannot reuse anything.
-        return finish_failure(store, rule, official.as_ref());
-    }
-
-    if outcome.complete && outcome.pending.is_empty() {
-        return publish(
-            store,
+        let adapter = adapters::source_adapter(
             rule,
-            official.as_ref(),
-            normalize_entries(outcome.entries.iter().cloned()),
-            &outcome,
-            &mut on_progress,
-        );
-    }
-
-    save_progress(store, rule, official.as_ref(), &outcome, &mut on_progress)?;
-    // A pass that collected nothing is a refresh failure, not a partial index.
-    let code = if outcome.entries.is_empty() {
-        if official.is_some() {
-            "source_offline_cached"
-        } else {
-            "source_refresh_failed"
+            settings.script_sources.get(&rule.id).map(String::as_str),
+        )?;
+        let stored_official = store.load_index(&rule.id)?;
+        let official = stored_official
+            .clone()
+            .filter(|index| index::compatible(index, rule));
+        let progress = store
+            .load_index_progress(&rule.id)?
+            .filter(|index| index::compatible(index, rule));
+        // Resume unfinished work first; otherwise the published snapshot only
+        // supplies conditional validators. `force` disables those revalidators.
+        let mut previous = progress.clone().or_else(|| official.clone());
+        if force {
+            if let Some(previous) = previous.as_mut() {
+                previous.etag = None;
+                previous.modified = None;
+            }
         }
-    } else {
-        "source_partial"
-    };
-    let status = SourceStatus {
-        checked_at: outcome_checked_at(&outcome),
-        cached_at: snapshot_cached_at(official.as_ref()),
-        entry_count: snapshot_entry_count(official.as_ref()),
-        code: code.to_string(),
-    };
-    store.save_status(&rule.id, &status)?;
-    Ok(SourceUpdateOutcome {
-        status,
-        revision: snapshot_revision(official.as_ref()),
-        complete: snapshot_complete(official.as_ref()),
+
+        let outcome = match adapter.collect_index(rule, previous.as_ref(), ctx, cancel) {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                if cancelled(cancel) {
+                    return Err(invalid("task_cancelled"));
+                }
+                // An unreachable source is a status, not a hard task failure; its
+                // last successful snapshot stays untouched. Malformed source data
+                // (columns/forms/structure) is a hard error.
+                if is_transport_failure(&error.to_string()) {
+                    return finish_failure(store, rule, official.as_ref());
+                }
+                return Err(error);
+            }
+        };
+
+        if cancelled(cancel) {
+            save_progress(store, rule, official.as_ref(), &outcome, &mut on_progress)?;
+            return Err(invalid("task_cancelled"));
+        }
+
+        // The host persists settings from another process, so the source may have
+        // been disabled while the network work was running. Publishing then would
+        // reintroduce a source the user just turned off (design §4.3); keep the
+        // collected pages as private progress instead.
+        let latest = store.load_settings()?;
+        if super::script::rule_changed(rule, &latest) {
+            return Err(invalid("source_rule_changed"));
+        }
+        if !latest
+            .enabled
+            .get(&rule.id)
+            .copied()
+            .unwrap_or(rule.enabled)
+        {
+            if !outcome.not_modified {
+                save_progress(store, rule, official.as_ref(), &outcome, &mut on_progress)?;
+            }
+            return Err(invalid("source_not_enabled"));
+        }
+
+        if outcome.not_modified {
+            if progress.is_none() {
+                if let Some(current) = official.as_ref() {
+                    return finish_not_modified(store, rule, current, &outcome, &mut on_progress);
+                }
+            }
+            // A 304 without a usable published snapshot cannot reuse anything.
+            return finish_failure(store, rule, official.as_ref());
+        }
+
+        if outcome.complete && outcome.pending.is_empty() {
+            return publish(
+                store,
+                rule,
+                stored_official.as_ref(),
+                normalize_entries(outcome.entries.iter().cloned()),
+                &outcome,
+                &mut on_progress,
+            );
+        }
+
+        save_progress(store, rule, official.as_ref(), &outcome, &mut on_progress)?;
+        // A pass that collected nothing is a refresh failure, not a partial index.
+        let code = if outcome.entries.is_empty() {
+            if official.is_some() {
+                "source_offline_cached"
+            } else {
+                "source_refresh_failed"
+            }
+        } else {
+            "source_partial"
+        };
+        let status = SourceStatus {
+            checked_at: outcome_checked_at(&outcome),
+            cached_at: snapshot_cached_at(official.as_ref()),
+            entry_count: snapshot_entry_count(official.as_ref()),
+            code: code.to_string(),
+        };
+        store.save_status(&rule.id, &status)?;
+        Ok(SourceUpdateOutcome {
+            status,
+            revision: snapshot_revision(official.as_ref()),
+            complete: snapshot_complete(official.as_ref()),
+        })
     })
 }
 
@@ -143,8 +168,14 @@ fn publish(
     on_progress: &mut impl FnMut(&SourceIndex),
 ) -> Result<SourceUpdateOutcome> {
     let checked_at = outcome_checked_at(outcome);
-    let revision = content_revision(snapshot_revision(official), official, &entries, true, &[]);
+    let fingerprint = index::parser_fingerprint(rule);
+    let revision = if official.is_some_and(|old| old.parser_fingerprint != fingerprint) {
+        snapshot_revision(official).saturating_add(1)
+    } else {
+        content_revision(snapshot_revision(official), official, &entries, true, &[])
+    };
     let index = SourceIndex {
+        parser_fingerprint: index::parser_fingerprint(rule),
         schema_version: SOURCE_INDEX_SCHEMA_VERSION,
         source_id: rule.id.clone(),
         revision,
@@ -224,6 +255,7 @@ fn save_progress(
     pending.sort();
     pending.dedup();
     let progress = SourceIndex {
+        parser_fingerprint: index::parser_fingerprint(rule),
         schema_version: SOURCE_INDEX_SCHEMA_VERSION,
         source_id: rule.id.clone(),
         revision: snapshot_revision(official).max(1),
@@ -257,6 +289,7 @@ fn finish_failure(
         pending.sort();
         pending.dedup();
         store.save_index_progress(&SourceIndex {
+            parser_fingerprint: index::parser_fingerprint(rule),
             schema_version: SOURCE_INDEX_SCHEMA_VERSION,
             source_id: rule.id.clone(),
             revision: snapshot_revision(official).max(1),
@@ -316,17 +349,6 @@ fn snapshot_cached_at(official: Option<&SourceIndex>) -> Option<u64> {
 
 fn cancelled(cancel: &AtomicBool) -> bool {
     cancel.load(Ordering::Relaxed) || crate::operation::check().is_err()
-}
-
-/// Effective enablement from the newest persisted settings (the host may have
-/// changed it in another process during the network work).
-fn source_enabled(store: &SourceStore, rule: &SourceRule) -> Result<bool> {
-    Ok(store
-        .load_settings()?
-        .enabled
-        .get(&rule.id)
-        .copied()
-        .unwrap_or(rule.enabled))
 }
 
 /// Transport failures become a source status; everything else (malformed

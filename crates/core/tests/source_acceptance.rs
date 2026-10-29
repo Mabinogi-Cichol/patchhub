@@ -190,6 +190,7 @@ fn index_at(
     checked_at: u64,
 ) -> SourceIndex {
     SourceIndex {
+        parser_fingerprint: None,
         schema_version: 1,
         source_id: source_id.to_string(),
         revision,
@@ -363,7 +364,7 @@ fn run_update(
         rule,
         force,
         &mut ctx,
-        &AtomicBool::new(false),
+        &Arc::new(AtomicBool::new(false)),
         |_| {},
     )
 }
@@ -387,7 +388,7 @@ fn run_match(
         &[],
         force_details,
         &mut ctx,
-        &AtomicBool::new(false),
+        &Arc::new(AtomicBool::new(false)),
         now,
         |_| {},
         |_| {},
@@ -410,7 +411,7 @@ fn run_rematch(
         game,
         &[],
         &mut ctx,
-        &AtomicBool::new(false),
+        &Arc::new(AtomicBool::new(false)),
         now,
         |_| {},
     )
@@ -435,7 +436,7 @@ fn run_rematch_source(
         source_id,
         &[],
         &mut ctx,
-        &AtomicBool::new(false),
+        &Arc::new(AtomicBool::new(false)),
         now,
         |_| {},
     )
@@ -1590,11 +1591,20 @@ fn matrix7_failure_cancel_removal_and_cache_age() {
     let hooked = HookedFetcher::new();
     hooked.push(response(
         200,
-        &kagura_list(&[("Game A", "/article/a/"), ("Game B", "/article/b/")]),
+        &format!(
+            "{}<a rel='next' href='/page/2/'>Next</a>",
+            kagura_list(&[("Game A", "/article/a/"), ("Game B", "/article/b/")])
+        ),
         KAGURA_ENTRY,
     ));
+    hooked.push(response(
+        200,
+        "<html></html>",
+        "https://kagurafan.com/page/2/",
+    ));
     let cancel_hook = Arc::clone(&cancel);
-    hooked.fire_on_call(0, move || cancel_hook.store(true, Ordering::SeqCst));
+    // The first page has been parsed before cancelling the second request.
+    hooked.fire_on_call(1, move || cancel_hook.store(true, Ordering::SeqCst));
     let mut ctx = hooked_context(&hooked);
     let error = update_source(&store, &rule, true, &mut ctx, &cancel, |_| {}).unwrap_err();
     println!("  cancel: error={} requests={}", error, hooked.call_count());
@@ -1749,7 +1759,7 @@ fn matrix8_update_does_not_publish_when_source_is_disabled_mid_task() {
         &rule,
         true,
         &mut ctx,
-        &AtomicBool::new(false),
+        &Arc::new(AtomicBool::new(false)),
         |_| {},
     )
     .unwrap_err();
@@ -1811,7 +1821,7 @@ fn matrix8_match_discards_a_result_when_settings_changed_mid_task() {
         &[],
         false,
         &mut ctx,
-        &AtomicBool::new(false),
+        &Arc::new(AtomicBool::new(false)),
         200,
         |_| {},
         |_| {},
@@ -1879,7 +1889,7 @@ fn matrix8_match_discards_a_result_when_settings_changed_mid_task() {
         &game(42, "Game"),
         &[],
         &mut ctx,
-        &AtomicBool::new(false),
+        &Arc::new(AtomicBool::new(false)),
         300,
         |_| {},
     )
@@ -1932,7 +1942,7 @@ fn matrix8_match_discards_a_result_when_settings_changed_mid_task() {
         &[],
         false,
         &mut ctx,
-        &AtomicBool::new(false),
+        &Arc::new(AtomicBool::new(false)),
         200,
         |_| {},
         |_| {},

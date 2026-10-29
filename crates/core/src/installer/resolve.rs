@@ -64,6 +64,8 @@ pub type ResolveResult<T> = std::result::Result<T, ResolveError>;
 /// EXE mirrors or labels must not invalidate a ZIP selection.
 #[derive(Debug, Serialize)]
 struct ZipCandidateBinding<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    parser_fingerprint: Option<&'a str>,
     source_id: &'a str,
     source_record_id: &'a str,
     game_appid: u32,
@@ -95,6 +97,7 @@ pub fn zip_selection_id(candidate: &SourceCandidate) -> Option<String> {
         return None;
     }
     let binding = ZipCandidateBinding {
+        parser_fingerprint: candidate.parser_fingerprint.as_deref(),
         source_id: &candidate.source_id,
         source_record_id: &candidate.source_record_id,
         game_appid: appid,
@@ -509,6 +512,7 @@ mod tests {
 
     fn candidate() -> SourceCandidate {
         SourceCandidate {
+            parser_fingerprint: None,
             candidate_id: "candidate-000000000000000000000000".to_string(),
             source_id: "kagura-cn".to_string(),
             source_record_id: "https://kagura.example/p/1".to_string(),
@@ -841,6 +845,7 @@ mod tests {
         handle
             .store()
             .save_index(&crate::sources::model::SourceIndex {
+                parser_fingerprint: None,
                 schema_version: 1,
                 source_id: "patchmoe".to_string(),
                 revision: 1,

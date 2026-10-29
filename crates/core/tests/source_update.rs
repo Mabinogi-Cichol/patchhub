@@ -51,7 +51,7 @@ fn run_update(
         rule,
         force,
         &mut ctx,
-        &AtomicBool::new(false),
+        &Arc::new(AtomicBool::new(false)),
         |_| {},
     )
 }
@@ -222,7 +222,7 @@ fn patchmoe_publishes_complete_index_with_entry_mapping() {
         &rule,
         true,
         &mut ctx,
-        &AtomicBool::new(false),
+        &Arc::new(AtomicBool::new(false)),
         |_| progress_calls += 1,
     )
     .unwrap();
@@ -348,7 +348,7 @@ fn patchmoe_cancel_before_start_makes_no_request_and_saves_progress() {
     let rule = patchmoe_rule();
     let fake = Arc::new(FakeFetcher::new());
     let mut ctx = context(&fake);
-    let cancel = AtomicBool::new(true);
+    let cancel = Arc::new(AtomicBool::new(true));
     let error = update_source(&store, &rule, true, &mut ctx, &cancel, |_| {}).unwrap_err();
     assert_eq!(error.to_string(), "task_cancelled");
     assert_eq!(
@@ -614,7 +614,7 @@ fn kagura_cn_cancel_saves_progress_and_resume_publishes() {
     // keeps the already collected entries and the remaining page queue.
     let cancelled = Arc::new(FakeFetcher::new());
     let mut ctx = context(&cancelled);
-    let cancel = AtomicBool::new(true);
+    let cancel = Arc::new(AtomicBool::new(true));
     let error = update_source(&store, &rule, true, &mut ctx, &cancel, |_| {}).unwrap_err();
     assert_eq!(error.to_string(), "task_cancelled");
     assert_eq!(cancelled.call_count(), 0);

@@ -7,12 +7,12 @@
 //! loaded lazily (or preloaded for an immutable snapshot); the legacy per-game
 //! cache/discovery trees are only read by the one-time v1 → v2 migration.
 
-use super::canonical;
 use super::matching::{select_entry, EntrySelection};
 use super::model::*;
 use super::r#match::candidate_is_credible;
 use super::store::SourceStore;
 use super::validate;
+use super::{canonical, index};
 use super::{
     invalid, Clock, Result, SystemClock, BUILTIN_ADAPTERS, GAME_MATCH_SCHEMA_VERSION,
     SOURCE_INDEX_SCHEMA_VERSION,
@@ -189,7 +189,12 @@ impl SourceRegistry {
     /// Published index snapshot for `source_id` (lazy read outside a snapshot).
     fn index(&self, source_id: &str) -> Option<SourceIndex> {
         if let Some(index) = self.indexes.get(source_id) {
-            return Some(index.clone());
+            return self
+                .rules
+                .iter()
+                .find(|rule| rule.id == source_id)
+                .filter(|rule| index::compatible(index, rule))
+                .map(|_| index.clone());
         }
         if self.frozen_snapshot {
             return None;
@@ -199,14 +204,17 @@ impl SourceRegistry {
             .ok()
             .flatten()
             .filter(|index| {
-                index.schema_version == SOURCE_INDEX_SCHEMA_VERSION && index.source_id == source_id
+                self.rules
+                    .iter()
+                    .find(|rule| rule.id == source_id)
+                    .is_some_and(|rule| index::compatible(index, rule))
             })
     }
 
     /// Persisted match record for `appid` (lazy read outside a snapshot).
     fn match_record(&self, appid: u32) -> Option<GameMatchRecord> {
         if let Some(record) = self.matches.get(&appid) {
-            return Some(record.clone());
+            return Some(self.current_record(record.clone()));
         }
         if self.frozen_snapshot {
             return None;
@@ -218,6 +226,11 @@ impl SourceRegistry {
             .filter(|record| {
                 record.schema_version == GAME_MATCH_SCHEMA_VERSION && record.appid == appid
             })
+            .map(|record| self.current_record(record))
+    }
+
+    fn current_record(&self, record: GameMatchRecord) -> GameMatchRecord {
+        super::matching::current_record(record, &self.rules, |rule| self.index(&rule.id))
     }
 
     pub fn list_sources(&self) -> Vec<SourceSummary> {
@@ -229,8 +242,11 @@ impl SourceRegistry {
         self.rules
             .iter()
             .map(|rule| {
-                let status = self.status.get(&rule.id);
                 let index = self.index(&rule.id);
+                let status = self
+                    .status
+                    .get(&rule.id)
+                    .filter(|_| rule.script.is_none() || index.is_some());
                 let code = status.map(|status| status.code.clone()).unwrap_or_else(|| {
                     if index.is_some() {
                         "cached".to_string()
@@ -398,7 +414,7 @@ impl SourceRegistry {
             if entry.date.as_deref() == Some("COMING SOON") {
                 continue;
             }
-            result.push(candidate_from_index_match(
+            let mut candidate = candidate_from_index_match(
                 &rule.id,
                 game.appid,
                 entry.appid,
@@ -408,7 +424,9 @@ impl SourceRegistry {
                 &entry.page,
                 url,
                 index.checked_at,
-            ));
+            );
+            index::bind_candidate(rule, &mut candidate);
+            result.push(candidate);
         }
         result
     }
@@ -755,6 +773,7 @@ pub(crate) fn candidate_from_index_match(
     ]);
     let candidate_id = canonical::candidate_id(&identity);
     let mut candidate = SourceCandidate {
+        parser_fingerprint: None,
         candidate_id,
         source_id: source_id.to_string(),
         source_record_id: canonical::canonical_url(source_page),
@@ -975,6 +994,7 @@ mod tests {
 
     fn index(entries: Vec<SourceIndexEntry>) -> SourceIndex {
         SourceIndex {
+            parser_fingerprint: None,
             schema_version: SOURCE_INDEX_SCHEMA_VERSION,
             source_id: "patchmoe".to_string(),
             revision: 3,

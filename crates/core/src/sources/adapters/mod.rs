@@ -18,6 +18,7 @@ use super::{invalid, Result};
 use scraper::{ElementRef, Html, Selector};
 use std::collections::HashSet;
 use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub mod dom;
@@ -117,6 +118,55 @@ pub fn builtin_adapter(id: &str) -> Option<Box<dyn Adapter>> {
         "kagura_wordpress" | "kagura_woocommerce" => Some(Box::new(kagura::KaguraAdapter)),
         "hgamer_html" => Some(Box::new(hgamer::HgamerAdapter)),
         _ => None,
+    }
+}
+
+/// Captured source implementation. Scripts never fall back to a website parser.
+pub enum SourceAdapter<'a> {
+    Builtin(Box<dyn Adapter>),
+    Script(&'a str),
+}
+
+pub fn source_adapter<'a>(rule: &SourceRule, code: Option<&'a str>) -> Result<SourceAdapter<'a>> {
+    if rule.adapter == "lua" {
+        return code
+            .map(SourceAdapter::Script)
+            .ok_or_else(|| invalid(format!("script_source_missing: {}", rule.id)));
+    }
+    builtin_adapter(&rule.adapter)
+        .map(SourceAdapter::Builtin)
+        .ok_or_else(|| invalid("unknown_source_adapter"))
+}
+
+impl SourceAdapter<'_> {
+    pub fn collect_index(
+        &self,
+        rule: &SourceRule,
+        previous: Option<&SourceIndex>,
+        ctx: &mut RequestContext,
+        cancel: &Arc<AtomicBool>,
+    ) -> Result<IndexOutcome> {
+        match self {
+            Self::Builtin(adapter) => adapter.collect_index(rule, previous, ctx, cancel),
+            Self::Script(code) => {
+                script::collect_index(rule, code, previous, ctx, Arc::clone(cancel), |_| {})
+            }
+        }
+    }
+
+    pub fn resolve_page(
+        &self,
+        rule: &SourceRule,
+        page: &str,
+        ctx: &mut RequestContext,
+        cancel: &Arc<AtomicBool>,
+    ) -> Result<super::model::PageFact> {
+        match self {
+            Self::Script(code) => {
+                script::resolve_page(rule, code, page, ctx, Arc::clone(cancel), |_| {})
+            }
+            Self::Builtin(_) => kagura::resolve_page(rule, kagura::adapter_name(rule), page, ctx),
+        }
     }
 }
 

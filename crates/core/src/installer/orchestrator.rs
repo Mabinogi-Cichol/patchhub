@@ -678,6 +678,7 @@ pub(crate) mod tests {
 
     pub(crate) fn candidate() -> SourceCandidate {
         SourceCandidate {
+            parser_fingerprint: None,
             candidate_id: "candidate-000000000000000000000000".to_string(),
             source_id: "kagura-cn".to_string(),
             source_record_id: "https://kagurafan.com/patches/game".to_string(),
@@ -814,6 +815,7 @@ pub(crate) mod tests {
         handle
             .store()
             .save_index(&SourceIndex {
+                parser_fingerprint: None,
                 schema_version: 1,
                 source_id: "patchmoe".to_string(),
                 revision: 1,

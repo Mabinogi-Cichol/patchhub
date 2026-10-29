@@ -9,9 +9,7 @@
 //! the number of index hits, not by a global crawler. Progress is reported
 //! through explicit phases so the host never claims a network task is offline.
 
-use super::adapters::kagura::{self, resolve_page};
 use super::adapters::{self, DiscoverPrevious};
-use super::canonical;
 use super::http::RequestContext;
 use super::identity;
 use super::model::{
@@ -24,13 +22,17 @@ use super::r#match::{candidate_is_credible, derive_game_status, input_key};
 use super::registry::candidate_from_index_match;
 use super::store::SourceStore;
 use super::validate;
+use super::{canonical, index};
 use super::{
     invalid, rule_fingerprint, Result, GAME_MATCH_SCHEMA_VERSION, PARSER_VERSION, QUERY_VERSION,
     SOURCES_ENCODING_VERSION, SOURCE_DETAIL_SCHEMA_VERSION,
 };
 use std::collections::{BTreeMap, BTreeSet, HashSet, VecDeque};
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 
 /// Non-wire progress signal for the host's `match_progress` event.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -61,70 +63,82 @@ pub fn match_games(
     name_hints: &[String],
     force_details: bool,
     ctx: &mut RequestContext,
-    cancel: &AtomicBool,
+    cancel: &Arc<AtomicBool>,
     now: u64,
     mut on_progress: impl FnMut(MatchProgress),
     mut on_update: impl FnMut(&GameMatch),
 ) -> Result<Vec<GameMatch>> {
-    let games = dedupe_games(games);
-    let total = games.len();
-    emit(&mut on_progress, "index", 0, total, true);
-    let mut results = Vec::with_capacity(total);
-    for (index, game) in games.iter().enumerate() {
-        if cancelled(cancel) {
-            finish_progress(&mut on_progress, results.len(), total);
-            return Err(cancelled_error());
+    crate::operation::with_cancel(Arc::clone(cancel), || {
+        let settings = store.load_settings()?;
+        if rules
+            .iter()
+            .any(|rule| rule.script.is_some() && super::script::rule_changed(rule, &settings))
+        {
+            return Err(invalid("source_rule_changed"));
         }
-        emit(&mut on_progress, "index", index, total, true);
-        let previous = store.load_match(game.appid)?;
-        let reused = !force_details
-            && match &previous {
-                Some(record) => record_reusable(store, record, game, name_hints, rules, overrides)?,
-                None => false,
-            };
-        if reused {
-            let mut summary = summary_from_record(previous.as_ref().expect("reused record"));
-            summary.instance_id = game.instance_id.clone();
-            results.push(summary);
-        } else {
-            let record = {
-                let mut on_phase = |phase: &str| emit(&mut on_progress, phase, index, total, true);
-                match_one(
-                    store,
-                    rules,
-                    overrides,
-                    game,
-                    name_hints,
-                    previous.as_ref(),
-                    MatchOptions {
-                        force_details,
-                        force_fallback: false,
-                        only_source: None,
-                    },
-                    ctx,
-                    cancel,
-                    now,
-                    &mut on_phase,
-                )
-            };
-            let record = match record {
-                Ok(record) => record,
-                Err(error) => {
-                    finish_progress(&mut on_progress, results.len(), total);
-                    return Err(error);
-                }
-            };
-            let mut summary = summary_from_record(&record);
-            summary.instance_id = game.instance_id.clone();
-            on_update(&summary);
-            results.push(summary);
+        let games = dedupe_games(games);
+        let total = games.len();
+        emit(&mut on_progress, "index", 0, total, true);
+        let mut results = Vec::with_capacity(total);
+        for (index, game) in games.iter().enumerate() {
+            if cancelled(cancel) {
+                finish_progress(&mut on_progress, results.len(), total);
+                return Err(cancelled_error());
+            }
+            emit(&mut on_progress, "index", index, total, true);
+            let previous = store.load_match(game.appid)?;
+            let reused = !force_details
+                && match &previous {
+                    Some(record) => {
+                        record_reusable(store, record, game, name_hints, rules, overrides)?
+                    }
+                    None => false,
+                };
+            if reused {
+                let mut summary = summary_from_record(previous.as_ref().expect("reused record"));
+                summary.instance_id = game.instance_id.clone();
+                results.push(summary);
+            } else {
+                let record = {
+                    let mut on_phase =
+                        |phase: &str| emit(&mut on_progress, phase, index, total, true);
+                    match_one(
+                        store,
+                        rules,
+                        overrides,
+                        game,
+                        name_hints,
+                        previous.as_ref(),
+                        MatchOptions {
+                            force_details,
+                            force_fallback: false,
+                            only_source: None,
+                        },
+                        ctx,
+                        cancel,
+                        now,
+                        &mut on_phase,
+                    )
+                };
+                let record = match record {
+                    Ok(record) => record,
+                    Err(error) => {
+                        finish_progress(&mut on_progress, results.len(), total);
+                        return Err(error);
+                    }
+                };
+                let mut summary = summary_from_record(&record);
+                summary.instance_id = game.instance_id.clone();
+                on_update(&summary);
+                results.push(summary);
+            }
+            emit(&mut on_progress, "index", index + 1, total, true);
+            emit(&mut on_progress, "details", index + 1, total, true);
+            emit(&mut on_progress, "fallback", index + 1, total, true);
         }
-        emit(&mut on_progress, "index", index + 1, total, true);
-        emit(&mut on_progress, "details", index + 1, total, true);
-        emit(&mut on_progress, "fallback", index + 1, total, true);
-    }
-    finish_progress(&mut on_progress, total, total);
-    Ok(results)
+        finish_progress(&mut on_progress, total, total);
+        Ok(results)
+    })
 }
 
 /// Re-matches one game: recomputes every publisher source, forces its hit
@@ -138,32 +152,34 @@ pub fn rematch_game(
     game: &GameQuery,
     name_hints: &[String],
     ctx: &mut RequestContext,
-    cancel: &AtomicBool,
+    cancel: &Arc<AtomicBool>,
     now: u64,
     mut on_update: impl FnMut(&GameMatch),
 ) -> Result<GameMatch> {
-    let previous = store.load_match(game.appid)?;
-    let record = match_one(
-        store,
-        rules,
-        overrides,
-        game,
-        name_hints,
-        previous.as_ref(),
-        MatchOptions {
-            force_details: true,
-            force_fallback: true,
-            only_source: None,
-        },
-        ctx,
-        cancel,
-        now,
-        &mut |_| {},
-    )?;
-    let mut summary = summary_from_record(&record);
-    summary.instance_id = game.instance_id.clone();
-    on_update(&summary);
-    Ok(summary)
+    crate::operation::with_cancel(Arc::clone(cancel), || {
+        let previous = store.load_match(game.appid)?;
+        let record = match_one(
+            store,
+            rules,
+            overrides,
+            game,
+            name_hints,
+            previous.as_ref(),
+            MatchOptions {
+                force_details: true,
+                force_fallback: true,
+                only_source: None,
+            },
+            ctx,
+            cancel,
+            now,
+            &mut |_| {},
+        )?;
+        let mut summary = summary_from_record(&record);
+        summary.instance_id = game.instance_id.clone();
+        on_update(&summary);
+        Ok(summary)
+    })
 }
 
 /// Re-matches only `source_id` after that source's index changed.
@@ -180,54 +196,78 @@ pub fn rematch_source(
     source_id: &str,
     name_hints: &[String],
     ctx: &mut RequestContext,
-    cancel: &AtomicBool,
+    cancel: &Arc<AtomicBool>,
     now: u64,
     mut on_update: impl FnMut(&GameMatch),
 ) -> Result<Vec<GameMatch>> {
-    let rule = rules
-        .iter()
-        .find(|rule| rule.id == source_id)
-        .ok_or_else(|| invalid("unknown_source"))?;
-    if rule.role == SourceRole::FallbackIndexer {
-        return Err(invalid("unknown_source"));
-    }
-    let games = dedupe_games(games);
-    let mut results = Vec::with_capacity(games.len());
-    for game in &games {
-        if cancelled(cancel) {
-            return Err(cancelled_error());
+    crate::operation::with_cancel(Arc::clone(cancel), || {
+        let rule = rules
+            .iter()
+            .find(|rule| rule.id == source_id)
+            .ok_or_else(|| invalid("unknown_source"))?;
+        if rule.role == SourceRole::FallbackIndexer {
+            return Err(invalid("unknown_source"));
         }
-        let previous = store.load_match(game.appid)?;
-        let record = match_one(
-            store,
-            rules,
-            overrides,
-            game,
-            name_hints,
-            previous.as_ref(),
-            MatchOptions {
-                force_details: true,
-                force_fallback: false,
-                only_source: Some(source_id),
-            },
-            ctx,
-            cancel,
-            now,
-            &mut |_| {},
-        )?;
-        let mut summary = summary_from_record(&record);
-        summary.instance_id = game.instance_id.clone();
-        on_update(&summary);
-        results.push(summary);
-    }
-    Ok(results)
+        let games = dedupe_games(games);
+        let mut results = Vec::with_capacity(games.len());
+        for game in &games {
+            if cancelled(cancel) {
+                return Err(cancelled_error());
+            }
+            let previous = store.load_match(game.appid)?;
+            let record = match_one(
+                store,
+                rules,
+                overrides,
+                game,
+                name_hints,
+                previous.as_ref(),
+                MatchOptions {
+                    force_details: true,
+                    force_fallback: false,
+                    only_source: Some(source_id),
+                },
+                ctx,
+                cancel,
+                now,
+                &mut |_| {},
+            )?;
+            let mut summary = summary_from_record(&record);
+            summary.instance_id = game.instance_id.clone();
+            on_update(&summary);
+            results.push(summary);
+        }
+        Ok(results)
+    })
 }
 
 /// Pure read of a persisted match record (`matches/<appid>.json`), no network
 /// and no writes. A missing record is `pending` with empty candidates.
 pub fn game_match_summary(store: &SourceStore, appid: u32) -> GameMatch {
     match store.load_match(appid) {
-        Ok(Some(record)) => summary_from_record(&record),
+        Ok(Some(record)) => {
+            let rules = match store.load_settings() {
+                Ok(settings) => settings.added,
+                Err(error) => {
+                    let error = crate::projection::DomainError::from(error);
+                    return GameMatch {
+                        appid,
+                        instance_id: None,
+                        status: GameMatchStatus::Failed,
+                        candidates: Vec::new(),
+                        diagnostics: vec![Diagnostic {
+                            source_id: None,
+                            code: error.code,
+                            detail: error.detail,
+                        }],
+                        source_revisions: BTreeMap::new(),
+                    };
+                }
+            };
+            summary_from_record(&current_record(record, &rules, |rule| {
+                store.load_index(&rule.id).ok().flatten()
+            }))
+        }
         _ => GameMatch {
             appid,
             instance_id: None,
@@ -265,6 +305,7 @@ pub fn source_revisions(store: &SourceStore, rules: &[SourceRule]) -> BTreeMap<S
             .load_index(&rule.id)
             .ok()
             .flatten()
+            .filter(|index| index::compatible(index, rule))
             .map(|index| index.revision)
             .unwrap_or(0);
         revisions.insert(rule.id.clone(), revision);
@@ -291,7 +332,7 @@ fn match_one(
     previous: Option<&GameMatchRecord>,
     options: MatchOptions<'_>,
     ctx: &mut RequestContext,
-    cancel: &AtomicBool,
+    cancel: &Arc<AtomicBool>,
     now: u64,
     on_phase: &mut dyn FnMut(&str),
 ) -> Result<GameMatchRecord> {
@@ -309,12 +350,31 @@ fn match_one(
     );
     // The host writes settings from another process; `load_settings` reads the
     // persisted revision so a mid-task disable/unsubscribe is detected below.
-    let settings_revision = store.load_settings()?.revision;
+    let settings = store.load_settings()?;
+    if rules
+        .iter()
+        .any(|rule| rule.script.is_some() && super::script::rule_changed(rule, &settings))
+    {
+        return Err(invalid("source_rule_changed"));
+    }
+    let settings_revision = settings.revision;
 
     let mut indexes: BTreeMap<String, Option<SourceIndex>> = BTreeMap::new();
     for rule in &publishers {
-        indexes.insert(rule.id.clone(), store.load_index(&rule.id)?);
+        indexes.insert(
+            rule.id.clone(),
+            store
+                .load_index(&rule.id)?
+                .filter(|index| index::compatible(index, rule)),
+        );
     }
+
+    let previous = previous.map(|record| {
+        current_record(record.clone(), rules, |rule| {
+            indexes.get(&rule.id).and_then(Option::as_ref).cloned()
+        })
+    });
+    let previous = previous.as_ref();
 
     // Candidates already built for this game (previous run) feed the DLC/lead
     // rules while this pass builds new ones.
@@ -368,6 +428,7 @@ fn match_one(
         let source = match_publisher_source(
             store,
             rule,
+            settings.script_sources.get(&rule.id).map(String::as_str),
             indexes.get(&rule.id).and_then(Option::as_ref),
             game,
             &query,
@@ -438,6 +499,7 @@ fn match_one(
                     let source = match_publisher_source(
                         store,
                         rule,
+                        settings.script_sources.get(&rule.id).map(String::as_str),
                         index,
                         game,
                         &query,
@@ -470,9 +532,17 @@ fn match_one(
     // matching inputs changed while details/fallback were being fetched, do not
     // write this attempt and keep the previous record for the next pass.
     if settings_binding_changed(store, settings_revision, &key, game, name_hints, rules)? {
+        let latest = store.load_settings()?;
         return Ok(previous
-            .cloned()
+            .map(|record| {
+                current_record(record.clone(), &latest.added, |rule| {
+                    store.load_index(&rule.id).ok().flatten()
+                })
+            })
             .unwrap_or_else(|| pending_record(game, key, now)));
+    }
+    if cancelled(cancel) {
+        return Err(cancelled_error());
     }
     store.save_match(&record)?;
     Ok(record)
@@ -493,6 +563,12 @@ fn settings_binding_changed(
     let settings = store.load_settings()?;
     if settings.revision == captured_revision {
         return Ok(false);
+    }
+    if rules
+        .iter()
+        .any(|rule| super::script::rule_changed(rule, &settings))
+    {
+        return Ok(true);
     }
     let overrides = Overrides {
         enabled: settings.enabled,
@@ -537,6 +613,12 @@ fn record_reusable(
     rules: &[SourceRule],
     overrides: &Overrides,
 ) -> Result<bool> {
+    if current_record(record.clone(), rules, |rule| {
+        store.load_index(&rule.id).ok().flatten()
+    }) != *record
+    {
+        return Ok(false);
+    }
     let publishers = active_publishers(rules, overrides, game.appid);
     let publisher_ids: Vec<String> = publishers.iter().map(|rule| rule.id.clone()).collect();
     let hints = merged_hints(game, name_hints);
@@ -559,6 +641,7 @@ fn record_reusable(
     for rule in &publishers {
         let revision = store
             .load_index(&rule.id)?
+            .filter(|index| index::compatible(index, rule))
             .map(|index| index.revision)
             .unwrap_or(0);
         let stored = record
@@ -575,7 +658,9 @@ fn record_reusable(
         && publishers.iter().all(|rule| {
             store
                 .load_index(&rule.id)
-                .map(|index| index.is_some_and(|index| index.complete))
+                .map(|index| {
+                    index.is_some_and(|index| index::compatible(&index, rule) && index.complete)
+                })
                 .unwrap_or(false)
         });
     let publisher_matched = record
@@ -605,13 +690,14 @@ fn record_reusable(
 fn match_publisher_source(
     store: &SourceStore,
     rule: &SourceRule,
+    code: Option<&str>,
     index: Option<&SourceIndex>,
     game: &GameQuery,
     query: &QueryContext,
     previous: Option<&SourceMatchRecord>,
     force_details: bool,
     ctx: &mut RequestContext,
-    cancel: &AtomicBool,
+    cancel: &Arc<AtomicBool>,
     now: u64,
     known: &mut Vec<SourceCandidate>,
 ) -> Result<SourceMatchRecord> {
@@ -645,11 +731,11 @@ fn match_publisher_source(
     // Kagura articles/products/categories need their hit pages.
     let needs_pages = index.entries.iter().any(|entry| entry.kind != "entry");
     if needs_pages && !candidates.iter().any(candidate_is_credible) {
-        let adapter = kagura::adapter_name(rule);
-        let found = match_kagura_entries(
+        let adapter = adapters::source_adapter(rule, code)?;
+        let found = match_page_entries(
             store,
             rule,
-            adapter,
+            &adapter,
             index,
             query,
             force_details,
@@ -710,9 +796,12 @@ fn publisher_status(
 
 fn merge_and_validate(
     rule: &SourceRule,
-    candidates: Vec<SourceCandidate>,
+    mut candidates: Vec<SourceCandidate>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Vec<SourceCandidate> {
+    for candidate in &mut candidates {
+        index::bind_candidate(rule, candidate);
+    }
     let mut validated = Vec::with_capacity(candidates.len());
     for candidate in identity::merge_candidates(&candidates) {
         match identity::validate_candidate(&candidate, rule) {
@@ -841,15 +930,15 @@ fn entry_names(entry: &SourceIndexEntry) -> Vec<String> {
 // ---- Kagura detail-page matching ---------------------------------------
 
 #[allow(clippy::too_many_arguments)]
-fn match_kagura_entries(
+fn match_page_entries(
     store: &SourceStore,
     rule: &SourceRule,
-    adapter: &str,
+    adapter: &adapters::SourceAdapter<'_>,
     index: &SourceIndex,
     query: &QueryContext,
     force_details: bool,
     ctx: &mut RequestContext,
-    cancel: &AtomicBool,
+    cancel: &Arc<AtomicBool>,
     now: u64,
     known: &mut Vec<SourceCandidate>,
     detail_pages: &mut Vec<String>,
@@ -894,7 +983,7 @@ fn match_kagura_entries(
                     return Err(cancelled_error());
                 }
                 *detail_failed = true;
-                diagnostics.push(diagnostic(rule, error.to_string()));
+                diagnostics.push(error_diagnostic(rule, error));
             }
         }
     }
@@ -937,13 +1026,13 @@ fn match_kagura_entries(
 fn process_category(
     store: &SourceStore,
     rule: &SourceRule,
-    adapter: &str,
+    adapter: &adapters::SourceAdapter<'_>,
     index_revision: u64,
     page: &str,
     query: &QueryContext,
     force_details: bool,
     ctx: &mut RequestContext,
-    cancel: &AtomicBool,
+    cancel: &Arc<AtomicBool>,
     now: u64,
     known: &mut Vec<SourceCandidate>,
     detail_pages: &mut Vec<String>,
@@ -979,7 +1068,7 @@ fn process_category(
                     return Err(cancelled_error());
                 }
                 *detail_failed = true;
-                diagnostics.push(diagnostic(rule, error.to_string()));
+                diagnostics.push(error_diagnostic(rule, error));
                 continue;
             }
         };
@@ -1033,7 +1122,7 @@ fn process_category(
                         return Err(cancelled_error());
                     }
                     *detail_failed = true;
-                    diagnostics.push(diagnostic(rule, error.to_string()));
+                    diagnostics.push(error_diagnostic(rule, error));
                 }
             }
         }
@@ -1056,12 +1145,12 @@ fn process_category(
 fn resolve_fact(
     store: &SourceStore,
     rule: &SourceRule,
-    adapter: &str,
+    adapter: &adapters::SourceAdapter<'_>,
     index_revision: u64,
     page: &str,
     force_details: bool,
     ctx: &mut RequestContext,
-    cancel: &AtomicBool,
+    cancel: &Arc<AtomicBool>,
     now: u64,
     detail_pages: &mut Vec<String>,
 ) -> Result<PageFact> {
@@ -1081,7 +1170,10 @@ fn resolve_fact(
     if cancelled(cancel) {
         return Err(cancelled_error());
     }
-    let fact = resolve_page(rule, adapter, &page, ctx)?;
+    let fact = adapter.resolve_page(rule, &page, ctx, cancel)?;
+    if cancelled(cancel) {
+        return Err(cancelled_error());
+    }
     store.save_detail(&DetailRecord {
         schema_version: SOURCE_DETAIL_SCHEMA_VERSION,
         source_id: rule.id.clone(),
@@ -1199,7 +1291,7 @@ fn decide_fallback(
     publisher_matched: bool,
     force: bool,
     ctx: &mut RequestContext,
-    cancel: &AtomicBool,
+    cancel: &Arc<AtomicBool>,
     now: u64,
 ) -> Result<Option<FallbackMatchRecord>> {
     let existing = previous.and_then(|record| record.fallback.as_ref());
@@ -1376,7 +1468,41 @@ fn fallback_query_key(query: &QueryContext, rule: &SourceRule) -> String {
 
 // ---- summaries ----------------------------------------------------------
 
-fn summary_from_record(record: &GameMatchRecord) -> GameMatch {
+/// Remove results that belong to a retired script before any read or reuse.
+/// Legacy Rust sources keep their established cache semantics.
+pub(crate) fn current_record(
+    mut record: GameMatchRecord,
+    rules: &[SourceRule],
+    mut index: impl FnMut(&SourceRule) -> Option<SourceIndex>,
+) -> GameMatchRecord {
+    let mut stale = false;
+    record.sources.retain(|source_id, source| {
+        let Some(rule) = rules
+            .iter()
+            .find(|rule| rule.id == *source_id && rule.script.is_some())
+        else {
+            return true;
+        };
+        let current = rule.role == SourceRole::Publisher
+            && index(rule).is_some_and(|index| {
+                index::compatible(&index, rule)
+                    && index.revision == source.index_revision
+                    && source
+                        .candidates
+                        .iter()
+                        .all(|candidate| candidate.parser_fingerprint == index.parser_fingerprint)
+            });
+        stale |= !current;
+        current
+    });
+    if stale {
+        record.fallback = None;
+        record.status = derive_game_status(&record);
+    }
+    record
+}
+
+pub(crate) fn summary_from_record(record: &GameMatchRecord) -> GameMatch {
     let credible: Vec<SourceCandidate> = record
         .sources
         .values()
@@ -1636,6 +1762,15 @@ fn lead_relevant(title: &str, query: &QueryContext, known: &[SourceCandidate]) -
             let base = name.split(['：', ':']).next().unwrap_or(name);
             stem == validate::discovery_normal(&identity::base_title(base))
         })
+}
+
+fn error_diagnostic(rule: &SourceRule, error: std::io::Error) -> Diagnostic {
+    let error = crate::projection::DomainError::from(error);
+    Diagnostic {
+        source_id: Some(rule.id.clone()),
+        code: error.code,
+        detail: error.detail,
+    }
 }
 
 fn diagnostic(rule: &SourceRule, code: impl Into<String>) -> Diagnostic {

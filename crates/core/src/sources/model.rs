@@ -414,6 +414,10 @@ pub struct Provenance {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema, ts_rs::TS)]
 #[serde(deny_unknown_fields)]
 pub struct SourceCandidate {
+    /// Host-bound script identity, also binds install selections.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional = nullable)]
+    pub parser_fingerprint: Option<String>,
     /// `candidate-[0-9a-f]{24}`.
     pub candidate_id: String,
     pub source_id: String,
@@ -683,9 +687,12 @@ pub struct SourceIndexEntry {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SourceIndex {
+    /// Script parser identity; absent for sources still using Rust adapters.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parser_fingerprint: Option<String>,
     pub schema_version: u32,
     pub source_id: String,
-    /// Content revision: only real `entries`/`complete`/`pending` changes bump it.
+    /// Content revision: parser identity or real entries/complete/pending changes.
     pub revision: u64,
     pub complete: bool,
     pub checked_at: u64,
@@ -711,7 +718,7 @@ pub struct FactLink {
 
 /// Query-independent facts parsed from one source page (design §4.1, §9).
 ///
-/// Built by [`super::adapters::kagura::resolve_page`] during a game match task,
+/// Built by [`super::adapters::SourceAdapter::resolve_page`] during a game match task,
 /// never during a source index update, and persisted inside [`DetailRecord`].
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

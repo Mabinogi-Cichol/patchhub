@@ -6,9 +6,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use patchhub_core::sources::http::{
-    FakeFetcher, FetchRequest, FetchResponse, Fetcher, RequestContext,
-};
+use patchhub_core::sources::http::{FakeFetcher, FetchResponse, RequestContext};
 use patchhub_core::sources::matching::{
     game_match_summary, match_games, rematch_game, rematch_source, source_revisions,
 };
@@ -129,6 +127,7 @@ fn index(
     entries: Vec<SourceIndexEntry>,
 ) -> SourceIndex {
     SourceIndex {
+        parser_fingerprint: None,
         schema_version: 1,
         source_id: source_id.to_string(),
         revision,
@@ -283,7 +282,7 @@ fn run_input(
         name_hints,
         force_details,
         &mut ctx,
-        &AtomicBool::new(false),
+        &Arc::new(AtomicBool::new(false)),
         now,
         |_| {},
         |_| {},
@@ -309,7 +308,7 @@ fn rematch(
         game,
         name_hints,
         &mut ctx,
-        &AtomicBool::new(false),
+        &Arc::new(AtomicBool::new(false)),
         now,
         |_| {},
     )
@@ -372,7 +371,7 @@ fn index_hits_stay_offline_and_only_hit_detail_pages_are_fetched() {
         &[],
         false,
         &mut ctx,
-        &AtomicBool::new(false),
+        &Arc::new(AtomicBool::new(false)),
         200,
         |progress| phases.push(progress),
         |update| updates.push(update.clone()),
@@ -1212,7 +1211,7 @@ fn rematch_source_recomputes_only_that_source_and_reuses_fallback() {
         "kagura-cn",
         &[],
         &mut ctx,
-        &AtomicBool::new(false),
+        &Arc::new(AtomicBool::new(false)),
         400,
         |summary| updates.push(summary.clone()),
     )
@@ -1289,7 +1288,7 @@ fn rematch_source_recomputes_only_that_source_and_reuses_fallback() {
         "kagura-cn",
         &[],
         &mut ctx,
-        &AtomicBool::new(false),
+        &Arc::new(AtomicBool::new(false)),
         700,
         |_| {},
     )
@@ -1362,22 +1361,7 @@ fn detail_failure_keeps_previous_candidates_and_reports_incomplete() {
     assert!(!after.sources["kagura-cn"].diagnostics.is_empty());
 }
 
-/// Fetcher wrapper that flips the task's cancel flag after its first response.
-struct CancelAfterFirstFetch {
-    inner: Arc<FakeFetcher>,
-    cancel: Arc<AtomicBool>,
-    calls: Arc<std::sync::atomic::AtomicUsize>,
-}
-
-impl Fetcher for CancelAfterFirstFetch {
-    fn fetch(&self, request: &FetchRequest) -> std::io::Result<FetchResponse> {
-        self.calls.fetch_add(1, Ordering::SeqCst);
-        let response = self.inner.fetch(request);
-        self.cancel.store(true, Ordering::SeqCst);
-        response
-    }
-}
-
+/// Completed games remain committed when cancellation arrives between games.
 #[test]
 fn cancellation_saves_finished_games_and_returns_task_cancelled() {
     let temp = tempfile::tempdir().unwrap();
@@ -1401,13 +1385,7 @@ fn cancellation_saves_finished_games_and_returns_task_cancelled() {
         "https://kagurafan.com/game/a/",
     ));
     let cancel = Arc::new(AtomicBool::new(false));
-    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let fetcher = CancelAfterFirstFetch {
-        inner: Arc::clone(&fake),
-        cancel: Arc::clone(&cancel),
-        calls: Arc::clone(&calls),
-    };
-    let mut ctx = RequestContext::with_settings(Box::new(fetcher), Duration::ZERO);
+    let mut ctx = context(&fake);
     let error = match match_games(
         &store,
         &[rule],
@@ -1419,13 +1397,15 @@ fn cancellation_saves_finished_games_and_returns_task_cancelled() {
         &cancel,
         200,
         |_| {},
-        |_| {},
+        |_| {
+            cancel.store(true, Ordering::SeqCst);
+        },
     ) {
         Ok(_) => panic!("the task must be cancelled"),
         Err(error) => error,
     };
     assert_eq!(error.to_string(), "task_cancelled");
-    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(fake.call_count(), 1);
     assert!(
         store.load_match(42).unwrap().is_some(),
         "finished games are saved before cancellation"
@@ -1912,6 +1892,7 @@ fn source_revisions_and_summary_are_pure_reads() {
 
 fn candidate(page: &str, appid: u32) -> SourceCandidate {
     let mut candidate = SourceCandidate {
+        parser_fingerprint: None,
         candidate_id: "candidate-000000000000000000000000".to_string(),
         source_id: "table-source".to_string(),
         source_record_id: page.to_string(),

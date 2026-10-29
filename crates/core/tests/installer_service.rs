@@ -189,6 +189,7 @@ fn publisher_download_cancel_is_standard_cancel_before_any_transaction() {
         sources
             .store()
             .save_index(&SourceIndex {
+                parser_fingerprint: None,
                 schema_version: 1,
                 source_id: "patchmoe".into(),
                 revision: 1,

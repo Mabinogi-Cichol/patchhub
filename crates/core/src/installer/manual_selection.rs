@@ -146,3 +146,88 @@ pub(crate) fn resolve_download(
         language,
     })
 }
+
+#[cfg(test)]
+mod script_binding_tests {
+    use super::*;
+    use crate::sources::{
+        self,
+        http::{FakeFetcher, RequestContext},
+        RawSourceRule, Sources,
+    };
+    use std::{
+        sync::{atomic::AtomicBool, Arc},
+        time::Duration,
+    };
+
+    #[test]
+    fn explicit_url_binds_script_candidate_before_and_after_replacement() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut sources = Sources::open(temp.path()).unwrap();
+        let raw: RawSourceRule=serde_json::from_value(json!({"id":"custom", "name":"Custom", "adapter":"lua", "enabled":true,
+            "pages":["https://example.com/list"], "page_hosts":["example.com"], "download_hosts":["download.example.com"], "root_layout":"game_root"})).unwrap();
+        let code="return {collect_index=function() return {entries={{title='Game',page='https://example.com/list',kind='entry',appid=42,url='https://download.example.com/a.zip'}},complete=true} end}";
+        let game = GameQuery {
+            appid: 42,
+            name: "Game".into(),
+            localized_name: None,
+            instance_id: Some("test".into()),
+        };
+        let update = |sources: &Sources| {
+            let rule = sources
+                .registry()
+                .rules()
+                .iter()
+                .find(|r| r.id == "custom")
+                .unwrap();
+            let mut ctx = RequestContext::with_settings(
+                Box::new(Arc::new(FakeFetcher::new())),
+                Duration::ZERO,
+            );
+            sources::update::update_source(
+                sources.store(),
+                rule,
+                false,
+                &mut ctx,
+                &Arc::new(AtomicBool::new(false)),
+                |_| {},
+            )
+            .unwrap();
+        };
+        sources.import_script_source(&raw, 1, code, false).unwrap();
+        update(&sources);
+        let old = sources.registry().index_candidates(&game).remove(0);
+        let input = super::super::service::ManualDownloadInput {
+            source_id: "custom".into(),
+            candidate_id: old.candidate_id,
+            url: "https://download.example.com/manual.zip".into(),
+        };
+        assert!(resolve_download(sources.registry(), &game, &input).is_ok());
+        sources
+            .import_script_source(&raw, 1, &format!("{code}\n-- parser B"), true)
+            .unwrap();
+        assert_eq!(
+            resolve_download(sources.registry(), &game, &input)
+                .unwrap_err()
+                .code,
+            "selection_not_found"
+        );
+        update(&sources);
+        assert_eq!(
+            resolve_download(sources.registry(), &game, &input)
+                .unwrap_err()
+                .code,
+            "selection_not_found"
+        );
+        let current = sources.registry().index_candidates(&game).remove(0);
+        assert!(resolve_download(
+            sources.registry(),
+            &game,
+            &super::super::service::ManualDownloadInput {
+                candidate_id: current.candidate_id,
+                ..input
+            }
+        )
+        .is_ok());
+    }
+}

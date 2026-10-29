@@ -50,18 +50,18 @@ fn error_with_detail(id: Option<&str>, code: &str, detail: Option<&str>) -> Valu
 }
 
 fn respond(bytes: &[u8]) -> Value {
-    let cancel = AtomicBool::new(false);
+    let cancel = Arc::new(AtomicBool::new(false));
     respond_with_channel(bytes, &cancel, false)
 }
 
 /// `serve` and `serve-task` share this parser/executor; only `serve-task` may
 /// dispatch the task-channel methods (`install_patch` and the streaming source
 /// tasks).
-fn respond_with(bytes: &[u8], cancel: &AtomicBool) -> Value {
+fn respond_with(bytes: &[u8], cancel: &Arc<AtomicBool>) -> Value {
     respond_with_channel(bytes, cancel, true)
 }
 
-fn respond_with_channel(bytes: &[u8], cancel: &AtomicBool, task_channel: bool) -> Value {
+fn respond_with_channel(bytes: &[u8], cancel: &Arc<AtomicBool>, task_channel: bool) -> Value {
     let request = match parse_request(bytes, task_channel) {
         Ok(r) => r,
         Err(e) => return error_with_detail(e.request_id.as_deref(), &e.code, e.detail.as_deref()),
@@ -162,10 +162,10 @@ pub(crate) fn run_task(
                     emit(cursor.event(progress));
                 }
             },
-            || respond_with(bytes, cancel.as_ref()),
+            || respond_with(bytes, &cancel),
         );
     }
-    let cancel_ref = AtomicBool::new(false);
+    let cancel_ref = Arc::new(AtomicBool::new(false));
     respond_with(bytes, &cancel_ref)
 }
 
@@ -186,7 +186,7 @@ fn stream_sources_task(
     // Install the operation scope so `operation::check` inside the source
     // fetchers observes this stream task's cancel flag.
     let response = patchhub_core::operation::with_cancel(cancel.clone(), || {
-        runtime::execute_streaming(&method, params, cancel.as_ref(), &mut |payload| {
+        runtime::execute_streaming(&method, params, cancel, &mut |payload| {
             let mut object = match payload {
                 Value::Object(map) => map,
                 other => {
