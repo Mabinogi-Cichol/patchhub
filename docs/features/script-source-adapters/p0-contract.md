@@ -2,12 +2,12 @@
 
 [设计](design.md) · [施工记录](progress.md) · [迁移矩阵](migration-matrix.md)
 
-状态：**P0 原型验证通过；以下生产接口由 P1–P6 实现，当前客户端尚不能导入或运行脚本。** 原型位于 [script_runtime_prototype.rs](../../../crates/core/tests/script_runtime_prototype.rs) 及其 [测试宿主](../../../crates/core/tests/support/script_runtime.rs)，没有注册到生产适配器。
+状态：**P0 原型验证通过，P1 已实现核心导入/读取；执行分派与客户端入口待后续阶段，当前客户端尚不能导入或运行脚本。** 原型位于 [script_runtime_prototype.rs](../../../crates/core/tests/script_runtime_prototype.rs) 及其 [测试宿主](../../../crates/core/tests/support/script_runtime.rs)，没有注册到生产适配器。
 
 ## 已验证的运行时决策
 
 - 固定 `mlua = 0.12.2`，使用 `lua54/vendored/serialize`，不启用 `send/async/module`。锁定的 `mlua-sys 0.13.0` / `lua-src 551.0.2` 实际编译 Lua **5.4.9**；Rust 1.94 的 Windows MSVC、WSL Ubuntu x86_64 均能编译并运行同一组测试。
-- 依赖目前仅放在 core 的 `dev-dependencies`。`ego-tree 0.11` 是已有 `scraper` 树的节点类型，显式依赖用于保存节点 ID，不是另一套 DOM 引擎。P2 将必要依赖和测试宿主能力移入产品模块，不能复制成两套长期维护的执行器。
+- P0 时依赖仅放在 core 的 `dev-dependencies`；P1 已将 `mlua` 移为正常依赖用于语法检查，原型也复用同一编译检查。`ego-tree 0.11` 仍为开发依赖，是已有 `scraper` 树的节点类型，不是另一套 DOM 引擎。P2 再将测试宿主的执行能力移入产品模块，不能复制成两套长期维护的执行器。
 - 一次调用一个 VM。显式开放 `assert/error/ipairs/next/pairs/select/tonumber/tostring/type`、受控 `pcall/xpcall`、`string/table/math/utf8` 与 `_VERSION/_G`。去掉 `string.dump`；没有 `io/os/package/debug/ffi/require/dofile/loadfile/load/coroutine/collectgarbage/print`。
 - 代码只以 `ChunkMode::Text` 编译。导入只编译，不调用生成的函数；顶层报错和无限循环均不会在语法检查时执行。入口在实际任务中从模块返回表读取，缺失入口明确失败。
 - `scope` 借用当前 `RequestContext`，作用域退出后回调不可再调用；不延长引用生命周期、不增加线程共享网络栈。DOM 节点以 `Rc<Html> + NodeId` 保持原文档存活，不跨 VM 保存句柄，不依赖自引用或 `unsafe`。
@@ -79,11 +79,11 @@ P2 的外部错误固定为 `script_source_syntax_error`、`script_source_runtim
 
 `SourceRule.script` 是可选 `{api_version, sha256}`，未脚本化的规则省略字段。`sha256` 为源码原始 UTF-8 字节摘要，不改换行或自动格式化。设置增加默认空的 `script_sources: source_id -> code`；规则、源码、摘要、revision 在锁内以一次完整文件替换提交，成功后才更换内存快照。现有 `apply_overrides → bump_revision` 是分开更新内存/落盘，不能直接当作完整设置事务。
 
-P1 将明确升级后的设置 schema 与旧格式读取/一次性迁移，并验证旧文件保留和失败不改内存；**P0 不预先提交 schema 常量或运行迁移**。现有来源 schema-2 规则 JSON 与来源 ID 保持。旧二进制带 `deny_unknown_fields`，不能承诺读取新增脚本设置；P5 的能力校验和升级说明必须明确此边界。
+P1 已选定设置文件 schema **3**，命名空间 marker 保持 **2**，索引/详情/匹配文件不变。读写打开一次升级旧设置；只读快照不升级、不运行脚本。已验证旧缓存文件保留、写失败不改设置字节或内存，以及多个 writer 不覆盖新脚本。现有来源 schema-2 规则 JSON 与来源 ID 保持。旧二进制不能读取 v3 设置；P5 的能力校验和升级说明必须明确此边界。
 
 P3 至少给索引增加默认缺失的 `parser_fingerprint`，只在有效来源已脚本化时写入，值为包含脚本描述的规则解析标识；旧无标识索引不能授权脚本来源。`content_revision` 必须比较此标识，之后复用现有 `index_revision` 传播到详情与游戏匹配。无需给每种 DTO 另添代际或 TTL。已有名称覆盖只用于列表显示，不合并回运行规则，继续保持名称编辑不改变解析身份。
 
-JSONL 保持 **v5**，Lua API 单独为 **v1**；新增导入/读取方法及可选描述必须在 P5 同步生成 TS/Python/Flutter 契约。当前 `validate_capabilities` 精确比较方法表，新旧客户端/核心组合应报能力不兼容，不偷偷使用旧入口。P0 未修改任何产品协议或生成产物，完整跨语言验证属于 P5。
+JSONL 保持 **v5**，Lua API 单独为 **v1**。P1 已同步 `SourceRule.script` 可选描述的生成 TS/Python/JSON Schema 与 Flutter 资源，并验证现有契约；导入/读取 RPC 方法、两端编辑器与新能力表仍归 P5。当前 `validate_capabilities` 精确比较方法表，P5 新旧客户端/核心组合应报能力不兼容，不偷偷使用旧入口。
 
 ## P0 证据范围
 
