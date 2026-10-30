@@ -2,7 +2,7 @@
 use crate::*;
 use serde_json::{json, Value};
 pub fn capabilities() -> Value {
-    json!({"protocol_version":5,"methods":METHODS,"contracts":ContractVersions::default(),"installer":{"schema_version":1,"selection_version":1,"content_version":1,"adapter_version":1,"policy_schema_version":1,"report_schema_version":1,"formats":{"zip":"supported","exe":"supported"},"strategies":["managed_zip","publisher_zip","publisher_exe"],"links":{"zip":{"available":true,"blockers":[]},"exe":{"available":true,"blockers":[]}}},"sources":{"index_schema_version":1,"detail_schema_version":1,"match_schema_version":1,"schedule_schema_version":1,"adapter_version":1,"parser_version":patchhub_core::sources::PARSER_VERSION,"encoding_version":1,"methods":SOURCE_METHODS}})
+    json!({"protocol_version":5,"methods":METHODS,"contracts":ContractVersions::default(),"installer":{"schema_version":1,"selection_version":1,"content_version":1,"adapter_version":1,"policy_schema_version":1,"report_schema_version":1,"formats":{"zip":"supported","exe":"supported"},"strategies":["managed_zip","publisher_zip","publisher_exe"],"links":{"zip":{"available":true,"blockers":[]},"exe":{"available":true,"blockers":[]}}},"sources":{"index_schema_version":1,"detail_schema_version":1,"match_schema_version":1,"schedule_schema_version":1,"adapter_version":1,"parser_version":patchhub_core::sources::PARSER_VERSION,"encoding_version":1,"script_api_version":1,"methods":SOURCE_METHODS}})
 }
 pub fn host() -> Value {
     json!({"roots":[],"catalog":null,"signed_catalog":null,"trust_keys":null,"state_dir":null,"platform":"windows"})
@@ -102,7 +102,12 @@ pub fn success_result(method: Method) -> Value {
         Method::SetGameSource => {
             json!({"settings_revision":1,"source_id":"fixture","subscribed":true})
         }
-        Method::AddSource => json!({"settings_revision":1,"rule":rule()}),
+        Method::AddSource | Method::ImportScriptSource => {
+            json!({"settings_revision":1,"rule":rule()})
+        }
+        Method::GetScriptSource => {
+            json!({"rule":rule(),"api_version":1,"code":"return {}","sha256":"a".repeat(64)})
+        }
         Method::SetSourceUpdateInterval => {
             json!({"settings_revision":1,"source_id":"fixture","interval_hours":24})
         }
@@ -142,6 +147,12 @@ pub fn request(method: Method) -> Value {
             p["appid"] = json!(42);
         }
         Method::AddSource => p["rule"] = rule(),
+        Method::ImportScriptSource => {
+            p["rule"] = rule();
+            p["api_version"] = json!(1);
+            p["code"] = json!("return {}");
+        }
+        Method::GetScriptSource => p["source_id"] = json!("fixture"),
         Method::SetSourceUpdateInterval => {
             p["source_id"] = json!("fixture");
             p["interval_hours"] = json!(24);
@@ -188,6 +199,52 @@ pub fn cases() -> Value {
     }
     fn bad(requests: &mut Vec<Value>, name: &str, mut r: Value, error: &str) {
         requests.push(json!({"name":name,"request":r.take(),"task_channel":true,"error":error}));
+    }
+    let large_code = format!("-- {}\nreturn {{}}", "来源脚本 ".repeat(6000));
+    for (index, code) in [
+        "".to_string(),
+        "Upper".to_string(),
+        "a".repeat(129),
+        "invalid\n".to_string(),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        responses.push(json!({"name":format!("error-code-invalid-{index}"),"method":"get_script_source","response":{"protocol_version":5,"request_id":"fixture","ok":false,"error":{"code":code}},"error":"invalid_core_response"}));
+    }
+    let mut r = request(Method::ImportScriptSource);
+    r["params"]["code"] = json!(large_code);
+    r["params"]["replace"] = json!(true);
+    requests.push(json!({"name":"script-import-large-replace","request":r,"task_channel":false}));
+    let mut document = success_result(Method::GetScriptSource);
+    document["code"] = json!(large_code);
+    responses.push(json!({"name":"script-document-large","method":"get_script_source","response":{"protocol_version":5,"request_id":"fixture","ok":true,"result":document}}));
+    for (field, value) in [
+        ("code", json!(false)),
+        ("api_version", json!(true)),
+        ("replace", json!("true")),
+        ("path", json!("adapter.lua")),
+    ] {
+        let mut r = request(Method::ImportScriptSource);
+        r["params"][field] = value;
+        bad(
+            &mut requests,
+            &format!("script-import-invalid-{field}"),
+            r,
+            "invalid_request",
+        );
+    }
+    for version in [None, Some(2)] {
+        let mut v = capabilities();
+        if let Some(version) = version {
+            v["sources"]["script_api_version"] = json!(version);
+        } else {
+            v["sources"]
+                .as_object_mut()
+                .unwrap()
+                .remove("script_api_version");
+        }
+        responses.push(json!({"name":format!("capabilities-script-api-{version:?}"),"method":"get_capabilities","response":{"protocol_version":5,"request_id":"fixture","ok":true,"result":v},"error":if version.is_none() {"capability_mismatch"} else {"installer_schema_unsupported"}}));
     }
     let mut r = request(Method::Scan);
     r["protocol_version"] = json!(4);

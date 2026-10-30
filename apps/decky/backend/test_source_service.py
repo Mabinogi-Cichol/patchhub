@@ -104,6 +104,36 @@ class SourceServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.service.list_sources(), SUMMARIES)
         self.assertEqual(len(self.bridge.sync_calls), 2)
 
+    async def test_script_import_forwards_large_source_without_execution_or_conflating_refresh(self):
+        await self.service.initialize()
+        code = "-- " + "来源代码" * 20000 + "\nwhile true do end\nreturn {}"
+        document = response("get_script_source")["result"]
+        self.bridge.sync_results["import_script_source"] = response("import_script_source")["result"]
+        for replace in (False, True):
+            self.bridge.sync_calls.clear()
+            result = await self.service.import_script_source(document["rule"], 1, code, replace)
+            self.assertEqual(self.bridge.sync_calls, [
+                ("import_script_source", {"rule": document["rule"], "api_version": 1, "code": code, "replace": replace})])
+            self.assertEqual(self.service.settings_revision, result["settings_revision"])
+        self.assertEqual(self.bridge.stream_calls, [])
+
+    async def test_script_read_is_read_only_and_failure_keeps_the_source_snapshot(self):
+        await self.service.initialize()
+        document = response("get_script_source")["result"]
+        self.bridge.sync_results["get_script_source"] = document
+        self.bridge.sync_calls.clear()
+        self.assertEqual(await self.service.get_script_source("fixture"), document)
+        self.assertEqual(self.bridge.sync_calls, [("get_script_source", {"source_id": "fixture"})])
+        before = self.service.list_sources()
+        def fail(_):
+            raise CoreError("script_source_syntax_error", "source/fixture.lua:4: syntax")
+        self.bridge.sync_results["import_script_source"] = fail
+        with self.assertRaises(CoreError):
+            await self.service.import_script_source(document["rule"], 1, "return {", True)
+        self.assertEqual(self.service.list_sources(), before)
+        self.assertFalse(self.service.state_dir.exists())
+        self.assertEqual(len(self.bridge.sync_calls), 2)
+
     async def test_prime_rejects_malformed_scan_results(self):
         with self.assertRaises(ValueError):
             self.service.prime(["not", "a", "report"])

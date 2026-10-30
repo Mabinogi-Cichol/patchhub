@@ -1,3 +1,5 @@
+import { ScriptSourceEditor } from "./script-source-editor";
+import type { AddSourceResult, ScriptSourceDocument } from "../../../packages/contracts/generated/protocol";
 import { callable, definePlugin, routerHook } from "@decky/api";
 import { AppUpdatePanel, startAppUpdateNotifications, waitForAppUpdate } from './app-update';
 import { Button, ButtonItem, DropdownItem, Field, Focusable, Navigation, PanelSection, PanelSectionRow, SidebarNavigation, TextField, ToggleField, showModal, useParams } from "@decky/ui";
@@ -43,6 +45,8 @@ const setSourceEnabled = callable<[string, boolean], SourceSubscription[]>("set_
 const setSourceName = callable<[string, string], SourceSubscription[]>("set_source_name");
 const setGameSource = callable<[number, string, boolean], { appid: number }>("set_game_source");
 const addSource = callable<[string], SourceSubscription[]>("add_source");
+const getScriptSource = callable<[string], ScriptSourceDocument>("get_script_source");
+const importScriptSource = callable<[string, number, string, boolean], AddSourceResult>("import_script_source");
 const sourceRuleExample = JSON.stringify({
   id: "my-publisher", name: "发行商补丁站", adapter: "table_html", enabled: true,
   pages: ["https://patches.vendor.example/patches/"], page_hosts: ["patches.vendor.example"],
@@ -549,12 +553,13 @@ function GameManager({ item, seg, panel }: { item: Install; seg: string; panel?:
   return <SidebarNavigation {...navigation} />;
 }
 
-function SourceCard({ source, busy, expanded, onToggle, task, changeSources, onUpdateSource, onCancelTask, onInterval }: {
+function SourceCard({ source, busy, expanded, onToggle, task, changeSources, onUpdateSource, onCancelTask, onInterval, onEditScript }: {
   source: SourceSubscription; busy: boolean; expanded: boolean; onToggle: () => void; task?: SourceTaskSnapshot;
   changeSources: (action: () => Promise<SourceSubscription[]>, affectsMatching?: boolean) => void;
   onUpdateSource: (sourceId: string, force: boolean) => void;
   onCancelTask: (taskId: string) => void;
   onInterval: (sourceId: string, hours: number) => void;
+  onEditScript: (sourceId?: string) => void;
 }) {
   const publisher = source.role !== "fallback_indexer";
   const [name, setName] = useState(source.name);
@@ -572,6 +577,10 @@ function SourceCard({ source, busy, expanded, onToggle, task, changeSources, onU
       <Row><TextField label="来源名称" value={name} disabled={busy} onChange={e => setName(e.target.value)} /></Row>
       <Row><Action disabled={busy || !name.trim() || name.trim() === source.name}
         onClick={() => changeSources(() => setSourceName(source.id, name), false)}>保存名称</Action></Row>
+      {source.script && <>
+        <InfoRow label="脚本" below>Lua · API {source.script.api_version} · SHA-256 {source.script.sha256}</InfoRow>
+        <Row><Action disabled={busy} onClick={() => onEditScript(source.id)}>编辑脚本</Action></Row>
+      </>}
       <InfoRow label="站点" below>{source.pages.join(" · ")}</InfoRow>
       {publisher && <>
         <InfoRow label="索引条目">{source.entry_count} 条 · 修订 {source.revision}</InfoRow>
@@ -593,7 +602,7 @@ function SourceCard({ source, busy, expanded, onToggle, task, changeSources, onU
   </div>;
 }
 
-function SourcesPage({ report, busy, tasks, expandedSources, onToggleSource, rule, setRule, changeSources, onUpdateSource, onCancelTask, onInterval, onMatchGames }: {
+function SourcesPage({ report, busy, tasks, expandedSources, onToggleSource, rule, setRule, changeSources, onUpdateSource, onCancelTask, onInterval, onMatchGames, onEditScript }: {
   expandedSources: Record<string, boolean>; onToggleSource: (sourceId: string) => void;
   report: ScanResult | null; busy: boolean; tasks: SourceTaskSnapshot[]; rule: string; setRule: (value: string) => void;
   changeSources: (action: () => Promise<SourceSubscription[]>, affectsMatching?: boolean) => void;
@@ -601,6 +610,7 @@ function SourcesPage({ report, busy, tasks, expandedSources, onToggleSource, rul
   onCancelTask: (taskId: string) => void;
   onInterval: (sourceId: string, hours: number) => void;
   onMatchGames: () => void;
+  onEditScript: (sourceId?: string) => void;
 }) {
   const [showExample, setShowExample] = useState(false);
   async function copyExample() {
@@ -616,7 +626,7 @@ function SourcesPage({ report, busy, tasks, expandedSources, onToggleSource, rul
   const fallbacks = sources.filter(source => source.role === "fallback_indexer");
   const taskFor = (sourceId: string) => tasks.find(task => task.kind === "update_source" && task.key === sourceId);
   return <div className="patch-page">
-    <Status>全局设置，对所有游戏生效。普通来源按间隔自动更新；HGamer 只在重新匹配游戏时按游戏补查，不参与自动更新。</Status>
+    <Status>全局设置，对所有游戏生效。普通来源按间隔自动更新；补查来源（包括 HGamer 与脚本来源）按游戏查询，不参与索引定时更新。</Status>
     <PanelSection title="匹配游戏"><Row><Action disabled={busy} onClick={onMatchGames}>匹配全部游戏</Action></Row>
       <Row><Status>来源更新后使用已更新的索引增量匹配当前游戏库；单个游戏可在游戏详情重新匹配。</Status></Row></PanelSection>
     {!!tasks.length && <PanelSection title="来源任务">{tasks.map(task => <Row key={task.task_id}>
@@ -625,15 +635,16 @@ function SourcesPage({ report, busy, tasks, expandedSources, onToggleSource, rul
     <PanelSection title="发行商补丁源">
       {publishers.map(source => <SourceCard key={source.id} source={source} busy={busy}
         expanded={expandedSources[source.id] === true} onToggle={() => onToggleSource(source.id)} task={taskFor(source.id)}
-        changeSources={changeSources} onUpdateSource={onUpdateSource} onCancelTask={onCancelTask} onInterval={onInterval} />)}
+        changeSources={changeSources} onUpdateSource={onUpdateSource} onCancelTask={onCancelTask} onInterval={onInterval} onEditScript={onEditScript} />)}
       {!publishers.length && <Row><Status>尚未配置发行商补丁源。</Status></Row>}
     </PanelSection>
     <PanelSection title="补丁索引（补查来源）">
       {fallbacks.map(source => <SourceCard key={source.id} source={source} busy={busy}
         expanded={expandedSources[source.id] === true} onToggle={() => onToggleSource(source.id)}
-        changeSources={changeSources} onUpdateSource={onUpdateSource} onCancelTask={onCancelTask} onInterval={onInterval} />)}
+        changeSources={changeSources} onUpdateSource={onUpdateSource} onCancelTask={onCancelTask} onInterval={onInterval} onEditScript={onEditScript} />)}
       {!fallbacks.length && <Row><Status>尚未配置补查来源。</Status></Row>}
     </PanelSection>
+    <PanelSection title="脚本来源"><Row><Action disabled={busy} onClick={() => onEditScript()}>导入脚本来源</Action></Row></PanelSection>
     <PanelSection title="添加源"><Row><TextField label="源规则 JSON（高级）" value={rule} onChange={e => setRule(e.target.value)} /></Row>
       <Row><Action disabled={busy || !rule.trim()} onClick={() => changeSources(() => addSource(rule))}>添加补丁源</Action>
         <Action aria-expanded={showExample} aria-controls="source-rule-example" onClick={() => setShowExample(value => !value)}>{showExample ? "收起规则示例" : "查看规则示例"}</Action></Row>
@@ -725,6 +736,27 @@ function GlobalSources() {
   const { report, busy, sourceTasks } = state;
   const { error, note } = feedbackFor(state);
   const [rule, setRule] = useState("");
+  const [editor, setEditor] = useState<{ document?: ScriptSourceDocument } | null>(null);
+  async function editScript(sourceId?: string) {
+    if (session.getSnapshot().busy) return;
+    session.update({ busy: "正在读取脚本…", busySince: Date.now() });
+    try { setEditor(sourceId ? { document: await getScriptSource(sourceId) } : {}); }
+    catch (failure) { session.setFeedback({ error: `读取脚本失败：${String(failure)}`, note: null }); }
+    finally { session.update({ busy: null, busySince: null }); }
+  }
+  async function saveScript(ruleJson: string, apiVersion: number, code: string, replace: boolean) {
+    if (session.getSnapshot().busy) throw Error("其他操作正在进行，请稍后保存");
+    session.update({ busy: "正在保存脚本…", busySince: Date.now() });
+    try {
+      const result = await importScriptSource(ruleJson, apiVersion, code, replace);
+      session.commitScriptSource(session.getSnapshot().report?.sources ?? [], result.settings_revision);
+      session.setFeedback({ note: "脚本已保存，尚未执行。请更新来源或重新匹配游戏。", error: null });
+      try {
+        session.commitSources(await listSourcesRpc());
+        await session.projectRows(session.getSnapshot().report?.installs.map(row => row.game.instance_id) ?? []);
+      } catch (failure) { session.setFeedback({ error: `脚本已保存，但刷新来源或游戏状态失败：${String(failure)}` }); }
+    } finally { session.update({ busy: null, busySince: null }); }
+  }
   const tasks = Object.values(sourceTasks).filter(task => !sourceTaskTerminal(task.state));
   useEffect(() => session.startSourcePolling(), []);
   const changeSources = (action: () => Promise<SourceSubscription[]>, affectsMatching = true) => void session.work("正在更新补丁源…", async () => {
@@ -734,11 +766,12 @@ function GlobalSources() {
     return sources;
   }, () => setRule(""));
   return <><div>{busy && <Status>{busy}</Status>}{error && <Status warning>{error}</Status>}{note && <Status>{note}</Status>}</div>
-    <SourcesPage report={report} busy={!!busy} tasks={tasks} expandedSources={state.expandedSources} onToggleSource={session.toggleSourceExpanded} rule={rule} setRule={setRule} changeSources={changeSources}
+    {editor && <ScriptSourceEditor document={editor.document} onSave={saveScript} onClose={() => setEditor(null)} />}
+    <SourcesPage report={report} busy={!!busy || !!editor} tasks={tasks} expandedSources={state.expandedSources} onToggleSource={session.toggleSourceExpanded} rule={rule} setRule={setRule} changeSources={changeSources}
       onUpdateSource={(sourceId, force) => void session.updateSource(sourceId, force)}
       onCancelTask={taskId => void session.cancelSourceTask(taskId)}
       onInterval={(sourceId, hours) => void session.setSourceInterval(sourceId, hours)}
-      onMatchGames={() => void session.matchGames(null)} />
+      onMatchGames={() => void session.matchGames(null)} onEditScript={sourceId => void editScript(sourceId)} />
   </>;
 }
 

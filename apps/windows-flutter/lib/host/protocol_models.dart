@@ -27,6 +27,8 @@ const coreMethods = [
   'set_source_name',
   'set_game_source',
   'add_source',
+  'import_script_source',
+  'get_script_source',
   'set_source_update_interval',
   'update_source',
   'match_games',
@@ -71,6 +73,9 @@ void _validateCapabilities(Map<String, dynamic> value) {
   }
   final installer = value['installer'] as Map<String, dynamic>;
   final sources = value['sources'] as Map<String, dynamic>;
+  if (!sources.containsKey('script_api_version')) {
+    throw const CoreError('capability_mismatch');
+  }
   for (final key in [
     'schema_version',
     'selection_version',
@@ -90,6 +95,7 @@ void _validateCapabilities(Map<String, dynamic> value) {
     'schedule_schema_version',
     'adapter_version',
     'encoding_version',
+    'script_api_version',
   ]) {
     if (sources[key] != 1) {
       throw const CoreError('installer_schema_unsupported');
@@ -165,6 +171,8 @@ class WireProtocol {
     'set_source_name': 'SourceNameResult',
     'set_game_source': 'GameSourceResult',
     'add_source': 'AddSourceResult',
+    'import_script_source': 'AddSourceResult',
+    'get_script_source': 'ScriptSourceDocument',
     'set_source_update_interval': 'SetSourceIntervalResult',
     'update_source': 'SourceUpdateResult',
     'match_games': 'MatchGamesResult',
@@ -229,8 +237,21 @@ class WireProtocol {
         return false;
       }
     }
-    if (value is String && rule['x-max-utf8-bytes'] is int) {
-      if (utf8.encode(value).length > rule['x-max-utf8-bytes']) return false;
+    if (value is String) {
+      if (rule['minLength'] is int && value.runes.length < rule['minLength']) {
+        return false;
+      }
+      if (rule['maxLength'] is int && value.runes.length > rule['maxLength']) {
+        return false;
+      }
+      if (rule['pattern'] is String &&
+          !RegExp(rule['pattern'] as String).hasMatch(value)) {
+        return false;
+      }
+      if (rule['x-max-utf8-bytes'] is int &&
+          utf8.encode(value).length > rule['x-max-utf8-bytes']) {
+        return false;
+      }
     }
     if (value is Map) {
       if ((rule['required'] as List? ?? []).any(
@@ -275,11 +296,6 @@ class WireProtocol {
       for (final entry in value.entries) {
         final key = entry.key;
         final item = entry.value;
-        if (key == 'code' &&
-            item is String &&
-            !RegExp(r'^[a-z0-9_]{1,128}$').hasMatch(item)) {
-          throw const CoreError('invalid_core_response');
-        }
         if ([
               'id',
               'request_id',

@@ -10,7 +10,7 @@ import uuid
 import decky
 
 sys.path.insert(0, str(Path(__file__).parent / "backend"))
-from bridge import CoreBridge
+from bridge import CoreBridge, CoreError
 from protocol_validation import validate_id, MAX_INSTANCE_ID_BYTES
 from plugin_settings import Settings, _no_links
 from source_service import SourceService, due_source_ids
@@ -168,6 +168,23 @@ class Plugin:
             raise ValueError("invalid_source_rule")
         await self.sources.add_source(json.loads(rule_json))
         return self.sources.list_sources()
+
+    async def get_script_source(self, source_id):
+        try:
+            return await self.sources.get_script_source(source_id)
+        except CoreError as error:
+            raise RuntimeError(f"{error.code}: {error.detail}" if error.detail else error.code) from error
+
+    async def import_script_source(self, rule_json, api_version, code, replace=False):
+        self._require_idle()
+        if (not isinstance(rule_json, str) or not isinstance(code, str)
+                or type(api_version) is not int or type(replace) is not bool):
+            raise ValueError("invalid_request")
+        try:
+            return await self.sources.import_script_source(
+                json.loads(rule_json), api_version, code, replace)
+        except CoreError as error:
+            raise RuntimeError(f"{error.code}: {error.detail}" if error.detail else error.code) from error
 
     async def set_game_source(self, appid, source_id, subscribed):
         self._require_idle()

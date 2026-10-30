@@ -140,6 +140,15 @@ class SourceService:
     async def add_source(self, rule):
         return await self._call_sync("add_source", {"rule": rule})
 
+    async def get_script_source(self, source_id):
+        return await self.bridge.call_sync("get_script_source", {"source_id": source_id})
+
+    async def import_script_source(self, rule, api_version, code, replace=False):
+        result = await self.bridge.call_sync("import_script_source", {
+            "rule": rule, "api_version": api_version, "code": code, "replace": replace})
+        self.settings_revision = result["settings_revision"]
+        return result
+
     async def set_game_source(self, appid, source_id, subscribed):
         return await self._call_sync("set_game_source",
                                      {"appid": appid, "source_id": source_id,

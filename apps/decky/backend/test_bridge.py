@@ -309,6 +309,31 @@ class BridgeStreamTests(unittest.IsolatedAsyncioTestCase):
 
 
 class BridgeIntegrationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_real_core_script_service_import_read_replace_and_failure(self):
+        from source_service import SourceService
+        root = Path(__file__).resolve().parents[3]
+        configured = os.environ.get("PATCHHUB_TEST_CORE")
+        binary = Path(configured) if configured else root / "target/debug" / ("patchhub-core.exe" if os.name == "nt" else "patchhub-core")
+        if not configured and not binary.exists():
+            self.skipTest("core binary not built")
+        with tempfile.TemporaryDirectory() as temporary:
+            catalog = Path(temporary) / "catalog.json"
+            catalog.write_text('{"schema_version":1,"revision":0,"releases":[]}')
+            bridge = CoreBridge(binary, catalog, state_dir=Path(temporary) / "state")
+            await bridge.preflight()
+            service = await SourceService(bridge, Path(temporary) / "state").initialize()
+            rule = json.loads((root / "docs/features/script-source-adapters/examples/publisher/source.json").read_text(encoding="utf-8"))
+            code = "-- " + "脚本源码" * 15000 + "\nwhile true do end\nreturn {}"
+            await service.import_script_source(rule, 1, code)
+            self.assertEqual((await service.get_script_source(rule["id"]))["code"], code)
+            await service.import_script_source(rule, 1, "error('not executed on save')", True)
+            with self.assertRaises(CoreError) as failure:
+                await service.import_script_source(rule, 1, "return {", True)
+            self.assertEqual(failure.exception.code, "script_source_syntax_error")
+            self.assertIn(rule["id"], failure.exception.detail)
+            restarted = SourceService(bridge, Path(temporary) / "state")
+            self.assertEqual((await restarted.get_script_source(rule["id"]))["code"], "error('not executed on save')")
+
     async def test_real_core_v5_scan_and_error(self):
         root = Path(__file__).resolve().parents[3]
         configured_binary = os.environ.get("PATCHHUB_TEST_CORE")

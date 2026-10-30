@@ -49,6 +49,9 @@ pub struct Params {
     pub instance_ids: Vec<String>,
     /// Declarative rule for `add_source` (validated against `RawSourceRule`).
     pub rule: Option<Value>,
+    pub api_version: Option<u32>,
+    pub code: Option<String>,
+    pub replace: bool,
     pub name_hints: Vec<String>,
 
     pub force: bool,
@@ -94,6 +97,12 @@ impl Params {
             instances: string_list(&v, "instances"),
             instance_ids: string_list(&v, "instance_ids"),
             rule: v.get("rule").cloned(),
+            api_version: v
+                .get("api_version")
+                .and_then(Value::as_u64)
+                .map(|n| n as u32),
+            code: text("code"),
+            replace: v.get("replace").and_then(Value::as_bool).unwrap_or(false),
             name_hints: string_list(&v, "name_hints"),
 
             force: v.get("force").and_then(Value::as_bool).unwrap_or(false),
@@ -184,7 +193,7 @@ impl ProgressCursor {
 }
 
 /// `get_capabilities` v5 payload (p1-host-contract §3.1, p1-contract §9.2):
-/// installer and source sub-objects merged with the full 22-method whitelist.
+/// installer and source sub-objects merged with the full 24-method whitelist.
 fn capabilities(_params: &Params) -> Value {
     let mut methods: Vec<&str> = Vec::with_capacity(METHODS.len());
     methods.extend(METHODS.iter().copied());
@@ -214,6 +223,7 @@ fn capabilities(_params: &Params) -> Value {
             "adapter_version": 1,
             "parser_version": sources::PARSER_VERSION,
             "encoding_version": sources::SOURCES_ENCODING_VERSION,
+            "script_api_version": sources::script::SCRIPT_API_VERSION,
             "methods": SOURCE_METHODS,
         },
         "methods": methods,
@@ -931,6 +941,41 @@ fn execute_source_method(
                 "subscribed": subscribed,
             }))
         }
+        "get_script_source" => {
+            let source_id = params
+                .source_id
+                .as_deref()
+                .ok_or_else(|| DomainError::code("source_id_required"))?;
+            let snapshot = sources::snapshot::SourceSnapshot::load(&state(params)?, &[], 0)
+                .map_err(err)?
+                .ok_or_else(|| DomainError::code("unknown_source"))?;
+            value(snapshot.get_script_source(source_id).map_err(err)?)
+        }
+        "import_script_source" => {
+            let raw: sources::RawSourceRule = serde_json::from_value(
+                params
+                    .rule
+                    .clone()
+                    .ok_or_else(|| DomainError::code("rule_required"))?,
+            )
+            .map_err(err)?;
+            let mut handle = open_sources(params)?;
+            value(
+                handle
+                    .import_script_source(
+                        &raw,
+                        params
+                            .api_version
+                            .ok_or_else(|| DomainError::code("api_version_required"))?,
+                        params
+                            .code
+                            .as_deref()
+                            .ok_or_else(|| DomainError::code("code_required"))?,
+                        params.replace,
+                    )
+                    .map_err(err)?,
+            )
+        }
         "add_source" => {
             let rule_value = params
                 .rule
@@ -1413,7 +1458,7 @@ mod sources_tests {
             .iter()
             .map(|method| method.as_str().unwrap())
             .collect();
-        assert_eq!(methods.len(), 22);
+        assert_eq!(methods.len(), 24);
         assert!(methods.contains(&"match_games"));
         assert!(methods.contains(&"project_instances"));
         assert_eq!(capabilities["sources"]["index_schema_version"], 1);
@@ -1424,7 +1469,7 @@ mod sources_tests {
         assert_eq!(capabilities["sources"]["encoding_version"], 1);
         assert_eq!(
             capabilities["sources"]["methods"].as_array().unwrap().len(),
-            10
+            12
         );
         assert_eq!(capabilities["installer"]["schema_version"], 1);
         assert_eq!(

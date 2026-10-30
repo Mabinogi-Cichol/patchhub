@@ -111,8 +111,13 @@ def _valid(value, rule):
             return False
         if len(value) < rule.get("minLength", 0) or len(value) > rule.get("maxLength", float("inf")):
             return False
-        if "pattern" in rule and not re.search(rule["pattern"], value):
-            return False
+        if "pattern" in rule:
+            pattern = rule["pattern"]
+            # Python `$` also matches before a final newline; an error code
+            # must match its entire vocabulary, as in Rust's ASCII check.
+            match = re.fullmatch if pattern == "^[a-z0-9_]+$" else re.search
+            if not match(pattern, value):
+                return False
         if "x-max-utf8-bytes" in rule and len(encoded) > rule["x-max-utf8-bytes"]:
             return False
     return True
@@ -137,8 +142,6 @@ def _bytes_valid(value):
                             validate_id(entry, generated.MAX_INSTANCE_ID_BYTES)
                         except ValueError:
                             return False
-            if key == "code" and item is not None and (not isinstance(item, str) or not re.fullmatch(r"[a-z0-9_]{1,128}", item)):
-                return False
             if not _bytes_valid(item):
                 return False
     elif isinstance(value, list):
@@ -196,6 +199,8 @@ def validate_capabilities(caps):
             or caps["methods"] != list(generated.METHODS) or caps.get("contracts") != generated.CONTRACTS):
         raise ValueError("capability_mismatch")
     installer, sources = caps.get("installer"), caps.get("sources")
+    if isinstance(sources, dict) and "script_api_version" not in sources:
+        raise ValueError("capability_mismatch")
     if (not isinstance(installer, dict) or not isinstance(sources, dict)
             or any(installer.get(key) != expected for key, expected in generated.INSTALLER_VERSIONS.items())
             or any(sources.get(key) != expected for key, expected in generated.SOURCE_VERSIONS.items())):

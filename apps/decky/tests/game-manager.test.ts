@@ -33,6 +33,8 @@ function mount(item: Install, task?: sourceTasks.SourceTaskSnapshot) {
   const controls: Array<{ name: string; props: any }> = [];
   const installs: unknown[][] = [];
   const sourceWrites: unknown[][] = [];
+  const scriptWrites: unknown[][] = [];
+  const projections: string[][] = [];
   const copies: string[] = [];
   let pending = Promise.resolve();
   const state: any = { report: { installs: [item], sources: [], diagnostics: [] }, transactions: [], busy: null, sourceTasks: task ? { [task.task_id]: task } : {}, error: null, note: null, errorInstance: null, noteInstance: null };
@@ -54,7 +56,10 @@ function mount(item: Install, task?: sourceTasks.SourceTaskSnapshot) {
   const exports: Record<string, any> = {};
   const mockSession = {
     getSnapshot: () => state, subscribe() {}, setFeedback(value: any) { Object.assign(state, value); },
+    update(value: any) { Object.assign(state, value); },
+    async projectRows(ids: string[]) { projections.push(ids); },
     commitSources(sources: unknown[]) { state.report.sources = sources; },
+    commitScriptSource(sources: unknown[], revision: number) { state.report.sources = sources; state.report.settings_revision = revision; },
     invalidateDiscovery() { state.report.installs.forEach((row: any) => { row.discovery = { status: "pending", candidates: [] }; }); },
     work(_label: string, action: () => Promise<any>, success: (value: any) => void) {
       pending = (async () => { try { success(await action()); } catch (error) { state.error = String(error); } })();
@@ -63,6 +68,21 @@ function mount(item: Install, task?: sourceTasks.SourceTaskSnapshot) {
   };
   const modules: Record<string, any> = {
     "@decky/api": { callable: (method: string) => async (...args: unknown[]) => {
+      if (method === "list_sources") {
+        if (state.rejectRefresh) throw Error("列表读取失败");
+        return state.savedSources ?? [];
+      }
+      if (method === "get_script_source") {
+        if (state.rejectRead) throw Error("读取被拒绝");
+        return state.script;
+      }
+      if (method === "import_script_source") {
+        scriptWrites.push(args);
+        if (state.rejectScript) throw Error("script_source_syntax_error: 保留诊断");
+        state.script = { rule: JSON.parse(args[0] as string), api_version: args[1], code: args[2], sha256: "a".repeat(64) };
+        state.savedSources = [{ ...state.script.rule, script: { api_version: 1, sha256: state.script.sha256 } }];
+        return { rule: state.script.rule, settings_revision: 3 };
+      }
       if (method !== "set_source_name") return;
       sourceWrites.push(args);
       if (state.rejectName) throw Error("保存被拒绝");
@@ -78,6 +98,9 @@ function mount(item: Install, task?: sourceTasks.SourceTaskSnapshot) {
     "./tasks": { tasks: { isBusy: () => false, startInstall: async (...args: unknown[]) => { installs.push(args); } } },
     "./preferences": { getListPreferences: () => ({ filter: "all", query: "" }) },
     "./app-update": {}, "./cache": {}, "./task-progress-view": {},
+    "./script-source-editor": { ScriptSourceEditor: (props: any) => {
+      controls.push({ name: "ScriptSourceEditor", props }); return null;
+    } },
   };
   runInNewContext(output, { exports, crypto: { randomUUID: () => "request-1" }, URL, console,
     navigator: { clipboard: { writeText: async (text: string) => { copies.push(text); } } },
@@ -86,8 +109,39 @@ function mount(item: Install, task?: sourceTasks.SourceTaskSnapshot) {
   const renderList = () => { hook = 0; controls.length = 0; return renderToStaticMarkup(React.createElement(exports.QuickAccess)); };
   const renderSources = () => { hook = 0; controls.length = 0; return renderToStaticMarkup(React.createElement(exports.GlobalSources)); };
   const button = (label: string) => controls.find(control => control.name === "ButtonItem" && React.Children.toArray(control.props.children).join("") === label)!.props;
-  return { render, renderList, renderSources, controls, button, installs, state, sourceWrites, copies, settle: () => pending };
+  return { render, renderList, renderSources, controls, button, installs, state, sourceWrites, scriptWrites, projections, copies, settle: () => pending };
 }
+
+test("source page imports and reads script documents through RPC, refreshes and preserves failed edits", async () => {
+  const page = mount(game()); page.renderSources();
+  page.button("导入脚本来源").onClick(); page.renderSources();
+  const editor = () => page.controls.find(control => control.name === "ScriptSourceEditor")!.props;
+  const rule = JSON.stringify({ id: "custom", name: "脚本来源", adapter: "lua", pages: [] });
+  await editor().onSave(rule, 1, "return {}", false);
+  editor().onClose(); page.state.expandedSources = { custom: true }; page.renderSources();
+  assert.match(page.state.note, /脚本已保存，尚未执行/);
+  assert.deepEqual(page.projections[0], ["game"]);
+  page.button("编辑脚本").onClick(); await new Promise<void>(resolve => setImmediate(resolve)); page.renderSources();
+  assert.equal(editor().document.code, "return {}");
+  page.state.rejectScript = true;
+  await assert.rejects(editor().onSave(rule, 1, "return {", true), /script_source_syntax_error/);
+  page.renderSources();
+  assert.equal(editor().document.code, "return {}");
+  assert.equal(page.state.busy, null);
+  page.state.rejectScript = false;
+  await editor().onSave(rule, 1, "return { updated = true }", true); editor().onClose(); page.renderSources();
+  assert.equal(page.scriptWrites.at(-1)?.[3], true);
+  page.button("编辑脚本").onClick(); await new Promise<void>(resolve => setImmediate(resolve)); page.renderSources();
+  assert.equal(editor().document.code, "return { updated = true }");
+  page.state.rejectRefresh = true;
+  await editor().onSave(rule, 1, "return { saved = true }", true);
+  assert.match(page.state.error, /脚本已保存，但刷新来源或游戏状态失败/);
+  assert.equal(page.state.script.code, "return { saved = true }");
+  editor().onClose(); page.renderSources(); page.state.rejectRead = true;
+  page.button("编辑脚本").onClick(); await new Promise<void>(resolve => setImmediate(resolve)); page.renderSources();
+  assert.match(page.state.error, /读取被拒绝/);
+  assert.equal(page.controls.some(control => control.name === "ScriptSourceEditor"), false);
+});
 
 test("rule examples stay optional and copy JSON without replacing the draft", async () => {
   const page = mount(game());

@@ -10,8 +10,8 @@ pub use patchhub_core::{
     },
     projection::{DomainError, InstanceProjection, PreviewReport, ScanReport},
     sources::{
-        GameMatch, GameSourceSummary, RawSourceRule, SourceCandidate, SourceRule, SourceStatus,
-        SourceSummary,
+        GameMatch, GameSourceSummary, RawSourceRule, ScriptSourceDocument, SourceCandidate,
+        SourceRule, SourceStatus, SourceSummary,
     },
 };
 use schemars::JsonSchema;
@@ -85,12 +85,14 @@ pub enum Method {
     SetSourceName,
     SetGameSource,
     AddSource,
+    ImportScriptSource,
+    GetScriptSource,
     SetSourceUpdateInterval,
     UpdateSource,
     MatchGames,
     RematchGame,
 }
-pub const ALL_METHODS: [Method; 22] = [
+pub const ALL_METHODS: [Method; 24] = [
     Method::GetCapabilities,
     Method::Scan,
     Method::ProjectInstances,
@@ -109,12 +111,14 @@ pub const ALL_METHODS: [Method; 22] = [
     Method::SetSourceName,
     Method::SetGameSource,
     Method::AddSource,
+    Method::ImportScriptSource,
+    Method::GetScriptSource,
     Method::SetSourceUpdateInterval,
     Method::UpdateSource,
     Method::MatchGames,
     Method::RematchGame,
 ];
-pub const METHODS: [&str; 22] = [
+pub const METHODS: [&str; 24] = [
     "get_capabilities",
     "scan",
     "project_instances",
@@ -133,18 +137,22 @@ pub const METHODS: [&str; 22] = [
     "set_source_name",
     "set_game_source",
     "add_source",
+    "import_script_source",
+    "get_script_source",
     "set_source_update_interval",
     "update_source",
     "match_games",
     "rematch_game",
 ];
-pub const SOURCE_METHODS: [&str; 10] = [
+pub const SOURCE_METHODS: [&str; 12] = [
     "list_sources",
     "list_game_sources",
     "set_source_enabled",
     "set_source_name",
     "set_game_source",
     "add_source",
+    "import_script_source",
+    "get_script_source",
     "set_source_update_interval",
     "update_source",
     "match_games",
@@ -182,6 +190,8 @@ params!(SetSourceEnabledParams{pub source_id:String,pub enabled:bool,});
 params!(SetSourceNameParams{pub source_id:String,pub name:String,});
 params!(SetGameSourceParams{pub source_id:String,pub subscribed:bool,#[ts(optional = nullable)]pub instance_id:Option<String>,#[ts(optional = nullable)]pub appid:Option<u32>,});
 params!(AddSourceParams{pub rule:RawSourceRule,});
+params!(ImportScriptSourceParams{pub rule:RawSourceRule,pub api_version:u32,pub code:String,#[serde(default)]#[ts(as="Option<bool>", optional)]pub replace:bool,});
+params!(GetScriptSourceParams{pub source_id:String,});
 params!(SetSourceUpdateIntervalParams{pub source_id:String,#[ts(type="number")]pub interval_hours:u64,});
 params!(UpdateSourceParams{pub source_id:String,#[serde(default)]#[ts(as="Option<bool>", optional)]pub force:bool,});
 params!(MatchGamesParams{#[serde(default)]#[ts(as="Option<Vec<String>>", optional)]pub instances:Vec<String>,#[serde(default)]#[ts(as="Option<Vec<String>>", optional)]pub name_hints:Vec<String>,#[serde(default)]#[ts(as="Option<bool>", optional)]pub force_details:bool,});
@@ -207,6 +217,8 @@ pub enum RequestParams {
     SetSourceName(SetSourceNameParams),
     SetGameSource(SetGameSourceParams),
     AddSource(AddSourceParams),
+    ImportScriptSource(ImportScriptSourceParams),
+    GetScriptSource(GetScriptSourceParams),
     SetSourceUpdateInterval(SetSourceUpdateIntervalParams),
     UpdateSource(UpdateSourceParams),
     MatchGames(MatchGamesParams),
@@ -233,6 +245,8 @@ impl RequestParams {
             Self::SetSourceName(p) => &p.host,
             Self::SetGameSource(p) => &p.host,
             Self::AddSource(p) => &p.host,
+            Self::ImportScriptSource(p) => &p.host,
+            Self::GetScriptSource(p) => &p.host,
             Self::SetSourceUpdateInterval(p) => &p.host,
             Self::UpdateSource(p) => &p.host,
             Self::MatchGames(p) => &p.host,
@@ -498,6 +512,7 @@ pub struct SourceCapabilities {
     pub adapter_version: u32,
     pub parser_version: u32,
     pub encoding_version: u32,
+    pub script_api_version: u32,
     pub methods: Vec<Method>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
@@ -544,6 +559,7 @@ pub fn validate_capabilities(v: &Value) -> Result<Capabilities, ProtocolError> {
     ]
     .iter()
     .any(|v| *v != 1)
+        || c.sources.script_api_version != patchhub_core::sources::script::SCRIPT_API_VERSION
         || c.sources.parser_version != patchhub_core::sources::PARSER_VERSION
     {
         return Err(ProtocolError::code("installer_schema_unsupported"));
@@ -650,6 +666,7 @@ pub enum MethodResult {
     Named(SourceNameResult),
     GameSource(GameSourceResult),
     Added(AddSourceResult),
+    ScriptDocument(ScriptSourceDocument),
     SetInterval(SetSourceIntervalResult),
     SourceUpdated(SourceUpdateResult),
     Matched(MatchGamesResult),
@@ -706,6 +723,10 @@ pub fn validate_response(
         return Err(ProtocolError::code("invalid_core_response"));
     }
     if v["ok"].as_bool() == Some(false) {
+        let schema = output_schema();
+        if !matches_schema(v, &schema["$defs"]["ErrorResponse"], schema) {
+            return Err(ProtocolError::code("invalid_core_response"));
+        }
         serde_json::from_value::<ErrorResponse>(v.clone())
             .map_err(|_| ProtocolError::code("invalid_core_response"))?;
         return Ok(());
@@ -817,8 +838,11 @@ pub fn validate_response(
         Some(Method::SetGameSource) => {
             check!(GameSourceResult);
         }
-        Some(Method::AddSource) => {
+        Some(Method::AddSource | Method::ImportScriptSource) => {
             check!(AddSourceResult);
+        }
+        Some(Method::GetScriptSource) => {
+            check!(ScriptSourceDocument);
         }
         Some(Method::SetSourceUpdateInterval) => {
             check!(SetSourceIntervalResult);
@@ -946,17 +970,6 @@ fn validate_bounds(v: &Value) -> Result<(), ProtocolError> {
         }
         Value::Object(o) => {
             for (k, v) in o {
-                if k == "code"
-                    && v.as_str().is_some_and(|s| {
-                        s.is_empty()
-                            || s.len() > 128
-                            || !s
-                                .bytes()
-                                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
-                    })
-                {
-                    return Err(ProtocolError::code("invalid_core_response"));
-                }
                 if [
                     "id",
                     "request_id",
@@ -1362,8 +1375,19 @@ pub fn schema() -> Value {
     for name in ["SourceSummary", "GameSourceSummary"] {
         defs.get_mut(name).unwrap()["additionalProperties"] = serde_json::json!(false);
     }
-    defs.get_mut("DomainError").unwrap()["properties"]["code"] =
-        serde_json::json!({"type":"string","minLength":1,"maxLength":128,"pattern":"^[a-z0-9_]+$"});
+    // Error codes have a vocabulary; Lua source in `code` is unrestricted text.
+    for (name, definition) in defs.iter_mut() {
+        if !["ImportScriptSourceParams", "ScriptSourceDocument"].contains(&name.as_str()) {
+            if let Some(code) = definition
+                .get_mut("properties")
+                .and_then(|p| p.get_mut("code"))
+            {
+                code["minLength"] = serde_json::json!(1);
+                code["maxLength"] = serde_json::json!(128);
+                code["pattern"] = serde_json::json!("^[a-z0-9_]+$");
+            }
+        }
+    }
     defs.get_mut("Detection").unwrap()["properties"]["status"] = serde_json::json!({"enum":["unknown","not_detected","partial_or_conflict","installed_external","installed_managed"]});
     defs.get_mut("FileEvidence").unwrap()["properties"]["status"] =
         serde_json::json!({"enum":["match","mismatch","missing","unreadable_or_unsafe"]});
@@ -1396,6 +1420,8 @@ pub fn schema() -> Value {
             Method::SetSourceName => "SetSourceNameParams",
             Method::SetGameSource => "SetGameSourceParams",
             Method::AddSource => "AddSourceParams",
+            Method::ImportScriptSource => "ImportScriptSourceParams",
+            Method::GetScriptSource => "GetScriptSourceParams",
             Method::SetSourceUpdateInterval => "SetSourceUpdateIntervalParams",
             Method::UpdateSource => "UpdateSourceParams",
             Method::MatchGames => "MatchGamesParams",
@@ -1579,7 +1605,8 @@ pub fn result_schema_name(method: Method) -> &'static str {
         Method::SetSourceEnabled => "SourceEnabledResult",
         Method::SetSourceName => "SourceNameResult",
         Method::SetGameSource => "GameSourceResult",
-        Method::AddSource => "AddSourceResult",
+        Method::AddSource | Method::ImportScriptSource => "AddSourceResult",
+        Method::GetScriptSource => "ScriptSourceDocument",
         Method::SetSourceUpdateInterval => "SetSourceIntervalResult",
         Method::UpdateSource => "SourceUpdateResult",
         Method::MatchGames | Method::RematchGame => "MatchGamesResult",
@@ -1639,6 +1666,25 @@ fn matches_schema(v: &Value, s: &Value, root: &Value) -> bool {
         }
     }
     if let Some(value) = v.as_str() {
+        let length = value.chars().count() as u64;
+        if s.get("minLength")
+            .and_then(Value::as_u64)
+            .is_some_and(|limit| length < limit)
+            || s.get("maxLength")
+                .and_then(Value::as_u64)
+                .is_some_and(|limit| length > limit)
+        {
+            return false;
+        }
+        // The error-code vocabulary previously lived in recursive bounds.
+        // Apply it to its schema field, rather than every field named `code`.
+        if s.get("pattern").and_then(Value::as_str) == Some("^[a-z0-9_]+$")
+            && !value
+                .bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
+        {
+            return false;
+        }
         if s.get("x-max-utf8-bytes")
             .and_then(Value::as_u64)
             .is_some_and(|limit| value.len() as u64 > limit)

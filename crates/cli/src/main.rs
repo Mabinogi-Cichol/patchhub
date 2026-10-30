@@ -480,6 +480,8 @@ mod tests {
         "set_source_name",
         "set_game_source",
         "add_source",
+        "import_script_source",
+        "get_script_source",
         "set_source_update_interval",
         "update_source",
         "match_games",
@@ -492,7 +494,7 @@ mod tests {
         expected.sort_unstable();
         let mut actual = runtime::METHODS.to_vec();
         actual.sort_unstable();
-        assert_eq!(runtime::METHODS.len(), 22);
+        assert_eq!(runtime::METHODS.len(), 24);
         assert_eq!(actual, expected);
 
         let capabilities = respond(
@@ -504,7 +506,7 @@ mod tests {
             .iter()
             .map(|method| method.as_str().unwrap())
             .collect();
-        assert_eq!(methods.len(), 22);
+        assert_eq!(methods.len(), 24);
         let mut sorted = methods.clone();
         sorted.sort_unstable();
         assert_eq!(sorted, expected);
@@ -532,7 +534,7 @@ mod tests {
         assert_eq!(result["sources"]["schedule_schema_version"], 1);
         assert_eq!(result["sources"]["parser_version"], 2);
         assert_eq!(result["sources"]["encoding_version"], 1);
-        assert_eq!(result["sources"]["methods"].as_array().unwrap().len(), 10);
+        assert_eq!(result["sources"]["methods"].as_array().unwrap().len(), 12);
     }
 
     #[test]

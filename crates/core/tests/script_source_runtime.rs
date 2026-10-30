@@ -37,6 +37,34 @@ fn ctx(fake: &Arc<FakeFetcher>) -> RequestContext {
 fn flag() -> Arc<AtomicBool> {
     Arc::new(AtomicBool::new(false))
 }
+
+#[test]
+fn documented_publisher_example_imports_and_collects_direct_entries() {
+    let code = include_str!(
+        "../../../docs/features/script-source-adapters/examples/publisher/adapter.lua"
+    );
+    let raw: RawSourceRule = serde_json::from_str(include_str!(
+        "../../../docs/features/script-source-adapters/examples/publisher/source.json"
+    ))
+    .unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let mut sources = Sources::open(temp.path()).unwrap();
+    let imported = sources.import_script_source(&raw, 1, code, false).unwrap();
+    let fake = Arc::new(FakeFetcher::new());
+    fake.push(FetchResponse { status: 200, final_url: raw.pages[0].clone(),
+        body: br#"<table><tr data-appid="123"><td class="title">Game</td><td><a href="https://downloads.vendor.example/game.zip">Patch</a></td></tr></table>"#.to_vec(),
+        ..FetchResponse::default() });
+    let result =
+        script::collect_index(&imported.rule, code, None, &mut ctx(&fake), flag(), |_| {}).unwrap();
+    assert!(result.complete);
+    assert_eq!(result.entries.len(), 1);
+    assert_eq!(result.entries[0].appid, Some(123));
+    assert_eq!(result.entries[0].kind, "entry");
+    assert_eq!(
+        result.entries[0].url.as_deref(),
+        Some("https://downloads.vendor.example/game.zip")
+    );
+}
 fn index(
     code: &str,
     fake: &Arc<FakeFetcher>,

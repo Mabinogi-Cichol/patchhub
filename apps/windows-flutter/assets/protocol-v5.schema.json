@@ -45,7 +45,10 @@
       "additionalProperties": false,
       "properties": {
         "code": {
-          "$ref": "#/$defs/ActionBlockerCode"
+          "$ref": "#/$defs/ActionBlockerCode",
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[a-z0-9_]+$"
         },
         "detail": {
           "type": [
@@ -291,7 +294,10 @@
       "additionalProperties": false,
       "properties": {
         "code": {
-          "$ref": "#/$defs/CleanupErrorCode"
+          "$ref": "#/$defs/CleanupErrorCode",
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[a-z0-9_]+$"
         },
         "detail": {
           "type": [
@@ -464,6 +470,9 @@
       "additionalProperties": false,
       "properties": {
         "code": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[a-z0-9_]+$",
           "type": "string"
         },
         "detail": {
@@ -580,6 +589,9 @@
       "additionalProperties": false,
       "properties": {
         "code": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[a-z0-9_]+$",
           "type": "string"
         },
         "detail": {
@@ -984,6 +996,22 @@
       },
       "type": "array"
     },
+    "GetScriptSourceParams": {
+      "additionalProperties": false,
+      "properties": {
+        "host": {
+          "$ref": "#/$defs/HostInputs"
+        },
+        "source_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "host",
+        "source_id"
+      ],
+      "type": "object"
+    },
     "HostInputs": {
       "additionalProperties": false,
       "properties": {
@@ -1069,6 +1097,36 @@
       },
       "required": [
         "kind"
+      ],
+      "type": "object"
+    },
+    "ImportScriptSourceParams": {
+      "additionalProperties": false,
+      "properties": {
+        "api_version": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "code": {
+          "type": "string"
+        },
+        "host": {
+          "$ref": "#/$defs/HostInputs"
+        },
+        "replace": {
+          "default": false,
+          "type": "boolean"
+        },
+        "rule": {
+          "$ref": "#/$defs/RawSourceRule"
+        }
+      },
+      "required": [
+        "host",
+        "rule",
+        "api_version",
+        "code"
       ],
       "type": "object"
     },
@@ -1976,6 +2034,8 @@
         "set_source_name",
         "set_game_source",
         "add_source",
+        "import_script_source",
+        "get_script_source",
         "set_source_update_interval",
         "update_source",
         "match_games",
@@ -2044,6 +2104,9 @@
         },
         {
           "$ref": "#/$defs/AddSourceResult"
+        },
+        {
+          "$ref": "#/$defs/ScriptSourceDocument"
         },
         {
           "$ref": "#/$defs/SetSourceIntervalResult"
@@ -2379,6 +2442,9 @@
       "additionalProperties": false,
       "properties": {
         "code": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[a-z0-9_]+$",
           "type": "string"
         },
         "instance_id": {
@@ -2564,6 +2630,9 @@
       "additionalProperties": false,
       "properties": {
         "code": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[a-z0-9_]+$",
           "type": [
             "string",
             "null"
@@ -3079,6 +3148,54 @@
           "additionalProperties": false,
           "properties": {
             "method": {
+              "const": "import_script_source"
+            },
+            "params": {
+              "$ref": "#/$defs/ImportScriptSourceParams"
+            },
+            "protocol_version": {
+              "const": 5
+            },
+            "request_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "protocol_version",
+            "request_id",
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "method": {
+              "const": "get_script_source"
+            },
+            "params": {
+              "$ref": "#/$defs/GetScriptSourceParams"
+            },
+            "protocol_version": {
+              "const": 5
+            },
+            "request_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "protocol_version",
+            "request_id",
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "method": {
               "const": "set_source_update_interval"
             },
             "params": {
@@ -3281,6 +3398,32 @@
       },
       "required": [
         "api_version",
+        "sha256"
+      ],
+      "type": "object"
+    },
+    "ScriptSourceDocument": {
+      "additionalProperties": false,
+      "properties": {
+        "api_version": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "code": {
+          "type": "string"
+        },
+        "rule": {
+          "$ref": "#/$defs/RawSourceRule"
+        },
+        "sha256": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "rule",
+        "api_version",
+        "code",
         "sha256"
       ],
       "type": "object"
@@ -3684,6 +3827,11 @@
           "format": "uint32",
           "minimum": 0,
           "type": "integer"
+        },
+        "script_api_version": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
         }
       },
       "required": [
@@ -3694,6 +3842,7 @@
         "adapter_version",
         "parser_version",
         "encoding_version",
+        "script_api_version",
         "methods"
       ],
       "type": "object"
@@ -4006,6 +4155,9 @@
           "type": "integer"
         },
         "code": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[a-z0-9_]+$",
           "type": "string"
         },
         "entry_count": {

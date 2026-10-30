@@ -8,6 +8,7 @@ import '../host/core_task.dart';
 import '../models/app_model.dart';
 import '../models/library.dart';
 import '../presentation/library_presentation.dart';
+import 'script_source_editor.dart';
 
 const sourceRuleExample = '''{
   "id": "my-publisher",
@@ -116,6 +117,41 @@ class _GlobalSourcesPageState extends State<GlobalSourcesPage> {
     }
   }
 
+  Future<void> editScript([String? sourceId]) async {
+    Map<String, dynamic>? document;
+    if (sourceId != null) {
+      setState(() {
+        saving = true;
+        errors.remove(sourceId);
+      });
+      try {
+        document = await widget.model.client.call('get_script_source', {
+          'source_id': sourceId,
+        }) as Map<String, dynamic>;
+      } catch (failure) {
+        if (mounted) setState(() => errors[sourceId] = failure);
+        return;
+      } finally {
+        if (mounted) setState(() => saving = false);
+      }
+    }
+    if (!mounted) return;
+    final saved = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => ScriptSourceEditor(
+        document: document,
+        onSave: (params) => widget.model.mutate('import_script_source', params),
+      ),
+    );
+    if (saved == true && mounted) {
+      setState(() {});
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('脚本已保存，尚未执行。请更新来源或重新匹配游戏。')));
+    }
+  }
+
   Future<void> open(String url) async {
     try {
       await DesktopServices().openSource(Uri.parse(url));
@@ -189,7 +225,19 @@ class _GlobalSourcesPageState extends State<GlobalSourcesPage> {
       const Text('管理所有游戏使用的来源；单个游戏的订阅请进入“游戏订阅”。'),
       if (widget.model.sourceError != null)
         SelectableText('来源读取或状态刷新失败：${widget.model.sourceError}'),
+      if (widget.model.stateRefreshError != null)
+        SelectableText('${widget.model.stateRefreshError}'),
       const SizedBox(height: 12),
+      Align(
+        alignment: Alignment.centerLeft,
+        child: OutlinedButton.icon(
+          onPressed: saving || widget.model.tasks.closing
+              ? null
+              : () => editScript(),
+          icon: const Icon(Icons.code),
+          label: const Text('导入脚本来源'),
+        ),
+      ),
       Align(
         alignment: Alignment.centerLeft,
         child: TextButton.icon(
@@ -319,9 +367,22 @@ class _GlobalSourcesPageState extends State<GlobalSourcesPage> {
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 const Divider(height: 24),
+                if (source['script'] is Map) ...[
+                  SelectableText(
+                    'Lua 脚本 · API ${source['script']['api_version']}\nSHA-256 ${source['script']['sha256']}',
+                    key: PageStorageKey('source:$id:script-metadata'),
+                  ),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: TextButton(
+                      onPressed: saving ? null : () => editScript(id),
+                      child: const Text('编辑脚本'),
+                    ),
+                  ),
+                ],
                 if (errors[id] != null)
                   SelectableText(
-                    '保存失败：${errors[id]}',
+                    '操作失败：${errors[id]}',
                     key: PageStorageKey('source:$id:save-error'),
                   ),
                 if (task?.running == true) TaskSummary(task: task!),
