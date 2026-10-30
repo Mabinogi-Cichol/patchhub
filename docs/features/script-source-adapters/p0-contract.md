@@ -87,7 +87,7 @@ P1 已选定设置文件 schema **3**，命名空间 marker 保持 **2**，索�
 
 P3 已给索引增加默认缺失的 `parser_fingerprint`，只在有效来源已脚本化时写入，值为包含脚本描述的规则解析标识；旧无标识索引不能授权脚本来源。发布修订同时比较此标识与条目内容，再复用现有 `index_revision` 传播到详情与游戏匹配。由于相同事实仍会产生相同选择 ID，候选增加同一可选 `parser_fingerprint`，核心绑定候选 ID、指纹与 ZIP/EXE 选择，人工选择和手动 URL 也据此失效。未脚本化来源省略字段，已有夹具/身份不变。无需给每种 DTO 另添独立代际或 TTL。已有名称覆盖只用于列表显示，不合并回运行规则，继续保持名称编辑不改变解析身份。
 
-JSONL 保持 **v5**，Lua API 单独为 **v1**。P1 已同步 `SourceRule.script` 可选描述的生成 TS/Python/JSON Schema 与 Flutter 资源，并验证现有契约；导入/读取 RPC 方法、两端编辑器与新能力表仍归 P5。当前 `validate_capabilities` 精确比较方法表，P5 新旧客户端/核心组合应报能力不兼容，不偷偷使用旧入口。
+JSONL 保持 **v5**，Lua API 单独为 **v1**。P1 已同步 `SourceRule.script` 可选描述的生成 TS/Python/JSON Schema 与 Flutter 资源，并验证现有契约；P5 已接入导入/读取 RPC、两端编辑器与 `sources.script_api_version=1`。`validate_capabilities` 精确比较 24 个方法及 12 个来源方法；新旧客户端/核心组合报能力不兼容，不偷偷使用旧入口。错误码字段仍遵守原短码合同，源码 `code` 按 `ScriptSourceDocument/ImportScriptSourceParams` 的文本字段传输，不套用错误码正则。保存回执与后续刷新分开，不因刷新失败误报未保存。
 
 ## P0 证据范围
 

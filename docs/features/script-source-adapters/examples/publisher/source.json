@@ -1,0 +1,17 @@
+{
+  "id": "my-script-publisher",
+  "name": "脚本发行商示例",
+  "adapter": "lua",
+  "enabled": true,
+  "role": "publisher",
+  "pages": [
+    "https://patches.vendor.example/patches/"
+  ],
+  "page_hosts": [
+    "patches.vendor.example"
+  ],
+  "download_hosts": [
+    "downloads.vendor.example"
+  ],
+  "root_layout": "game_root"
+}

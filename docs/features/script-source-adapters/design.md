@@ -1,6 +1,6 @@
 # 可导入脚本来源适配器设计
 
-状态：**施工中，P0–P4 已实现：核心导入、运行时、发行商链路及多来源脚本补查；P4 双平台自动化已通过，双端入口、全部来源迁移及发行/实机待 P5–P7**。施工拆分见 [implementation-plan.md](implementation-plan.md)，实际进度与验证见 [progress.md](progress.md)。已验证的运行时决策与接入合同见 [p0-contract.md](p0-contract.md)，全部来源的迁移清单见 [migration-matrix.md](migration-matrix.md)。
+状态：**施工中，P0–P5 已实现：核心脚本链路及协议、两端导入/编辑；P5 本地自动化已通过，全部内置来源迁移和发行/实机待 P6–P7**。施工拆分见 [implementation-plan.md](implementation-plan.md)，实际进度与验证见 [progress.md](progress.md)。已验证的运行时决策与接入合同见 [p0-contract.md](p0-contract.md)，全部来源的迁移清单见 [migration-matrix.md](migration-matrix.md)。
 
 ## 1. 目标与范围
 
@@ -164,11 +164,12 @@ Lua `discover` 的页面事实与内联事实进入公共候选生成；身份�
 ## 8. 双端集成与兼容
 
 - Windows、Decky 都只编辑和传递规则/源码文本，运行统一位于 Rust 核心；不在 Flutter、浏览器或 Decky Python 中解释 Lua。
-- 增加导入、编辑、显式替换、示例与错误展示。来源卡片显示脚本类型/API 版本/摘要供核对，不在游戏流程中展示整段脚本。
+- 增加导入、编辑、显式替换、示例与错误展示。来源卡片显示脚本类型/API 版本/摘要供核对，不在游戏流程中展示整段脚本。两端均使用规则 JSON、API 版本、源码三个有标签的输入；编辑时显式读取，替换绑定到原 ID，查看/复制示例不覆盖草稿。
 - 现有来源名称编辑、启用、逐游戏订阅、更新间隔、任务进度和取消继续使用现有接口。
 - 同步 Rust 协议定义、`contract-gen` 产物、跨语言夹具、Python 桥接、TypeScript 及 Flutter 方法表/schema。当前客户端严格比较能力方法表，不能只增加 Rust 方法而不更新两端。
 - 新源码输入不沿用 Decky `add_source` 文本入口的固定长度限制；不为传输另设无依据的源码上限。普通扫描结果只携带描述，不反复携带整段代码。
-- 当前 JSONL v5 能否保持由 P0 的新增字段兼容性核对确认；Lua API v1 独立版本化。旧核心与新客户端组合需明确能力不兼容错误，不自动走另一套执行路径。
+- JSONL 保持 v5，Lua API v1 独立版本化。方法表增加 `import_script_source/get_script_source`，能力新增 `sources.script_api_version=1`；旧核心与新客户端组合明确报能力不兼容，不自动走另一套执行路径。
+- 保存回执与来源/游戏投影刷新分开处理，刷新失败显示已保存；保存不执行 Lua。成功保存先丢弃 UI 旧来源候选和动态补丁，再从核心投影，避免原“失败时保留结果”逻辑恢复旧脚本选择。签名目录条目保留，不增加客户端解析身份缓存。
 
 ## 9. 验收与遗留风险
 

@@ -4,11 +4,11 @@
 
 ## 当前状态
 
-**施工中。P0–P4 已完成核心导入、运行时、发行商链路及多来源脚本补查，并通过双平台自动化。双端入口、全部内置来源迁移和发行/实机待 P5–P7。**
+**施工中。P0–P5 已完成核心脚本链路、协议及 Windows/Decky 导入、读取与编辑替换，本地自动化通过。全部内置来源迁移和发行/实机待 P6–P7。**
 
 - 调研基线：`main@cb06188`，2026-10-30。
 - 文档开发分支：`feature/script-source-adapters`。
-- 用户先要求开始施工，随后逐阶段要求提交和继续施工，本轮明确“提交并继续”及“继续”。P0 代码/文档为 `138c0c6` / `57dd65c`，P1 为 `901e592` / `5abf92a`，P2 为 `4c97d0e` / `ca581e9`，P3 为 `03cb2ae` / `45a2a85`；本轮完成 P4，代码为 `20f921d`，文档独立提交。未推送、合并、部署、安装或操作设备。
+- 用户此前要求开始施工，并逐阶段要求提交和继续施工。P0 代码/文档为 `138c0c6` / `57dd65c`，P1 为 `901e592` / `5abf92a`，P2 为 `4c97d0e` / `ca581e9`，P3 为 `03cb2ae` / `45a2a85`；P4 代码/文档为 `20f921d` / `7550815`。本轮用户明确“开始 P5”，实施 P5，未提交本轮改动，未推送、合并、部署、安装或操作设备。
 - 已有来源名称编辑/示例功能属于此前工作，不是脚本适配器功能的实现或验收证据。
 
 ## 阶段状态
@@ -20,7 +20,7 @@
 | P2 | 运行时、宿主能力与取消 | 核心执行器已完成 | Windows/Linux 运行时专项各 8 项，完整回归及 lint 通过 | 录制夹具及本地 TCP 验证；无新增网站/设备验收 |
 | P3 | 发行商索引/详情与缓存、安装一致性 | 已实现 | 两平台 9 项链路专项与完整范围回归通过，Windows workspace lint 通过 | 本地 HTML/JSON 夹具与真实核心调用；无新网站/设备/实际安装验收 |
 | P4 | 脚本补查与多源聚合 | 已完成 | 两平台 11 项专项、完整范围回归及最终边界专项通过；Windows workspace lint/契约通过 | 离线 HTTP 夹具与真实核心读取/投影，无新增真实网站或设备验收 |
-| P5 | 协议与两端导入/编辑 | 待实施 | 待验证 | 待验证 |
+| P5 | 协议与两端导入/编辑 | 已完成 | 两平台协议/CLI、跨语言、双端表单和真实核心往返通过 | Windows 桌面安装版、Decky 游戏模式输入/软键盘待 P7；无新增真实站点验收 |
 | P6 | 全部内置来源/通用表格脚本迁移及旧 Rust 路径退役 | 待实施 | 待验证 | 待验证 |
 | P7 | 全面验收、发行包与约定范围实机验证 | 待实施 | 待验证 | 待验证 |
 
@@ -247,6 +247,46 @@ P3 代码已提交为 `03cb2ae`，文档另行提交；P3 出口已完成，下�
 
 P4 代码已提交为 `20f921d`，文档按本轮用户要求独立提交。两端导入/编辑及全部内置来源迁移尚未完成，不能以核心补查通过代替 P5–P7。
 
+## 2026-10-31：P5 协议、双端导入与编辑
+
+- 按用户“开始 P5”从 `feature/script-source-adapters@7550815` 继续，开始时工作区干净；本轮未要求 Git 提交，不推送、不合并、不部署。
+- [protocol](../../../crates/protocol/src/lib.rs) 新增 `import_script_source/get_script_source`，方法表由 22/10 扩展为 24/12。导入复用 `{rule, settings_revision}` 回执，读取返回作者规则、API、完整源码及 SHA-256；`replace` 默认 false。JSONL 仍为 v5，新增独立 `sources.script_api_version=1`，严格核对新旧能力组合。
+- [CLI](../../../crates/cli/src/runtime.rs) 复用 P1 核心事务导入；读取使用只读冻结快照，不初始化、升级或写状态，不执行 Lua、不联网。没有接受脚本文件路径。同步 Rust、TS、Python、JSON Schema、固定语料和 Flutter bundled schema；有效大源码作为固定语料，不套用旧 Decky `add_source` 长度检查。
+- 复核发现旧跨语言递归检查将任何 `code` 都视为短错误码，无法承载 Lua 文本。将错误码字符/长度约束归到相应 DTO 的 schema；源码 DTO 不设此限制。Rust 和 Flutter 的 schema 子集补上对应字段约束，错误回执也按 schema 检查；新增空码、大小写、过长码和含控制符的错误码的拒绝语料，保留未知合法错误码及完整详情。
+- [Windows 编辑器](../../../apps/windows-flutter/lib/pages/script_source_editor.dart) 与 [Decky 编辑器](../../../apps/decky/src/script-source-editor.tsx) 使用三个有标签的文本输入：规则 JSON、API 版本、Lua 源码。新导入、卡片显式读取、原 ID 绑定的“保存并替换”、API/SHA 展示、语法错误完整显示均已接入；失败保留输入，查看和复制示例不覆盖草稿或自动创建记录。源码可视行数只是滚动区域，不是文本上限。
+- 沿用现有名称、启用、订阅、间隔及更新/匹配入口。只在保存回执成功后清理 UI 的旧来源候选和动态补丁，再读取核心投影；签名目录结果保留，避免原“查询失败时保留结果”恢复已失效脚本选择。刷新来源/投影与保存分开，保存后刷新失败显示“已保存，但刷新失败”，不误报成未保存、不要求盲目重试导入。
+- Decky Python 只传输文本与结果，不执行 Lua；新 RPC 保留 CoreError 的完整 Lua 诊断，避免插件异常字符串仅剩错误码。Windows 卡片脚本元数据增加独立 PageStorage key，修复新错误提示插入/卡片重建后，内部文本滚动恢复误读 ExpansionTile 布尔展开状态的实际异常。
+- 保存只编译，不运行顶层和入口；保存成功不代表网站或执行通过。界面提示仅导入可信脚本、请求受规则域名约束，后续需更新来源或重新匹配。当前四个内置来源尚未脚本化，因此不显示脚本编辑按钮；P6 迁移后复用同一读取/显式用户覆盖路径，不在 P5 额外实现内置脚本版本层。
+- 更新[来源指南](../../source-adapters.md)与[作者示例](examples/README.md)。示例采用占位域名/合成 HTML，核心实际执行验证直接条目，双端测试核对文档/界面内容一致；不冒充真实站点抓取或内置迁移验收。
+
+### P5 已执行验证
+
+| 范围 | 命令 / 证据 | 结果 |
+| --- | --- | --- |
+| Windows 协议/CLI | `cargo test --locked -p patchhub-protocol -p patchhub-cli` | 最终 **69 passed**，7 个常规/文档目标通过；含实际 JSONL 子进程导入、重开读取、重复 ID、显式替换、语法/API 失败不改盘、设置保留、缺失状态只读 |
+| Linux 协议/CLI | WSL Ubuntu，独立 Linux 工具链与 `target/linux`，同一命令 | 最终 **69 passed**，全部通过；不是 Steam Deck 实机 |
+| 核心运行时/作者样例 | 两平台 `cargo test --locked -p patchhub-core --test script_source_runtime` | 各 **9 passed**（原 8 项及新文档样例）；未重复未改动的全量 core 测试 |
+| Rust lint / 生成契约 | `cargo clippy --locked --workspace --all-targets -- -D warnings`；`cargo run --locked -p patchhub-contract-gen -- check` | 最终通过；仅既有增量硬链接改复制提示，无代码 lint、无生成漂移 |
+| Decky Python | 显式 `PATCHHUB_TEST_CORE=target/debug/patchhub-core.exe`，`python -m unittest discover -s apps/decky/backend -p 'test*.py'` | **117 tests / 114 passed / 3 skipped**；含真实 Windows Core 大源码往返、替换、失败保留与重开读取；跳过为既有平台/身份用例 |
+| Decky → Linux Core | WSL `PATCHHUB_TEST_CORE=target/linux/debug/patchhub-core`，`test_bridge.BridgeIntegrationTests` | **2 passed**：实际扫描/错误与脚本服务往返；不等于设备插件部署 |
+| Decky 前端 | `npm test -w apps/decky`；`npm run typecheck`；`npm run build:decky` | 最终 **88 passed**，类型检查/构建通过；实际 JSX + 控件回调验证导入、读取、替换、失败草稿、复制、刷新失败和旧结果清理，原生 Decky 控件在测试中由 HTML 替身表示 |
+| Flutter 全量与最终相关回归 | `flutter test --no-pub`；最终再运行脚本编辑器/真实 CoreClient、source_model、wire_contract、core_protocol、global_sources_layout 共 6 个文件 | 全量 **283 passed / 1 skipped**；最终相关范围 **158 passed**。后者包含新增真实核心测试及新增错误语料，不与全量重复累计；深浅色、580×600 / 1.5 倍字体、长源码和卡片重建通过 |
+| Flutter 静态分析 | `flutter analyze --no-pub`，相关 Dart 格式化 | 最终通过，无问题 |
+| 共享契约表现 | `npm run test:contracts` | 生成 DTO / UTF-8 /动作/进度/URL 及 Flutter 表现夹具一致 |
+
+最终固定语料含 69 个请求、102 个响应、25 个事件、3 组序列、8 个早期错误、2 个原始请求；Rust/Python/Flutter 均验证适用部分。源码传输包含超过旧入口 32768 字符限制的合法中文脚本，真实保存的顶层无限循环/抛错未被执行。完整回归后对错误码约束、保存/刷新边界和 UI 旧结果清理的最终修改补跑上述相关检查。最后将一项错误码语料收紧为末尾换行，补验两平台 Rust 语料各 3 项、Python 117 项及 Flutter 协议 143 项通过；未重复未改动的 UI、全量 core 或安装器测试。`cargo fmt --all -- --check`、`git diff --check` 与功能/指南/索引本地链接检查通过。
+
+未执行：Windows 安装版交互、Decky Loader 中游戏模式手柄焦点/软键盘、正式发行包、远程设备部署、真实网站完整执行及实际安装。前端构建和离线/本机自动化不代替上述验收。
+
+### P5 实现过度设计审阅
+
+结论：**未发现未关闭的过度设计问题，P5 实现与本地自动化出口已完成。** 基线为 `7550815` 后的本轮改动；沿输入 → 能力/schema → JSONL/Python 转发 → 核心事务/只读快照 → 成功或错误回执 → 来源与游戏投影核对，并复查失败草稿、显式替换、只读与完整错误路径。
+
+- 两端仅编辑/传输文本，复用一个 Lua 执行器及设置事务，没有脚本包管理器、前端解释器、额外文件路径执行或并行版本系统。
+- 原 ID 绑定对应显式替换的实际覆盖风险；能力校验对应严格方法表；错误码字段分型对应源码被误拒绝的实际问题。没有对合法源码增加字符/文件/页数/报告上限或新的超时、重试与看门狗。
+- 旧 UI 结果保留及保存/刷新误报均沿真实执行路径发现并关闭；只处理本次脚本管理需要的边界，没有扩展成通用缓存代际、自动恢复或重试框架。
+- 输入草稿、错误详情、摘要和保存/执行状态均可直接查看；当前没有用核心测试、HTML 控件替身或 WSL 冒充安装版/Steam Deck 实机验证。
+
 ## 下一步
 
-进入 P5，扩展导入/读取 RPC 和能力方法、同步生成契约，并实现 Windows/Decky 的脚本导入/编辑及显式替换。P6 全部内置来源迁移和 P7 发行/实机验收仍按原计划实施。
+P6：将 Shiravune、Kagura 国内/海外、HGamer 及通用表格全部迁为随包 Lua，验证行为并删除旧 Rust 网站实现。随后进入 P7 发行资源与约定范围实机验收。本轮 P5 代码和文档均未提交。
