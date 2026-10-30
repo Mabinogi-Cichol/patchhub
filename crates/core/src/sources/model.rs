@@ -783,10 +783,13 @@ pub struct SourceMatchRecord {
     pub diagnostics: Vec<Diagnostic>,
 }
 
-/// HGamer fallback result inside [`GameMatchRecord`].
+/// Aggregated per-game fallback result inside [`GameMatchRecord`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FallbackMatchRecord {
+    /// Active source set/parser binding for read-only cache projections.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sources_fingerprint: Option<String>,
     pub query_key: String,
     pub status: FallbackMatchStatus,
     #[serde(default)]

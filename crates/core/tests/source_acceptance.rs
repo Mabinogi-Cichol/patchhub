@@ -1115,7 +1115,7 @@ fn matrix4_six_states_and_disabled_or_incomplete_semantics() {
         FallbackMatchStatus::Failed
     );
 
-    // failed: reachable for migrated records whose matched source failed.
+    // failed: a current source set whose publisher and fallback attempts failed.
     let temp = tempfile::tempdir().unwrap();
     let store = SourceStore::open(temp.path()).unwrap();
     store
@@ -1138,6 +1138,16 @@ fn matrix4_six_states_and_disabled_or_incomplete_semantics() {
                 },
             )]),
             fallback: Some(FallbackMatchRecord {
+                sources_fingerprint: Some(
+                    patchhub_core::sources::matching::fallback_sources_fingerprint(
+                        patchhub_core::sources::Sources::open(temp.path())
+                            .unwrap()
+                            .registry()
+                            .rules(),
+                        &Overrides::default(),
+                        99,
+                    ),
+                ),
                 query_key: "q".to_string(),
                 status: FallbackMatchStatus::Failed,
                 candidates: Vec::new(),

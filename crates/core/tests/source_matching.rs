@@ -1851,6 +1851,7 @@ fn source_revisions_and_summary_are_pure_reads() {
         )]
         .into(),
         fallback: Some(FallbackMatchRecord {
+            sources_fingerprint: None,
             query_key: "q".to_string(),
             status: FallbackMatchStatus::Matched,
             candidates: vec![candidate("https://hgamer.tw/p/1", 42)],
@@ -1875,9 +1876,22 @@ fn source_revisions_and_summary_are_pure_reads() {
 
     // A disabled fallback with no publisher record displays no candidates, and
     // keeps the P1 contract status (disabled means "not in enabled sources").
+    store
+        .update_settings(|settings| {
+            settings.enabled.insert("hgamer".into(), false);
+            Ok(())
+        })
+        .unwrap();
     match_record.status = GameMatchStatus::Pending;
     match_record.sources.clear();
     match_record.fallback = Some(FallbackMatchRecord {
+        sources_fingerprint: Some(
+            patchhub_core::sources::matching::fallback_sources_fingerprint(
+                &[],
+                &Overrides::default(),
+                42,
+            ),
+        ),
         query_key: "q".to_string(),
         status: FallbackMatchStatus::Disabled,
         candidates: vec![candidate("https://hgamer.tw/p/1", 42)],
@@ -1979,6 +1993,13 @@ fn seed_vbf_fallback(store: &SourceStore, appid: u32, upstream: &str) {
             status: GameMatchStatus::FallbackMatch,
             sources: Default::default(),
             fallback: Some(FallbackMatchRecord {
+                sources_fingerprint: Some(
+                    patchhub_core::sources::matching::fallback_sources_fingerprint(
+                        &[hgamer_rule()],
+                        &Overrides::default(),
+                        1189440,
+                    ),
+                ),
                 query_key: String::new(),
                 status: FallbackMatchStatus::Matched,
                 candidates: vec![vbf_upstream(appid, upstream)],

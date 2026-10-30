@@ -136,6 +136,7 @@ fn source_match(index_revision: u64, status: SourceMatchStatus) -> SourceMatchRe
 
 fn fallback_match(status: FallbackMatchStatus) -> FallbackMatchRecord {
     FallbackMatchRecord {
+        sources_fingerprint: None,
         query_key: "q".to_string(),
         status,
         candidates: Vec::new(),

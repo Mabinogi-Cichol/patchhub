@@ -801,6 +801,7 @@ fn migrated_fallback(legacy: &DiscoveryRecord) -> Option<(u64, FallbackMatchReco
     Some((
         checked_at,
         FallbackMatchRecord {
+            sources_fingerprint: None,
             query_key,
             status,
             candidates,

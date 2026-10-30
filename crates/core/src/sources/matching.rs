@@ -73,6 +73,10 @@ pub fn match_games(
         if rules
             .iter()
             .any(|rule| rule.script.is_some() && super::script::rule_changed(rule, &settings))
+            || settings
+                .added
+                .iter()
+                .any(|added| !rules.iter().any(|rule| rule.id == added.id))
         {
             return Err(invalid("source_rule_changed"));
         }
@@ -246,8 +250,8 @@ pub fn rematch_source(
 pub fn game_match_summary(store: &SourceStore, appid: u32) -> GameMatch {
     match store.load_match(appid) {
         Ok(Some(record)) => {
-            let rules = match store.load_settings() {
-                Ok(settings) => settings.added,
+            let settings = match store.load_settings() {
+                Ok(settings) => settings,
                 Err(error) => {
                     let error = crate::projection::DomainError::from(error);
                     return GameMatch {
@@ -264,7 +268,21 @@ pub fn game_match_summary(store: &SourceStore, appid: u32) -> GameMatch {
                     };
                 }
             };
-            summary_from_record(&current_record(record, &rules, |rule| {
+            let builtins: super::model::RulesConfig =
+                serde_json::from_str(super::DEFAULT_RULES_JSON).expect("embedded rules");
+            let builtins = builtins
+                .sources
+                .iter()
+                .map(validate::validate_rule)
+                .collect::<Result<Vec<_>>>()
+                .expect("embedded valid rules");
+            let rules = merged_rules(&builtins, &settings.added);
+            let overrides = Overrides {
+                enabled: settings.enabled,
+                added: settings.added,
+                games: settings.games,
+            };
+            summary_from_record(&current_record(record, &rules, &overrides, |rule| {
                 store.load_index(&rule.id).ok().flatten()
             }))
         }
@@ -337,7 +355,7 @@ fn match_one(
     on_phase: &mut dyn FnMut(&str),
 ) -> Result<GameMatchRecord> {
     let publishers = active_publishers(rules, overrides, game.appid);
-    let fallback_rule = active_fallback(rules, overrides, game.appid);
+    let fallback_rules = active_fallbacks(rules, overrides, game.appid);
     let publisher_ids: Vec<String> = publishers.iter().map(|rule| rule.id.clone()).collect();
     let hints = merged_hints(game, name_hints);
     let query = query_context(game, &hints, options.force_details, publisher_ids);
@@ -354,6 +372,10 @@ fn match_one(
     if rules
         .iter()
         .any(|rule| rule.script.is_some() && super::script::rule_changed(rule, &settings))
+        || settings
+            .added
+            .iter()
+            .any(|added| !rules.iter().any(|rule| rule.id == added.id))
     {
         return Err(invalid("source_rule_changed"));
     }
@@ -370,7 +392,7 @@ fn match_one(
     }
 
     let previous = previous.map(|record| {
-        current_record(record.clone(), rules, |rule| {
+        current_record(record.clone(), rules, overrides, |rule| {
             indexes.get(&rule.id).and_then(Option::as_ref).cloned()
         })
     });
@@ -388,7 +410,7 @@ fn match_one(
         })
         .unwrap_or_default();
 
-    if fallback_rule.is_some() {
+    if !fallback_rules.is_empty() {
         if let Some(fallback) = previous.and_then(|record| record.fallback.as_ref()) {
             if fallback.status == FallbackMatchStatus::Matched {
                 known.extend(fallback.candidates.iter().cloned());
@@ -460,7 +482,8 @@ fn match_one(
         &query,
         previous,
         &known,
-        fallback_rule,
+        &fallback_rules,
+        &settings.script_sources,
         !publishers.is_empty(),
         coverage_complete,
         publisher_matched,
@@ -533,9 +556,15 @@ fn match_one(
     // write this attempt and keep the previous record for the next pass.
     if settings_binding_changed(store, settings_revision, &key, game, name_hints, rules)? {
         let latest = store.load_settings()?;
+        let latest_rules = merged_rules(rules, &latest.added);
+        let latest_overrides = Overrides {
+            enabled: latest.enabled,
+            added: latest.added,
+            games: latest.games,
+        };
         return Ok(previous
             .map(|record| {
-                current_record(record.clone(), &latest.added, |rule| {
+                current_record(record.clone(), &latest_rules, &latest_overrides, |rule| {
                     store.load_index(&rule.id).ok().flatten()
                 })
             })
@@ -570,13 +599,14 @@ fn settings_binding_changed(
     {
         return Ok(true);
     }
+    let effective_rules = merged_rules(rules, &settings.added);
     let overrides = Overrides {
         enabled: settings.enabled,
         added: settings.added,
         games: settings.games,
     };
     let hints = merged_hints(game, name_hints);
-    let subscriptions = subscriptions_snapshot(rules, &overrides, game.appid);
+    let subscriptions = subscriptions_snapshot(&effective_rules, &overrides, game.appid);
     Ok(input_key(
         &game.name,
         game.localized_name.as_deref(),
@@ -613,7 +643,7 @@ fn record_reusable(
     rules: &[SourceRule],
     overrides: &Overrides,
 ) -> Result<bool> {
-    if current_record(record.clone(), rules, |rule| {
+    if current_record(record.clone(), rules, overrides, |rule| {
         store.load_index(&rule.id).ok().flatten()
     }) != *record
     {
@@ -653,7 +683,7 @@ fn record_reusable(
             return Ok(false);
         }
     }
-    let fallback_rule = active_fallback(rules, overrides, game.appid);
+    let fallback_rules = active_fallbacks(rules, overrides, game.appid);
     let coverage_complete = !publishers.is_empty()
         && publishers.iter().all(|rule| {
             store
@@ -670,12 +700,12 @@ fn record_reusable(
     let fallback_terminal = match &record.fallback {
         None => false,
         Some(fallback) => match fallback.status {
-            FallbackMatchStatus::Matched | FallbackMatchStatus::NoMatch => fallback_rule
-                .is_some_and(|rule| {
-                    let query = query_context(game, &hints, false, publisher_ids.clone());
-                    fallback.query_key == fallback_query_key(&query, rule)
-                }),
-            FallbackMatchStatus::Disabled => fallback_rule.is_none() && !publishers.is_empty(),
+            FallbackMatchStatus::Matched | FallbackMatchStatus::NoMatch => {
+                let query = query_context(game, &hints, false, publisher_ids.clone());
+                !fallback_rules.is_empty()
+                    && fallback.query_key == fallback_query_key(&query, &fallback_rules)
+            }
+            FallbackMatchStatus::Disabled => fallback_rules.is_empty() && !publishers.is_empty(),
             FallbackMatchStatus::NotNeeded => publisher_matched,
             FallbackMatchStatus::NotQueried => !coverage_complete,
             FallbackMatchStatus::Incomplete | FallbackMatchStatus::Failed => false,
@@ -1277,7 +1307,7 @@ fn candidates_from_fact(
     found
 }
 
-// ---- fallback (HGamer) --------------------------------------------------
+// ---- per-game fallback aggregation --------------------------------------
 
 /// Decides and, when justified, executes the per-game fallback query.
 #[allow(clippy::too_many_arguments)]
@@ -1285,7 +1315,8 @@ fn decide_fallback(
     query: &QueryContext,
     previous: Option<&GameMatchRecord>,
     known: &[SourceCandidate],
-    fallback_rule: Option<&SourceRule>,
+    fallback_rules: &[&SourceRule],
+    script_sources: &BTreeMap<String, String>,
     has_publisher_sources: bool,
     coverage_complete: bool,
     publisher_matched: bool,
@@ -1294,142 +1325,122 @@ fn decide_fallback(
     cancel: &Arc<AtomicBool>,
     now: u64,
 ) -> Result<Option<FallbackMatchRecord>> {
-    let existing = previous.and_then(|record| record.fallback.as_ref());
-    let key = fallback_rule.map(|rule| fallback_query_key(query, rule));
+    let key = fallback_query_key(query, fallback_rules);
+    let sources_fingerprint = fallback_set_fingerprint(fallback_rules);
+    let record = |status, candidates, diagnostics| {
+        Some(FallbackMatchRecord {
+            sources_fingerprint: Some(sources_fingerprint.clone()),
+            query_key: key.clone(),
+            status,
+            candidates,
+            checked_at: now,
+            diagnostics,
+        })
+    };
+    let existing = previous
+        .and_then(|record| record.fallback.as_ref())
+        .filter(|existing| existing.query_key == key);
     if publisher_matched {
-        // A confirmed publisher match hides the fallback; an existing terminal
-        // record is retained as evidence.
-        if let Some(existing) = existing {
-            if is_terminal(existing.status) {
-                return Ok(Some(existing.clone()));
-            }
+        if let Some(existing) = existing.filter(|existing| is_terminal(existing.status)) {
+            return Ok(Some(existing.clone()));
         }
-        return Ok(Some(fallback_record(
-            key.unwrap_or_default(),
+        return Ok(record(
             FallbackMatchStatus::NotNeeded,
             Vec::new(),
-            now,
             Vec::new(),
-        )));
+        ));
     }
     if !has_publisher_sources {
-        // No publisher coverage at all: never claim HGamer confirmed anything.
-        return Ok(Some(fallback_record(
-            key.unwrap_or_default(),
+        return Ok(record(
             FallbackMatchStatus::NotQueried,
             Vec::new(),
-            now,
             Vec::new(),
-        )));
+        ));
     }
-    let Some(rule) = fallback_rule else {
-        // Not configured or disabled for this game: report "not found among
-        // enabled sources", not "HGamer confirmed no patch".
-        return Ok(Some(fallback_record(
-            String::new(),
+    if fallback_rules.is_empty() {
+        return Ok(record(
             FallbackMatchStatus::Disabled,
             Vec::new(),
-            now,
             Vec::new(),
-        )));
-    };
-    let key = key.unwrap_or_default();
+        ));
+    }
     if !force {
-        if let Some(existing) = existing {
-            if existing.query_key == key
-                && matches!(
-                    existing.status,
-                    FallbackMatchStatus::Matched | FallbackMatchStatus::NoMatch
-                )
-            {
-                return Ok(Some(existing.clone()));
-            }
+        if let Some(existing) = existing.filter(|existing| {
+            matches!(
+                existing.status,
+                FallbackMatchStatus::Matched | FallbackMatchStatus::NoMatch
+            )
+        }) {
+            return Ok(Some(existing.clone()));
         }
     }
     if !coverage_complete {
-        // Publisher coverage is incomplete: do not turn matching into a network
-        // fallback. A previous terminal result for the same query stays visible.
-        if let Some(existing) = existing {
-            if existing.query_key == key && is_terminal(existing.status) {
-                return Ok(Some(existing.clone()));
-            }
+        if let Some(existing) = existing.filter(|existing| is_terminal(existing.status)) {
+            return Ok(Some(existing.clone()));
         }
-        return Ok(Some(fallback_record(
-            key,
+        return Ok(record(
             FallbackMatchStatus::NotQueried,
             Vec::new(),
-            now,
             Vec::new(),
-        )));
+        ));
     }
-    if cancelled(cancel) {
-        return Err(cancelled_error());
-    }
-    let mut fallback_query = query.clone();
-    fallback_query.source_context = vec![rule.id.clone()];
-    let mut known_candidates = known.to_vec();
-    if let Some(existing) = existing {
-        for candidate in &existing.candidates {
-            if !known_candidates
-                .iter()
-                .any(|known| known.candidate_id == candidate.candidate_id)
-            {
-                known_candidates.push(candidate.clone());
+    let mut candidates = Vec::new();
+    let mut diagnostics = Vec::new();
+    let mut complete = true;
+    let mut successful = 0;
+    for rule in fallback_rules {
+        if cancelled(cancel) {
+            return Err(cancelled_error());
+        }
+        let mut fallback_query = query.clone();
+        fallback_query.source_context = vec![rule.id.clone()];
+        fallback_query.force = force;
+        let mut known_candidates = known.to_vec();
+        known_candidates.extend(candidates.iter().cloned());
+        if let Some(existing) = existing {
+            known_candidates.extend(
+                existing
+                    .candidates
+                    .iter()
+                    .filter(|candidate| candidate.source_id == rule.id)
+                    .cloned(),
+            );
+        }
+        let discover_previous = DiscoverPrevious {
+            known_candidates: dedupe_candidates(known_candidates),
+        };
+        let outcome =
+            adapters::source_adapter(rule, script_sources.get(&rule.id).map(String::as_str))
+                .and_then(|adapter| {
+                    adapter.discover(rule, &fallback_query, ctx, &discover_previous, cancel)
+                });
+        if cancelled(cancel) {
+            return Err(cancelled_error());
+        }
+        match outcome {
+            Err(error) => {
+                complete = false;
+                diagnostics.push(error_diagnostic(rule, error));
+            }
+            Ok(outcome) => {
+                complete &= outcome.status == "complete";
+                successful += usize::from(outcome.status != "failed");
+                candidates.extend(outcome.candidates);
+                diagnostics.extend(outcome.diagnostics);
             }
         }
     }
-    let discover_previous = DiscoverPrevious { known_candidates };
-    match adapters::discover(rule, &fallback_query, ctx, &discover_previous) {
-        Err(error) => {
-            if cancelled(cancel) || error.to_string() == "task_cancelled" {
-                return Err(cancelled_error());
-            }
-            Ok(Some(fallback_record(
-                key,
-                FallbackMatchStatus::Failed,
-                Vec::new(),
-                now,
-                vec![diagnostic(rule, error.to_string())],
-            )))
-        }
-        Ok(outcome) => {
-            if cancelled(cancel) {
-                return Err(cancelled_error());
-            }
-            let status = if outcome.candidates.iter().any(candidate_is_credible) {
-                FallbackMatchStatus::Matched
-            } else {
-                match outcome.status.as_str() {
-                    "complete" => FallbackMatchStatus::NoMatch,
-                    "partial" => FallbackMatchStatus::Incomplete,
-                    _ => FallbackMatchStatus::Failed,
-                }
-            };
-            Ok(Some(fallback_record(
-                key,
-                status,
-                outcome.candidates,
-                now,
-                outcome.diagnostics,
-            )))
-        }
-    }
-}
-
-fn fallback_record(
-    query_key: String,
-    status: FallbackMatchStatus,
-    candidates: Vec<SourceCandidate>,
-    checked_at: u64,
-    diagnostics: Vec<Diagnostic>,
-) -> FallbackMatchRecord {
-    FallbackMatchRecord {
-        query_key,
-        status,
-        candidates,
-        checked_at,
-        diagnostics,
-    }
+    let candidates = identity::merge_candidates(&candidates);
+    let status = if candidates.iter().any(candidate_is_credible) {
+        FallbackMatchStatus::Matched
+    } else if complete && candidates.is_empty() {
+        FallbackMatchStatus::NoMatch
+    } else if successful == 0 && candidates.is_empty() {
+        FallbackMatchStatus::Failed
+    } else {
+        FallbackMatchStatus::Incomplete
+    };
+    Ok(record(status, candidates, diagnostics))
 }
 
 fn is_terminal(status: FallbackMatchStatus) -> bool {
@@ -1442,37 +1453,50 @@ fn is_terminal(status: FallbackMatchStatus) -> bool {
     )
 }
 
-/// Canonical fallback query digest: the per-game query inputs plus the fallback
-/// rule identity and the identity-encoding versions.
-fn fallback_query_key(query: &QueryContext, rule: &SourceRule) -> String {
-    #[derive(serde::Serialize)]
-    struct FallbackQuery<'a> {
-        name: &'a str,
-        name_hints: &'a [String],
+fn fallback_set_fingerprint(rules: &[&SourceRule]) -> String {
+    let source_fingerprints: BTreeMap<_, _> = rules
+        .iter()
+        .map(|rule| {
+            let mut effective = (*rule).clone();
+            effective.enabled = true;
+            (rule.id.clone(), rule_fingerprint(&effective))
+        })
+        .collect();
+    canonical::canonical_sha256(&serde_json::json!({"sources":source_fingerprints,
+        "parser_version":PARSER_VERSION,"query_version":QUERY_VERSION,"encoding_version":SOURCES_ENCODING_VERSION}))
+}
 
-        rule_fingerprint: String,
-        parser_version: u32,
-        query_version: u32,
-        encoding_version: u32,
-    }
-    canonical::canonical_sha256(&FallbackQuery {
-        name: &query.name,
-        name_hints: &query.name_hints,
+/// Source-only binding used by read-only projections without frontend name hints.
+pub fn fallback_sources_fingerprint(
+    rules: &[SourceRule],
+    overrides: &Overrides,
+    appid: u32,
+) -> String {
+    fallback_set_fingerprint(&active_fallbacks(rules, overrides, appid))
+}
 
-        rule_fingerprint: rule_fingerprint(rule),
-        parser_version: PARSER_VERSION,
-        query_version: QUERY_VERSION,
-        encoding_version: SOURCES_ENCODING_VERSION,
-    })
+fn fallback_query_key(query: &QueryContext, rules: &[&SourceRule]) -> String {
+    canonical::canonical_sha256(&serde_json::json!({"appid":query.appid,"name":query.name,
+        "name_hints":query.name_hints,"sources_fingerprint":fallback_set_fingerprint(rules)}))
 }
 
 // ---- summaries ----------------------------------------------------------
 
-/// Remove results that belong to a retired script before any read or reuse.
-/// Legacy Rust sources keep their established cache semantics.
+fn merged_rules(builtins: &[SourceRule], added: &[SourceRule]) -> Vec<SourceRule> {
+    builtins
+        .iter()
+        .filter(|rule| !added.iter().any(|added| added.id == rule.id))
+        .chain(added)
+        .cloned()
+        .collect()
+}
+
+/// Remove retired parser/source-set results before reads or reuse.
+/// Legacy Rust publisher caches keep their established revision semantics.
 pub(crate) fn current_record(
     mut record: GameMatchRecord,
     rules: &[SourceRule],
+    overrides: &Overrides,
     mut index: impl FnMut(&SourceRule) -> Option<SourceIndex>,
 ) -> GameMatchRecord {
     let mut stale = false;
@@ -1495,6 +1519,14 @@ pub(crate) fn current_record(
         stale |= !current;
         current
     });
+    if let Some(fallback) = &record.fallback {
+        stale |= fallback.sources_fingerprint.as_deref()
+            != Some(&fallback_sources_fingerprint(
+                rules,
+                overrides,
+                record.appid,
+            ));
+    }
     if stale {
         record.fallback = None;
         record.status = derive_game_status(&record);
@@ -1521,7 +1553,10 @@ pub(crate) fn summary_from_record(record: &GameMatchRecord) -> GameMatch {
             .flat_map(|source| source.candidates.iter().cloned())
             .collect();
         if let Some(fallback) = &record.fallback {
-            if fallback.status == FallbackMatchStatus::Matched {
+            if matches!(
+                fallback.status,
+                FallbackMatchStatus::Matched | FallbackMatchStatus::Incomplete
+            ) {
                 combined.extend(fallback.candidates.iter().cloned());
             }
         }
@@ -1627,11 +1662,11 @@ fn active_publishers<'a>(
     publishers
 }
 
-fn active_fallback<'a>(
+fn active_fallbacks<'a>(
     rules: &'a [SourceRule],
     overrides: &Overrides,
     appid: u32,
-) -> Option<&'a SourceRule> {
+) -> Vec<&'a SourceRule> {
     let mut fallbacks: Vec<&SourceRule> = rules
         .iter()
         .filter(|rule| {
@@ -1645,7 +1680,7 @@ fn active_fallback<'a>(
             .cmp(&right.priority)
             .then_with(|| left.id.cmp(&right.id))
     });
-    fallbacks.into_iter().next()
+    fallbacks
 }
 
 fn subscriptions_snapshot(

@@ -1562,6 +1562,11 @@ mod sources_tests {
                 status: sources::GameMatchStatus::Pending,
                 sources: Default::default(),
                 fallback: fallback_status.map(|status| sources::FallbackMatchRecord {
+                    sources_fingerprint: Some(sources::matching::fallback_sources_fingerprint(
+                        sources::Sources::open(state).unwrap().registry().rules(),
+                        &sources::model::Overrides::default(),
+                        appid,
+                    )),
                     query_key: "fixture".to_string(),
                     status,
                     candidates: Vec::new(),

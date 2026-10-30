@@ -139,6 +139,81 @@ pub fn source_adapter<'a>(rule: &SourceRule, code: Option<&'a str>) -> Result<So
 }
 
 impl SourceAdapter<'_> {
+    pub fn discover(
+        &self,
+        rule: &SourceRule,
+        query: &QueryContext,
+        ctx: &mut RequestContext,
+        previous: &DiscoverPrevious,
+        cancel: &Arc<AtomicBool>,
+    ) -> Result<DiscoverOutcome> {
+        match self {
+            Self::Builtin(adapter) => {
+                finish_discovery(rule, adapter.discover(rule, query, ctx, previous)?)
+            }
+            Self::Script(code) => {
+                let facts =
+                    script::discover(rule, code, query, previous, ctx, Arc::clone(cancel), |_| {})?;
+                let identities: Vec<Identity> = facts
+                    .identities
+                    .into_iter()
+                    .filter(|identity| identity.appid == query.appid)
+                    .map(|identity| Identity {
+                        appid: identity.appid,
+                        page: identity.page,
+                        aliases: identity.aliases,
+                    })
+                    .collect();
+                let mut identity_query = query.clone();
+                identity_query.name_hints.extend(
+                    identities
+                        .iter()
+                        .flat_map(|identity| identity.aliases.iter().cloned()),
+                );
+                let mut candidates = Vec::new();
+                for page in facts.pages {
+                    let mut pending = vec![page.fact];
+                    while let Some(fact) = pending.pop() {
+                        let mut found = identity::build_candidates(
+                            rule,
+                            &fact.title,
+                            &fact.page,
+                            &fact.text,
+                            &fact.steam_ids,
+                            &fact.aliases,
+                            &page.reported_format,
+                            &fact.mirrors,
+                            &identity_query,
+                        );
+                        for candidate in &mut found {
+                            candidate.published_at = fact.published_at.clone();
+                            candidate.upstream_page = page.upstream_page.clone();
+                        }
+                        candidates.extend(found);
+                        pending.extend(fact.article_facts.into_iter().rev());
+                    }
+                }
+                let candidates = identity::enrich_candidates(&candidates, &identities);
+                let mut candidates = identity::merge_candidates(&candidates);
+                for candidate in &mut candidates {
+                    super::index::bind_candidate(rule, candidate);
+                    identity::validate_candidate(candidate, rule)?;
+                }
+                Ok(DiscoverOutcome {
+                    status: if facts.complete {
+                        "complete"
+                    } else {
+                        "partial"
+                    }
+                    .into(),
+                    candidates,
+                    diagnostics: facts.diagnostics,
+                    identities,
+                })
+            }
+        }
+    }
+
     pub fn collect_index(
         &self,
         rule: &SourceRule,
@@ -181,8 +256,10 @@ pub fn discover(
 ) -> Result<DiscoverOutcome> {
     let adapter =
         builtin_adapter(&rule.adapter).ok_or_else(|| invalid("unknown_discovery_adapter"))?;
-    let mut outcome = adapter.discover(rule, query, ctx, previous)?;
+    finish_discovery(rule, adapter.discover(rule, query, ctx, previous)?)
+}
 
+fn finish_discovery(rule: &SourceRule, mut outcome: DiscoverOutcome) -> Result<DiscoverOutcome> {
     // Adapters mutate `published_at`/`upstream_page` after construction, so the
     // fingerprint must be resaved (Python `discover` does this before merging).
     for candidate in &mut outcome.candidates {
@@ -193,26 +270,11 @@ pub fn discover(
 
     let merged = identity::merge_candidates(&outcome.candidates);
     let mut validated = Vec::with_capacity(merged.len());
-    let mut failure = None;
     for candidate in merged {
-        match identity::validate_candidate(&candidate, rule) {
-            Ok(()) => validated.push(candidate),
-            Err(error) => {
-                failure = Some(error.to_string());
-                break;
-            }
-        }
+        identity::validate_candidate(&candidate, rule)?;
+        validated.push(candidate);
     }
-    if let Some(code) = failure {
-        // Python keeps the unmerged candidates when validation raises.
-        outcome.diagnostics.push(Diagnostic {
-            source_id: Some(rule.id.clone()),
-            code,
-            detail: None,
-        });
-    } else {
-        outcome.candidates = validated;
-    }
+    outcome.candidates = validated;
 
     let mut seen = HashSet::new();
     let mut diagnostics = Vec::new();
@@ -572,6 +634,33 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(error.to_string(), "unknown_discovery_adapter");
+    }
+
+    #[test]
+    fn invalid_adapter_candidates_fail_instead_of_remaining_positive_partial_results() {
+        let rule = rule("hgamer_html");
+        let mut candidates = identity::build_candidates(
+            &rule,
+            "Game",
+            "https://example.com/game",
+            "",
+            &[42],
+            &[],
+            "zip",
+            &[],
+            &query(),
+        );
+        assert!(!candidates.is_empty());
+        candidates[0].source_id = "different-source".into();
+        let error = finish_discovery(
+            &rule,
+            DiscoverOutcome {
+                candidates,
+                ..Default::default()
+            },
+        )
+        .unwrap_err();
+        assert_eq!(error.to_string(), "invalid_discovery_source");
     }
 
     #[test]

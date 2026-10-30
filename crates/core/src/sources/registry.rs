@@ -230,7 +230,9 @@ impl SourceRegistry {
     }
 
     fn current_record(&self, record: GameMatchRecord) -> GameMatchRecord {
-        super::matching::current_record(record, &self.rules, |rule| self.index(&rule.id))
+        super::matching::current_record(record, &self.rules, &self.overrides, |rule| {
+            self.index(&rule.id)
+        })
     }
 
     pub fn list_sources(&self) -> Vec<SourceSummary> {
@@ -300,14 +302,14 @@ impl SourceRegistry {
                     matched.insert(source_id.clone());
                 }
             }
-            if record
+            if let Some(fallback) = record
                 .fallback
                 .as_ref()
-                .is_some_and(|fallback| fallback.status == FallbackMatchStatus::Matched)
+                .filter(|fallback| fallback.status == FallbackMatchStatus::Matched)
             {
-                for rule in &self.rules {
-                    if rule.role == SourceRole::FallbackIndexer {
-                        matched.insert(rule.id.clone());
+                for candidate in &fallback.candidates {
+                    if candidate_is_credible(candidate) {
+                        matched.insert(candidate.source_id.clone());
                     }
                 }
             }
@@ -617,7 +619,11 @@ impl SourceRegistry {
                         && rule.enabled
                         && self.game_subscribed(game.appid, &rule.id)
                 });
-                if fallback.status == FallbackMatchStatus::Matched && fallback_active {
+                if matches!(
+                    fallback.status,
+                    FallbackMatchStatus::Matched | FallbackMatchStatus::Incomplete
+                ) && fallback_active
+                {
                     candidates.extend(fallback.candidates.iter().cloned());
                 }
             }
@@ -1053,9 +1059,18 @@ mod tests {
                 })
                 .collect(),
             fallback: fallback.map(|status| FallbackMatchRecord {
+                sources_fingerprint: Some(super::super::matching::fallback_sources_fingerprint(
+                    registry.rules(),
+                    registry.overrides(),
+                    appid,
+                )),
                 query_key: "query".to_string(),
                 status,
-                candidates: Vec::new(),
+                candidates: if status == FallbackMatchStatus::Matched {
+                    vec![candidate("hgamer", appid)]
+                } else {
+                    Vec::new()
+                },
                 checked_at: 1_000,
                 diagnostics: Vec::new(),
             }),
