@@ -2,7 +2,7 @@
 
 [设计](design.md) · [施工记录](progress.md) · [迁移矩阵](migration-matrix.md)
 
-状态：**P0–P3 已实现核心导入/读取、类型化运行时及发行商更新/详情分派，P3 双平台自动化已通过。** P0 原型在 P2 已迁为 [核心执行器](../../../crates/core/src/sources/adapters/script.rs)，原型回归迁入其 [单元测试](../../../crates/core/src/sources/adapters/script/tests.rs)，未保留第二套测试宿主。已有任务入口可执行核心保存的发行商脚本；客户端导入/读取 RPC 和编辑界面仍待 P5，补查聚合待 P4。
+状态：**P0–P4 已实现核心导入/读取、类型化运行时、发行商链路及多源脚本补查，P4 双平台自动化已通过。** P0 原型在 P2 已迁为 [核心执行器](../../../crates/core/src/sources/adapters/script.rs)，原型回归迁入其 [单元测试](../../../crates/core/src/sources/adapters/script/tests.rs)，未保留第二套测试宿主。已有任务入口可执行核心保存的发行商和补查脚本；客户端导入/读取 RPC 和编辑界面仍待 P5。
 
 ## 已验证的运行时决策
 
@@ -42,7 +42,7 @@ return {
 | --- | --- |
 | `collect_index` | `previous` 为已有索引/进度中的 `entries/pending/complete/etag/modified`，无记录时为空值；返回 `{entries, pending, complete, etag?, modified?, not_modified?, diagnostics?}`。条目复用 `SourceIndexEntry`；时间、修订和源 ID 由核心生成。`not_modified=true` 必须已有同解析身份的正式索引。 |
 | `resolve_page` | 输入绝对页面 URL；返回既有 `PageFact` 字段：`title/page/kind/steam_ids/aliases/mirrors/text/published_at/body_links/article_links/article_facts/next_page`。不得返回候选授权或安装对象。 |
-| `discover` | `query` 提供 `appid/name/name_hints/terms/force`；`terms` 由公共身份算法生成。`previous` 提供已有候选的事实副本。返回 `{pages, identities, complete, diagnostics}`；`pages` 每项为 `{fact: PageFact, reported_format?, upstream_page?}`，`identities` 每项为 `{appid, page, aliases}`。核心仍调用公共身份、格式、候选生成和校验逻辑，不接受脚本直接返回 `SourceCandidate`。P4 验证此入口，P0 未声称 HGamer 已迁移。 |
+| `discover` | `query` 提供 `appid/name/name_hints/terms/force`；`terms` 由公共身份算法生成。`previous` 提供已有候选的事实副本。返回 `{pages, identities, complete, diagnostics}`；`pages` 每项为 `{fact: PageFact, reported_format?, upstream_page?}`，`identities` 每项为 `{appid, page, aliases}`。核心仍调用公共身份、格式、候选生成和校验逻辑，不接受脚本直接返回 `SourceCandidate`。P4 已完成此核心入口的自动化验证；HGamer 的完整脚本迁移仍待 P6，P0 未声称已迁移。 |
 
 `diagnostics` 每项只含 `code/detail?`；宿主绑定 `source_id`。空数组、缺省可选项按字段合同处理。脚本异常没有返回输出时不保存虚构的新续跑状态，保留既有正式索引和进度。返回明确的部分结果时才使用 `pending`；不保存 Lua 栈或局部变量。
 
@@ -73,7 +73,9 @@ P0 发现 `mlua` 默认转换可能忽略数组表的字符串键，而 `detect_
 
 P2 已实现外部错误 `script_source_syntax_error`、`script_source_runtime_error`、`script_source_contract_error`、`script_source_digest_mismatch`、`unsupported_script_api_version`；`detail` 保留来源 ID、入口及可取得的底层 Lua 文件/行号和完整原因。取消统一为现有 `task_cancelled`。底层执行函数为私有，类型化入口封装领域错误，经 `io::Error`、领域投影与 CLI 映射仍保留完整详情，不截断。普通列表/读取仍不执行脚本。
 
-P2 的 `collect_index` 校验完整/部分结果、条目与域名；`not_modified` 需已有完整索引。`resolve_page` 校验页面事实，镜像格式由核心重新判断。`discover` 只返回校验后的页面与身份事实，不产生候选授权；多源聚合和候选生成归 P4。脚本诊断/进度只能提供内容，来源 ID、入口由宿主绑定。HTTP 等待响应头及正文使用共用 `operation::cancellable`，取消会丢弃在途 future；沿用已有请求超时/网络策略，不增加脚本任务期限。
+P2 的 `collect_index` 校验完整/部分结果、条目与域名；`not_modified` 需已有完整索引。`resolve_page` 校验页面事实，镜像格式由核心重新判断。`discover` 只返回校验后的页面与身份事实；P4 的同一适配器分派用公共身份/格式算法生成候选，补全当前 AppID 的已确认别名，拒绝让其他游戏身份授权当前候选。多源聚合遍历全部有效来源并保留来源归属、部分结果及诊断，不接受脚本返回候选权限字段。脚本诊断/进度只能提供内容，来源 ID、入口由宿主绑定。HTTP 等待响应头及正文使用共用 `operation::cancellable`，取消会丢弃在途 future；沿用已有请求超时/网络策略，不增加脚本任务期限。
+
+P4 沿用聚合 `FallbackMatchRecord`，新增可选 `sources_fingerprint` 用于只读核对当前启用/订阅规则集合；完整查询键另覆盖游戏名与名称提示。集合摘要按 ID 排序并含规则/源码与解析版本，不受输入顺序影响。无绑定旧记录、来源集合/脚本变化后的旧聚合不作为当前结果，保留文件并在下一次匹配重算；没有增加 wire 字段、TTL、每源数据库或状态恢复层。
 
 ## P1/P3 持久化与 P5 传输决策
 
