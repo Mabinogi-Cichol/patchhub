@@ -15,6 +15,7 @@ INSTALLER_FILES = (
     ('LICENSE', 'LICENSE', 'project-license'),
     ('scripts/licenses/sfextract-MIT.txt', 'licenses/sfextract-MIT.txt', 'reference-license'),
 )
+SCRIPT_LICENSES = ('Lua-5.4-LICENSE.txt', 'mlua-MIT.txt')
 SFEXTRACT_COMMIT = '21f5c5595a70e9284fff83476c0e307d5b92f573'
 PRODUCTION_BACKEND = {'bridge.py', 'source_service.py', 'tasks.py', 'plugin_settings.py', 'state_host.py', 'protocol.py', 'protocol_validation.py', 'v5.schema.json', 'app_update.py', 'install-decky.py'}
 
@@ -55,6 +56,9 @@ def validate_decky(plugin):
     package = json.loads((plugin / 'package.json').read_text(encoding='utf-8'))
     if package['version'] != project_version(ROOT):
         raise ValueError('Rebuild Decky plugin: application version differs from Cargo.toml')
+    for name in SCRIPT_LICENSES:
+        if (plugin / 'licenses' / name).read_bytes() != (ROOT / 'scripts/licenses' / name).read_bytes():
+            raise ValueError(f'Rebuild Decky plugin for current {name}')
     actual = {path.name for path in (plugin / 'backend').iterdir()}
     if actual != PRODUCTION_BACKEND:
         raise ValueError('Rebuild Decky plugin: unexpected or missing production backend modules')
@@ -109,6 +113,8 @@ def main():
             shutil.copyfile(source, bundle / name)
         (bundle / 'licenses').mkdir(exist_ok=True)
         shutil.copyfile(ROOT / 'scripts/licenses/sfextract-MIT.txt', bundle / 'licenses/sfextract-MIT.txt')
+        for name in SCRIPT_LICENSES:
+            shutil.copyfile(ROOT / 'scripts/licenses' / name, bundle / 'licenses' / name)
         windows_files = set(prepare_update(bundle, root=ROOT))
     windows = [(path, path.relative_to(bundle).as_posix(), path.suffix == '.exe')
                for path in sorted(bundle.rglob('*')) if path.is_file()

@@ -30,6 +30,14 @@ class PackagingTests(unittest.TestCase):
         with patch.object(packager, 'ROOT', root), patch.object(packager, 'OUTPUT', root / '.artifacts'), patch.object(sys, 'argv', ['package-artifacts.py', '--platform', platform]):
             packager.main()
 
+    def test_decky_rejects_stale_script_runtime_license(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.fixture(root)
+            self.write(root, 'apps/decky/plugin-output/licenses/Lua-5.4-LICENSE.txt', b'stale')
+            with self.assertRaisesRegex(ValueError, 'Lua-5.4-LICENSE'):
+                self.run_package(root, 'decky')
+
     def fixture(self, root, windows=False):
         self.write(root, 'Cargo.toml', b'[workspace.package]\nversion = "1.2.3"\n')
         self.write(root, 'scripts/windows-update.ps1', Path(__file__).with_name('windows-update.ps1').read_bytes())
@@ -37,6 +45,10 @@ class PackagingTests(unittest.TestCase):
         self.write(root, 'package-lock.json', b'npm lock')
         plugin = root / 'apps/decky/plugin-output'
         self.write(plugin, 'package.json', b'{"version":"1.2.3"}')
+        for name in packager.SCRIPT_LICENSES:
+            data = name.encode()
+            self.write(root, 'scripts/licenses/' + name, data)
+            self.write(plugin, 'licenses/' + name, data)
         for name in packager.PRODUCTION_BACKEND:
             self.write(plugin, 'backend/' + name)
         for name in ('protocol.py', 'v5.schema.json'):

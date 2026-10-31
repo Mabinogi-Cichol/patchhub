@@ -26,6 +26,10 @@ foreach ($taskName in @('dependencies.cdx.json','client-guide.md','privacy.md','
 }
 New-Item -ItemType Directory -Path (Join-Path $taskBundle 'licenses') -Force | Out-Null
 Copy-Item -LiteralPath (Join-Path $taskRoot 'scripts/licenses/sfextract-MIT.txt') -Destination (Join-Path $taskBundle 'licenses')
+
+foreach ($taskLicense in @('Lua-5.4-LICENSE.txt','mlua-MIT.txt')) {
+    Copy-Item -LiteralPath (Join-Path $taskRoot "scripts/licenses/$taskLicense") -Destination (Join-Path $taskBundle 'licenses')
+}
 & $taskPython.Source @taskPythonArgs (Join-Path $PSScriptRoot 'update_manifest.py') $taskBundle
 if ($LASTEXITCODE -ne 0) { throw 'Update manifest generation failed' }
 if ((Get-Content -LiteralPath (Join-Path $taskBundle 'app-version.json') -Raw | ConvertFrom-Json).version -ne $Version) { throw 'NSIS version differs from application' }

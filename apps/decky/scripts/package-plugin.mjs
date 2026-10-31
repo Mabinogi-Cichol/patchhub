@@ -31,6 +31,8 @@ copyFileSync(join(root, "packages/contracts/generated/v5.schema.json"), join(out
 cpSync(join(app, "dist"), join(output, "dist"), { recursive: true });
 mkdirSync(join(output, "licenses"), { recursive: true });
 copyFileSync(join(root, "scripts/licenses/sfextract-MIT.txt"), join(output, "licenses/sfextract-MIT.txt"));
+for (const name of ["Lua-5.4-LICENSE.txt", "mlua-MIT.txt"])
+  copyFileSync(join(root, "scripts/licenses", name), join(output, "licenses", name));
 const runtime = [];
 for (const name of binaries) {
   const binary = join(root, "target/linux/release", name);

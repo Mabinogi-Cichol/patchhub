@@ -42,6 +42,14 @@ def component(ecosystem, name, version, license_expression=None):
 
 for package in metadata['packages']:
     value = component('cargo', package['name'], package['version'], package.get('license'))
+    if package['name'] in ('lua-src', 'mlua', 'mlua-sys'):
+        name = 'Lua-5.4-LICENSE.txt' if package['name'] == 'lua-src' else 'mlua-MIT.txt'
+        value.setdefault('properties', []).extend([
+            {'name': 'patchhub:license-path', 'value': f'licenses/{name}'},
+            {'name': 'patchhub:license-sha256', 'value': hashlib.sha256((root / 'scripts/licenses' / name).read_bytes()).hexdigest()},
+        ])
+        if package['name'] == 'lua-src':
+            value['properties'].append({'name': 'patchhub:bundled-runtime', 'value': 'Lua 5.4.9; lua54/vendored; statically embedded; no external interpreter'})
     checksum = checksums.get((package['name'], package['version'], package.get('source')))
     if checksum:
         value['hashes'] = [{'alg': 'SHA-256', 'content': checksum}]
