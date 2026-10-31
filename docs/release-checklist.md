@@ -5,10 +5,29 @@
 ## v0.5.0 发布准备（2026-11-01）
 
 - 用户授权将 `feature/script-source-adapters` 合并至 `main` 并发布 v0.5.0，包含此前本地 `main` 的来源名称改动及当前分支的 Lua 来源迁移、后台 Shiravune 访问、双端脚本管理与相关修复。
-- 沿用[脚本来源施工记录](features/script-source-adapters/progress.md)及[来源名称施工记录](features/source-display-names/progress.md)中对应当前文件的验证；本轮只更新应用版本和发行文档，不重复执行已完成的产品回归。标签 CI 将重新执行双平台检查、构建与打包。
+- 沿用[脚本来源施工记录](features/script-source-adapters/progress.md)及[来源名称施工记录](features/source-display-names/progress.md)中对应当前文件的验证；本轮补齐构建测试夹具并更新应用版本和发行文档，不重复执行已完成的产品回归。标签 CI 将重新执行双平台检查、构建与打包。
 - 应用版本从根 `Cargo.toml` 同步为 0.5.0，Windows 使用 0.5.0+1；正式发行必须来自 `v0.5.0` 标签构建，公开附件限定三个安装包与 `SHA256SUMS.txt`。中文正文见[发行说明](releases/v0.5.0.md)。
 - Breaking Change 保持已确认决策：旧解析索引与候选不复用，升级后重新更新来源与匹配；不新增缓存迁移。
 - 标签 CI、公开 Release 与附件核验待执行。未验收项继续保留：本次最终包的 Steam Deck 部署、实体手柄/软键盘、全新会话、真实游戏安装矩阵、Windows 安装包安装与系统 DPI 等；既有局部实机证据不代表本次最终包通过这些项目。
+
+## v0.5.0 发布记录（2026-11-01）
+
+- 当前功能分支的源码、构建夹具、版本与文档分别提交后合并至 `main`，合并提交 `a20356b7514b73f64cb0aebacb95a95ecae8b3db`；注解标签 `v0.5.0` 指向该提交，`main` 与标签已原子推送。标签固定，后续仅补充发行核验文档。
+- [标签 CI 41233605892](https://github.com/Mabinogi-Cichol/patchhub/actions/runs/41233605892) 的 changes、双平台 core、windows、decky、ci 与 release 共 7 个任务全部成功；标签构建重新执行了核心/协议/CLI、双端前端/桥接及打包检查，生成新的 Windows NSIS、便携包和 Decky 包；Windows Flutter 289 项通过、2 项跳过且静态分析无问题，Decky 前端 90 项通过。
+- [正式 Release v0.5.0](https://github.com/Mabinogi-Cichol/patchhub/releases/tag/v0.5.0) 于北京时间 2026-11-01 03:29:36 发布，标题与标签均为 `v0.5.0`，非草稿、非预发行，4 个公开附件；正文已替换为[中文发行说明](releases/v0.5.0.md)并读回一致。
+- 下载全部 4 个公开附件，GitHub digest、文件大小与 `SHA256SUMS.txt` 的 3 个名称/哈希全部匹配；两端 ZIP CRC、无重复/越界路径、内容白名单、标签资源/契约/后端来源均通过。Windows 47 个文件，Decky 30 个文件；后台浏览器模块/共享脚本及 Lua 许可证均包含在包中。
+- Windows EXE/DLL 为 PE x86_64，NSIS 引导桩为 x86；Decky core/worker 为 ELF64 x86_64，运行时文件大小/哈希和 Unix 执行位通过。两端包内 CycloneDX 1.6 SBOM 应用及工作区版本均为 0.5.0，Cargo/npm/Dart 锁摘要、安装器及 Lua 许可来源与标签一致，Windows 按实际 CRLF 检出规则核对。SBOM 组件数：Windows 519，Decky 450。
+- 正式便携包在隔离 APPDATA 中启动并正常关闭，FileVersion `0.5.0+1`、ProductVersion `0.5.0+1`、退出码 0；未替换用户安装版或操作游戏。NSIS 未运行，版本由标签构建时的显式 VERSION 与 app-version.json 一致性检查及成功 CI 佐证。
+- 当前依赖审计**未通过**：cargo-audit 命中 11 条 RustSec 公告及 Tokio 1 条 unsound 提示（数据库 `2295466c4e9df26647fd67d8fa1c705ac2fc7f81`）；涉及 quick-xml 0.38.4、rustls 0.23.45、rustls-webpki 0.103.15、webpki-roots 1.0.9、zip 6.0.0、tokio 1.53.1。npm audit 报 9 个受影响条目（7 中、2 低，无高/严重），均在 Decky Rollup 构建依赖链。这些命中版本与发布前 `origin/main@8c07540` 相同；本次没有更新第三方依赖或添加忽略。静态检查确认 EXE XML 审计使用 quick-xml 的 NsReader/attributes，网络请求使用上述 TLS 栈，未据“版本未变”排除实际影响；没有完成利用性及修复验收。
+- 本轮未对最终包执行 Steam Deck 部署、实体手柄/软键盘、全新会话、真实游戏安装矩阵、Windows 安装包安装、系统 DPI 与跨版本自更新验收；既有功能阶段证据不视为本次最终附件通过这些项目。用户确认的旧索引/候选不复用决策已写入发行说明。
+- 证据保存在忽略目录 `.artifacts/release-v0.5.0/`：Release/标签运行/任务 API、完整 CI 日志、公开下载包、`verification.json`、便携包冒烟及依赖审计原始/摘要报告。本轮改动文档的 303 个本地文件链接检查通过；历史文档中的已退役代码引用未作为本次检查通过项。
+
+| 附件 | 字节 | SHA-256 |
+| --- | --- | --- |
+| patchhub-decky.zip | 8209909 | `5ffd8273b49f39fb2ca1cc90275744ff18d5d399917dae010ff1d750bee8da89` |
+| patchhub-windows-portable.zip | 20157181 | `4ff3f18edcff92653f51f8df0ce13dcc15176a26f91c0af8145c1e9fe458c821` |
+| patchhub-windows-x64-setup.exe | 15175672 | `b041b3769bcb3fccf84101c94f56f0e9c48757fc2c8e0fa53b31834e120f96cb` |
+| SHA256SUMS.txt | 278 | `84b30420d3d62ff80e04cb0ae92b4fbd1de241e66519de4132f70c51f474ac1f` |
 
 ## 构建与来源
 
