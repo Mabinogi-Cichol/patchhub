@@ -43,6 +43,7 @@ class CoreTask {
   Future<void> get done => _finished.future;
   bool running = true;
   bool cancelRequested = false;
+  final _browserCancelled = Completer<void>();
   bool _cancelSent = false;
   bool _requestWritten = false;
   bool _controlClosed = false;
@@ -62,6 +63,7 @@ class CoreTask {
   Future<void> cancel() async {
     if (!running || cancelRequested) return;
     cancelRequested = true;
+    if (!_browserCancelled.isCompleted) _browserCancelled.complete();
     _notify();
     if (_requestWritten) await _sendCancel();
   }
@@ -110,6 +112,57 @@ class CoreTask {
   };
 
   Future<void> _run() async {
+    try {
+      await _invoke(arguments, requestId);
+      if (!cancelRequested &&
+          error == null &&
+          method == 'update_source' &&
+          arguments['source_id'] == 'patchmoe' &&
+          result is Map &&
+          [
+            'source_browser_verification_required',
+            'source_age_verification_required',
+          ].contains(result['status']?['code'])) {
+        final pages = await client.collectSourcePages(
+          'patchmoe',
+          _browserCancelled.future,
+          (phase) {
+            progress = {'phase': phase, 'running': true};
+            _notify();
+          },
+        );
+        if (cancelRequested) throw const CoreError('task_cancelled');
+        await _invoke({
+          ...arguments,
+          'force': true,
+          'browser_responses': pages,
+        }, client.requestId());
+        if (error == null && result is Map && result['complete'] != true) {
+          error = CoreError(result['status']['code'] as String);
+        }
+      }
+    } catch (failure) {
+      error = failure is CoreError
+          ? failure
+          : CoreError('source_browser_failed', '$failure');
+    } finally {
+      await _closeControl();
+      if (!_browserCancelled.isCompleted) _browserCancelled.complete();
+      running = false;
+      _notify();
+      _finished.complete();
+      await _changes.close();
+      await _events.close();
+    }
+  }
+
+  Future<void> _invoke(Map<String, Object?> params, String wireId) async {
+    _process = null;
+    _requestWritten = false;
+    _cancelSent = false;
+    _controlClosed = false;
+    result = null;
+    error = null;
     Future<void>? readOutput;
     Future<void>? readErrors;
     var receivedTerminal = false;
@@ -118,7 +171,7 @@ class CoreTask {
       await client.capabilities();
       final process = await client.startProcess('serve-task');
       _process = process;
-      final sequence = EventSequence(client.protocol, requestId);
+      final sequence = EventSequence(client.protocol, wireId);
       readErrors = process.stderr
           .transform(utf8.decoder)
           .join()
@@ -177,7 +230,7 @@ class CoreTask {
                   // A valid domain failure is also a terminal receipt. Its
                   // error is distinct from a broken stream with no receipt.
                   try {
-                    result = client.protocol.response(value, requestId, method);
+                    result = client.protocol.response(value, wireId, method);
                   } on CoreError catch (failure) {
                     if (value is Map &&
                         value['ok'] == false &&
@@ -185,7 +238,7 @@ class CoreTask {
                         failure.code == value['error']['code'] &&
                         failure.detail == value['error']['detail'] &&
                         value['protocol_version'] == 5 &&
-                        value['request_id'] == requestId &&
+                        value['request_id'] == wireId &&
                         client.protocol.matches(
                           value,
                           client.protocol.schema[r'$defs']['ErrorResponse'],
@@ -231,9 +284,9 @@ class CoreTask {
         process.stdin.writeln(
           jsonEncode({
             'protocol_version': 5,
-            'request_id': requestId,
+            'request_id': wireId,
             'method': method,
-            'params': {...arguments, 'host': client.paths.host},
+            'params': {...params, 'host': client.paths.host},
           }),
         );
         await process.stdin.flush();
@@ -265,13 +318,6 @@ class CoreTask {
       if (_process != null) exitCode = await _process!.exitCode;
       if (readOutput != null) await readOutput;
       if (readErrors != null) await readErrors;
-    } finally {
-      await _closeControl();
-      running = false;
-      _notify();
-      _finished.complete();
-      await _changes.close();
-      await _events.close();
     }
   }
 }

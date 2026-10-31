@@ -64,7 +64,9 @@ class TaskSummary extends StatelessWidget {
             child: const Text('取消任务'),
           ),
         ] else if (task.error != null)
-          SelectableText('任务结果：${task.error}')
+          SelectableText(
+            '任务结果：${statusLabel(task.error!.code)}${task.error!.detail == null ? '' : '\n${task.error!.detail}'}',
+          )
         else
           const Text('任务已完成'),
         if (!query && task.controlError != null)
@@ -93,6 +95,7 @@ class _GlobalSourcesPageState extends State<GlobalSourcesPage> {
   final errors = <String, Object>{};
   final rule = TextEditingController();
   bool saving = false;
+
   @override
   void dispose() {
     rule.dispose();
@@ -369,7 +372,7 @@ class _GlobalSourcesPageState extends State<GlobalSourcesPage> {
                 const Divider(height: 24),
                 if (source['script'] is Map) ...[
                   SelectableText(
-                    'Lua 脚本 · API ${source['script']['api_version']}\nSHA-256 ${source['script']['sha256']}',
+                    'Lua 脚本 · API ${source['script']['api_version']}',
                     key: PageStorageKey('source:$id:script-metadata'),
                   ),
                   Align(
