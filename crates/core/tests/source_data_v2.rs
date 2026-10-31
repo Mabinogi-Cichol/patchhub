@@ -29,6 +29,16 @@ fn read_json(path: &Path) -> Value {
     serde_json::from_slice(&fs::read(path).unwrap()).unwrap()
 }
 
+fn current_patchmoe_fingerprint() -> Option<String> {
+    let config: RulesConfig =
+        serde_json::from_str(patchhub_core::sources::DEFAULT_RULES_JSON).unwrap();
+    let rule = patchhub_core::sources::validate::validate_rule(
+        config.sources.iter().find(|r| r.id == "patchmoe").unwrap(),
+    )
+    .unwrap();
+    patchhub_core::sources::index::parser_fingerprint(&rule)
+}
+
 fn index_entry(title: &str, page: &str, url: &str) -> SourceIndexEntry {
     SourceIndexEntry {
         title: title.to_string(),
@@ -1063,7 +1073,7 @@ fn legacy_files_migrate_once_and_new_snapshots_win() {
     assert!(store.load_match(42).unwrap().is_some());
 
     let fresh = SourceIndex {
-        parser_fingerprint: None,
+        parser_fingerprint: current_patchmoe_fingerprint(),
         schema_version: SOURCE_INDEX_SCHEMA_VERSION,
         source_id: "patchmoe".to_string(),
         revision: 9,
@@ -1088,6 +1098,7 @@ fn legacy_files_migrate_once_and_new_snapshots_win() {
         "https://www.patch.moe/",
         "appid",
     );
+    matched_candidate.parser_fingerprint = current_patchmoe_fingerprint();
     matched_candidate.mirrors = vec![Mirror {
         url: "https://download.patch.moe/fresh.zip".to_string(),
         label: None,
@@ -1172,7 +1183,7 @@ fn installer_resolve_works_from_a_published_index_before_any_match_task() {
     let store = SourceStore::open(&state).unwrap();
     store
         .save_index(&SourceIndex {
-            parser_fingerprint: None,
+            parser_fingerprint: current_patchmoe_fingerprint(),
             schema_version: SOURCE_INDEX_SCHEMA_VERSION,
             source_id: "patchmoe".to_string(),
             revision: 1,

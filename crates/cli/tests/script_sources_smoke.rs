@@ -166,12 +166,27 @@ fn large_script_roundtrips_across_processes_and_explicit_replace_preserves_setti
 }
 
 #[test]
-fn read_missing_state_is_read_only_and_builtin_rust_cannot_be_replaced() {
+fn read_missing_state_is_read_only_and_builtin_script_can_be_overridden() {
     let temp = tempfile::tempdir().unwrap();
     let absent = temp.path().join("absent");
     let response = call(&absent, "get_script_source", json!({"source_id":"missing"}));
     assert_eq!(response["error"]["code"], "unknown_source");
     assert!(!absent.exists());
+    let document = call(
+        &absent,
+        "get_script_source",
+        json!({"source_id":"patchmoe"}),
+    );
+    assert_eq!(document["ok"], true);
+    assert_eq!(document["result"]["rule"]["adapter"], "lua");
+    assert!(document["result"]["code"]
+        .as_str()
+        .unwrap()
+        .contains("form_zh_cn"));
+    assert!(
+        !absent.exists(),
+        "reading bundled text must not create state"
+    );
     let mut builtin = rule();
     builtin["id"] = json!("patchmoe");
     let response = call(
@@ -179,5 +194,11 @@ fn read_missing_state_is_read_only_and_builtin_rust_cannot_be_replaced() {
         "import_script_source",
         json!({"rule":builtin,"api_version":1,"code":"return {}","replace":true}),
     );
-    assert_eq!(response["error"]["code"], "source_not_script");
+    assert_eq!(response["ok"], true, "{response}");
+    let reopened = call(
+        temp.path(),
+        "get_script_source",
+        json!({"source_id":"patchmoe"}),
+    );
+    assert_eq!(reopened["result"]["code"], "return {}");
 }

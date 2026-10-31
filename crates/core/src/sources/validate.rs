@@ -322,10 +322,7 @@ fn valid_adapter_id(value: &str) -> bool {
 }
 
 fn valid_table_id(value: &str) -> bool {
-    (1..=64).contains(&value.len())
-        && value
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+    !value.is_empty() && !value.chars().any(|c| c.is_ascii_whitespace())
 }
 
 /// Port of `sources.py::_validate_rule`, preserving the Python check order and
@@ -383,15 +380,7 @@ pub fn validate_rule(raw: &RawSourceRule) -> io::Result<SourceRule> {
         allowed_url(page, &raw.page_hosts, false)?;
     }
     if raw.adapter == "table_html" {
-        let Some(columns) = &raw.columns else {
-            return Err(invalid("invalid_source_columns"));
-        };
-        if columns.title > 20
-            || columns.download > 20
-            || columns.date.is_some_and(|v| v > 20)
-            || columns.language.is_some_and(|v| v > 20)
-            || columns.appid.is_some_and(|v| v > 20)
-        {
+        if raw.columns.is_none() {
             return Err(invalid("invalid_source_columns"));
         }
         if let Some(table_id) = &raw.table_id {
@@ -400,7 +389,7 @@ pub fn validate_rule(raw: &RawSourceRule) -> io::Result<SourceRule> {
             }
         }
     }
-    Ok(SourceRule {
+    let mut rule = SourceRule {
         id: raw.id.clone(),
         name: raw.name.clone(),
         adapter: raw.adapter.clone(),
@@ -421,7 +410,9 @@ pub fn validate_rule(raw: &RawSourceRule) -> io::Result<SourceRule> {
         language: raw.language.clone(),
         url: raw.url.clone(),
         script: None,
-    })
+    };
+    super::builtin::bind(&mut rule);
+    Ok(rule)
 }
 
 /// Port of `sources.py::_validate_entries`.
@@ -455,7 +446,7 @@ pub fn validate_entries(
     Ok(clean)
 }
 
-fn normalize_date(raw: &str) -> io::Result<String> {
+pub(crate) fn normalize_date(raw: &str) -> io::Result<String> {
     let stripped = raw.trim();
     let value = if stripped.to_uppercase() == "COMING SOON" {
         String::from("COMING SOON")
@@ -821,10 +812,7 @@ mod tests {
             language: None,
             appid: None,
         });
-        assert_eq!(
-            validate_rule(&table).unwrap_err().to_string(),
-            "invalid_source_columns"
-        );
+        assert!(validate_rule(&table).is_ok());
 
         table.columns = Some(Columns {
             title: 0,
@@ -834,6 +822,8 @@ mod tests {
             appid: None,
         });
         table.table_id = Some("p".repeat(65));
+        assert!(validate_rule(&table).is_ok());
+        table.table_id = Some("contains space".into());
         assert_eq!(
             validate_rule(&table).unwrap_err().to_string(),
             "invalid_table_id"

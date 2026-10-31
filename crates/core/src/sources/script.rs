@@ -38,10 +38,14 @@ pub fn validate_code(source_id: &str, api_version: u32, code: &[u8]) -> Result<S
 }
 
 /// Reads only the captured rule/code pair. No compilation, execution or IO.
-pub(crate) fn document(rule: &SourceRule, code: Option<&String>) -> Result<ScriptSourceDocument> {
-    let (descriptor, code) = verify(rule, code.map(String::as_str))?;
+pub(crate) fn document(rule: &SourceRule, code: Option<&str>) -> Result<ScriptSourceDocument> {
+    let (descriptor, code) = verify(rule, code)?;
     Ok(ScriptSourceDocument {
-        rule: rule.into(),
+        rule: {
+            let mut raw: super::RawSourceRule = rule.into();
+            raw.adapter = "lua".into();
+            raw
+        },
         api_version: descriptor.api_version,
         code: code.to_owned(),
         sha256: descriptor.sha256.clone(),
@@ -55,7 +59,6 @@ pub(crate) fn verify<'rule, 'code>(
     let descriptor = rule
         .script
         .as_ref()
-        .filter(|_| rule.adapter == "lua")
         .ok_or_else(|| invalid("source_not_script"))?;
     if descriptor.api_version != SCRIPT_API_VERSION {
         return Err(invalid("unsupported_script_api_version"));
@@ -78,6 +81,7 @@ pub(crate) fn rule_changed(rule: &SourceRule, settings: &super::model::SettingsF
         return false;
     };
     let mut current = current.clone();
+    super::builtin::bind(&mut current);
     current.enabled = rule.enabled;
     super::rule_fingerprint(&current) != super::rule_fingerprint(rule)
 }

@@ -8,6 +8,7 @@
 //! appStore (design §1).
 
 pub mod adapters;
+pub mod builtin;
 pub mod canonical;
 pub mod http;
 pub mod identity;
@@ -20,6 +21,8 @@ pub mod schedule;
 pub mod script;
 pub mod snapshot;
 pub mod store;
+#[cfg(test)]
+pub(crate) mod test_fixtures;
 pub mod update;
 pub mod validate;
 

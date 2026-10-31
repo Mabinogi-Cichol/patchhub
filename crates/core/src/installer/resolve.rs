@@ -512,7 +512,9 @@ mod tests {
 
     fn candidate() -> SourceCandidate {
         SourceCandidate {
-            parser_fingerprint: None,
+            parser_fingerprint: crate::sources::index::parser_fingerprint(
+                &crate::sources::test_fixtures::default_rule("kagura-cn"),
+            ),
             candidate_id: "candidate-000000000000000000000000".to_string(),
             source_id: "kagura-cn".to_string(),
             source_record_id: "https://kagura.example/p/1".to_string(),
@@ -692,9 +694,9 @@ mod tests {
         };
         let handle = crate::sources::Sources::open(state).unwrap();
         let source_id = candidate.source_id.clone();
-        handle
-            .store()
-            .save_match(&GameMatchRecord {
+        crate::sources::test_fixtures::save_match(
+            handle.registry(),
+            GameMatchRecord {
                 schema_version: 1,
                 appid: 42,
                 name: "Game".to_string(),
@@ -714,8 +716,9 @@ mod tests {
                 )]),
                 fallback: None,
                 updated_at: 100,
-            })
-            .unwrap();
+            },
+        )
+        .unwrap();
     }
 
     fn seeded_registry(state: &std::path::Path, candidate: &SourceCandidate) -> String {
@@ -845,7 +848,9 @@ mod tests {
         handle
             .store()
             .save_index(&crate::sources::model::SourceIndex {
-                parser_fingerprint: None,
+                parser_fingerprint: crate::sources::index::parser_fingerprint(
+                    &crate::sources::test_fixtures::default_rule("patchmoe"),
+                ),
                 schema_version: 1,
                 source_id: "patchmoe".to_string(),
                 revision: 1,

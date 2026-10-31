@@ -21,7 +21,7 @@ const HGAMER_BASE: &str = "https://hgamer.tw/zh-CN/patches";
 
 fn kagura_rule() -> SourceRule {
     SourceRule {
-        script: None,
+        script: patchhub_core::sources::builtin::descriptor("kagura_wordpress"),
         id: "kagura-cn".to_string(),
         name: "Kagura CN".to_string(),
         adapter: "kagura_wordpress".to_string(),
@@ -42,7 +42,7 @@ fn kagura_rule() -> SourceRule {
 
 fn entry_rule() -> SourceRule {
     SourceRule {
-        script: None,
+        script: patchhub_core::sources::builtin::descriptor("table_html"),
         id: "table-source".to_string(),
         name: "Table".to_string(),
         adapter: "table_html".to_string(),
@@ -69,7 +69,7 @@ fn entry_rule() -> SourceRule {
 
 fn hgamer_rule() -> SourceRule {
     SourceRule {
-        script: None,
+        script: patchhub_core::sources::builtin::descriptor("hgamer_html"),
         id: "hgamer".to_string(),
         name: "HGamer".to_string(),
         adapter: "hgamer_html".to_string(),
@@ -127,7 +127,13 @@ fn index(
     entries: Vec<SourceIndexEntry>,
 ) -> SourceIndex {
     SourceIndex {
-        parser_fingerprint: None,
+        parser_fingerprint: patchhub_core::sources::index::parser_fingerprint(
+            &(match source_id {
+                "kagura-cn" => kagura_rule(),
+                "table-source" => entry_rule(),
+                _ => panic!("unknown test source: {source_id}"),
+            }),
+        ),
         schema_version: 1,
         source_id: source_id.to_string(),
         revision,

@@ -27,6 +27,23 @@ void main() {
         resourceDirectory: temp.path,
       );
       final client = CoreClient(paths, protocol);
+      final bundled = await client.call('get_script_source', {
+        'source_id': 'patchmoe',
+      }) as Map;
+      expect(bundled['rule']['adapter'], 'lua');
+      expect(bundled['code'], contains('form_zh_cn'));
+      expect(Directory(paths.stateDirectory).existsSync(), false);
+      await client.call('import_script_source', {
+        'rule': bundled['rule'],
+        'api_version': 1,
+        'code': 'return {}',
+        'replace': true,
+      });
+      expect(
+        (await client.call('get_script_source', {'source_id': 'patchmoe'})
+            as Map)['code'],
+        'return {}',
+      );
       final rule = jsonDecode(scriptRuleExample) as Map<String, dynamic>;
       final code = '-- ${'脚本源码' * 15000}\nwhile true do end\nreturn {}';
       final imported = await client.call('import_script_source', {

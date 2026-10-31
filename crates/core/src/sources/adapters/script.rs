@@ -427,6 +427,14 @@ impl UserData for Node {
                     id: element.id(),
                 }))
         });
+        methods.add_method("children", |lua, node, ()| {
+            lua.create_sequence_from(node.element().children().filter_map(ElementRef::wrap).map(
+                |element| Node {
+                    document: Rc::clone(&node.document),
+                    id: element.id(),
+                },
+            ))
+        });
     }
 }
 
@@ -607,12 +615,18 @@ fn execute<T: DeserializeOwned>(
                 scope.create_function(|lua, (url, validators): (String, Option<Table>)| {
                     let etag: Option<String> = validators
                         .as_ref()
-                        .map(|v| v.get("etag"))
+                        .map(|v| {
+                            v.get::<Value>("etag")
+                                .and_then(|value| from_value(lua, value))
+                        })
                         .transpose()?
                         .flatten();
                     let modified: Option<String> = validators
                         .as_ref()
-                        .map(|v| v.get("modified"))
+                        .map(|v| {
+                            v.get::<Value>("modified")
+                                .and_then(|value| from_value(lua, value))
+                        })
                         .transpose()?
                         .flatten();
                     let fetched = network
@@ -674,6 +688,76 @@ fn execute<T: DeserializeOwned>(
                 })?,
             )?;
             host.set("null", lua.null())?;
+            host.set(
+                "canonical_url",
+                lua.create_function(|_, value: String| {
+                    Ok(crate::sources::canonical::canonical_url(&value))
+                })?,
+            )?;
+            host.set(
+                "url_parts",
+                lua.create_function(|lua, value: String| {
+                    let url = url::Url::parse(&value).map_err(mlua::Error::external)?;
+                    let parts = lua.create_table()?;
+                    parts.set("host", url.host_str().unwrap_or(""))?;
+                    parts.set("path", url.path())?;
+                    Ok(parts)
+                })?,
+            )?;
+            host.set(
+                "navigation_url",
+                lua.create_function(|_, value: String| {
+                    Ok(validate::navigation_url(&value).is_ok())
+                })?,
+            )?;
+            host.set(
+                "steam_ids",
+                lua.create_function(|lua, value: Value| {
+                    let links: Vec<String> = from_value(lua, value)?;
+                    lua.to_value(&crate::sources::identity::steam_ids(&links))
+                })?,
+            )?;
+            host.set(
+                "aliases",
+                lua.create_function(|lua, (title, value): (String, Value)| {
+                    let blocks: Vec<String> = from_value(lua, value)?;
+                    lua.to_value(&crate::sources::identity::aliases(&title, &blocks))
+                })?,
+            )?;
+            host.set(
+                "game_title",
+                lua.create_function(|_, value: String| {
+                    Ok(crate::sources::identity::game_title(&value))
+                })?,
+            )?;
+            host.set(
+                "date",
+                lua.create_function(|_, value: String| Ok(crate::sources::identity::date(&value)))?,
+            )?;
+            host.set(
+                "normalize_date",
+                lua.create_function(|_, value: String| {
+                    validate::normalize_date(&value).map_err(mlua::Error::external)
+                })?,
+            )?;
+            host.set(
+                "word_contains",
+                lua.create_function(|_, (text, word): (String, String)| {
+                    if word.is_empty() {
+                        return Ok(false);
+                    }
+                    let lower = text.to_ascii_lowercase();
+                    let word = word.to_ascii_lowercase();
+                    Ok(lower.match_indices(&word).any(|(position, _)| {
+                        let word_char = |c: char| c.is_alphanumeric() || c == '_';
+                        !text[..position].chars().next_back().is_some_and(word_char)
+                            && !text[position + word.len()..]
+                                .chars()
+                                .next()
+                                .is_some_and(word_char)
+                    }))
+                })?,
+            )?;
             host.set(
                 "array",
                 lua.create_function(|lua, ()| {

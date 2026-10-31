@@ -43,7 +43,13 @@ fn setup() -> (tempfile::TempDir, Sources) {
     s.registry_mut().set_enabled("hgamer", false).unwrap();
     s.store()
         .save_index(&SourceIndex {
-            parser_fingerprint: None,
+            parser_fingerprint: sources::index::parser_fingerprint(
+                s.registry()
+                    .rules()
+                    .iter()
+                    .find(|r| r.id == "publisher")
+                    .unwrap(),
+            ),
             schema_version: sources::SOURCE_INDEX_SCHEMA_VERSION,
             source_id: "publisher".into(),
             revision: 1,

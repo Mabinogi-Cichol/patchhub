@@ -53,7 +53,7 @@ const PATCHMOE_INDEX: &str = include_str!("fixtures/sources/patchmoe-index.html"
 
 fn kagura_rule() -> SourceRule {
     SourceRule {
-        script: None,
+        script: patchhub_core::sources::builtin::descriptor("kagura_wordpress"),
         id: "kagura-cn".to_string(),
         name: "Kagura CN".to_string(),
         adapter: "kagura_wordpress".to_string(),
@@ -74,7 +74,7 @@ fn kagura_rule() -> SourceRule {
 
 fn table_rule() -> SourceRule {
     SourceRule {
-        script: None,
+        script: patchhub_core::sources::builtin::descriptor("table_html"),
         id: "table-source".to_string(),
         name: "Table".to_string(),
         adapter: "table_html".to_string(),
@@ -101,7 +101,7 @@ fn table_rule() -> SourceRule {
 
 fn patchmoe_rule() -> SourceRule {
     SourceRule {
-        script: None,
+        script: patchhub_core::sources::builtin::descriptor("patchmoe"),
         id: "patchmoe".to_string(),
         name: "patch.moe".to_string(),
         adapter: "patchmoe".to_string(),
@@ -122,7 +122,7 @@ fn patchmoe_rule() -> SourceRule {
 
 fn hgamer_rule() -> SourceRule {
     SourceRule {
-        script: None,
+        script: patchhub_core::sources::builtin::descriptor("hgamer_html"),
         id: "hgamer".to_string(),
         name: "HGamer".to_string(),
         adapter: "hgamer_html".to_string(),
@@ -190,7 +190,14 @@ fn index_at(
     checked_at: u64,
 ) -> SourceIndex {
     SourceIndex {
-        parser_fingerprint: None,
+        parser_fingerprint: patchhub_core::sources::index::parser_fingerprint(
+            &(match source_id {
+                "kagura-cn" => kagura_rule(),
+                "table-source" => table_rule(),
+                "patchmoe" => patchmoe_rule(),
+                _ => panic!("unknown test source: {source_id}"),
+            }),
+        ),
         schema_version: 1,
         source_id: source_id.to_string(),
         revision,
@@ -1118,6 +1125,17 @@ fn matrix4_six_states_and_disabled_or_incomplete_semantics() {
     // failed: a current source set whose publisher and fallback attempts failed.
     let temp = tempfile::tempdir().unwrap();
     let store = SourceStore::open(temp.path()).unwrap();
+    let sources = patchhub_core::sources::Sources::open(temp.path()).unwrap();
+    let current_rule = sources
+        .registry()
+        .rules()
+        .iter()
+        .find(|r| r.id == "kagura-cn")
+        .unwrap();
+    let mut current_index = index("kagura-cn", 1, true, vec![]);
+    current_index.parser_fingerprint =
+        patchhub_core::sources::index::parser_fingerprint(current_rule);
+    store.save_index(&current_index).unwrap();
     store
         .save_match(&GameMatchRecord {
             schema_version: GAME_MATCH_SCHEMA_VERSION,
@@ -1624,12 +1642,9 @@ fn matrix7_failure_cancel_removal_and_cache_age() {
         published,
         "M7: cancellation keeps the official snapshot"
     );
-    let progress = store.load_index_progress("kagura-cn").unwrap().unwrap();
-    assert_eq!(
-        progress.entries.len(),
-        2,
-        "collected page is kept as progress"
-    );
+    // A cancelled VM does not return new facts (P2 contract). The official
+    // snapshot and any previously persisted progress remain untouched.
+    assert!(store.load_index_progress("kagura-cn").unwrap().is_none());
 
     // A complete update reflects withdrawn entries.
     let temp = tempfile::tempdir().unwrap();
@@ -1676,6 +1691,12 @@ fn matrix7_failure_cancel_removal_and_cache_age() {
     let temp = tempfile::tempdir().unwrap();
     let store = SourceStore::open(temp.path()).unwrap();
     let rule = kagura_rule();
+    store
+        .update_settings(|settings| {
+            settings.added.push(rule.clone());
+            Ok(())
+        })
+        .unwrap();
     store
         .save_index(&index_at(
             "kagura-cn",
@@ -1975,6 +1996,14 @@ fn matrix9_warm_match_is_offline_and_reads_do_not_write_state() {
     let temp = tempfile::tempdir().unwrap();
     let store = SourceStore::open(temp.path()).unwrap();
     let rule = kagura_rule();
+    // Read-only production snapshots must see the same configured rule as the
+    // matching task, including the new parser identity.
+    store
+        .update_settings(|settings| {
+            settings.added.push(rule.clone());
+            Ok(())
+        })
+        .unwrap();
     let list = kagura_list(&[("Game", "/article/game/")]);
     let update = Arc::new(FakeFetcher::new());
     update.push(response(200, &list, KAGURA_ENTRY));

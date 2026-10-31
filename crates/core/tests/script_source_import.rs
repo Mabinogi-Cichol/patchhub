@@ -82,7 +82,7 @@ fn import_compiles_only_and_persists_one_complete_document() {
         assert!(serde_json::to_value(&sources.registry().rules()[index])
             .unwrap()
             .get("script")
-            .is_none());
+            .is_some());
     }
     let metadata = serde_json::to_string(&sources.registry().list_sources()).unwrap();
     assert!(!metadata.contains("top level must not run"));
@@ -119,7 +119,6 @@ fn invalid_imports_and_implicit_overwrites_do_not_modify_settings() {
             "script_source_syntax_error",
         ),
         (rule("custom"), 1, "return {}", true, "unknown_source"),
-        (rule("patchmoe"), 1, "return {}", true, "source_not_script"),
         (
             rule("patchmoe"),
             1,

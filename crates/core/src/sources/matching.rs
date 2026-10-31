@@ -1488,6 +1488,10 @@ fn merged_rules(builtins: &[SourceRule], added: &[SourceRule]) -> Vec<SourceRule
         .filter(|rule| !added.iter().any(|added| added.id == rule.id))
         .chain(added)
         .cloned()
+        .map(|mut rule| {
+            super::builtin::bind(&mut rule);
+            rule
+        })
         .collect()
 }
 
@@ -1507,17 +1511,19 @@ pub(crate) fn current_record(
         else {
             return true;
         };
-        let current = rule.role == SourceRole::Publisher
-            && index(rule).is_some_and(|index| {
-                index::compatible(&index, rule)
-                    && index.revision == source.index_revision
+        let index = index(rule);
+        let parser_current = rule.role == SourceRole::Publisher
+            && index.as_ref().is_some_and(|index| {
+                index::compatible(index, rule)
                     && source
                         .candidates
                         .iter()
                         .all(|candidate| candidate.parser_fingerprint == index.parser_fingerprint)
             });
-        stale |= !current;
-        current
+        // A routine publisher refresh retires its own result, not an unchanged
+        // fallback query. Parser changes still invalidate dependent evidence.
+        stale |= !parser_current;
+        parser_current && index.is_some_and(|index| index.revision == source.index_revision)
     });
     if let Some(fallback) = &record.fallback {
         stale |= fallback.sources_fingerprint.as_deref()

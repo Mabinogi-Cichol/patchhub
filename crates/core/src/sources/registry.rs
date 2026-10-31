@@ -138,11 +138,14 @@ impl SourceRegistry {
     fn reload(&mut self) -> Result<()> {
         let settings = self.store.settings()?;
         self.revision = settings.revision;
-        let overrides = Overrides {
+        let mut overrides = Overrides {
             enabled: settings.enabled.clone(),
             added: settings.added.clone(),
             games: settings.games.clone(),
         };
+        for rule in &mut overrides.added {
+            super::builtin::bind(rule);
+        }
         validate::validate_overrides(&overrides)?;
 
         let added_ids: HashSet<&str> = overrides
@@ -156,6 +159,9 @@ impl SourceRegistry {
             .filter(|rule| !added_ids.contains(rule.id.as_str()))
             .cloned()
             .collect();
+        for rule in &mut rules {
+            super::builtin::bind(rule);
+        }
         rules.extend(overrides.added.iter().cloned());
         let mut seen = HashSet::new();
         for rule in &rules {
@@ -172,6 +178,13 @@ impl SourceRegistry {
         self.rules = rules;
         self.names = settings.names;
         self.script_sources = settings.script_sources;
+        for rule in &self.rules {
+            if let Some(code) = super::builtin::code(&rule.adapter) {
+                self.script_sources
+                    .entry(rule.id.clone())
+                    .or_insert_with(|| code.to_owned());
+            }
+        }
         self.overrides = overrides;
         self.status.clear();
         self.indexes.clear();
@@ -522,7 +535,9 @@ impl SourceRegistry {
                 (false, Some(_)) => return Err(invalid("script_source_exists")),
                 (true, None) => return Err(invalid("unknown_source")),
                 (true, Some(existing)) => {
-                    if existing.adapter != "lua" || existing.script.is_none() {
+                    if existing.adapter != "lua"
+                        && super::builtin::code(&existing.adapter).is_none()
+                    {
                         return Err(invalid("source_not_script"));
                     }
                     rule.enabled = settings
@@ -553,7 +568,7 @@ impl SourceRegistry {
             .iter()
             .find(|rule| rule.id == source_id)
             .ok_or_else(|| invalid("unknown_source"))?;
-        super::script::document(rule, self.script_sources.get(source_id))
+        super::script::document(rule, self.script_sources.get(source_id).map(String::as_str))
     }
 
     pub fn set_game_source(&mut self, appid: u32, source_id: &str, subscribed: bool) -> Result<()> {
@@ -1000,7 +1015,9 @@ mod tests {
 
     fn index(entries: Vec<SourceIndexEntry>) -> SourceIndex {
         SourceIndex {
-            parser_fingerprint: None,
+            parser_fingerprint: super::super::index::parser_fingerprint(
+                &super::super::test_fixtures::default_rule("patchmoe"),
+            ),
             schema_version: SOURCE_INDEX_SCHEMA_VERSION,
             source_id: "patchmoe".to_string(),
             revision: 3,
@@ -1076,7 +1093,7 @@ mod tests {
             }),
             updated_at: 1_000,
         };
-        registry.store().save_match(&record).unwrap();
+        super::super::test_fixtures::save_match(registry, record).unwrap();
     }
 
     #[test]

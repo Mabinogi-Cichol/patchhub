@@ -124,9 +124,9 @@ mod tests {
     /// equivalent of the old per-game discovery record.
     fn save_match(sources: &Sources, appid: u32, candidate: SourceCandidate) {
         let source_id = candidate.source_id.clone();
-        sources
-            .store()
-            .save_match(&GameMatchRecord {
+        crate::sources::test_fixtures::save_match(
+            sources.registry(),
+            GameMatchRecord {
                 schema_version: 1,
                 appid,
                 name: "Game".to_string(),
@@ -146,8 +146,9 @@ mod tests {
                 )]),
                 fallback: None,
                 updated_at: 100,
-            })
-            .unwrap();
+            },
+        )
+        .unwrap();
     }
 
     #[test]
@@ -251,6 +252,7 @@ mod tests {
             })
             .unwrap();
         assert_eq!(sources.registry().source_origin(&rule.id), Some("added"));
+        candidate.parser_fingerprint = crate::sources::index::parser_fingerprint(&rule);
         save_match(&sources, appid, candidate.clone());
 
         let mut query = super::super::orchestrator::tests::query();

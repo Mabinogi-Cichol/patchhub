@@ -7,7 +7,6 @@ use mlua::{chunk::ChunkMode, HookTriggers, VmState};
 use patchhub_core::{
     operation,
     sources::{
-        adapters::{builtin_adapter, kagura},
         http::{FakeFetcher, FetchRequest, FetchResponse, Fetcher, RequestContext},
         model::{PageFact, SourceIndexEntry, SourceRule},
         validate::validate_rule,
@@ -107,7 +106,7 @@ struct IndexOutput {
 }
 
 #[test]
-fn recorded_non_table_list_matches_existing_rust_parser() {
+fn recorded_non_table_list_matches_legacy_baseline() {
     let mut rule = rule();
     rule.pages.truncate(1); // This test exercises the independent /patch/ root.
     let fake = Arc::new(FakeFetcher::new());
@@ -123,20 +122,13 @@ fn recorded_non_table_list_matches_existing_rust_parser() {
         &mut progress,
     )
     .unwrap();
-    let expected_fake = Arc::new(FakeFetcher::new());
-    expected_fake.push(response(LIST, &rule.pages[0]));
-    let expected = builtin_adapter(&rule.adapter)
-        .unwrap()
-        .collect_index(
-            &rule,
-            None,
-            &mut context(&expected_fake),
-            &AtomicBool::new(false),
-        )
-        .unwrap();
-    assert_eq!(actual.value.entries, expected.entries);
-    assert_eq!(actual.value.pending, expected.pending);
-    assert_eq!(actual.value.complete, expected.complete);
+    let expected: Vec<SourceIndexEntry> = serde_json::from_str(include_str!(
+        "../../../../tests/fixtures/script-sources/kagura-en-index-baseline.json"
+    ))
+    .unwrap();
+    assert_eq!(actual.value.entries, expected);
+    assert_eq!(actual.value.pending, Vec::<String>::new());
+    assert!(actual.value.complete);
     assert_eq!(actual.value.entries.len(), 2);
     assert_eq!(fake.call_count(), 1);
     assert_eq!(progress, rule.pages);
@@ -147,7 +139,7 @@ fn recorded_non_table_list_matches_existing_rust_parser() {
 }
 
 #[test]
-fn recorded_detail_matches_rust_with_no_invented_steam_id() {
+fn recorded_detail_matches_baseline_with_no_invented_steam_id() {
     let rule = rule();
     let fake = Arc::new(FakeFetcher::new());
     fake.push(response(DETAIL, DETAIL_URL));
@@ -162,14 +154,9 @@ fn recorded_detail_matches_rust_with_no_invented_steam_id() {
     )
     .unwrap()
     .value;
-    let expected_fake = Arc::new(FakeFetcher::new());
-    expected_fake.push(response(DETAIL, DETAIL_URL));
-    let expected = kagura::resolve_page(
-        &rule,
-        kagura::adapter_name(&rule),
-        DETAIL_URL,
-        &mut context(&expected_fake),
-    )
+    let expected: PageFact = serde_json::from_str(include_str!(
+        "../../../../tests/fixtures/script-sources/kagura-en-detail-baseline.json"
+    ))
     .unwrap();
     assert_eq!(actual, expected);
     assert_eq!(actual.mirrors.len(), 4);

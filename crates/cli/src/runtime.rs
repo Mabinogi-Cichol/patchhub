@@ -283,6 +283,28 @@ fn value(data: impl Serialize) -> Result<Value, DomainError> {
 }
 
 #[cfg(test)]
+fn fixture_source_rule(id: &str) -> sources::SourceRule {
+    let config: sources::RulesConfig = serde_json::from_str(sources::DEFAULT_RULES_JSON).unwrap();
+    sources::validate::validate_rule(config.sources.iter().find(|r| r.id == id).unwrap()).unwrap()
+}
+#[cfg(test)]
+fn fixture_source_index(id: &str) -> sources::SourceIndex {
+    sources::SourceIndex {
+        schema_version: 1,
+        source_id: id.into(),
+        parser_fingerprint: sources::index::parser_fingerprint(&fixture_source_rule(id)),
+        revision: 1,
+        complete: true,
+        checked_at: 100,
+        updated_at: 100,
+        etag: None,
+        modified: None,
+        entries: vec![],
+        pending: vec![],
+    }
+}
+
+#[cfg(test)]
 mod script_error_tests {
     #[test]
     fn script_error_codes_keep_the_complete_lua_detail() {
@@ -946,10 +968,10 @@ fn execute_source_method(
                 .source_id
                 .as_deref()
                 .ok_or_else(|| DomainError::code("source_id_required"))?;
-            let snapshot = sources::snapshot::SourceSnapshot::load(&state(params)?, &[], 0)
-                .map_err(err)?
-                .ok_or_else(|| DomainError::code("unknown_source"))?;
-            value(snapshot.get_script_source(source_id).map_err(err)?)
+            match sources::snapshot::SourceSnapshot::load(&state(params)?, &[], 0).map_err(err)? {
+                Some(snapshot) => value(snapshot.get_script_source(source_id).map_err(err)?),
+                None => value(sources::builtin::document(source_id).map_err(err)?),
+            }
         }
         "import_script_source" => {
             let raw: sources::RawSourceRule = serde_json::from_value(
@@ -1777,7 +1799,9 @@ mod sources_tests {
         let store = sources::store::SourceStore::open(&state).unwrap();
         store
             .save_index(&SourceIndex {
-                parser_fingerprint: None,
+                parser_fingerprint: sources::index::parser_fingerprint(&fixture_source_rule(
+                    "patchmoe",
+                )),
                 schema_version: 1,
                 source_id: "patchmoe".to_string(),
                 revision: 3,
@@ -1903,6 +1927,7 @@ mod sources_tests {
         assert!(result["settings_revision"].as_u64().unwrap() >= 2);
 
         let store = sources::store::SourceStore::open(&state).unwrap();
+        store.save_index(&fixture_source_index("patchmoe")).unwrap();
         store
             .save_status(
                 "patchmoe",
@@ -2078,7 +2103,9 @@ mod sources_tests {
         handle
             .store()
             .save_index(&SourceIndex {
-                parser_fingerprint: None,
+                parser_fingerprint: sources::index::parser_fingerprint(&fixture_source_rule(
+                    "patchmoe",
+                )),
                 schema_version: 1,
                 source_id: "patchmoe".to_string(),
                 revision: 1,
@@ -2580,7 +2607,9 @@ mod dynamic_projection_tests {
 
     fn dynamic_candidate() -> SourceCandidate {
         SourceCandidate {
-            parser_fingerprint: None,
+            parser_fingerprint: sources::index::parser_fingerprint(&fixture_source_rule(
+                "kagura-cn",
+            )),
             candidate_id: "candidate-000000000000000000000000".to_string(),
             source_id: "kagura-cn".to_string(),
             source_record_id: "https://kagurafan.com/patches/game".to_string(),
@@ -2623,6 +2652,10 @@ mod dynamic_projection_tests {
 
     fn save_dynamic_match(sources: &sources::Sources, candidate: SourceCandidate) {
         let source_id = candidate.source_id.clone();
+        sources
+            .store()
+            .save_index(&fixture_source_index(&source_id))
+            .unwrap();
         sources
             .store()
             .save_match(&GameMatchRecord {
