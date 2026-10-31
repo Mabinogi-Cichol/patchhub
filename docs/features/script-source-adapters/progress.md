@@ -1,10 +1,10 @@
 # 可导入脚本来源适配器施工记录
 
-[设计文档](design.md) · [施工计划](implementation-plan.md)
+[设计文档](design.md) · [施工计划](implementation-plan.md) · [当前问题与修复方案](fix-plan.md)
 
 ## 当前状态
 
-**施工中。P0–P6 已完成核心链路、双端脚本管理、四个内置来源及通用表格脚本迁移，旧 Rust 网站模块已退役；本地自动化与逐源只读网络抽样通过。P7 本地发行核验与 Deck 部署、RPC/界面抽样已完成；Windows 原生界面和实体手柄/软键盘验收仍待执行。**
+**施工中。P0–P6 已完成；P7 本地候选包与 Deck 部署、RPC/界面抽样通过。Shiravune 后台访问修复已实现：Windows 原生普通按钮与受控到期入口、Deck 正式普通 RPC 与隔离受控到期入口均通过，完整索引 165 条，目标游戏标题候选恢复。实体手柄/软键盘、其余原生交互及真实游戏安装仍按下文待验收，不代表 P7 全部完成。**
 
 - 调研基线：`main@cb06188`，2026-10-30。
 - 文档开发分支：`feature/script-source-adapters`。
@@ -22,7 +22,7 @@
 | P4 | 脚本补查与多源聚合 | 已完成 | 两平台 11 项专项、完整范围回归及最终边界专项通过；Windows workspace lint/契约通过 | 离线 HTTP 夹具与真实核心读取/投影，无新增真实网站或设备验收 |
 | P5 | 协议与两端导入/编辑 | 已完成 | 两平台协议/CLI、跨语言、双端表单和真实核心往返通过 | Windows 桌面安装版、Decky 游戏模式输入/软键盘待 P7；无新增真实站点验收 |
 | P6 | 全部内置来源/通用表格脚本迁移及旧 Rust 路径退役 | 已完成 | Windows 668 / Linux 679 passed，各 9 ignored；双端往返、lint/构建/契约通过 | 四源只读元数据抽样通过；非全量目录、下载或设备验收 |
-| P7 | 全面验收、发行包与约定范围实机验证 | 施工中 | 本地 Release 构建、双端 ZIP/NSIS、包内核验、隔离 ZIP/EXE 安装已通过 | Kagura 完整目录与自定义样例通过；Deck 已迁移部署并通过 RPC、元数据更新/取消和界面抽样；Windows 原生/实体手柄待验收 |
+| P7 | 全面验收、发行包与约定范围实机验证 | 施工中 | 双端 Release/ZIP、原有 NSIS 核验与隔离 ZIP/EXE 安装通过；本次未重新构建 NSIS | Kagura 完整目录与自定义样例通过；Deck 部署/RPC/界面及 Windows 原生后台更新通过，双端受控到期入口通过；其余原生输入/实体手柄待验收 |
 
 ## 2026-10-30：调研与计划
 
@@ -431,3 +431,56 @@ P7 保持施工中：Windows 原生桌面界面的实际导入/取消/重启，D
 - `dfd8d37 fix(decky): 保留脚本 RPC 的完整 Lua 错误正文`
 
 本文、设计/索引及作者示例另作独立文档提交。推送目标为 `origin/feature/script-source-adapters`，包含此前尚未推送的阶段提交；未要求合并 main 或发布。提交/推送不改变上文仍待实际验收的事项，P7 不标为全部完成。
+
+### 2026-10-31：Shiravune 问题调查与 Breaking Change 决策
+
+- 用户报告 `SACRIFICE VILLAINS：牺牲恶棍` 不能从 Shiravune 匹配、来源出现 `patchmoe_language_forms_missing`，并要求审阅 Lua 哈希的必要性。按过度设计审阅技能检查实际缓存、脚本、匹配和安装选择路径；没有修改产品代码或用户数据。
+- 本机旧索引有 160 条、覆盖完整，仍有目标游戏中英繁标题及补丁链接，但没有新版解析指纹。当前核心按设计排除该索引；新索引因访问验证页无法生成。隔离历史 EN/CN 网页实验能够解析出该游戏候选并重新解析 ZIP 选择；没有执行下载或安装，也未证明当前真实列表内容。
+- 最初对话建议一次性转换旧索引；用户随后明确“**不需要，这次作为 Breaking Change**”。已撤回该建议，设计保持旧索引/选择不复用，需更新索引和重新匹配，不新增迁移或兼容路径。
+- 用户提醒旧 Rust 曾处理验证流程。回查 `main@cb06188` 的 `PatchmoeAdapter`、共享 HTTP 和迁移后执行器：旧能力为重定向、Cookie 及表单 POST，当前仍保留。当前专项 `cargo test --locked --offline -p patchhub-core --test builtin_script_regression patchmoe::language_forms_are_posted_with_cookie_jar` **1 项通过**。
+- 将 `main@cb06188` 的源码导出到忽略目录并构建独立只读探针，和当前 Lua 探针在同一环境顺序请求相同 URL。两者均收到 HTTP 200 验证页（无 form），分别报原始 `patchmoe_language_forms_missing` 和 Lua 包装的同一错误。没有发现该页面对应的 Rust 成功、Lua 失败差异；不据此否定用户记忆中的历史成功行为。
+- 首次受限环境下旧探针返回网络错误，未用作站点结论；允许网络访问后取得上述实际页面。网络对照、历史离线实验和回归日志保存在忽略目录 `.artifacts/shiravune-investigation/`，旧基线和探针也仅在 `.artifacts/` 中；不提交网页中的设备或访问标识。
+- 修正方案见 [fix-plan.md](fix-plan.md)：先准确处理已复现的失败页，继续调查真实访问要求；不以改错误文案宣称恢复采集，撤回无证据的浏览器会话接入方案。哈希保留内部身份作用、简化正常来源卡片展示仍是待实现建议。
+- 本轮仅调整本功能方案与进度。无代码修复、设备部署、Git 提交或推送；当前在线索引恢复和完整游戏匹配验收未通过。
+
+### 2026-10-31：按用户浏览器证据更新完整访问修复计划
+
+- 用户提供三张截图及实际操作说明：浏览器等待请求验证完成，用户对年龄提示选择 YES 后能进入补丁列表。因此将当前问题认定为来源访问能力缺口；旧 Rust 与 Lua 同样失败不能证明功能正确。以上是用户提供的浏览器证据，不是助手已完成产品验收。
+- 助手尝试查看现有 Edge 页面，Computer Use 因无法可靠识别当前浏览器 URL 而停止。没有完成浏览器现场对照、读取验证会话或进行年龄确认；未据此断言 Cookie 可直接转交 Core。
+- 更新 [fix-plan.md](fix-plan.md)：浏览器辅助访问纳入本功能范围，先分别验证 Windows/Decky 同一会话获取真实列表及三语言响应，再接入现有 Lua、更新任务与用户继续/取消操作。请求验证和年龄确认均由用户完成，完整列表才发布；真实索引、目标游戏匹配及重启读取为完成标准。自动化夹具和错误提示改善不替代真实访问闭环。
+- 保留用户确认的 Breaking Change：不收养旧索引，不补写解析指纹，不复用旧安装选择。哈希普通卡片展示简化仍列为待实现，内部内容身份保留。
+- 用户明确要求继续当前功能分支。本轮曾创建无独立提交的 `fix/shiravune-access-flow`，收到指示后已切回 `feature/script-source-adapters` 并删除该临时分支；全部未提交文档保留。修复按当前功能开发继续，不新增修复分支。
+- 用户同时要求将分支处理原则写入仓库规则，已更新根 `AGENTS.md`：尚未合并功能的开发/测试/验收问题在原分支完成；独立缺陷另行处理；明确用户指示优先。
+- 同步修订设计中原先排除全部浏览器辅助的范围与 P7 计划、功能索引；保留前一轮调查和建议的历史记录，当前方案以更新后的修复计划为准。按过度设计审阅技能核对，未预设通用浏览器平台、重试框架、缓存迁移或任意等待时限；具体接入仍待原型验证。
+- 本轮为文档与开发规则更新，未修改产品代码、重跑网站请求、操作设备或提交/推送 Git。产品修复、浏览器原型及双端验收仍待执行。
+- 文档验证：6 份改动文件的 **213 个本地链接**（含新增章节锚点）检查通过，`git diff --check` 通过。未重复运行未修改的产品测试；方案审阅与链接检查不代表浏览器原型或产品验收通过。
+
+### 2026-10-31：开始修复，区分人工原型与后台自动产品流程
+
+- 用户要求开始修复。所有改动继续在 `feature/script-source-adapters`，未提交或推送；Breaking Change 和源码内容身份保留。
+- Windows 原型最初因插件未注册报 `MissingPluginException`；补齐当前机器已有的目录联接构建方式后，旧 `webview_windows 0.4.0` 又与 MSVC 14.51 的协程编译不兼容。改用 `webview_flutter_windows 1.3.0`，按插件指定 SHA-256 核对官方 NuGet 后构建成功；没有启用系统开发者模式或修改安全设置。
+- 用户在 Windows 和 Deck 手工原型中完成年龄确认。两端同会话均取得根页及英/繁/简三次 POST；使用实际 Core/Lua 在隔离状态发布 **165 条完整索引**，存在目标游戏中英繁标题及正确补丁 URL，ZIP 选择只读解析成功。这是人工原型/传输可行性证据，不是后台自动更新通过。
+- 用户进一步明确正式产品要求为普通更新和定时更新全程后台自动完成；原型操作不应成为正式用户步骤。已移除开发中的 Windows 手动网页页面、Deck 弹出网页与“在网页验证并更新”按钮及相关前端 RPC。当前设计与修复计划同步改为后台自动运行环境；不会代替用户作出真实个人声明或破解验证码。
+- Windows 新建独立 profile、不给网页组件挂载、只加载原已配置 `https://www.patch.moe/?flag=1` 的自动原型，在没有点击或采集动作的情况下取得 **4 个真实响应**。记录为 `.artifacts/shiravune-investigation/auto-browser-result.json`；手工采集结果另留 `browser-pages.json`，两者不混用。
+- Deck 已按技能重新核对 Devkit 当前配对、可信主机记录、Loader active、1 个 PatchHub 0.4.0 实例；43 项安装任务及 6 项来源任务均无活动项。`aiohttp` 可用。正式插件暂未替换；原型与隔离运行文件仅在本轮 `/tmp/patchhub-shiravune-*` 目录，证据保存在 `.artifacts/shiravune-deck-validation/`。
+- Steam 实测与类型定义存在差异：`CreatePopup` 没有采用预期初始 URL，完成事件传回空 URL，默认视口为零。改用 `BrowserView.Create`、显式加载唯一空白地址、按真实显示尺寸设布局并保持不可见，再绑定自己创建的 target ID。产品后台路径不再打开 popup 或按标题/事件 URL 猜测网页。
+- 新 Deck `SourceService.start_update_source` 在隔离状态经真实 Core、隐藏 BrowserView 和语言 POST 自动完成 **165 条完整索引**；调用者没有提供手工响应，结果 `completed` / `source_refreshed`。这是普通后台任务的实际网络证据；正式插件及到期入口仍待验收。
+- Windows 宿主把浏览器阶段并入同一个 `CoreTask`，第二次 Core 调用使用独立 wire request ID；正常按钮与 `schedulerTick` 复用同一路径。浏览器阶段保留进度及取消，只有真实完整列表才发布。源码仍由 Lua 解析，浏览器响应通过 URL/方法/表单体绑定进入现有 `RequestContext`。
+- 已执行的中间验证：Windows 相关核心 48 项、Linux 对应 48 项及协议/CLI 回归通过；新增浏览器更新专项 3 项；Windows Flutter 旧范围 **288 项通过、1 项跳过**，新后台入口原生集成验证执行中；Deck 前端旧范围 94 项通过（含后来移除的手工原型 5 项，最终计数需重跑），新后台 Python **39 项通过**。Windows/MSVC 与 WSL 的权限、目录联接及换行问题单独记录，不作为产品通过项。
+- 当前未执行真实补丁下载安装。正式普通/定时入口、最终打包、部署与清理仍需补齐；本记录不将上述原型和中间结果写成完整修复完成。
+
+### 2026-10-31：后台访问修复验证与正式 Decky 部署
+
+- Windows 原生集成测试通过正式 `GlobalSourcesPage` 的普通更新按钮及实际 `AppModel.schedulerTick`；后者仅将隔离状态设为到期，实际任务使用真实时间、当前 Release Core 和后台 WebView2。两次均自动完成，完整索引 **165 条**，目标 **SACRIFICE VILLAINS：牺牲恶棍** 恢复标题候选及正确 ZIP 地址。候选仍为 `match_basis=title` / `incomplete`，没有把标题线索提升为可信身份。证据：`.artifacts/shiravune-investigation/windows-native-auto/result.json`、`windows-native-auto.log`。独立新 profile 自动原型与原生任务测试分别记录，不能混为同一会话。
+- 最终 Flutter **291 项通过、1 项跳过**，静态分析无问题；新增同一宿主任务切换浏览器传输、独立 wire ID、浏览器阶段取消及真实年龄声明阻断的测试。Decky 前端 **89 项**、类型检查与构建通过，Python 浏览器/来源/任务 **39 项**通过。沿用本次未再修改核心的 Windows/Linux 各 **48 项**专项、协议/CLI 和 Clippy 记录；生成契约检查、共享展示契约、版本同步检查通过。打包回归 **11 项**通过。
+- 按 [Deck 部署技能](../../../.agents/skills/decky-deploy-verify/SKILL.md) 复核当前配对、43 项安装任务和6项来源任务均终态后，保存当前 PatchHub 0.4.0 全插件、状态、设置与可安装回滚包。首次备份未覆盖，已取回 `.artifacts/shiravune-deck-validation/shiravune-auto-20261031-2350/`。通过现有 Loader 连接安装已核验本地 ZIP，未裸复制正式目录或终止后端进程。
+- 本轮冻结 Decky ZIP **8313455 字节**，SHA-256 **`1e65e1046aad2f70ca17001a1c7c6597ad2e1262bf69109fd64c455343ed0ffa`**。正式目录 **30 个文件全部匹配**，core/worker ELF 与可执行位正常，`plugin_loader` active，运行中仅 **1 个 PatchHub 0.4.0**。实际 HTTP 前端 **149879 字节**，SHA-256 **`45a5dfd33dbcd388c82fb18d1d39f3b5169a2d8efd421200fda3870e2382dc4a`**，与本地一致。
+- 正式插件普通 `update_source('patchmoe', true)` 经真实 Core、隐藏 BrowserView、三语言 POST 自动完成，**165 条完整索引**，23 个已有 AppID 完成增量匹配；没有向 RPC 提供手工页面。Deck 不含目标游戏3137110，因此目标候选证据来自 Windows 原生隔离库与核心专项，不声称是 Deck 已安装游戏匹配。
+- Deck 到期验证调用**正式安装的 `Plugin._check_due_sources`**，使用独立 `automatic-state` 和受控 `now=next_due_at+1`；真实网站、正式 Core 和后台浏览器完成165条完整索引。证据 `scheduled-result.json`；这证明正式到期入口，未等待一小时墙钟周期。尝试启用正式来源间隔时发现既有规则要求当前解析器至少有一次有效尝试，否则没有 `next_due_at`；未改变该调度契约。临时间隔已恢复为原来的 **0**，没有改写用户缓存时间。
+- 正式 `scan()` 返回 **27 个安装实例**、2项既有 `library_unavailable` 诊断；事务仍为 **25 条**。更新后无活动安装任务或残留产品 BrowserView。Loader 安装移除了 PatchHub 排序成员，已仅恢复到 Storage Cleaner 后，其余插件顺序/设置保持。随后通过 Loader 正常重载，重新读取仍为165条完整索引、同一脚本SHA和关闭的自动更新设置。
+- 真实游戏模式页面与来源详情截图已查看，无横向溢出（854 CSS px），普通卡片只有 Lua/API，完整摘要仍可通过脚本编辑器读取；没有手工验证/采集按钮。证据 `formal-sources.png`、`formal-source-details.png`、`visible-result.json`。这些为 CDP/DOM 实机证据，不代表实体手柄、软键盘或SteamOS重启验收。
+- Windows 最终 Release 已重建，候选包包含 WebView2 插件、Loader DLL、共享采集脚本及当前 Core。打包入口补齐新生产模块/运行时资源的检查，SBOM按当前锁文件与Flutter依赖重建；最终ZIP哈希记录在本轮 `windows-package-final.json`。本次没有重建 NSIS、安装用户桌面版本或发布Release。
+- 按 [过度设计审阅](../../../.agents/skills/overengineering-review/SKILL.md) 沿普通/定时入口→宿主浏览器→受限响应传输→当前Lua→索引发布/增量匹配，以及失败/取消/销毁路径复核：未发现需新增机制的项。浏览器能力仅限已复现的 Shiravune JavaScript 缺口；没有通用浏览器平台、缓存收养、Rust回退、隐式成功、任务总时长限制或新配额。请求/响应URL与当前来源权限、方法/表单体绑定仍保留；内部SHA用于解析身份，普通UI删除完整SHA。
+- 本轮不下载或安装真实游戏补丁，未提交/推送Git。Shiravune本次访问修复已实现并完成上述边界内验证；P7其余原生交互、实体手柄/软键盘、全新Deck会话及真实游戏安装仍待验收。远端临时材料与原型窗口清理结果见下方收尾记录。
+- 收尾：首次备份三个归档的 SHA-256 已逐一核对，本地回滚材料保留。确认绝对路径后，已删除本轮 `/home/deck/patchhub-validation/shiravune-auto-20261031-2350` 与 `/tmp/patchhub-shiravune-SAV41dJx`；已通过原生 Destroy 关闭开发原型，正式产品 BrowserView 数为0，退出来源页并关闭菜单。未删除正式插件、状态或游戏文件。
+- 最终静态核验：8份相关文档共227个本地文件链接通过，`git diff --check`通过。Windows便携ZIP为20213253字节，SHA-256 `e85cc6e4d813187f172d002737d9df13f6fcc3fc0e6e137784de5696c5fa6ded`；解包确认当前Core、WebView2插件/Loader与采集脚本一致。本轮SSH隧道已关闭。
