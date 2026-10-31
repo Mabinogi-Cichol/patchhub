@@ -1,7 +1,6 @@
 {
   "id": "my-product-pages",
   "name": "自选产品详情页示例",
-  "adapter": "lua",
   "enabled": true,
   "role": "publisher",
   "discovery_only": true,

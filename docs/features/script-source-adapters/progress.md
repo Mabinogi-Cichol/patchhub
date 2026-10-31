@@ -484,3 +484,131 @@ P7 保持施工中：Windows 原生桌面界面的实际导入/取消/重启，D
 - 本轮不下载或安装真实游戏补丁，未提交/推送Git。Shiravune本次访问修复已实现并完成上述边界内验证；P7其余原生交互、实体手柄/软键盘、全新Deck会话及真实游戏安装仍待验收。远端临时材料与原型窗口清理结果见下方收尾记录。
 - 收尾：首次备份三个归档的 SHA-256 已逐一核对，本地回滚材料保留。确认绝对路径后，已删除本轮 `/home/deck/patchhub-validation/shiravune-auto-20261031-2350` 与 `/tmp/patchhub-shiravune-SAV41dJx`；已通过原生 Destroy 关闭开发原型，正式产品 BrowserView 数为0，退出来源页并关闭菜单。未删除正式插件、状态或游戏文件。
 - 最终静态核验：8份相关文档共227个本地文件链接通过，`git diff --check`通过。Windows便携ZIP为20213253字节，SHA-256 `e85cc6e4d813187f172d002737d9df13f6fcc3fc0e6e137784de5696c5fa6ded`；解包确认当前Core、WebView2插件/Loader与采集脚本一致。本轮SSH隧道已关闭。
+
+### 2026-11-01：审计“添加自定义来源”对 Lua 脚本的支持
+
+用户指出来源已全部改为 Lua 脚本后，添加自定义来源也需要相应支持。本轮先按只读审计核对新增/导入/编辑/删除、启用/名称/订阅/间隔/调度、索引/详情/补查/匹配/安装/展示六条链路，再修复经代码路径确认的缺口；未改动用户状态、未访问真实网站、未操作设备。
+
+#### 审计结论（已支持）
+
+- 导入校验对 `adapter=lua` 没有多余要求：`columns/table_id` 只约束 `table_html`，`download_hosts` 只对非 `discovery_only` 来源要求，`discovery_only` 显式接受 `lua`（`validate.rs`）。
+- 新建/替换语义闭环：同 ID 新建报错、显式替换保留名称/启用/订阅/间隔，规则与源码同事务写入；两个 writer 只有一个成功。
+- 启用、名称、逐游戏订阅、间隔、两端调度均按 `role` 与规则集合判断，没有内置来源 ID 白名单；新建来源默认订阅全部游戏，间隔默认 0（关闭）。
+- 索引更新、详情解析、补查聚合、候选绑定/解析指纹、ZIP/EXE/人工候选与显式 URL 解析使用同一生产分派，无按站点 ID 的分支；状态目录拼接受 `valid_source_id` 字符集限制（小写字母数字与连字符，≤48）。
+- 两端导入后刷新来源列表与游戏投影，新建来源会出现在游戏订阅页。
+
+#### 本轮修复
+
+1. **脚本来源首次尝试失败后永不自动重试**（核心）。`list_sources` 为隐藏旧解析身份的状态，把脚本来源在没有已发布索引时的上次尝试一并过滤，导致 `checked_at` 与 `next_due_at` 同时为空；新建自定义来源第一次更新失败后不再进入自动调度，与 `docs/source-adapters.md` 和 `p1-contract §10` 的 `next_due_at = status.checked_at + interval_hours*3600` 不一致。现改为：卡片展示继续过滤旧解析状态，到期计算使用真实上次尝试（`crates/core/src/sources/registry.rs`）。新增回归 `script_source_first_failed_attempt_still_schedules_a_retry`。
+2. **添加自定义来源无法新增 Lua 来源**（两端）。原“高级：添加来源规则 / 添加源”一律走 `add_source`，核心只接受声明式适配器名，`adapter=lua` 会返回 `source_exists_or_adapter_unavailable`（与 ID 冲突同码），用户无法判断是自己写错还是需要走脚本导入。现两端解析规则：`adapter=lua` 打开脚本编辑器并带入该规则，只需补填源码后按 `replace=false` 导入；其他适配器仍走 `add_source`。Windows 实现在 [source_pages.dart](../../../apps/windows-flutter/lib/pages/source_pages.dart) 与 [script_source_editor.dart](../../../apps/windows-flutter/lib/pages/script_source_editor.dart) 的 `draftRule`；Decky 新增 source-rule.ts 判定（该入口与文件在本日后续改动中已删除）并在 [index.tsx](../../../apps/decky/src/index.tsx) 打开同一编辑器（`draftRule`）。未改核心错误码，也没有让 `add_source` 接受 lua。
+3. **Windows 规则错误文本崩溃**（顺带修复的实机可达缺陷）。`SelectableText` 与同页 `ExpansionTile` 共用 PageStorage 标识，规则 JSON 解析失败后渲染错误文本抛出 `type 'bool' is not a subtype of type 'double?'`；为该文本补独立 `PageStorageKey('global-sources:rule-error')`，与既有来源卡片错误文本一致。
+
+#### 审计发现但本轮未实施（待决策）
+
+1. **无删除/撤销来源能力**：核心、协议、CLI、两端均无删除入口。自定义来源只能停用；内置来源被“保存并替换”后无法回到随包脚本。需要新增协议方法并同步生成契约、CLI 与两端，删除时清理 `added/script_sources/enabled/names/intervals/games` 与运行中的任务；旧索引/详情/匹配文件可按解析身份自然失效，不必另行清理。
+2. **补查类自定义来源的展示仍按 `hgamer` 字面量判断**：Decky [discovery.ts](../../../apps/decky/src/discovery.ts) 的来源名称与“补丁索引/发行商补丁源”后缀、[packages/ui](../../../packages/ui/src/index.ts) 的普通源命中抑制与排序、Flutter [library_presentation.dart](../../../apps/windows-flutter/lib/presentation/library_presentation.dart) 的同类判断，以及 [source_pages.dart](../../../apps/windows-flutter/lib/pages/source_pages.dart) 的分组兜底 `|| id == 'hgamer'`。自定义 `publisher` 来源显示原始 ID，自定义 `fallback_indexer` 来源被标成发行商补丁源且不会被抑制。应按 `role` 判定。
+3. **无 `fallback_indexer` 作者示例**：示例目录只有 `publisher` 与“自选产品详情页”，补查脚本只能按 API 合同自行编写。
+4. **Decky `add_source` 的 32 KiB 参数上限**与 Windows、脚本导入不一致，属于只剩一端的遗留限制。
+
+#### 已执行验证
+
+| 范围 | 命令 | 结果 |
+| --- | --- | --- |
+| 核心完整回归 | `cargo test --locked -p patchhub-core` | **603 passed / 9 ignored**，含新增调度回归；集成目标（含 `script_source_import`、`script_source_pipeline`、`script_source_fallback`）全部通过 |
+| 核心静态分析 | `cargo clippy --locked -p patchhub-core --all-targets -- -D warnings`、`cargo fmt --all -- --check` | 通过；仅有既有增量缓存硬链接改复制提示 |
+| Decky 前端 | `npm test`（apps/decky） | **94 passed**，含新增“lua 规则打开脚本编辑器而不是 add_source”与 `draftRule` 预填 |
+| Decky 类型/构建 | `npm run typecheck`、`npm run build` | 通过 |
+| Windows 客户端 | `flutter analyze --no-pub lib test`、`flutter test --no-pub` | 静态分析无问题；**292 passed / 1 skipped**，含新增 lua 规则路由与错误文本回归 |
+| 共享契约 | `npm run test:contracts` | 通过（本轮未改协议与生成物） |
+
+未执行：双端实机界面与实体手柄输入、真实网站上的自定义脚本导入/更新、完整 workspace 构建与发行包。以上都不因自动化通过而视为已验收。
+
+#### 本轮过度设计复核
+
+沿“规则输入 → 路由 → 导入事务 → 列表/调度 → 任务”路径核对：调度修复只在汇总时改用真实上次尝试，没有新增状态字段、迁移或重试框架；两端路由复用既有编辑器与 `import_script_source`，没有让 `add_source` 接受 lua、没有新增协议方法或模板系统；PageStorageKey 是有复现堆栈的实际崩溃修复。未发现需要新增的防御分支或配置项。剩余缺口（删除能力、补查展示按 role、补查示例、Decky 参数上限）以审计记录保留，未提前实现。
+
+### 2026-11-01：删除自定义来源、内置来源只读与 add_source 限制清理
+
+用户就上一轮审计给出决定：新增删除自定义来源的能力；内置来源的编辑改为只读；不需要补查类自定义来源；删除 `add_source` 的参数上限。本轮按此实施并在双端接入，未访问真实网站、未部署设备、未提交 Git。
+
+- 核心 [registry.rs](../../../crates/core/src/sources/registry.rs)：新增 `remove_source(source_id)`，只删除 `settings.added` 中的用户规则，并清掉该 ID 的源码、启用、名称与间隔；逐游戏订阅保留，重新添加同一 ID 时沿用。内置来源与未知 ID 分别报 `source_builtin_readonly` / `unknown_source`，删除与失败写入都不改动设置字节。`import_script_source` 的 `replace=true` 只接受用户已有规则：内置来源改为只读（`source_builtin_readonly`），新建同 ID 仍报 `script_source_exists`。
+- 核心 [matching.rs](../../../crates/core/src/sources/matching.rs)：只读记录清理中，规则已不存在的脚本候选不再获得授权（旧 Rust 无指纹条目保持既有语义），使删除来源后 `match_summary`/只读投影同样看不到其候选；索引/详情/状态文件保留在磁盘，但按解析指纹不再生效。
+- 协议与 CLI：[lib.rs](../../../crates/protocol/src/lib.rs) 新增 `remove_source` 方法、`RemoveSourceParams`、`SourceRemovedResult`，方法表 24/12 → **25/13**；[fixtures](../../../crates/protocol/src/fixtures.rs) 补齐请求/成功夹具；[runtime.rs](../../../crates/cli/src/runtime.rs) 与帮助文本接入。生成契约、`packages/contracts/fixtures/v5/cases.json` 与 Flutter bundled schema 已重新生成并通过 `check`。
+- 两端：Windows [source_pages.dart](../../../apps/windows-flutter/lib/pages/source_pages.dart) 对 `origin=builtin` 显示“查看脚本”，对内建只读编辑器禁用输入并隐藏保存；用户来源显示“编辑脚本/删除来源”，删除前需确认。Decky [index.tsx](../../../apps/decky/src/index.tsx) 同样按 `origin` 分流，删除为两步确认，并经 `remove_source` RPC 后刷新来源与投影。两端编辑器新增 `readOnly`。
+- Decky `main.py` 移除 `add_source` 的 32768 字符检查；Windows 与脚本导入本来没有该上限。
+- 旧版保存过的同 ID 用户覆盖仍按用户规则加载、可编辑、可删除，删除后恢复随包脚本；不再允许新建此类覆盖。
+
+#### 已执行验证
+
+| 范围 | 命令 | 结果 |
+| --- | --- | --- |
+| 核心/协议/CLI 完整回归 | `cargo test --locked -p patchhub-core -p patchhub-protocol -p patchhub-cli` | 全部目标通过（核心 370 lib + 集成目标；含新增删除/只读/调度回归） |
+| 静态分析 / 格式 | `cargo clippy --locked --workspace --all-targets -- -D warnings`、`cargo fmt --all -- --check` | 通过（仅既有增量缓存硬链接提示） |
+| 生成契约 | `cargo run -p patchhub-contract-gen -- check`、`npm run test:contracts` | 无漂移；共享 DTO/夹具与 Flutter 展示一致 |
+| Windows 客户端 | `flutter analyze --no-pub lib test`、`flutter test --no-pub` | 无分析问题；**295 passed / 1 skipped** |
+| Decky 前端 | `npm test`、`npm run typecheck`、`npm run build` | **96 passed**，类型检查与构建通过 |
+| Decky Python | `python -m unittest test_source_service test_bridge test_v5_bridge` | **51 passed**，含真实 Core 的内置只读、用户来源删除与重启读取 |
+
+新增回归覆盖：内置来源替换/删除被拒且不改设置字节；用户来源删除只清自己的设置、可重新导入；删除后旧匹配候选在 `matches`/`cached_candidates`/`match_summary` 均不可用；旧版同 ID 覆盖可加载、删除后恢复随包定义；CLI 进程内创建-删除-重建与错误码；双端界面只读查看与两步删除。
+
+未执行：双端实机界面与实体手柄输入、真实网站上的来源删除/更新、发行包与设备部署。补查类自定义来源按用户决定不再扩展。
+
+#### 本轮过度设计复核
+
+删除只清理设置条目、不引入缓存清理任务或迁移；候选授权按解析指纹判断，未新增字段或世代号；只读是同一编辑器的一个布尔状态，没有第二套查看器；`add_source` 只删掉一条无依据的长度检查，未换成别的配额。未发现需要新增的防御分支。
+
+### 2026-11-01：删除声明式表格来源，自定义来源只保留 Lua
+
+用户提问：既然旧 Rust 适配器都删了、内置来源也全是 Lua，为什么“添加来源”还要选 adapter。核对后确认 adapter 现在只剩两个作用：内置规则用它定位随包 Lua 文本（`builtin::code`），用户规则用 `lua` 标记自有源码；而 `add_source` 仍按旧白名单接受 patchmoe/kagura/hgamer，等于让用户“选一个别人的选择器去抓自己的页面”。据此按用户决定删除声明式表格来源，新增侧只留 Lua。
+
+- 协议/CLI：[lib.rs](../../../crates/protocol/src/lib.rs) 删除 `add_source` 方法、`AddSourceParams` 与请求/结果映射，方法表回到 **24 / 12**；[fixtures](../../../crates/protocol/src/fixtures.rs)、生成契约、`packages/contracts/fixtures/v5/cases.json` 与 Flutter bundled schema 重新生成；[runtime.rs](../../../crates/cli/src/runtime.rs) 与帮助文本同步。
+- 核心：[registry.rs](../../../crates/core/src/sources/registry.rs) 删除 `add_source`，[mod.rs](../../../crates/core/src/sources/mod.rs) 删除已无使用者的 `BUILTIN_ADAPTERS`。`RawSourceRule.adapter` 改为可省略、缺省即 `lua`，作者规则不再需要写适配器；内置规则继续用历史名字定位随包脚本，不受影响。
+- 存量兼容：随包 `table.lua`、`columns/table_id` 字段与既有校验保留，只因为有用户可能已经保存过这类规则——删字段会让 `deny_unknown_fields` 直接读不出旧设置。这类规则仍然加载和执行，但**没有任何新建入口**，可在来源卡片里删除后改用 Lua。没有自动改写或迁移用户规则。
+- 两端：Windows [source_pages.dart](../../../apps/windows-flutter/lib/pages/source_pages.dart) 与 Decky [index.tsx](../../../apps/decky/src/index.tsx) 删除“高级：添加来源规则 / 添加源”的 JSON 输入、示例与复制，`import_script_source`（导入脚本来源）成为唯一入口；两侧编辑器去掉不再使用的 `draftRule` 预填参数，Decky 同时删除 `source-rule.ts` 与其测试。
+- 作者示例：`examples/publisher/source.json` 与 `examples/product-pages/source.json` 去掉 `adapter`，两端示例常量同步（仍由测试逐字对照）。
+- 文档：[source-adapters.md](../../source-adapters.md) 删除“添加表格网站”章节，改为“自定义来源（只有 Lua）/内置站点脚本”；[design.md](design.md)、[p0-contract.md](p0-contract.md)、[implementation-plan.md](implementation-plan.md)、[migration-matrix.md](migration-matrix.md) 与功能索引同步；[source-display-names](../source-display-names/progress.md) 记录规则示例入口随之移除。
+
+#### 已执行验证
+
+| 范围 | 命令 | 结果 |
+| --- | --- | --- |
+| 核心/协议/CLI | `cargo test --locked -p patchhub-core -p patchhub-protocol -p patchhub-cli` | 全部通过；核心 370 lib + 集成目标，含删除/只读/调度回归 |
+| 静态分析/格式 | `cargo clippy --locked --workspace --all-targets -- -D warnings`、`cargo fmt --all -- --check` | 通过 |
+| 生成契约 | `cargo run -p patchhub-contract-gen -- generate/check`、`npm run test:contracts` | 无漂移，共享 DTO 与 Flutter 展示一致 |
+| Windows | `flutter analyze --no-pub lib test`、`flutter test --no-pub` | 无分析问题；**290 passed / 1 skipped**（删除原添加规则示例与路由用例） |
+| Decky 前端 | `npm test`、`npm run typecheck`、`npm run build` | **90 passed**，类型检查与构建通过 |
+| Decky Python | `python -m unittest test_source_service test_bridge test_v5_bridge` | **51 passed**，大请求用例改用 `import_script_source` 夹具 |
+
+新增/调整回归：删除两端添加规则示例与路由用例；大请求桥接测试改用脚本导入夹具；示例文件与两端常量保持一致。
+
+未执行：双端实机界面、真实网站与发行包。存量表格规则的实际执行仅由既有回归覆盖，未做真实站点验证。
+
+#### 本轮过度设计复核
+
+删除的是入口、方法和失去使用者的常量，没有新增开关或兼容分支；保留执行器与字段的唯一理由是既有设置会被 `deny_unknown_fields` 拒绝，属于可复现的数据兼容问题，不是假想场景。端到端只剩“导入脚本来源”一条新增路径，未再引入类型选择或模板系统。
+
+### 2026-11-01：Lua API 版本固定为 1，界面不再要求填写
+
+用户询问“Lua API 版本是什么”。核对后确认 `SCRIPT_API_VERSION = 1`（[script.rs](../../../crates/core/src/sources/script.rs)），它标识脚本与宿主的入口/能力合同版本（入口 `collect_index/resolve_page/discover`、`ctx.get/post/html/...`），既不是 Lua 语言版本（运行时为内嵌 Lua 5.4），也不是客户端 JSONL 协议版本（v5）；导入与读取都只接受 1，否则报 `unsupported_script_api_version`。该字段与 `adapter` 一样属于内部合同细节，界面上没有可选项。
+
+- Windows [script_source_editor.dart](../../../apps/windows-flutter/lib/pages/script_source_editor.dart) 与 Decky [script-source-editor.tsx](../../../apps/decky/src/script-source-editor.tsx) 删除“Lua API 版本”输入与整数校验，保存时固定提交 `api_version: 1`；已有脚本仍显示“当前 API 1 · SHA-256”供核对，只读查看保持只读。
+- 协议不变：`import_script_source` 仍要求 `api_version`，两端固定传 1；[source-adapters.md](../../source-adapters.md)、[design.md](design.md)、[p0-contract.md](p0-contract.md) 同步说明“无需用户填写”。
+
+验证：Decky `npm run typecheck` 与 `npm test`（**90 passed**）；Windows `flutter analyze --no-pub lib test` 无问题、脚本导入/编辑器/来源页相关 **11 项通过**。本轮未改 Rust 与协议，未重复运行核心回归；未做实机与真实网站验证。
+
+### 2026-11-01：来源卡片与脚本查看界面不再展示脚本元数据
+
+用户指出来源卡片展开后仍显示“Lua 脚本 · API 1”，查看脚本的二级界面也显示“当前 API 1 · SHA-256”，既然 API 已固定为 1、摘要只用于内部身份，这两处都不必展示。
+
+- Windows [source_pages.dart](../../../apps/windows-flutter/lib/pages/source_pages.dart) 与 Decky [index.tsx](../../../apps/decky/src/index.tsx) 删除卡片里的“Lua 脚本 · API”行，只保留“查看脚本/编辑脚本/删除来源”与只读提示。
+- 两端编辑器（[script_source_editor.dart](../../../apps/windows-flutter/lib/pages/script_source_editor.dart)、[script-source-editor.tsx](../../../apps/decky/src/script-source-editor.tsx)）删除“当前 API · SHA-256”元数据行；编辑模式保留“替换同 ID 来源…”提示，只读查看只显示只读说明。协议与存储不变，摘要仍由核心计算并用于解析身份校验。
+- 文档：[source-adapters.md](../../source-adapters.md) 与 [design.md](design.md) 同步为“卡片不展示脚本元数据”。
+
+验证：Decky `npm run typecheck`、`npm test`（**90 passed**，原“显示完整元数据”用例改为断言不显示摘要与 API）、`npm run build`；Windows `flutter analyze --no-pub lib test` 无问题，脚本编辑器与来源页相关 **10 项通过**。本轮未改 Rust 与协议；未做实机验证。
+
+### 2026-11-01：v0.5.0 合并与发布集成检查
+
+- 用户授权提交当前功能分支、合并到 main 并发布 v0.5.0；沿用上文对应当前源码的核心/协议/CLI、双端及实机证据，不把未执行验收改记为通过。
+- 发布前版本同步测试发现旧夹具漏建 Lua 许可证、Decky source_browser.py 与共享 shiravune-browser.js；只补齐夹具所需文件，不修改生产打包行为。修正后版本同步 **12 项通过**，打包回归 **11 项通过**，`project_version.py --check` 与 `git diff --check` 通过。
+- 本轮新增修改仅为上述夹具及应用版本/发行文档。按精简原则核对：未增加限制、重试、超时、状态或兼容路径。双平台完整回归、正式构建与最终包以 v0.5.0 标签 CI 和发行附件核验为准，发布结果记录在[发行检查](../../release-checklist.md)。
+- P7 原生交互、实体手柄/软键盘、全新会话及真实游戏安装等原有待验收项仍保留；本轮没有额外部署或操作游戏。

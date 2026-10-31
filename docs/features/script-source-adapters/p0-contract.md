@@ -82,7 +82,7 @@ P4 沿用聚合 `FallbackMatchRecord`，新增可选 `sources_fingerprint` 用�
 
 ## P1/P3 持久化与 P5 传输决策
 
-接口参数：`import_script_source {rule: RawSourceRule, api_version: 1, code: UTF-8 string, replace: false}`；成功复用 `{rule: SourceRule, settings_revision}` 形状。`get_script_source {source_id}` 返回 `{rule: RawSourceRule, api_version, code, sha256}`，作者规则不含由核心生成的描述。导入者不能指定摘要。
+接口参数：`import_script_source {rule: RawSourceRule, api_version: 1, code: UTF-8 string, replace: false}`；成功复用 `{rule: SourceRule, settings_revision}` 形状。`get_script_source {source_id}` 返回 `{rule: RawSourceRule, api_version, code, sha256}`，作者规则不含由核心生成的描述。导入者不能指定摘要。`remove_source {source_id}` 删除用户新增的来源，返回 `{settings_revision, source_id}`；内置来源与未知 ID 分别报 `source_builtin_readonly` / `unknown_source`。`api_version` 仍为请求字段，但两端固定传 1，界面不再要求用户填写。
 
 `SourceRule.script` 是可选 `{api_version, sha256}`，未脚本化的规则省略字段。`sha256` 为源码原始 UTF-8 字节摘要，不改换行或自动格式化。设置增加默认空的 `script_sources: source_id -> code`；规则、源码、摘要、revision 在锁内以一次完整文件替换提交，成功后才更换内存快照。P0 调研发现旧 `apply_overrides → bump_revision` 分开更新内存/落盘；P1 已将其替换为完整锁内事务。
 
@@ -90,7 +90,7 @@ P1 已选定设置文件 schema **3**，命名空间 marker 保持 **2**，索�
 
 P3 已给索引增加默认缺失的 `parser_fingerprint`，只在有效来源已脚本化时写入，值为包含脚本描述的规则解析标识；旧无标识索引不能授权脚本来源。发布修订同时比较此标识与条目内容，再复用现有 `index_revision` 传播到详情与游戏匹配。由于相同事实仍会产生相同选择 ID，候选增加同一可选 `parser_fingerprint`，核心绑定候选 ID、指纹与 ZIP/EXE 选择，人工选择和手动 URL 也据此失效。未脚本化来源省略字段，已有夹具/身份不变。无需给每种 DTO 另添独立代际或 TTL。已有名称覆盖只用于列表显示，不合并回运行规则，继续保持名称编辑不改变解析身份。
 
-JSONL 保持 **v5**，Lua API 单独为 **v1**。P1 已同步 `SourceRule.script` 可选描述的生成 TS/Python/JSON Schema 与 Flutter 资源，并验证现有契约；P5 已接入导入/读取 RPC、两端编辑器与 `sources.script_api_version=1`。`validate_capabilities` 精确比较 24 个方法及 12 个来源方法；新旧客户端/核心组合报能力不兼容，不偷偷使用旧入口。错误码字段仍遵守原短码合同，源码 `code` 按 `ScriptSourceDocument/ImportScriptSourceParams` 的文本字段传输，不套用错误码正则。保存回执与后续刷新分开，不因刷新失败误报未保存。
+JSONL 保持 **v5**，Lua API 单独为 **v1**。P1 已同步 `SourceRule.script` 可选描述的生成 TS/Python/JSON Schema 与 Flutter 资源，并验证现有契约；P5 已接入导入/读取 RPC、两端编辑器与 `sources.script_api_version=1`；2026-11-01 增加 `remove_source`、删除 `add_source` 后为 **24 个方法、12 个来源方法**。`validate_capabilities` 精确比较这批方法；新旧客户端/核心组合报能力不兼容，不偷偷使用旧入口。错误码字段仍遵守原短码合同，源码 `code` 按 `ScriptSourceDocument/ImportScriptSourceParams` 的文本字段传输，不套用错误码正则。保存回执与后续刷新分开，不因刷新失败误报未保存。
 
 ## P0 证据范围
 
@@ -102,6 +102,6 @@ P0 时内置生产迁移尚未实施；P6 已完成四个来源及 `table_html` 
 
 [builtin.rs](../../../crates/core/src/sources/builtin.rs) 以 `include_str!/concat!` 内嵌公共 Lua 文本和站点脚本；旧适配器名只定位文本，生产分派只有同一 Lua 执行器。每份完整代码按 UTF-8 原始字节计算 SHA-256；`.gitattributes` 固定随包 `*.lua` 为 LF，避免平台检出改变修订。自定义源码仍逐字保存。
 
-读取内置脚本不编译、不执行、不联网、不初始化状态；文档规则输出 `adapter=lua`，显式保存后成为同 ID 用户覆盖。发行更新只绑定仍使用旧适配器名的规则，不覆盖用户 `adapter=lua` 的代码。旧无解析指纹缓存保留文件但不授权新解析器。`ctx.get` 条件字段同时接受缺省和 `ctx.null`，支持已有索引序列化的可选值。
+读取内置脚本不编译、不执行、不联网、不初始化状态；文档规则输出 `adapter=lua`，只供查看，内置来源不可被导入覆盖或删除。发行更新绑定随包定义，不读取也不覆盖任何用户 `adapter=lua` 源码；早期版本保存的同 ID 覆盖仍按 `settings.added` 中的用户规则加载，可编辑、可删除，删除后恢复随包定义。旧无解析指纹缓存保留文件但不授权新解析器。`ctx.get` 条件字段同时接受缺省和 `ctx.null`，支持已有索引序列化的可选值。
 
 取消或异常没有返回事实时，遵循 P2 合同保留既有正式索引和已有进度，不落盘虚构的本轮局部状态；明确返回部分事实时才保存 `pending`。不保存 VM 栈，不新增断点协议。通用表格使用字面 ID 比较，移除旧 20 列及 64 字节 ASCII ID 限制；ID 保持非空且不含 HTML ASCII 空白。
