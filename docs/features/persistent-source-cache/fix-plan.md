@@ -18,7 +18,7 @@
 
 根因链：
 
-1. 上轮修改 [session.rs](../../../crates/core/src/sources/session.rs) 将上次成功的详情页传入 upstream_pages。[kagura.rs](../../../crates/core/src/sources/adapters/kagura.rs)把“查分类和相关文章”整体置于 direct.is_empty() 内。已有本体详情就只重验本体，force 也无法补查已有 DLC 分类。优先重验错误地变成唯一查询路径。
+1. 上轮修改 [session.rs](../../../crates/core/src/sources/session.rs) 将上次成功的详情页传入 upstream_pages。[kagura.rs](https://github.com/Mabinogi-Cichol/patchhub/blob/cb06188/crates/core/src/sources/adapters/kagura.rs)把“查分类和相关文章”整体置于 direct.is_empty() 内。已有本体详情就只重验本体，force 也无法补查已有 DLC 分类。优先重验错误地变成唯一查询路径。
 2. [identity.rs](../../../crates/core/src/sources/identity.rs)的 title_relevant 只比较正规化后的完整名称和去掉 +/DLC 等标志的候选名称。查询提示为 Summer Memories、夏日狂想曲：乡间的难忘回忆；DLC 标题去掉 + 后是夏日狂想曲，两者不相等。只移出分类分支还不够，crawl_category 和 build_candidates 均会再次使用标题过滤。
 3. adapter 包装层在没有诊断时判 complete；registry.commit 将 complete 的候选整体替换旧 success。仅重验了本体也被当作完整结果，漏查候选可以消失且页面没有不完整提示。持续正缓存随后忠实保留这个不完整结果，普通扫描不会主动补齐。
 

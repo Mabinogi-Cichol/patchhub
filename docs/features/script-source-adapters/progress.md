@@ -4,11 +4,11 @@
 
 ## 当前状态
 
-**施工中。P0–P5 已完成核心脚本链路、协议及 Windows/Decky 导入、读取与编辑替换，本地自动化通过。全部内置来源迁移和发行/实机待 P6–P7。**
+**施工中。P0–P6 已完成核心链路、双端脚本管理、四个内置来源及通用表格脚本迁移，旧 Rust 网站模块已退役；本地自动化与逐源只读网络抽样通过。P7 发行包和约定范围实机验收待实施。**
 
 - 调研基线：`main@cb06188`，2026-10-30。
 - 文档开发分支：`feature/script-source-adapters`。
-- 用户此前要求开始施工，并逐阶段要求提交和继续施工。P0 代码/文档为 `138c0c6` / `57dd65c`，P1 为 `901e592` / `5abf92a`，P2 为 `4c97d0e` / `ca581e9`，P3 为 `03cb2ae` / `45a2a85`；P4 代码/文档为 `20f921d` / `7550815`。本轮用户明确“开始 P5”，实施 P5，未提交本轮改动，未推送、合并、部署、安装或操作设备。
+- 用户此前要求开始施工，并逐阶段要求提交和继续施工。P0 代码/文档为 `138c0c6` / `57dd65c`，P1 为 `901e592` / `5abf92a`，P2 为 `4c97d0e` / `ca581e9`，P3 为 `03cb2ae` / `45a2a85`；P4 代码/文档为 `20f921d` / `7550815`。随后用户要求“提交并开始 P6”：P5 文档/代码已提交为 `2009704` / `66ac372`，P6 代码已提交为 `c39fd62`，本文件随独立文档提交保存本阶段证据。未推送、合并、部署或操作设备，未安装真实补丁。
 - 已有来源名称编辑/示例功能属于此前工作，不是脚本适配器功能的实现或验收证据。
 
 ## 阶段状态
@@ -21,7 +21,7 @@
 | P3 | 发行商索引/详情与缓存、安装一致性 | 已实现 | 两平台 9 项链路专项与完整范围回归通过，Windows workspace lint 通过 | 本地 HTML/JSON 夹具与真实核心调用；无新网站/设备/实际安装验收 |
 | P4 | 脚本补查与多源聚合 | 已完成 | 两平台 11 项专项、完整范围回归及最终边界专项通过；Windows workspace lint/契约通过 | 离线 HTTP 夹具与真实核心读取/投影，无新增真实网站或设备验收 |
 | P5 | 协议与两端导入/编辑 | 已完成 | 两平台协议/CLI、跨语言、双端表单和真实核心往返通过 | Windows 桌面安装版、Decky 游戏模式输入/软键盘待 P7；无新增真实站点验收 |
-| P6 | 全部内置来源/通用表格脚本迁移及旧 Rust 路径退役 | 待实施 | 待验证 | 待验证 |
+| P6 | 全部内置来源/通用表格脚本迁移及旧 Rust 路径退役 | 已完成 | Windows 668 / Linux 679 passed，各 9 ignored；双端往返、lint/构建/契约通过 | 四源只读元数据抽样通过；非全量目录、下载或设备验收 |
 | P7 | 全面验收、发行包与约定范围实机验证 | 待实施 | 待验证 | 待验证 |
 
 ## 2026-10-30：调研与计划
@@ -289,4 +289,56 @@ P4 代码已提交为 `20f921d`，文档按本轮用户要求独立提交。两�
 
 ## 下一步
 
-P6：将 Shiravune、Kagura 国内/海外、HGamer 及通用表格全部迁为随包 Lua，验证行为并删除旧 Rust 网站实现。随后进入 P7 发行资源与约定范围实机验收。本轮 P5 代码和文档均未提交。
+P6：将 Shiravune、Kagura 国内/海外、HGamer 及通用表格全部迁为随包 Lua，验证行为并删除旧 Rust 网站实现。随后进入 P7 发行资源与约定范围实机验收。P5 已于随后用户要求“提交并开始 P6”时拆分提交为：`2009704`（文档）、`66ac372`（代码）。未推送或合并。
+
+## 2026-10-31：P6 开始全部内置来源迁移
+
+- 按用户要求提交 P5 后开始 P6。`2009704` / `66ac372` 为独立文档/代码提交，提交后工作区干净；沿用 P5 已完成验证，没有重复运行 P5 全量检查。
+- 迁移前旧适配器离线基线：`cargo test --locked -p patchhub-core sources::adapters --lib`，40 passed / 1 ignored；Kagura 录制列表/详情固定期望保留为 JSON。另用同一批输入比较旧 Rust 与新 Lua 的四源/通用表格索引、页面事实、候选事实及 HTTP 请求，9 组对照通过，固定输入/期望保存在 `tests/fixtures/builtin-migration/`。候选解析身份和观察时间属于明确变化，不作为站点事实等价字段。
+- 新增内嵌 Lua 资源、共享 Lua 文本/DOM helper 与单一脚本分派。保留旧 adapter 名称仅用于定位随包源码；用户 adapter=lua 覆盖仍按原事务保存。正在迁移回归、验证只读/替换和安装消费路径；本阶段尚未完成，真实网络和最终双平台证据待记录。
+
+### P6 实现与行为收口
+
+- [随包资源](../../../crates/core/resources/source-scripts/) 包含 `common.lua`、Shiravune、Kagura 国内/海外共用代码、HGamer、通用表格。由 [builtin.rs](../../../crates/core/src/sources/builtin.rs) 静态内嵌完整源码并生成 API 1/SHA-256 描述；`.gitattributes` 固定 Lua LF。完整摘要见[迁移矩阵](migration-matrix.md)。不依赖外部解释器或额外源码文件部署。
+- 旧 adapter 名只定位内嵌文本，[生产分派](../../../crates/core/src/sources/adapters/mod.rs) 统一执行 Lua。删除 `patchmoe.rs`、`kagura.rs`、`hgamer.rs`、`table.rs` 和旧站点 DOM 模块；网站选择器、表单、分页、正文提取全部迁入 Lua，公共 HTTP/DOM/URL、身份、候选、缓存与安装留在核心。
+- 宿主只补真实迁移所需的直接子元素、URL 分解/规范化、公共 Steam 身份/别名/日期及单词匹配；没有站点专用解析回调。条件请求处理 `ctx.null` 的可选验证器，解决真实索引序列化后的 null 与 Lua 字符串转换冲突。表格 ID 改为字面比较，同时删除无依据的 20 列及 64 字节 ASCII ID 限制；第 22 列和 Unicode/冒号 ID 有生产路径回归。
+- 读取内置脚本不初始化状态、不编译/执行、不联网；返回 `adapter=lua` 规则供显式同 ID 覆盖。导入只编译，用户覆盖在重启和后续默认规则变更后仍保留，名称覆盖、启用、逐游戏订阅和间隔保持。Windows CoreClient、Decky SourceService 均通过真实核心往返。
+- 迁移后普通读取、快照、更新、匹配和安装继续检查当前脚本解析身份。旧无绑定索引/匹配文件保留但不授权新解析器。安装、投影、CLI 等旧合成测试补齐当前规则的索引/候选证据，未放宽生产身份门槛；迁移专用回归另验证旧无绑定缓存仍失效。
+- 完整回归发现普通发行商索引修订变化会连带清除未变的 HGamer 补查结果。`current_record` 现在区分索引修订与解析身份：修订变化仅移除对应发行商记录，解析变化继续失效依赖证据，补查源集合/源码变更仍失效补查结果。既有“后续发行商命中隐藏旧补查”和“按源重匹配复用补查”回归恢复通过，P3/P4 源码替换失效回归继续通过。
+- 取消遵循 P2 已冻结合同：脚本未返回事实时，不生成本轮 VM 局部进度；既有正式索引和已有进度保留。明确返回部分结果时才存 `pending`。迁移测试相应更新，不新增 VM 检查点、重试或总时长限制。运行时错误现在含来源/入口/行号，测试保留原因断言而不要求旧裸错误字符串。
+- 历史设计/审计中指向已删除网站模块的链接改为对应 Git 基线，保留当时事实；当前指南、设计、合同、迁移矩阵与功能索引同步更新。
+
+### P6 验证结果（2026-10-31）
+
+| 范围 | 实际执行 | 结果 |
+| --- | --- | --- |
+| Windows Rust | `cargo test --locked -p patchhub-core -p patchhub-protocol -p patchhub-cli --no-fail-fast` | 668 passed / 9 ignored；35 个测试/文档测试目标，无失败 |
+| WSL Ubuntu Rust | 独立 Linux target 执行相同命令 | 679 passed / 9 ignored；平台差异来自已有 OS 专用测试，无失败 |
+| 迁移专项 | 九组固定结果/请求对照；迁移回归 18；内置读取/覆盖与旧缓存 2；发行商脚本 9；补查脚本 11；运行时 9 | 两平台全部通过；已包含在完整回归中，非额外累计 |
+| 来源及消费者 | 来源更新 18、匹配 24、验收 11、安装投影 24，另有核心安装单元/集成回归 | 两平台通过；合成隔离状态和游戏目录，不是实际游戏生效验收 |
+| Flutter | `flutter analyze --no-pub`；原生脚本往返、编辑器、wire contract、core protocol 四文件 | 无分析问题；148 passed；新增内置读取不初始化状态和显式覆盖 |
+| Decky Python | 显式 `PATCHHUB_TEST_CORE=target/debug/patchhub-core.exe`，backend unittest discover | 117 tests，OK / 3 skipped；含真实 SourceService 内置读取与覆盖；未在 Deck 设备运行 |
+| lint / 格式 / 契约 | workspace/all-targets clippy `-D warnings`、cargo fmt check、contract-gen check、`npm run test:contracts` | 通过，无生成漂移；仅既有增量硬链接降为复制的环境提示；修正一个等价布尔断言 lint 后补跑门禁，未重复无改动测试 |
+| Decky 前端 | `npm run typecheck`、`npm run build:decky` | 通过；前端实现未修改，沿用 P5 表单自动化，不把构建当设备验收 |
+| 文档/差异 | 功能目录、索引、指南与夹具说明的本地 Markdown 链接、`git diff --check` | 通过；旧模块无生产分派/引用 |
+
+本地日志保留于忽略的 `.artifacts/p6-rust-{windows,linux}-final.log`、`p6-live.log`、`p6-python.log`、`p6-flutter.log`、`p6-clippy.log` 等，未将运行产物加入 Git。
+
+### P6 真实网络证据
+
+通过生产分派执行 `builtin_scripts_live` 与 `hgamer_live` 的显式 ignored 网络测试，只读取公开 HTML/元数据，没有下载补丁：
+
+- Shiravune：完整索引 165 条，`complete=true`，无诊断；表单语言请求沿现有 Cookie/最终 URL 网络上下文执行。
+- Kagura 国内：从当日首页选择 `https://kagurafan.com/2026/10/22/sacrifice_sanctuary_the_ritual_maidens_life_with_monsters/`，详情返回标题和 4 个镜像；该页没有 Steam ID。
+- Kagura 海外：`https://www.kaguragames.com/product/sacrifice-sanctuary-the-ritual-maidens-life-with-monsters-patch/`，详情返回标题和 4 个镜像；该页没有 Steam ID。发行商网络用例耗时约 5.94 秒，4 个逻辑 URL（同首页的语言 POST 不作为新逻辑 URL）。
+- HGamer：App1250180 查询 3 个逻辑请求，完整、0 候选、1 身份；App1227890 查询 5 个逻辑请求，完整、本体/DLC 两候选、1 身份、上游 Kagura；均无诊断，合计约 13.05 秒。
+
+Kagura 真实验证仅为详情抽样，列表分页、多入口、分类、DLC 与候选变体由离线生产链路覆盖；未将其写成全站实时采集通过。后续只调整公共镜像标签边界/空白类名提取，最终离线回归已通过，未重复无必要的网络请求。
+
+### P6 过度设计审阅
+
+按 [overengineering-review](../../../.agents/skills/overengineering-review/SKILL.md) 审阅 `66ac372` 至本轮差异，并沿注册/覆盖/读取、更新/详情/补查、缓存身份与安装消费者追踪。结论：**未发现本阶段仍需修改的过度设计项。** 静态资源定位复用一个执行器和现有设置事务；公共宿主能力均有迁移输入依据；未增加第二引擎、VM 池、网站 Rust 回调、源码大小/条目/页数/总时长配额、TTL、重试或新检查点协议。旧表格无依据限制已连同校验分支及专属拒绝断言删除。测试用解析绑定仅在 cfg(test)/集成夹具中，生产旧缓存仍不能取得当前授权。此结论不代表发行包或设备验收完成。
+
+### 下一阶段
+
+P6 已完成，代码提交为 `c39fd62`；文档按仓库规范独立提交。P7：正式构建/发行资源与许可证核验、干净环境启动、自定义导入样例真实网络、全量目录与约定范围设备/手柄验收。实际游戏安装、设备部署和发布按后续用户授权执行；未执行项保持待验证。

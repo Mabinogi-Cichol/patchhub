@@ -1,6 +1,6 @@
 # 源适配器与订阅
 
-来源能力已迁入共享 Rust 核心并作为单一来源引擎（P0–P5 已在 Windows 与 Decky 实机验证，P6 收口）：[设计](features/shared-source-discovery/design.md)、[施工记录](features/shared-source-discovery/progress.md)、[P0 基线](features/shared-source-discovery/p0-baseline.md)、[P5 契约](features/shared-source-discovery/p5-decky-design.md)。下文描述现行共享核心入口与用户可见行为。自定义 Lua 来源现已提供双端导入/编辑，见[脚本适配器设计](features/script-source-adapters/design.md)与[施工记录](features/script-source-adapters/progress.md)；四个内置来源及通用表格的全部脚本迁移仍属 P6。
+来源能力已迁入共享 Rust 核心并作为单一来源引擎（P0–P5 已在 Windows 与 Decky 实机验证，P6 收口）：[设计](features/shared-source-discovery/design.md)、[施工记录](features/shared-source-discovery/progress.md)、[P0 基线](features/shared-source-discovery/p0-baseline.md)、[P5 契约](features/shared-source-discovery/p5-decky-design.md)。下文描述现行共享核心入口与用户可见行为。自定义 Lua 来源现已提供双端导入/编辑，见[脚本适配器设计](features/script-source-adapters/design.md)与[施工记录](features/script-source-adapters/progress.md)；四个内置来源及通用表格已全部使用随核心内嵌的 Lua 脚本。
 
 工具订阅网站，不订阅固定的游戏清单。工作单位是“来源”而不是“游戏”：每次来源更新只遍历该来源自己的列表/目录页并发布共享索引；游戏匹配先读本地索引，命中后才按需获取相关详情。普通源索引不会因为新增游戏、重启或手动重匹配而重新遍历。只有具备 ZIP/EXE 安装能力的匹配结果进入安装流程；仅相似标题的候选仍需人工选择。
 
@@ -68,7 +68,7 @@ sources/rust-v1/
 
 ## 网站专用适配器
 
-表格配置不能替代所有网站逻辑。自定义来源可使用下节的 Lua 适配器。当前四个内置来源与通用表格仍由 Rust 网站模块提供，计划在 P6 全部迁移并退役旧模块；当前没有将脚本失败回退到 Rust 的机制。Lua 执行器内嵌在共享核心，两端不依赖外部 Lua/Python 解释器。
+表格配置不能替代所有网站逻辑。自定义来源可使用下节的 Lua 适配器。四个内置来源与通用表格均由随包 Lua 脚本提供，旧 Rust 网站模块已退役；脚本错误直接报告。Lua 执行器内嵌在共享核心，两端不依赖外部 Lua/Python 解释器。
 
 - **列表索引采集器**：patch.moe 与通用表格适配器读取列表页（支持条件请求），产出 `SourceIndexEntry`（title/aliases/page/kind/appid/url/language/date）；条目源为 `kind="entry"`。Kagura 适配器把列表分页解析为 `article/product/category` 链接。
 - **详情解析**：Kagura 命中项由匹配任务调用 `resolve_page` 解析单页，生成 query 无关的 `PageFact`（标题、Steam AppID、镜像、正文、发布时间、分类内联文章等），写入按来源+规范 URL 共享的详情缓存。
@@ -87,7 +87,7 @@ sources/rust-v1/
 - 来源卡片显示 Lua、API 版本和完整源码 SHA-256。点击“编辑脚本”显式从核心读取规则与源码，修改后点击“保存并替换 <来源 ID>”。编辑器将替换绑定到该 ID；要创建另一个 ID，使用新导入入口。新导入碰到已有 ID 会报错，不会自动覆盖。
 - 替换保留用户名称覆盖、启用、游戏订阅及更新间隔。规则、源码与摘要由核心一次事务保存；摘要按收到的原始 UTF-8 字节计算，不由前端指定。两端刷新来源与游戏投影，清除旧脚本结果；刷新失败明确显示“已保存，但刷新失败”，不会伪装成未保存。
 - 脚本变化会使受影响索引、详情、匹配和旧安装选择失效。保留旧缓存文件不代表可继续授权旧结果；需要重新更新/匹配。普通扫描和读取源码不运行 Lua、不联网、不升级状态文件。
-- 当前内置 Rust 来源没有“编辑脚本”按钮，也不能用替换接口强行覆盖。P6 迁移为随包脚本后才使用相同读取与显式用户覆盖路径；发行版不得覆盖用户已保存的源码。
+- 内置来源可直接“编辑脚本”；读取不执行或联网，保存需显式替换同 ID 来源。用户覆盖保留名称、启用、订阅和间隔，发行更新不会覆盖已保存源码；未编辑的内置脚本随核心更新，无需额外导入。
 
 两端传输完整源码，不复用旧 Decky `add_source` 的 32768 字符检查，不另设源码/报告截断。编辑器的可视行数只影响滚动区域，不限制文本长度。JSONL 仍为 v5，能力表新增 `import_script_source/get_script_source` 与 `sources.script_api_version=1`；旧核心/客户端组合会明确报能力不兼容，应配套升级。设置文件已是 schema 3，旧二进制降级读取不在支持范围内。
 
@@ -111,4 +111,4 @@ sources/rust-v1/
 
 运行时查询遵守网站的实际可访问性。403、登录、验证码或网站结构变化显示查询失败或索引不完整，不会伪造匹配。真实网络验收与本地模拟页面测试分别报告。
 
-网页解析由核心 Rust CLI 完成（随插件打包为 `bin/patchhub-core`），插件运行时不再包含 Python HTML 解析模块，也不需要 `/usr/bin/python3` 解析工作进程。下载仍验证 HTTPS 证书，使用系统证书库。
+网页解析由核心 CLI 内嵌的 Lua 执行器完成（随插件打包为 `bin/patchhub-core`），插件运行时不再包含 Python HTML 解析模块，也不需要 `/usr/bin/python3` 解析工作进程。下载仍验证 HTTPS 证书，使用系统证书库。

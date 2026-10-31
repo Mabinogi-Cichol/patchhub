@@ -15,7 +15,7 @@
 
 - [Decky main.py](../../../apps/decky/main.py)：scan 首次读取报告，刷新列表型来源后、逐游戏查询后分别再次整库投影；_project_row 也通过全库 scan 提取单行。P0 实测一次刷新周期 3 次整库 `bridge.scan()`，单游戏查询另 2 次。
 - [来源 session.rs](../../../crates/core/src/sources/session.rs)：逐 AppID 串行 discover_game，普通源发现和 HGamer fallback 混合在单游戏流程中。
-- [Kagura 适配器](../../../crates/core/src/sources/adapters/kagura.rs)：已有共享索引，但 force 会按游戏重新加入入口；详情工作队列仍与游戏查询绑定。P0 实测强制扫描时每款游戏重翻全部列表页。
+- [Kagura 适配器](https://github.com/Mabinogi-Cichol/patchhub/blob/cb06188/crates/core/src/sources/adapters/kagura.rs)：已有共享索引，但 force 会按游戏重新加入入口；详情工作队列仍与游戏查询绑定。P0 实测强制扫描时每款游戏重翻全部列表页。
 - [HTTP 上下文](../../../crates/core/src/sources/http.rs)：响应缓存按游戏隔离；不同游戏访问同一页面无法共享本轮响应（P0 S4：同批两款游戏同详情页请求 2 次）。
 - [Decky session.ts](../../../apps/decky/src/session.ts)：整库与单游戏查询共用扫描快照轮询；后端 start_game_discovery 会关闭原扫描会话。
 - [持久缓存旧设计](../persistent-source-cache/design.md)曾决定不增加定时更新。本需求明确替代该产品决策，但保留“不因缓存年龄禁止展示或安装”的原则。旧施工记录保留历史事实。

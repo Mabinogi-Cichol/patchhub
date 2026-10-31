@@ -2,7 +2,7 @@
 
 [设计](design.md) · [施工记录](progress.md) · [迁移矩阵](migration-matrix.md)
 
-状态：**P0–P4 已实现核心导入/读取、类型化运行时、发行商链路及多源脚本补查，P4 双平台自动化已通过。** P0 原型在 P2 已迁为 [核心执行器](../../../crates/core/src/sources/adapters/script.rs)，原型回归迁入其 [单元测试](../../../crates/core/src/sources/adapters/script/tests.rs)，未保留第二套测试宿主。已有任务入口可执行核心保存的发行商和补查脚本；客户端导入/读取 RPC 和编辑界面仍待 P5。
+状态：**P0–P6 已实现核心执行器、双端脚本管理与全部内置来源迁移。** 原型在 P2 已迁入[核心执行器](../../../crates/core/src/sources/adapters/script.rs)，回归位于其[单元测试](../../../crates/core/src/sources/adapters/script/tests.rs)。P6 复用相同 API 1；实际验证及待验收边界见[施工记录](progress.md)。
 
 ## 已验证的运行时决策
 
@@ -42,7 +42,7 @@ return {
 | --- | --- |
 | `collect_index` | `previous` 为已有索引/进度中的 `entries/pending/complete/etag/modified`，无记录时为空值；返回 `{entries, pending, complete, etag?, modified?, not_modified?, diagnostics?}`。条目复用 `SourceIndexEntry`；时间、修订和源 ID 由核心生成。`not_modified=true` 必须已有同解析身份的正式索引。 |
 | `resolve_page` | 输入绝对页面 URL；返回既有 `PageFact` 字段：`title/page/kind/steam_ids/aliases/mirrors/text/published_at/body_links/article_links/article_facts/next_page`。不得返回候选授权或安装对象。 |
-| `discover` | `query` 提供 `appid/name/name_hints/terms/force`；`terms` 由公共身份算法生成。`previous` 提供已有候选的事实副本。返回 `{pages, identities, complete, diagnostics}`；`pages` 每项为 `{fact: PageFact, reported_format?, upstream_page?}`，`identities` 每项为 `{appid, page, aliases}`。核心仍调用公共身份、格式、候选生成和校验逻辑，不接受脚本直接返回 `SourceCandidate`。P4 已完成此核心入口的自动化验证；HGamer 的完整脚本迁移仍待 P6，P0 未声称已迁移。 |
+| `discover` | `query` 提供 `appid/name/name_hints/terms/force`；`terms` 由公共身份算法生成。`previous` 提供已有候选的事实副本。返回 `{pages, identities, complete, diagnostics}`；`pages` 每项为 `{fact: PageFact, reported_format?, upstream_page?}`，`identities` 每项为 `{appid, page, aliases}`。核心仍调用公共身份、格式、候选生成和校验逻辑，不接受脚本直接返回 `SourceCandidate`。P4 已完成此核心入口的自动化验证；HGamer 在 P6 已迁入相同入口，候选权限仍由核心生成。 |
 
 `diagnostics` 每项只含 `code/detail?`；宿主绑定 `source_id`。空数组、缺省可选项按字段合同处理。脚本异常没有返回输出时不保存虚构的新续跑状态，保留既有正式索引和进度。返回明确的部分结果时才使用 `pending`；不保存 Lua 栈或局部变量。
 
@@ -57,8 +57,11 @@ return {
 | `ctx.form(url, fields)` | `fields` 为 `{{name, value}, ...}`，保留重复表单字段及次序；宿主执行 URL 编码。 |
 | `ctx.html(text)` | 返回文档根节点。 |
 | `node:select(css)` | 后代元素序列，CSS 无效即报错，不返回空成功。 |
-| `node:text()/attr(name)/tag()/parent()` | 合并空白文本、可选属性、标签、可选父节点；不存在的属性/父节点是 `nil`。 |
+| `node:text()/attr(name)/tag()/parent()/children()` | 合并空白文本、可选属性、标签、可选父节点和直接子元素数组；不存在的属性/父节点是 `nil`。 |
 | `ctx.url_join(base, reference)` | 相对 URL 合并；执行请求时仍由捕获的规则检查域名，不信任脚本传入的 hosts。 |
+| `ctx.canonical_url(url)/url_parts(url)/navigation_url(url)` | 规范化 URL、返回 `{host,path}`、判断通用导航 URL；不发请求、不授予域名权限。 |
+| `ctx.steam_ids(links)/aliases(title,blocks)/game_title(text)` | 复用公共 Steam 身份、别名与游戏名算法，输入为脚本提取的事实；没有网站选择器。 |
+| `ctx.date(text)/normalize_date(text)/word_contains(text,word)` | 日期提取（可空）、索引日期规范化（非法报错）、ASCII 大小写不敏感、Unicode 单词边界匹配。 |
 | `ctx.json_decode(text)/json_encode(value)` | JSON 与普通值转换，见下述值合同。 |
 | `ctx.null / ctx.array()` | JSON null 哨兵 / 显式空数组；普通 `{}` 表示空对象。 |
 | `ctx.progress(message)/check_cancel()` | 消息/取消检查；来源 ID、任务与设置版本由宿主绑定。 |
@@ -93,4 +96,12 @@ JSONL 保持 **v5**，Lua API 单独为 **v1**。P1 已同步 `SourceRule.script
 
 录制信息见 [recording.json](../../../crates/core/tests/fixtures/script-sources/recording.json)。三个真实 HTTP 200 页面保留相关 DOM 片段，不将导航、JS、图像资源全部放入仓库。列表与详情在同一夹具上与现有 Rust 解析器对照相等。真实详情没有 Steam app 链接，返回空 ID；Steam ID 提取及分页终止分别用明确标记的合成输入补充测试，不能冒充真实站点的完整抓取或身份确认。
 
-四个内置来源及 `table_html` 的生产迁移均仍待 P6，见 [迁移矩阵](migration-matrix.md)。通过原型不代表导入、缓存失效、安装、双端界面、发行包或设备验收已完成。
+P0 时内置生产迁移尚未实施；P6 已完成四个来源及 `table_html` 的迁移和旧模块退役，见[迁移矩阵](migration-matrix.md)。录制夹具通过不能代替全站真实网络、发行包或设备验收。
+
+## P6 随包来源与修订
+
+[builtin.rs](../../../crates/core/src/sources/builtin.rs) 以 `include_str!/concat!` 内嵌公共 Lua 文本和站点脚本；旧适配器名只定位文本，生产分派只有同一 Lua 执行器。每份完整代码按 UTF-8 原始字节计算 SHA-256；`.gitattributes` 固定随包 `*.lua` 为 LF，避免平台检出改变修订。自定义源码仍逐字保存。
+
+读取内置脚本不编译、不执行、不联网、不初始化状态；文档规则输出 `adapter=lua`，显式保存后成为同 ID 用户覆盖。发行更新只绑定仍使用旧适配器名的规则，不覆盖用户 `adapter=lua` 的代码。旧无解析指纹缓存保留文件但不授权新解析器。`ctx.get` 条件字段同时接受缺省和 `ctx.null`，支持已有索引序列化的可选值。
+
+取消或异常没有返回事实时，遵循 P2 合同保留既有正式索引和已有进度，不落盘虚构的本轮局部状态；明确返回部分事实时才保存 `pending`。不保存 VM 栈，不新增断点协议。通用表格使用字面 ID 比较，移除旧 20 列及 64 字节 ASCII ID 限制；ID 保持非空且不含 HTML ASCII 空白。

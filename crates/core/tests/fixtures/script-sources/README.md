@@ -2,7 +2,7 @@
 
 These P0 fixtures now exercise the shared core Lua executor (moved from the
 experimental test host in P2). P3 wires this executor into publisher update and
-detail tasks; the built-in Kagura source migration remains pending P6.
+detail tasks. P6 migrated all built-in adapters to bundled Lua.
 
 `recording.json` records three public Kagura EN responses fetched on 2026-10-30
 (HTTP 200), their URLs, full decoded-response SHA-256, retained-section counts,
@@ -15,7 +15,9 @@ Selecting two cards is fixture reduction, not a runtime entry limit.
 `kagura-en-prototype.lua` is a non-table API experiment for list roots,
 pagination and detail parsing. It is not the complete maintained adapter and is
 not bundled or registered as the production Kagura source. List and detail facts
-are compared with the existing Rust parser on the same recorded DOM fragments.
+were compared with the legacy Rust parser on the same recorded DOM fragments.
+P6 froze those outputs as `kagura-en-{index,detail}-baseline.json` before
+removing the Rust parser; current tests compare with those fixed expectations.
 
 The real detail has four mirrors and no Steam app link. The Steam ID test
 explicitly injects a synthetic Steam link; it must not be described as a live

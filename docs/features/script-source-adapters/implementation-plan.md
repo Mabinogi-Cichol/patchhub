@@ -47,7 +47,7 @@
 
 ## P2：脚本运行时与宿主能力
 
-**主要位置**：`sources/adapters/script.rs`，关联 `adapters/dom.rs`、`http.rs`、`operation.rs`。
+**主要位置**：`sources/adapters/script.rs`，关联通用 DOM 句柄（现位于 `script.rs`）、`http.rs`、`operation.rs`。
 
 - 实现一次调用一个环境、导出函数调用、作用域内 HTTP/HTML/URL/JSON 回调及返回值转换。
 - 脚本 HTTP 复用 `RequestContext` 的 URL/域名与重定向检查、Cookie、字符解码和取消；支持真实样例所需的 GET/POST/表单，脚本无直接网络或文件入口。
@@ -111,7 +111,9 @@
 
 ## P6：全部内置来源迁移与 Rust 网站实现退役
 
-**主要位置**：`crates/core/resources/sources.json`、拟新增随包 Lua 脚本资源、`sources/adapters`、`matching.rs`、来源回归夹具与发行资源配置。
+2026-10-31 已实施；逐源证据见[迁移矩阵](migration-matrix.md)，验证范围与剩余 P7 项见[施工记录](progress.md)。
+
+**主要位置**：`crates/core/resources/sources.json`、`crates/core/resources/source-scripts/` 随包 Lua 脚本资源、`sources/adapters`、`matching.rs`、来源回归夹具与发行资源配置。
 
 - 将 Shiravune、Kagura 国内、Kagura 海外、HGamer 逐一实现为随包 Lua 脚本，统一走 P2–P4 的生产分派；可按逐源验证结果依次切换，最终必须全部完成。
 - 将 `table_html` 的列配置解析迁到随包 Lua 脚本，保持现有 JSON 示例可用；Rust 保留通用 DOM/HTTP/URL/身份处理能力。
