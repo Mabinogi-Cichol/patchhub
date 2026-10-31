@@ -200,6 +200,43 @@
       ],
       "type": "object"
     },
+    "BrowserResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "body": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "method": {
+          "type": "string"
+        },
+        "response_url": {
+          "type": "string"
+        },
+        "status": {
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "text": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "url",
+        "method",
+        "response_url",
+        "status",
+        "text"
+      ],
+      "type": "object"
+    },
     "CacheInventory": {
       "additionalProperties": false,
       "properties": {
@@ -4576,6 +4613,15 @@
     "UpdateSourceParams": {
       "additionalProperties": false,
       "properties": {
+        "browser_responses": {
+          "items": {
+            "$ref": "#/$defs/BrowserResponse"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
         "force": {
           "default": false,
           "type": "boolean"

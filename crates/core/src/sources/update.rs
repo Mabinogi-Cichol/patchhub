@@ -134,7 +134,15 @@ pub fn update_source(
 
         save_progress(store, rule, official.as_ref(), &outcome, &mut on_progress)?;
         // A pass that collected nothing is a refresh failure, not a partial index.
-        let code = if outcome.entries.is_empty() {
+        let verification = outcome.diagnostics.iter().find(|diagnostic| {
+            matches!(
+                diagnostic.code.as_str(),
+                "source_browser_verification_required" | "source_age_verification_required"
+            )
+        });
+        let code = if let Some(diagnostic) = verification {
+            diagnostic.code.as_str()
+        } else if outcome.entries.is_empty() {
             if official.is_some() {
                 "source_offline_cached"
             } else {

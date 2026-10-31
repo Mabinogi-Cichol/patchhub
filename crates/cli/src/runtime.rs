@@ -56,6 +56,7 @@ pub struct Params {
 
     pub force: bool,
     pub force_details: Option<bool>,
+    pub browser_responses: Option<Vec<sources::browser::BrowserResponse>>,
 }
 
 impl Params {
@@ -107,6 +108,10 @@ impl Params {
 
             force: v.get("force").and_then(Value::as_bool).unwrap_or(false),
             force_details: v.get("force_details").and_then(Value::as_bool),
+            browser_responses: v
+                .get("browser_responses")
+                .filter(|v| !v.is_null())
+                .map(|v| serde_json::from_value(v.clone()).expect("validated browser responses")),
         }
     }
 }
@@ -1105,7 +1110,20 @@ fn update_source_impl(
         .map_err(err)?
         .map(|index| index.revision)
         .unwrap_or(0);
-    let mut ctx = source_http_context()?;
+    let mut ctx = match &params.browser_responses {
+        Some(pages) => {
+            for page in pages {
+                sources::validate::allowed_url(&page.url, &rule.page_hosts, false).map_err(err)?;
+                sources::validate::allowed_url(&page.response_url, &rule.page_hosts, false)
+                    .map_err(err)?;
+            }
+            sources::http::RequestContext::with_settings(
+                Box::new(sources::browser::BrowserFetcher::new(pages.clone())),
+                std::time::Duration::ZERO,
+            )
+        }
+        None => source_http_context()?,
+    };
 
     emit(source_progress_value(
         source_id, "index", 0, 0, true, revision,

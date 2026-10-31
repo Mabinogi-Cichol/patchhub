@@ -258,10 +258,15 @@ impl SourceRegistry {
             .iter()
             .map(|rule| {
                 let index = self.index(&rule.id);
-                let status = self
-                    .status
-                    .get(&rule.id)
-                    .filter(|_| rule.script.is_none() || index.is_some());
+                let status = self.status.get(&rule.id).filter(|status| {
+                    rule.script.is_none()
+                        || index.is_some()
+                        || matches!(
+                            status.code.as_str(),
+                            "source_browser_verification_required"
+                                | "source_age_verification_required"
+                        )
+                });
                 let code = status.map(|status| status.code.clone()).unwrap_or_else(|| {
                     if index.is_some() {
                         "cached".to_string()

@@ -8,6 +8,7 @@
 //! appStore (design §1).
 
 pub mod adapters;
+pub mod browser;
 pub mod builtin;
 pub mod canonical;
 pub mod http;

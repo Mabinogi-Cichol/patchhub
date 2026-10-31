@@ -9,6 +9,21 @@ return {
         end
         if response.status ~= 200 then return u.failed_index("source_http_" .. response.status) end
         local root = ctx.html(response.text)
+        local function verification(page)
+            local text = page:lower()
+            if text:find("please wait while your request is being verified", 1, true) then
+                return "source_browser_verification_required"
+            end
+            if text:find("age verification", 1, true) and text:find("18 years", 1, true) then
+                return "source_age_verification_required"
+            end
+        end
+        local function waiting(code)
+            return {entries = ctx.array(), pending = rule.pages, complete = false,
+                diagnostics = {{code = code}}}
+        end
+        local blocked = verification(response.text)
+        if blocked then return waiting(blocked) end
         local entries, forms = {}, 0
         for _, form in ipairs(root:select("form")) do
             local name = form:attr("name")
@@ -38,6 +53,8 @@ return {
                     local fetched, localized = pcall(ctx.form, url, fields)
                     if not fetched then return u.failed_index(localized) end
                     if localized.status ~= 200 then return u.failed_index("source_http_" .. localized.status) end
+                    blocked = verification(localized.text)
+                    if blocked then return waiting(blocked) end
                     local page = localized.url ~= "" and localized.url or url
                     local language = name == "form_en" and "en" or name == "form_zh_cn" and "zh-CN" or "zh-TW"
                     for _, row in ipairs(u.rows(ctx.html(localized.text))) do

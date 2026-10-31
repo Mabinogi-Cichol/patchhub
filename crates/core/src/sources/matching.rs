@@ -815,7 +815,7 @@ fn publisher_status(
     if candidates.iter().any(candidate_is_credible) {
         return SourceMatchStatus::Matched;
     }
-    if detail_failed {
+    if detail_failed || !candidates.is_empty() {
         return SourceMatchStatus::DetailIncomplete;
     }
     if !index.complete {
