@@ -14,7 +14,7 @@
 
 | 功能 | 状态 | 设计文档 | 施工记录 | 附加文档 |
 | --- | --- | --- | --- | --- |
-| 可导入脚本来源适配器 | 施工中：P0–P6 已完成；P7 双端候选包、Deck 部署与抽样通过；Shiravune 普通后台更新及受控到期入口双端通过，165 条完整索引；旧缓存不复用按 Breaking Change 处理。内置来源改为只读、自定义来源支持删除且只接受 Lua 脚本（声明式表格入口已删除，2026-11-01）。其余原生输入、实体手柄与真实游戏安装边界见记录 | [设计](script-source-adapters/design.md) | [施工记录](script-source-adapters/progress.md) | [施工计划](script-source-adapters/implementation-plan.md) · [修复方案](script-source-adapters/fix-plan.md) |
+| 可导入脚本来源适配器 | 已随 v0.5.0 发布，标签 CI/最终附件核验通过；其余验收施工中：P0–P6 已完成；P7 双端候选包、Deck 部署与抽样通过；Shiravune 普通后台更新及受控到期入口双端通过，165 条完整索引；旧缓存不复用按 Breaking Change 处理。内置来源改为只读、自定义来源支持删除且只接受 Lua 脚本（声明式表格入口已删除，2026-11-01）。其余原生输入、实体手柄与真实游戏安装边界见记录 | [设计](script-source-adapters/design.md) | [施工记录](script-source-adapters/progress.md) | [施工计划](script-source-adapters/implementation-plan.md) · [修复方案](script-source-adapters/fix-plan.md) |
 | 订阅源显示名称与规则示例 | 已实现，相关本地自动化及过度设计审阅通过；Windows/Deck 实机待验收 | [设计](source-display-names/design.md) | [施工记录](source-display-names/progress.md) | — |
 | 应用版本号单一来源 | 已实现，版本同步 / 检查、隔离 Cargo/npm 锁验证与本地 Windows / Decky 构建打包通过；在线 CI、实机与正式跨版本更新待验证，未发布 | [设计与调研](version-single-source/design.md) | [施工记录](version-single-source/progress.md) | — |
 | Windows 安装进度界面 | 已实现，13 项相关回归、静态分析、12 张 Windows 原生夹具截图与 Release 构建通过；真实游戏安装和用户视觉验收待完成 | [设计](windows-install-progress/design.md) | [施工记录](windows-install-progress/progress.md) | — |
