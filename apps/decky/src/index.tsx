@@ -1,4 +1,5 @@
 import { ScriptSourceEditor } from "./script-source-editor";
+import { scriptSourceError } from "./script-source-error";
 import type { AddSourceResult, ScriptSourceDocument } from "../../../packages/contracts/generated/protocol";
 import { callable, definePlugin, routerHook } from "@decky/api";
 import { AppUpdatePanel, startAppUpdateNotifications, waitForAppUpdate } from './app-update';
@@ -745,7 +746,7 @@ function GlobalSources() {
     if (session.getSnapshot().busy) return;
     session.update({ busy: "正在读取脚本…", busySince: Date.now() });
     try { setEditor(sourceId ? { document: await getScriptSource(sourceId) } : {}); }
-    catch (failure) { session.setFeedback({ error: `读取脚本失败：${String(failure)}`, note: null }); }
+    catch (failure) { session.setFeedback({ error: `读取脚本失败：${scriptSourceError(failure)}`, note: null }); }
     finally { session.update({ busy: null, busySince: null }); }
   }
   async function saveScript(ruleJson: string, apiVersion: number, code: string, replace: boolean) {
@@ -758,7 +759,7 @@ function GlobalSources() {
       try {
         session.commitSources(await listSourcesRpc());
         await session.projectRows(session.getSnapshot().report?.installs.map(row => row.game.instance_id) ?? []);
-      } catch (failure) { session.setFeedback({ error: `脚本已保存，但刷新来源或游戏状态失败：${String(failure)}` }); }
+      } catch (failure) { session.setFeedback({ error: `脚本已保存，但刷新来源或游戏状态失败：${scriptSourceError(failure)}` }); }
     } finally { session.update({ busy: null, busySince: null }); }
   }
   const tasks = Object.values(sourceTasks).filter(task => !sourceTaskTerminal(task.state));

@@ -2,6 +2,7 @@ import { ButtonItem, Focusable, PanelSection, PanelSectionRow, TextField } from 
 import { useRef, useState } from "react";
 import type { ScriptSourceDocument } from "../../../packages/contracts/generated/protocol";
 import { scriptCodeExample, scriptRuleExample } from "./script-source-examples";
+import { scriptSourceError } from "./script-source-error";
 
 function CodeInput({ label, value, disabled, onChange }: {
   label: string; value: string; disabled: boolean; onChange: (value: string) => void;
@@ -40,7 +41,7 @@ export function ScriptSourceEditor({ document, onSave, onClose }: {
       if (!/^\d+$/.test(api)) throw Error("API 版本必须是整数");
       await onSave(rule, Number(api), code, !!target);
       onClose();
-    } catch (failure) { setError(String(failure)); }
+    } catch (failure) { setError(scriptSourceError(failure)); }
     finally { setSaving(false); }
   }
   async function copy(text: string) {

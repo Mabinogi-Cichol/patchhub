@@ -1,3 +1,4 @@
+import { scriptSourceError } from "../src/script-source-error.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
@@ -16,7 +17,7 @@ const output = ts.transpileModule(readFileSync(new URL("../src/script-source-edi
 // Exercise actual JSX and native control callbacks using the existing page-test
 // approach. Steam focus navigation and the on-device keyboard remain device QA.
 function mount(document?: any) {
-  const values: any[] = []; let hook = 0; let closed = false; let reject = false;
+  const values: any[] = []; let hook = 0; let closed = false; let reject: unknown = false;
   const controls: any[] = []; const writes: any[][] = []; const copies: string[] = [];
   const native: Record<string, any> = {};
   for (const name of ["ButtonItem", "Focusable", "PanelSection", "PanelSectionRow", "TextField"]) {
@@ -29,6 +30,7 @@ function mount(document?: any) {
   }
   const exports: Record<string, any> = {};
   const modules: Record<string, any> = {
+    "./script-source-error": { scriptSourceError },
     "react": { ...React, useState(initial: any) {
       const index = hook++; if (!(index in values)) values[index] = initial;
       return [values[index], (value: any) => { values[index] = value; }];
@@ -42,14 +44,14 @@ function mount(document?: any) {
     hook = 0; controls.length = 0;
     return renderToStaticMarkup(React.createElement(exports.ScriptSourceEditor, { document,
       onClose: () => { closed = true; }, onSave: async (...args: any[]) => {
-        writes.push(args); if (reject) throw Error("script_source_syntax_error: source/custom.lua:8: 完整诊断");
+        writes.push(args); if (reject) throw typeof reject === "boolean" ? Error("script_source_syntax_error: source/custom.lua:8: 完整诊断") : reject;
       } }));
   }
   const button = (label: string) => controls.find(c => c.name === "ButtonItem" && c.props.children === label).props;
   const input = (label: string) => controls.filter(c => c.name === "Focusable")
     .map(c => React.Children.toArray(c.props.children.props.children).find((child: any) => child.type === "textarea") as any)
     .find(element => element.props["aria-label"] === label).props;
-  return { render, button, input, controls, writes, copies, closed: () => closed, reject: (value: boolean) => { reject = value; } };
+  return { render, button, input, controls, writes, copies, closed: () => closed, reject: (value: unknown) => { reject = value; } };
 }
 
 test("script examples equal the documented author files", () => {
@@ -93,4 +95,20 @@ test("read document shows full metadata and replacement is bound to the original
   await editor.button(`保存并替换 ${rule.id}`).onClick();
   assert.equal(editor.writes[0][3], true);
   assert.equal(editor.closed(), true);
+});
+
+test("real Decky Python Exception shows the full Lua error and keeps the draft", async () => {
+  const editor = mount(); editor.render();
+  editor.input("脚本规则 JSON").onChange({ target: { value: scriptRuleExample } });
+  editor.input("Lua 源码").onChange({ target: { value: "return {" } });
+  const detail = "script_source_syntax_error: source/custom.lua:1: unexpected symbol near <eof>\nException: text inside a Lua diagnostic";
+  const failure = { name: "Python Exception", pythonTraceback: `Traceback (most recent call last):\n  File loader.py, line 1\nException: ${detail}\n`, toString: () => "Python Exception" };
+  editor.reject(failure); editor.render();
+  await editor.button("保存并导入").onClick();
+  assert.match(editor.render(), /source\/custom.lua:1/);
+  assert.match(editor.render(), /text inside a Lua diagnostic/);
+  assert.equal(scriptSourceError(failure), detail);
+  assert.equal(editor.input("Lua 源码").value, "return {");
+  assert.equal(editor.closed(), false);
+  assert.equal(scriptSourceError(Error("clipboard denied")), "Error: clipboard denied");
 });

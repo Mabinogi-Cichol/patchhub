@@ -1,3 +1,4 @@
+import { scriptSourceError } from "../src/script-source-error.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
@@ -67,6 +68,7 @@ function mount(item: Install, task?: sourceTasks.SourceTaskSnapshot) {
     },
   };
   const modules: Record<string, any> = {
+    "./script-source-error": { scriptSourceError },
     "@decky/api": { callable: (method: string) => async (...args: unknown[]) => {
       if (method === "list_sources") {
         if (state.rejectRefresh) throw Error("列表读取失败");
