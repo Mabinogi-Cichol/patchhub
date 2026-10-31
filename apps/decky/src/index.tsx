@@ -737,6 +737,10 @@ function GlobalSources() {
   const { error, note } = feedbackFor(state);
   const [rule, setRule] = useState("");
   const [editor, setEditor] = useState<{ document?: ScriptSourceDocument } | null>(null);
+  const editorSection = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    if (editor) editorSection.current?.scrollIntoView({ block: "start" });
+  }, [editor]);
   async function editScript(sourceId?: string) {
     if (session.getSnapshot().busy) return;
     session.update({ busy: "正在读取脚本…", busySince: Date.now() });
@@ -766,7 +770,7 @@ function GlobalSources() {
     return sources;
   }, () => setRule(""));
   return <><div>{busy && <Status>{busy}</Status>}{error && <Status warning>{error}</Status>}{note && <Status>{note}</Status>}</div>
-    {editor && <ScriptSourceEditor document={editor.document} onSave={saveScript} onClose={() => setEditor(null)} />}
+    {editor && <div ref={editorSection}><ScriptSourceEditor document={editor.document} onSave={saveScript} onClose={() => setEditor(null)} /></div>}
     <SourcesPage report={report} busy={!!busy || !!editor} tasks={tasks} expandedSources={state.expandedSources} onToggleSource={session.toggleSourceExpanded} rule={rule} setRule={setRule} changeSources={changeSources}
       onUpdateSource={(sourceId, force) => void session.updateSource(sourceId, force)}
       onCancelTask={taskId => void session.cancelSourceTask(taskId)}
