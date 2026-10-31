@@ -277,3 +277,207 @@ fn actual_root_identity_cannot_be_declared_away() {
     );
     assert!(!host.state_dir().exists());
 }
+
+/// P7 crosses the Lua -> index -> detail -> selection -> public write boundary.
+/// The only payloads are an inert ZIP and the repository's synthetic SF fixture.
+#[test]
+#[ignore = "requires SF_WORKER_TEST_BIN pointing to the Release worker"]
+fn script_source_update_to_isolated_zip_and_exe_install() {
+    use patchhub_core::{
+        installer::{exe_resolve::exe_selection_id, zip_selection_id},
+        sources::{
+            http::{FakeFetcher, FetchResponse, RequestContext},
+            matching, update, GameQuery, Sources,
+        },
+        trust::revision::SqliteTrustRevisionStore,
+    };
+    use patchhub_installer_worker::production::WorkerRuntime;
+    use serde_json::json;
+    use std::{
+        io::Write,
+        sync::{atomic::AtomicBool, Arc},
+        time::Duration,
+    };
+    struct PayloadTransport(std::sync::Mutex<Option<HttpResponse>>);
+    impl Transport for PayloadTransport {
+        fn get(&self, _: &str, _: Option<&str>, _: Option<&str>) -> io::Result<HttpResponse> {
+            Ok(self
+                .0
+                .lock()
+                .unwrap()
+                .take()
+                .expect("one artifact download"))
+        }
+    }
+    for format in ["zip", "exe"] {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("Steam");
+        manifest(&root, "Game");
+        let game = patchhub_core::steam::scan(std::slice::from_ref(&root))
+            .installs
+            .remove(0);
+        fs::write(game.install_path.join("engine.exe"), b"inert").unwrap();
+        fs::write(game.install_path.join("identity.dat"), [87, 164, 242, 220]).unwrap();
+        let manifest_path = root.join("steamapps/appmanifest_42.acf");
+        let text = fs::read_to_string(&manifest_path).unwrap();
+        let end = text.rfind('}').unwrap();
+        let mut text = text;
+        text.insert_str(end, " \"InstalledDepots\" {} ");
+        fs::write(manifest_path, text).unwrap();
+        let state = temp.path().join("state");
+        let mut sources = Sources::open(&state).unwrap();
+        let raw = serde_json::from_value(json!({"id":"script-install","name":"Script install","adapter":"lua","enabled":true,"discovery_only":true,"pages":["https://script.example/list"],"page_hosts":["script.example"],"download_hosts":["kaguraserver.com"]})).unwrap();
+        let code = format!(
+            r#"return {{
+          collect_index=function(ctx,rule,previous)
+            local title=ctx.html(ctx.get(rule.pages[1]).text):select('h1')[1]:text()
+            return {{entries={{{{title=title,page='https://script.example/game',kind='article'}}}},complete=true}}
+          end,
+          resolve_page=function(ctx,rule,page)
+            local title=ctx.html(ctx.get(page).text):select('h1')[1]:text()
+            return {{title=title,page=page,kind='article',steam_ids={{42}},text='English patch {format}',mirrors={{{{url='https://kaguraserver.com/a.{format}'}}}}}}
+          end
+        }}"#
+        );
+        sources.import_script_source(&raw, 1, &code, false).unwrap();
+        let fake = Arc::new(FakeFetcher::new());
+        for page in ["list", "game"] {
+            fake.push(FetchResponse {
+                status: 200,
+                final_url: format!("https://script.example/{page}"),
+                body: b"<h1>Fixture</h1>".to_vec(),
+                ..Default::default()
+            });
+        }
+        let mut ctx = RequestContext::with_settings(Box::new(Arc::clone(&fake)), Duration::ZERO);
+        let flag = Arc::new(AtomicBool::new(false));
+        let rule = sources
+            .registry()
+            .rules()
+            .iter()
+            .find(|r| r.id == "script-install")
+            .unwrap()
+            .clone();
+        update::update_source(sources.store(), &rule, true, &mut ctx, &flag, |_| {}).unwrap();
+        let query = GameQuery {
+            appid: 42,
+            name: "Fixture".into(),
+            localized_name: None,
+            instance_id: Some(game.instance_id.clone()),
+        };
+        let matched = matching::match_games(
+            sources.store(),
+            sources.registry().rules(),
+            sources.registry().overrides(),
+            std::slice::from_ref(&query),
+            &[],
+            false,
+            &mut ctx,
+            &flag,
+            100,
+            |_| {},
+            |_| {},
+        )
+        .unwrap();
+        let candidate = matched[0]
+            .candidates
+            .iter()
+            .find(|c| c.source_id == "script-install")
+            .unwrap();
+        assert!(candidate.parser_fingerprint.is_some());
+        let (selection, payload) = if format == "zip" {
+            let selection = zip_selection_id(candidate).unwrap();
+            let reopened = Sources::open(&state).unwrap();
+            patchhub_core::installer::resolve_zip(reopened.registry(), &query, &selection).unwrap();
+            let mut writer = zip::ZipWriter::new(io::Cursor::new(Vec::new()));
+            writer
+                .start_file("payload.bin", zip::write::SimpleFileOptions::default())
+                .unwrap();
+            writer.write_all(b"script ZIP payload").unwrap();
+            (
+                InstallTarget::PublisherZipSelection {
+                    selection_id: ZipSelectionId::new(&selection).unwrap(),
+                },
+                writer.finish().unwrap().into_inner(),
+            )
+        } else {
+            let selection = exe_selection_id(candidate).unwrap();
+            let reopened = Sources::open(&state).unwrap();
+            patchhub_core::installer::exe_resolve::resolve_exe(
+                reopened.registry(),
+                &query,
+                &selection,
+            )
+            .unwrap();
+            let golden: serde_json::Value = serde_json::from_str(include_str!(
+                "../../installer-format/tests/fixtures/sf/worker-golden.json"
+            ))
+            .unwrap();
+            let bytes = golden["cases"][0]["data_hex"]
+                .as_str()
+                .unwrap()
+                .as_bytes()
+                .chunks_exact(2)
+                .map(|v| u8::from_str_radix(std::str::from_utf8(v).unwrap(), 16).unwrap())
+                .collect();
+            (
+                InstallTarget::PublisherExeSelection {
+                    selection_id: ExeSelectionId::new(&selection).unwrap(),
+                },
+                bytes,
+            )
+        };
+        assert!(
+            !game.install_path.join("payload.bin").exists(),
+            "resolution is read-only"
+        );
+        let transport = PayloadTransport(std::sync::Mutex::new(Some(HttpResponse {
+            status: 200,
+            location: None,
+            content_type: Some("application/octet-stream".into()),
+            content_length: Some(payload.len() as u64),
+            etag: None,
+            last_modified: None,
+            final_url: format!("https://kaguraserver.com/a.{format}"),
+            body: Box::new(io::Cursor::new(payload)),
+        })));
+        let host = ValidatedHostContext::new(&state, &[root], platform()).unwrap();
+        let revisions = SqliteTrustRevisionStore::new(&state).unwrap();
+        let worker = WorkerRuntime::new(std::path::PathBuf::from(
+            std::env::var_os("SF_WORKER_TEST_BIN").unwrap(),
+        ))
+        .unwrap();
+        let mut emit = |_| {};
+        let result = install(
+            InstallRequest {
+                request_id: RequestId::new("script-install").unwrap(),
+                instance_id: InstanceId::new(&game.instance_id).unwrap(),
+                operation: InstallOperation::Overwrite,
+                target: selection,
+                cleanup_policy: CleanupPolicy::AfterCommit,
+            },
+            InstallerDeps {
+                host: &host,
+                catalog: &Provider,
+                revision_store: &revisions,
+                transport: &transport,
+                worker: Some(&worker),
+                control: &Lease,
+                clock: &SystemClock,
+                emit: &mut emit,
+            },
+        )
+        .unwrap();
+        assert_eq!(result.state, "committed");
+        let bytes = fs::read(game.install_path.join("payload.bin")).unwrap();
+        if format == "zip" {
+            assert_eq!(bytes, b"script ZIP payload");
+        } else {
+            assert_eq!(bytes.len(), 15);
+        }
+        assert_eq!(
+            fs::read(game.install_path.join("engine.exe")).unwrap(),
+            b"inert"
+        );
+    }
+}
