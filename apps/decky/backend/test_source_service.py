@@ -97,6 +97,43 @@ class SourceServiceTests(unittest.IsolatedAsyncioTestCase):
         for name in ("matches", "cached_candidates", "_rules", "builtins", "validate_download", "source_for_release"):
             self.assertFalse(hasattr(self.service, name))
 
+    async def test_update_automatically_uses_browser_after_request_verification(self):
+        await self.service.initialize()
+        pages = [{"url": "https://www.patch.moe/", "method": "GET", "text": "list"}]
+        calls = []
+        async def browser(url, cancel, progress):
+            calls.append(url)
+            progress("browser_verification")
+            return pages
+        self.service._browser_fetch = browser
+        complete = response("update_source")["result"]
+        def update(params):
+            if "browser_responses" in params:
+                return complete
+            return dict(complete, complete=False, status=dict(complete["status"], code="source_browser_verification_required"))
+        self.bridge.stream_results["update_source"] = update
+        snapshot = self.service.start_update_source("patchmoe")
+        result = await self.settle(snapshot["task_id"])
+        self.assertEqual(result["state"], "completed")
+        self.assertEqual(calls, [SUMMARIES[0]["pages"][0]])
+        self.assertEqual(len(self.bridge.stream_calls), 2)
+        self.assertEqual(self.bridge.stream_calls[1][1]["browser_responses"], pages)
+        self.assertTrue(self.bridge.stream_calls[1][1]["force"])
+
+    async def test_required_personal_declaration_does_not_become_success(self):
+        await self.service.initialize()
+        complete = response("update_source")["result"]
+        self.bridge.stream_results["update_source"] = dict(complete, complete=False,
+            status=dict(complete["status"], code="source_browser_verification_required"))
+        async def browser(url, cancel, progress):
+            raise ValueError("source_age_verification_required")
+        self.service._browser_fetch = browser
+        snapshot = self.service.start_update_source("patchmoe")
+        result = await self.settle(snapshot["task_id"])
+        self.assertEqual(result["state"], "failed")
+        self.assertEqual(result["error"], "source_age_verification_required")
+        self.assertEqual(len(self.bridge.stream_calls), 1)
+
     async def test_prime_exposes_summaries_from_one_scan(self):
         await self.service.initialize()
         self.service.prime(SCAN)

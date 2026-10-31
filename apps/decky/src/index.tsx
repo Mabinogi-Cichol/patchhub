@@ -579,7 +579,7 @@ function SourceCard({ source, busy, expanded, onToggle, task, changeSources, onU
       <Row><Action disabled={busy || !name.trim() || name.trim() === source.name}
         onClick={() => changeSources(() => setSourceName(source.id, name), false)}>保存名称</Action></Row>
       {source.script && <>
-        <InfoRow label="脚本" below>Lua · API {source.script.api_version} · SHA-256 {source.script.sha256}</InfoRow>
+        <InfoRow label="脚本" below>Lua · API {source.script.api_version}</InfoRow>
         <Row><Action disabled={busy} onClick={() => onEditScript(source.id)}>编辑脚本</Action></Row>
       </>}
       <InfoRow label="站点" below>{source.pages.join(" · ")}</InfoRow>
