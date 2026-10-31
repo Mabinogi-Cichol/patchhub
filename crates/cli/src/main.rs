@@ -219,7 +219,7 @@ Usage: patchhub-core scan [--steam-root PATH]... [--catalog PATH] [--platform wi
        patchhub-core serve  (versioned JSON-lines on stdin/stdout)\n\
 Installation requires a signed catalog. Close the game and pause Steam updates before installing.
 Methods: get_capabilities scan project_instances preview install_patch list_transactions recover discard_plan cleanup_cache cache_status backup_status cleanup_backups.
-Sources: list_sources list_game_sources set_source_enabled set_source_name set_game_source add_source set_source_update_interval update_source match_games rematch_game.
+Sources: list_sources list_game_sources set_source_enabled set_source_name set_game_source remove_source set_source_update_interval update_source match_games rematch_game.
 Options: --signed-catalog --trust-keys --state-dir --archive --operation install|reinstall --request-id ID.
 Source options: --source-id ID --name TEXT --appid N --enabled true|false --subscribed true|false --rule JSON --interval-hours N --name-hint TEXT --force --force-details --instance-id ID --match-instance ID.
 Maintenance: keygen PRIVATE PUBLIC KEY_ID; sign-catalog CATALOG PRIVATE KEY_ID OUTPUT LIFETIME_SECONDS; schema OUTPUT.";
@@ -479,13 +479,13 @@ mod tests {
         "set_source_enabled",
         "set_source_name",
         "set_game_source",
-        "add_source",
         "import_script_source",
         "get_script_source",
         "set_source_update_interval",
         "update_source",
         "match_games",
         "rematch_game",
+        "remove_source",
     ];
 
     #[test]

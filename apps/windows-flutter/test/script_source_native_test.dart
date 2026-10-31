@@ -33,16 +33,25 @@ void main() {
       expect(bundled['rule']['adapter'], 'lua');
       expect(bundled['code'], contains('form_zh_cn'));
       expect(Directory(paths.stateDirectory).existsSync(), false);
-      await client.call('import_script_source', {
-        'rule': bundled['rule'],
-        'api_version': 1,
-        'code': 'return {}',
-        'replace': true,
-      });
+      await expectLater(
+        client.call('import_script_source', {
+          'rule': bundled['rule'],
+          'api_version': 1,
+          'code': 'return {}',
+          'replace': true,
+        }),
+        throwsA(
+          isA<CoreError>().having(
+            (e) => e.code,
+            'code',
+            'source_builtin_readonly',
+          ),
+        ),
+      );
       expect(
         (await client.call('get_script_source', {'source_id': 'patchmoe'})
             as Map)['code'],
-        'return {}',
+        contains('form_zh_cn'),
       );
       final rule = jsonDecode(scriptRuleExample) as Map<String, dynamic>;
       final code = '-- ${'脚本源码' * 15000}\nwhile true do end\nreturn {}';
@@ -85,6 +94,15 @@ void main() {
             as Map)['code'],
         'return {}',
       );
+      await client.call('remove_source', {'source_id': rule['id']});
+      await expectLater(
+        client.call('get_script_source', {'source_id': rule['id']}),
+        throwsA(
+          isA<CoreError>().having((e) => e.code, 'code', 'unknown_source'),
+        ),
+      );
+      final remaining = await client.call('list_sources', const {}) as List;
+      expect(remaining.any((source) => source['id'] == rule['id']), false);
     },
     skip: binary.existsSync()
         ? false

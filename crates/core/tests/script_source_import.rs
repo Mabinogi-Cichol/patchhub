@@ -99,6 +99,81 @@ fn import_compiles_only_and_persists_one_complete_document() {
 }
 
 #[test]
+fn removing_a_custom_source_clears_only_its_settings_and_allows_reimport() {
+    let state = tempfile::tempdir().unwrap();
+    let mut sources = Sources::open(state.path()).unwrap();
+    sources
+        .import_script_source(&rule("custom"), 1, CODE, false)
+        .unwrap();
+    sources
+        .registry_mut()
+        .set_name("custom", "自定义来源")
+        .unwrap();
+    sources.registry_mut().set_enabled("custom", false).unwrap();
+    sources
+        .registry_mut()
+        .set_update_interval("custom", 24)
+        .unwrap();
+    sources
+        .registry_mut()
+        .set_game_source(42, "custom", false)
+        .unwrap();
+    let before = sources.settings_revision();
+
+    let revision = sources.registry_mut().remove_source("custom").unwrap();
+    assert_eq!(revision, before + 1);
+    assert_eq!(sources.settings_revision(), revision);
+    assert!(!sources
+        .registry()
+        .list_sources()
+        .iter()
+        .any(|source| source.rule.id == "custom"));
+    assert_eq!(
+        sources.get_script_source("custom").unwrap_err().to_string(),
+        "unknown_source"
+    );
+    let settings: Value =
+        serde_json::from_slice(&bytes(&sources)).expect("settings stay one document");
+    for field in ["added", "script_sources"] {
+        assert!(
+            !settings[field].to_string().contains("custom"),
+            "{field} keeps no trace: {settings}"
+        );
+    }
+    assert!(settings["enabled"].get("custom").is_none());
+    assert!(settings["names"].get("custom").is_none());
+    assert!(settings["intervals"].get("custom").is_none());
+    // Other sources keep their own settings; unknown and builtin removal is refused.
+    assert!(settings["enabled"].get("patchmoe").is_none());
+    assert_eq!(
+        sources
+            .registry_mut()
+            .remove_source("custom")
+            .unwrap_err()
+            .to_string(),
+        "unknown_source"
+    );
+    assert_eq!(
+        sources
+            .registry_mut()
+            .remove_source("patchmoe")
+            .unwrap_err()
+            .to_string(),
+        "source_builtin_readonly"
+    );
+    // A deleted ID can be imported again as a new source.
+    let imported = sources
+        .import_script_source(&rule("custom"), 1, CODE, false)
+        .unwrap();
+    assert!(imported.rule.enabled);
+    assert!(sources.registry().list_sources().iter().any(|source| {
+        source.rule.id == "custom"
+            && source.origin == "added"
+            && source.rule.name == "Custom source"
+    }));
+}
+
+#[test]
 fn invalid_imports_and_implicit_overwrites_do_not_modify_settings() {
     let state = tempfile::tempdir().unwrap();
     let mut sources = Sources::open(state.path()).unwrap();
@@ -143,7 +218,6 @@ fn invalid_imports_and_implicit_overwrites_do_not_modify_settings() {
             .to_string(),
         "source_not_script"
     );
-    assert!(sources.registry_mut().add_source(&rule("bypass")).is_err());
     assert_eq!(bytes(&sources), initial);
     assert_eq!(
         validate_code("bad", 1, &[0xff]).unwrap_err().to_string(),

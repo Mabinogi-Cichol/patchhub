@@ -47,7 +47,6 @@ pub struct Params {
     pub instances: Vec<String>,
     /// `project_instances` requested instance ids.
     pub instance_ids: Vec<String>,
-    /// Declarative rule for `add_source` (validated against `RawSourceRule`).
     pub rule: Option<Value>,
     pub api_version: Option<u32>,
     pub code: Option<String>,
@@ -1003,17 +1002,19 @@ fn execute_source_method(
                     .map_err(err)?,
             )
         }
-        "add_source" => {
-            let rule_value = params
-                .rule
-                .clone()
-                .ok_or_else(|| DomainError::code("rule_required"))?;
-            let raw: sources::RawSourceRule = serde_json::from_value(rule_value).map_err(err)?;
+        "remove_source" => {
+            let source_id = params
+                .source_id
+                .as_deref()
+                .ok_or_else(|| DomainError::code("source_id_required"))?;
             let mut handle = open_sources(params)?;
-            let rule = handle.registry_mut().add_source(&raw).map_err(err)?;
+            handle
+                .registry_mut()
+                .remove_source(source_id)
+                .map_err(err)?;
             Ok(json!({
                 "settings_revision": handle.settings_revision(),
-                "rule": rule,
+                "source_id": source_id,
             }))
         }
         "set_source_update_interval" => {

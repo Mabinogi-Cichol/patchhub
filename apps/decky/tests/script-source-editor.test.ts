@@ -16,7 +16,7 @@ const output = ts.transpileModule(readFileSync(new URL("../src/script-source-edi
 
 // Exercise actual JSX and native control callbacks using the existing page-test
 // approach. Steam focus navigation and the on-device keyboard remain device QA.
-function mount(document?: any) {
+function mount(document?: any, readOnly?: boolean) {
   const values: any[] = []; let hook = 0; let closed = false; let reject: unknown = false;
   const controls: any[] = []; const writes: any[][] = []; const copies: string[] = [];
   const native: Record<string, any> = {};
@@ -42,7 +42,7 @@ function mount(document?: any) {
     navigator: { clipboard: { writeText: async (text: string) => { copies.push(text); } } } });
   function render() {
     hook = 0; controls.length = 0;
-    return renderToStaticMarkup(React.createElement(exports.ScriptSourceEditor, { document,
+    return renderToStaticMarkup(React.createElement(exports.ScriptSourceEditor, { document, readOnly,
       onClose: () => { closed = true; }, onSave: async (...args: any[]) => {
         writes.push(args); if (reject) throw typeof reject === "boolean" ? Error("script_source_syntax_error: source/custom.lua:8: 完整诊断") : reject;
       } }));
@@ -81,11 +81,13 @@ test("large script import failures preserve both inputs; examples do not modify 
   assert.equal(editor.closed(), true);
 });
 
-test("read document shows full metadata and replacement is bound to the original ID", async () => {
+test("read document shows the code without script metadata and binds replacement to the original ID", async () => {
   const rule = JSON.parse(scriptRuleExample);
   const document = { rule, api_version: 1, sha256: "a".repeat(64), code: "return {}" };
   const editor = mount(document);
-  assert.match(editor.render(), new RegExp(document.sha256));
+  const markup = editor.render();
+  assert.doesNotMatch(markup, new RegExp(document.sha256));
+  assert.doesNotMatch(markup, /当前 API/);
   assert.equal(editor.input("Lua 源码").value, document.code);
   editor.input("脚本规则 JSON").onChange({ target: { value: JSON.stringify({ ...rule, id: "different" }) } }); editor.render();
   await editor.button(`保存并替换 ${rule.id}`).onClick();
@@ -95,6 +97,21 @@ test("read document shows full metadata and replacement is bound to the original
   await editor.button(`保存并替换 ${rule.id}`).onClick();
   assert.equal(editor.writes[0][3], true);
   assert.equal(editor.closed(), true);
+});
+
+test("a builtin document opens read-only with no save action", () => {
+  const rule = JSON.parse(scriptRuleExample);
+  const document = { rule, api_version: 1, sha256: "b".repeat(64), code: "return {}" };
+  const editor = mount(document, true);
+  const markup = editor.render();
+  assert.equal(editor.controls.find(control => control.name === "PanelSection")!.props.title,
+    "查看脚本：my-script-publisher");
+  assert.match(markup, /内置来源随版本更新/);
+  assert.doesNotMatch(markup, /保存并替换/);
+  assert.equal(editor.input("Lua 源码").disabled, true);
+  assert.equal(editor.input("脚本规则 JSON").disabled, true);
+  assert.equal(editor.button("关闭").disabled, false);
+  assert.equal(editor.writes.length, 0);
 });
 
 test("real Decky Python Exception shows the full Lua error and keeps the draft", async () => {

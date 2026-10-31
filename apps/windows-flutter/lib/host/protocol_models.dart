@@ -26,13 +26,13 @@ const coreMethods = [
   'set_source_enabled',
   'set_source_name',
   'set_game_source',
-  'add_source',
   'import_script_source',
   'get_script_source',
   'set_source_update_interval',
   'update_source',
   'match_games',
   'rematch_game',
+  'remove_source',
 ];
 
 void validateCapabilities(Map<String, dynamic> value) {
@@ -170,13 +170,13 @@ class WireProtocol {
     'set_source_enabled': 'SourceEnabledResult',
     'set_source_name': 'SourceNameResult',
     'set_game_source': 'GameSourceResult',
-    'add_source': 'AddSourceResult',
     'import_script_source': 'AddSourceResult',
     'get_script_source': 'ScriptSourceDocument',
     'set_source_update_interval': 'SetSourceIntervalResult',
     'update_source': 'SourceUpdateResult',
     'match_games': 'MatchGamesResult',
     'rematch_game': 'MatchGamesResult',
+    'remove_source': 'SourceRemovedResult',
   };
 
   static bool equal(dynamic a, dynamic b) {

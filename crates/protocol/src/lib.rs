@@ -85,13 +85,13 @@ pub enum Method {
     SetSourceEnabled,
     SetSourceName,
     SetGameSource,
-    AddSource,
     ImportScriptSource,
     GetScriptSource,
     SetSourceUpdateInterval,
     UpdateSource,
     MatchGames,
     RematchGame,
+    RemoveSource,
 }
 pub const ALL_METHODS: [Method; 24] = [
     Method::GetCapabilities,
@@ -111,13 +111,13 @@ pub const ALL_METHODS: [Method; 24] = [
     Method::SetSourceEnabled,
     Method::SetSourceName,
     Method::SetGameSource,
-    Method::AddSource,
     Method::ImportScriptSource,
     Method::GetScriptSource,
     Method::SetSourceUpdateInterval,
     Method::UpdateSource,
     Method::MatchGames,
     Method::RematchGame,
+    Method::RemoveSource,
 ];
 pub const METHODS: [&str; 24] = [
     "get_capabilities",
@@ -137,13 +137,13 @@ pub const METHODS: [&str; 24] = [
     "set_source_enabled",
     "set_source_name",
     "set_game_source",
-    "add_source",
     "import_script_source",
     "get_script_source",
     "set_source_update_interval",
     "update_source",
     "match_games",
     "rematch_game",
+    "remove_source",
 ];
 pub const SOURCE_METHODS: [&str; 12] = [
     "list_sources",
@@ -151,13 +151,13 @@ pub const SOURCE_METHODS: [&str; 12] = [
     "set_source_enabled",
     "set_source_name",
     "set_game_source",
-    "add_source",
     "import_script_source",
     "get_script_source",
     "set_source_update_interval",
     "update_source",
     "match_games",
     "rematch_game",
+    "remove_source",
 ];
 impl Method {
     pub fn as_str(self) -> &'static str {
@@ -190,13 +190,13 @@ params!(ListGameSourcesParams{#[ts(optional = nullable)]pub instance_id:Option<S
 params!(SetSourceEnabledParams{pub source_id:String,pub enabled:bool,});
 params!(SetSourceNameParams{pub source_id:String,pub name:String,});
 params!(SetGameSourceParams{pub source_id:String,pub subscribed:bool,#[ts(optional = nullable)]pub instance_id:Option<String>,#[ts(optional = nullable)]pub appid:Option<u32>,});
-params!(AddSourceParams{pub rule:RawSourceRule,});
 params!(ImportScriptSourceParams{pub rule:RawSourceRule,pub api_version:u32,pub code:String,#[serde(default)]#[ts(as="Option<bool>", optional)]pub replace:bool,});
 params!(GetScriptSourceParams{pub source_id:String,});
 params!(SetSourceUpdateIntervalParams{pub source_id:String,#[ts(type="number")]pub interval_hours:u64,});
 params!(UpdateSourceParams{pub source_id:String,#[serde(default)]#[ts(as="Option<bool>", optional)]pub force:bool,#[serde(default,skip_serializing_if="Option::is_none")]#[ts(optional = nullable)]pub browser_responses:Option<Vec<BrowserResponse>>,});
 params!(MatchGamesParams{#[serde(default)]#[ts(as="Option<Vec<String>>", optional)]pub instances:Vec<String>,#[serde(default)]#[ts(as="Option<Vec<String>>", optional)]pub name_hints:Vec<String>,#[serde(default)]#[ts(as="Option<bool>", optional)]pub force_details:bool,});
 params!(RematchGameParams{#[ts(optional = nullable)]pub instance_id:Option<String>,#[ts(optional = nullable)]pub appid:Option<u32>,#[serde(default)]#[ts(as="Option<Vec<String>>", optional)]pub name_hints:Vec<String>,});
+params!(RemoveSourceParams{pub source_id:String,});
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(tag = "method", content = "params", rename_all = "snake_case")]
 pub enum RequestParams {
@@ -217,13 +217,13 @@ pub enum RequestParams {
     SetSourceEnabled(SetSourceEnabledParams),
     SetSourceName(SetSourceNameParams),
     SetGameSource(SetGameSourceParams),
-    AddSource(AddSourceParams),
     ImportScriptSource(ImportScriptSourceParams),
     GetScriptSource(GetScriptSourceParams),
     SetSourceUpdateInterval(SetSourceUpdateIntervalParams),
     UpdateSource(UpdateSourceParams),
     MatchGames(MatchGamesParams),
     RematchGame(RematchGameParams),
+    RemoveSource(RemoveSourceParams),
 }
 impl RequestParams {
     pub fn host(&self) -> &HostInputs {
@@ -245,13 +245,13 @@ impl RequestParams {
             Self::SetSourceEnabled(p) => &p.host,
             Self::SetSourceName(p) => &p.host,
             Self::SetGameSource(p) => &p.host,
-            Self::AddSource(p) => &p.host,
             Self::ImportScriptSource(p) => &p.host,
             Self::GetScriptSource(p) => &p.host,
             Self::SetSourceUpdateInterval(p) => &p.host,
             Self::UpdateSource(p) => &p.host,
             Self::MatchGames(p) => &p.host,
             Self::RematchGame(p) => &p.host,
+            Self::RemoveSource(p) => &p.host,
         }
     }
     pub fn params_value(&self) -> Value {
@@ -619,6 +619,13 @@ pub struct SetSourceIntervalResult {
     #[ts(type = "number")]
     pub interval_hours: u64,
 }
+#[derive(Debug, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(deny_unknown_fields)]
+pub struct SourceRemovedResult {
+    #[ts(type = "number")]
+    pub settings_revision: u64,
+    pub source_id: String,
+}
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(deny_unknown_fields)]
 pub struct SourceUpdateResult {
@@ -669,6 +676,7 @@ pub enum MethodResult {
     Added(AddSourceResult),
     ScriptDocument(ScriptSourceDocument),
     SetInterval(SetSourceIntervalResult),
+    Removed(SourceRemovedResult),
     SourceUpdated(SourceUpdateResult),
     Matched(MatchGamesResult),
 }
@@ -839,7 +847,7 @@ pub fn validate_response(
         Some(Method::SetGameSource) => {
             check!(GameSourceResult);
         }
-        Some(Method::AddSource | Method::ImportScriptSource) => {
+        Some(Method::ImportScriptSource) => {
             check!(AddSourceResult);
         }
         Some(Method::GetScriptSource) => {
@@ -853,6 +861,9 @@ pub fn validate_response(
         }
         Some(Method::MatchGames | Method::RematchGame) => {
             check!(MatchGamesResult);
+        }
+        Some(Method::RemoveSource) => {
+            check!(SourceRemovedResult);
         }
         None => {
             check!(MethodResult);
@@ -1420,13 +1431,13 @@ pub fn schema() -> Value {
             Method::SetSourceEnabled => "SetSourceEnabledParams",
             Method::SetSourceName => "SetSourceNameParams",
             Method::SetGameSource => "SetGameSourceParams",
-            Method::AddSource => "AddSourceParams",
             Method::ImportScriptSource => "ImportScriptSourceParams",
             Method::GetScriptSource => "GetScriptSourceParams",
             Method::SetSourceUpdateInterval => "SetSourceUpdateIntervalParams",
             Method::UpdateSource => "UpdateSourceParams",
             Method::MatchGames => "MatchGamesParams",
             Method::RematchGame => "RematchGameParams",
+            Method::RemoveSource => "RemoveSourceParams",
         };
         serde_json::json!({"type":"object","additionalProperties":false,"required":["protocol_version","request_id","method","params"],"properties":{"protocol_version":{"const":PROTOCOL_VERSION},"request_id":{"type":"string"},"method":{"const":method.as_str()},"params":{"$ref":format!("#/$defs/{name}")}}})
     }).collect();
@@ -1606,11 +1617,12 @@ pub fn result_schema_name(method: Method) -> &'static str {
         Method::SetSourceEnabled => "SourceEnabledResult",
         Method::SetSourceName => "SourceNameResult",
         Method::SetGameSource => "GameSourceResult",
-        Method::AddSource | Method::ImportScriptSource => "AddSourceResult",
+        Method::ImportScriptSource => "AddSourceResult",
         Method::GetScriptSource => "ScriptSourceDocument",
         Method::SetSourceUpdateInterval => "SetSourceIntervalResult",
         Method::UpdateSource => "SourceUpdateResult",
         Method::MatchGames | Method::RematchGame => "MatchGamesResult",
+        Method::RemoveSource => "SourceRemovedResult",
     }
 }
 fn output_schema() -> &'static Value {

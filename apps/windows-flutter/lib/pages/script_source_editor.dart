@@ -6,8 +6,16 @@ import 'package:flutter/services.dart';
 import 'script_source_examples.dart';
 
 class ScriptSourceEditor extends StatefulWidget {
-  const ScriptSourceEditor({super.key, this.document, required this.onSave});
+  const ScriptSourceEditor({
+    super.key,
+    this.document,
+    this.readOnly = false,
+    required this.onSave,
+  });
   final Map<String, dynamic>? document;
+
+  /// 内置来源随版本更新，只展示规则与源码。
+  final bool readOnly;
   final Future<void> Function(Map<String, Object?> params) onSave;
 
   @override
@@ -23,9 +31,6 @@ class _ScriptSourceEditorState extends State<ScriptSourceEditor> {
   late final code = TextEditingController(
     text: widget.document?['code'] as String? ?? '',
   );
-  late final api = TextEditingController(
-    text: '${widget.document?['api_version'] ?? 1}',
-  );
   bool saving = false;
   bool example = false;
   String? error;
@@ -36,7 +41,6 @@ class _ScriptSourceEditorState extends State<ScriptSourceEditor> {
   void dispose() {
     rule.dispose();
     code.dispose();
-    api.dispose();
     super.dispose();
   }
 
@@ -53,11 +57,9 @@ class _ScriptSourceEditorState extends State<ScriptSourceEditor> {
       if (target != null && value['id'] != target) {
         throw FormatException('替换时来源 ID 必须为 $target');
       }
-      final version = int.tryParse(api.text);
-      if (version == null) throw const FormatException('API 版本必须是整数');
       await widget.onSave({
         'rule': value,
-        'api_version': version,
+        'api_version': 1,
         'code': code.text,
         'replace': target != null,
       });
@@ -82,7 +84,13 @@ class _ScriptSourceEditorState extends State<ScriptSourceEditor> {
   Widget build(BuildContext context) => PopScope(
     canPop: !saving,
     child: AlertDialog(
-      title: Text(target == null ? '导入脚本来源' : '编辑脚本：$target'),
+      title: Text(
+        widget.readOnly
+            ? '查看脚本：$target'
+            : target == null
+            ? '导入脚本来源'
+            : '编辑脚本：$target',
+      ),
       content: SizedBox(
         width: 760,
         child: SingleChildScrollView(
@@ -92,18 +100,20 @@ class _ScriptSourceEditorState extends State<ScriptSourceEditor> {
               const Text(
                 '仅导入你信任的 Lua 脚本。网络请求限于规则声明的域名。保存仅检查语法，不执行脚本；保存后需更新来源或重新匹配游戏。',
               ),
-              if (target != null) ...[
+              if (widget.readOnly) ...[
                 const SizedBox(height: 12),
-                SelectableText(
-                  '当前 API ${widget.document!['api_version']} · SHA-256 ${widget.document!['sha256']}',
-                ),
+                const Text('内置来源随版本更新，只读查看。需要自定义解析时请另建来源。'),
+              ],
+              if (target != null && !widget.readOnly) ...[
+                const SizedBox(height: 12),
                 const Text('替换同 ID 来源，保留名称覆盖、启用、订阅及更新间隔。'),
               ],
               const SizedBox(height: 16),
               TextField(
                 key: const ValueKey('script-rule'),
                 controller: rule,
-                enabled: !saving,
+                enabled: !saving && !widget.readOnly,
+                readOnly: widget.readOnly,
                 minLines: 4,
                 maxLines: 8,
                 style: const TextStyle(fontFamily: 'monospace'),
@@ -114,20 +124,9 @@ class _ScriptSourceEditorState extends State<ScriptSourceEditor> {
               ),
               const SizedBox(height: 16),
               TextField(
-                key: const ValueKey('script-api'),
-                controller: api,
-                enabled: !saving,
-                keyboardType: TextInputType.number,
-                decoration: const InputDecoration(
-                  labelText: 'Lua API 版本',
-                  helperText: '当前核心支持 API 1',
-                ),
-              ),
-              const SizedBox(height: 16),
-              TextField(
                 key: const ValueKey('script-code'),
                 controller: code,
-                enabled: !saving,
+                enabled: !saving && !widget.readOnly,
                 minLines: 6,
                 maxLines: 12,
                 style: const TextStyle(fontFamily: 'monospace'),
@@ -177,18 +176,19 @@ class _ScriptSourceEditorState extends State<ScriptSourceEditor> {
       actions: [
         TextButton(
           onPressed: saving ? null : () => Navigator.of(context).pop(),
-          child: const Text('取消'),
+          child: Text(widget.readOnly ? '关闭' : '取消'),
         ),
-        FilledButton(
-          onPressed: saving ? null : save,
-          child: Text(
-            saving
-                ? '正在保存…'
-                : target == null
-                ? '保存并导入'
-                : '保存并替换 $target',
+        if (!widget.readOnly)
+          FilledButton(
+            onPressed: saving ? null : save,
+            child: Text(
+              saving
+                  ? '正在保存…'
+                  : target == null
+                  ? '保存并导入'
+                  : '保存并替换 $target',
+            ),
           ),
-        ),
       ],
     ),
   );

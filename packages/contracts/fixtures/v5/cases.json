@@ -1021,42 +1021,6 @@
       "task_channel": false
     },
     {
-      "name": "add_source-request",
-      "request": {
-        "method": "add_source",
-        "params": {
-          "host": {
-            "catalog": null,
-            "platform": "windows",
-            "roots": [],
-            "signed_catalog": null,
-            "state_dir": null,
-            "trust_keys": null
-          },
-          "rule": {
-            "adapter": "table_html",
-            "discovery_only": false,
-            "download_hosts": [],
-            "enabled": true,
-            "id": "fixture",
-            "name": "Fixture",
-            "page_hosts": [
-              "example.com"
-            ],
-            "pages": [
-              "https://example.com/"
-            ],
-            "priority": 100,
-            "role": "publisher",
-            "root_layout": null
-          }
-        },
-        "protocol_version": 5,
-        "request_id": "fixture"
-      },
-      "task_channel": false
-    },
-    {
       "name": "import_script_source-request",
       "request": {
         "method": "import_script_source",
@@ -1201,6 +1165,26 @@
         "request_id": "fixture"
       },
       "task_channel": true
+    },
+    {
+      "name": "remove_source-request",
+      "request": {
+        "method": "remove_source",
+        "params": {
+          "host": {
+            "catalog": null,
+            "platform": "windows",
+            "roots": [],
+            "signed_catalog": null,
+            "state_dir": null,
+            "trust_keys": null
+          },
+          "source_id": "fixture"
+        },
+        "protocol_version": 5,
+        "request_id": "fixture"
+      },
+      "task_channel": false
     },
     {
       "name": "script-import-large-replace",
@@ -2341,13 +2325,13 @@
             "set_source_enabled",
             "set_source_name",
             "set_game_source",
-            "add_source",
             "import_script_source",
             "get_script_source",
             "set_source_update_interval",
             "update_source",
             "match_games",
-            "rematch_game"
+            "rematch_game",
+            "remove_source"
           ],
           "protocol_version": 5,
           "sources": {
@@ -2362,13 +2346,13 @@
               "set_source_enabled",
               "set_source_name",
               "set_game_source",
-              "add_source",
               "import_script_source",
               "get_script_source",
               "set_source_update_interval",
               "update_source",
               "match_games",
-              "rematch_game"
+              "rematch_game",
+              "remove_source"
             ],
             "parser_version": 2,
             "schedule_schema_version": 1,
@@ -3076,48 +3060,6 @@
       }
     },
     {
-      "method": "add_source",
-      "name": "add_source-success",
-      "response": {
-        "ok": true,
-        "protocol_version": 5,
-        "request_id": "fixture",
-        "result": {
-          "rule": {
-            "adapter": "table_html",
-            "discovery_only": false,
-            "download_hosts": [],
-            "enabled": true,
-            "id": "fixture",
-            "name": "Fixture",
-            "page_hosts": [
-              "example.com"
-            ],
-            "pages": [
-              "https://example.com/"
-            ],
-            "priority": 100,
-            "role": "publisher",
-            "root_layout": null
-          },
-          "settings_revision": 1
-        }
-      }
-    },
-    {
-      "method": "add_source",
-      "name": "add_source-failure",
-      "response": {
-        "error": {
-          "code": "io_error",
-          "detail": "固定诊断"
-        },
-        "ok": false,
-        "protocol_version": 5,
-        "request_id": "fixture"
-      }
-    },
-    {
       "method": "import_script_source",
       "name": "import_script_source-success",
       "response": {
@@ -3426,6 +3368,32 @@
       }
     },
     {
+      "method": "remove_source",
+      "name": "remove_source-success",
+      "response": {
+        "ok": true,
+        "protocol_version": 5,
+        "request_id": "fixture",
+        "result": {
+          "settings_revision": 1,
+          "source_id": "fixture"
+        }
+      }
+    },
+    {
+      "method": "remove_source",
+      "name": "remove_source-failure",
+      "response": {
+        "error": {
+          "code": "io_error",
+          "detail": "固定诊断"
+        },
+        "ok": false,
+        "protocol_version": 5,
+        "request_id": "fixture"
+      }
+    },
+    {
       "error": "invalid_core_response",
       "method": "get_script_source",
       "name": "error-code-invalid-0",
@@ -3568,13 +3536,13 @@
             "set_source_enabled",
             "set_source_name",
             "set_game_source",
-            "add_source",
             "import_script_source",
             "get_script_source",
             "set_source_update_interval",
             "update_source",
             "match_games",
-            "rematch_game"
+            "rematch_game",
+            "remove_source"
           ],
           "protocol_version": 5,
           "sources": {
@@ -3589,13 +3557,13 @@
               "set_source_enabled",
               "set_source_name",
               "set_game_source",
-              "add_source",
               "import_script_source",
               "get_script_source",
               "set_source_update_interval",
               "update_source",
               "match_games",
-              "rematch_game"
+              "rematch_game",
+              "remove_source"
             ],
             "parser_version": 2,
             "schedule_schema_version": 1
@@ -3663,13 +3631,13 @@
             "set_source_enabled",
             "set_source_name",
             "set_game_source",
-            "add_source",
             "import_script_source",
             "get_script_source",
             "set_source_update_interval",
             "update_source",
             "match_games",
-            "rematch_game"
+            "rematch_game",
+            "remove_source"
           ],
           "protocol_version": 5,
           "sources": {
@@ -3684,13 +3652,13 @@
               "set_source_enabled",
               "set_source_name",
               "set_game_source",
-              "add_source",
               "import_script_source",
               "get_script_source",
               "set_source_update_interval",
               "update_source",
               "match_games",
-              "rematch_game"
+              "rematch_game",
+              "remove_source"
             ],
             "parser_version": 2,
             "schedule_schema_version": 1,
@@ -5101,13 +5069,13 @@
             "set_source_enabled",
             "set_source_name",
             "set_game_source",
-            "add_source",
             "import_script_source",
             "get_script_source",
             "set_source_update_interval",
             "update_source",
             "match_games",
-            "rematch_game"
+            "rematch_game",
+            "remove_source"
           ],
           "protocol_version": 5,
           "sources": {
@@ -5122,13 +5090,13 @@
               "set_source_enabled",
               "set_source_name",
               "set_game_source",
-              "add_source",
               "import_script_source",
               "get_script_source",
               "set_source_update_interval",
               "update_source",
               "match_games",
-              "rematch_game"
+              "rematch_game",
+              "remove_source"
             ],
             "parser_version": 2,
             "schedule_schema_version": 1,
@@ -5192,13 +5160,13 @@
               "set_source_enabled",
               "set_source_name",
               "set_game_source",
-              "add_source",
               "import_script_source",
               "get_script_source",
               "set_source_update_interval",
               "update_source",
               "match_games",
-              "rematch_game"
+              "rematch_game",
+              "remove_source"
             ],
             "parser_version": 2,
             "schedule_schema_version": 1,
@@ -5267,13 +5235,13 @@
             "set_source_enabled",
             "set_source_name",
             "set_game_source",
-            "add_source",
             "import_script_source",
             "get_script_source",
             "set_source_update_interval",
             "update_source",
             "match_games",
-            "rematch_game"
+            "rematch_game",
+            "remove_source"
           ],
           "protocol_version": 5,
           "sources": {
@@ -5288,13 +5256,13 @@
               "set_source_enabled",
               "set_source_name",
               "set_game_source",
-              "add_source",
               "import_script_source",
               "get_script_source",
               "set_source_update_interval",
               "update_source",
               "match_games",
-              "rematch_game"
+              "rematch_game",
+              "remove_source"
             ],
             "parser_version": 2,
             "schedule_schema_version": 1,
@@ -5363,13 +5331,13 @@
             "set_source_enabled",
             "set_source_name",
             "set_game_source",
-            "add_source",
             "import_script_source",
             "get_script_source",
             "set_source_update_interval",
             "update_source",
             "match_games",
-            "rematch_game"
+            "rematch_game",
+            "remove_source"
           ],
           "protocol_version": 5,
           "sources": {
@@ -5384,13 +5352,13 @@
               "set_source_enabled",
               "set_source_name",
               "set_game_source",
-              "add_source",
               "import_script_source",
               "get_script_source",
               "set_source_update_interval",
               "update_source",
               "match_games",
-              "rematch_game"
+              "rematch_game",
+              "remove_source"
             ],
             "parser_version": 2,
             "schedule_schema_version": 1,
@@ -5459,13 +5427,13 @@
             "set_source_enabled",
             "set_source_name",
             "set_game_source",
-            "add_source",
             "import_script_source",
             "get_script_source",
             "set_source_update_interval",
             "update_source",
             "match_games",
-            "rematch_game"
+            "rematch_game",
+            "remove_source"
           ],
           "protocol_version": 5,
           "sources": {
@@ -5480,13 +5448,13 @@
               "set_source_enabled",
               "set_source_name",
               "set_game_source",
-              "add_source",
               "import_script_source",
               "get_script_source",
               "set_source_update_interval",
               "update_source",
               "match_games",
-              "rematch_game"
+              "rematch_game",
+              "remove_source"
             ],
             "parser_version": 1,
             "schedule_schema_version": 1,
@@ -5555,13 +5523,13 @@
             "set_source_enabled",
             "set_source_name",
             "set_game_source",
-            "add_source",
             "import_script_source",
             "get_script_source",
             "set_source_update_interval",
             "update_source",
             "match_games",
-            "rematch_game"
+            "rematch_game",
+            "remove_source"
           ],
           "protocol_version": 5,
           "sources": {
@@ -5576,9 +5544,9 @@
               "set_source_enabled",
               "set_source_name",
               "set_game_source",
-              "add_source",
               "import_script_source",
-              "get_script_source"
+              "get_script_source",
+              "set_source_update_interval"
             ],
             "parser_version": 2,
             "schedule_schema_version": 1,
@@ -5647,13 +5615,13 @@
             "set_source_enabled",
             "set_source_name",
             "set_game_source",
-            "add_source",
             "import_script_source",
             "get_script_source",
             "set_source_update_interval",
             "update_source",
             "match_games",
-            "rematch_game"
+            "rematch_game",
+            "remove_source"
           ],
           "protocol_version": 5,
           "sources": {
@@ -5668,13 +5636,13 @@
               "set_source_enabled",
               "set_source_name",
               "set_game_source",
-              "add_source",
               "import_script_source",
               "get_script_source",
               "set_source_update_interval",
               "update_source",
               "match_games",
-              "rematch_game"
+              "rematch_game",
+              "remove_source"
             ],
             "parser_version": 2,
             "schedule_schema_version": 1,
@@ -5739,13 +5707,13 @@
             "set_source_enabled",
             "set_source_name",
             "set_game_source",
-            "add_source",
             "import_script_source",
             "get_script_source",
             "set_source_update_interval",
             "update_source",
             "match_games",
-            "rematch_game"
+            "rematch_game",
+            "remove_source"
           ],
           "protocol_version": 5,
           "sources": {
@@ -5760,13 +5728,13 @@
               "set_source_enabled",
               "set_source_name",
               "set_game_source",
-              "add_source",
               "import_script_source",
               "get_script_source",
               "set_source_update_interval",
               "update_source",
               "match_games",
-              "rematch_game"
+              "rematch_game",
+              "remove_source"
             ],
             "parser_version": 2,
             "schedule_schema_version": 1,
@@ -5839,13 +5807,13 @@
             "set_source_enabled",
             "set_source_name",
             "set_game_source",
-            "add_source",
             "import_script_source",
             "get_script_source",
             "set_source_update_interval",
             "update_source",
             "match_games",
-            "rematch_game"
+            "rematch_game",
+            "remove_source"
           ],
           "protocol_version": 5,
           "sources": {
@@ -5860,13 +5828,13 @@
               "set_source_enabled",
               "set_source_name",
               "set_game_source",
-              "add_source",
               "import_script_source",
               "get_script_source",
               "set_source_update_interval",
               "update_source",
               "match_games",
-              "rematch_game"
+              "rematch_game",
+              "remove_source"
             ],
             "parser_version": 2,
             "schedule_schema_version": 1,

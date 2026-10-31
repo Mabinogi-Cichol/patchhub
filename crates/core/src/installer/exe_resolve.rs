@@ -232,24 +232,29 @@ mod tests {
 
         let mut sources = Sources::open(temp.path()).unwrap();
         let rule = sources
-            .registry_mut()
-            .add_source(&RawSourceRule {
-                id: "custom-exe".to_string(),
-                name: "Custom".to_string(),
-                adapter: "kagura_wordpress".to_string(),
-                role: None,
-                discovery_only: Some(true),
-                priority: None,
-                enabled: true,
-                pages: vec!["https://mirror.example/".to_string()],
-                page_hosts: vec!["mirror.example".to_string()],
-                download_hosts: Some(vec!["dl.mirror.example".to_string()]),
-                root_layout: None,
-                columns: None,
-                table_id: None,
-                language: None,
-                url: None,
-            })
+            .import_script_source(
+                &RawSourceRule {
+                    id: "custom-exe".to_string(),
+                    name: "Custom".to_string(),
+                    adapter: "lua".to_string(),
+                    role: None,
+                    discovery_only: Some(true),
+                    priority: None,
+                    enabled: true,
+                    pages: vec!["https://mirror.example/".to_string()],
+                    page_hosts: vec!["mirror.example".to_string()],
+                    download_hosts: Some(vec!["dl.mirror.example".to_string()]),
+                    root_layout: None,
+                    columns: None,
+                    table_id: None,
+                    language: None,
+                    url: None,
+                },
+                1,
+                "return {}",
+                false,
+            )
+            .map(|imported| imported.rule)
             .unwrap();
         assert_eq!(sources.registry().source_origin(&rule.id), Some("added"));
         candidate.parser_fingerprint = crate::sources::index::parser_fingerprint(&rule);

@@ -102,7 +102,7 @@ pub fn success_result(method: Method) -> Value {
         Method::SetGameSource => {
             json!({"settings_revision":1,"source_id":"fixture","subscribed":true})
         }
-        Method::AddSource | Method::ImportScriptSource => {
+        Method::ImportScriptSource => {
             json!({"settings_revision":1,"rule":rule()})
         }
         Method::GetScriptSource => {
@@ -114,6 +114,9 @@ pub fn success_result(method: Method) -> Value {
         Method::UpdateSource => source_update_result(),
         Method::MatchGames | Method::RematchGame => {
             json!({"settings_revision":1,"source_revisions":{"fixture":1},"results":[game_match()]})
+        }
+        Method::RemoveSource => {
+            json!({"settings_revision":1,"source_id":"fixture"})
         }
     }
 }
@@ -146,13 +149,13 @@ pub fn request(method: Method) -> Value {
             p["subscribed"] = json!(true);
             p["appid"] = json!(42);
         }
-        Method::AddSource => p["rule"] = rule(),
         Method::ImportScriptSource => {
             p["rule"] = rule();
             p["api_version"] = json!(1);
             p["code"] = json!("return {}");
         }
         Method::GetScriptSource => p["source_id"] = json!("fixture"),
+        Method::RemoveSource => p["source_id"] = json!("fixture"),
         Method::SetSourceUpdateInterval => {
             p["source_id"] = json!("fixture");
             p["interval_hours"] = json!(24);

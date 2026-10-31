@@ -45,15 +45,9 @@ const recover = callable<[], Transaction[]>("recover");
 const setSourceEnabled = callable<[string, boolean], SourceSubscription[]>("set_source_enabled");
 const setSourceName = callable<[string, string], SourceSubscription[]>("set_source_name");
 const setGameSource = callable<[number, string, boolean], { appid: number }>("set_game_source");
-const addSource = callable<[string], SourceSubscription[]>("add_source");
+const removeSourceRpc = callable<[string], SourceSubscription[]>("remove_source");
 const getScriptSource = callable<[string], ScriptSourceDocument>("get_script_source");
 const importScriptSource = callable<[string, number, string, boolean], AddSourceResult>("import_script_source");
-const sourceRuleExample = JSON.stringify({
-  id: "my-publisher", name: "发行商补丁站", adapter: "table_html", enabled: true,
-  pages: ["https://patches.vendor.example/patches/"], page_hosts: ["patches.vendor.example"],
-  download_hosts: ["downloads.vendor.example"], root_layout: "game_root", table_id: "patches",
-  columns: { title: 0, appid: 1, download: 2, date: 3, language: 4 },
-}, null, 2);
 const backupStatus = callable<[], BackupInventory>("backup_status");
 const cleanupBackups = callable<[], BackupCleanupResult>("cleanup_backups");
 const cacheStatus = callable<[], CacheInventory>("cache_status");
@@ -554,16 +548,19 @@ function GameManager({ item, seg, panel }: { item: Install; seg: string; panel?:
   return <SidebarNavigation {...navigation} />;
 }
 
-function SourceCard({ source, busy, expanded, onToggle, task, changeSources, onUpdateSource, onCancelTask, onInterval, onEditScript }: {
+function SourceCard({ source, busy, expanded, onToggle, task, changeSources, onUpdateSource, onCancelTask, onInterval, onEditScript, onRemoveSource }: {
   source: SourceSubscription; busy: boolean; expanded: boolean; onToggle: () => void; task?: SourceTaskSnapshot;
   changeSources: (action: () => Promise<SourceSubscription[]>, affectsMatching?: boolean) => void;
   onUpdateSource: (sourceId: string, force: boolean) => void;
   onCancelTask: (taskId: string) => void;
   onInterval: (sourceId: string, hours: number) => void;
-  onEditScript: (sourceId?: string) => void;
+  onEditScript: (sourceId?: string, readOnly?: boolean) => void;
+  onRemoveSource: (sourceId: string) => void;
 }) {
   const publisher = source.role !== "fallback_indexer";
+  const builtin = source.origin === "builtin";
   const [name, setName] = useState(source.name);
+  const [confirming, setConfirming] = useState(false);
   useEffect(() => setName(source.name), [source.name]);
   const summary = sourceCardSummary(source, task);
   const contentId = `patch-source-${encodeURIComponent(source.id)}`;
@@ -579,8 +576,21 @@ function SourceCard({ source, busy, expanded, onToggle, task, changeSources, onU
       <Row><Action disabled={busy || !name.trim() || name.trim() === source.name}
         onClick={() => changeSources(() => setSourceName(source.id, name), false)}>保存名称</Action></Row>
       {source.script && <>
-        <InfoRow label="脚本" below>Lua · API {source.script.api_version}</InfoRow>
-        <Row><Action disabled={busy} onClick={() => onEditScript(source.id)}>编辑脚本</Action></Row>
+        {builtin
+          ? <>
+            <Row><Status>内置来源随版本更新，脚本只读。</Status></Row>
+            <Row><Action disabled={busy} onClick={() => onEditScript(source.id, true)}>查看脚本</Action></Row>
+          </>
+          : <>
+            <Row><Action disabled={busy} onClick={() => onEditScript(source.id)}>编辑脚本</Action></Row>
+            {confirming
+              ? <Row>
+                <Status>删除后该来源不再参与更新和匹配；本机缓存文件保留但不再生效。</Status>
+                <Action disabled={busy} onClick={() => { setConfirming(false); onRemoveSource(source.id); }}>确认删除</Action>
+                <Action disabled={busy} onClick={() => setConfirming(false)}>取消</Action>
+              </Row>
+              : <Row><Action disabled={busy} onClick={() => setConfirming(true)}>删除来源</Action></Row>}
+          </>}
       </>}
       <InfoRow label="站点" below>{source.pages.join(" · ")}</InfoRow>
       {publisher && <>
@@ -603,25 +613,17 @@ function SourceCard({ source, busy, expanded, onToggle, task, changeSources, onU
   </div>;
 }
 
-function SourcesPage({ report, busy, tasks, expandedSources, onToggleSource, rule, setRule, changeSources, onUpdateSource, onCancelTask, onInterval, onMatchGames, onEditScript }: {
+function SourcesPage({ report, busy, tasks, expandedSources, onToggleSource, changeSources, onUpdateSource, onCancelTask, onInterval, onMatchGames, onEditScript, onRemoveSource }: {
   expandedSources: Record<string, boolean>; onToggleSource: (sourceId: string) => void;
-  report: ScanResult | null; busy: boolean; tasks: SourceTaskSnapshot[]; rule: string; setRule: (value: string) => void;
+  report: ScanResult | null; busy: boolean; tasks: SourceTaskSnapshot[];
   changeSources: (action: () => Promise<SourceSubscription[]>, affectsMatching?: boolean) => void;
   onUpdateSource: (sourceId: string, force: boolean) => void;
   onCancelTask: (taskId: string) => void;
   onInterval: (sourceId: string, hours: number) => void;
   onMatchGames: () => void;
-  onEditScript: (sourceId?: string) => void;
+  onEditScript: (sourceId?: string, readOnly?: boolean) => void;
+  onRemoveSource: (sourceId: string) => void;
 }) {
-  const [showExample, setShowExample] = useState(false);
-  async function copyExample() {
-    try {
-      await navigator.clipboard.writeText(sourceRuleExample);
-      session.setFeedback({ note: "示例已复制，请修改后添加", error: null });
-    } catch (error) {
-      session.setFeedback({ error: `复制失败：${String(error)}`, note: null });
-    }
-  }
   const sources = report?.sources ?? [];
   const publishers = sources.filter(source => source.role !== "fallback_indexer");
   const fallbacks = sources.filter(source => source.role === "fallback_indexer");
@@ -636,25 +638,16 @@ function SourcesPage({ report, busy, tasks, expandedSources, onToggleSource, rul
     <PanelSection title="发行商补丁源">
       {publishers.map(source => <SourceCard key={source.id} source={source} busy={busy}
         expanded={expandedSources[source.id] === true} onToggle={() => onToggleSource(source.id)} task={taskFor(source.id)}
-        changeSources={changeSources} onUpdateSource={onUpdateSource} onCancelTask={onCancelTask} onInterval={onInterval} onEditScript={onEditScript} />)}
+        changeSources={changeSources} onUpdateSource={onUpdateSource} onCancelTask={onCancelTask} onInterval={onInterval} onEditScript={onEditScript} onRemoveSource={onRemoveSource} />)}
       {!publishers.length && <Row><Status>尚未配置发行商补丁源。</Status></Row>}
     </PanelSection>
     <PanelSection title="补丁索引（补查来源）">
       {fallbacks.map(source => <SourceCard key={source.id} source={source} busy={busy}
         expanded={expandedSources[source.id] === true} onToggle={() => onToggleSource(source.id)}
-        changeSources={changeSources} onUpdateSource={onUpdateSource} onCancelTask={onCancelTask} onInterval={onInterval} onEditScript={onEditScript} />)}
+        changeSources={changeSources} onUpdateSource={onUpdateSource} onCancelTask={onCancelTask} onInterval={onInterval} onEditScript={onEditScript} onRemoveSource={onRemoveSource} />)}
       {!fallbacks.length && <Row><Status>尚未配置补查来源。</Status></Row>}
     </PanelSection>
     <PanelSection title="脚本来源"><Row><Action disabled={busy} onClick={() => onEditScript()}>导入脚本来源</Action></Row></PanelSection>
-    <PanelSection title="添加源"><Row><TextField label="源规则 JSON（高级）" value={rule} onChange={e => setRule(e.target.value)} /></Row>
-      <Row><Action disabled={busy || !rule.trim()} onClick={() => changeSources(() => addSource(rule))}>添加补丁源</Action>
-        <Action aria-expanded={showExample} aria-controls="source-rule-example" onClick={() => setShowExample(value => !value)}>{showExample ? "收起规则示例" : "查看规则示例"}</Action></Row>
-      {showExample && <div id="source-rule-example" role="group" aria-label="来源规则示例">
-        <Row><Status>适用于表格形式的补丁列表。请替换示例 ID、名称和域名，并按实际网页调整表格 ID 和列号。列号从 0 开始；title 和 download 必填，其他列可省略。</Status></Row>
-        <Row><pre style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere", margin: 0 }}>{sourceRuleExample}</pre></Row>
-        <Row><Action onClick={() => void copyExample()}>复制示例</Action></Row>
-      </div>}
-    </PanelSection>
   </div>;
 }
 
@@ -736,16 +729,16 @@ function GlobalSources() {
   const state = useSyncExternalStore(session.subscribe, session.getSnapshot);
   const { report, busy, sourceTasks } = state;
   const { error, note } = feedbackFor(state);
-  const [rule, setRule] = useState("");
-  const [editor, setEditor] = useState<{ document?: ScriptSourceDocument } | null>(null);
+  const [editor, setEditor] = useState<{ document?: ScriptSourceDocument; readOnly?: boolean } | null>(null);
   const editorSection = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
     if (editor) editorSection.current?.scrollIntoView({ block: "start" });
   }, [editor]);
-  async function editScript(sourceId?: string) {
+  async function editScript(sourceId?: string, readOnly = false) {
     if (session.getSnapshot().busy) return;
+    if (!sourceId) { setEditor({}); return; }
     session.update({ busy: "正在读取脚本…", busySince: Date.now() });
-    try { setEditor(sourceId ? { document: await getScriptSource(sourceId) } : {}); }
+    try { setEditor({ document: await getScriptSource(sourceId), readOnly }); }
     catch (failure) { session.setFeedback({ error: `读取脚本失败：${scriptSourceError(failure)}`, note: null }); }
     finally { session.update({ busy: null, busySince: null }); }
   }
@@ -769,14 +762,15 @@ function GlobalSources() {
     session.commitSources(sources);
     if (affectsMatching) session.invalidateDiscovery();
     return sources;
-  }, () => setRule(""));
+  }, () => {});
   return <><div>{busy && <Status>{busy}</Status>}{error && <Status warning>{error}</Status>}{note && <Status>{note}</Status>}</div>
-    {editor && <div ref={editorSection}><ScriptSourceEditor document={editor.document} onSave={saveScript} onClose={() => setEditor(null)} /></div>}
-    <SourcesPage report={report} busy={!!busy || !!editor} tasks={tasks} expandedSources={state.expandedSources} onToggleSource={session.toggleSourceExpanded} rule={rule} setRule={setRule} changeSources={changeSources}
+    {editor && <div ref={editorSection}><ScriptSourceEditor document={editor.document} readOnly={editor.readOnly} onSave={saveScript} onClose={() => setEditor(null)} /></div>}
+    <SourcesPage report={report} busy={!!busy || !!editor} tasks={tasks} expandedSources={state.expandedSources} onToggleSource={session.toggleSourceExpanded} changeSources={changeSources}
       onUpdateSource={(sourceId, force) => void session.updateSource(sourceId, force)}
       onCancelTask={taskId => void session.cancelSourceTask(taskId)}
       onInterval={(sourceId, hours) => void session.setSourceInterval(sourceId, hours)}
-      onMatchGames={() => void session.matchGames(null)} onEditScript={sourceId => void editScript(sourceId)} />
+      onMatchGames={() => void session.matchGames(null)} onEditScript={(sourceId, readOnly) => void editScript(sourceId, readOnly)}
+      onRemoveSource={sourceId => changeSources(() => removeSourceRpc(sourceId))} />
   </>;
 }
 

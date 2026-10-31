@@ -11,6 +11,10 @@ fn d_role() -> SourceRole {
     SourceRole::Publisher
 }
 
+fn default_adapter() -> String {
+    "lua".to_string()
+}
+
 fn d_priority() -> u16 {
     100
 }
@@ -41,6 +45,9 @@ pub enum RootLayout {
 pub struct RawSourceRule {
     pub id: String,
     pub name: String,
+    /// Author rules are Lua; bundled rules keep their historical adapter name to
+    /// locate the compiled script. Omitted means `lua`.
+    #[serde(default = "default_adapter")]
     pub adapter: String,
     #[serde(default)]
     #[ts(optional = nullable)]

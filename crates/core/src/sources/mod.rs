@@ -52,14 +52,6 @@ pub const SOURCE_DETAIL_SCHEMA_VERSION: u32 = 1;
 /// On-disk schema of `matches/<appid>.json` (p1-contract §1, §7.1).
 pub const GAME_MATCH_SCHEMA_VERSION: u32 = 1;
 
-pub const BUILTIN_ADAPTERS: &[&str] = &[
-    "patchmoe",
-    "table_html",
-    "kagura_wordpress",
-    "kagura_woocommerce",
-    "hgamer_html",
-];
-
 /// discovery.py internal adapter set; not a valid rule `adapter` value on its own.
 pub const DISCOVERY_ADAPTERS: &[&str] = &["kagura_wordpress", "kagura_woocommerce", "hgamer_html"];
 

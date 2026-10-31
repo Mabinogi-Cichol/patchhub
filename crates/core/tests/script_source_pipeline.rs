@@ -661,3 +661,21 @@ fn unreadable_parser_settings_are_reported_instead_of_authorizing_cached_candida
     assert!(summary.candidates.is_empty());
     assert!(!summary.diagnostics.is_empty());
 }
+
+#[test]
+fn removing_a_custom_source_retires_its_candidates_and_allows_matching_again() {
+    let (_temp, mut s, candidates) = seeded();
+    let revision = s.registry_mut().remove_source("custom").unwrap();
+    assert_eq!(revision, s.settings_revision());
+    assert!(!s
+        .registry()
+        .list_sources()
+        .iter()
+        .any(|source| source.rule.id == "custom"));
+    // Retained match records cannot authorize candidates of a deleted source.
+    assert_retired(&s, &candidates);
+    let summary = matching::game_match_summary(s.store(), 42);
+    assert!(summary.candidates.is_empty());
+    assert!(summary.diagnostics.is_empty());
+    assert_eq!(summary.status, GameMatchStatus::Pending);
+}

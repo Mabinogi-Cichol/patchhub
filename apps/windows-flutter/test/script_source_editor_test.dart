@@ -62,6 +62,63 @@ class ScriptClient extends FixtureClient {
   }
 }
 
+class SourceAdminClient extends FixtureClient {
+  SourceAdminClient(this.sources);
+  List<Map<String, dynamic>> sources;
+  final calls = <String>[];
+  final writes = <Map<String, Object?>>[];
+  @override
+  Future<Object?> call(
+    String method, [
+    Map<String, Object?> args = const {},
+  ]) async {
+    calls.add(method);
+    if (method == 'list_sources') return sources;
+    if (method == 'get_script_source') {
+      final source = sources.firstWhere((item) => item['id'] == args['source_id']);
+      return {
+        'rule': {
+          for (final entry in source.entries)
+            if (!['status', 'interval_hours', 'entry_count', 'complete', 'script', 'origin'].contains(entry.key))
+              entry.key: entry.value,
+        },
+        'api_version': 1,
+        'code': 'return {}',
+        'sha256': 'a' * 64,
+      };
+    }
+    if (method == 'remove_source') {
+      writes.add(Map.of(args));
+      sources = sources
+          .where((item) => item['id'] != args['source_id'])
+          .toList();
+      return {'settings_revision': 4, 'source_id': args['source_id']};
+    }
+    if (method == 'project_instances') {
+      return {'settings_revision': 4, 'instances': <Object?>[]};
+    }
+    return super.call(method, args);
+  }
+}
+
+Map<String, dynamic> adminSource(String id, String name, String origin) => {
+  'id': id,
+  'name': name,
+  'adapter': 'lua',
+  'enabled': true,
+  'role': 'publisher',
+  'origin': origin,
+  'status': 'not_refreshed',
+  'interval_hours': 0,
+  'entry_count': 0,
+  'complete': false,
+  'pages': <String>[],
+  'page_hosts': <String>[],
+  'download_hosts': <String>[],
+  'root_layout': 'game_root',
+  'script': {'api_version': 1, 'sha256': 'a' * 64},
+};
+
 void main() {
   test('UI examples match the author files', () {
     const root =
@@ -176,6 +233,63 @@ void main() {
       },
     );
   }
+
+  testWidgets('builtin sources are read-only and custom sources can be deleted', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(900, 760);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final client = SourceAdminClient([
+      adminSource('patchmoe', 'Shiravune', 'builtin'),
+      adminSource('mine', '我的脚本', 'added'),
+    ]);
+    final model = AppModel(client)..sources = client.sources;
+    addTearDown(model.dispose);
+    await tester.pumpWidget(
+      PatchHubApp(home: Scaffold(body: GlobalSourcesPage(model: model))),
+    );
+    await tester.tap(find.text('Shiravune'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('内置来源随版本更新'), findsOneWidget);
+    expect(find.text('编辑脚本'), findsNothing);
+    expect(find.text('删除来源'), findsNothing);
+    await tester.ensureVisible(find.text('查看脚本'));
+    await tester.tap(find.text('查看脚本'));
+    await tester.pumpAndSettle();
+    expect(find.text('查看脚本：patchmoe'), findsOneWidget);
+    expect(find.byType(FilledButton), findsNothing);
+    final code = tester.widget<TextField>(
+      find.byKey(const ValueKey('script-code')),
+    );
+    expect(code.enabled, isFalse);
+    expect(find.text('关闭'), findsOneWidget);
+    await tester.tap(find.text('关闭'));
+    await tester.pumpAndSettle();
+    expect(find.byType(ScriptSourceEditor), findsNothing);
+
+    await tester.ensureVisible(find.text('我的脚本'));
+    await tester.tap(find.text('我的脚本'));
+    await tester.pumpAndSettle();
+    expect(find.text('编辑脚本'), findsOneWidget);
+    await tester.ensureVisible(find.text('删除来源'));
+    await tester.tap(find.text('删除来源'));
+    await tester.pumpAndSettle();
+    expect(find.text('删除来源：我的脚本'), findsOneWidget);
+    await tester.tap(find.text('取消'));
+    await tester.pumpAndSettle();
+    expect(client.writes, isEmpty);
+    await tester.tap(find.text('删除来源'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('删除'));
+    await tester.pumpAndSettle();
+    expect(client.writes.single['source_id'], 'mine');
+    expect(client.calls, contains('remove_source'));
+    expect(find.text('我的脚本'), findsNothing);
+    expect(client.sources.map((source) => source['id']), ['patchmoe']);
+    expect(tester.takeException(), isNull);
+  });
 
   testWidgets(
     'page imports, refreshes projections, reads and explicitly replaces the same ID',

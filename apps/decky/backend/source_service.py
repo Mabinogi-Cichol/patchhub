@@ -139,8 +139,9 @@ class SourceService:
     async def set_name(self, source_id, name):
         return await self._call_sync("set_source_name", {"source_id": source_id, "name": name})
 
-    async def add_source(self, rule):
-        return await self._call_sync("add_source", {"rule": rule})
+    async def remove_source(self, source_id):
+        validate_id(source_id)
+        return await self._call_sync("remove_source", {"source_id": source_id})
 
     async def get_script_source(self, source_id):
         return await self.bridge.call_sync("get_script_source", {"source_id": source_id})

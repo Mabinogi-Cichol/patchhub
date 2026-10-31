@@ -14,8 +14,7 @@ use super::store::SourceStore;
 use super::validate;
 use super::{canonical, index};
 use super::{
-    invalid, Clock, Result, SystemClock, BUILTIN_ADAPTERS, GAME_MATCH_SCHEMA_VERSION,
-    SOURCE_INDEX_SCHEMA_VERSION,
+    invalid, Clock, Result, SystemClock, GAME_MATCH_SCHEMA_VERSION, SOURCE_INDEX_SCHEMA_VERSION,
 };
 use std::collections::{BTreeMap, HashSet};
 
@@ -258,7 +257,8 @@ impl SourceRegistry {
             .iter()
             .map(|rule| {
                 let index = self.index(&rule.id);
-                let status = self.status.get(&rule.id).filter(|status| {
+                let stored_status = self.status.get(&rule.id);
+                let status = stored_status.filter(|status| {
                     rule.script.is_none()
                         || index.is_some()
                         || matches!(
@@ -287,9 +287,12 @@ impl SourceRegistry {
                     .map(|status| status.checked_at)
                     .or_else(|| index.as_ref().map(|index| index.checked_at));
                 let interval_hours = intervals.get(&rule.id).copied().unwrap_or(0);
+                // Scheduling reads the real last attempt even when the display
+                // filter above withholds it: otherwise a first failed attempt
+                // would never be retried automatically.
                 let next_due_at = super::schedule::next_due_at(
                     interval_hours,
-                    status.map(|status| status.checked_at).unwrap_or(0),
+                    stored_status.map(|status| status.checked_at).unwrap_or(0),
                 );
                 let mut display_rule = rule.clone();
                 if let Some(name) = self.names.get(&rule.id) {
@@ -501,22 +504,6 @@ impl SourceRegistry {
         Ok(name.to_string())
     }
 
-    pub fn add_source(&mut self, raw: &RawSourceRule) -> Result<SourceRule> {
-        let rule = validate::validate_rule(raw)?;
-        if !BUILTIN_ADAPTERS.contains(&rule.adapter.as_str()) {
-            return Err(invalid("source_exists_or_adapter_unavailable"));
-        }
-        self.store.update_settings(|settings| {
-            if stored_rule(&self.builtins, settings, &rule.id).is_some() {
-                return Err(invalid("source_exists_or_adapter_unavailable"));
-            }
-            settings.added.push(rule.clone());
-            Ok(())
-        })?;
-        self.reload()?;
-        Ok(rule)
-    }
-
     /// Compile only, then atomically store rule, raw UTF-8 source and digest.
     pub fn import_script_source(
         &mut self,
@@ -534,30 +521,42 @@ impl SourceRegistry {
             api_version,
             code.as_bytes(),
         )?);
+        let rule_id = rule.id.clone();
         let revision = self.store.update_settings(|settings| {
-            let existing = stored_rule(&self.builtins, settings, &rule.id);
-            match (replace, existing) {
+            let user_rule = settings
+                .added
+                .iter()
+                .find(|rule| rule.id == rule_id)
+                .cloned();
+            match (replace, user_rule) {
                 (false, Some(_)) => return Err(invalid("script_source_exists")),
-                (true, None) => return Err(invalid("unknown_source")),
-                (true, Some(existing)) => {
-                    if existing.adapter != "lua"
-                        && super::builtin::code(&existing.adapter).is_none()
-                    {
-                        return Err(invalid("source_not_script"));
+                (false, None) => {
+                    if self.builtins.iter().any(|builtin| builtin.id == rule_id) {
+                        return Err(invalid("script_source_exists"));
                     }
+                }
+                (true, Some(existing)) => {
                     rule.enabled = settings
                         .enabled
-                        .get(&rule.id)
+                        .get(&rule_id)
                         .copied()
                         .unwrap_or(existing.enabled);
                 }
-                (false, None) => {}
+                (true, None) => {
+                    return Err(invalid(
+                        if self.builtins.iter().any(|builtin| builtin.id == rule_id) {
+                            "source_builtin_readonly"
+                        } else {
+                            "unknown_source"
+                        },
+                    ));
+                }
             }
-            settings.added.retain(|existing| existing.id != rule.id);
+            settings.added.retain(|existing| existing.id != rule_id);
             settings.added.push(rule.clone());
             settings
                 .script_sources
-                .insert(rule.id.clone(), code.to_string());
+                .insert(rule_id.clone(), code.to_string());
             Ok(settings.revision)
         })?;
         self.reload()?;
@@ -565,6 +564,34 @@ impl SourceRegistry {
             rule,
             settings_revision: revision,
         })
+    }
+
+    /// Delete a user-added source (a custom source or an older user override of
+    /// a builtin ID). Bundled sources are read-only and never removable; deleting
+    /// a user rule whose ID matches a builtin restores the bundled definition.
+    ///
+    /// Cached index/detail/match files are left on disk: they are bound to the
+    /// rule's parsing identity, so a re-added source with a different definition
+    /// cannot reuse them.
+    pub fn remove_source(&mut self, source_id: &str) -> Result<u64> {
+        let builtin = self.builtins.iter().any(|rule| rule.id == source_id);
+        let revision = self.store.update_settings(|settings| {
+            let Some(position) = settings.added.iter().position(|rule| rule.id == source_id) else {
+                return Err(invalid(if builtin {
+                    "source_builtin_readonly"
+                } else {
+                    "unknown_source"
+                }));
+            };
+            settings.added.remove(position);
+            settings.script_sources.remove(source_id);
+            settings.enabled.remove(source_id);
+            settings.names.remove(source_id);
+            settings.intervals.remove(source_id);
+            Ok(settings.revision)
+        })?;
+        self.reload()?;
+        Ok(revision)
     }
 
     pub fn get_script_source(&self, source_id: &str) -> Result<ScriptSourceDocument> {
@@ -908,12 +935,14 @@ mod tests {
         let mut registry = registry_at(temp.path());
         assert_eq!(registry.list_sources()[0].rule.name, "Shiravune");
         let mut raw: RawSourceRule = serde_json::from_value(serde_json::json!({
-            "id": "custom", "name": "Custom", "adapter": "patchmoe", "enabled": true,
-            "pages": ["https://www.patch.moe/"], "page_hosts": ["www.patch.moe"],
-            "download_hosts": ["download.patch.moe"], "root_layout": "game_root"
+            "id": "custom", "name": "Custom", "enabled": true,
+            "pages": ["https://example.com/"], "page_hosts": ["example.com"],
+            "download_hosts": ["download.example.com"], "root_layout": "game_root"
         }))
         .unwrap();
-        registry.add_source(&raw).unwrap();
+        registry
+            .import_script_source(&raw, 1, "return {}", false)
+            .unwrap();
         registry.set_enabled("patchmoe", false).unwrap();
         registry.set_game_source(42, "patchmoe", false).unwrap();
         registry.set_update_interval("patchmoe", 24).unwrap();
@@ -1099,6 +1128,38 @@ mod tests {
             updated_at: 1_000,
         };
         super::super::test_fixtures::save_match(registry, record).unwrap();
+    }
+
+    #[test]
+    fn script_source_first_failed_attempt_still_schedules_a_retry() {
+        let temp = tempfile::tempdir().unwrap();
+        {
+            let mut registry = registry_at(temp.path());
+            registry.set_update_interval("patchmoe", 6).unwrap();
+            registry
+                .store()
+                .save_status(
+                    "patchmoe",
+                    &SourceStatus {
+                        checked_at: 1_000,
+                        cached_at: None,
+                        entry_count: 0,
+                        code: "source_refresh_failed".to_string(),
+                    },
+                )
+                .unwrap();
+        }
+        let registry = registry_at(temp.path());
+        let summary = registry
+            .list_sources()
+            .into_iter()
+            .find(|source| source.rule.id == "patchmoe")
+            .unwrap();
+        // No published index yet: the attempt stays hidden from the card …
+        assert_eq!(summary.status, "not_refreshed");
+        assert_eq!(summary.checked_at, None);
+        // … but it still schedules the next automatic attempt.
+        assert_eq!(summary.next_due_at, Some(1_000 + 6 * 3_600));
     }
 
     #[test]

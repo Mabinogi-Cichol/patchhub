@@ -2,7 +2,6 @@
 const scriptRuleExample = r'''{
   "id": "my-script-publisher",
   "name": "脚本发行商示例",
-  "adapter": "lua",
   "enabled": true,
   "role": "publisher",
   "pages": [

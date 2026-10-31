@@ -166,7 +166,7 @@ fn large_script_roundtrips_across_processes_and_explicit_replace_preserves_setti
 }
 
 #[test]
-fn read_missing_state_is_read_only_and_builtin_script_can_be_overridden() {
+fn read_missing_state_is_read_only_and_builtin_scripts_are_read_only() {
     let temp = tempfile::tempdir().unwrap();
     let absent = temp.path().join("absent");
     let response = call(&absent, "get_script_source", json!({"source_id":"missing"}));
@@ -194,11 +194,59 @@ fn read_missing_state_is_read_only_and_builtin_script_can_be_overridden() {
         "import_script_source",
         json!({"rule":builtin,"api_version":1,"code":"return {}","replace":true}),
     );
-    assert_eq!(response["ok"], true, "{response}");
-    let reopened = call(
+    assert_eq!(response["error"]["code"], "source_builtin_readonly");
+    assert_eq!(
+        call(
+            temp.path(),
+            "remove_source",
+            json!({"source_id":"patchmoe"})
+        )["error"]["code"],
+        "source_builtin_readonly"
+    );
+    assert!(call(
         temp.path(),
         "get_script_source",
-        json!({"source_id":"patchmoe"}),
+        json!({"source_id":"patchmoe"})
+    )["result"]["code"]
+        .as_str()
+        .unwrap()
+        .contains("form_zh_cn"));
+
+    // A user source can be created, deleted and re-created in the same state.
+    assert_eq!(
+        call(
+            temp.path(),
+            "import_script_source",
+            json!({"rule":rule(),"api_version":1,"code":"return {}"})
+        )["ok"],
+        true
     );
-    assert_eq!(reopened["result"]["code"], "return {}");
+    let removed = call(temp.path(), "remove_source", json!({"source_id":"custom"}));
+    assert_eq!(removed["ok"], true, "{removed}");
+    assert!(removed["result"]["settings_revision"].is_number());
+    let sources = call(temp.path(), "list_sources", json!({}));
+    assert!(
+        !sources["result"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|source| source["id"] == "custom"),
+        "{sources}"
+    );
+    assert_eq!(
+        call(temp.path(), "remove_source", json!({"source_id":"custom"}))["error"]["code"],
+        "unknown_source"
+    );
+    assert_eq!(
+        call(&absent, "remove_source", json!({"source_id":"missing"}))["error"]["code"],
+        "unknown_source"
+    );
+    assert_eq!(
+        call(
+            temp.path(),
+            "import_script_source",
+            json!({"rule":rule(),"api_version":1,"code":"return {}"})
+        )["ok"],
+        true
+    );
 }

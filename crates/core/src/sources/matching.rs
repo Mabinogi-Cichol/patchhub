@@ -1509,7 +1509,14 @@ pub(crate) fn current_record(
             .iter()
             .find(|rule| rule.id == *source_id && rule.script.is_some())
         else {
-            return true;
+            // A deleted user source cannot authorize the candidates it produced;
+            // entries from the retired Rust publishers keep their old semantics.
+            let keep = source
+                .candidates
+                .iter()
+                .all(|candidate| candidate.parser_fingerprint.is_none());
+            stale |= !keep;
+            return keep;
         };
         let index = index(rule);
         let parser_current = rule.role == SourceRole::Publisher

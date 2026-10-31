@@ -162,11 +162,14 @@ class Plugin:
         await self.sources.set_name(source_id, name)
         return self.sources.list_sources()
 
-    async def add_source(self, rule_json):
+    async def remove_source(self, source_id):
         self._require_idle()
-        if not isinstance(rule_json, str) or len(rule_json) > 32768:
-            raise ValueError("invalid_source_rule")
-        await self.sources.add_source(json.loads(rule_json))
+        if not isinstance(source_id, str):
+            raise ValueError("invalid_request")
+        try:
+            await self.sources.remove_source(source_id)
+        except CoreError as error:
+            raise RuntimeError(f"{error.code}: {error.detail}" if error.detail else error.code) from error
         return self.sources.list_sources()
 
     async def get_script_source(self, source_id):

@@ -185,7 +185,6 @@ class SourceServiceTests(unittest.IsolatedAsyncioTestCase):
         updated_list = lambda _params: [{**SUMMARIES[0], "enabled": False}, SUMMARIES[1]]
         self.bridge.sync_results["set_source_enabled"] = {"settings_revision": 6,
                                                           "source_id": "patchmoe", "enabled": False}
-        self.bridge.sync_results["add_source"] = {"settings_revision": 6, "rule": {"id": "custom"}}
         self.bridge.sync_results["set_game_source"] = {"settings_revision": 6,
                                                        "source_id": "patchmoe", "subscribed": False}
         self.bridge.sync_results["list_sources"] = updated_list
@@ -194,8 +193,12 @@ class SourceServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(self.service.list_sources()[0]["enabled"])
         self.assertIn(("set_source_enabled", {"source_id": "patchmoe", "enabled": False}),
                       self.bridge.sync_calls)
-        await self.service.add_source({"id": "custom"})
-        self.assertIn(("add_source", {"rule": {"id": "custom"}}), self.bridge.sync_calls)
+        self.bridge.sync_results["remove_source"] = {"settings_revision": 7, "source_id": "custom"}
+        await self.service.remove_source("custom")
+        self.assertIn(("remove_source", {"source_id": "custom"}), self.bridge.sync_calls)
+        self.assertEqual(self.service.settings_revision, 7)
+        with self.assertRaises(ValueError):
+            await self.service.remove_source("")
         await self.service.set_game_source(42, "patchmoe", False)
         self.assertIn(("set_game_source", {"appid": 42, "source_id": "patchmoe", "subscribed": False}),
                       self.bridge.sync_calls)

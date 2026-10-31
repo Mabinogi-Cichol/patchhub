@@ -98,22 +98,6 @@
       ],
       "type": "string"
     },
-    "AddSourceParams": {
-      "additionalProperties": false,
-      "properties": {
-        "host": {
-          "$ref": "#/$defs/HostInputs"
-        },
-        "rule": {
-          "$ref": "#/$defs/RawSourceRule"
-        }
-      },
-      "required": [
-        "host",
-        "rule"
-      ],
-      "type": "object"
-    },
     "AddSourceResult": {
       "additionalProperties": false,
       "properties": {
@@ -2070,13 +2054,13 @@
         "set_source_enabled",
         "set_source_name",
         "set_game_source",
-        "add_source",
         "import_script_source",
         "get_script_source",
         "set_source_update_interval",
         "update_source",
         "match_games",
-        "rematch_game"
+        "rematch_game",
+        "remove_source"
       ],
       "type": "string"
     },
@@ -2147,6 +2131,9 @@
         },
         {
           "$ref": "#/$defs/SetSourceIntervalResult"
+        },
+        {
+          "$ref": "#/$defs/SourceRemovedResult"
         },
         {
           "$ref": "#/$defs/SourceUpdateResult"
@@ -2558,6 +2545,8 @@
       "description": "Deserialization intermediate: loose field types so `validate_rule` can return\nthe exact Python error codes.",
       "properties": {
         "adapter": {
+          "default": "lua",
+          "description": "Author rules are Lua; bundled rules keep their historical adapter name to\nlocate the compiled script. Omitted means `lua`.",
           "type": "string"
         },
         "columns": {
@@ -2656,7 +2645,6 @@
       "required": [
         "id",
         "name",
-        "adapter",
         "enabled",
         "pages",
         "page_hosts"
@@ -2744,6 +2732,22 @@
       },
       "required": [
         "host"
+      ],
+      "type": "object"
+    },
+    "RemoveSourceParams": {
+      "additionalProperties": false,
+      "properties": {
+        "host": {
+          "$ref": "#/$defs/HostInputs"
+        },
+        "source_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "host",
+        "source_id"
       ],
       "type": "object"
     },
@@ -3161,30 +3165,6 @@
           "additionalProperties": false,
           "properties": {
             "method": {
-              "const": "add_source"
-            },
-            "params": {
-              "$ref": "#/$defs/AddSourceParams"
-            },
-            "protocol_version": {
-              "const": 5
-            },
-            "request_id": {
-              "type": "string"
-            }
-          },
-          "required": [
-            "protocol_version",
-            "request_id",
-            "method",
-            "params"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "method": {
               "const": "import_script_source"
             },
             "params": {
@@ -3309,6 +3289,30 @@
             },
             "params": {
               "$ref": "#/$defs/RematchGameParams"
+            },
+            "protocol_version": {
+              "const": 5
+            },
+            "request_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "protocol_version",
+            "request_id",
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "method": {
+              "const": "remove_source"
+            },
+            "params": {
+              "$ref": "#/$defs/RemoveSourceParams"
             },
             "protocol_version": {
               "const": 5
@@ -4056,6 +4060,24 @@
         "source_progress"
       ],
       "type": "string"
+    },
+    "SourceRemovedResult": {
+      "additionalProperties": false,
+      "properties": {
+        "settings_revision": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "source_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "settings_revision",
+        "source_id"
+      ],
+      "type": "object"
     },
     "SourceRole": {
       "enum": [
