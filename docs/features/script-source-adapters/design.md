@@ -1,6 +1,6 @@
 # 可导入脚本来源适配器设计
 
-状态：**施工中，P0–P6 已实现并完成本地自动化，四个内置来源及通用表格全部脚本化；P7 发行包和约定范围实机验收待实施**。施工拆分见 [implementation-plan.md](implementation-plan.md)，实际进度与验证见 [progress.md](progress.md)。已验证的运行时决策与接入合同见 [p0-contract.md](p0-contract.md)，全部来源的迁移清单见 [migration-matrix.md](migration-matrix.md)。
+状态：**施工中，P0–P6 已实现并完成本地自动化，四个内置来源及通用表格全部脚本化；P7 本地发行与 Deck 部署/界面抽样通过，Windows 原生与实体手柄验收待执行**。施工拆分见 [implementation-plan.md](implementation-plan.md)，实际进度与验证见 [progress.md](progress.md)。已验证的运行时决策与接入合同见 [p0-contract.md](p0-contract.md)，全部来源的迁移清单见 [migration-matrix.md](migration-matrix.md)。
 
 ## 1. 目标与范围
 
@@ -188,3 +188,10 @@ P0 已验证双平台原型构建、宿主回调作用域、DOM 生命周期、�
 - [mlua 项目](https://github.com/mlua-rs/mlua)：Lua 绑定、构建与平台支持说明。
 - [mlua Lua API](https://docs.rs/mlua/0.12.2/mlua/struct.Lua.html)：`new_with`、hook、受作用域约束的宿主回调；实际依赖版本在 P0 锁定。
 - [mlua 标准库枚举](https://docs.rs/mlua/0.12.2/mlua/struct.StdLib.html)：按需开放库，不能把 `ALL_SAFE` 等同于无文件/进程能力。
+
+
+## P7 发行收口
+
+Lua 5.4.9 与 mlua 使用静态 vendored 构建。两端发行包携带 `licenses/Lua-5.4-LICENSE.txt` 与 `licenses/mlua-MIT.txt`，SBOM 的 `lua-src/mlua/mlua-sys` 条目关联正文路径/摘要，`lua-src` 标注实际 Lua 5.4.9，区别于 crate 的 551.0.2 版本。安装器和自更新清单纳入正文文件，不要求外部解释器。
+
+P7 本地 Release 构建、真实包内源码/摘要、全目录网络与合成 ZIP/EXE 安装证据，以及设备身份差异和待验收项，统一记录在[施工记录](progress.md)，不将构建通过等同于实机完成。

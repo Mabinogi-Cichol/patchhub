@@ -1,0 +1,12 @@
+{
+  "id": "my-product-pages",
+  "name": "自选产品详情页示例",
+  "adapter": "lua",
+  "enabled": true,
+  "role": "publisher",
+  "discovery_only": true,
+  "pages": ["https://www.kaguragames.com/product/sacrifice-sanctuary-the-ritual-maidens-life-with-monsters-patch/"],
+  "page_hosts": ["www.kaguragames.com"],
+  "download_hosts": ["kaguraserver.com", "kaguragamespatch.com"],
+  "root_layout": null
+}

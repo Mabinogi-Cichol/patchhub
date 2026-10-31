@@ -4,11 +4,11 @@
 
 ## 当前状态
 
-**施工中。P0–P6 已完成核心链路、双端脚本管理、四个内置来源及通用表格脚本迁移，旧 Rust 网站模块已退役；本地自动化与逐源只读网络抽样通过。P7 发行包和约定范围实机验收待实施。**
+**施工中。P0–P6 已完成核心链路、双端脚本管理、四个内置来源及通用表格脚本迁移，旧 Rust 网站模块已退役；本地自动化与逐源只读网络抽样通过。P7 本地发行核验与 Deck 部署、RPC/界面抽样已完成；Windows 原生界面和实体手柄/软键盘验收仍待执行。**
 
 - 调研基线：`main@cb06188`，2026-10-30。
 - 文档开发分支：`feature/script-source-adapters`。
-- 用户此前要求开始施工，并逐阶段要求提交和继续施工。P0 代码/文档为 `138c0c6` / `57dd65c`，P1 为 `901e592` / `5abf92a`，P2 为 `4c97d0e` / `ca581e9`，P3 为 `03cb2ae` / `45a2a85`；P4 代码/文档为 `20f921d` / `7550815`。随后用户要求“提交并开始 P6”：P5 文档/代码已提交为 `2009704` / `66ac372`，P6 代码已提交为 `c39fd62`，本文件随独立文档提交保存本阶段证据。未推送、合并、部署或操作设备，未安装真实补丁。
+- 用户此前要求开始施工，并逐阶段要求提交和继续施工。P0 代码/文档为 `138c0c6` / `57dd65c`，P1 为 `901e592` / `5abf92a`，P2 为 `4c97d0e` / `ca581e9`，P3 为 `03cb2ae` / `45a2a85`；P4 代码/文档为 `20f921d` / `7550815`。随后用户要求“提交并开始 P6”：P5 文档/代码已提交为 `2009704` / `66ac372`，P6 代码已提交为 `c39fd62`，本文件随独立文档提交保存本阶段证据。截至 P6 提交时未推送、合并或操作设备；随后 P7 的授权部署见后文，未安装真实游戏补丁。
 - 已有来源名称编辑/示例功能属于此前工作，不是脚本适配器功能的实现或验收证据。
 
 ## 阶段状态
@@ -22,7 +22,7 @@
 | P4 | 脚本补查与多源聚合 | 已完成 | 两平台 11 项专项、完整范围回归及最终边界专项通过；Windows workspace lint/契约通过 | 离线 HTTP 夹具与真实核心读取/投影，无新增真实网站或设备验收 |
 | P5 | 协议与两端导入/编辑 | 已完成 | 两平台协议/CLI、跨语言、双端表单和真实核心往返通过 | Windows 桌面安装版、Decky 游戏模式输入/软键盘待 P7；无新增真实站点验收 |
 | P6 | 全部内置来源/通用表格脚本迁移及旧 Rust 路径退役 | 已完成 | Windows 668 / Linux 679 passed，各 9 ignored；双端往返、lint/构建/契约通过 | 四源只读元数据抽样通过；非全量目录、下载或设备验收 |
-| P7 | 全面验收、发行包与约定范围实机验证 | 待实施 | 待验证 | 待验证 |
+| P7 | 全面验收、发行包与约定范围实机验证 | 施工中 | 本地 Release 构建、双端 ZIP/NSIS、包内核验、隔离 ZIP/EXE 安装已通过 | Kagura 完整目录与自定义样例通过；Deck 已迁移部署并通过 RPC、元数据更新/取消和界面抽样；Windows 原生/实体手柄待验收 |
 
 ## 2026-10-30：调研与计划
 
@@ -342,3 +342,92 @@ Kagura 真实验证仅为详情抽样，列表分页、多入口、分类、DLC 
 ### 下一阶段
 
 P6 已完成，代码提交为 `c39fd62`；文档按仓库规范独立提交。P7：正式构建/发行资源与许可证核验、干净环境启动、自定义导入样例真实网络、全量目录与约定范围设备/手柄验收。实际游戏安装、设备部署和发布按后续用户授权执行；未执行项保持待验证。
+
+## 2026-10-31：P7 开始发行与全面验收
+
+- 用户要求“提交并开始 P7”。P6 拆分提交为 `c39fd62`（代码）与 `270ca13`（文档），开始本阶段前工作区干净；未推送/合并。
+- 沿用 P6 已通过的 Windows 668 / Linux 679 项回归及双端/契约/lint 证据；未修改对应实现，不重复完整门禁。P7 新增验证针对 Release 优化构建、发行包资源/依赖、干净状态、自定义样例真实网络与全目录行为。
+- 本轮先完成可在本地隔离状态执行的验收。设备部署、真实游戏安装和实体手柄操作尚未执行，不能将本地构建或自动化写成设备通过。
+
+### P7 本地构建、打包与依赖结果
+
+- Windows/Linux Release 核心和 worker 均以 `--release --locked` 构建通过。Windows 使用 `scripts/build-windows-flutter.ps1 -SkipRust -Preview` 构建实际 Release UI；这里 `Preview` 只跳过已通过的分析/测试门禁，生成的仍是 Release 包，未将其称为安装版界面验收。Decky 前端构建与 `package:plugin` 通过，Linux ELF 与 runtime manifest 相符。
+- 发现原打包流程只记录 Lua/mlua 的 MIT 类型，未携带正文。补入 Lua 5.4.9 原始许可声明、mlua/rlua 及 lua-src wrapper 的 MIT 正文；Windows build/ZIP/NSIS 和 Decky 插件均携带相同正文，更新清单包含相应文件。SBOM 增加许可证路径与 SHA-256，并区分实际内嵌 Lua 5.4.9 与 `lua-src 551.0.2` crate 版本；没有增加运行时依赖。
+- `cargo metadata --locked` 与当前 Flutter pub deps/SDK 元数据生成 CycloneDX SBOM，共 518 个组件（含开发/目标平台依赖，不是实际可达性分析）。Lua/mlua 三个相关条目许可与正文摘要齐全；沿用的 Flutter 收集器仍将 6 个 SDK 包的独立许可元数据标为待核对，并指向包内 `NOTICES.Z`，不能写成全量许可证审核已完成。
+- 生成 Windows portable ZIP、NSIS 和 Decky ZIP，本地未发布、未打 Tag、未推送。该候选版本仍为项目当前 `0.4.0`，不因本地验收自行修改版本。
+
+| 本地候选 | 字节数 | SHA-256 |
+| --- | ---: | --- |
+| `patchhub-windows-portable.zip` | 19896578 | `0efc0bfdfb17ab0be0fe0c78cd8a1f0ec3aba17a44a02a764fc0708ac22cbf6b` |
+| `patchhub-decky.zip` | 8272487 | `f634c5f58cdd55aed87ac3cade201aaaaf024ecfbec6e93c34ba60d1074ce822` |
+| `patchhub-windows-x64-setup.exe` | 15002357 | `66db71ff85ac2c2c4314b24e0d1b2d6be87d22a09cbf52c78e11146d3fe6e7b7` |
+
+- 从上述两个实际 ZIP 解包，在临时工作目录、空 `PATH` 和不存在的状态目录启动各自核心，读取四源完整源码与 SHA-256，均与 Git Lua 资源逐字一致；读取没有创建状态。随后显式覆盖内置脚本为顶层无限循环，保存/读取成功且没有执行该循环。两包许可证正文与源文件相同；没有外部 Lua 可执行程序/DLL/SO。Linux `ldd` 只列系统 libc/libm/libgcc/loader；Windows `dumpbin /DEPENDENTS` 无 Lua/Python DLL。此为本地包内核心验证，不是 Deck SteamOS 实机兼容性结论。
+- 包装回归 11 项、SBOM 回归 1 项、Flutter SBOM 回归 1 项通过；新增拒绝 Decky 过期许可证正文与 Lua 运行时标注断言。版本同步检查和差异格式检查通过。
+
+### P7 真实网络与隔离安装
+
+- 实际 Windows Release `serve-task update_source`：Kagura 国内完整索引 **472** 条，海外完整索引 **229** 条，均 `complete=true/source_refreshed`。这里完整指来源脚本完成其配置入口/分页并通过核心验证，不声称穷尽网站未公开或未链接的页面。
+- 新增独立[产品详情页作者示例](examples/product-pages/source.json)与[源码](examples/product-pages/adapter.lua)，通过相同 Release RPC 导入、更新发布 1 条完整配置范围索引、跨进程读取。该脚本只采集显式配置的详情页，不把单页示例当成全目录。占位表格示例继续是合成离线输入；复杂内置四源的其他真实详情/补查证据沿用 P6，无重复无意义请求。
+- 新增 `installer_service::script_source_update_to_isolated_zip_and_exe_install`：真实 Lua 生产分派提取合成列表/详情 → 发布索引 → 匹配 → 解析当前选择 → 公共 `install` 写入口；分别用合成 ZIP 和仓库 SF golden EXE，在临时 Steam/游戏/状态目录安装。EXE 使用本轮实际 Release worker，预先解析不写游戏文件，安装最终 `committed`，原有 inert `engine.exe` 保持，ZIP payload 字节核对、EXE payload 长度核对。
+- Windows 与 Linux 上该专项各 1 项通过（每项包含 ZIP/EXE 两种格式）；新用例依赖显式 `SF_WORKER_TEST_BIN`，默认忽略，不自动操作任何真实游戏。对应 clippy `-D warnings` 通过；没有修改生产安装逻辑，因此未重复 P6 完整回归。
+- 日志与候选保存在忽略目录 `.artifacts/p7-*`，例如 `p7-network-results.json`、`p7-package-probe-{windows,linux}.log`、`p7-script-install-{windows,linux}.log`、`p7-packaging.log`、`p7-nsis.log`。
+
+### P7 Deck 设备准备与当前边界
+
+- 用户已明确授权“Decky 部署与验收”，不含真实游戏补丁安装。按 [decky-deploy-verify](../../../.agents/skills/decky-deploy-verify/SKILL.md) 核对当前 Devkit 配对与独立可信 known_hosts，SSH 和 Loader/CEF 可用；未绕过主机密钥校验。
+- 实际目标仍安装旧品牌“Steam 黄油补丁助手 0.3.0”，目录 `steam-patch-manager`，状态也为旧名称；不存在当前 `patchhub` 插件目录。活动任务 43 项均为终态，0 活动。没有把旧终态失败/取消记录清掉，也没有操作游戏。
+- 技能明确“旧品牌不自动迁移”。因此停止正式插件替换，另向用户确认备份后迁移状态、安装 PatchHub 并移除旧插件的范围；普通部署授权未被自行扩大为品牌迁移。
+- 已完成首份旧插件/状态备份及回滚 ZIP，清单 492 个文件（插件 25、状态 467），并取回本地核对哈希。证据与配对路径放在忽略目录 `.artifacts/script-source-adapters-p7-deck-20261031/`，不提交设备地址、凭证、真实库路径或原始任务数据。插件备份 SHA-256 `ab277fd0d605e9b055dc35fa7c8bf15e2393bc1ef9cf763ffddcac5bac742fe9`，状态备份 `cbebf205eca525403b360fc4e2355136da7b541aad5a18fb8e81c710674c747d`。
+- 正式替换、后端重载、运行时 RPC/HTTP bundle 对齐、游戏模式画面、实体手柄及 Windows 原生界面尚未验收，P7 保持施工中。当前 SSH 隧道只用于本轮 CEF，结束后关闭；远端唯一暂存目录在证据取回并核验后按技能清理，不能删除唯一备份。
+
+### P7 本地过度设计复核
+
+沿 `270ca13` 后差异核对打包、许可证/SBOM 和新增合成安装路径：正文缺失是实际发行问题，直接复用现有拷贝、清单和回归，没有新许可证平台或运行时配置。作者示例明确自己的页面范围，无隐藏数量/时间限制；安装验收仅增加显式依赖 Release worker 的隔离用例，没有放宽生产权限或修改身份门槛。未发现需修改的过度设计项；设备收尾仍待实际证据。
+
+- 本轮等待品牌迁移确认期间，已把 Loader/本插件设置、回滚 ZIP 和清单一并取回本地。再次核对两份完整备份 SHA 后，仅清理本轮远端暂存目录，原插件/原状态未修改；本轮 SSH 隧道关闭。继续部署前需重新检查实时活动任务和原状态，不将此前基线永久当成当前事实。
+
+
+### 2026-10-31：授权直接迁移并完成 Deck 部署与抽样验收
+
+- 用户明确回复“**不备份直接迁移**”。按本次指示未新增备份；上一轮已完成的本地备份保持原样，不重做也不覆盖。复核 Devkit 当前配对、Loader v3.3.0、0 活动任务和目标目录不存在后执行迁移。
+- 通过 Loader 正常卸载旧品牌插件以停止后端，再将旧状态及本插件设置目录直接重命名为 `patchhub`，未复制出额外备份。移动前后 **467 个状态文件逐文件哈希相等**，owner 仍为设备用户。安装后来源设置自动由 schema 2 升为 3；实际存在的 `enabled/added/games/intervals` 字段与迁移前一致，分别覆盖启用、已有规则、逐游戏订阅和间隔。旧版没有名称覆盖字段，名称保留仍以 P6 对应回归为依据。
+- 使用 Loader v3.3.0 当前的[安装/卸载入口](https://github.com/SteamDeckHomebrew/decky-loader/blob/v3.3.0/backend/decky_loader/utilities.py)与[安装请求语义](https://github.com/SteamDeckHomebrew/decky-loader/blob/v3.3.0/backend/decky_loader/browser.py)，逐次核对事件返回的名称、版本、请求 ID、SHA 和类型后确认。未裸拷正式文件、未手工 kill 后端、未修改 SteamOS 系统分区或其他插件。
+- 初次迁移候选为前文 `f634c5…`，随后实机发现并修复两个界面问题，重新经 Loader 安装最终候选。最终 Decky ZIP **8273287 字节**，SHA-256 **`d2cfd637040f9f6c0df78d3f750141a2006326ad348a010f1b99910af58ef131`**；最终正式目录的 **28 个文件全部匹配**，core/worker 均可执行。前文候选哈希保留为历史，当前 `.artifacts/patchhub-decky.zip` 对应此最终包；Windows ZIP/NSIS 未改变。
+- 当前只存在 **1 个 PatchHub 0.4.0** 实例，旧品牌实例与旧插件目录已移除。Loader 重装曾删除本插件排序成员，已仅按原相邻位置将 PatchHub 放回 Storage Cleaner 后，其他插件及 frozen/hidden/disabled 成员关系保持。未全量覆盖旧 Loader 设置。
+
+### P7 实机发现及修复
+
+1. 来源页向下滚动后点击“编辑脚本”，新编辑器插入页顶但仍停留原滚动位置；实测规则输入框 top 为约 **-1065 CSS px**。在 `GlobalSources` 的编辑器容器挂载后用一次 layout effect 定位，没有定时器/轮询。重新挂载最终路由后 top 为约 **399 CSS px**，编辑器标题和首个输入在 854×534 CSS 视口内。重新部署后仍打开的旧路由会保留旧函数；通过退出再进入路由验证了实际新组件，未只凭 HTTP 新字节宣称修复生效。
+2. 实际语法错误从核心带回来源和 Lua 行号，但 Loader 的异常对象 `String(error)` 只有“Python Exception”，正文放在 `pythonTraceback`。新增脚本管理边界的短格式化函数，取当前 Loader 包装的异常正文，保留完整多行 Lua 诊断，不向用户堆栈式展示 Loader 内部帧。读取、保存失败和保存后刷新失败复用同一处理；没有改变核心错误码或 RPC 形状。新增回归使用真实错误形态，并覆盖正文内再次出现 `Exception:` 时不截断。
+
+修复后 **Decky 89 项测试、typecheck、构建/打包通过**。新增改动只涉及 Decky 展示层，沿用未变核心/Windows/契约的 P7/P6 验证，不重复完整 Rust 回归。按 UI/UX 技能核对可见性及错误提示，并按过度设计技能复核实际执行路径：仅新增有实机依据的容器定位和错误正文提取，无额外兼容引擎、重试、配额或状态平台。
+
+### P7 最终设备证据
+
+- 正式文件、本地构建与设备 HTTP `dist/index.js` 字节一致：**149567 字节**、SHA-256 **`2a1aa9d3c74a90f5d1a7031dc8a81eeabda940ea3e6b6a23d52434b83d3e6524`**；当前已挂载新组件，脚本编辑行为与新实现相符。
+- 真实 `scan()`（当前插件为无参数签名）返回 **27 个安装实例**，`list_transactions` 为 **25** 条，历史 installer task **43** 项均终态。两个扫描诊断均为 `library_unavailable`，未将不可用库隐藏为成功；没有调用游戏安装/卸载/回滚接口。
+- 四个内置脚本经实际 RPC 读取，在设备浏览器内重新计算源码 SHA，与核心描述及本地源码相同；API 1，作者规则为 `adapter=lua`。来源、间隔及开关保持。
+- 真实 QAM 的 PatchHub 主界面、页底设置/扫描入口、全屏来源卡片和编辑器均截图检查；完整 SHA 可换行。无横向溢出。截图是设备 CDP/DOM 操作证据，不代表实体手柄或 Steam+X 键盘输入已验收。
+- 在实际编辑器输入 `return {` 并提交，显示 `script_source_syntax_error`、`source=patchmoe` 和 `source/patchmoe.lua:1`；草稿保留，来源设置文件 SHA 仍为 `8cc2a9efa05b6a13f83d60bfe99387c5513d09cc519859357398476ce35418b5`，没有留下有效用户覆盖。随后关闭测试草稿。
+- 实际设备运行 Shiravune Lua 元数据更新：经历 `running/index`，最终 **completed / complete=true / 165 条 / revision 2**。随后实际启动 Kagura 国内元数据更新并取消，最终 **cancelled / task_cancelled / running=false**。仅请求网页元数据，未下载补丁，未改变自动更新间隔。源码缓存因新解析身份需更新的提示符合 P6 设计。
+- 重装通过 Loader 正常停止/启动后端，最终 RPC 和用户策略对照均通过。期间一次 Loader 自身出现“5 秒停止后 SIGKILL”的告警，未由本任务手工终止；后续日志可见卸载完成、0.1 秒停止与重新加载，未形成遗留活动任务。保留日志，不将这次过程描述为全程无告警。
+- 最终证据、截图、迁移摘要与相关 Loader 日志位于忽略目录 `.artifacts/script-source-adapters-p7-deck-20261031/`。未把配对凭据、设备地址、真实库路径或原始任务数据加入 Git。
+
+### 当前剩余验收
+
+P7 保持施工中：Windows 原生桌面界面的实际导入/取消/重启，Deck 实体手柄焦点/返回及 Steam+X 输入、设备界面的有效自定义导入保存，仍待相应实际验证。真实游戏补丁安装和游戏内生效不在本轮授权范围。未发布或合并；P7 代码提交与本轮推送授权见末节。
+
+- 本轮结束前已取回最终部署/迁移摘要、策略对照与相关日志；核验正式 28 文件后仅清理本轮远端唯一迁移暂存目录。恢复原 Steam 导航、关闭菜单/草稿、移除本轮临时监听与调试变量，并关闭 SSH 隧道。新插件和迁移状态保持运行，Loader service 为 active。
+
+
+### 2026-10-31：按用户要求拆分提交并推送功能分支
+
+用户明确要求“提交 GIT 并推送”。沿用本 session 已完成且实现未再变化的验证，不重复运行测试；提交前核对工作区与暂存区并执行差异格式检查。同一 `index.tsx` 中的两个修复按改动块分别暂存。
+
+- `4386c12 build(sources): 补齐 Lua 发行许可证与依赖清单`
+- `2c05444 test(sources): 验证脚本候选的隔离 ZIP 与 EXE 安装`
+- `d35f7d2 fix(decky): 打开脚本编辑器时定位到可见区域`
+- `dfd8d37 fix(decky): 保留脚本 RPC 的完整 Lua 错误正文`
+
+本文、设计/索引及作者示例另作独立文档提交。推送目标为 `origin/feature/script-source-adapters`，包含此前尚未推送的阶段提交；未要求合并 main 或发布。提交/推送不改变上文仍待实际验收的事项，P7 不标为全部完成。
