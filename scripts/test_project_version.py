@@ -153,7 +153,8 @@ class ProjectVersionTests(unittest.TestCase):
     @unittest.skipUnless(os.name == 'nt', 'Windows preview entrypoint requires PowerShell and cmd')
     def test_windows_preview_syncs_before_build_and_refreshes_old_metadata(self):
         for relative in ('scripts/build-windows-flutter.ps1', 'scripts/update_manifest.py',
-                         'apps/windows-flutter/.flutter-version', 'scripts/licenses/sfextract-MIT.txt'):
+                         'apps/windows-flutter/.flutter-version', 'scripts/licenses/sfextract-MIT.txt',
+                         'scripts/licenses/Lua-5.4-LICENSE.txt', 'scripts/licenses/mlua-MIT.txt'):
             target = self.root / relative
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(versions.ROOT / relative, target)
@@ -191,13 +192,15 @@ class ProjectVersionTests(unittest.TestCase):
             shutil.copyfile(versions.ROOT / relative, target)
         app = self.root / 'apps/decky'
         for relative in ('main.py', 'plugin.json', 'README.md', 'dist/index.js',
-                         'backend/bridge.py', 'backend/source_service.py', 'backend/tasks.py',
+                         'backend/bridge.py', 'backend/source_service.py', 'backend/source_browser.py', 'backend/tasks.py',
                          'backend/plugin_settings.py', 'backend/state_host.py',
                          'backend/protocol_validation.py', 'backend/app_update.py'):
             target = app / relative
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text('fixture', encoding='utf-8')
         for relative in ('LICENSE', 'scripts/install-decky.py', 'scripts/licenses/sfextract-MIT.txt',
+                         'scripts/licenses/Lua-5.4-LICENSE.txt', 'scripts/licenses/mlua-MIT.txt',
+                         'apps/windows-flutter/assets/shiravune-browser.js',
                          'packages/contracts/generated/protocol.py', 'packages/contracts/generated/v5.schema.json',
                          'catalog/catalog.json', 'catalog/signed-catalog.json', 'catalog/trust-keys.json'):
             target = self.root / relative
