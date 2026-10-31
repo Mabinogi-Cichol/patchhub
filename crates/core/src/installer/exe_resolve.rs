@@ -15,10 +15,13 @@ pub fn exe_selection_id(candidate: &SourceCandidate) -> Option<String> {
     if !candidate.mirrors.iter().any(|m| m.format == "exe") {
         return None;
     }
-    let binding = json!({"source_id":candidate.source_id,"source_record_id":candidate.source_record_id,
+    let mut binding = json!({"source_id":candidate.source_id,"source_record_id":candidate.source_record_id,
         "game_appid":appid,"languages":candidate.languages,"variant":candidate.variant,
         "version_identity":candidate.version_identity,"source_page":candidate.source_page,
         "requires_dlc":candidate.requires_dlc,"excludes_dlc":candidate.excludes_dlc,"mirrors":candidate.mirrors});
+    if let Some(parser) = &candidate.parser_fingerprint {
+        binding["parser_fingerprint"] = json!(parser);
+    }
     Some(format!(
         "exe-selection-{}-{appid}",
         &canonical::canonical_sha256(&binding)[..24]
@@ -121,9 +124,9 @@ mod tests {
     /// equivalent of the old per-game discovery record.
     fn save_match(sources: &Sources, appid: u32, candidate: SourceCandidate) {
         let source_id = candidate.source_id.clone();
-        sources
-            .store()
-            .save_match(&GameMatchRecord {
+        crate::sources::test_fixtures::save_match(
+            sources.registry(),
+            GameMatchRecord {
                 schema_version: 1,
                 appid,
                 name: "Game".to_string(),
@@ -143,8 +146,9 @@ mod tests {
                 )]),
                 fallback: None,
                 updated_at: 100,
-            })
-            .unwrap();
+            },
+        )
+        .unwrap();
     }
 
     #[test]
@@ -228,26 +232,32 @@ mod tests {
 
         let mut sources = Sources::open(temp.path()).unwrap();
         let rule = sources
-            .registry_mut()
-            .add_source(&RawSourceRule {
-                id: "custom-exe".to_string(),
-                name: "Custom".to_string(),
-                adapter: "kagura_wordpress".to_string(),
-                role: None,
-                discovery_only: Some(true),
-                priority: None,
-                enabled: true,
-                pages: vec!["https://mirror.example/".to_string()],
-                page_hosts: vec!["mirror.example".to_string()],
-                download_hosts: Some(vec!["dl.mirror.example".to_string()]),
-                root_layout: None,
-                columns: None,
-                table_id: None,
-                language: None,
-                url: None,
-            })
+            .import_script_source(
+                &RawSourceRule {
+                    id: "custom-exe".to_string(),
+                    name: "Custom".to_string(),
+                    adapter: "lua".to_string(),
+                    role: None,
+                    discovery_only: Some(true),
+                    priority: None,
+                    enabled: true,
+                    pages: vec!["https://mirror.example/".to_string()],
+                    page_hosts: vec!["mirror.example".to_string()],
+                    download_hosts: Some(vec!["dl.mirror.example".to_string()]),
+                    root_layout: None,
+                    columns: None,
+                    table_id: None,
+                    language: None,
+                    url: None,
+                },
+                1,
+                "return {}",
+                false,
+            )
+            .map(|imported| imported.rule)
             .unwrap();
         assert_eq!(sources.registry().source_origin(&rule.id), Some("added"));
+        candidate.parser_fingerprint = crate::sources::index::parser_fingerprint(&rule);
         save_match(&sources, appid, candidate.clone());
 
         let mut query = super::super::orchestrator::tests::query();

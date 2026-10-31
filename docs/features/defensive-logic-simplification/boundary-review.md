@@ -6,7 +6,7 @@
 
 ## 1. 来源本地数据：删除任意字节门槛
 
-定位：[mod.rs](../../../crates/core/src/sources/mod.rs)、[store.rs](../../../crates/core/src/sources/store.rs) `read_bounded/write_json/write_atomic`、[registry.rs](../../../crates/core/src/sources/registry.rs) `commit`、[validate.rs](../../../crates/core/src/sources/validate.rs) `validate_candidates`、[kagura.rs](../../../crates/core/src/sources/adapters/kagura.rs)。
+定位：[mod.rs](../../../crates/core/src/sources/mod.rs)、[store.rs](../../../crates/core/src/sources/store.rs) `read_bounded/write_json/write_atomic`、[registry.rs](../../../crates/core/src/sources/registry.rs) `commit`、[validate.rs](../../../crates/core/src/sources/validate.rs) `validate_candidates`、[kagura.rs](https://github.com/Mabinogi-Cichol/patchhub/blob/cb06188/crates/core/src/sources/adapters/kagura.rs)。
 
 - 512 KiB候选/发现结果：canonical编码和serde序列化已完成才测长；不是防止这些分配发生的机制。commit超限先删除attempt.index再重编码，仍超限则丢弃此次持久化。这是完整结果被拒绝/降级，而非格式不合法。
 - 4 MiB缓存/索引/设置：读端在完整JSON解析前测长，写端在完整序列化后拒绝。JSON结构及原子写入没有该固定容量要求；没有查到这些具体阈值对应真实瓶颈的证据。

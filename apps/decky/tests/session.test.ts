@@ -51,6 +51,31 @@ function fakeApi(queue: SourceTaskSnapshot[][], overrides: Partial<SourceTaskApi
   return { api, calls };
 }
 
+test("script save removes previous source results before a pending projection or failed refresh", async () => {
+  const row = game("a");
+  row.discovery = match();
+  row.patches = [{ source_id: "patchmoe", release_id: "old-dynamic" }, { release_id: "signed" }] as Install["patches"];
+  const initial = { ...rowReport(), installs: [row] };
+  let fail = false;
+  const { api } = fakeApi([], { projectInstances: async () => {
+    if (fail) throw Error("projection failed");
+    return { settings_revision: 10, instances: [{ ...game("a"), discovery: { status: "pending", candidates: [], diagnostics: [] } }] };
+  } });
+  const session = createManagerSession(async () => ({ report: initial, transactions: [] }), api);
+  await session.ensureSnapshot();
+  session.commitScriptSource([], 10);
+  assert.deepEqual(session.getSnapshot().report!.installs[0].patches.map(p => p.release_id), ["signed"]);
+  await session.projectRows(["a"]);
+  assert.equal(session.getSnapshot().report!.installs[0].discovery!.candidates.length, 0);
+  assert.ok(!session.getSnapshot().report!.installs[0].patches.some(p => p.release_id === "old-dynamic"));
+  session.acceptSnapshot({ report: initial, transactions: [] });
+  session.commitScriptSource([], 11); fail = true;
+  await assert.rejects(session.projectRows(["a"]), /projection failed/);
+  assert.equal(session.getSnapshot().report!.settings_revision, 11);
+  assert.equal(session.getSnapshot().report!.installs[0].discovery!.candidates.length, 0);
+  assert.deepEqual(session.getSnapshot().report!.installs[0].patches.map(p => p.release_id), ["signed"]);
+});
+
 test("menu remounts and filter changes reuse the snapshot; explicit refresh scans again", async () => {
   let scans = 0;
   const session = createManagerSession(async () => {

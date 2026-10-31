@@ -8,7 +8,19 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::Duration;
 
-use patchhub_core::sources::adapters::kagura::resolve_page;
+fn resolve_page(
+    rule: &SourceRule,
+    _legacy_name: &str,
+    page: &str,
+    ctx: &mut RequestContext,
+) -> std::io::Result<PageFact> {
+    patchhub_core::sources::adapters::source_adapter(rule, None)?.resolve_page(
+        rule,
+        page,
+        ctx,
+        &Arc::new(AtomicBool::new(false)),
+    )
+}
 use patchhub_core::sources::http::{FakeFetcher, FetchResponse, RequestContext};
 use patchhub_core::sources::model::*;
 use patchhub_core::sources::store::SourceStore;
@@ -51,13 +63,14 @@ fn run_update(
         rule,
         force,
         &mut ctx,
-        &AtomicBool::new(false),
+        &Arc::new(AtomicBool::new(false)),
         |_| {},
     )
 }
 
 fn patchmoe_rule() -> SourceRule {
     SourceRule {
+        script: patchhub_core::sources::builtin::descriptor("patchmoe"),
         id: "patchmoe".to_string(),
         name: "patch.moe".to_string(),
         adapter: "patchmoe".to_string(),
@@ -103,6 +116,7 @@ fn push_patchmoe_full(fake: &FakeFetcher, html: &str, etag: Option<&str>) {
 
 fn table_rule() -> SourceRule {
     SourceRule {
+        script: patchhub_core::sources::builtin::descriptor("table_html"),
         id: "table-source".to_string(),
         name: "Table".to_string(),
         adapter: "table_html".to_string(),
@@ -142,6 +156,7 @@ fn table_html(rows: &[String]) -> String {
 
 fn kagura_cn_rule() -> SourceRule {
     SourceRule {
+        script: patchhub_core::sources::builtin::descriptor("kagura_wordpress"),
         id: "kagura-cn".to_string(),
         name: "Kagura CN".to_string(),
         adapter: "kagura_wordpress".to_string(),
@@ -162,6 +177,7 @@ fn kagura_cn_rule() -> SourceRule {
 
 fn kagura_en_rule() -> SourceRule {
     SourceRule {
+        script: patchhub_core::sources::builtin::descriptor("kagura_woocommerce"),
         id: "kagura-en".to_string(),
         name: "Kagura EN".to_string(),
         adapter: "kagura_woocommerce".to_string(),
@@ -182,6 +198,7 @@ fn kagura_en_rule() -> SourceRule {
 
 fn hgamer_rule() -> SourceRule {
     SourceRule {
+        script: patchhub_core::sources::builtin::descriptor("hgamer_html"),
         id: "hgamer".to_string(),
         name: "HGamer".to_string(),
         adapter: "hgamer_html".to_string(),
@@ -217,7 +234,7 @@ fn patchmoe_publishes_complete_index_with_entry_mapping() {
         &rule,
         true,
         &mut ctx,
-        &AtomicBool::new(false),
+        &Arc::new(AtomicBool::new(false)),
         |_| progress_calls += 1,
     )
     .unwrap();
@@ -337,13 +354,13 @@ fn patchmoe_transport_failure_preserves_the_old_snapshot() {
 }
 
 #[test]
-fn patchmoe_cancel_before_start_makes_no_request_and_saves_progress() {
+fn patchmoe_cancel_before_start_makes_no_request_or_new_progress() {
     let temp = tempfile::tempdir().unwrap();
     let store = SourceStore::open(temp.path()).unwrap();
     let rule = patchmoe_rule();
     let fake = Arc::new(FakeFetcher::new());
     let mut ctx = context(&fake);
-    let cancel = AtomicBool::new(true);
+    let cancel = Arc::new(AtomicBool::new(true));
     let error = update_source(&store, &rule, true, &mut ctx, &cancel, |_| {}).unwrap_err();
     assert_eq!(error.to_string(), "task_cancelled");
     assert_eq!(
@@ -352,9 +369,8 @@ fn patchmoe_cancel_before_start_makes_no_request_and_saves_progress() {
         "cancellation must not start a request"
     );
 
-    let progress = store.load_index_progress("patchmoe").unwrap().unwrap();
-    assert!(!progress.complete);
-    assert_eq!(progress.pending, vec!["https://www.patch.moe/".to_string()]);
+    // P2 contract: no returned facts means no invented VM-local checkpoint.
+    assert!(store.load_index_progress("patchmoe").unwrap().is_none());
     assert!(store.load_index("patchmoe").unwrap().is_none());
 }
 
@@ -464,7 +480,7 @@ fn table_validation_failure_returns_an_error_and_keeps_the_snapshot() {
         "https://example.com/list1",
     ));
     let error = run_update(&store, &rule, true, &bad).unwrap_err();
-    assert_eq!(error.to_string(), "invalid_source_appid");
+    assert!(error.to_string().contains("invalid_source_appid"));
 
     assert_eq!(
         fs::read(store.paths().index("table-source")).unwrap(),
@@ -609,7 +625,7 @@ fn kagura_cn_cancel_saves_progress_and_resume_publishes() {
     // keeps the already collected entries and the remaining page queue.
     let cancelled = Arc::new(FakeFetcher::new());
     let mut ctx = context(&cancelled);
-    let cancel = AtomicBool::new(true);
+    let cancel = Arc::new(AtomicBool::new(true));
     let error = update_source(&store, &rule, true, &mut ctx, &cancel, |_| {}).unwrap_err();
     assert_eq!(error.to_string(), "task_cancelled");
     assert_eq!(cancelled.call_count(), 0);
@@ -922,7 +938,7 @@ fn resolve_page_rejects_pages_outside_the_rule_hosts() {
     let mut ctx = context(&fake);
     let error =
         resolve_page(&rule, "kagura_cn_html", "https://evil.example/x/", &mut ctx).unwrap_err();
-    assert_eq!(error.to_string(), "invalid_discovery_url");
+    assert_eq!(error.to_string(), "invalid_source_url");
     assert_eq!(fake.call_count(), 0);
 }
 

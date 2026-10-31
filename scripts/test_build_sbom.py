@@ -46,9 +46,13 @@ checksum = "{cargo_checksum}"
                 'node_modules/locked-npm': {'version': '4.5.6', 'license': 'Apache-2.0',
                     'dev': True, 'integrity': 'sha512-' + base64.b64encode(npm_digest).decode()},
             }}), encoding='utf-8')
+            for name in ('Lua-5.4-LICENSE.txt', 'mlua-MIT.txt'):
+                (licenses / name).write_text(name, encoding='utf-8')
             metadata = root / 'metadata.json'
             metadata.write_text(json.dumps({'packages': [{'name': 'locked-rust', 'version': '1.2.3',
-                'source': 'registry+https://example.test', 'license': 'MIT'}]}), encoding='utf-8')
+                'source': 'registry+https://example.test', 'license': 'MIT'},
+                {'name': 'lua-src', 'version': '551.0.2', 'license': 'MIT'},
+                {'name': 'mlua', 'version': '0.12.2', 'license': 'MIT'}]}), encoding='utf-8')
 
             result = subprocess.run([sys.executable, str(scripts / 'build-sbom.py'), str(metadata)],
                                     cwd=root, capture_output=True, text=True, check=True,
@@ -57,10 +61,15 @@ checksum = "{cargo_checksum}"
             inventory = json.loads((root / '.artifacts/dependencies.cdx.json').read_text(encoding='utf-8'))
             components = {entry['name']: entry for entry in inventory['components']}
             self.assertEqual(inventory['metadata']['component']['version'], '9.8.7-rc.1')
-            self.assertEqual(summary['components'], 3)
-            self.assertEqual(set(components), {'locked-rust', 'locked-npm', 'patchhub-rust-installer'})
+            self.assertEqual(summary['components'], 5)
+            self.assertEqual(set(components), {'locked-rust', 'locked-npm', 'patchhub-rust-installer', 'lua-src', 'mlua'})
             self.assertEqual(components['locked-rust']['hashes'][0]['content'], 'ab' * 32)
             self.assertEqual(components['locked-npm']['hashes'][0]['content'], npm_digest.hex())
+            lua = {p['name']: p['value'] for p in components['lua-src']['properties']}
+            self.assertEqual(lua['patchhub:license-path'], 'licenses/Lua-5.4-LICENSE.txt')
+            self.assertEqual(lua['patchhub:license-sha256'], hashlib.sha256(b'Lua-5.4-LICENSE.txt').hexdigest())
+            self.assertIn('Lua 5.4.9', lua['patchhub:bundled-runtime'])
+            self.assertIn('statically embedded', lua['patchhub:bundled-runtime'])
             sf95 = components['patchhub-rust-installer']
             self.assertEqual(sf95['version'], '1')
             self.assertEqual(sf95['licenses'], [{'expression': 'MIT'}])

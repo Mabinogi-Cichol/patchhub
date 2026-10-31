@@ -50,18 +50,18 @@ fn error_with_detail(id: Option<&str>, code: &str, detail: Option<&str>) -> Valu
 }
 
 fn respond(bytes: &[u8]) -> Value {
-    let cancel = AtomicBool::new(false);
+    let cancel = Arc::new(AtomicBool::new(false));
     respond_with_channel(bytes, &cancel, false)
 }
 
 /// `serve` and `serve-task` share this parser/executor; only `serve-task` may
 /// dispatch the task-channel methods (`install_patch` and the streaming source
 /// tasks).
-fn respond_with(bytes: &[u8], cancel: &AtomicBool) -> Value {
+fn respond_with(bytes: &[u8], cancel: &Arc<AtomicBool>) -> Value {
     respond_with_channel(bytes, cancel, true)
 }
 
-fn respond_with_channel(bytes: &[u8], cancel: &AtomicBool, task_channel: bool) -> Value {
+fn respond_with_channel(bytes: &[u8], cancel: &Arc<AtomicBool>, task_channel: bool) -> Value {
     let request = match parse_request(bytes, task_channel) {
         Ok(r) => r,
         Err(e) => return error_with_detail(e.request_id.as_deref(), &e.code, e.detail.as_deref()),
@@ -162,10 +162,10 @@ pub(crate) fn run_task(
                     emit(cursor.event(progress));
                 }
             },
-            || respond_with(bytes, cancel.as_ref()),
+            || respond_with(bytes, &cancel),
         );
     }
-    let cancel_ref = AtomicBool::new(false);
+    let cancel_ref = Arc::new(AtomicBool::new(false));
     respond_with(bytes, &cancel_ref)
 }
 
@@ -186,7 +186,7 @@ fn stream_sources_task(
     // Install the operation scope so `operation::check` inside the source
     // fetchers observes this stream task's cancel flag.
     let response = patchhub_core::operation::with_cancel(cancel.clone(), || {
-        runtime::execute_streaming(&method, params, cancel.as_ref(), &mut |payload| {
+        runtime::execute_streaming(&method, params, cancel, &mut |payload| {
             let mut object = match payload {
                 Value::Object(map) => map,
                 other => {
@@ -219,7 +219,7 @@ Usage: patchhub-core scan [--steam-root PATH]... [--catalog PATH] [--platform wi
        patchhub-core serve  (versioned JSON-lines on stdin/stdout)\n\
 Installation requires a signed catalog. Close the game and pause Steam updates before installing.
 Methods: get_capabilities scan project_instances preview install_patch list_transactions recover discard_plan cleanup_cache cache_status backup_status cleanup_backups.
-Sources: list_sources list_game_sources set_source_enabled set_source_name set_game_source add_source set_source_update_interval update_source match_games rematch_game.
+Sources: list_sources list_game_sources set_source_enabled set_source_name set_game_source remove_source set_source_update_interval update_source match_games rematch_game.
 Options: --signed-catalog --trust-keys --state-dir --archive --operation install|reinstall --request-id ID.
 Source options: --source-id ID --name TEXT --appid N --enabled true|false --subscribed true|false --rule JSON --interval-hours N --name-hint TEXT --force --force-details --instance-id ID --match-instance ID.
 Maintenance: keygen PRIVATE PUBLIC KEY_ID; sign-catalog CATALOG PRIVATE KEY_ID OUTPUT LIFETIME_SECONDS; schema OUTPUT.";
@@ -479,11 +479,13 @@ mod tests {
         "set_source_enabled",
         "set_source_name",
         "set_game_source",
-        "add_source",
+        "import_script_source",
+        "get_script_source",
         "set_source_update_interval",
         "update_source",
         "match_games",
         "rematch_game",
+        "remove_source",
     ];
 
     #[test]
@@ -492,7 +494,7 @@ mod tests {
         expected.sort_unstable();
         let mut actual = runtime::METHODS.to_vec();
         actual.sort_unstable();
-        assert_eq!(runtime::METHODS.len(), 22);
+        assert_eq!(runtime::METHODS.len(), 24);
         assert_eq!(actual, expected);
 
         let capabilities = respond(
@@ -504,7 +506,7 @@ mod tests {
             .iter()
             .map(|method| method.as_str().unwrap())
             .collect();
-        assert_eq!(methods.len(), 22);
+        assert_eq!(methods.len(), 24);
         let mut sorted = methods.clone();
         sorted.sort_unstable();
         assert_eq!(sorted, expected);
@@ -532,7 +534,7 @@ mod tests {
         assert_eq!(result["sources"]["schedule_schema_version"], 1);
         assert_eq!(result["sources"]["parser_version"], 2);
         assert_eq!(result["sources"]["encoding_version"], 1);
-        assert_eq!(result["sources"]["methods"].as_array().unwrap().len(), 10);
+        assert_eq!(result["sources"]["methods"].as_array().unwrap().len(), 12);
     }
 
     #[test]

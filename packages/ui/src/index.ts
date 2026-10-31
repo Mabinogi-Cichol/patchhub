@@ -96,6 +96,10 @@ export function reason(code: string): string {
     source_not_modified: "官网内容未变化",
     source_offline_cached: "查询失败，使用上次成功查询的缓存",
     source_refresh_failed: "补丁源查询失败，暂无可用缓存",
+    source_browser_verification_required: "站点请求验证尚未完成",
+    source_age_verification_required: "站点要求本人年龄确认，自动更新未完成",
+    source_browser_load_failed: "来源网页加载失败",
+    source_list_missing: "未取得来源补丁列表",
     source_partial: "仅完成部分来源查询",
     cached: "已缓存，等待实时查询",
     not_refreshed: "尚未查询",
@@ -456,6 +460,7 @@ export function sourcePhaseLabel(phase: string | null | undefined): string {
   const labels: Record<string, string> = {
     inventory: "扫描游戏库", index: "更新来源索引", details: "获取补丁详情",
     matched: "匹配游戏", fallback: "补查补丁索引",
+      browser_verification: "等待站点请求验证", browser_collect: "读取来源列表",
   };
   return labels[phase ?? ""] ?? "准备中";
 }

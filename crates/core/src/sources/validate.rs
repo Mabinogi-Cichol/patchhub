@@ -322,10 +322,7 @@ fn valid_adapter_id(value: &str) -> bool {
 }
 
 fn valid_table_id(value: &str) -> bool {
-    (1..=64).contains(&value.len())
-        && value
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+    !value.is_empty() && !value.chars().any(|c| c.is_ascii_whitespace())
 }
 
 /// Port of `sources.py::_validate_rule`, preserving the Python check order and
@@ -351,7 +348,9 @@ pub fn validate_rule(raw: &RawSourceRule) -> io::Result<SourceRule> {
         return Err(invalid("invalid_source_rule"));
     }
     if discovery_only {
-        if raw.root_layout.is_some() || !DISCOVERY_ADAPTERS.contains(&raw.adapter.as_str()) {
+        if raw.root_layout.is_some()
+            || !(DISCOVERY_ADAPTERS.contains(&raw.adapter.as_str()) || raw.adapter == "lua")
+        {
             return Err(invalid("invalid_source_rule"));
         }
     } else if raw.root_layout.as_deref() != Some("game_root") || role != SourceRole::Publisher {
@@ -361,17 +360,17 @@ pub fn validate_rule(raw: &RawSourceRule) -> io::Result<SourceRule> {
     if role == SourceRole::FallbackIndexer && (!discovery_only || !download_hosts.is_empty()) {
         return Err(invalid("invalid_source_rule"));
     }
-    if raw.pages.is_empty() || raw.pages.len() > 5 {
+    if raw.pages.is_empty() {
         return Err(invalid("invalid_source_pages"));
     }
-    if raw.page_hosts.is_empty() || raw.page_hosts.len() > 8 {
+    if raw.page_hosts.is_empty() {
         return Err(invalid("invalid_source_hosts"));
     }
     for value in &raw.page_hosts {
         host(value)?;
     }
     let minimum_download_hosts = if discovery_only { 0 } else { 1 };
-    if download_hosts.len() < minimum_download_hosts || download_hosts.len() > 8 {
+    if download_hosts.len() < minimum_download_hosts {
         return Err(invalid("invalid_source_hosts"));
     }
     for value in &download_hosts {
@@ -381,15 +380,7 @@ pub fn validate_rule(raw: &RawSourceRule) -> io::Result<SourceRule> {
         allowed_url(page, &raw.page_hosts, false)?;
     }
     if raw.adapter == "table_html" {
-        let Some(columns) = &raw.columns else {
-            return Err(invalid("invalid_source_columns"));
-        };
-        if columns.title > 20
-            || columns.download > 20
-            || columns.date.is_some_and(|v| v > 20)
-            || columns.language.is_some_and(|v| v > 20)
-            || columns.appid.is_some_and(|v| v > 20)
-        {
+        if raw.columns.is_none() {
             return Err(invalid("invalid_source_columns"));
         }
         if let Some(table_id) = &raw.table_id {
@@ -398,7 +389,7 @@ pub fn validate_rule(raw: &RawSourceRule) -> io::Result<SourceRule> {
             }
         }
     }
-    Ok(SourceRule {
+    let mut rule = SourceRule {
         id: raw.id.clone(),
         name: raw.name.clone(),
         adapter: raw.adapter.clone(),
@@ -418,7 +409,10 @@ pub fn validate_rule(raw: &RawSourceRule) -> io::Result<SourceRule> {
         table_id: raw.table_id.clone(),
         language: raw.language.clone(),
         url: raw.url.clone(),
-    })
+        script: None,
+    };
+    super::builtin::bind(&mut rule);
+    Ok(rule)
 }
 
 /// Port of `sources.py::_validate_entries`.
@@ -452,7 +446,7 @@ pub fn validate_entries(
     Ok(clean)
 }
 
-fn normalize_date(raw: &str) -> io::Result<String> {
+pub(crate) fn normalize_date(raw: &str) -> io::Result<String> {
     let stripped = raw.trim();
     let value = if stripped.to_uppercase() == "COMING SOON" {
         String::from("COMING SOON")
@@ -777,10 +771,7 @@ mod tests {
         );
         let mut bad = raw_rule();
         bad.pages = (0..6).map(|i| format!("https://example.com/{i}")).collect();
-        assert_eq!(
-            validate_rule(&bad).unwrap_err().to_string(),
-            "invalid_source_pages"
-        );
+        assert_eq!(validate_rule(&bad).unwrap().pages.len(), 6);
         let mut bad = raw_rule();
         bad.page_hosts = vec![];
         assert_eq!(
@@ -821,10 +812,7 @@ mod tests {
             language: None,
             appid: None,
         });
-        assert_eq!(
-            validate_rule(&table).unwrap_err().to_string(),
-            "invalid_source_columns"
-        );
+        assert!(validate_rule(&table).is_ok());
 
         table.columns = Some(Columns {
             title: 0,
@@ -834,6 +822,8 @@ mod tests {
             appid: None,
         });
         table.table_id = Some("p".repeat(65));
+        assert!(validate_rule(&table).is_ok());
+        table.table_id = Some("contains space".into());
         assert_eq!(
             validate_rule(&table).unwrap_err().to_string(),
             "invalid_table_id"

@@ -8,6 +8,8 @@
 //! appStore (design §1).
 
 pub mod adapters;
+pub mod browser;
+pub mod builtin;
 pub mod canonical;
 pub mod http;
 pub mod identity;
@@ -17,8 +19,11 @@ pub mod matching;
 pub mod model;
 pub mod registry;
 pub mod schedule;
+pub mod script;
 pub mod snapshot;
 pub mod store;
+#[cfg(test)]
+pub(crate) mod test_fixtures;
 pub mod update;
 pub mod validate;
 
@@ -38,20 +43,14 @@ pub const QUERY_VERSION: u32 = 1;
 pub const SOURCES_ENCODING_VERSION: u32 = 1;
 pub const DEFAULT_RULES_SCHEMA: u32 = 2;
 pub const STORE_SCHEMA_VERSION: u32 = 2;
+/// Settings only: the index/detail/match namespace remains schema 2.
+pub const SOURCE_SETTINGS_SCHEMA_VERSION: u32 = 3;
 /// On-disk schema of `index/<source_id>.json` (p1-contract §1, §5).
 pub const SOURCE_INDEX_SCHEMA_VERSION: u32 = 1;
 /// On-disk schema of `details/<source_id>/<key>.json` (p1-contract §1, §6).
 pub const SOURCE_DETAIL_SCHEMA_VERSION: u32 = 1;
 /// On-disk schema of `matches/<appid>.json` (p1-contract §1, §7.1).
 pub const GAME_MATCH_SCHEMA_VERSION: u32 = 1;
-
-pub const BUILTIN_ADAPTERS: &[&str] = &[
-    "patchmoe",
-    "table_html",
-    "kagura_wordpress",
-    "kagura_woocommerce",
-    "hgamer_html",
-];
 
 /// discovery.py internal adapter set; not a valid rule `adapter` value on its own.
 pub const DISCOVERY_ADAPTERS: &[&str] = &["kagura_wordpress", "kagura_woocommerce", "hgamer_html"];
@@ -136,6 +135,21 @@ impl Sources {
 
     pub fn registry(&self) -> &registry::SourceRegistry {
         &self.registry
+    }
+
+    pub fn import_script_source(
+        &mut self,
+        rule: &RawSourceRule,
+        api_version: u32,
+        code: &str,
+        replace: bool,
+    ) -> Result<ImportedScriptSource> {
+        self.registry
+            .import_script_source(rule, api_version, code, replace)
+    }
+
+    pub fn get_script_source(&self, source_id: &str) -> Result<ScriptSourceDocument> {
+        self.registry.get_script_source(source_id)
     }
 
     pub fn registry_mut(&mut self) -> &mut registry::SourceRegistry {

@@ -97,11 +97,78 @@ class SourceServiceTests(unittest.IsolatedAsyncioTestCase):
         for name in ("matches", "cached_candidates", "_rules", "builtins", "validate_download", "source_for_release"):
             self.assertFalse(hasattr(self.service, name))
 
+    async def test_update_automatically_uses_browser_after_request_verification(self):
+        await self.service.initialize()
+        pages = [{"url": "https://www.patch.moe/", "method": "GET", "text": "list"}]
+        calls = []
+        async def browser(url, cancel, progress):
+            calls.append(url)
+            progress("browser_verification")
+            return pages
+        self.service._browser_fetch = browser
+        complete = response("update_source")["result"]
+        def update(params):
+            if "browser_responses" in params:
+                return complete
+            return dict(complete, complete=False, status=dict(complete["status"], code="source_browser_verification_required"))
+        self.bridge.stream_results["update_source"] = update
+        snapshot = self.service.start_update_source("patchmoe")
+        result = await self.settle(snapshot["task_id"])
+        self.assertEqual(result["state"], "completed")
+        self.assertEqual(calls, [SUMMARIES[0]["pages"][0]])
+        self.assertEqual(len(self.bridge.stream_calls), 2)
+        self.assertEqual(self.bridge.stream_calls[1][1]["browser_responses"], pages)
+        self.assertTrue(self.bridge.stream_calls[1][1]["force"])
+
+    async def test_required_personal_declaration_does_not_become_success(self):
+        await self.service.initialize()
+        complete = response("update_source")["result"]
+        self.bridge.stream_results["update_source"] = dict(complete, complete=False,
+            status=dict(complete["status"], code="source_browser_verification_required"))
+        async def browser(url, cancel, progress):
+            raise ValueError("source_age_verification_required")
+        self.service._browser_fetch = browser
+        snapshot = self.service.start_update_source("patchmoe")
+        result = await self.settle(snapshot["task_id"])
+        self.assertEqual(result["state"], "failed")
+        self.assertEqual(result["error"], "source_age_verification_required")
+        self.assertEqual(len(self.bridge.stream_calls), 1)
+
     async def test_prime_exposes_summaries_from_one_scan(self):
         await self.service.initialize()
         self.service.prime(SCAN)
         self.assertEqual(self.service.settings_revision, 5)
         self.assertEqual(self.service.list_sources(), SUMMARIES)
+        self.assertEqual(len(self.bridge.sync_calls), 2)
+
+    async def test_script_import_forwards_large_source_without_execution_or_conflating_refresh(self):
+        await self.service.initialize()
+        code = "-- " + "来源代码" * 20000 + "\nwhile true do end\nreturn {}"
+        document = response("get_script_source")["result"]
+        self.bridge.sync_results["import_script_source"] = response("import_script_source")["result"]
+        for replace in (False, True):
+            self.bridge.sync_calls.clear()
+            result = await self.service.import_script_source(document["rule"], 1, code, replace)
+            self.assertEqual(self.bridge.sync_calls, [
+                ("import_script_source", {"rule": document["rule"], "api_version": 1, "code": code, "replace": replace})])
+            self.assertEqual(self.service.settings_revision, result["settings_revision"])
+        self.assertEqual(self.bridge.stream_calls, [])
+
+    async def test_script_read_is_read_only_and_failure_keeps_the_source_snapshot(self):
+        await self.service.initialize()
+        document = response("get_script_source")["result"]
+        self.bridge.sync_results["get_script_source"] = document
+        self.bridge.sync_calls.clear()
+        self.assertEqual(await self.service.get_script_source("fixture"), document)
+        self.assertEqual(self.bridge.sync_calls, [("get_script_source", {"source_id": "fixture"})])
+        before = self.service.list_sources()
+        def fail(_):
+            raise CoreError("script_source_syntax_error", "source/fixture.lua:4: syntax")
+        self.bridge.sync_results["import_script_source"] = fail
+        with self.assertRaises(CoreError):
+            await self.service.import_script_source(document["rule"], 1, "return {", True)
+        self.assertEqual(self.service.list_sources(), before)
+        self.assertFalse(self.service.state_dir.exists())
         self.assertEqual(len(self.bridge.sync_calls), 2)
 
     async def test_prime_rejects_malformed_scan_results(self):
@@ -118,7 +185,6 @@ class SourceServiceTests(unittest.IsolatedAsyncioTestCase):
         updated_list = lambda _params: [{**SUMMARIES[0], "enabled": False}, SUMMARIES[1]]
         self.bridge.sync_results["set_source_enabled"] = {"settings_revision": 6,
                                                           "source_id": "patchmoe", "enabled": False}
-        self.bridge.sync_results["add_source"] = {"settings_revision": 6, "rule": {"id": "custom"}}
         self.bridge.sync_results["set_game_source"] = {"settings_revision": 6,
                                                        "source_id": "patchmoe", "subscribed": False}
         self.bridge.sync_results["list_sources"] = updated_list
@@ -127,8 +193,12 @@ class SourceServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(self.service.list_sources()[0]["enabled"])
         self.assertIn(("set_source_enabled", {"source_id": "patchmoe", "enabled": False}),
                       self.bridge.sync_calls)
-        await self.service.add_source({"id": "custom"})
-        self.assertIn(("add_source", {"rule": {"id": "custom"}}), self.bridge.sync_calls)
+        self.bridge.sync_results["remove_source"] = {"settings_revision": 7, "source_id": "custom"}
+        await self.service.remove_source("custom")
+        self.assertIn(("remove_source", {"source_id": "custom"}), self.bridge.sync_calls)
+        self.assertEqual(self.service.settings_revision, 7)
+        with self.assertRaises(ValueError):
+            await self.service.remove_source("")
         await self.service.set_game_source(42, "patchmoe", False)
         self.assertIn(("set_game_source", {"appid": 42, "source_id": "patchmoe", "subscribed": False}),
                       self.bridge.sync_calls)

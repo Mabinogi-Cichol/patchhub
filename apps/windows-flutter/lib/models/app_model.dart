@@ -230,6 +230,26 @@ class AppModel extends ChangeNotifier {
   Future<void> mutate(String method, Map<String, Object?> args) async {
     final value = await client.call(method, args) as Map<String, dynamic>;
     settingsRevision = value['settings_revision'] as int;
+    if (method == 'import_script_source' && snapshot != null) {
+      // Core invalidates parser identities and the aggregate fallback source
+      // set. Do not retain UI results from the previous script after a save,
+      // including when the following projection fails or is still pending.
+      for (var index = 0; index < snapshot!.rows.length; index++) {
+        final row = snapshot!.rows[index];
+        snapshot!.rows[index] = GameRow({
+          ...row.value,
+          'patches': row.patches
+              .where((patch) => patch['source_id'] == null)
+              .toList(),
+          'discovery': {
+            'status': 'pending',
+            'candidates': <Map<String, dynamic>>[],
+            'diagnostics': <Map<String, dynamic>>[],
+          },
+        });
+      }
+      notifyListeners();
+    }
     try {
       await loadSources();
       if (snapshot != null) {

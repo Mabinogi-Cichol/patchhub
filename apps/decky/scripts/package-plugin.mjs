@@ -23,14 +23,17 @@ for (const file of ["main.py", "plugin.json", "package.json", "README.md"]) copy
 copyFileSync(join(root, "LICENSE"), join(output, "LICENSE"));
 // An explicit production allowlist prevents developer Python oracles from
 // becoming a second installation engine in the deployed plugin.
-for (const file of ["bridge.py", "source_service.py", "tasks.py", "plugin_settings.py", "state_host.py", "protocol_validation.py", "app_update.py"])
+for (const file of ["bridge.py", "source_service.py", "source_browser.py", "tasks.py", "plugin_settings.py", "state_host.py", "protocol_validation.py", "app_update.py"])
   copyFileSync(join(app, "backend", file), join(output, "backend", file));
 copyFileSync(join(root, 'scripts/install-decky.py'), join(output, 'backend/install-decky.py'));
 copyFileSync(join(root, "packages/contracts/generated/protocol.py"), join(output, "backend/protocol.py"));
+copyFileSync(join(root, "apps/windows-flutter/assets/shiravune-browser.js"), join(output, "backend/shiravune-browser.js"));
 copyFileSync(join(root, "packages/contracts/generated/v5.schema.json"), join(output, "backend/v5.schema.json"));
 cpSync(join(app, "dist"), join(output, "dist"), { recursive: true });
 mkdirSync(join(output, "licenses"), { recursive: true });
 copyFileSync(join(root, "scripts/licenses/sfextract-MIT.txt"), join(output, "licenses/sfextract-MIT.txt"));
+for (const name of ["Lua-5.4-LICENSE.txt", "mlua-MIT.txt"])
+  copyFileSync(join(root, "scripts/licenses", name), join(output, "licenses", name));
 const runtime = [];
 for (const name of binaries) {
   const binary = join(root, "target/linux/release", name);

@@ -52,6 +52,12 @@ impl fmt::Display for DomainError {
 impl std::error::Error for DomainError {}
 impl From<std::io::Error> for DomainError {
     fn from(error: std::io::Error) -> Self {
+        if let Some(domain) = error
+            .get_ref()
+            .and_then(|error| error.downcast_ref::<Self>())
+        {
+            return domain.clone();
+        }
         let text = error.to_string();
         if text.len() <= 128
             && text

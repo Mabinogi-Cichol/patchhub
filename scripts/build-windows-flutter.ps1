@@ -77,6 +77,10 @@ foreach ($taskResource in @('catalog.json','signed-catalog.json','trust-keys.jso
 Copy-Item -LiteralPath (Join-Path $taskRoot 'LICENSE') -Destination $taskResources
 New-Item -ItemType Directory -Path (Join-Path $taskResources 'licenses') -Force | Out-Null
 Copy-Item -LiteralPath (Join-Path $taskRoot 'scripts/licenses/sfextract-MIT.txt') -Destination (Join-Path $taskResources 'licenses')
+New-Item -ItemType Directory -Path (Join-Path $taskOutput 'licenses') -Force | Out-Null
+foreach ($taskLicense in @('Lua-5.4-LICENSE.txt','mlua-MIT.txt')) {
+    Copy-Item -LiteralPath (Join-Path $taskRoot "scripts/licenses/$taskLicense") -Destination (Join-Path $taskOutput 'licenses')
+}
 Write-Output "Flutter Windows candidate: $taskOutput"
 
 $taskFlutterRoot = Split-Path -Parent (Split-Path -Parent (Resolve-Path $Flutter).Path)

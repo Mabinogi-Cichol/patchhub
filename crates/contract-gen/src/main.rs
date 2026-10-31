@@ -106,7 +106,7 @@ export function makeRequest(request_id: string, call: RequestParams): Request {
         ),
         (
             "SOURCE_VERSIONS",
-            json!({"index_schema_version":1,"detail_schema_version":1,"match_schema_version":1,"schedule_schema_version":1,"adapter_version":1,"parser_version":patchhub_core::sources::PARSER_VERSION,"encoding_version":1}),
+            json!({"index_schema_version":1,"detail_schema_version":1,"match_schema_version":1,"schedule_schema_version":1,"adapter_version":1,"parser_version":patchhub_core::sources::PARSER_VERSION,"encoding_version":1,"script_api_version":patchhub_core::sources::script::SCRIPT_API_VERSION}),
         ),
         ("RESULT_TYPES", json!(result_types)),
         ("SCHEMA", schema),

@@ -90,6 +90,11 @@ impl SourceSnapshot {
     pub fn state_root(&self) -> &Path {
         &self.state_root
     }
+    /// Explicit source access uses the same rule/code capture as this snapshot.
+    /// Ordinary projection only uses metadata and never executes scripts.
+    pub fn get_script_source(&self, source_id: &str) -> Result<ScriptSourceDocument> {
+        self.registry.get_script_source(source_id)
+    }
     /// Crate-only access keeps public callers away from the registry's store/mutators.
     pub(crate) fn registry(&self) -> &SourceRegistry {
         &self.registry

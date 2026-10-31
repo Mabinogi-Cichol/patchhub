@@ -53,11 +53,34 @@ fn inputs<'a>(
     }
 }
 fn candidate() -> SourceCandidate {
-    serde_json::from_value(serde_json::json!({"candidate_id":"candidate-000000000000000000000000","source_id":"kagura-cn","source_record_id":"https://kagurafan.com/patches/game","game_appid":42,"parent_appid":null,"game_title":"Test","patch_title":"Test patch","variant":"base","requires_dlc":null,"excludes_dlc":null,"platforms":["steam"],"patch_kind":"adult_content","languages":["zh-CN"],"version_raw":"1","version_identity":"1","published_at":null,"patch_updated_at":null,"source_page":"https://kagurafan.com/patches/game","upstream_page":null,"mirrors":[{"url":"https://kaguraserver.com/a.zip","label":null,"format":"zip"}],"format_reported":"zip","format_observed":"zip","capability":"discover_only","match_basis":"appid","observed_at":"2026-01-01T00:00:00+00:00","cache_status":"cached","fingerprint":"f".repeat(64)})).unwrap()
+    let mut candidate: SourceCandidate = serde_json::from_value(serde_json::json!({"candidate_id":"candidate-000000000000000000000000","source_id":"kagura-cn","source_record_id":"https://kagurafan.com/patches/game","game_appid":42,"parent_appid":null,"game_title":"Test","patch_title":"Test patch","variant":"base","requires_dlc":null,"excludes_dlc":null,"platforms":["steam"],"patch_kind":"adult_content","languages":["zh-CN"],"version_raw":"1","version_identity":"1","published_at":null,"patch_updated_at":null,"source_page":"https://kagurafan.com/patches/game","upstream_page":null,"mirrors":[{"url":"https://kaguraserver.com/a.zip","label":null,"format":"zip"}],"format_reported":"zip","format_observed":"zip","capability":"discover_only","match_basis":"appid","observed_at":"2026-01-01T00:00:00+00:00","cache_status":"cached","fingerprint":"f".repeat(64)})).unwrap();
+    candidate.parser_fingerprint = sources::index::parser_fingerprint(&fixture_rule());
+    candidate
+}
+fn fixture_rule() -> sources::SourceRule {
+    let config: sources::RulesConfig = serde_json::from_str(sources::DEFAULT_RULES_JSON).unwrap();
+    sources::validate::validate_rule(config.sources.iter().find(|r| r.id == "kagura-cn").unwrap())
+        .unwrap()
 }
 fn seed(state: &Path, candidate: SourceCandidate) -> u64 {
     let handle = sources::Sources::open(state).unwrap();
     let source_id = candidate.source_id.clone();
+    handle
+        .store()
+        .save_index(&sources::SourceIndex {
+            parser_fingerprint: sources::index::parser_fingerprint(&fixture_rule()),
+            schema_version: 1,
+            source_id: source_id.clone(),
+            revision: 1,
+            complete: true,
+            checked_at: 100,
+            updated_at: 100,
+            etag: None,
+            modified: None,
+            entries: vec![],
+            pending: vec![],
+        })
+        .unwrap();
     handle
         .store()
         .save_match(&GameMatchRecord {

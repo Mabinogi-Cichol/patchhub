@@ -1,30 +1,11 @@
-import 'dart:convert';
-
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 
 import '../host/desktop_services.dart';
 import '../host/core_task.dart';
 import '../models/app_model.dart';
 import '../models/library.dart';
 import '../presentation/library_presentation.dart';
-
-const sourceRuleExample = '''{
-  "id": "my-publisher",
-  "name": "发行商补丁站",
-  "adapter": "table_html",
-  "enabled": true,
-  "pages": ["https://patches.vendor.example/patches/"],
-  "page_hosts": ["patches.vendor.example"],
-  "download_hosts": ["downloads.vendor.example"],
-  "root_layout": "game_root",
-  "table_id": "patches",
-  "columns": {"title": 0, "appid": 1, "download": 2, "date": 3, "language": 4}
-}''';
-
-const sourceRuleExampleHelp =
-    '适用于表格形式的补丁列表。请替换示例 ID、名称和域名，并按实际网页调整表格 ID 和列号。'
-    '列号从 0 开始；title 和 download 必填，其他列可省略。';
+import 'script_source_editor.dart';
 
 String sourceTime(dynamic seconds) => seconds == null
     ? '尚无记录'
@@ -63,7 +44,9 @@ class TaskSummary extends StatelessWidget {
             child: const Text('取消任务'),
           ),
         ] else if (task.error != null)
-          SelectableText('任务结果：${task.error}')
+          SelectableText(
+            '任务结果：${statusLabel(task.error!.code)}${task.error!.detail == null ? '' : '\n${task.error!.detail}'}',
+          )
         else
           const Text('任务已完成'),
         if (!query && task.controlError != null)
@@ -90,13 +73,7 @@ class _GlobalSourcesPageState extends State<GlobalSourcesPage> {
   final intervals = <String, String>{};
   final names = <String, String>{};
   final errors = <String, Object>{};
-  final rule = TextEditingController();
   bool saving = false;
-  @override
-  void dispose() {
-    rule.dispose();
-    super.dispose();
-  }
 
   Future<void> save(
     String key,
@@ -116,6 +93,64 @@ class _GlobalSourcesPageState extends State<GlobalSourcesPage> {
     }
   }
 
+  Future<void> removeSource(String sourceId, String name) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text('删除来源：$name'),
+        content: const Text('删除后该来源不再参与更新和匹配。缓存文件保留在本机，但不会再生效。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('删除'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    await save(sourceId, 'remove_source', {'source_id': sourceId});
+  }
+
+  Future<void> editScript([String? sourceId, bool readOnly = false]) async {
+    Map<String, dynamic>? document;
+    if (sourceId != null) {
+      setState(() {
+        saving = true;
+        errors.remove(sourceId);
+      });
+      try {
+        document = await widget.model.client.call('get_script_source', {
+          'source_id': sourceId,
+        }) as Map<String, dynamic>;
+      } catch (failure) {
+        if (mounted) setState(() => errors[sourceId] = failure);
+        return;
+      } finally {
+        if (mounted) setState(() => saving = false);
+      }
+    }
+    if (!mounted) return;
+    final saved = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => ScriptSourceEditor(
+        document: document,
+        readOnly: readOnly,
+        onSave: (params) => widget.model.mutate('import_script_source', params),
+      ),
+    );
+    if (saved == true && mounted) {
+      setState(() {});
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('脚本已保存，尚未执行。请更新来源或重新匹配游戏。')));
+    }
+  }
+
   Future<void> open(String url) async {
     try {
       await DesktopServices().openSource(Uri.parse(url));
@@ -127,59 +162,6 @@ class _GlobalSourcesPageState extends State<GlobalSourcesPage> {
     }
   }
 
-  void showRuleExample() {
-    showDialog<void>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('来源规则示例'),
-        content: const SizedBox(
-          width: 620,
-          child: SingleChildScrollView(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(sourceRuleExampleHelp),
-                SizedBox(height: 16),
-                SelectableText(
-                  sourceRuleExample,
-                  style: TextStyle(fontFamily: 'monospace'),
-                ),
-              ],
-            ),
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(dialogContext).pop(),
-            child: const Text('关闭'),
-          ),
-          TextButton(
-            onPressed: () async {
-              try {
-                await Clipboard.setData(
-                  const ClipboardData(text: sourceRuleExample),
-                );
-                if (!dialogContext.mounted) return;
-                Navigator.of(dialogContext).pop();
-                if (!mounted) return;
-                ScaffoldMessenger.of(
-                  context,
-                ).showSnackBar(const SnackBar(content: Text('示例已复制，请修改后添加')));
-              } catch (failure) {
-                if (dialogContext.mounted) Navigator.of(dialogContext).pop();
-                if (mounted) {
-                  ScaffoldMessenger.of(context)
-                      .showSnackBar(SnackBar(content: Text('复制失败：$failure')));
-                }
-              }
-            },
-            child: const Text('复制示例'),
-          ),
-        ],
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) => ListView(
     key: const PageStorageKey('global-sources'),
@@ -189,7 +171,19 @@ class _GlobalSourcesPageState extends State<GlobalSourcesPage> {
       const Text('管理所有游戏使用的来源；单个游戏的订阅请进入“游戏订阅”。'),
       if (widget.model.sourceError != null)
         SelectableText('来源读取或状态刷新失败：${widget.model.sourceError}'),
+      if (widget.model.stateRefreshError != null)
+        SelectableText('${widget.model.stateRefreshError}'),
       const SizedBox(height: 12),
+      Align(
+        alignment: Alignment.centerLeft,
+        child: OutlinedButton.icon(
+          onPressed: saving || widget.model.tasks.closing
+              ? null
+              : () => editScript(),
+          icon: const Icon(Icons.code),
+          label: const Text('导入脚本来源'),
+        ),
+      ),
       Align(
         alignment: Alignment.centerLeft,
         child: TextButton.icon(
@@ -225,42 +219,6 @@ class _GlobalSourcesPageState extends State<GlobalSourcesPage> {
         ))
           sourceCard(source, fallback),
       ],
-      ExpansionTile(
-        key: const PageStorageKey('global-sources:add-rule'),
-        title: Row(
-          children: [
-            const Expanded(child: Text('高级：添加来源规则')),
-            TextButton(onPressed: showRuleExample, child: const Text('示例')),
-          ],
-        ),
-        children: [
-          TextField(
-            key: const PageStorageKey('global-sources:rule-input'),
-            controller: rule,
-            minLines: 5,
-            maxLines: null,
-            decoration: const InputDecoration(
-              labelText: '来源规则 JSON',
-              border: OutlineInputBorder(),
-            ),
-          ),
-          if (errors['rule'] != null) SelectableText('${errors['rule']}'),
-          OutlinedButton(
-            onPressed: saving
-                ? null
-                : () {
-                    try {
-                      save('rule', 'add_source', {
-                        'rule': jsonDecode(rule.text),
-                      });
-                    } catch (failure) {
-                      setState(() => errors['rule'] = failure);
-                    }
-                  },
-            child: const Text('添加来源'),
-          ),
-        ],
-      ),
     ],
   );
 
@@ -319,9 +277,38 @@ class _GlobalSourcesPageState extends State<GlobalSourcesPage> {
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 const Divider(height: 24),
+                if (source['script'] is Map) ...[
+                  if (source['origin'] == 'builtin') ...[
+                    const Text('内置来源随版本更新，脚本只读。'),
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: TextButton(
+                        key: PageStorageKey('source:$id:view-script'),
+                        onPressed: saving ? null : () => editScript(id, true),
+                        child: const Text('查看脚本'),
+                      ),
+                    ),
+                  ] else
+                    Wrap(
+                      spacing: 8,
+                      children: [
+                        TextButton(
+                          onPressed: saving ? null : () => editScript(id),
+                          child: const Text('编辑脚本'),
+                        ),
+                        TextButton(
+                          key: PageStorageKey('source:$id:remove'),
+                          onPressed: saving || running
+                              ? null
+                              : () => removeSource(id, source['name'] as String),
+                          child: const Text('删除来源'),
+                        ),
+                      ],
+                    ),
+                ],
                 if (errors[id] != null)
                   SelectableText(
-                    '保存失败：${errors[id]}',
+                    '操作失败：${errors[id]}',
                     key: PageStorageKey('source:$id:save-error'),
                   ),
                 if (task?.running == true) TaskSummary(task: task!),

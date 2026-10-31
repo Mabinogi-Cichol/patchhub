@@ -265,14 +265,15 @@ class BridgeStreamTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_large_request_is_sent_without_a_fixed_line_limit(self):
         self.bridge._preflight_done = True
-        rule = copy.deepcopy(next(case["request"]["params"]["rule"] for case in CASES["requests"] if case["name"] == "add_source-request"))
-        rule["name"] += "x" * (128 * 1024)
-        peer = _FakeProcess(lambda rid, req: ([], response("add_source", rid)))
+        params = copy.deepcopy(next(case["request"]["params"] for case in CASES["requests"]
+                                    if case["name"] == "script-import-large-replace"))
+        params.pop("host", None)
+        peer = _FakeProcess(lambda rid, req: ([], response("import_script_source", rid)))
         with patch("bridge.asyncio.create_subprocess_exec", return_value=peer):
-            await self.bridge._call("add_source", {"rule": rule}, request_id="large")
+            await self.bridge._call("import_script_source", params, request_id="large")
         sent = json.loads(peer.payload.split(b"\n", 1)[0])
-        self.assertEqual(sent["params"]["rule"]["name"], rule["name"])
-        self.assertGreater(len(peer.payload), 128 * 1024)
+        self.assertEqual(sent["params"]["code"], params["code"])
+        self.assertGreater(len(peer.payload), len(params["code"].encode("utf-8")))
 
     async def test_large_response_line_is_read_fully_then_next_call_recovers(self):
         line_size = 9 * 1024 * 1024
@@ -309,6 +310,46 @@ class BridgeStreamTests(unittest.IsolatedAsyncioTestCase):
 
 
 class BridgeIntegrationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_real_core_script_service_import_read_replace_and_failure(self):
+        from source_service import SourceService
+        root = Path(__file__).resolve().parents[3]
+        configured = os.environ.get("PATCHHUB_TEST_CORE")
+        binary = Path(configured) if configured else root / "target/debug" / ("patchhub-core.exe" if os.name == "nt" else "patchhub-core")
+        if not configured and not binary.exists():
+            self.skipTest("core binary not built")
+        with tempfile.TemporaryDirectory() as temporary:
+            catalog = Path(temporary) / "catalog.json"
+            catalog.write_text('{"schema_version":1,"revision":0,"releases":[]}')
+            bridge = CoreBridge(binary, catalog, state_dir=Path(temporary) / "state")
+            await bridge.preflight()
+            service = SourceService(bridge, Path(temporary) / "state")
+            bundled = await service.get_script_source("patchmoe")
+            self.assertEqual(bundled["rule"]["adapter"], "lua")
+            self.assertIn("form_zh_cn", bundled["code"])
+            self.assertFalse((Path(temporary) / "state").exists())
+            await service.initialize()
+            # Bundled sources are read-only: importing over one is refused.
+            with self.assertRaises(CoreError) as bundled_failure:
+                await service.import_script_source(bundled["rule"], 1, "return {}", True)
+            self.assertEqual(bundled_failure.exception.code, "source_builtin_readonly")
+            self.assertIn("form_zh_cn", (await service.get_script_source("patchmoe"))["code"])
+            rule = json.loads((root / "docs/features/script-source-adapters/examples/publisher/source.json").read_text(encoding="utf-8"))
+            code = "-- " + "脚本源码" * 15000 + "\nwhile true do end\nreturn {}"
+            await service.import_script_source(rule, 1, code)
+            self.assertEqual((await service.get_script_source(rule["id"]))["code"], code)
+            await service.import_script_source(rule, 1, "error('not executed on save')", True)
+            with self.assertRaises(CoreError) as failure:
+                await service.import_script_source(rule, 1, "return {", True)
+            self.assertEqual(failure.exception.code, "script_source_syntax_error")
+            self.assertIn(rule["id"], failure.exception.detail)
+            restarted = SourceService(bridge, Path(temporary) / "state")
+            self.assertEqual((await restarted.get_script_source(rule["id"]))["code"], "error('not executed on save')")
+            await restarted.remove_source(rule["id"])
+            self.assertNotIn(rule["id"], [source["id"] for source in restarted.list_sources()])
+            with self.assertRaises(CoreError) as missing:
+                await restarted.remove_source(rule["id"])
+            self.assertEqual(missing.exception.code, "unknown_source")
+
     async def test_real_core_v5_scan_and_error(self):
         root = Path(__file__).resolve().parents[3]
         configured_binary = os.environ.get("PATCHHUB_TEST_CORE")

@@ -6,9 +6,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use patchhub_core::sources::http::{
-    FakeFetcher, FetchRequest, FetchResponse, Fetcher, RequestContext,
-};
+use patchhub_core::sources::http::{FakeFetcher, FetchResponse, RequestContext};
 use patchhub_core::sources::matching::{
     game_match_summary, match_games, rematch_game, rematch_source, source_revisions,
 };
@@ -23,6 +21,7 @@ const HGAMER_BASE: &str = "https://hgamer.tw/zh-CN/patches";
 
 fn kagura_rule() -> SourceRule {
     SourceRule {
+        script: patchhub_core::sources::builtin::descriptor("kagura_wordpress"),
         id: "kagura-cn".to_string(),
         name: "Kagura CN".to_string(),
         adapter: "kagura_wordpress".to_string(),
@@ -43,6 +42,7 @@ fn kagura_rule() -> SourceRule {
 
 fn entry_rule() -> SourceRule {
     SourceRule {
+        script: patchhub_core::sources::builtin::descriptor("table_html"),
         id: "table-source".to_string(),
         name: "Table".to_string(),
         adapter: "table_html".to_string(),
@@ -69,6 +69,7 @@ fn entry_rule() -> SourceRule {
 
 fn hgamer_rule() -> SourceRule {
     SourceRule {
+        script: patchhub_core::sources::builtin::descriptor("hgamer_html"),
         id: "hgamer".to_string(),
         name: "HGamer".to_string(),
         adapter: "hgamer_html".to_string(),
@@ -126,6 +127,13 @@ fn index(
     entries: Vec<SourceIndexEntry>,
 ) -> SourceIndex {
     SourceIndex {
+        parser_fingerprint: patchhub_core::sources::index::parser_fingerprint(
+            &(match source_id {
+                "kagura-cn" => kagura_rule(),
+                "table-source" => entry_rule(),
+                _ => panic!("unknown test source: {source_id}"),
+            }),
+        ),
         schema_version: 1,
         source_id: source_id.to_string(),
         revision,
@@ -280,7 +288,7 @@ fn run_input(
         name_hints,
         force_details,
         &mut ctx,
-        &AtomicBool::new(false),
+        &Arc::new(AtomicBool::new(false)),
         now,
         |_| {},
         |_| {},
@@ -306,7 +314,7 @@ fn rematch(
         game,
         name_hints,
         &mut ctx,
-        &AtomicBool::new(false),
+        &Arc::new(AtomicBool::new(false)),
         now,
         |_| {},
     )
@@ -369,7 +377,7 @@ fn index_hits_stay_offline_and_only_hit_detail_pages_are_fetched() {
         &[],
         false,
         &mut ctx,
-        &AtomicBool::new(false),
+        &Arc::new(AtomicBool::new(false)),
         200,
         |progress| phases.push(progress),
         |update| updates.push(update.clone()),
@@ -1209,7 +1217,7 @@ fn rematch_source_recomputes_only_that_source_and_reuses_fallback() {
         "kagura-cn",
         &[],
         &mut ctx,
-        &AtomicBool::new(false),
+        &Arc::new(AtomicBool::new(false)),
         400,
         |summary| updates.push(summary.clone()),
     )
@@ -1286,7 +1294,7 @@ fn rematch_source_recomputes_only_that_source_and_reuses_fallback() {
         "kagura-cn",
         &[],
         &mut ctx,
-        &AtomicBool::new(false),
+        &Arc::new(AtomicBool::new(false)),
         700,
         |_| {},
     )
@@ -1359,22 +1367,7 @@ fn detail_failure_keeps_previous_candidates_and_reports_incomplete() {
     assert!(!after.sources["kagura-cn"].diagnostics.is_empty());
 }
 
-/// Fetcher wrapper that flips the task's cancel flag after its first response.
-struct CancelAfterFirstFetch {
-    inner: Arc<FakeFetcher>,
-    cancel: Arc<AtomicBool>,
-    calls: Arc<std::sync::atomic::AtomicUsize>,
-}
-
-impl Fetcher for CancelAfterFirstFetch {
-    fn fetch(&self, request: &FetchRequest) -> std::io::Result<FetchResponse> {
-        self.calls.fetch_add(1, Ordering::SeqCst);
-        let response = self.inner.fetch(request);
-        self.cancel.store(true, Ordering::SeqCst);
-        response
-    }
-}
-
+/// Completed games remain committed when cancellation arrives between games.
 #[test]
 fn cancellation_saves_finished_games_and_returns_task_cancelled() {
     let temp = tempfile::tempdir().unwrap();
@@ -1398,13 +1391,7 @@ fn cancellation_saves_finished_games_and_returns_task_cancelled() {
         "https://kagurafan.com/game/a/",
     ));
     let cancel = Arc::new(AtomicBool::new(false));
-    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let fetcher = CancelAfterFirstFetch {
-        inner: Arc::clone(&fake),
-        cancel: Arc::clone(&cancel),
-        calls: Arc::clone(&calls),
-    };
-    let mut ctx = RequestContext::with_settings(Box::new(fetcher), Duration::ZERO);
+    let mut ctx = context(&fake);
     let error = match match_games(
         &store,
         &[rule],
@@ -1416,13 +1403,15 @@ fn cancellation_saves_finished_games_and_returns_task_cancelled() {
         &cancel,
         200,
         |_| {},
-        |_| {},
+        |_| {
+            cancel.store(true, Ordering::SeqCst);
+        },
     ) {
         Ok(_) => panic!("the task must be cancelled"),
         Err(error) => error,
     };
     assert_eq!(error.to_string(), "task_cancelled");
-    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(fake.call_count(), 1);
     assert!(
         store.load_match(42).unwrap().is_some(),
         "finished games are saved before cancellation"
@@ -1868,6 +1857,7 @@ fn source_revisions_and_summary_are_pure_reads() {
         )]
         .into(),
         fallback: Some(FallbackMatchRecord {
+            sources_fingerprint: None,
             query_key: "q".to_string(),
             status: FallbackMatchStatus::Matched,
             candidates: vec![candidate("https://hgamer.tw/p/1", 42)],
@@ -1892,9 +1882,22 @@ fn source_revisions_and_summary_are_pure_reads() {
 
     // A disabled fallback with no publisher record displays no candidates, and
     // keeps the P1 contract status (disabled means "not in enabled sources").
+    store
+        .update_settings(|settings| {
+            settings.enabled.insert("hgamer".into(), false);
+            Ok(())
+        })
+        .unwrap();
     match_record.status = GameMatchStatus::Pending;
     match_record.sources.clear();
     match_record.fallback = Some(FallbackMatchRecord {
+        sources_fingerprint: Some(
+            patchhub_core::sources::matching::fallback_sources_fingerprint(
+                &[],
+                &Overrides::default(),
+                42,
+            ),
+        ),
         query_key: "q".to_string(),
         status: FallbackMatchStatus::Disabled,
         candidates: vec![candidate("https://hgamer.tw/p/1", 42)],
@@ -1909,6 +1912,7 @@ fn source_revisions_and_summary_are_pure_reads() {
 
 fn candidate(page: &str, appid: u32) -> SourceCandidate {
     let mut candidate = SourceCandidate {
+        parser_fingerprint: None,
         candidate_id: "candidate-000000000000000000000000".to_string(),
         source_id: "table-source".to_string(),
         source_record_id: page.to_string(),
@@ -1995,6 +1999,13 @@ fn seed_vbf_fallback(store: &SourceStore, appid: u32, upstream: &str) {
             status: GameMatchStatus::FallbackMatch,
             sources: Default::default(),
             fallback: Some(FallbackMatchRecord {
+                sources_fingerprint: Some(
+                    patchhub_core::sources::matching::fallback_sources_fingerprint(
+                        &[hgamer_rule()],
+                        &Overrides::default(),
+                        1189440,
+                    ),
+                ),
                 query_key: String::new(),
                 status: FallbackMatchStatus::Matched,
                 candidates: vec![vbf_upstream(appid, upstream)],

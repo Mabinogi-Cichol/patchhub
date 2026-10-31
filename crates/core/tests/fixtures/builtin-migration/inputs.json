@@ -1,0 +1,309 @@
+[
+  {
+    "name": "patchmoe-index",
+    "rule": {
+      "id": "patchmoe",
+      "name": "Shiravune",
+      "adapter": "patchmoe",
+      "enabled": true,
+      "pages": [
+        "https://www.patch.moe/?flag=1"
+      ],
+      "page_hosts": [
+        "www.patch.moe"
+      ],
+      "download_hosts": [
+        "download.patch.moe"
+      ],
+      "root_layout": "game_root"
+    },
+    "kind": "index",
+    "responses": [
+      {
+        "url": "https://www.patch.moe/?flag=1",
+        "body": "<html><body>\n<form name=\"form_zh_cn\" method=\"post\" action=\"/zh\"><input type=\"hidden\" name=\"lang\" value=\"zh-CN\"></form>\n<form name=\"form_en\" method=\"post\" action=\"/en\"><input type=\"hidden\" name=\"lang\" value=\"en\"></form>\n</body></html>"
+      },
+      {
+        "url": "https://www.patch.moe/zh",
+        "body": "<!DOCTYPE html>\n<!--\n  Cropped excerpt of the public patch.moe localized index page\n  (https://www.patch.moe/, EN submission). It preserves the real two-table\n  layout that the collector must parse: `table.tbl.new` (recent updates) and\n  `table.tbl.regular` (full list), each led by a `th` header row.\n-->\n<html lang=\"en\">\n<body>\n<section class=\"new_contents\">\n    <table class=\"tbl new\">\n        <tr>\n            <th class=\"title\">Title</th>\n            <th class=\"release\">Release</th>\n            <th class=\"patch\">Patch</th>\n        </tr>\n        <tr><td class=\"title\">Modified Girl Eurie!</td><td class=\"release\">2026/10/13</td><td class=\"patch\"><a download href=\"https://download.patch.moe/Modified_Girl_Eurie_patch.zip\">DLC</a></td></tr>\n        <tr><td class=\"title\">Cicada Communication</td><td class=\"release\">2026/9/30</td><td class=\"patch\"><a download href=\"https://download.patch.moe/Cicada_Communication_patch.zip\">DLC</a></td></tr>\n        <tr><td class=\"title\">Fusty Dungeon</td><td class=\"release\">2026/9/24</td><td class=\"patch\"><a download href=\"https://download.patch.moe/Fusty_Dungeon_patch.zip\">DLC</a></td></tr>\n    </table>\n</section>\n<h2 class=\"listhead\"> ALL PATCHES</h2>\n<section class=\"regular_contents\">\n    <table class=\"tbl regular\">\n        <tr>\n            <th class=\"title\">Title</th>\n            <th class=\"release\">Release</th>\n            <th class=\"patch\">Patch</th>\n        </tr>\n        <tr><td class=\"title\">Princessfall</td><td class=\"release\">COMING SOON</td><td class=\"patch\"><a download href=\"https://download.patch.moe/Princessfall_EN_Patch.zip\">DLC</a></td></tr>\n        <tr><td class=\"title\">Kudo’s Kuppa</td><td class=\"release\">2026/6/23</td><td class=\"patch\"><a download href=\"https://download.patch.moe/Kudos_Kuppa_patch.zip\">DLC</a></td></tr>\n        <tr><td class=\"title\">Yokai Busters</td><td class=\"release\"> 2025/8/5</td><td class=\"patch\"><a download href=\"https://download.patch.moe/yokaibusters_patch.zip\">DLC</a></td></tr>\n    </table>\n</section>\n</body>\n</html>\n"
+      },
+      {
+        "url": "https://www.patch.moe/en",
+        "body": "<!DOCTYPE html>\n<!--\n  Cropped excerpt of the public patch.moe localized index page\n  (https://www.patch.moe/, EN submission). It preserves the real two-table\n  layout that the collector must parse: `table.tbl.new` (recent updates) and\n  `table.tbl.regular` (full list), each led by a `th` header row.\n-->\n<html lang=\"en\">\n<body>\n<section class=\"new_contents\">\n    <table class=\"tbl new\">\n        <tr>\n            <th class=\"title\">Title</th>\n            <th class=\"release\">Release</th>\n            <th class=\"patch\">Patch</th>\n        </tr>\n        <tr><td class=\"title\">Modified Girl Eurie!</td><td class=\"release\">2026/10/13</td><td class=\"patch\"><a download href=\"https://download.patch.moe/Modified_Girl_Eurie_patch.zip\">DLC</a></td></tr>\n        <tr><td class=\"title\">Cicada Communication</td><td class=\"release\">2026/9/30</td><td class=\"patch\"><a download href=\"https://download.patch.moe/Cicada_Communication_patch.zip\">DLC</a></td></tr>\n        <tr><td class=\"title\">Fusty Dungeon</td><td class=\"release\">2026/9/24</td><td class=\"patch\"><a download href=\"https://download.patch.moe/Fusty_Dungeon_patch.zip\">DLC</a></td></tr>\n    </table>\n</section>\n<h2 class=\"listhead\"> ALL PATCHES</h2>\n<section class=\"regular_contents\">\n    <table class=\"tbl regular\">\n        <tr>\n            <th class=\"title\">Title</th>\n            <th class=\"release\">Release</th>\n            <th class=\"patch\">Patch</th>\n        </tr>\n        <tr><td class=\"title\">Princessfall</td><td class=\"release\">COMING SOON</td><td class=\"patch\"><a download href=\"https://download.patch.moe/Princessfall_EN_Patch.zip\">DLC</a></td></tr>\n        <tr><td class=\"title\">Kudo’s Kuppa</td><td class=\"release\">2026/6/23</td><td class=\"patch\"><a download href=\"https://download.patch.moe/Kudos_Kuppa_patch.zip\">DLC</a></td></tr>\n        <tr><td class=\"title\">Yokai Busters</td><td class=\"release\"> 2025/8/5</td><td class=\"patch\"><a download href=\"https://download.patch.moe/yokaibusters_patch.zip\">DLC</a></td></tr>\n    </table>\n</section>\n</body>\n</html>\n"
+      }
+    ],
+    "page": null
+  },
+  {
+    "name": "table-index",
+    "rule": {
+      "id": "custom-table",
+      "name": "Table",
+      "adapter": "table_html",
+      "enabled": true,
+      "pages": [
+        "https://example.com/list"
+      ],
+      "page_hosts": [
+        "example.com"
+      ],
+      "download_hosts": [
+        "download.example.com"
+      ],
+      "root_layout": "game_root",
+      "columns": {
+        "title": 0,
+        "download": 1,
+        "date": 2,
+        "language": 3,
+        "appid": 4
+      },
+      "table_id": "patches"
+    },
+    "kind": "index",
+    "responses": [
+      {
+        "url": "https://example.com/list",
+        "body": "<table id=\"patches\"><tr><th>Title</th><th>ZIP</th></tr><tr><td>Game</td><td><a href=\"https://download.example.com/game.zip\">Patch</a></td><td>2026/10/31</td><td>zh-CN</td><td>42</td></tr></table>"
+      }
+    ],
+    "page": null
+  },
+  {
+    "name": "kagura-cn-index",
+    "rule": {
+      "id": "kagura-cn",
+      "name": "Kagura Games 国内",
+      "adapter": "kagura_wordpress",
+      "enabled": true,
+      "role": "publisher",
+      "discovery_only": true,
+      "priority": 10,
+      "pages": [
+        "https://kagurafan.com/"
+      ],
+      "page_hosts": [
+        "kagurafan.com"
+      ],
+      "download_hosts": [
+        "kaguraserver.com",
+        "kaguragamespatch.com"
+      ],
+      "root_layout": null
+    },
+    "kind": "index",
+    "responses": [
+      {
+        "url": "https://kagurafan.com/",
+        "body": "<html><body>\n<a href=\"/category/patch/\">Patch Category</a>\n<article><h2 class=\"entry-title\"><a href=\"/article/1/\">Article One</a></h2></article>\n<a rel=\"next\" href=\"/page/2/\">Next</a>\n</body></html>"
+      },
+      {
+        "url": "https://kagurafan.com/page/2/",
+        "body": "<html><body>\n<article><h2 class=\"entry-title\"><a href=\"/article/2/\">Article Two</a></h2></article>\n</body></html>"
+      }
+    ],
+    "page": null
+  },
+  {
+    "name": "kagura-cn-article",
+    "rule": {
+      "id": "kagura-cn",
+      "name": "Kagura Games 国内",
+      "adapter": "kagura_wordpress",
+      "enabled": true,
+      "role": "publisher",
+      "discovery_only": true,
+      "priority": 10,
+      "pages": [
+        "https://kagurafan.com/"
+      ],
+      "page_hosts": [
+        "kagurafan.com"
+      ],
+      "download_hosts": [
+        "kaguraserver.com",
+        "kaguragamespatch.com"
+      ],
+      "root_layout": null
+    },
+    "kind": "detail",
+    "responses": [
+      {
+        "url": "https://kagurafan.com/article/1/",
+        "body": "<html><body><article>\n<h1 class=\"entry-title\">Game</h1>\n<time class=\"published\" datetime=\"2024-01-02\">Jan 2</time>\n<div class=\"entry-content\">\n<p>中文 补丁 v1.2.3 ZIP</p>\n<a href=\"https://kaguraserver.com/game_v1.2.3.zip\">下载 Mirror 1</a>\n<a href=\"https://store.steampowered.com/app/42/Game/\">Steam</a>\n<a href=\"/related/\">Related</a>\n</div>\n</article></body></html>"
+      }
+    ],
+    "page": "https://kagurafan.com/article/1/"
+  },
+  {
+    "name": "kagura-cn-category",
+    "rule": {
+      "id": "kagura-cn",
+      "name": "Kagura Games 国内",
+      "adapter": "kagura_wordpress",
+      "enabled": true,
+      "role": "publisher",
+      "discovery_only": true,
+      "priority": 10,
+      "pages": [
+        "https://kagurafan.com/"
+      ],
+      "page_hosts": [
+        "kagurafan.com"
+      ],
+      "download_hosts": [
+        "kaguraserver.com",
+        "kaguragamespatch.com"
+      ],
+      "root_layout": null
+    },
+    "kind": "detail",
+    "responses": [
+      {
+        "url": "https://kagurafan.com/category/game/",
+        "body": "<html><body>\n<h1>Patch Category</h1>\n<article><h2 class=\"entry-title\"><a href=\"/article/1/\">Article One</a></h2>\n<div class=\"entry-content\"><p>中文 v1.0</p>\n<a href=\"https://kaguraserver.com/one.zip\">下载</a></div></article>\n<article><h2 class=\"entry-title\"><a href=\"/article/2/\">Article Two</a></h2></article>\n<a rel=\"next\" href=\"/category/patch/page/2/\">Next</a>\n</body></html>"
+      }
+    ],
+    "page": "https://kagurafan.com/category/game/"
+  },
+  {
+    "name": "kagura-en-index",
+    "rule": {
+      "id": "kagura-en",
+      "name": "Kagura Games 海外",
+      "adapter": "kagura_woocommerce",
+      "enabled": true,
+      "role": "publisher",
+      "discovery_only": true,
+      "priority": 20,
+      "pages": [
+        "https://www.kaguragames.com/patch/",
+        "https://www.kaguragames.com/product-category/patches/patch/"
+      ],
+      "page_hosts": [
+        "www.kaguragames.com"
+      ],
+      "download_hosts": [
+        "kaguraserver.com",
+        "kaguragamespatch.com"
+      ],
+      "root_layout": null
+    },
+    "kind": "index",
+    "responses": [
+      {
+        "url": "https://www.kaguragames.com/patch/",
+        "body": "<html><body>\n<li class=\"product type-product\">\n  <h2 class=\"woocommerce-loop-product__title\">Game A</h2>\n  <a href=\"/product/game-a/\">Game A</a>\n</li>\n<li class=\"product type-product\">\n  <h2 class=\"woocommerce-loop-product__title\">Game B</h2>\n  <a href=\"/product/game-b/\">Game B</a>\n</li>\n<div class=\"widget\">\n  <li class=\"product type-product\">\n    <h2 class=\"woocommerce-loop-product__title\">Widget Patch</h2>\n    <a href=\"/product/widget/\">Widget Patch</a>\n  </li>\n</div>\n<div class=\"related\">\n  <li class=\"product type-product\">\n    <h2 class=\"woocommerce-loop-product__title\">Related Patch</h2>\n    <a href=\"/product/related/\">Related Patch</a>\n  </li>\n</div>\n</body></html>"
+      },
+      {
+        "url": "https://www.kaguragames.com/product-category/patches/patch/",
+        "body": "<html><body>\n<li class=\"product type-product\">\n  <h2 class=\"woocommerce-loop-product__title\">Game C</h2>\n  <a href=\"/product/game-c/\">Game C</a>\n</li>\n<a rel=\"next\" href=\"/product-category/patches/patch/page/2/\">Next</a>\n</body></html>"
+      },
+      {
+        "url": "https://www.kaguragames.com/product-category/patches/patch/page/2/",
+        "body": "<html><body>\n<li class=\"product type-product\">\n  <h2 class=\"woocommerce-loop-product__title\">Game D</h2>\n  <a href=\"/product/game-d/\">Game D</a>\n</li>\n</body></html>"
+      }
+    ],
+    "page": null
+  },
+  {
+    "name": "kagura-en-detail",
+    "rule": {
+      "id": "kagura-en",
+      "name": "Kagura Games 海外",
+      "adapter": "kagura_woocommerce",
+      "enabled": true,
+      "role": "publisher",
+      "discovery_only": true,
+      "priority": 20,
+      "pages": [
+        "https://www.kaguragames.com/patch/",
+        "https://www.kaguragames.com/product-category/patches/patch/"
+      ],
+      "page_hosts": [
+        "www.kaguragames.com"
+      ],
+      "download_hosts": [
+        "kaguraserver.com",
+        "kaguragamespatch.com"
+      ],
+      "root_layout": null
+    },
+    "kind": "detail",
+    "responses": [
+      {
+        "url": "https://www.kaguragames.com/product/sacrifice-sanctuary-the-ritual-maidens-life-with-monsters-patch/",
+        "body": "<!doctype html><html><body>\n<h1 itemprop=\"name\" class=\"product_title entry-title\">Sacrifice Sanctuary: The Ritual Maiden&#8217;s Life With Monsters Patch</h1>\n<div class=\"woocommerce-Tabs-panel woocommerce-Tabs-panel--patch panel entry-content \" id=\"tab-patch\" role=\"tabpanel\" aria-labelledby=\"tab-title-patch\">\n\t\t\t\t\t\t\t\t\t\t<p><img decoding=\"async\" class=\"aligncenter size-full wp-image-1481\" src=\"data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%20728%2090'%3E%3C/svg%3E\" alt=\"\" width=\"728\" height=\"90\" data-lazy-srcset=\"https://www.kaguragames.com/wp-content/uploads/2020/08/Kagura-Games-Patch-Graphic.png 728w, https://www.kaguragames.com/wp-content/uploads/2020/08/Kagura-Games-Patch-Graphic-510x63.png 510w\" data-lazy-sizes=\"(max-width: 728px) 100vw, 728px\" data-lazy-src=\"https://www.kaguragames.com/wp-content/uploads/2020/08/Kagura-Games-Patch-Graphic.png\" /><noscript><img decoding=\"async\" class=\"aligncenter size-full wp-image-1481\" src=\"https://www.kaguragames.com/wp-content/uploads/2020/08/Kagura-Games-Patch-Graphic.png\" alt=\"\" width=\"728\" height=\"90\" srcset=\"https://www.kaguragames.com/wp-content/uploads/2020/08/Kagura-Games-Patch-Graphic.png 728w, https://www.kaguragames.com/wp-content/uploads/2020/08/Kagura-Games-Patch-Graphic-510x63.png 510w\" sizes=\"(max-width: 728px) 100vw, 728px\" /></noscript></p>\n<p><strong>このパッチは、日本国外でのみ使用できます。</strong><br />\n<strong>(This patch may only be used outside of Japan.)</strong></p>\n<p>Sacrifice Sanctuary: The Ritual Maiden&#8217;s Life With Monsters Steam and GOG Patch v1.01</p>\n<p><a href=\"https://kaguraserver.com/KaguraGames/EN/patch/Sacrifice%20Sanctuary/Sacrifice%20Sanctuary%20EN%20Patch%20v1.01.exe\" target=\"_blank\" rel=\"noopener\"><strong>Mirror 1</strong></a></p>\n<p><a href=\"https://kagurachan.com/KaguraGames/EN/patch/Sacrifice%20Sanctuary/Sacrifice%20Sanctuary%20EN%20Patch%20v1.01.exe\" target=\"_blank\" rel=\"noopener\"><strong>Mirror 2</strong></a></p>\n<p><a href=\"https://kaguragamespatch.com/KaguraGames/EN/patch/Sacrifice%20Sanctuary/Sacrifice%20Sanctuary%20EN%20Patch%20v1.01.exe\" target=\"_blank\" rel=\"noopener\"><strong>Mirror 3</strong></a></p>\n<p><a href=\"https://drive.google.com/file/d/14d62hMlTWiNhfa9riSDZ3k96VLwoOhQC/view?usp=drive_link\" target=\"_blank\" rel=\"noopener\"><strong>Mirror 4</strong></a></p>\n<p><a href=\"https://www.kaguragames.com/patch-instructions/\" target=\"_blank\" rel=\"noopener\">Patch Instructions can be found here.</a></p>\n\t\t\t\t</div>\n</body></html>\n"
+      }
+    ],
+    "page": "https://www.kaguragames.com/product/sacrifice-sanctuary-the-ritual-maidens-life-with-monsters-patch/"
+  },
+  {
+    "name": "hgamer-discover",
+    "rule": {
+      "id": "hgamer",
+      "name": "HGamer 补丁索引",
+      "adapter": "hgamer_html",
+      "enabled": true,
+      "role": "fallback_indexer",
+      "discovery_only": true,
+      "priority": 100,
+      "pages": [
+        "https://hgamer.tw/zh-CN/patches"
+      ],
+      "page_hosts": [
+        "hgamer.tw"
+      ],
+      "download_hosts": [],
+      "root_layout": null
+    },
+    "kind": "discover",
+    "responses": [
+      {
+        "url": "https://hgamer.tw/zh-CN/search?q=Game",
+        "body": "<html><body>\n<div class=\"summary\"><h1>Search</h1><p>找到 1 笔 results for Game</p></div>\n<div><h2>游戏</h2><ul><li><a href=\"/zh-CN/games/1\">Game</a></li></ul></div>\n</body></html>"
+      },
+      {
+        "url": "https://hgamer.tw/zh-CN/games/1",
+        "body": "<html><body>\n<div data-game-body>\n<h1>Game</h1>\n<div><a href=\"https://store.steampowered.com/app/42/Game/\">Steam</a>\n<a href=\"/zh-CN/patches/patch-1\">Patch</a></div>\n</div>\n</body></html>"
+      },
+      {
+        "url": "https://hgamer.tw/zh-CN/patches/patch-1",
+        "body": "<html><body>\n<div data-patch-body>\n<h1>Patch</h1>\n<div><a href=\"https://store.steampowered.com/app/42/Game/\">Steam</a>\n<p>ZIP</p>\n<a href=\"https://mirror.example/patch.zip\">下载 Mirror 1</a></div>\n</div>\n</body></html>"
+      }
+    ],
+    "page": null
+  },
+  {
+    "name": "hgamer-widget",
+    "rule": {
+      "id": "hgamer",
+      "name": "HGamer 补丁索引",
+      "adapter": "hgamer_html",
+      "enabled": true,
+      "role": "fallback_indexer",
+      "discovery_only": true,
+      "priority": 100,
+      "pages": [
+        "https://hgamer.tw/zh-CN/patches"
+      ],
+      "page_hosts": [
+        "hgamer.tw"
+      ],
+      "download_hosts": [],
+      "root_layout": null
+    },
+    "kind": "discover",
+    "responses": [
+      {
+        "url": "https://hgamer.tw/zh-CN/search?q=Game",
+        "body": "<html><body>\n<div class=\"summary\"><h1>Search</h1><p>找到 1 笔 results for Game</p></div>\n<div><h2>补丁</h2><ul><li><a href=\"/zh-CN/patches/patch-desc\">Game patch</a></li></ul></div>\n</body></html>"
+      },
+      {
+        "url": "https://hgamer.tw/zh-CN/patches/patch-1",
+        "body": "<html><body>\n<div data-patch-body=\"true\">\n<section class=\"hero\"><h1>Game 补丁</h1><p>v4</p></section>\n<section class=\"content\">\n<iframe src=\"https://store.steampowered.com/widget/42/\" title=\"Steam\"></iframe>\n<div class=\"block\"><div class=\"head\"><h2>补丁说明</h2></div><div class=\"text\"><p>ZIP</p></div></div>\n</section>\n</div>\n</body></html>"
+      }
+    ],
+    "page": null
+  }
+]

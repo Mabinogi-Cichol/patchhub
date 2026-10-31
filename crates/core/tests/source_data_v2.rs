@@ -11,7 +11,7 @@ use patchhub_core::sources::{
     snapshot::SourceSnapshot,
     store::{detail_key, SourceStore},
     Sources, GAME_MATCH_SCHEMA_VERSION, SOURCE_DETAIL_SCHEMA_VERSION, SOURCE_INDEX_SCHEMA_VERSION,
-    STORE_SCHEMA_VERSION,
+    SOURCE_SETTINGS_SCHEMA_VERSION, STORE_SCHEMA_VERSION,
 };
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
@@ -27,6 +27,16 @@ fn write_json(path: &Path, value: &Value) {
 
 fn read_json(path: &Path) -> Value {
     serde_json::from_slice(&fs::read(path).unwrap()).unwrap()
+}
+
+fn current_patchmoe_fingerprint() -> Option<String> {
+    let config: RulesConfig =
+        serde_json::from_str(patchhub_core::sources::DEFAULT_RULES_JSON).unwrap();
+    let rule = patchhub_core::sources::validate::validate_rule(
+        config.sources.iter().find(|r| r.id == "patchmoe").unwrap(),
+    )
+    .unwrap();
+    patchhub_core::sources::index::parser_fingerprint(&rule)
 }
 
 fn index_entry(title: &str, page: &str, url: &str) -> SourceIndexEntry {
@@ -136,6 +146,7 @@ fn source_match(index_revision: u64, status: SourceMatchStatus) -> SourceMatchRe
 
 fn fallback_match(status: FallbackMatchStatus) -> FallbackMatchRecord {
     FallbackMatchRecord {
+        sources_fingerprint: None,
         query_key: "q".to_string(),
         status,
         candidates: Vec::new(),
@@ -197,6 +208,7 @@ fn schema2_records_round_trip_and_failed_writes_keep_the_last_snapshot() {
     assert_eq!(STORE_SCHEMA_VERSION, 2);
 
     let index = SourceIndex {
+        parser_fingerprint: None,
         schema_version: SOURCE_INDEX_SCHEMA_VERSION,
         source_id: "patchmoe".to_string(),
         revision: 3,
@@ -555,9 +567,9 @@ fn schema1_state_migrates_to_schema2_without_losing_old_files() {
 
     let store = SourceStore::open(&state).unwrap();
 
-    // --- settings v1 -> v2 -------------------------------------------------
+    // --- settings v1 -> v3 (index namespace remains v2) --------------------
     let settings = store.load_settings().unwrap();
-    assert_eq!(settings.schema_version, STORE_SCHEMA_VERSION);
+    assert_eq!(settings.schema_version, SOURCE_SETTINGS_SCHEMA_VERSION);
     assert_eq!(settings.revision, 7);
     assert!(
         settings.intervals.is_empty(),
@@ -575,7 +587,7 @@ fn schema1_state_migrates_to_schema2_without_losing_old_files() {
     assert_eq!(settings.added[0].id, "extra");
     assert_eq!(
         read_json(&root.join("settings.json"))["schema_version"],
-        json!(2)
+        json!(SOURCE_SETTINGS_SCHEMA_VERSION)
     );
 
     // --- cache/<source>.json -> index/<source>.json ------------------------
@@ -734,7 +746,7 @@ fn schema1_state_migrates_to_schema2_without_losing_old_files() {
     assert_eq!(reopened.revision().unwrap(), 7);
     assert_eq!(
         reopened.load_settings().unwrap().schema_version,
-        STORE_SCHEMA_VERSION
+        SOURCE_SETTINGS_SCHEMA_VERSION
     );
     let new_after = collect_files(&root);
     assert_eq!(
@@ -818,7 +830,7 @@ fn failed_migration_reports_a_specific_code_and_preserves_old_files() {
     let retried = SourceStore::open(&state).unwrap();
     assert_eq!(
         retried.load_settings().unwrap().schema_version,
-        STORE_SCHEMA_VERSION
+        SOURCE_SETTINGS_SCHEMA_VERSION
     );
     assert!(retried.load_match(42).unwrap().is_some());
 }
@@ -828,6 +840,7 @@ fn failed_migration_reports_a_specific_code_and_preserves_old_files() {
 #[test]
 fn content_revision_ignores_timestamps_but_tracks_real_changes() {
     let previous = SourceIndex {
+        parser_fingerprint: None,
         schema_version: SOURCE_INDEX_SCHEMA_VERSION,
         source_id: "patchmoe".to_string(),
         revision: 4,
@@ -935,6 +948,7 @@ fn schedule_boundaries_match_the_p1_contract() {
     assert!(is_due(1_001, Some(1_000)));
 
     let settings = SettingsFile {
+        script_sources: BTreeMap::new(),
         schema_version: STORE_SCHEMA_VERSION,
         revision: 1,
         enabled: BTreeMap::new(),
@@ -1059,6 +1073,7 @@ fn legacy_files_migrate_once_and_new_snapshots_win() {
     assert!(store.load_match(42).unwrap().is_some());
 
     let fresh = SourceIndex {
+        parser_fingerprint: current_patchmoe_fingerprint(),
         schema_version: SOURCE_INDEX_SCHEMA_VERSION,
         source_id: "patchmoe".to_string(),
         revision: 9,
@@ -1083,6 +1098,7 @@ fn legacy_files_migrate_once_and_new_snapshots_win() {
         "https://www.patch.moe/",
         "appid",
     );
+    matched_candidate.parser_fingerprint = current_patchmoe_fingerprint();
     matched_candidate.mirrors = vec![Mirror {
         url: "https://download.patch.moe/fresh.zip".to_string(),
         label: None,
@@ -1167,6 +1183,7 @@ fn installer_resolve_works_from_a_published_index_before_any_match_task() {
     let store = SourceStore::open(&state).unwrap();
     store
         .save_index(&SourceIndex {
+            parser_fingerprint: current_patchmoe_fingerprint(),
             schema_version: SOURCE_INDEX_SCHEMA_VERSION,
             source_id: "patchmoe".to_string(),
             revision: 1,

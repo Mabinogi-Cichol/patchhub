@@ -133,6 +133,7 @@ mod tests {
 
     fn fallback(status: FallbackMatchStatus) -> FallbackMatchRecord {
         FallbackMatchRecord {
+            sources_fingerprint: None,
             query_key: "q".to_string(),
             status,
             candidates: Vec::new(),

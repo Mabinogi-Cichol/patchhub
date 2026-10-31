@@ -8,6 +8,7 @@ use patchhub_core::{
 };
 use serde::Serialize;
 use serde_json::{json, Value};
+use std::sync::Arc;
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -46,12 +47,15 @@ pub struct Params {
     pub instances: Vec<String>,
     /// `project_instances` requested instance ids.
     pub instance_ids: Vec<String>,
-    /// Declarative rule for `add_source` (validated against `RawSourceRule`).
     pub rule: Option<Value>,
+    pub api_version: Option<u32>,
+    pub code: Option<String>,
+    pub replace: bool,
     pub name_hints: Vec<String>,
 
     pub force: bool,
     pub force_details: Option<bool>,
+    pub browser_responses: Option<Vec<sources::browser::BrowserResponse>>,
 }
 
 impl Params {
@@ -93,10 +97,20 @@ impl Params {
             instances: string_list(&v, "instances"),
             instance_ids: string_list(&v, "instance_ids"),
             rule: v.get("rule").cloned(),
+            api_version: v
+                .get("api_version")
+                .and_then(Value::as_u64)
+                .map(|n| n as u32),
+            code: text("code"),
+            replace: v.get("replace").and_then(Value::as_bool).unwrap_or(false),
             name_hints: string_list(&v, "name_hints"),
 
             force: v.get("force").and_then(Value::as_bool).unwrap_or(false),
             force_details: v.get("force_details").and_then(Value::as_bool),
+            browser_responses: v
+                .get("browser_responses")
+                .filter(|v| !v.is_null())
+                .map(|v| serde_json::from_value(v.clone()).expect("validated browser responses")),
         }
     }
 }
@@ -183,7 +197,7 @@ impl ProgressCursor {
 }
 
 /// `get_capabilities` v5 payload (p1-host-contract §3.1, p1-contract §9.2):
-/// installer and source sub-objects merged with the full 22-method whitelist.
+/// installer and source sub-objects merged with the full 24-method whitelist.
 fn capabilities(_params: &Params) -> Value {
     let mut methods: Vec<&str> = Vec::with_capacity(METHODS.len());
     methods.extend(METHODS.iter().copied());
@@ -213,6 +227,7 @@ fn capabilities(_params: &Params) -> Value {
             "adapter_version": 1,
             "parser_version": sources::PARSER_VERSION,
             "encoding_version": sources::SOURCES_ENCODING_VERSION,
+            "script_api_version": sources::script::SCRIPT_API_VERSION,
             "methods": SOURCE_METHODS,
         },
         "methods": methods,
@@ -249,6 +264,11 @@ fn err(error: impl std::fmt::Display) -> DomainError {
         return DomainError::code(text);
     }
     for prefix in [
+        "script_source_syntax_error",
+        "script_source_runtime_error",
+        "script_source_contract_error",
+        "script_source_digest_mismatch",
+        "unsupported_script_api_version",
         "journal_error",
         "invalid_zip",
         "zip_member",
@@ -264,6 +284,50 @@ fn err(error: impl std::fmt::Display) -> DomainError {
 }
 fn value(data: impl Serialize) -> Result<Value, DomainError> {
     serde_json::to_value(data).map_err(err)
+}
+
+#[cfg(test)]
+fn fixture_source_rule(id: &str) -> sources::SourceRule {
+    let config: sources::RulesConfig = serde_json::from_str(sources::DEFAULT_RULES_JSON).unwrap();
+    sources::validate::validate_rule(config.sources.iter().find(|r| r.id == id).unwrap()).unwrap()
+}
+#[cfg(test)]
+fn fixture_source_index(id: &str) -> sources::SourceIndex {
+    sources::SourceIndex {
+        schema_version: 1,
+        source_id: id.into(),
+        parser_fingerprint: sources::index::parser_fingerprint(&fixture_source_rule(id)),
+        revision: 1,
+        complete: true,
+        checked_at: 100,
+        updated_at: 100,
+        etag: None,
+        modified: None,
+        entries: vec![],
+        pending: vec![],
+    }
+}
+
+#[cfg(test)]
+mod script_error_tests {
+    #[test]
+    fn script_error_codes_keep_the_complete_lua_detail() {
+        for code in [
+            "script_source_syntax_error",
+            "script_source_runtime_error",
+            "script_source_contract_error",
+            "script_source_digest_mismatch",
+            "unsupported_script_api_version",
+        ] {
+            let detail = format!(
+                "source=custom, entry=resolve_page: source/custom.lua:7: {}",
+                "中文".repeat(1200)
+            );
+            let domain = super::err(format!("{code}: {detail}"));
+            assert_eq!(domain.code, code);
+            assert!(domain.detail.unwrap().contains(&detail));
+        }
+    }
 }
 fn projection_error(error: DomainError) -> DomainError {
     error
@@ -392,7 +456,7 @@ fn validate_state_boundary(
 }
 
 pub fn execute(method: &str, params: Params) -> Result<Value, DomainError> {
-    let cancel = AtomicBool::new(false);
+    let cancel = Arc::new(AtomicBool::new(false));
     execute_controlled(method, params, &cancel)
 }
 
@@ -410,7 +474,7 @@ pub fn failed(code: impl Into<String>, detail: impl Into<String>) -> DomainError
 pub fn execute_controlled(
     method: &str,
     params: Params,
-    cancel: &AtomicBool,
+    cancel: &Arc<AtomicBool>,
 ) -> Result<Value, DomainError> {
     if !METHODS.contains(&method) {
         return Err(DomainError::code("unsupported_method"));
@@ -903,17 +967,54 @@ fn execute_source_method(
                 "subscribed": subscribed,
             }))
         }
-        "add_source" => {
-            let rule_value = params
-                .rule
-                .clone()
-                .ok_or_else(|| DomainError::code("rule_required"))?;
-            let raw: sources::RawSourceRule = serde_json::from_value(rule_value).map_err(err)?;
+        "get_script_source" => {
+            let source_id = params
+                .source_id
+                .as_deref()
+                .ok_or_else(|| DomainError::code("source_id_required"))?;
+            match sources::snapshot::SourceSnapshot::load(&state(params)?, &[], 0).map_err(err)? {
+                Some(snapshot) => value(snapshot.get_script_source(source_id).map_err(err)?),
+                None => value(sources::builtin::document(source_id).map_err(err)?),
+            }
+        }
+        "import_script_source" => {
+            let raw: sources::RawSourceRule = serde_json::from_value(
+                params
+                    .rule
+                    .clone()
+                    .ok_or_else(|| DomainError::code("rule_required"))?,
+            )
+            .map_err(err)?;
             let mut handle = open_sources(params)?;
-            let rule = handle.registry_mut().add_source(&raw).map_err(err)?;
+            value(
+                handle
+                    .import_script_source(
+                        &raw,
+                        params
+                            .api_version
+                            .ok_or_else(|| DomainError::code("api_version_required"))?,
+                        params
+                            .code
+                            .as_deref()
+                            .ok_or_else(|| DomainError::code("code_required"))?,
+                        params.replace,
+                    )
+                    .map_err(err)?,
+            )
+        }
+        "remove_source" => {
+            let source_id = params
+                .source_id
+                .as_deref()
+                .ok_or_else(|| DomainError::code("source_id_required"))?;
+            let mut handle = open_sources(params)?;
+            handle
+                .registry_mut()
+                .remove_source(source_id)
+                .map_err(err)?;
             Ok(json!({
                 "settings_revision": handle.settings_revision(),
-                "rule": rule,
+                "source_id": source_id,
             }))
         }
         "set_source_update_interval" => {
@@ -944,7 +1045,7 @@ fn execute_source_method(
 pub fn execute_streaming(
     method: &str,
     params: Params,
-    cancel: &AtomicBool,
+    cancel: &Arc<AtomicBool>,
     emit: &mut dyn FnMut(Value),
 ) -> Result<Value, DomainError> {
     match method {
@@ -985,7 +1086,7 @@ fn validate_match_query(games: &[sources::GameQuery], params: &Params) -> Result
 
 fn update_source_impl(
     params: &Params,
-    cancel: &AtomicBool,
+    cancel: &Arc<AtomicBool>,
     emit: &mut dyn FnMut(Value),
 ) -> Result<Value, DomainError> {
     let state = state(params)?;
@@ -1010,7 +1111,20 @@ fn update_source_impl(
         .map_err(err)?
         .map(|index| index.revision)
         .unwrap_or(0);
-    let mut ctx = source_http_context()?;
+    let mut ctx = match &params.browser_responses {
+        Some(pages) => {
+            for page in pages {
+                sources::validate::allowed_url(&page.url, &rule.page_hosts, false).map_err(err)?;
+                sources::validate::allowed_url(&page.response_url, &rule.page_hosts, false)
+                    .map_err(err)?;
+            }
+            sources::http::RequestContext::with_settings(
+                Box::new(sources::browser::BrowserFetcher::new(pages.clone())),
+                std::time::Duration::ZERO,
+            )
+        }
+        None => source_http_context()?,
+    };
 
     emit(source_progress_value(
         source_id, "index", 0, 0, true, revision,
@@ -1085,7 +1199,7 @@ fn update_source_impl(
 
 fn match_games_impl(
     params: &Params,
-    cancel: &AtomicBool,
+    cancel: &Arc<AtomicBool>,
     emit: &mut dyn FnMut(Value),
 ) -> Result<Value, DomainError> {
     let state = state(params)?;
@@ -1139,7 +1253,7 @@ fn match_games_impl(
 
 fn rematch_game_impl(
     params: &Params,
-    cancel: &AtomicBool,
+    cancel: &Arc<AtomicBool>,
     emit: &mut dyn FnMut(Value),
 ) -> Result<Value, DomainError> {
     let state = state(params)?;
@@ -1224,7 +1338,7 @@ fn install_patch(
     params: &Params,
     _report: &steam::ScanReport,
     platform: Platform,
-    cancel: &AtomicBool,
+    cancel: &Arc<AtomicBool>,
 ) -> Result<Value, DomainError> {
     use installer::service::*;
     let request = RequestId::new(
@@ -1385,7 +1499,7 @@ mod sources_tests {
             .iter()
             .map(|method| method.as_str().unwrap())
             .collect();
-        assert_eq!(methods.len(), 22);
+        assert_eq!(methods.len(), 24);
         assert!(methods.contains(&"match_games"));
         assert!(methods.contains(&"project_instances"));
         assert_eq!(capabilities["sources"]["index_schema_version"], 1);
@@ -1396,7 +1510,7 @@ mod sources_tests {
         assert_eq!(capabilities["sources"]["encoding_version"], 1);
         assert_eq!(
             capabilities["sources"]["methods"].as_array().unwrap().len(),
-            10
+            12
         );
         assert_eq!(capabilities["installer"]["schema_version"], 1);
         assert_eq!(
@@ -1534,6 +1648,11 @@ mod sources_tests {
                 status: sources::GameMatchStatus::Pending,
                 sources: Default::default(),
                 fallback: fallback_status.map(|status| sources::FallbackMatchRecord {
+                    sources_fingerprint: Some(sources::matching::fallback_sources_fingerprint(
+                        sources::Sources::open(state).unwrap().registry().rules(),
+                        &sources::model::Overrides::default(),
+                        appid,
+                    )),
                     query_key: "fixture".to_string(),
                     status,
                     candidates: Vec::new(),
@@ -1597,7 +1716,7 @@ mod sources_tests {
                 state_dir: Some(state),
                 ..Default::default()
             },
-            &AtomicBool::new(false),
+            &Arc::new(AtomicBool::new(false)),
             &mut |event| events.push(event),
         )
         .unwrap();
@@ -1620,7 +1739,7 @@ mod sources_tests {
                 state_dir: Some(state),
                 ..Default::default()
             },
-            &AtomicBool::new(false),
+            &Arc::new(AtomicBool::new(false)),
             &mut |_| {},
         )
         .unwrap_err();
@@ -1699,6 +1818,9 @@ mod sources_tests {
         let store = sources::store::SourceStore::open(&state).unwrap();
         store
             .save_index(&SourceIndex {
+                parser_fingerprint: sources::index::parser_fingerprint(&fixture_source_rule(
+                    "patchmoe",
+                )),
                 schema_version: 1,
                 source_id: "patchmoe".to_string(),
                 revision: 3,
@@ -1824,6 +1946,7 @@ mod sources_tests {
         assert!(result["settings_revision"].as_u64().unwrap() >= 2);
 
         let store = sources::store::SourceStore::open(&state).unwrap();
+        store.save_index(&fixture_source_index("patchmoe")).unwrap();
         store
             .save_status(
                 "patchmoe",
@@ -1896,7 +2019,7 @@ mod sources_tests {
                 source_id: Some("missing".to_string()),
                 ..Default::default()
             },
-            &AtomicBool::new(false),
+            &Arc::new(AtomicBool::new(false)),
             &mut |_| {},
         )
         .unwrap_err();
@@ -1909,7 +2032,7 @@ mod sources_tests {
                 source_id: Some("hgamer".to_string()),
                 ..Default::default()
             },
-            &AtomicBool::new(false),
+            &Arc::new(AtomicBool::new(false)),
             &mut |_| {},
         )
         .unwrap_err();
@@ -1999,6 +2122,9 @@ mod sources_tests {
         handle
             .store()
             .save_index(&SourceIndex {
+                parser_fingerprint: sources::index::parser_fingerprint(&fixture_source_rule(
+                    "patchmoe",
+                )),
                 schema_version: 1,
                 source_id: "patchmoe".to_string(),
                 revision: 1,
@@ -2153,7 +2279,7 @@ mod sources_tests {
                 interval_hours: Some(24),
                 ..Default::default()
             },
-            &AtomicBool::new(false),
+            &Arc::new(AtomicBool::new(false)),
             &mut |event| events.push(event),
         )
         .unwrap();
@@ -2500,6 +2626,9 @@ mod dynamic_projection_tests {
 
     fn dynamic_candidate() -> SourceCandidate {
         SourceCandidate {
+            parser_fingerprint: sources::index::parser_fingerprint(&fixture_source_rule(
+                "kagura-cn",
+            )),
             candidate_id: "candidate-000000000000000000000000".to_string(),
             source_id: "kagura-cn".to_string(),
             source_record_id: "https://kagurafan.com/patches/game".to_string(),
@@ -2542,6 +2671,10 @@ mod dynamic_projection_tests {
 
     fn save_dynamic_match(sources: &sources::Sources, candidate: SourceCandidate) {
         let source_id = candidate.source_id.clone();
+        sources
+            .store()
+            .save_index(&fixture_source_index(&source_id))
+            .unwrap();
         sources
             .store()
             .save_match(&GameMatchRecord {

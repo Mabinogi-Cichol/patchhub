@@ -11,6 +11,7 @@ import time
 import uuid
 from pathlib import Path
 from threading import Event
+from source_browser import collect_source_pages
 
 from protocol_validation import (MAX_INSTANCE_ID_BYTES, JS_MAX_INTEGER,
                                  validate_capabilities, validate_id)
@@ -54,7 +55,7 @@ def _name_hints(value):
 
 
 class SourceService:
-    def __init__(self, bridge, state_dir):
+    def __init__(self, bridge, state_dir, browser_fetch=collect_source_pages):
         self.bridge = bridge
         self._state_root = Path(state_dir).absolute()
         self.state_dir = self._state_root / "sources"
@@ -62,6 +63,7 @@ class SourceService:
         self._summaries = []
         self._tasks = {}
         self._closed = False
+        self._browser_fetch = browser_fetch
 
     # -- lifecycle ---------------------------------------------------------
     async def initialize(self):
@@ -137,8 +139,18 @@ class SourceService:
     async def set_name(self, source_id, name):
         return await self._call_sync("set_source_name", {"source_id": source_id, "name": name})
 
-    async def add_source(self, rule):
-        return await self._call_sync("add_source", {"rule": rule})
+    async def remove_source(self, source_id):
+        validate_id(source_id)
+        return await self._call_sync("remove_source", {"source_id": source_id})
+
+    async def get_script_source(self, source_id):
+        return await self.bridge.call_sync("get_script_source", {"source_id": source_id})
+
+    async def import_script_source(self, rule, api_version, code, replace=False):
+        result = await self.bridge.call_sync("import_script_source", {
+            "rule": rule, "api_version": api_version, "code": code, "replace": replace})
+        self.settings_revision = result["settings_revision"]
+        return result
 
     async def set_game_source(self, appid, source_id, subscribed):
         return await self._call_sync("set_game_source",
@@ -300,6 +312,19 @@ class SourceService:
             result = await self.bridge._call(method, params,
                                              on_event=lambda event: self._on_event(task, event),
                                              cancel=task["cancel"])
+            if (method == "update_source" and params.get("source_id") == "patchmoe"
+                    and result.get("status", {}).get("code") in {
+                        "source_browser_verification_required", "source_age_verification_required"}):
+                source = next(source for source in self._summaries if source["id"] == "patchmoe")
+                def progress(phase):
+                    task["progress"] = {"phase": phase, "running": True, "completed": None, "total": None}
+                pages = await self._browser_fetch(source["pages"][0], task["cancel"], progress)
+                if task["cancel"].is_set():
+                    raise ValueError("task_cancelled")
+                result = await self.bridge._call(method, dict(params, force=True, browser_responses=pages),
+                                                 on_event=lambda event: self._on_event(task, event), cancel=task["cancel"])
+                if not result.get("complete"):
+                    raise ValueError(result["status"]["code"])
             self._finish_result(task, method, result)
         except asyncio.CancelledError:
             task["state"] = "cancelled"

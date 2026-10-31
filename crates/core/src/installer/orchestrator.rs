@@ -678,6 +678,9 @@ pub(crate) mod tests {
 
     pub(crate) fn candidate() -> SourceCandidate {
         SourceCandidate {
+            parser_fingerprint: crate::sources::index::parser_fingerprint(
+                &crate::sources::test_fixtures::default_rule("kagura-cn"),
+            ),
             candidate_id: "candidate-000000000000000000000000".to_string(),
             source_id: "kagura-cn".to_string(),
             source_record_id: "https://kagurafan.com/patches/game".to_string(),
@@ -722,9 +725,9 @@ pub(crate) mod tests {
     /// per-game discovery record seeded by these tests.
     pub(crate) fn save_match(sources: &Sources, appid: u32, candidate: SourceCandidate) {
         let source_id = candidate.source_id.clone();
-        sources
-            .store()
-            .save_match(&GameMatchRecord {
+        crate::sources::test_fixtures::save_match(
+            sources.registry(),
+            GameMatchRecord {
                 schema_version: 1,
                 appid,
                 name: "Game".to_string(),
@@ -744,8 +747,9 @@ pub(crate) mod tests {
                 )]),
                 fallback: None,
                 updated_at: 100,
-            })
-            .unwrap();
+            },
+        )
+        .unwrap();
     }
 
     pub(crate) fn query() -> GameQuery {
@@ -765,6 +769,7 @@ pub(crate) mod tests {
     /// not require a seeded registry (facts/acquire/reinstall-error paths).
     fn source_rule() -> SourceRule {
         SourceRule {
+            script: None,
             id: "kagura-cn".to_string(),
             name: "Kagura".to_string(),
             adapter: "kagura_wordpress".to_string(),
@@ -813,6 +818,9 @@ pub(crate) mod tests {
         handle
             .store()
             .save_index(&SourceIndex {
+                parser_fingerprint: crate::sources::index::parser_fingerprint(
+                    &crate::sources::test_fixtures::default_rule("patchmoe"),
+                ),
                 schema_version: 1,
                 source_id: "patchmoe".to_string(),
                 revision: 1,

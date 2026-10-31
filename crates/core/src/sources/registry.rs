@@ -7,17 +7,28 @@
 //! loaded lazily (or preloaded for an immutable snapshot); the legacy per-game
 //! cache/discovery trees are only read by the one-time v1 → v2 migration.
 
-use super::canonical;
 use super::matching::{select_entry, EntrySelection};
 use super::model::*;
 use super::r#match::candidate_is_credible;
 use super::store::SourceStore;
 use super::validate;
+use super::{canonical, index};
 use super::{
-    invalid, Clock, Result, SystemClock, BUILTIN_ADAPTERS, GAME_MATCH_SCHEMA_VERSION,
-    SOURCE_INDEX_SCHEMA_VERSION,
+    invalid, Clock, Result, SystemClock, GAME_MATCH_SCHEMA_VERSION, SOURCE_INDEX_SCHEMA_VERSION,
 };
 use std::collections::{BTreeMap, HashSet};
+
+fn stored_rule<'a>(
+    builtins: &'a [SourceRule],
+    settings: &'a SettingsFile,
+    source_id: &str,
+) -> Option<&'a SourceRule> {
+    settings
+        .added
+        .iter()
+        .find(|rule| rule.id == source_id)
+        .or_else(|| builtins.iter().find(|rule| rule.id == source_id))
+}
 
 pub struct SourceRegistry {
     store: SourceStore,
@@ -25,6 +36,7 @@ pub struct SourceRegistry {
     rules: Vec<SourceRule>,
     overrides: Overrides,
     names: BTreeMap<String, String>,
+    script_sources: BTreeMap<String, String>,
     revision: u64,
     status: BTreeMap<String, SourceStatus>,
     /// Published index snapshots, keyed by source id.
@@ -53,6 +65,7 @@ impl SourceRegistry {
             rules: Vec::new(),
             overrides: Overrides::default(),
             names: BTreeMap::new(),
+            script_sources: BTreeMap::new(),
             revision: 0,
             status: BTreeMap::new(),
             indexes: BTreeMap::new(),
@@ -124,11 +137,14 @@ impl SourceRegistry {
     fn reload(&mut self) -> Result<()> {
         let settings = self.store.settings()?;
         self.revision = settings.revision;
-        let overrides = Overrides {
+        let mut overrides = Overrides {
             enabled: settings.enabled.clone(),
             added: settings.added.clone(),
             games: settings.games.clone(),
         };
+        for rule in &mut overrides.added {
+            super::builtin::bind(rule);
+        }
         validate::validate_overrides(&overrides)?;
 
         let added_ids: HashSet<&str> = overrides
@@ -142,6 +158,9 @@ impl SourceRegistry {
             .filter(|rule| !added_ids.contains(rule.id.as_str()))
             .cloned()
             .collect();
+        for rule in &mut rules {
+            super::builtin::bind(rule);
+        }
         rules.extend(overrides.added.iter().cloned());
         let mut seen = HashSet::new();
         for rule in &rules {
@@ -157,6 +176,14 @@ impl SourceRegistry {
 
         self.rules = rules;
         self.names = settings.names;
+        self.script_sources = settings.script_sources;
+        for rule in &self.rules {
+            if let Some(code) = super::builtin::code(&rule.adapter) {
+                self.script_sources
+                    .entry(rule.id.clone())
+                    .or_insert_with(|| code.to_owned());
+            }
+        }
         self.overrides = overrides;
         self.status.clear();
         self.indexes.clear();
@@ -174,7 +201,12 @@ impl SourceRegistry {
     /// Published index snapshot for `source_id` (lazy read outside a snapshot).
     fn index(&self, source_id: &str) -> Option<SourceIndex> {
         if let Some(index) = self.indexes.get(source_id) {
-            return Some(index.clone());
+            return self
+                .rules
+                .iter()
+                .find(|rule| rule.id == source_id)
+                .filter(|rule| index::compatible(index, rule))
+                .map(|_| index.clone());
         }
         if self.frozen_snapshot {
             return None;
@@ -184,14 +216,17 @@ impl SourceRegistry {
             .ok()
             .flatten()
             .filter(|index| {
-                index.schema_version == SOURCE_INDEX_SCHEMA_VERSION && index.source_id == source_id
+                self.rules
+                    .iter()
+                    .find(|rule| rule.id == source_id)
+                    .is_some_and(|rule| index::compatible(index, rule))
             })
     }
 
     /// Persisted match record for `appid` (lazy read outside a snapshot).
     fn match_record(&self, appid: u32) -> Option<GameMatchRecord> {
         if let Some(record) = self.matches.get(&appid) {
-            return Some(record.clone());
+            return Some(self.current_record(record.clone()));
         }
         if self.frozen_snapshot {
             return None;
@@ -203,6 +238,13 @@ impl SourceRegistry {
             .filter(|record| {
                 record.schema_version == GAME_MATCH_SCHEMA_VERSION && record.appid == appid
             })
+            .map(|record| self.current_record(record))
+    }
+
+    fn current_record(&self, record: GameMatchRecord) -> GameMatchRecord {
+        super::matching::current_record(record, &self.rules, &self.overrides, |rule| {
+            self.index(&rule.id)
+        })
     }
 
     pub fn list_sources(&self) -> Vec<SourceSummary> {
@@ -214,8 +256,17 @@ impl SourceRegistry {
         self.rules
             .iter()
             .map(|rule| {
-                let status = self.status.get(&rule.id);
                 let index = self.index(&rule.id);
+                let stored_status = self.status.get(&rule.id);
+                let status = stored_status.filter(|status| {
+                    rule.script.is_none()
+                        || index.is_some()
+                        || matches!(
+                            status.code.as_str(),
+                            "source_browser_verification_required"
+                                | "source_age_verification_required"
+                        )
+                });
                 let code = status.map(|status| status.code.clone()).unwrap_or_else(|| {
                     if index.is_some() {
                         "cached".to_string()
@@ -236,9 +287,12 @@ impl SourceRegistry {
                     .map(|status| status.checked_at)
                     .or_else(|| index.as_ref().map(|index| index.checked_at));
                 let interval_hours = intervals.get(&rule.id).copied().unwrap_or(0);
+                // Scheduling reads the real last attempt even when the display
+                // filter above withholds it: otherwise a first failed attempt
+                // would never be retried automatically.
                 let next_due_at = super::schedule::next_due_at(
                     interval_hours,
-                    status.map(|status| status.checked_at).unwrap_or(0),
+                    stored_status.map(|status| status.checked_at).unwrap_or(0),
                 );
                 let mut display_rule = rule.clone();
                 if let Some(name) = self.names.get(&rule.id) {
@@ -269,14 +323,14 @@ impl SourceRegistry {
                     matched.insert(source_id.clone());
                 }
             }
-            if record
+            if let Some(fallback) = record
                 .fallback
                 .as_ref()
-                .is_some_and(|fallback| fallback.status == FallbackMatchStatus::Matched)
+                .filter(|fallback| fallback.status == FallbackMatchStatus::Matched)
             {
-                for rule in &self.rules {
-                    if rule.role == SourceRole::FallbackIndexer {
-                        matched.insert(rule.id.clone());
+                for candidate in &fallback.candidates {
+                    if candidate_is_credible(candidate) {
+                        matched.insert(candidate.source_id.clone());
                     }
                 }
             }
@@ -383,7 +437,7 @@ impl SourceRegistry {
             if entry.date.as_deref() == Some("COMING SOON") {
                 continue;
             }
-            result.push(candidate_from_index_match(
+            let mut candidate = candidate_from_index_match(
                 &rule.id,
                 game.appid,
                 entry.appid,
@@ -393,7 +447,9 @@ impl SourceRegistry {
                 &entry.page,
                 url,
                 index.checked_at,
-            ));
+            );
+            index::bind_candidate(rule, &mut candidate);
+            result.push(candidate);
         }
         result
     }
@@ -428,10 +484,10 @@ impl SourceRegistry {
         if !self.rules.iter().any(|rule| rule.id == source_id) {
             return Err(invalid("unknown_source"));
         }
-        let mut overrides = self.overrides.clone();
-        overrides.enabled.insert(source_id.to_string(), enabled);
-        self.store.apply_overrides(&overrides)?;
-        self.store.bump_revision()?;
+        self.store.update_settings(|settings| {
+            settings.enabled.insert(source_id.to_string(), enabled);
+            Ok(())
+        })?;
         self.reload()
     }
 
@@ -444,25 +500,107 @@ impl SourceRegistry {
             return Err(invalid("invalid_source_name"));
         }
         self.store.set_name(source_id, name)?;
-        self.store.bump_revision()?;
         self.reload()?;
         Ok(name.to_string())
     }
 
-    pub fn add_source(&mut self, raw: &RawSourceRule) -> Result<SourceRule> {
-        let rule = validate::validate_rule(raw)?;
-        if !BUILTIN_ADAPTERS.contains(&rule.adapter.as_str()) {
-            return Err(invalid("source_exists_or_adapter_unavailable"));
+    /// Compile only, then atomically store rule, raw UTF-8 source and digest.
+    pub fn import_script_source(
+        &mut self,
+        raw: &RawSourceRule,
+        api_version: u32,
+        code: &str,
+        replace: bool,
+    ) -> Result<ImportedScriptSource> {
+        let mut rule = validate::validate_rule(raw)?;
+        if rule.adapter != "lua" {
+            return Err(invalid("source_not_script"));
         }
-        if self.rules.iter().any(|existing| existing.id == rule.id) {
-            return Err(invalid("source_exists_or_adapter_unavailable"));
-        }
-        let mut overrides = self.overrides.clone();
-        overrides.added.push(rule.clone());
-        self.store.apply_overrides(&overrides)?;
-        self.store.bump_revision()?;
+        rule.script = Some(super::script::validate_code(
+            &rule.id,
+            api_version,
+            code.as_bytes(),
+        )?);
+        let rule_id = rule.id.clone();
+        let revision = self.store.update_settings(|settings| {
+            let user_rule = settings
+                .added
+                .iter()
+                .find(|rule| rule.id == rule_id)
+                .cloned();
+            match (replace, user_rule) {
+                (false, Some(_)) => return Err(invalid("script_source_exists")),
+                (false, None) => {
+                    if self.builtins.iter().any(|builtin| builtin.id == rule_id) {
+                        return Err(invalid("script_source_exists"));
+                    }
+                }
+                (true, Some(existing)) => {
+                    rule.enabled = settings
+                        .enabled
+                        .get(&rule_id)
+                        .copied()
+                        .unwrap_or(existing.enabled);
+                }
+                (true, None) => {
+                    return Err(invalid(
+                        if self.builtins.iter().any(|builtin| builtin.id == rule_id) {
+                            "source_builtin_readonly"
+                        } else {
+                            "unknown_source"
+                        },
+                    ));
+                }
+            }
+            settings.added.retain(|existing| existing.id != rule_id);
+            settings.added.push(rule.clone());
+            settings
+                .script_sources
+                .insert(rule_id.clone(), code.to_string());
+            Ok(settings.revision)
+        })?;
         self.reload()?;
-        Ok(rule)
+        Ok(ImportedScriptSource {
+            rule,
+            settings_revision: revision,
+        })
+    }
+
+    /// Delete a user-added source (a custom source or an older user override of
+    /// a builtin ID). Bundled sources are read-only and never removable; deleting
+    /// a user rule whose ID matches a builtin restores the bundled definition.
+    ///
+    /// Cached index/detail/match files are left on disk: they are bound to the
+    /// rule's parsing identity, so a re-added source with a different definition
+    /// cannot reuse them.
+    pub fn remove_source(&mut self, source_id: &str) -> Result<u64> {
+        let builtin = self.builtins.iter().any(|rule| rule.id == source_id);
+        let revision = self.store.update_settings(|settings| {
+            let Some(position) = settings.added.iter().position(|rule| rule.id == source_id) else {
+                return Err(invalid(if builtin {
+                    "source_builtin_readonly"
+                } else {
+                    "unknown_source"
+                }));
+            };
+            settings.added.remove(position);
+            settings.script_sources.remove(source_id);
+            settings.enabled.remove(source_id);
+            settings.names.remove(source_id);
+            settings.intervals.remove(source_id);
+            Ok(settings.revision)
+        })?;
+        self.reload()?;
+        Ok(revision)
+    }
+
+    pub fn get_script_source(&self, source_id: &str) -> Result<ScriptSourceDocument> {
+        let rule = self
+            .rules
+            .iter()
+            .find(|rule| rule.id == source_id)
+            .ok_or_else(|| invalid("unknown_source"))?;
+        super::script::document(rule, self.script_sources.get(source_id).map(String::as_str))
     }
 
     pub fn set_game_source(&mut self, appid: u32, source_id: &str, subscribed: bool) -> Result<()> {
@@ -472,30 +610,31 @@ impl SourceRegistry {
         if !self.rules.iter().any(|rule| rule.id == source_id) {
             return Err(invalid("unknown_source"));
         }
-        let mut overrides = self.overrides.clone();
-        overrides
-            .games
-            .entry(appid.to_string())
-            .or_default()
-            .insert(source_id.to_string(), subscribed);
-        self.store.apply_overrides(&overrides)?;
-        self.store.bump_revision()?;
+        self.store.update_settings(|settings| {
+            settings
+                .games
+                .entry(appid.to_string())
+                .or_default()
+                .insert(source_id.to_string(), subscribed);
+            Ok(())
+        })?;
         self.reload()
     }
 
     /// Sets a source's automatic update interval in hours (`0` = off). The
     /// fallback indexer is queried per game and never site-wide scheduled.
     pub fn set_update_interval(&mut self, source_id: &str, interval_hours: u64) -> Result<()> {
-        let rule = self
-            .rules
-            .iter()
-            .find(|rule| rule.id == source_id)
-            .ok_or_else(|| invalid("unknown_source"))?;
-        if rule.role == SourceRole::FallbackIndexer {
-            return Err(invalid("source_not_indexable"));
-        }
-        self.store.set_interval(source_id, interval_hours)?;
-        self.store.bump_revision()?;
+        self.store.update_settings(|settings| {
+            let rule = stored_rule(&self.builtins, settings, source_id)
+                .ok_or_else(|| invalid("unknown_source"))?;
+            if rule.role == SourceRole::FallbackIndexer {
+                return Err(invalid("source_not_indexable"));
+            }
+            settings
+                .intervals
+                .insert(source_id.to_string(), interval_hours);
+            Ok(())
+        })?;
         self.reload()
     }
 
@@ -527,7 +666,11 @@ impl SourceRegistry {
                         && rule.enabled
                         && self.game_subscribed(game.appid, &rule.id)
                 });
-                if fallback.status == FallbackMatchStatus::Matched && fallback_active {
+                if matches!(
+                    fallback.status,
+                    FallbackMatchStatus::Matched | FallbackMatchStatus::Incomplete
+                ) && fallback_active
+                {
                     candidates.extend(fallback.candidates.iter().cloned());
                 }
             }
@@ -683,6 +826,7 @@ pub(crate) fn candidate_from_index_match(
     ]);
     let candidate_id = canonical::candidate_id(&identity);
     let mut candidate = SourceCandidate {
+        parser_fingerprint: None,
         candidate_id,
         source_id: source_id.to_string(),
         source_record_id: canonical::canonical_url(source_page),
@@ -791,12 +935,14 @@ mod tests {
         let mut registry = registry_at(temp.path());
         assert_eq!(registry.list_sources()[0].rule.name, "Shiravune");
         let mut raw: RawSourceRule = serde_json::from_value(serde_json::json!({
-            "id": "custom", "name": "Custom", "adapter": "patchmoe", "enabled": true,
-            "pages": ["https://www.patch.moe/"], "page_hosts": ["www.patch.moe"],
-            "download_hosts": ["download.patch.moe"], "root_layout": "game_root"
+            "id": "custom", "name": "Custom", "enabled": true,
+            "pages": ["https://example.com/"], "page_hosts": ["example.com"],
+            "download_hosts": ["download.example.com"], "root_layout": "game_root"
         }))
         .unwrap();
-        registry.add_source(&raw).unwrap();
+        registry
+            .import_script_source(&raw, 1, "return {}", false)
+            .unwrap();
         registry.set_enabled("patchmoe", false).unwrap();
         registry.set_game_source(42, "patchmoe", false).unwrap();
         registry.set_update_interval("patchmoe", 24).unwrap();
@@ -903,6 +1049,9 @@ mod tests {
 
     fn index(entries: Vec<SourceIndexEntry>) -> SourceIndex {
         SourceIndex {
+            parser_fingerprint: super::super::index::parser_fingerprint(
+                &super::super::test_fixtures::default_rule("patchmoe"),
+            ),
             schema_version: SOURCE_INDEX_SCHEMA_VERSION,
             source_id: "patchmoe".to_string(),
             revision: 3,
@@ -961,15 +1110,56 @@ mod tests {
                 })
                 .collect(),
             fallback: fallback.map(|status| FallbackMatchRecord {
+                sources_fingerprint: Some(super::super::matching::fallback_sources_fingerprint(
+                    registry.rules(),
+                    registry.overrides(),
+                    appid,
+                )),
                 query_key: "query".to_string(),
                 status,
-                candidates: Vec::new(),
+                candidates: if status == FallbackMatchStatus::Matched {
+                    vec![candidate("hgamer", appid)]
+                } else {
+                    Vec::new()
+                },
                 checked_at: 1_000,
                 diagnostics: Vec::new(),
             }),
             updated_at: 1_000,
         };
-        registry.store().save_match(&record).unwrap();
+        super::super::test_fixtures::save_match(registry, record).unwrap();
+    }
+
+    #[test]
+    fn script_source_first_failed_attempt_still_schedules_a_retry() {
+        let temp = tempfile::tempdir().unwrap();
+        {
+            let mut registry = registry_at(temp.path());
+            registry.set_update_interval("patchmoe", 6).unwrap();
+            registry
+                .store()
+                .save_status(
+                    "patchmoe",
+                    &SourceStatus {
+                        checked_at: 1_000,
+                        cached_at: None,
+                        entry_count: 0,
+                        code: "source_refresh_failed".to_string(),
+                    },
+                )
+                .unwrap();
+        }
+        let registry = registry_at(temp.path());
+        let summary = registry
+            .list_sources()
+            .into_iter()
+            .find(|source| source.rule.id == "patchmoe")
+            .unwrap();
+        // No published index yet: the attempt stays hidden from the card …
+        assert_eq!(summary.status, "not_refreshed");
+        assert_eq!(summary.checked_at, None);
+        // … but it still schedules the next automatic attempt.
+        assert_eq!(summary.next_due_at, Some(1_000 + 6 * 3_600));
     }
 
     #[test]

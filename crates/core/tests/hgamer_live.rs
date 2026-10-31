@@ -37,8 +37,16 @@ fn run(appid: u32, name: &str) {
     };
     let mut ctx = RequestContext::new().unwrap();
     let started = Instant::now();
-    let outcome =
-        adapters::discover(&rule, &query, &mut ctx, &DiscoverPrevious::default()).unwrap();
+    let outcome = adapters::source_adapter(&rule, None)
+        .unwrap()
+        .discover(
+            &rule,
+            &query,
+            &mut ctx,
+            &DiscoverPrevious::default(),
+            &std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        )
+        .unwrap();
     let mut visited: Vec<String> = ctx.visited.into_iter().collect();
     visited.sort();
     println!("\n=== appid={appid} name={name}");

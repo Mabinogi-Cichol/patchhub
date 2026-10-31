@@ -2,6 +2,14 @@
 
 本清单区分已构建产物与已验收发行版。当前版本仍为开发 Alpha，完整开发计划的样本数量及双端 UI 门槛尚未达到。
 
+## v0.5.0 发布准备（2026-11-01）
+
+- 用户授权将 `feature/script-source-adapters` 合并至 `main` 并发布 v0.5.0，包含此前本地 `main` 的来源名称改动及当前分支的 Lua 来源迁移、后台 Shiravune 访问、双端脚本管理与相关修复。
+- 沿用[脚本来源施工记录](features/script-source-adapters/progress.md)及[来源名称施工记录](features/source-display-names/progress.md)中对应当前文件的验证；本轮只更新应用版本和发行文档，不重复执行已完成的产品回归。标签 CI 将重新执行双平台检查、构建与打包。
+- 应用版本从根 `Cargo.toml` 同步为 0.5.0，Windows 使用 0.5.0+1；正式发行必须来自 `v0.5.0` 标签构建，公开附件限定三个安装包与 `SHA256SUMS.txt`。中文正文见[发行说明](releases/v0.5.0.md)。
+- Breaking Change 保持已确认决策：旧解析索引与候选不复用，升级后重新更新来源与匹配；不新增缓存迁移。
+- 标签 CI、公开 Release 与附件核验待执行。未验收项继续保留：本次最终包的 Steam Deck 部署、实体手柄/软键盘、全新会话、真实游戏安装矩阵、Windows 安装包安装与系统 DPI 等；既有局部实机证据不代表本次最终包通过这些项目。
+
 ## 构建与来源
 
 - Rust 依赖锁定于 Cargo.lock，前端依赖锁定于 package-lock.json；安装依赖使用 npm ci。

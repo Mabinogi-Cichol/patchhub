@@ -90,6 +90,27 @@ class SourceTasksRpcTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result[0]["name"], "Shiravune")
         plugin.bridge.scan.assert_not_awaited()
 
+    async def test_script_rpcs_keep_full_source_and_error_detail(self):
+        plugin = self.plugin()
+        code = "-- " + "源码" * 40000 + "\nreturn {}"
+        document = {"rule": {"id": "custom"}, "api_version": 1, "code": code, "sha256": "a" * 64}
+        plugin.sources.get_script_source = AsyncMock(return_value=document)
+        self.assertEqual(await plugin.get_script_source("custom"), document)
+        result = {"rule": document["rule"], "settings_revision": 3}
+        plugin.sources.import_script_source = AsyncMock(return_value=result)
+        saved = await plugin.import_script_source('{"id":"custom"}', 1, code, True)
+        plugin.sources.import_script_source.assert_awaited_once_with({"id": "custom"}, 1, code, True)
+        self.assertEqual(saved, result)
+        detail = "source/custom.lua:8: " + "完整语法诊断" * 1000
+        plugin.sources.import_script_source.side_effect = CoreError("script_source_syntax_error", detail)
+        with self.assertRaises(RuntimeError) as failure:
+            await plugin.import_script_source('{"id":"custom"}', 1, "return {", True)
+        self.assertIn(detail, str(failure.exception))
+        plugin.sources.get_script_source.side_effect = CoreError("script_source_digest_mismatch", detail)
+        with self.assertRaises(RuntimeError) as failure:
+            await plugin.get_script_source("custom")
+        self.assertIn(detail, str(failure.exception))
+
     async def test_task_status_and_cancel_are_keyed_by_task_id(self):
         plugin = self.plugin()
         self.assertEqual((await plugin.source_task_status("task-1"))["task_id"], "task-1")

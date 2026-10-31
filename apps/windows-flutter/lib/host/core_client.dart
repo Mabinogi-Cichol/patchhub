@@ -5,6 +5,7 @@ import 'dart:io';
 import 'core_paths.dart';
 import 'core_task.dart';
 import 'protocol_models.dart';
+import 'source_browser.dart';
 export 'protocol_models.dart';
 
 class CoreClient {
@@ -13,6 +14,23 @@ class CoreClient {
   final WireProtocol protocol;
   Future<Process> startProcess(String channel) =>
       Process.start(paths.binary, [channel]);
+  Future<List<Map<String, dynamic>>> collectSourcePages(
+    String sourceId,
+    Future<void> cancelled,
+    void Function(String) progress,
+  ) async {
+    final sources = await call('list_sources') as List;
+    final source = sources.cast<Map>().firstWhere(
+      (source) => source['id'] == sourceId,
+    );
+    return collectSourceInBackground(
+      paths.stateDirectory,
+      (source['pages'] as List).first as String,
+      cancelled,
+      progress,
+    );
+  }
+
   final _calls = <Future<void>>{};
   final _reads = <CoreTask>{};
   bool _closing = false;

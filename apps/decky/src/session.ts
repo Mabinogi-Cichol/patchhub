@@ -99,6 +99,17 @@ export function createManagerSession(readSnapshot: () => Promise<Snapshot>, sour
   function commitSources(sources: SourceSubscription[]) {
     if (state.report) update({ report: { ...state.report, sources } });
   }
+  function commitScriptSource(sources: SourceSubscription[], settingsRevision: number) {
+    if (!state.report) return;
+    // A script save changes parser identity / the aggregate fallback set.
+    // Remove old source results before projection so pending/failed reads
+    // cannot restore them through retainQueryResults.
+    update({ report: { ...state.report, sources, settings_revision: settingsRevision,
+      installs: state.report.installs.map(row => ({ ...row,
+        patches: row.patches.filter(patch => patch.source_id == null),
+        discovery: discovery("pending", [], []),
+      })) } });
+  }
   function mergeInstances(instances: Install[]) {
     if (!state.report || !instances.length) return;
     const byInstance = new Map(instances.map(instance => [instance.game.instance_id, instance]));
@@ -271,6 +282,8 @@ export function createManagerSession(readSnapshot: () => Promise<Snapshot>, sour
     refresh,
     invalidateDiscovery,
     commitSources,
+    commitScriptSource,
+    projectRows,
     updateSource,
     matchGames,
     rematchGame,

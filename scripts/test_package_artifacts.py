@@ -30,6 +30,14 @@ class PackagingTests(unittest.TestCase):
         with patch.object(packager, 'ROOT', root), patch.object(packager, 'OUTPUT', root / '.artifacts'), patch.object(sys, 'argv', ['package-artifacts.py', '--platform', platform]):
             packager.main()
 
+    def test_decky_rejects_stale_script_runtime_license(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.fixture(root)
+            self.write(root, 'apps/decky/plugin-output/licenses/Lua-5.4-LICENSE.txt', b'stale')
+            with self.assertRaisesRegex(ValueError, 'Lua-5.4-LICENSE'):
+                self.run_package(root, 'decky')
+
     def fixture(self, root, windows=False):
         self.write(root, 'Cargo.toml', b'[workspace.package]\nversion = "1.2.3"\n')
         self.write(root, 'scripts/windows-update.ps1', Path(__file__).with_name('windows-update.ps1').read_bytes())
@@ -37,6 +45,10 @@ class PackagingTests(unittest.TestCase):
         self.write(root, 'package-lock.json', b'npm lock')
         plugin = root / 'apps/decky/plugin-output'
         self.write(plugin, 'package.json', b'{"version":"1.2.3"}')
+        for name in packager.SCRIPT_LICENSES:
+            data = name.encode()
+            self.write(root, 'scripts/licenses/' + name, data)
+            self.write(plugin, 'licenses/' + name, data)
         for name in packager.PRODUCTION_BACKEND:
             self.write(plugin, 'backend/' + name)
         for name in ('protocol.py', 'v5.schema.json'):
@@ -66,9 +78,11 @@ class PackagingTests(unittest.TestCase):
             for path in ('patchhub.exe', 'patchhub-core.exe', 'patchhub-worker.exe',
                          'flutter_windows.dll', 'msvcp140.dll', 'vcruntime140.dll', 'vcruntime140_1.dll', 'file_selector_windows_plugin.dll',
                          'url_launcher_windows_plugin.dll', 'window_manager_plugin.dll',
-                         'screen_retriever_windows_plugin.dll', 'data/icudtl.dat', 'data/app.so',
+                         'screen_retriever_windows_plugin.dll', 'webview_flutter_windows_plugin.dll',
+                         'WebView2Loader.dll', 'data/icudtl.dat', 'data/app.so',
                          'data/flutter_assets/AssetManifest.bin', 'data/flutter_assets/NOTICES.Z',
                          'data/flutter_assets/assets/protocol-v5.schema.json',
+                         'data/flutter_assets/assets/shiravune-browser.js',
                          'resources/catalog.json', 'resources/signed-catalog.json', 'resources/trust-keys.json',
                          'resources/licenses/Flutter-LICENSE', 'resources/licenses/Dart-LICENSE'):
                 self.write(bundle, path)

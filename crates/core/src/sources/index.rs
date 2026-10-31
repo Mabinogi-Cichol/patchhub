@@ -7,8 +7,33 @@
 //! after the one-time v1 → v2 upgrade.
 
 use super::canonical;
-use super::model::{DiscoveryIndexRecord, SourceCache, SourceIndex, SourceIndexEntry};
+use super::model::{DiscoveryIndexRecord, SourceCache, SourceIndex, SourceIndexEntry, SourceRule};
 use super::SOURCE_INDEX_SCHEMA_VERSION;
+
+pub fn parser_fingerprint(rule: &SourceRule) -> Option<String> {
+    rule.script.as_ref().map(|_| super::rule_fingerprint(rule))
+}
+
+/// An old snapshot remains on disk but cannot authorize a new parser.
+pub fn compatible(index: &SourceIndex, rule: &SourceRule) -> bool {
+    index.source_id == rule.id
+        && index.schema_version == SOURCE_INDEX_SCHEMA_VERSION
+        && index.parser_fingerprint == parser_fingerprint(rule)
+}
+
+pub(crate) fn bind_candidate(rule: &SourceRule, candidate: &mut super::model::SourceCandidate) {
+    let Some(fingerprint) = parser_fingerprint(rule) else {
+        return;
+    };
+    if candidate.parser_fingerprint.is_none() {
+        candidate.candidate_id =
+            canonical::candidate_id(&serde_json::json!([candidate.candidate_id, fingerprint]));
+    }
+    candidate.parser_fingerprint = Some(fingerprint);
+    candidate.fingerprint = canonical::fingerprint(
+        &serde_json::to_value(&*candidate).expect("candidate serialization"),
+    );
+}
 
 /// Content revision for a published index: bump only when the normalized
 /// entries, `complete` or `pending` set actually changed. `checked_at` /
@@ -88,6 +113,7 @@ pub fn from_cache(source_id: &str, cache: &SourceCache) -> SourceIndex {
     }));
     let complete = cache.cached_at.is_some();
     SourceIndex {
+        parser_fingerprint: None,
         schema_version: SOURCE_INDEX_SCHEMA_VERSION,
         source_id: source_id.to_string(),
         revision: content_revision(0, None, &entries, complete, &[]),
@@ -127,6 +153,7 @@ pub fn from_discovery_index(source_id: &str, record: &DiscoveryIndexRecord) -> S
     let pending = record.index.pending.clone();
     let complete = pending.is_empty();
     SourceIndex {
+        parser_fingerprint: None,
         schema_version: SOURCE_INDEX_SCHEMA_VERSION,
         source_id: source_id.to_string(),
         revision: content_revision(0, None, &entries, complete, &pending),
@@ -160,6 +187,7 @@ mod tests {
 
     fn index(entries: Vec<SourceIndexEntry>, complete: bool, pending: Vec<String>) -> SourceIndex {
         SourceIndex {
+            parser_fingerprint: None,
             schema_version: SOURCE_INDEX_SCHEMA_VERSION,
             source_id: "patchmoe".to_string(),
             revision: 1,

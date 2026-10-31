@@ -113,7 +113,7 @@ P1、P1b、P2、P2b 是本轮施工顺序，完成前不生成供用户使用的
 
 本轮保留。若还要消除内部简中优先，需要另行确定“同包多语言应记录单一语言还是完整语言集合”，并联动候选展示、内容身份、重装及旧记录处理；不能简单将 `find(zh-CN)` 换成 `first()` 后宣称已消除语种语义。
 
-相关代码：[patchmoe](../../../crates/core/src/sources/adapters/patchmoe.rs)、[select_entry](../../../crates/core/src/sources/matching.rs)、[ZIP resolve](../../../crates/core/src/installer/resolve.rs)、[EXE resolve](../../../crates/core/src/installer/exe_resolve.rs)、[manual_selection](../../../crates/core/src/installer/manual_selection.rs)。
+相关代码：[patchmoe](https://github.com/Mabinogi-Cichol/patchhub/blob/cb06188/crates/core/src/sources/adapters/patchmoe.rs)、[select_entry](../../../crates/core/src/sources/matching.rs)、[ZIP resolve](../../../crates/core/src/installer/resolve.rs)、[EXE resolve](../../../crates/core/src/installer/exe_resolve.rs)、[manual_selection](../../../crates/core/src/installer/manual_selection.rs)。
 
 ### 4.2 安装语言事实与校验：已确认删除
 
