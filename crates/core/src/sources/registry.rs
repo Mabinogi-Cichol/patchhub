@@ -286,7 +286,15 @@ impl SourceRegistry {
                 let checked_at = status
                     .map(|status| status.checked_at)
                     .or_else(|| index.as_ref().map(|index| index.checked_at));
-                let interval_hours = intervals.get(&rule.id).copied().unwrap_or(0);
+                let interval_hours = intervals.get(&rule.id).copied().unwrap_or_else(|| {
+                    if rule.role == SourceRole::Publisher
+                        && self.source_origin(&rule.id) == Some("builtin")
+                    {
+                        7 * 24
+                    } else {
+                        0
+                    }
+                });
                 // Scheduling reads the real last attempt even when the display
                 // filter above withholds it: otherwise a first failed attempt
                 // would never be retried automatically.
@@ -1163,6 +1171,68 @@ mod tests {
     }
 
     #[test]
+    fn builtin_publishers_default_to_weekly_without_overwriting_saved_intervals() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut registry = registry_at(temp.path());
+        for source in registry.list_sources() {
+            assert_eq!(
+                source.interval_hours,
+                if source.rule.role == SourceRole::Publisher {
+                    168
+                } else {
+                    0
+                }
+            );
+            assert_eq!(source.next_due_at, None);
+        }
+        registry.set_update_interval("patchmoe", 0).unwrap();
+        registry.set_update_interval("kagura-cn", 24).unwrap();
+        let raw = serde_json::from_value(serde_json::json!({
+            "id": "custom", "name": "Custom", "enabled": true,
+            "pages": ["https://example.com/"], "page_hosts": ["example.com"],
+            "download_hosts": ["download.example.com"], "root_layout": "game_root"
+        }))
+        .unwrap();
+        registry
+            .import_script_source(&raw, 1, "return {}", false)
+            .unwrap();
+        registry
+            .store()
+            .save_status(
+                "kagura-en",
+                &SourceStatus {
+                    checked_at: 1_000,
+                    cached_at: None,
+                    entry_count: 0,
+                    code: "source_refresh_failed".to_string(),
+                },
+            )
+            .unwrap();
+        drop(registry);
+
+        let registry = registry_at(temp.path());
+        assert_eq!(
+            registry
+                .list_sources()
+                .into_iter()
+                .find(|source| source.rule.id == "kagura-en")
+                .unwrap()
+                .next_due_at,
+            Some(1_000 + 168 * 3_600)
+        );
+        let intervals: BTreeMap<_, _> = registry
+            .list_sources()
+            .into_iter()
+            .map(|source| (source.rule.id, source.interval_hours))
+            .collect();
+        assert_eq!(intervals["patchmoe"], 0);
+        assert_eq!(intervals["kagura-cn"], 24);
+        assert_eq!(intervals["kagura-en"], 168);
+        assert_eq!(intervals["hgamer"], 0);
+        assert_eq!(intervals["custom"], 0);
+    }
+
+    #[test]
     fn list_sources_reads_index_status_and_schedule() {
         let temp = tempfile::tempdir().unwrap();
         let registry = registry_at(temp.path());
@@ -1184,7 +1254,7 @@ mod tests {
         assert_eq!(summary.entry_count, 1);
         assert_eq!(summary.cached_at, Some(1_000));
         assert_eq!(summary.status, "cached");
-        assert_eq!(summary.interval_hours, 0);
+        assert_eq!(summary.interval_hours, 168);
         assert_eq!(summary.next_due_at, None);
 
         let summary = registry

@@ -5,6 +5,40 @@ import 'package:patchhub_windows/models/app_model.dart';
 import 'package:patchhub_windows/pages/source_pages.dart';
 
 import 'library_page_test.dart' show FixtureClient;
+import 'support/process_fixture_client.dart';
+
+class StartupClient extends ProcessFixtureClient {
+  StartupClient() : super('normal');
+  @override
+  Future<Object?> call(
+    String method, [
+    Map<String, Object?> args = const {},
+  ]) async {
+    if (method == 'scan') return {'installs': [], 'diagnostics': []};
+    if (method == 'list_transactions') return <Map<String, dynamic>>[];
+    if (method == 'list_sources') {
+      return <Map<String, dynamic>>[
+        {
+          'id': 'new',
+          'enabled': true,
+          'role': 'publisher',
+          'status': 'not_refreshed',
+          'interval_hours': 0,
+          'next_due_at': null,
+        },
+        {
+          'id': 'due',
+          'enabled': true,
+          'role': 'publisher',
+          'status': 'cached',
+          'interval_hours': 168,
+          'next_due_at': 1,
+        },
+      ];
+    }
+    return super.call(method, args);
+  }
+}
 
 class SettingsClient extends FixtureClient {
   final calls = <String>[];
@@ -26,6 +60,31 @@ class SettingsClient extends FixtureClient {
 }
 
 void main() {
+  test(
+    'initialization forces only unrefreshed updates and reuses running tasks',
+    () async {
+      final model = AppModel(StartupClient());
+      addTearDown(model.dispose);
+      await model.initialize();
+      // The immediate opening tick runs in the background.
+      await Future<void>.delayed(Duration.zero);
+      final initial = model.tasks.sources['update_source:new']!;
+      expect(initial.arguments['force'], true);
+      expect(
+        model.tasks.sources['update_source:due']!.arguments['force'],
+        false,
+      );
+      await model.schedulerTick(onOpen: true);
+      expect(model.tasks.sources['update_source:new'], same(initial));
+      await Future.wait(model.tasks.sources.values.map((task) => task.done));
+      await Future<void>.delayed(Duration.zero);
+      expect(initial.error, isNull);
+      await model.schedulerTick();
+      expect(model.tasks.sources['update_source:new'], same(initial));
+      await Future.wait(model.tasks.sources.values.map((task) => task.done));
+      await Future<void>.delayed(Duration.zero);
+    },
+  );
   test('scheduler only starts due enabled publisher indexes, without duplicate jobs', () {
     Map<String, dynamic> source(
       String id, {
@@ -56,6 +115,40 @@ void main() {
       ),
       ['due'],
     );
+  });
+  test('opening includes unrefreshed publishers with periodic updates off, once per open', () {
+    Map<String, dynamic> source(
+      String id, {
+      bool enabled = true,
+      String role = 'publisher',
+      String status = 'not_refreshed',
+    }) => {
+      'id': id,
+      'enabled': enabled,
+      'role': role,
+      'status': status,
+      'interval_hours': 0,
+      'next_due_at': null,
+    };
+    final sources = [
+      source('builtin'),
+      source('custom'),
+      source('busy'),
+      source('disabled', enabled: false),
+      source('fallback', role: 'fallback_indexer'),
+      source('updated', status: 'source_refreshed'),
+      source('failed', status: 'source_refresh_failed'),
+    ];
+    expect(dueSources(sources, 100, (id) => id == 'busy', onOpen: true), [
+      'builtin',
+      'custom',
+    ]);
+    expect(dueSources(sources, 100, (_) => false), isEmpty);
+    expect(dueSources(sources, 100, (_) => false, onOpen: true), [
+      'builtin',
+      'custom',
+      'busy',
+    ]);
   });
   test(
     'saved revision survives projection failure and remains visibly distinct',

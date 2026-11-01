@@ -209,11 +209,29 @@ export function createManagerSession(readSnapshot: () => Promise<Snapshot>, sour
   function startSourcePolling() {
     if (!sourceApi) return () => {};
     pollSubscribers += 1;
-    if (pollSubscribers === 1) void pollSourceTasks();
+    if (pollSubscribers === 1) void checkUnrefreshedSources();
     return () => {
       pollSubscribers = Math.max(0, pollSubscribers - 1);
       if (pollSubscribers === 0 && pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
     };
+  }
+  async function checkUnrefreshedSources() {
+    if (!sourceApi) return;
+    try {
+      // Read active backend tasks first: reopening the UI must reuse an update
+      // that is still running. This check runs on opening, never on each poll.
+      await pollSourceTasks();
+      const sources = await sourceApi.listSources();
+      commitSources(sources);
+      for (const source of sources) {
+        if (!source.enabled || source.role !== "publisher" || source.status !== "not_refreshed") continue;
+        if (Object.values(state.sourceTasks).some(task => task.kind === "update_source"
+          && task.key === source.id && !sourceTaskTerminal(task.state))) continue;
+        await updateSource(source.id, true);
+      }
+    } catch (error) {
+      setFeedback({ error: `检查未更新订阅源失败：${reason(String(error))}` });
+    }
   }
   async function beginSourceTask(scope: string | null, action: () => Promise<SourceTaskSnapshot>) {
     if (!sourceApi) return null;
