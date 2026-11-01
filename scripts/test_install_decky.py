@@ -200,6 +200,23 @@ class InstallerTests(unittest.TestCase):
         for key in ("pluginOrder", "frozenPlugins", "hiddenPlugins"):
             self.assertEqual(set(self.loader.settings[key]), {"other", "another", m.NAME})
 
+    def test_progress_follows_real_install_and_recovery_operations(self):
+        self.old()
+        events = []
+        with patch.object(m, 'UPDATE_PROGRESS', events.append):
+            self.installer.install(self.package, yes=True)
+        self.assertEqual([event['stage'] for event in events], ['backing_up', 'installing', 'verifying', 'cleanup'])
+        self.assertTrue(all(event['state'] == 'applying' for event in events))
+
+    def test_failed_install_reports_recovery_stage_before_terminal_error(self):
+        self.old()
+        self.loader.fail_install = 'after'
+        events = []
+        with patch.object(m, 'UPDATE_PROGRESS', events.append), self.assertRaises(m.InstallError):
+            self.installer.install(self.package, yes=True)
+        self.assertEqual([event['stage'] for event in events], ['backing_up', 'installing', 'recovering'])
+        self.assert_original()
+
 
     def test_install_and_reload_failures_restore_old_and_cleanup(self):
         self.old()
