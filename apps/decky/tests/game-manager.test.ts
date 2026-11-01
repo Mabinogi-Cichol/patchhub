@@ -17,7 +17,7 @@ import type { Install, Patch, SourceCandidate } from "@patchhub/ui";
 
 const require = createRequire(import.meta.url);
 const source = readFileSync(new URL("../src/index.tsx", import.meta.url), "utf8");
-const output = ts.transpileModule(`${source}\nexport { GameManager, QuickAccess, GlobalSources };`, { compilerOptions: {
+const output = ts.transpileModule(`${source}\nexport { GameManager, QuickAccess, GlobalSources, Manager };`, { compilerOptions: {
   jsx: ts.JsxEmit.ReactJSX, module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022,
 } }).outputText;
 const game = (): Install => ({ game: { instance_id: "game", appid: 1, name: "测试游戏", library_path: "/library", install_path: "/library/game", buildid: "123", availability: "installed", kind: "game" }, patches: [], match_status: "no_catalog_match", discovery: { status: "failed", candidates: [], diagnostics: [{ code: "source_refresh_failed", detail: "query-secret", source_id: null }] } });
@@ -42,10 +42,10 @@ function mount(item: Install, task?: sourceTasks.SourceTaskSnapshot) {
   let pending = Promise.resolve();
   const state: any = { report: { installs: [item], sources: [], diagnostics: [] }, transactions: [], busy: null, sourceTasks: task ? { [task.task_id]: task } : {}, error: null, note: null, errorInstance: null, noteInstance: null };
   const native: Record<string, any> = {};
-  for (const name of ["Button", "ButtonItem", "Field", "Focusable", "PanelSection", "PanelSectionRow", "DropdownItem", "TextField", "ToggleField"]) {
+  for (const name of ["Button", "ButtonItem", "DialogButton", "Field", "Focusable", "PanelSection", "PanelSectionRow", "DropdownItem", "TextField", "ToggleField"]) {
     native[name] = (props: any) => {
       controls.push({ name, props });
-      if (name === "Button" || name === "ButtonItem") return React.createElement("button", { disabled: props.disabled }, props.children);
+      if (name === "Button" || name === "ButtonItem" || name === "DialogButton") return React.createElement("button", { disabled: props.disabled }, props.children);
       if (name === "TextField") return React.createElement("input", { "aria-label": props.label, value: props.value, readOnly: true });
       return React.createElement("div", { "data-control": name, "data-label": props.label }, props.label, props.children);
     };
@@ -55,6 +55,7 @@ function mount(item: Install, task?: sourceTasks.SourceTaskSnapshot) {
     return props.pages.find((page: any) => page.route === props.page)?.content;
   };
   native.showModal = () => ({ Close() {} });
+  native.useParams = () => ({ instance: "sources" });
   native.Navigation = {};
   const exports: Record<string, any> = {};
   const mockSession = {
@@ -104,6 +105,9 @@ function mount(item: Install, task?: sourceTasks.SourceTaskSnapshot) {
     "./session": { createManagerSession: () => mockSession, feedbackFor, needsRecovery },
     "./actions": actions, "./discovery": discovery, "./source-tasks": sourceTasks, "./route": route,
     "./steam": { gamePresentation: (_appid: number, name: string) => ({ name }), transactionGameName: () => "游戏", matchesGameQuery: () => true },
+    "./game-artwork": { GameArtwork: (props: any) => {
+      controls.push({ name: "GameArtwork", props }); return null;
+    } },
     "./tasks": { tasks: { isBusy: () => false, startInstall: async (...args: unknown[]) => { installs.push(args); } } },
     "./preferences": { getListPreferences: () => ({ filter: "all", query: "" }) },
     "./app-update": {}, "./cache": {}, "./task-progress-view": {},
@@ -117,9 +121,38 @@ function mount(item: Install, task?: sourceTasks.SourceTaskSnapshot) {
   const render = (panel?: string) => { hook = 0; controls.length = 0; return renderToStaticMarkup(React.createElement(exports.GameManager, { item, seg: "game", panel })); };
   const renderList = () => { hook = 0; controls.length = 0; return renderToStaticMarkup(React.createElement(exports.QuickAccess)); };
   const renderSources = () => { hook = 0; controls.length = 0; return renderToStaticMarkup(React.createElement(exports.GlobalSources)); };
+  const renderSettings = () => { hook = 0; controls.length = 0; return renderToStaticMarkup(React.createElement(exports.Manager)); };
   const button = (label: string) => controls.find(control => control.name === "ButtonItem" && React.Children.toArray(control.props.children).join("") === label)!.props;
-  return { render, renderList, renderSources, controls, button, installs, state, sourceWrites, scriptWrites, projections, copies, methods, removals, settle: () => pending };
+  return { render, renderList, renderSources, renderSettings, controls, button, installs, state, sourceWrites, scriptWrites, projections, copies, methods, removals, settle: () => pending };
 }
+
+test("artwork follows the selected game and only appears in patch details", () => {
+  const page = mount(game());
+  page.render();
+  assert.equal(page.controls.find(control => control.name === "GameArtwork")?.props.appid, 1);
+  assert.equal(page.controls.some(control => control.name === "Field" && control.props.label === "游戏"), false);
+  assert.equal(page.controls.some(control => control.name === "PanelSection" && control.props.title === "当前游戏"), false);
+  for (const panel of ["records", "sources"]) {
+    page.render(panel);
+    assert.equal(page.controls.some(control => control.name === "GameArtwork"), false);
+  }
+  page.renderList();
+  assert.equal(page.controls.some(control => control.name === "GameArtwork"), false);
+});
+
+test("all native sidebar pages hide duplicate content titles and retain sidebar labels", () => {
+  const page = mount(game());
+  page.render();
+  const gameNav = page.controls.find(control => control.name === "SidebarNavigation")!.props;
+  assert.equal(gameNav.showTitle, true);
+  assert.deepEqual(Array.from(gameNav.pages.filter((p: any) => typeof p === "object"), (p: any) => [p.title, p.hideTitle]),
+    [["补丁管理", true], ["操作记录", true], ["游戏订阅", true]]);
+  page.renderSettings();
+  const settingsNav = page.controls.find(control => control.name === "SidebarNavigation")!.props;
+  assert.equal(settingsNav.showTitle, true);
+  assert.deepEqual(Array.from(settingsNav.pages.filter((p: any) => typeof p === "object"), (p: any) => [p.title, p.hideTitle]),
+    [["管理订阅源", true], ["缓存、备份与更新", true]]);
+});
 
 test("source page imports and reads script documents through RPC, refreshes and preserves failed edits", async () => {
   const page = mount(game()); page.renderSources();
@@ -235,6 +268,7 @@ test("the default page has three native panels and neutral empty results with qu
   assert.match(html, /AppID.*1.*Build.*123/);
   assert.match(html, /暂无补丁结果/);
   assert.match(html, /重新查询/);
+  assert.ok(html.indexOf("重新查询") < html.indexOf("AppID"));
   assert.doesNotMatch(html, /概览|query-secret|查询失败|覆盖不完整|尚未完成/);
   assert.ok(!page.controls.some(control => control.name === "DropdownItem" && control.props.label === "偏好的补丁语言"));
   page.button("安装路径与游戏库 ▾").onClick();
@@ -291,7 +325,9 @@ test("source-only candidates accept a manual URL and use the same installation t
   const page = mount(item);
   const html = page.render();
   assert.match(html, /未找到下载链接/);
-  assert.match(html, /打开补丁来源页/);
+  assert.doesNotMatch(html, /打开补丁来源页/);
+  page.controls.find(control => control.name === "DialogButton")!.props.onClick();
+  assert.match(page.render(), /打开补丁来源页/);
   assert.doesNotMatch(html, /尚待确认|线索用于核对|待核对来源/);
   page.button("手动输入下载链接 ▾").onClick();
   page.render();
@@ -308,11 +344,77 @@ test("patch and exact mirror selectors remain native Decky dropdowns", () => {
   const item = game();
   item.patches = [patch({ release_id: "first", candidate_id: "candidate-1", selection_id: "mirror-a", download_url: "https://a.example.test/p.zip" }), patch({ release_id: "first", candidate_id: "candidate-1", selection_id: "mirror-b", download_url: "https://b.example.test/p.zip" }), patch({ release_id: "second" })];
   const page = mount(item); page.render();
+  assert.equal(page.controls.some(control => control.name === "DropdownItem" && control.props.label === "选择补丁"), true);
+  const selectionIndex = page.controls.findIndex(control => control.name === "DropdownItem" && control.props.label === "选择补丁");
+  const downloadIndex = page.controls.findIndex(control => control.name === "DropdownItem" && control.props.label === "选择下载项");
+  const installIndex = page.controls.findIndex(control => control.name === "ButtonItem" && control.props.children === "安装补丁");
+  const detailsIndex = page.controls.findIndex(control => control.name === "DialogButton" && control.props["aria-controls"]);
+  const queryIndex = page.controls.findIndex(control => control.name === "ButtonItem" && control.props.children === "重新查询");
+  assert.ok(selectionIndex < downloadIndex && downloadIndex < installIndex && installIndex < detailsIndex && detailsIndex < queryIndex);
+  const appidIndex = page.controls.findIndex(control => control.name === "Field" && control.props.label === "AppID");
+  const buildIndex = page.controls.findIndex(control => control.name === "Field" && control.props.label === "Build");
+  const pathsIndex = page.controls.findIndex(control => control.name === "ButtonItem" && control.props.children?.[0] === "安装路径与游戏库");
+  assert.ok(queryIndex < appidIndex && appidIndex < buildIndex && buildIndex < pathsIndex);
+  assert.equal(page.controls.filter(control => control.name === "ButtonItem").at(-1)?.props.children?.[0], "安装路径与游戏库");
+  page.controls.find(control => control.name === "DialogButton" && control.props["aria-controls"])!.props.onClick();
+  page.render();
   const dropdowns = page.controls.filter(control => control.name === "DropdownItem");
-  assert.equal(dropdowns.find(control => control.props.label === "补丁")!.props.rgOptions.length, 2);
+  const patches = dropdowns.find(control => control.props.label === "选择补丁")!.props;
+  assert.equal(patches.rgOptions.length, 2);
   const mirrors = dropdowns.find(control => control.props.label === "选择下载项")!.props;
   assert.deepEqual(Array.from(mirrors.rgOptions, (entry: any) => entry.data), ["mirror-a", "mirror-b"]);
   mirrors.onChange({ data: "mirror-b" });
   page.render();
   assert.equal(page.controls.find(control => control.name === "DropdownItem" && control.props.label === "选择下载项")!.props.selectedOption, "mirror-b");
+  assert.equal(page.controls.find(control => control.name === "DialogButton")!.props["aria-expanded"], true);
+  page.controls.find(control => control.name === "DropdownItem" && control.props.label === "选择补丁")!.props.onChange(patches.rgOptions[1]);
+  page.render();
+  assert.equal(page.controls.find(control => control.name === "DropdownItem" && control.props.label === "选择补丁")!.props.selectedOption, patches.rgOptions[1].data);
+  assert.equal(page.controls.find(control => control.name === "DialogButton")!.props["aria-expanded"], true);
+});
+
+test("patch language, version, conditions and source link fold together while installation stays available", () => {
+  const item = game();
+  item.discovery!.candidates = [{ ...candidate, version_raw: "3", requires_dlc: [42] }];
+  item.patches = [patch({ candidate_id: "candidate-1", support_level: "publisher_exe",
+    download_url: "https://downloads.example.test/patch.exe", download_label: "主下载" })];
+  const page = mount(item);
+  const toggle = () => page.controls.find(control => control.name === "DialogButton" && control.props["aria-controls"])!.props;
+  const collapsed = page.render();
+  assert.equal(toggle()["aria-expanded"], false);
+  assert.doesNotMatch(collapsed, /downloads\.example\.test|当前状态|安装方式|匹配源|补丁语言|补丁版本|适用条件|打开来源网页/);
+  assert.equal(page.button("安装补丁").disabled, false);
+  const before = page.methods.length;
+  toggle().onClick();
+  const expanded = page.render();
+  assert.equal(toggle()["aria-expanded"], true);
+  assert.match(expanded, /downloads\.example\.test\/patch\.exe/);
+  assert.match(expanded, /当前状态.*兼容性.*安装方式/);
+  assert.match(expanded, /补丁语言.*补丁版本.*3.*适用条件.*需要 DLC 42/);
+  assert.equal(page.button("打开来源网页 ↗").disabled, undefined);
+  toggle().onClick();
+  assert.doesNotMatch(page.render(), /downloads\.example\.test/);
+  assert.equal(toggle()["aria-expanded"], false);
+  assert.equal(page.methods.length, before);
+  assert.equal(page.button("安装补丁").disabled, false);
+});
+
+test("source-only patch selector stays outside the fold while its metadata and links stay inside", () => {
+  const item = game();
+  item.discovery!.candidates = [candidate, { ...candidate, candidate_id: "candidate-2", patch_title: "另一个补丁" }];
+  const page = mount(item);
+  const collapsed = page.render();
+  assert.ok(collapsed.indexOf("手动输入下载链接") < collapsed.indexOf("补丁详情"));
+  assert.ok(collapsed.indexOf("补丁详情") < collapsed.indexOf("重新查询"));
+  assert.equal(page.controls.some(control => control.name === "DropdownItem" && control.props.label === "选择补丁"), true);
+  assert.doesNotMatch(collapsed, /补丁语言|补丁版本|适用条件|打开补丁来源页/);
+  assert.ok(page.button("手动输入下载链接 ▾"));
+  page.controls.find(control => control.name === "DialogButton")!.props.onClick();
+  page.render();
+  const selector = page.controls.find(control => control.name === "DropdownItem" && control.props.label === "选择补丁")!.props;
+  assert.equal(selector.rgOptions.length, 2);
+  selector.onChange(selector.rgOptions[1]);
+  assert.match(page.render(), /另一个补丁/);
+  assert.equal(page.controls.find(control => control.name === "DialogButton")!.props["aria-expanded"], true);
+  assert.ok(page.button("打开补丁来源页 ↗"));
 });

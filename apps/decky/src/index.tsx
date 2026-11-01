@@ -3,13 +3,14 @@ import { scriptSourceError } from "./script-source-error";
 import type { AddSourceResult, ScriptSourceDocument } from "../../../packages/contracts/generated/protocol";
 import { callable, definePlugin, routerHook } from "@decky/api";
 import { AppUpdatePanel, startAppUpdateNotifications, waitForAppUpdate } from './app-update';
-import { Button, ButtonItem, DropdownItem, Field, Focusable, Navigation, PanelSection, PanelSectionRow, SidebarNavigation, TextField, ToggleField, showModal, useParams } from "@decky/ui";
+import { Button, ButtonItem, DialogButton, DropdownItem, Field, Focusable, Navigation, PanelSection, PanelSectionRow, SidebarNavigation, TextField, ToggleField, showModal, useParams } from "@decky/ui";
 import { FaGamepad } from "react-icons/fa";
 import brandLogo from "../../../docs/images/branding/logo.png";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ComponentProps, type ReactNode } from "react";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ComponentProps, type ReactNode } from "react";
 import { downloadFileName, candidateMatched, displayPatches, filterInstalls, gameDisplayName, installSummary, patchState, reason, sourceCoverageText, sourceIntervalOptions, sourceLastAttemptText, sourceLastSuccessText, sourceNextDueText, workflowState, type Filter, type Install, type Patch, type Preview, type ProjectInstancesResult, type ScanResult, type SourceCandidate, type SourceSubscription, type Transaction } from "@patchhub/ui";
 import { getListPreferences, setListPreferences, subscribeListPreferences } from "./preferences";
 import { gamePresentation, matchesGameQuery, transactionGameName } from "./steam";
+import { GameArtwork } from "./game-artwork";
 import { installationResult } from "@patchhub/ui";
 import { installInput, manualDownloadInput, manualDownloadRequestKey, primaryActionBlockers, primaryInstallAction } from "./actions";
 import { createManagerSession, feedbackFor, needsRecovery } from "./session";
@@ -98,6 +99,15 @@ function Row({ children }: { children: ReactNode }) { return <PanelSectionRow>{c
 function InfoRow({ label, children, below = false }: { label: ReactNode; children: ReactNode; below?: boolean }) {
   return <PanelSectionRow><Field label={label} childrenLayout={below ? "below" : "inline"} spacingBetweenLabelAndChild="none"><span className="patch-kv-value">{children}</span></Field></PanelSectionRow>;
 }
+function PatchDetails({ children }: { children: ReactNode }) {
+  const [expanded, setExpanded] = useState(false);
+  const contentId = useId();
+  return <PanelSection>
+    <Row><DialogButton style={{ width: "100%" }} aria-expanded={expanded} aria-controls={contentId}
+      onClick={() => setExpanded(value => !value)}>补丁详情 <span aria-hidden="true">{expanded ? "▾" : "▸"}</span></DialogButton></Row>
+    <div id={contentId}>{expanded && children}</div>
+  </PanelSection>;
+}
 function sourceInfo(patch: Patch, sources: SourceSubscription[] | null = []) {
   const subscription = sources?.find(source => source.id === patch.source_id);
   return subscription?.name || "匹配源未知";
@@ -148,6 +158,8 @@ const css = `
   .patch-patch-name { font-weight:600; }
   .patch-patch-source { font-size:12px; opacity:.8; overflow-wrap:anywhere; }
   .patch-kv-value { overflow-wrap:anywhere; }
+  .patch-game-artwork { height:clamp(120px,20vh,180px); margin:16px 0; }
+  .patch-game-artwork-image, .patch-game-artwork-content { width:100%; height:100%; object-fit:cover; }
   .patch-source-card { margin:0 0 16px; border:1px solid #627387; border-radius:8px; background:#202c39; min-width:0; }
   .patch-source-card .patch-source-heading { box-sizing:border-box; width:100%; min-width:0; height:auto; margin:0; padding:14px 16px; border-radius:7px; border:0; background:#2b3b4d; color:#f3f6f8; box-shadow:none; font-size:16px; line-height:1.35; text-align:left; white-space:normal; }
   .patch-source-card .patch-source-heading:hover { background:#344a60; }
@@ -170,7 +182,7 @@ function matchSummary(item: Install): string {
 function CandidateDetails({ candidate }: { candidate: SourceCandidate }) {
   const format = candidate.format_observed && candidate.format_observed !== "unknown" ? candidate.format_observed : candidate.format_reported && candidate.format_reported !== "unknown" ? candidate.format_reported : "待确认";
   const conflict = !!candidate.format_reported && candidate.format_reported !== "unknown" && !!candidate.format_observed && candidate.format_observed !== "unknown" && candidate.format_reported !== candidate.format_observed;
-  return <PanelSection title="来源补丁详情">
+  return <>
     <InfoRow label="补丁">{candidate.patch_title}</InfoRow>
     <InfoRow label="来源">{candidateSource(candidate)}</InfoRow>
     <InfoRow label="补丁语言">{candidateLanguage(candidate)}</InfoRow>
@@ -180,7 +192,7 @@ function CandidateDetails({ candidate }: { candidate: SourceCandidate }) {
     {!!candidate.version_evidence?.length && candidate.warnings?.includes("version_conflict") && <InfoRow label="页面版本描述" below>{candidate.version_evidence.filter(value => typeof value === "string").join("、")}</InfoRow>}
     <Row><Action onClick={() => openSource(candidate.source_page)}>{candidate.source_id === "hgamer" ? "打开补丁详情 ↗" : "打开补丁来源页 ↗"}</Action></Row>
     {candidate.upstream_page && candidate.upstream_page !== candidate.source_page && <Row><Action onClick={() => openSource(candidate.upstream_page!)}>打开上游发布页 ↗</Action></Row>}
-  </PanelSection>;
+  </>;
 }
 function GameButton({ item }: { item: Install }) {
   const { name, icon } = gamePresentation(item.game.appid, gameDisplayName(item.game));
@@ -434,31 +446,18 @@ function GameManager({ item, seg, panel }: { item: Install; seg: string; panel?:
   }
   const common = <>{busy && <Status>{busy}</Status>}{error && <Status warning>{error}</Status>}{note && <Status>{note}</Status>}
     </>;
-  const selection = entries.length > 1 ? <PanelSection title="选择补丁"><Row><DropdownItem label="补丁" layout="below"
+  const selection = entries.length > 1 ? <Row><DropdownItem label="选择补丁" layout="below"
     rgOptions={entries.map(entry => ({ data: entry.key, label: entry.kind === "installable" ? entry.patch.name : `${entry.candidate.patch_title} · ${entry.candidate.version_raw || "版本待确认"} · ${candidateLanguage(entry.candidate)} · ${candidateSource(entry.candidate)}` }))}
-    selectedOption={selectedKey} onChange={option => chooseRelease(option.data)} /></Row></PanelSection> : null;
+    selectedOption={selectedKey} onChange={option => chooseRelease(option.data)} /></Row> : null;
   const patchCandidate = item.discovery?.candidates.find(value => value.candidate_id === patch?.candidate_id);
   const patches = <div className="patch-page" ref={activePanel === "patches" ? contentRef : undefined} onScroll={e => panelScroll.current.patches = e.currentTarget.scrollTop}>
     {common}
-    <PanelSection title="游戏信息">
-      <InfoRow label="游戏">{game}</InfoRow>
-      <InfoRow label="AppID">{item.game.appid}</InfoRow>
-      <InfoRow label="Build">{item.game.buildid ?? "未知"}</InfoRow>
-      <Row><Action onClick={() => setPathsExpanded(value => !value)}>安装路径与游戏库{pathsExpanded ? " ▴" : " ▾"}</Action></Row>
-      {pathsExpanded && <>
-        <InfoRow label="安装路径" below>{item.game.install_path}</InfoRow>
-        <Row><Action onClick={() => void copyPath(item.game.install_path)}>复制安装路径</Action></Row>
-        <InfoRow label="游戏库" below>{item.game.library_path}</InfoRow>
-        <Row><Action onClick={() => void copyPath(item.game.library_path)}>复制游戏库路径</Action></Row>
-      </>}
+    <PanelSection>
+      <Row><GameArtwork key={item.game.instance_id} appid={item.game.appid} /></Row>
       {owned.some(needsRecovery) && <Row><Status warning>有未完成的操作需要处理。</Status><Action onClick={() => navigatePanel("records")}>查看操作记录</Action></Row>}
     </PanelSection>
-    <PanelSection title="查找补丁">
-      {gameTask && <Row><QueryProgress task={gameTask} /><Action onClick={() => void session.cancelSourceTask(gameTask.task_id)}>取消查询</Action></Row>}
-      <Row><Action disabled={!!busy || !!gameTask} onClick={rematch}>重新查询</Action></Row>
-    </PanelSection>
-    {selection}
-    {candidate ? <><CandidateDetails candidate={candidate} />
+    {selection && <PanelSection>{selection}</PanelSection>}
+    {candidate ? <>
       <PanelSection title="安装补丁">
         <Row><Status>未找到下载链接</Status></Row>
         <Row><Action onClick={() => setManualLinkExpanded(value => !value)}>手动输入下载链接{manualLinkExpanded ? " ▴" : " ▾"}</Action></Row>
@@ -469,10 +468,22 @@ function GameManager({ item, seg, panel }: { item: Install; seg: string; panel?:
         </>}
       </PanelSection></> : !patch ? <PanelSection><Row><Status>暂无补丁结果</Status><Action onClick={() => navigatePanel("sources")}>游戏订阅</Action></Row></PanelSection> : <>
       {selected?.kind === "installable" && selected.choices.length > 1 && <PanelSection title="下载文件与镜像"><Row><DropdownItem label="选择下载项" layout="below" selectedOption={patch.selection_id ?? patch.release_id} rgOptions={selected.choices.map(p => ({ data: p.selection_id ?? p.release_id, label: `${p.download_label || "来源下载"} · ${p.download_url ? downloadFileName(p.download_url) : p.name}` }))} onChange={option => { setSelectedDownload(option.data); setPreview(null); setArchive(""); }} /></Row></PanelSection>}
-      <PanelSection title="选择补丁"><InfoRow label="补丁">{patch.name}</InfoRow>
-        <InfoRow label="匹配源">{sourceInfo(patch, report?.sources)}</InfoRow>
+      <PanelSection title={installed ? "覆盖安装" : "安装补丁"}>
+        <Row><Status>安装时请关闭游戏并暂停 Steam 更新。</Status></Row>
+        {actionBlockers.map((blocker, i) => <Row key={`action-${blocker.code}-${i}`}><Status warning>{reason(blocker.code)}{blocker.detail ? ` · ${blocker.detail}` : ""}</Status></Row>)}
+        <Row><Action disabled={!!busy || tasks.isBusy()} onClick={viewPreview}>查看文件变更（只读）</Action></Row>
+        {preview && <Row><Status>{preview.changes.length ? preview.changes.map(change => `${change.action}：${change.path}`).join("；") : preview.blockers.length ? preview.blockers.map(reason).join("；") : "暂无文件变更。"}</Status></Row>}
+        <Row><Action disabled={!primaryAvailable || !!busy || tasks.isBusy()} onClick={() => void beginInstall()}>{primaryAction.label === "overwrite" ? "覆盖安装补丁" : "安装补丁"}</Action></Row>
+        {!patch.download_url && !primaryAvailable && <Row><Status>未找到下载链接</Status></Row>}
+        {patch.actions.local_archive.available && <Row><Action onClick={() => setManual(value => !value)}>导入本地 ZIP（可选）{manual ? " ▴" : " ▾"}</Action></Row>}
+        {(manual && patch.actions.local_archive.available) && <><Row><TextField label="Downloads 内的 ZIP 路径" value={archive} onChange={e => setArchive(e.target.value)} /></Row>
+          <Row><Action disabled={!archive.trim() || !patch.actions.local_archive.available || !!busy || tasks.isBusy()} onClick={() => void beginInstall(archive)}>使用本地 ZIP {primaryAction.label === "overwrite" ? "覆盖安装" : "安装"}</Action></Row></>}
       </PanelSection>
-      <PanelSection title="补丁详情">
+    </>}
+    {entries.length > 0 && <PatchDetails key={item.game.instance_id}>
+      {candidate ? <CandidateDetails candidate={candidate} /> : patch && <>
+        <InfoRow label="补丁">{patch.name}</InfoRow>
+        <InfoRow label="匹配源">{sourceInfo(patch, report?.sources)}</InfoRow>
         <InfoRow label="当前状态">{patchState(patch.detection.status)}</InfoRow>
         <InfoRow label="兼容性">{workflowState(patch.compatibility)}</InfoRow>
         <InfoRow label="安装方式">{workflowState(patch.support_level)}</InfoRow>
@@ -487,19 +498,23 @@ function GameManager({ item, seg, panel }: { item: Install; seg: string; panel?:
           <InfoRow label="下载地址" below>{patch.download_url}</InfoRow>
         </>}
         <Row><Action onClick={() => openSource(patch.source_page)}>打开来源网页 ↗</Action></Row>
-      </PanelSection>
-      <PanelSection title={installed ? "覆盖安装" : "安装补丁"}>
-        <Row><Status>安装时请关闭游戏并暂停 Steam 更新。</Status></Row>
-        {actionBlockers.map((blocker, i) => <Row key={`action-${blocker.code}-${i}`}><Status warning>{reason(blocker.code)}{blocker.detail ? ` · ${blocker.detail}` : ""}</Status></Row>)}
-        <Row><Action disabled={!!busy || tasks.isBusy()} onClick={viewPreview}>查看文件变更（只读）</Action></Row>
-        {preview && <Row><Status>{preview.changes.length ? preview.changes.map(change => `${change.action}：${change.path}`).join("；") : preview.blockers.length ? preview.blockers.map(reason).join("；") : "暂无文件变更。"}</Status></Row>}
-        <Row><Action disabled={!primaryAvailable || !!busy || tasks.isBusy()} onClick={() => void beginInstall()}>{primaryAction.label === "overwrite" ? "覆盖安装补丁" : "安装补丁"}</Action></Row>
-        {!patch.download_url && !primaryAvailable && <Row><Status>未找到下载链接</Status></Row>}
-        {patch.actions.local_archive.available && <Row><Action onClick={() => setManual(value => !value)}>导入本地 ZIP（可选）{manual ? " ▴" : " ▾"}</Action></Row>}
-        {(manual && patch.actions.local_archive.available) && <><Row><TextField label="Downloads 内的 ZIP 路径" value={archive} onChange={e => setArchive(e.target.value)} /></Row>
-          <Row><Action disabled={!archive.trim() || !patch.actions.local_archive.available || !!busy || tasks.isBusy()} onClick={() => void beginInstall(archive)}>使用本地 ZIP {primaryAction.label === "overwrite" ? "覆盖安装" : "安装"}</Action></Row></>}
-      </PanelSection>
-    </>}
+      </>}
+    </PatchDetails>}
+    <PanelSection title="查找补丁">
+      {gameTask && <Row><QueryProgress task={gameTask} /><Action onClick={() => void session.cancelSourceTask(gameTask.task_id)}>取消查询</Action></Row>}
+      <Row><Action disabled={!!busy || !!gameTask} onClick={rematch}>重新查询</Action></Row>
+    </PanelSection>
+    <PanelSection title="游戏信息">
+      <InfoRow label="AppID">{item.game.appid}</InfoRow>
+      <InfoRow label="Build">{item.game.buildid ?? "未知"}</InfoRow>
+      <Row><Action onClick={() => setPathsExpanded(value => !value)}>安装路径与游戏库{pathsExpanded ? " ▴" : " ▾"}</Action></Row>
+      {pathsExpanded && <>
+        <InfoRow label="安装路径" below>{item.game.install_path}</InfoRow>
+        <Row><Action onClick={() => void copyPath(item.game.install_path)}>复制安装路径</Action></Row>
+        <InfoRow label="游戏库" below>{item.game.library_path}</InfoRow>
+        <Row><Action onClick={() => void copyPath(item.game.library_path)}>复制游戏库路径</Action></Row>
+      </>}
+    </PanelSection>
   </div>;
   const records = <div className="patch-page" ref={activePanel === "records" ? contentRef : undefined} onScroll={e => panelScroll.current.records = e.currentTarget.scrollTop}>
     {common}
@@ -530,9 +545,9 @@ function GameManager({ item, seg, panel }: { item: Install; seg: string; panel?:
     </PanelSection>) : <PanelSection><Row><Status>尚未配置订阅源，请从主面板的全局设置添加。</Status></Row></PanelSection>}
   </div>;
   const navPages: ComponentProps<typeof SidebarNavigation>["pages"] = [
-    { identifier: `${base}/patches`, route: `${base}/patches`, title: "补丁管理", visible: true, content: patches },
-    { identifier: `${base}/records`, route: `${base}/records`, title: "操作记录", visible: true, content: records },
-    "separator", { identifier: `${base}/sources`, route: `${base}/sources`, title: "游戏订阅", visible: true, content: sources },
+    { identifier: `${base}/patches`, route: `${base}/patches`, title: "补丁管理", hideTitle: true, visible: true, content: patches },
+    { identifier: `${base}/records`, route: `${base}/records`, title: "操作记录", hideTitle: true, visible: true, content: records },
+    "separator", { identifier: `${base}/sources`, route: `${base}/sources`, title: "游戏订阅", hideTitle: true, visible: true, content: sources },
   ];
   // The decky SidebarNavigation resolves the visible page from page.route
   // against the URL and switches by replacing the URL. `fnSetNavigateToPage`
@@ -718,9 +733,9 @@ function Manager() {
   const item = report?.installs.find(i => i.game.instance_id === target);
   return <Focusable className="patch-full" onCancel={() => Navigation.NavigateBack()}><style>{css}</style>
     {instance === sourceRoute ? <SidebarNavigation showTitle disableRouteReporting title={<div className="patch-nav-header"><span className="patch-nav-tool">PatchHub</span><span className="patch-nav-game">全局设置</span></div>} page={settingsPage(panel)} pages={[
-      { identifier: settingsRoutes.sources, route: settingsRoutes.sources, title: "管理订阅源", visible: true, content: <GlobalSources /> },
+      { identifier: settingsRoutes.sources, route: settingsRoutes.sources, title: "管理订阅源", hideTitle: true, visible: true, content: <GlobalSources /> },
       "separator",
-      { identifier: settingsRoutes.cache, route: settingsRoutes.cache, title: "缓存、备份与更新", visible: true, content: <GlobalCache /> },
+      { identifier: settingsRoutes.cache, route: settingsRoutes.cache, title: "缓存、备份与更新", hideTitle: true, visible: true, content: <GlobalCache /> },
     ]} />
       : item ? <GameManager key={instance} item={item} seg={instance!} panel={panel} />
         : <div className="patch-page"><h2>PatchHub</h2><Status>{report ? "游戏已不在当前扫描结果中。" : "正在加载游戏列表…"}</Status><Action onClick={() => Navigation.NavigateBack()}>返回游戏列表</Action></div>}
