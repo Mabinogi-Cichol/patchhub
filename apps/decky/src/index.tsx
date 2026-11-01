@@ -31,7 +31,7 @@ const rematchGameRpc = callable<[string | null, number | null, string[]], Source
 const sourceTaskStatusRpc = callable<[], SourceTaskSnapshot[]>("source_task_status");
 const cancelSourceTaskRpc = callable<[string], SourceTaskSnapshot>("cancel_source_task");
 const sourceApi: SourceTaskApi = {
-  listSources: () => listSourcesRpc(),
+  listSources: async () => { await waitForAppUpdate(); return listSourcesRpc(); },
   updateSource: (sourceId, force = false) => updateSourceRpc(sourceId, force),
   matchGames: (instances, nameHints, forceDetails) => matchGamesRpc(instances, nameHints, forceDetails),
   rematchGame: (instance, appid, nameHints) => rematchGameRpc(instance, appid, nameHints),
@@ -323,7 +323,6 @@ function GameManager({ item, seg, panel }: { item: Install; seg: string; panel?:
   useEffect(() => {
     mounted.current = true;
     void session.ensureSnapshot();
-    const stopPolling = session.startSourcePolling();
     const restoreTask = () => {
       if (document.hidden) return;
       void tasks.resume().then(() => {
@@ -340,7 +339,6 @@ function GameManager({ item, seg, panel }: { item: Install; seg: string; panel?:
     window.addEventListener("pagehide", leave);
     return () => {
       mounted.current = false;
-      stopPolling();
       document.removeEventListener("visibilitychange", visibility);
       window.removeEventListener("pagehide", leave);
       leave();
@@ -712,7 +710,10 @@ function GlobalCache() {
 function Manager() {
   const { instance, panel } = useParams<{ instance: string; panel?: string }>();
   const { report } = useSyncExternalStore(session.subscribe, session.getSnapshot);
-  useEffect(() => { void session.ensureSnapshot(); }, []);
+  useEffect(() => {
+    void session.ensureSnapshot();
+    return session.startSourcePolling();
+  }, []);
   const target = instance === sourceRoute ? instance : decodeInstance(instance ?? "");
   const item = report?.installs.find(i => i.game.instance_id === target);
   return <Focusable className="patch-full" onCancel={() => Navigation.NavigateBack()}><style>{css}</style>
@@ -756,7 +757,6 @@ function GlobalSources() {
     } finally { session.update({ busy: null, busySince: null }); }
   }
   const tasks = Object.values(sourceTasks).filter(task => !sourceTaskTerminal(task.state));
-  useEffect(() => session.startSourcePolling(), []);
   const changeSources = (action: () => Promise<SourceSubscription[]>, affectsMatching = true) => void session.work("正在更新补丁源…", async () => {
     const sources = await action();
     session.commitSources(sources);

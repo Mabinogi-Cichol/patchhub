@@ -213,8 +213,8 @@ pub struct SettingsFile {
     pub enabled: BTreeMap<String, bool>,
     pub added: Vec<SourceRule>,
     pub games: BTreeMap<String, BTreeMap<String, bool>>,
-    /// `source_id -> automatic update interval in hours` (schema 2). Missing or
-    /// `0` means automatic updates are off for that source.
+    /// `source_id -> automatic update interval in hours` (schema 2). Missing
+    /// uses the registry default; explicit `0` disables periodic updates.
     #[serde(default)]
     pub intervals: BTreeMap<String, u64>,
     /// User display names, independent of source identity and compiled rules.

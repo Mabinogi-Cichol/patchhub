@@ -10,15 +10,17 @@ import 'library.dart';
 List<String> dueSources(
   List<Map<String, dynamic>> sources,
   int now,
-  bool Function(String) running,
-) => sources
+  bool Function(String) running, {
+  bool onOpen = false,
+}) => sources
     .where(
       (source) =>
           source['enabled'] == true &&
           source['role'] == 'publisher' &&
-          (source['interval_hours'] as int) > 0 &&
-          source['next_due_at'] is int &&
-          (source['next_due_at'] as int) <= now &&
+          ((onOpen && source['status'] == 'not_refreshed') ||
+              ((source['interval_hours'] as int) > 0 &&
+                  source['next_due_at'] is int &&
+                  (source['next_due_at'] as int) <= now)) &&
           !running(source['id'] as String),
     )
     .map((source) => source['id'] as String)
@@ -120,10 +122,10 @@ class AppModel extends ChangeNotifier {
       const Duration(seconds: 60),
       (_) => schedulerTick(),
     );
-    schedulerTick();
+    schedulerTick(onOpen: true);
   }
 
-  Future<void> schedulerTick() async {
+  Future<void> schedulerTick({bool onOpen = false}) async {
     if (_ticking || tasks.closing) return;
     _ticking = true;
     try {
@@ -133,8 +135,13 @@ class AppModel extends ChangeNotifier {
         sources,
         DateTime.now().millisecondsSinceEpoch ~/ 1000,
         (id) => tasks.sources['update_source:$id']?.running == true,
+        onOpen: onOpen,
       )) {
-        startSource('update_source', {'source_id': sourceId, 'force': false});
+        final source = sources.firstWhere((source) => source['id'] == sourceId);
+        startSource('update_source', {
+          'source_id': sourceId,
+          'force': onOpen && source['status'] == 'not_refreshed',
+        });
       }
     } catch (failure) {
       sourceError = failure;

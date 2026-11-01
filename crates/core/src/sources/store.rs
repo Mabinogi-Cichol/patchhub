@@ -217,7 +217,7 @@ impl SourceStore {
         } else {
             default_settings()
         };
-        // v1 settings have no `intervals`; `#[serde(default)]` leaves them off.
+        // Missing `intervals` use registry defaults; explicit values are retained.
         if !(1..=SOURCE_SETTINGS_SCHEMA_VERSION).contains(&settings.schema_version)
             || settings.revision == 0
         {

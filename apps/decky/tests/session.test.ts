@@ -51,6 +51,56 @@ function fakeApi(queue: SourceTaskSnapshot[][], overrides: Partial<SourceTaskApi
   return { api, calls };
 }
 
+test("opening updates unrefreshed enabled publishers even with interval zero, and rechecks on reopening", async t => {
+  const source = (id: string, fields: Partial<SourceSubscription> = {}) => ({
+    id, role: "publisher", enabled: true, status: "not_refreshed", interval_hours: 0,
+    ...fields,
+  } as SourceSubscription);
+  const summaries = [source("builtin"), source("custom", { origin: "added" }),
+    source("disabled", { enabled: false }), source("fallback", { role: "fallback_indexer" }),
+    source("cached", { status: "cached" }), source("busy"),
+    source("failed", { status: "source_refresh_failed" })];
+  let reads = 0;
+  const { api, calls } = fakeApi([], {
+    listSources: async () => { reads++; return summaries; },
+    taskStatus: async () => [task({ kind: "update_source", key: "busy" })],
+    updateSource: async (...args) => {
+      calls.updateSource.push(args);
+      return task({ task_id: args[0], kind: "update_source", key: args[0], state: "failed" });
+    },
+  });
+  const session = createManagerSession(async () => ({ report, transactions: [] }), api);
+  let stop = session.startSourcePolling();
+  t.after(() => stop());
+  const stopSecondSubscriber = session.startSourcePolling();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(calls.updateSource, [["builtin", true], ["custom", true]]);
+  assert.equal(reads, 1);
+  // Polling after a failed start does not force another update.
+  await session.pollSourceTasks();
+  assert.equal(calls.updateSource.length, 2);
+  stopSecondSubscriber(); stop();
+  stop = session.startSourcePolling();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(calls.updateSource.slice(2), [["builtin", true], ["custom", true]]);
+  assert.equal(reads, 2);
+  stop();
+  summaries[0].status = "source_refreshed";
+  summaries[1].status = "cached";
+  stop = session.startSourcePolling();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(calls.updateSource.length, 4);
+});
+
+test("an opening source read failure is visible", async t => {
+  const { api } = fakeApi([], { listSources: async () => { throw Error("offline"); } });
+  const session = createManagerSession(async () => ({ report, transactions: [] }), api);
+  const stop = session.startSourcePolling();
+  t.after(stop);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.match(session.getSnapshot().error!, /检查未更新订阅源失败.*offline/);
+});
+
 test("script save removes previous source results before a pending projection or failed refresh", async () => {
   const row = game("a");
   row.discovery = match();
