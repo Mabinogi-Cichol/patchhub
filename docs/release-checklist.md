@@ -2,6 +2,24 @@
 
 本清单区分已构建产物与已验收发行版。当前版本仍为开发 Alpha，完整开发计划的样本数量及双端 UI 门槛尚未达到。
 
+## v0.5.1 发布记录（2026-11-01）
+
+- 用户授权合并和发布；Decky 修复代码 `52f28b7`、功能文档 `d102957`、版本同步 `8e98e4f`、发行说明 `a747f14` 分别提交后合并至 main，合并提交 `f66d0dd704138fd75377fa922d9e552c5672044d`。main 与注解 Tag v0.5.1 原子推送，Tag 对象 `3a307ee77e28e31265bd3ba642fa4df088616c81` 固定指向该合并提交；后续核验文档不移动 Tag。
+- [标签 CI 41296277719](https://github.com/Mabinogi-Cichol/patchhub/actions/runs/41296277719) 的 changes、双平台 core、windows、decky、ci 和 release 共 7 个任务全部成功。正式三个安装包均来自本次 Tag 的新构建。
+- [正式 Release v0.5.1](https://github.com/Mabinogi-Cichol/patchhub/releases/tag/v0.5.1) 于北京时间 2026-11-01 18:18:29 发布，标题与 Tag 均为 v0.5.1，非草稿、非预发行，公开附件严格为三个安装包与 SHA256SUMS.txt；正文与[中文发行说明](releases/v0.5.1.md)读回一致。
+- 已下载全部 4 个附件，大小、GitHub digest、校验清单的 3 个文件名及 SHA-256 全部一致。两端 ZIP CRC、无重复/越界路径、内容白名单与 Tag 来源匹配；Windows 47 个文件，Decky 30 个文件。
+- Windows EXE/DLL 为 PE x86_64，NSIS 引导桩为 x86；Decky Core/worker 为 ELF64 x86_64，runtime 摘要、大小及执行权限通过。两端包内应用/工作区/SBOM 版本为 0.5.1，Cargo/npm/Dart 锁摘要、安装器与 Lua 许可来源和 Tag 一致；Windows 按实际 CRLF 检出规则核对。SBOM 组件数：Windows 519、Decky 450。
+- 正式 Windows 便携包在隔离 APPDATA 中启动并正常关闭，FileVersion `0.5.1+1`、ProductVersion `0.5.1+1`、退出码 0。未替换现有安装或操作游戏；NSIS 未运行，其版本由成功 Tag CI 中的显式构建版本与包内 app-version.json 一致性步骤佐证。
+- 本轮源码阶段的 148 项回归、完成提示 5 项回归及用户真实 0.4.0 测试候选 → v0.5.0 更新已记录在[自更新施工记录](features/client-self-update/progress.md)；不代表最终 v0.5.1 附件已部署至设备。最终包的 Deck 部署、实体手柄、Windows 安装版矩阵及正式版本之间自更新仍待验收。
+- 第三方依赖未更新，本轮未重新执行依赖审计，不声称 v0.5.0 已记录的既有公告命中已修复。证据保存在忽略目录 `.artifacts/release-v0.5.1/`，包含 CI/Release API、日志、下载附件、完整校验和便携包启动结果。
+
+| 附件 | 字节 | SHA-256 |
+| --- | --- | --- |
+| patchhub-decky.zip | 8219142 | `b33f89b61db82971bbc33fb6ceac4f70644e68ca179436f22b1913be9234a298` |
+| patchhub-windows-portable.zip | 20158287 | `d4bdcb9eb23e901597a778abe99d3ad1d22be3dcba245a463ab250819962ab4c` |
+| patchhub-windows-x64-setup.exe | 15178140 | `fc29a5655ac6363e3febbff173ce9c55f78e8df888d964e4af6e0b3d2ed3e7bb` |
+| SHA256SUMS.txt | 278 | `b3e7ca470464c861ea04184ed5078f09847e62cdc3fba40bbd032cbdc147975a` |
+
 ## v0.5.1 发布准备（2026-11-01）
 
 - 用户要求合并 Decky 自更新修复至 main 并发布 v0.5.1。沿用本 session 已验证的源码、真实更新及完成提示候选结果，详细证据与边界见[自更新施工记录](features/client-self-update/progress.md)。

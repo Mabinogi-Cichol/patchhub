@@ -1,8 +1,14 @@
 # Windows 与 Decky 客户端自更新施工记录
 
 - 设计：[design.md](design.md)。
-- 当前状态：**双端自更新已实现；本轮 Decky 更新阻断、进度与完成提示修复经自动化、用户真实更新和原生界面验证通过，正在准备 v0.5.1。Windows 完整安装版矩阵、正式版本间更新及实体手柄验收仍待完成。**
-- 当前修复分支：`fix/decky-self-update`，基于 `main@37f50fd`；原实现分支 `feature/client-self-update`（基于 `main@81a2965`）的历史记录保留。
+- 当前状态：**双端自更新已实现；本轮 Decky 更新阻断、进度与完成提示修复经自动化、用户真实更新和原生界面验证通过，已随 v0.5.1 发布。Windows 完整安装版矩阵、正式版本间更新及实体手柄验收仍待完成。**
+- 修复归档分支：`fix/decky-self-update`，基于 `main@37f50fd`；原实现分支 `feature/client-self-update`（基于 `main@81a2965`）的历史记录保留。
+
+## 2026-11-01：v0.5.1 已合并发布
+
+- 修复和配套文档已分项提交并合并 main，Tag v0.5.1 固定指向 `f66d0dd`；[Tag CI](https://github.com/Mabinogi-Cichol/patchhub/actions/runs/41296277719) 全部通过，[正式 Release](https://github.com/Mabinogi-Cichol/patchhub/releases/tag/v0.5.1) 已公开。
+- 三个安装包及 SHA256SUMS.txt 已下载核验，大小/摘要、ZIP 白名单/CRC/Tag 来源、平台架构、包内版本及 SBOM 通过；Windows 正式便携包隔离启动及正常关闭通过。详见[发行记录](../../release-checklist.md#v051-发布记录2026-11-01)。
+- 未部署正式 v0.5.1 包或重跑设备更新；此前源码候选与用户测试记录保持原边界，实体手柄和 Windows 安装版完整矩阵仍待验收。
 
 ## 2026-11-01：v0.5.1 合并与发布准备
 
