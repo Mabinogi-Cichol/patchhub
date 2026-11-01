@@ -137,6 +137,8 @@ flowchart TD
 
 ## 6. Decky 安装设计
 
+2026-11-01 专项修复见 [Decky 修复方案](decky-fix-plan.md)：允许在途领取提醒调用，使用原生进度弹窗呈现下载及安装阶段。实机确认 Loader 自动导入插件不保证刷新已打开的 Steam 页面，完成提示须明确要求退出当前页面并从 Decky 重开 PatchHub，不承诺界面自动重载；状态和验证结果以[施工记录](progress.md)为准。
+
 ### 6.1 检测与执行者分离
 
 Python 宿主负责后台检测、偏好和供前端读取的候选；React 通过宿主 RPC 获取状态。更新 RPC 属于 Decky 宿主接口，不进入 Rust v5 协议。拟新增 `check_app_update`、`get_app_update_status`、`set_app_update_preferences`、`start_app_update`；启动只接受宿主已检查的候选标识，不接受前端传入任意 URL、脚本或目标目录。

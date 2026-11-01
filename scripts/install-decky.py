@@ -32,6 +32,12 @@ FOLDER = "patchhub"
 SETTINGS = ("pluginOrder", "frozenPlugins", "hiddenPlugins", "disabled_plugins")
 TERMINAL = {"completed", "failed", "cancelled"}
 DOWNLOAD_PROGRESS = None
+UPDATE_PROGRESS = None
+
+
+def update_progress(state, stage):
+    if UPDATE_PROGRESS:
+        UPDATE_PROGRESS({'state': state, 'stage': stage})
 
 
 class InstallError(RuntimeError):
@@ -141,6 +147,7 @@ def release_package(work, requested, download=fetch):
     require(len(matches) == 1, "校验清单缺少唯一 Decky ZIP 哈希")
     archive = work / "package.zip"
     download(selected[ASSET], archive)
+    update_progress('preparing', 'validating')
     require(digest(archive) == matches[0], "Release ZIP SHA-256 不匹配")
     api_digest = next(item.get('digest') for item in assets if item.get('name') == ASSET)
     require(api_digest is None or api_digest == 'sha256:' + matches[0], 'Release API digest 与校验清单不一致')
@@ -376,7 +383,8 @@ BRIDGE = r"""async (op, a) => {
    'utilities/enable_plugin','utilities/disable_plugin','utilities/settings/set']);
  const busy = () => [...b.runningCalls.values()].some(r => mutations.has(r.message?.route));
  const jobs = window.__patchhubTerminalJobs ||= Object.create(null);
- const reads=new Set(['list_tasks','get_capabilities','get_settings','list_sources','list_transactions','scan_status','task_status','prepare_app_update','finish_app_update','get_app_update_status','source_task_status']);
+ // Notification bookkeeping lives outside the plugin and never writes game files.
+ const reads=new Set(['list_tasks','get_capabilities','get_settings','list_sources','list_transactions','scan_status','task_status','prepare_app_update','finish_app_update','get_app_update_status','source_task_status','claim_app_update_notice']);
  const pluginWrite = (route,args) => route==='loader/call_plugin_method' && args[0]===name && !reads.has(args[1]);
  if (op === 'guard') return window.__patchhubTerminalGuard?.id===a.id;
  if (op === 'acquire') {
@@ -651,6 +659,7 @@ class Installer:
             self.finish(state)
             return
         require(phase in ("installing", "restoring"), "未知恢复阶段")
+        update_progress('applying', 'recovering')
         require(self.loader.root() / "plugins" / FOLDER == self.plugin, "Loader 插件根目录已变化，保留恢复材料")
         self.loader.settle(state.data)
         state.data.pop("pending", None)
@@ -721,6 +730,7 @@ class Installer:
                 except OSError as error:
                     raise InstallError("非交互终端需要显式传入 --yes") from error
             require(answer.strip().lower() in ("y", "yes"), "已取消")
+        update_progress('applying', 'backing_up')
         original = backup_plugin(self.plugin, self.work / "rollback.zip") if self.plugin.exists() else None
         if original:
             require(original["version"] == old_version, "运行版本与旧包版本不一致")
@@ -733,13 +743,16 @@ class Installer:
                 self.loader.call("tasks")
             state.data["phase"] = "installing"
             state.save()
+            update_progress('applying', 'installing')
             self.loader.mutate(state, kind="install", name=package["name"], artifact=(self.work / "package.zip").as_uri(), version=package["version"], hash=package["sha256"], installType=1 if original else 0, checkTasks=bool(original))
             self.restore_settings(state, first_install_success=not original)
+            update_progress('applying', 'verifying')
             verify_files(self.plugin, package["files"])
             self.loader.verify(self.work, package)
             with recovery_signals():
                 state.data["phase"] = "complete"
                 state.save()
+                update_progress('applying', 'cleanup')
                 self.finish(state)
         except BaseException as error:
             # A second Ctrl-C must not interrupt normal rollback. SIGKILL/power
@@ -794,9 +807,10 @@ def main(argv=None):
         options.version = None if options.recover else version_tag(gui['candidate']['tag'])
         options.yes = not options.recover
         options.homebrew = Path(gui['plugin']).parent.parent
-        global DOWNLOAD_PROGRESS
+        global DOWNLOAD_PROGRESS, UPDATE_PROGRESS
+        UPDATE_PROGRESS = lambda value: atomic_json(Path(gui['status']), value)
         DOWNLOAD_PROGRESS = lambda size, total, url: atomic_json(Path(gui['status']), {
-            'state': 'preparing', 'bytes': size, 'total': total, 'file': urllib.parse.urlsplit(url).path.rsplit('/', 1)[-1]})
+            'state': 'preparing', 'stage': 'downloading', 'bytes': size, 'total': total, 'file': urllib.parse.urlsplit(url).path.rsplit('/', 1)[-1]}) if urllib.parse.urlsplit(url).path.endswith('/' + ASSET) else None
     require(sys.version_info >= (3, 10) and sys.platform == "linux", "请使用 Steam Deck 上的 Python 3.10+ 运行")
     require(os.geteuid() != 0, "请以 Steam 用户运行，不要使用 sudo")
     require(not options.recover or (not options.version and not options.check and not options.yes), "--recover 不能与版本、安装或检查参数组合")
@@ -848,7 +862,7 @@ def main(argv=None):
             loader.identity()
             if gui:
                 loader.call('prepare_app_update')
-                atomic_json(Path(gui['status']), {'state': 'applying', 'version': options.version})
+                update_progress('applying', 'preparing')
             installer.install(package, yes=options.yes)
             if 'backend/app_update.py' in package['files']:
                 loader.call('finish_app_update')

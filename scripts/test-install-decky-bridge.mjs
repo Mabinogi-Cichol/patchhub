@@ -172,6 +172,27 @@ test('transaction guard survives install completion until verification or recove
   assert.equal(e.window.__patchhubTerminalJobs,undefined);
 });
 
+test('pending update notice does not block installation or future notification calls',async()=>{
+  const e=environment();
+  e.backend.runningCalls.set(100,{message:{route:'loader/call_plugin_method',args:[name,'claim_app_update_notice']}});
+  await e.run('acquire',{id:'transaction'});
+  await e.run('launch',e.install);
+  assert.equal((await finished(e)).ok,true);
+  await e.backend.call('loader/call_plugin_method',name,'claim_app_update_notice');
+  await assert.rejects(e.backend.call('loader/call_plugin_method',name,'start_install'),/update_in_progress/);
+  await e.run('forget',{id:'job-1'});
+  await e.run('release',{id:'transaction'});
+  assert.equal(e.backend.runningCalls.has(100),true);
+});
+
+test('pending game writes and foreign Loader mutations still prevent acquisition',async()=>{
+  const e=environment();
+  e.backend.runningCalls.set(100,{message:{route:'loader/call_plugin_method',args:[name,'start_install']}});
+  await assert.rejects(e.run('acquire',{id:'transaction'}),/pending_plugin_write/);
+  e.backend.runningCalls.set(100,{message:{route:'utilities/install_plugins'}});
+  await assert.rejects(e.run('acquire',{id:'transaction'}),/pending_plugin_write/);
+});
+
 test('cancellation RPC failure still restores the original prompt handler and call function',async()=>{
   const e=environment(),previous=e.backend.call,dispatch=e.backend.dispatch.bind(e.backend);
   e.backend.dispatch=async(route,...args)=>{

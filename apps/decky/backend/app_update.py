@@ -153,7 +153,7 @@ class AppUpdate:
         shutil.copyfile(self.root / 'backend' / 'install-decky.py', self.worker_dir / 'install-decky.py')
         request = self.worker_dir / 'request.json'
         _write_json(request, {'candidate': self.result, 'plugin': str(self.root), 'status': str(self.worker_dir / 'result.json'), 'recover': recover})
-        _write_json(self.worker_dir / 'result.json', {'state': 'preparing'})
+        _write_json(self.worker_dir / 'result.json', {'state': 'applying', 'stage': 'recovering'} if recover else {'state': 'preparing'})
         with (self.worker_dir / 'worker.log').open('wb') as log:
             environment = dict(os.environ)
             if 'LD_LIBRARY_PATH_ORIG' in environment:

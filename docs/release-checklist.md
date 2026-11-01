@@ -2,6 +2,12 @@
 
 本清单区分已构建产物与已验收发行版。当前版本仍为开发 Alpha，完整开发计划的样本数量及双端 UI 门槛尚未达到。
 
+## v0.5.1 发布准备（2026-11-01）
+
+- 用户要求合并 Decky 自更新修复至 main 并发布 v0.5.1。沿用本 session 已验证的源码、真实更新及完成提示候选结果，详细证据与边界见[自更新施工记录](features/client-self-update/progress.md)。
+- 根 Cargo workspace 版本源升级至 0.5.1，并同步 Cargo/npm 项目锁、Flutter、Decky 和共享 UI 派生元数据。正式发行必须来自 v0.5.1 Tag 对应 CI 新构建，不能上传旧测试候选。
+- Release 标题严格为 `v0.5.1`，正文使用[中文发行说明](releases/v0.5.1.md)，公开附件仅为三个安装包与 `SHA256SUMS.txt`。在线 CI 与附件核验待完成后补记；本轮不部署正式附件或操作游戏。
+
 ## v0.5.0 发布准备（2026-11-01）
 
 - 用户授权将 `feature/script-source-adapters` 合并至 `main` 并发布 v0.5.0，包含此前本地 `main` 的来源名称改动及当前分支的 Lua 来源迁移、后台 Shiravune 访问、双端脚本管理与相关修复。

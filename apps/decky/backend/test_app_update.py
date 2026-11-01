@@ -67,6 +67,20 @@ class MaintenanceTests(unittest.TestCase):
 
 
 class ServiceTests(unittest.IsolatedAsyncioTestCase):
+    async def test_recovery_launch_is_applying_and_cannot_be_cancelled_as_download(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / 'package.json').write_text('{"version":"0.3.0"}')
+            (root / 'backend').mkdir()
+            (root / 'backend/install-decky.py').write_text('# fixture')
+            service = AppUpdate(root, root)
+            service.worker_dir = root / 'worker'
+            service.snapshot = lambda: {'execution': json.loads((service.worker_dir / 'result.json').read_text())} if (service.worker_dir / 'result.json').exists() else {}
+            with patch('app_update.shutil.which', return_value='python3'), patch('app_update.subprocess.Popen', return_value=Mock(pid=123)):
+                self.assertEqual(service.start(recover=True)['execution'], {'state': 'applying', 'stage': 'recovering'})
+            with self.assertRaisesRegex(RuntimeError, '正在替换或恢复'):
+                service.cancel()
+
     async def test_worker_completion_during_process_check_is_preserved(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
