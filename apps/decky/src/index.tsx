@@ -320,6 +320,8 @@ function GameManager({ item, seg, panel }: { item: Install; seg: string; panel?:
   const patch = selected?.kind === "installable" ? selected.choices.find(p => (p.selection_id ?? p.release_id) === selectedDownload) ?? selected.patch : undefined;
   const candidate = selected?.kind === "discovery" ? selected.candidate : undefined;
   const identity = patch?.selection_id ?? patch?.release_id ?? "";
+  // The core's dynamic EXE preview route only returns exe_check_required.
+  const previewAvailable = !!patch && !patch.selection_id?.startsWith("exe-selection-");
   useEffect(() => { setPreview(null); setArchive(""); setManual(false); setManualUrl(""); setManualLinkExpanded(false); }, [item.game.instance_id, selectedKey, identity]);
   const primaryAction = primaryInstallAction(patch, !!archive.trim());
   const primaryAvailable = primaryAction.available;
@@ -471,8 +473,10 @@ function GameManager({ item, seg, panel }: { item: Install; seg: string; panel?:
       <PanelSection title={installed ? "覆盖安装" : "安装补丁"}>
         <Row><Status>安装时请关闭游戏并暂停 Steam 更新。</Status></Row>
         {actionBlockers.map((blocker, i) => <Row key={`action-${blocker.code}-${i}`}><Status warning>{reason(blocker.code)}{blocker.detail ? ` · ${blocker.detail}` : ""}</Status></Row>)}
-        <Row><Action disabled={!!busy || tasks.isBusy()} onClick={viewPreview}>查看文件变更（只读）</Action></Row>
-        {preview && <Row><Status>{preview.changes.length ? preview.changes.map(change => `${change.action}：${change.path}`).join("；") : preview.blockers.length ? preview.blockers.map(reason).join("；") : "暂无文件变更。"}</Status></Row>}
+        {previewAvailable && <>
+          <Row><Action disabled={!!busy || tasks.isBusy()} onClick={viewPreview}>查看文件变更（只读）</Action></Row>
+          {preview && <Row><Status>{preview.changes.length ? preview.changes.map(change => `${change.action}：${change.path}`).join("；") : preview.blockers.length ? preview.blockers.map(reason).join("；") : "暂无文件变更。"}</Status></Row>}
+        </>}
         <Row><Action disabled={!primaryAvailable || !!busy || tasks.isBusy()} onClick={() => void beginInstall()}>{primaryAction.label === "overwrite" ? "覆盖安装补丁" : "安装补丁"}</Action></Row>
         {!patch.download_url && !primaryAvailable && <Row><Status>未找到下载链接</Status></Row>}
         {patch.actions.local_archive.available && <Row><Action onClick={() => setManual(value => !value)}>导入本地 ZIP（可选）{manual ? " ▴" : " ▾"}</Action></Row>}

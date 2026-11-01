@@ -399,6 +399,30 @@ test("patch language, version, conditions and source link fold together while in
   assert.equal(page.button("安装补丁").disabled, false);
 });
 
+test("dynamic EXE hides unsupported file preview and keeps installation; ZIP and signed releases keep preview", async () => {
+  const item = game();
+  item.patches = [patch({ selection_id: "exe-selection-one-1", support_level: "publisher_exe" }),
+    patch({ release_id: "zip", selection_id: "zip-selection-two-1", support_level: "publisher_zip" }),
+    patch({ release_id: "signed" })];
+  const page = mount(item);
+  const html = page.render();
+  assert.doesNotMatch(html, /查看文件变更|exe_check_required/);
+  assert.equal(page.button("安装补丁").disabled, false);
+  assert.ok(!page.methods.includes("preview"));
+  const selector = () => page.controls.find(control => control.name === "DropdownItem" && control.props.label === "选择补丁")!.props;
+  for (const id of ["zip-selection-two-1", "signed"]) {
+    selector().onChange(selector().rgOptions.find((option: any) => option.data === id));
+    page.render();
+    assert.equal(page.button("查看文件变更（只读）").disabled, false);
+    page.button("查看文件变更（只读）").onClick();
+    await page.settle();
+  }
+  assert.equal(page.methods.filter(method => method === "preview").length, 2);
+  selector().onChange(selector().rgOptions.find((option: any) => option.data === "exe-selection-one-1"));
+  assert.doesNotMatch(page.render(), /查看文件变更|exe_check_required/);
+  assert.equal(page.button("安装补丁").disabled, false);
+});
+
 test("source-only patch selector stays outside the fold while its metadata and links stay inside", () => {
   const item = game();
   item.discovery!.candidates = [candidate, { ...candidate, candidate_id: "candidate-2", patch_title: "另一个补丁" }];
