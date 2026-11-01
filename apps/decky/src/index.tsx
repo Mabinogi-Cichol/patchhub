@@ -261,7 +261,7 @@ function QuickAccess() {
   </div>;
 }
 
-function TaskModal({ game, patch, onTerminal, onExit }: { game: string; patch: string; onTerminal: (task: TaskSnapshot) => void; onExit: () => void }) {
+function TaskModal({ appid, game, patch, onTerminal, onExit }: { appid: number; game: string; patch: string; onTerminal: (task: TaskSnapshot) => void; onExit: () => void }) {
   useEffect(() => onExit, [onExit]);
   const task = useSyncExternalStore(tasks.subscribe, tasks.getSnapshot);
   useEffect(() => {
@@ -273,7 +273,7 @@ function TaskModal({ game, patch, onTerminal, onExit }: { game: string; patch: s
   };
   return task && taskIsTerminal(task.state)
     ? <TaskResultView task={task} onClose={cancelOrClose} />
-    : <TaskProgressView task={task} game={game} patch={patch} onClose={cancelOrClose} />;
+    : <TaskProgressView task={task} appid={appid} game={game} patch={patch} onClose={cancelOrClose} />;
 }
 let modal: ReturnType<typeof showModal> | null = null;
 let modalOwner: object | null = null;
@@ -282,11 +282,11 @@ function hideTask() {
   modalOwner = null; modal = null;
   previous?.Close();
 }
-function showTask(game: string, patch: string, onTerminal: (task: TaskSnapshot) => void) {
+function showTask(appid: number, game: string, patch: string, onTerminal: (task: TaskSnapshot) => void) {
   if (modal) return;
   const owner = {};
   modalOwner = owner;
-  modal = showModal(<TaskModal game={game} patch={patch} onTerminal={onTerminal} onExit={() => {
+  modal = showModal(<TaskModal appid={appid} game={game} patch={patch} onTerminal={onTerminal} onExit={() => {
     // Programmatic replacement must not let an old modal cancel a new task.
     if (modalOwner !== owner) return;
     modalOwner = null; modal = null; tasks.dismount();
@@ -343,7 +343,7 @@ function GameManager({ item, seg, panel }: { item: Install; seg: string; panel?:
         const task = tasks.getSnapshot();
         if (!mounted.current || document.hidden || !task || task.instance_id !== item.game.instance_id) return;
         const name = item.patches.find(p => p.selection_id ? p.selection_id === task.selection_id : p.release_id === task.release_id)?.name ?? task.selection_id ?? task.release_id ?? "补丁";
-        showTask(game, name, finishTask);
+        showTask(item.game.appid, game, name, finishTask);
       }).catch(() => {});
     };
     const leave = () => { tasks.dismount(); hideTask(); };
@@ -410,7 +410,7 @@ function GameManager({ item, seg, panel }: { item: Install; seg: string; panel?:
       pendingRequestIds.set(key, requestId);
       hideTask();
       const pending = tasks.startInstall(item.game.instance_id, patch.selection_id ? null : patch.release_id, patch.selection_id ?? null, operation, requestId, input);
-      showTask(game, patch.name, finishTask);
+      showTask(item.game.appid, game, patch.name, finishTask);
       await pending;
       pendingRequestIds.delete(key);
     }
@@ -429,7 +429,7 @@ function GameManager({ item, seg, panel }: { item: Install; seg: string; panel?:
     try {
       hideTask();
       const pending = tasks.startInstall(item.game.instance_id, null, null, "overwrite", requestId, "", input);
-      showTask(game, candidate.patch_title, finishTask);
+      showTask(item.game.appid, game, candidate.patch_title, finishTask);
       await pending;
       pendingRequestIds.delete(key);
     } catch (error) { hideTask(); session.setFeedback({ error: reason(String(error)) }, item.game.instance_id); }

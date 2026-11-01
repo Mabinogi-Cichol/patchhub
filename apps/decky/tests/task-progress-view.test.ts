@@ -26,7 +26,9 @@ runInNewContext(output, { exports, require: (id: string) => {
   if (id === "@decky/ui") return native;
   if (id === "@patchhub/ui") return { reason: (code: string) => `原因：${code}`, installationResult, progressStageLabel };
   if (id === "./cache") return { formatSize: (bytes: number) => `${bytes} B` };
-  if (id === "./task-progress") return { taskProgressPercent: () => 50 };
+  if (id === "./task-progress") return { taskProgressPercent: (task: TaskSnapshot | null) => task ? 50 : null };
+  if (id === "./game-artwork") return { GameArtwork: ({ appid }: { appid: number }) =>
+    appid === 1 ? React.createElement("img", { "data-game-artwork": appid, alt: "" }) : null };
   return require(id);
 } });
 function task(state: TaskSnapshot["state"]): TaskSnapshot {
@@ -39,7 +41,7 @@ test("progress has only the native close hint and all native exits use its handl
   controls.length = 0;
   let closed = 0;
   const html = renderToStaticMarkup(React.createElement(exports.TaskProgressView, {
-    task: task("running"), game: "游戏", patch: "补丁", onClose: () => { closed++; },
+    task: task("running"), appid: 1, game: "游戏", patch: "补丁", onClose: () => { closed++; },
   }));
   assert.match(html, /data-close-hint="关闭并取消安装"/);
   assert.match(html, /<progress/);
@@ -51,12 +53,35 @@ test("progress has only the native close hint and all native exits use its handl
   assert.equal(closed, 3);
 });
 
+test("progress uses current-game artwork before its text, including before the first snapshot", () => {
+  for (const value of [null, task("running"), task("cancelling")]) {
+    const html = renderToStaticMarkup(React.createElement(exports.TaskProgressView, {
+      task: value, appid: 1, game: "游戏", patch: "补丁", onClose() {},
+    }));
+    assert.match(html, /data-game-artwork="1"/);
+    assert.ok(html.indexOf('data-game-artwork="1"') < html.indexOf("游戏 · 补丁"));
+    assert.match(html, /当前阶段/);
+    assert.match(html, /data-close-hint="关闭并取消安装"/);
+  }
+});
+
+test("unavailable artwork leaves progress and cancellation readable without an image", () => {
+  const html = renderToStaticMarkup(React.createElement(exports.TaskProgressView, {
+    task: task("running"), appid: 2, game: "无图游戏", patch: "补丁", onClose() {},
+  }));
+  assert.doesNotMatch(html, /<img/);
+  assert.match(html, /无图游戏 · 补丁/);
+  assert.match(html, /当前阶段/);
+  assert.match(html, /<progress/);
+  assert.match(html, /关闭将取消安装/);
+});
+
 test("every terminal result contains result and native close hint without progress or action buttons", () => {
   for (const [state, message] of [["completed", "安装已完成"], ["cancelled", "已安全取消"], ["failed", "安装失败"]] as const) {
     const html = renderToStaticMarkup(React.createElement(exports.TaskResultView, { task: task(state), onClose() {} }));
     assert.match(html, new RegExp(message));
     assert.match(html, /data-close-hint="关闭"/);
-    assert.doesNotMatch(html, /<button|<progress|已处理|文件：|已用|当前阶段|data.bin/);
+    assert.doesNotMatch(html, /<button|<progress|<img|已处理|文件：|已用|当前阶段|data.bin/);
   }
 });
 
@@ -80,13 +105,13 @@ test("all nine installer stages and applying substages render native progress", 
   };
   for (const [stage, label] of Object.entries(stages)) {
     const html = renderToStaticMarkup(React.createElement(exports.TaskProgressView, {
-      task: { ...task("running"), stage, substage: null }, game: "游戏", patch: "补丁", onClose() {},
+      task: { ...task("running"), stage, substage: null }, appid: 1, game: "游戏", patch: "补丁", onClose() {},
     }));
     assert.match(html, new RegExp(progressStageLabel(stage)), stage);
   }
   for (const [substage, label] of [["backing_up", "保护现有文件"], ["writing", "写入文件"], ["committing", "提交安装"]]) {
     const html = renderToStaticMarkup(React.createElement(exports.TaskProgressView, {
-      task: { ...task("running"), substage }, game: "游戏", patch: "补丁", onClose() {},
+      task: { ...task("running"), substage }, appid: 1, game: "游戏", patch: "补丁", onClose() {},
     }));
     assert.match(html, new RegExp(progressStageLabel("applying", substage)), substage);
   }

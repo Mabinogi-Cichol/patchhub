@@ -4,6 +4,7 @@ import { reason, installationResult, progressStageLabel } from "@patchhub/ui";
 import { formatSize } from "./cache";
 import { type TaskSnapshot } from "./task-controller";
 import { taskProgressPercent } from "./task-progress";
+import { GameArtwork } from "./game-artwork";
 
 function duration(seconds: number) { return `${Math.floor(seconds / 60)} 分 ${Math.floor(seconds % 60)} 秒`; }
 
@@ -14,6 +15,8 @@ const styles = `
   .patch-task-header h2 { margin:0 0 6px; font-size:22px; }
   .patch-task-header { padding-bottom:8px; }
   .patch-task-body { flex:1 1 auto; min-height:0; overflow-y:auto; overscroll-behavior:contain; padding-right:6px; }
+  .patch-task-artwork .patch-game-artwork { height:80px; margin:0 0 10px; }
+  .patch-task-artwork .patch-game-artwork-image, .patch-task-artwork .patch-game-artwork-content { width:100%; height:100%; object-fit:cover; }
   .patch-task-shell p { margin:6px 0; line-height:1.35; overflow-wrap:anywhere; }
   .patch-task-stage { margin:0 0 8px; }
   .patch-task-metrics { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:4px 16px; margin:12px 0; }
@@ -55,12 +58,13 @@ export function TaskResultView({ task, onClose }: { task: TaskSnapshot; onClose:
   </TaskPanel>;
 }
 
-export function TaskProgressView({ task, game, patch, onClose }: {
-  task: TaskSnapshot | null; game: string; patch: string; onClose: () => void;
+export function TaskProgressView({ task, appid, game, patch, onClose }: {
+  task: TaskSnapshot | null; appid: number; game: string; patch: string; onClose: () => void;
 }) {
   const stage = task?.state === "cancelling" ? "正在取消" : task?.state === "rolling_back" ? "正在恢复原文件" : progressStageLabel(task?.stage ?? "starting", task?.substage);
   const progress = taskProgressPercent(task);
   return <TaskPanel title="安装补丁" onClose={onClose} cancelDescription="关闭并取消安装">
+    <div className="patch-task-artwork"><GameArtwork appid={appid} /></div>
     <p>{game} · {patch}</p>
     <p className="patch-task-stage">当前阶段：{stage}{progress != null ? ` · ${Math.round(progress)}%` : ""}</p>
     <ProgressBar indeterminate={progress == null} nProgress={progress ?? 0} />
