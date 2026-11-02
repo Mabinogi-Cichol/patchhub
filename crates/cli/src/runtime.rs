@@ -1560,7 +1560,14 @@ mod sources_tests {
         for source in array {
             assert_eq!(source["revision"], 0);
             assert_eq!(source["complete"], false);
-            assert_eq!(source["interval_hours"], 0);
+            assert_eq!(
+                source["interval_hours"],
+                if source["role"] == "publisher" {
+                    168
+                } else {
+                    0
+                }
+            );
             assert!(source["next_due_at"].is_null());
         }
     }
