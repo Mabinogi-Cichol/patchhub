@@ -15,7 +15,7 @@
 | 功能 | 状态 | 设计文档 | 施工记录 | 附加文档 |
 | --- | --- | --- | --- | --- |
 | Decky 原生界面与详情艺术作品 | 已实现并部署；安装进度接入原生艺术作品短横幅，类型检查 / 107 项测试 / 构建及实机合成进度布局通过；此前五页标题清理、操作排序、说明折叠、技术信息置底与 EXE 预览隐藏已落实，真实安装及实体手柄等样本待验收 | [设计](decky-visual-refresh/design.md) | [施工记录](decky-visual-refresh/progress.md) | [信息优先级方案](decky-visual-refresh/information-priority-plan.md) |
-| 打开时初始化订阅源与每周默认更新 | 已实现；Rust 114 / Flutter 35 / Decky 97 项与静态检查通过，双端实机待验收，未部署或发布 | [设计](source-startup-update/design.md) | [施工记录](source-startup-update/progress.md) | — |
+| 打开时初始化订阅源与每周默认更新 | 已实现；Rust 114 / Flutter 35 / Decky 97 项与静态检查通过；CLI 默认周期旧断言已修复，相关 24 项通过，Linux CI 待验证；双端实机待验收，未部署或发布 | [设计](source-startup-update/design.md) | [施工记录](source-startup-update/progress.md) | — |
 | 可导入脚本来源适配器 | 已随 v0.5.0 发布，标签 CI/最终附件核验通过；其余验收施工中：P0–P6 已完成；P7 双端候选包、Deck 部署与抽样通过；Shiravune 普通后台更新及受控到期入口双端通过，165 条完整索引；旧缓存不复用按 Breaking Change 处理。内置来源改为只读、自定义来源支持删除且只接受 Lua 脚本（声明式表格入口已删除，2026-11-01）。其余原生输入、实体手柄与真实游戏安装边界见记录 | [设计](script-source-adapters/design.md) | [施工记录](script-source-adapters/progress.md) | [施工计划](script-source-adapters/implementation-plan.md) · [修复方案](script-source-adapters/fix-plan.md) |
 | 订阅源显示名称与规则示例 | 已实现，相关本地自动化及过度设计审阅通过；Windows/Deck 实机待验收 | [设计](source-display-names/design.md) | [施工记录](source-display-names/progress.md) | — |
 | 应用版本号单一来源 | 已实现，版本同步 / 检查、隔离 Cargo/npm 锁验证与本地 Windows / Decky 构建打包通过；在线 CI、实机与正式跨版本更新待验证，未发布 | [设计与调研](version-single-source/design.md) | [施工记录](version-single-source/progress.md) | — |
