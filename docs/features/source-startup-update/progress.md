@@ -34,3 +34,11 @@
 
 - Windows 与 Steam Deck 真实首次打开、未更新源失败 / 取消后重新打开、已有用户周期展示、真实网站后台更新及更新后的游戏匹配。
 - 本轮未构建发行包或部署设备；自动化结果不代表实机验收已完成。
+
+## 2026-11-02：CLI 默认周期断言修复
+
+- CI run [41335313400](https://github.com/Mabinogi-Cichol/patchhub/actions/runs/41335313400/job/124933837896) 在 `list_sources_returns_defaults` 失败：实际周期为 168，旧断言仍要求 0；协议、格式和 Clippy 检查已通过。
+- 在 `fix/source-startup-update` 修正 CLI 回归断言：发布者源默认 168 小时，fallback 源为 0；保留未初始化索引与无到期时间断言。未修改产品逻辑或设计。
+- 过度设计复核：检查 CLI `list_sources` 默认值断言与 registry 默认周期契约，无新增抽象、限制、重试或防御分支，未发现需修改项。
+- 本地 Windows 验证：`./scripts/cargo.ps1 test -p patchhub-cli --locked runtime::sources_tests::`，24 passed；`cargo fmt --all -- --check` 与 `git diff --check` 通过。Linux 在线 CI 待推送后验证。
+- 按用户要求将测试修复提交为 `3bbcf70`，配套文档单独提交；未推送。
