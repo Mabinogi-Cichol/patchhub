@@ -4,7 +4,7 @@
 
 ## 状态
 
-已实现，本地相关自动化与静态检查通过；Windows / Steam Deck 实机验收待执行。未部署或发布。
+已实现并随 v0.5.2 发布，本地相关自动化、静态检查、标签 CI 与发行附件核验通过；Windows / Steam Deck 功能实机验收待执行。本轮未部署设备。
 
 ## 2026-11-01
 
@@ -42,3 +42,8 @@
 - 过度设计复核：检查 CLI `list_sources` 默认值断言与 registry 默认周期契约，无新增抽象、限制、重试或防御分支，未发现需修改项。
 - 本地 Windows 验证：`./scripts/cargo.ps1 test -p patchhub-cli --locked runtime::sources_tests::`，24 passed；`cargo fmt --all -- --check` 与 `git diff --check` 通过。Linux 在线 CI 待推送后验证。
 - 按用户要求将测试修复提交为 `3bbcf70`，配套文档单独提交；未推送。
+
+### v0.5.2 发布验证
+
+- 已合并推送 main，修复随 v0.5.2 发布；标签 CI 双平台 core 与两端打包全部通过，四个正式附件的哈希、来源和版本核验通过，Windows 便携包隔离启动 / 正常退出通过。
+- 发行提交 `3ac65f4`，详见[发行记录](../../release-checklist.md#v052-发布记录2026-11-02)。Windows / Steam Deck 功能实机验收仍待执行，本轮未部署设备。

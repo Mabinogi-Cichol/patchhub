@@ -241,3 +241,20 @@ RustSec 提示：RUSTSEC-2024-0429（glib 0.18.5，unsound）与 RUSTSEC-2024-03
 - 更新前全部 9 个附件已备份并逐个与当前公开 API 大小及 SHA-256 核对；更新后公开清单仅有三个安装包，哈希与原包一致。三个安装包的 ID/名称/大小/哈希/下载 URL、Tag 引用、正文、发布时间与发行状态均保持不变，未重建安装包或移动 Tag。
 - 实际 Release 数据通过 Decky 自更新候选识别及安装器下载校验；工作流实际 Bash 暂存夹具通过，WSL 安装入口 8 项、WSL 安装器 30 项及原生 Decky 自更新 8 项回归全部通过。没有新增实机验收结论。
 - 证据和可恢复附件：`.artifacts/release-v0.4.0/assets-simplification-20261027/`，包括更新前后 API、原附件、新清单及 `verification.json`。
+
+## v0.5.2 发布记录（2026-11-02）
+
+- 按用户授权合并至 main 并发布；CLI 默认更新周期断言修复 `3bbcf70`、功能记录 `3fa8d7f`、版本同步 `00790fb`、发行说明 `3385d38` 分别提交，合并提交为 `3ac65f44ebfa2176716a645608c803689605cd78`。main 与注解 Tag v0.5.2 原子推送，Tag 对象 `9501cf3f20224e66c12077f587604bdaddc30e9b` 固定指向该合并提交。
+- [标签 CI 41458274856](https://github.com/Mabinogi-Cichol/patchhub/actions/runs/41458274856) 共 7 个任务全部成功，包含双平台 core、Windows / Decky 打包与 release。此前 Ubuntu 的默认周期断言失败已在本次完整 CI 通过；三个安装包均来自标签新构建。
+- [正式 Release v0.5.2](https://github.com/Mabinogi-Cichol/patchhub/releases/tag/v0.5.2) 于北京时间 2026-11-02 22:11:29 发布，标题与 Tag 均为 v0.5.2，非草稿、非预发行。中文正文与[发行说明](releases/v0.5.2.md)读回一致；公开附件严格为三个安装包及 SHA256SUMS.txt。
+- 已下载全部四个附件，大小、GitHub digest、清单的三个文件名与 SHA-256 全部一致。ZIP CRC、内容白名单与 Tag 来源通过（Windows 47 文件、Decky 30 文件）；Windows PE x86_64 / NSIS x86、Decky ELF64 x86_64、runtime 摘要和执行位通过。
+- 两端应用与 Rust 工作区 / SBOM 版本为 0.5.2；Cargo/npm/Dart 锁、安装器与 Lua 许可摘要和 Tag 一致，Windows 按实际 CRLF 检出规则核对。SBOM 组件数为 Windows 519、Decky 450。
+- Windows 正式便携包在隔离 APPDATA 中启动并正常关闭，FileVersion / ProductVersion 均为 0.5.2+1，退出码 0，关闭 647ms。未执行 NSIS 安装、最终 Decky 包部署、实体手柄、真实游戏安装或正式跨版本自更新验收，不将源码阶段记录作为本次安装包实机证明。
+- 证据保存在忽略目录 `.artifacts/release-v0.5.2/`，含 CI/Release API、日志、下载文件、verification.json 及便携包启动结果。第三方依赖未更新，未重新执行依赖审计。
+
+| 附件 | 字节 | SHA-256 |
+| --- | --- | --- |
+| patchhub-decky.zip | 8222625 | `0a432be03f8071f7e3a8b965726406ee9cd0e6b13a75bbb8c1831b8562a6e9be` |
+| patchhub-windows-portable.zip | 20160314 | `ef9124df66ac6f95e81989965a34558a840788e9c7a93cfd9a7d71d8b9069107` |
+| patchhub-windows-x64-setup.exe | 15178179 | `7ccbde86a20b43a93ad4faa4434e5590065202177234efd1adbb21301d74c1c9` |
+| SHA256SUMS.txt | 278 | `02da146001f9eaa4f279badb1ded8911614b87604568efe1ff7274289fa2c745` |
