@@ -16,6 +16,7 @@
 
 | 功能 | 状态 | 设计文档 | 施工记录 | 附加文档 |
 | --- | --- | --- | --- | --- |
+| Decky debug 本地自更新源 | 已实现，点击更新主动取消业务；隔离写入/回滚回归、实机在途扫描取消及真实 HTTP→安装→Steam 重启→新版加载通过；真实游戏写入中更新、实体手柄待验收 | [设计](decky-debug-update/design.md) | [施工记录](decky-debug-update/progress.md) | [审阅](decky-debug-update/review.md) |
 | 移除公开静态补丁目录 | 已实现，Rust/Flutter/Decky 与双端打包资源检查通过；Windows 实际包干净扫描/查询/匹配/安装/回放通过；Linux 发行构建和实机待验证 | [设计](remove-static-catalog/design.md) | [施工记录](remove-static-catalog/progress.md) | [实现审阅](remove-static-catalog/review.md) |
 | Decky 原生界面与详情艺术作品 | 已实现并部署；安装进度接入原生艺术作品短横幅，类型检查 / 107 项测试 / 构建及实机合成进度布局通过；此前五页标题清理、操作排序、说明折叠、技术信息置底与 EXE 预览隐藏已落实，真实安装及实体手柄等样本待验收 | [设计](decky-visual-refresh/design.md) | [施工记录](decky-visual-refresh/progress.md) | [信息优先级方案](decky-visual-refresh/information-priority-plan.md) |
 | 打开时初始化订阅源与每周默认更新 | 已随 v0.5.2 发布；CLI 默认周期旧断言已修复，相关 24 项及标签双平台 core / 打包通过，发行附件核验与 Windows 便携包启动通过；双端功能实机待验收 | [设计](source-startup-update/design.md) | [施工记录](source-startup-update/progress.md) | — |
