@@ -979,7 +979,7 @@ dependencies = [
 
 [[package]]
 name = "patchhub-cli"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "fs2",
  "patchhub-core",
@@ -995,7 +995,7 @@ dependencies = [
 
 [[package]]
 name = "patchhub-contract-gen"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "patchhub-core",
  "patchhub-protocol",
@@ -1007,7 +1007,7 @@ dependencies = [
 
 [[package]]
 name = "patchhub-core"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "base64 0.22.1",
  "caseless",
@@ -1037,7 +1037,7 @@ dependencies = [
 
 [[package]]
 name = "patchhub-installer-format"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "base64 0.22.1",
  "caseless",
@@ -1053,7 +1053,7 @@ dependencies = [
 
 [[package]]
 name = "patchhub-installer-worker"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "memmap2",
  "patchhub-installer-format",
@@ -1066,7 +1066,7 @@ dependencies = [
 
 [[package]]
 name = "patchhub-protocol"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "patchhub-core",
  "schemars",
