@@ -209,8 +209,15 @@ fn clean_app_queries_matches_installs_and_replays_without_a_public_catalog() {
     let bytes = fs::read(&archive).unwrap();
     let server = std::thread::spawn(move || {
         let (mut stream, _) = listener.accept().unwrap();
-        let mut request = [0; 4096];
-        stream.read(&mut request).unwrap();
+        let mut reader = BufReader::new(&mut stream);
+        let mut line = String::new();
+        loop {
+            line.clear();
+            assert!(reader.read_line(&mut line).unwrap() > 0);
+            if line == "\r\n" {
+                break;
+            }
+        }
         write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/zip\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", bytes.len()).unwrap();
         stream.write_all(&bytes).unwrap();
     });
