@@ -2,6 +2,25 @@
 
 本清单区分已构建产物与已验收发行版。当前版本仍为开发 Alpha，完整开发计划的样本数量及双端 UI 门槛尚未达到。
 
+## v0.5.4 发布记录（2026-11-04）
+
+- 用户授权发布；功能提交 `af1caaa`（更新时主动取消业务并等待恢复收尾）、`448edf2`（隔离本地更新源与一键真机测试）、文档 `e3467dd`、`93129c4`、版本同步 `e126cd9`、发行说明 `48308f0` 分别提交；`main` 快进至 `48308f0`，与注解 Tag v0.5.4 原子推送，Tag 对象 `54c85f4e15d166c97fe2798b3697a6f85993548a` 指向该提交。
+- 发布前完成[本地 CI 完整对齐](local-ci-validation.md)：Windows core 与 windows 打包步骤（含本机 `makensis` 生成 NSIS）、WSL Ubuntu 的 core 与 decky 全步骤逐条通过；本机工具版本 Node 22、Rust 1.94.0、Python 3.12。证据为 `.artifacts/release-v0.5.4/windows-steps.json`、`.artifacts/release-v0.5.4/*.log` 及 WSL `~/patchhub-release-v054-48308f0/logs/`（`linux-steps.json`）。
+- [标签 CI 41677043760](https://github.com/Mabinogi-Cichol/patchhub/actions/runs/41677043760) 的 changes、双平台 core、windows、decky、ci 和 release 共 7 个任务全部成功；三个安装包均来自本次 Tag 的新构建。
+- [正式 Release v0.5.4](https://github.com/Mabinogi-Cichol/patchhub/releases/tag/v0.5.4) 于北京时间 2026-11-04 00:54:13 发布，标题与 Tag 均为 v0.5.4，非草稿、非预发行。正文按「新增与优化 / 问题修复」中文格式，与[发行说明](releases/v0.5.4.md)逐字符一致（工作流自动正文于 00:54:33 替换）；公开附件严格为三个安装包及 SHA256SUMS.txt。
+- 已下载全部四个附件：大小、GitHub digest、清单中的文件名与 SHA-256 全部一致。ZIP CRC 与内容白名单通过（Windows 43 文件、Decky 27 文件），两端无 catalog/trust-keys 资源，包内资源、契约、脚本与 Tag 内文件逐字节相同（Windows 按实际 CRLF 检出规则）。Windows `update-manifest.json` 的 files 集合等于 ZIP 条目，`app-version.json` 为 0.5.4。
+- Windows EXE/DLL 与 NSIS 引导桩（x86）平台核对通过；Decky Core/worker 为 ELF64 x86-64 PIE，执行位 0755、`runtime.json` 摘要与二进制一致。两端 SBOM（CycloneDX 1.6）应用及 6 个 Rust 工作区组件版本为 0.5.4，Cargo/npm/Dart 锁摘要与 Tag 内容一致；组件数 Windows 495、Decky 438。
+- Windows 正式便携包在隔离 APPDATA 中启动并正常关闭：FileVersion / ProductVersion 均为 0.5.4+1，退出码 0，关闭耗时 576ms。NSIS 版本字符串位于压缩载荷内，未运行安装包，由 Tag 构建脚本与成功 CI 的一致性步骤佐证。
+- 未执行：NSIS 安装、Decky 正式包部署到 Steam Deck、真实发行商下载与游戏安装、正式来源跨版本自更新及实体手柄验收；`v0.5.4` 的 debug 更新链与源码阶段记录不作为本次公开附件的实机证明。
+- 证据保存在忽略目录 `.artifacts/release-v0.5.4/`：`release.json`、`tag-run.json`、`tag-jobs.json`、`tag-ci-logs.zip`、`verification.json`、`downloads/` 与 `portable-smoke-result.json`。
+
+| 附件 | 字节 | SHA-256 |
+| --- | --- | --- |
+| patchhub-decky.zip | 7906606 | `f4c5c9ef671053ca7ef1dcbdf2bc7f32392d77793fc780328a0a4f20fbbaf14b` |
+| patchhub-windows-portable.zip | 19806033 | `ec8f233a8b0e222f99a0000e727aebc4887960c458d9b05694680745b424e7fd` |
+| patchhub-windows-x64-setup.exe | 14917415 | `60667983e239e166f32c08261add4979a400dd25e92ff4d217f616aa417b2eb9` |
+| SHA256SUMS.txt | 278 | `ce795563a610e8c2c854d353a605bc40cdcbd7f00e71f9f6ae599672a586f204` |
+
 ## v0.5.3 发布记录（2026-11-03）
 
 - 用户授权发布；发布提交 `d41fa74447d7e7ea2c8bd828e030895b20a12b98`（版本同步 `d41fa74`，此前含 cache_smoke 请求头修复 `880518f`、本地 CI 文档 `a0d0128`、记录更新 `ce5f047` 及两个合并提交）。main 与注解 Tag v0.5.3 推送，Tag 对象 `ae0411308bdf19639cf6b06707acd99535a404a8` 指向该提交。
