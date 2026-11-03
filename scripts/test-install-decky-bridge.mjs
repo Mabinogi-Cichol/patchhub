@@ -41,6 +41,7 @@ function environment() {
           this.emit('loader/add_plugin_install_prompt',name,args[2],'request-actual',args[3],args[4]); return;
         case 'utilities/confirm_plugin_install': return;
         case 'utilities/cancel_plugin_install': return;
+        case 'utilities/restart_webhelper': return true;
         case 'utilities/uninstall_plugin': return;
         default: throw new Error(route);
       }
@@ -189,6 +190,19 @@ test('pending update notice does not block installation or future notification c
   await e.run('forget',{id:'job-1'});
   await e.run('release',{id:'transaction'});
   assert.equal(e.backend.runningCalls.has(100),true);
+});
+
+test('ui reload delegates to the Loader webhelper restart instead of restarting Steam',async()=>{
+  const e=environment();
+  assert.equal(await e.run('reload_ui',{}),true);
+  assert.deepEqual(e.seen.map(x=>x.route),['utilities/restart_webhelper']);
+});
+
+test('ui reload reports a Loader refusal instead of claiming it was requested',async()=>{
+  const e=environment(),dispatch=e.backend.dispatch.bind(e.backend);
+  e.backend.dispatch=async(route,...args)=>route==='utilities/restart_webhelper'
+    ? Promise.reject(new Error('reload_unavailable')) : dispatch(route,...args);
+  await assert.rejects(e.run('reload_ui',{}),/reload_unavailable/);
 });
 
 test('pending game writes and foreign Loader mutations still prevent acquisition',async()=>{

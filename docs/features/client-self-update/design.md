@@ -4,6 +4,7 @@
 - 状态：**已实现，双端本地 Release 夹具完整更新链通过，正式跨版本发布及完整安装版验收待完成**；实际范围以施工记录为准。
 - 施工记录：[progress.md](progress.md)。
 - 2026-11-03 Decky 后续优化（候选已部署、完整自更新待验收）：[单行交互与客户端重启计划](decky-ui-restart-plan.md)。Decky 更新入口改为当前版本与唯一状态按钮，点击后原位展示整体百分比，成功后自动重启 Steam 客户端；此决策覆盖旧 Decky 多行详情、进度弹窗及手动退出重开页面方案，实现、设备部署、原生界面及客户端重启验证见施工记录，完整 UI 跨版本自更新和实体手柄待验收。
+- 2026-11-04 Decky 终点动作修订：[重启链调研](restart-fast-path-research.md) 对照 DeckyClash 后，把“重启 Steam 客户端”改为经 Loader `utilities/restart_webhelper` 重载 Steam UI（WebHelper），客户端进程与游戏会话保留；实现与本地验证见施工记录，实机验收待完成。
 - 基线：`main@81a2965`；设计分支 `feature/client-self-update`。
 
 2026-11-03 Decky 启动检查修订：每次插件前端初始化后立即调用一次检查更新，等待检查完成再领取提醒；不受普通后台 24 小时间隔限制，仍遵守 GitHub 返回的限流恢复时间并复用正在进行的检查。发现新版通过 Decky 原生 toast/tips 通知，点击进入“缓存、备份与更新”。无新版不通知，同一 Tag 沿用已有持久化去重。检查不阻塞插件界面初始化；卸载后不弹出迟到通知。
@@ -165,6 +166,12 @@ GUI 模式中用户点击更新即授权对应冻结版本，传递显式非交�
 进度写到插件目录外的事务状态文件，旧 UI 卸载后由新插件读取。原 `start_app_update` RPC 仅返回“已受理”和任务标识，不等待自身卸载后的最终结果。前端断开显示“插件正在重载”，不能把预期断连当作更新失败。若新版无法启动，外部执行者负责恢复，并通过现有 Loader 通知/恢复后的旧插件呈现结果。
 
 旧版插件备份只含程序与必要 Loader 设置，不复制游戏、来源库或业务数据库。待确认期间同样禁止不兼容迁移。现有终端安装器的大小硬限制、任意等待阈值及只检查部分任务等行为必须在复用路径逐项复核：没有外部约束依据的分支直接清理，不能因“已有实现”成为新功能规范。
+
+### 6.3 更新完成后的界面重载（2026-11-04）
+
+安装验证与 `finish_app_update` 之后不再调用 `SteamClient.User.StartRestart(true)`，改由独立安装器经管理桥接调用 Loader 的 `utilities/restart_webhelper`。Loader 执行 `killall -s SIGTERM steamwebhelper`，Steam 重建 UI 后重新注入 Decky 前端，插件 bundle 以带时间戳的动态 import 载入新版本；3.2.9 / 3.3.0 / 3.3.1 三个受支持版本的该行为一致，代码位置见[重启链调研](restart-fast-path-research.md)。Steam 客户端进程、游戏会话与下载不受影响。
+
+动作改名但状态字段保持：`result.json` 仍写 `restart` / `restart_context`，因为执行本次安装的 worker 来自旧包、与新版前端共用该契约；前端继续用页面 `performance.timeOrigin` 判断是否同一页面在等待重载。重载调用必然打断自身 CEF/WebSocket 连接，按“请求已受理、结果未确认”记录；只有 Loader 明确返回错误才算失败并保留单独重试入口，不写回安装失败。
 
 ## 7. 发布与落点
 

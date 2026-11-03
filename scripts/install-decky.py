@@ -49,18 +49,23 @@ def download_progress(size, total, url, expected_size=0):
                          'percent': min(80, int(size / total * 80)) if total else 0})
 
 
-def restart_client(loader, gui, version):
-    """Only the GUI success path (or an explicit retry) requests a client restart."""
+def reload_client_ui(loader, gui, version):
+    """Only the GUI success path (or an explicit retry) reloads the Steam UI.
+
+    Loader's restart_webhelper kills steamwebhelper, Steam rebuilds the page and
+    Decky re-injects the new bundle, so the client process and any running game
+    survive. The status keys keep the `restart` prefix: the worker that installs
+    this version still writes them, and the frontend reads them.
+    """
     result = {'state': 'completed', 'version': version, 'percent': 100}
     try:
-        loader.cdp.evaluate("(() => { if (typeof SteamClient?.User?.StartRestart !== 'function') throw new Error('Steam 客户端重启接口不可用'); return true; })()")
         result.update(restart='requested', restart_context=gui.get('client_context'))
         atomic_json(Path(gui['status']), result)
         try:
-            loader.cdp.evaluate('(() => { SteamClient.User.StartRestart(true); return true; })()')
+            loader.call('reload_ui')
         except (OSError, EOFError):
-            # The client can close CDP before delivering the result. This is
-            # an unconfirmed request, not proof of installation failure.
+            # The webhelper dies before answering. An unconfirmed request is not
+            # proof that the reload failed.
             pass
         except InstallError as error:
             if str(error) not in ('CEF 连接已关闭', 'CEF 连接已断开'):
@@ -489,6 +494,7 @@ BRIDGE = r"""async (op, a) => {
    return true;
  }
  if (op === 'finish_app_update') return await b.call('loader/call_plugin_method',name,op);
+ if (op === 'reload_ui') { await b.call('utilities/restart_webhelper'); return true; }
  if (op === 'runtime') {
    const plugins = (await b.call('loader/get_plugins')).filter(p => p.name===name);
    const front = l.plugins.filter(p => p.name===name);
@@ -896,7 +902,7 @@ def main(argv=None):
     with workspace_lock(cache):
         if gui and gui.get('restart_only'):
             try:
-                restart_client(loader, gui, gui['installed_version'])
+                reload_client_ui(loader, gui, gui['installed_version'])
             finally:
                 loader.cdp.close()
             return
@@ -947,7 +953,7 @@ def main(argv=None):
             if 'backend/app_update.py' in package['files']:
                 loader.call('finish_app_update')
             if gui:
-                restart_client(loader, gui, options.version)
+                reload_client_ui(loader, gui, options.version)
             print(f"{package['tag']} 安装及运行验证通过；本次备份、下载与恢复记录已清理。")
         finally:
             loader.cdp.close()
