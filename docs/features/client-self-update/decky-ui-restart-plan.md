@@ -75,3 +75,16 @@
 ## 2026-11-04 更新切换语义
 
 点击更新授权主动切换到更新流程：立即拒绝新业务、请求取消在途补丁/来源/扫描工作，复用原取消和必要恢复收尾。独立 worker 检查/下载/校验可正常推进，最终 Loader 替换前必须确认取消/恢复成功；不以等待自然完成或忙碌时禁用按钮规避。正常回滚不设总时限，错误明确报告。实现和实机证据见 [debug 更新施工记录](../decky-debug-update/progress.md)。
+
+## 2026-11-04 终点动作改为 Steam UI 重载（方案 A）
+
+用户要求按[重启链调研](restart-fast-path-research.md)的方案 A 替换第 3 节的客户端重启。调研结论：DeckyClash 的“重启”实际由 Loader 落到 `killall -s SIGTERM steamwebhelper`，我们用的是整个 Steam 客户端重启，后者的十秒级中断是“拖沓”的来源。
+
+| 项目 | 变更 |
+| --- | --- |
+| 动作 | `install-decky.py` 的 `restart_client()` → `reload_client_ui()`，改调管理桥接 `reload_ui`，由页面调用 Loader `utilities/restart_webhelper`；不再使用 `SteamClient.User.StartRestart(true)` |
+| 状态 | `result.json` 仍写 `restart` / `restart_context`；重试 RPC 仍为 `restart_app_update_client`。理由是执行本次安装的 worker 来自旧包，与新版前端共用该契约 |
+| 界面 | `app-update-view.tsx` 与 `app-update.tsx` 文案改为“正在重新加载界面”“重新加载界面”，错误改为“更新已安装，界面重新加载失败”；另按实机测量修正更新按钮布局：`Field` 把行内容按左右两半分配（右半 231.09 px），原 `minWidth: 240` 溢出到行右缘，改为 `width: 100%` + `minWidth: 0` 后按钮右缘与数值列、全宽按钮对齐（778.09 px） |
+| 保留 | 先持久化结果再调用；CEF/WS 断开视为“已受理未确认”；只有 Loader 明确报错才记为失败并可单独重试；安装验证、事务、回滚不变 |
+
+改动不走 Loader 服务重启（方案 C），保持“只重载本插件、不重启全部插件后端”的边界。实机验收项见调研第 7 节：零重载对照、A/B 重注入时序、游戏内副作用、分段耗时。

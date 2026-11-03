@@ -257,3 +257,43 @@
 
 
 2026-11-04 用户纠正后：Decky 点击更新主动取消业务并等待取消/必要恢复收尾，独立下载校验可并行推进。撤回等待 busy=false 的规避方案；实机在途 scan 被主动取消、收尾早于 Loader 安装，完整更新重启链通过。写入回滚夹具/失败阻止替换回归通过，真实游戏写入中触发更新与实体手柄待验收。当前事实见 [debug 更新当前记录](../decky-debug-update/progress.md)。
+
+## 2026-11-04：重启加载客户端环节调研（待选型）
+
+- 用户反馈 Decky 自更新完成后“重启加载 Steam 客户端”的逻辑拖沓，要求参考 DeckyClash 的自更新重启实现；本轮只做调研，未改运行代码、未部署设备、未提交。
+- 静态阅读 `chenx-dust/DeckyClash@0f8cc1d` 与 `decky-loader v3.3.1@ffd103b`：DeckyClash 的“重启”是 `systemctl restart plugin_loader.service`，Loader 启动路径检测到 `deckyHasLoaded` 后执行 `killall -s SIGTERM steamwebhelper`，最终落点是 Steam UI（WebHelper）重载，不是 Steam 客户端重启；本项目末端为 `SteamClient.User.StartRestart(true)`，属客户端整体重启。
+- 结论与候选（A `utilities/restart_webhelper`、B `SteamClient.Browser.RestartJSContext()`、C Loader 重启、D 现状提前）写入[重启链调研](restart-fast-path-research.md)；推荐保留事务化安装与验证，仅替换末端重载动作，`StartRestart` 降级为回退。
+- 未执行：设备实测（重载后新界面是否真的换新、重注入时序、游戏内副作用、分段耗时埋点）、代码与测试改动、过度设计复阅；均待选型后进入实现阶段。
+
+## 2026-11-04：终点动作改为 Loader WebHelper 重载（方案 A，已实现）
+
+- 用户选定方案 A。分支 `fix/decky-update-ui-reload`（基于 `main@e6ccfb7`）已创建；未提交、未部署、未重启设备。
+- `scripts/install-decky.py`：`restart_client()` 改为 `reload_client_ui()`，仍先写 `completed` + `restart: requested` + `restart_context`，再经管理桥接新 op `reload_ui` 调用 `utilities/restart_webhelper`；不再调用 `SteamClient.User.StartRestart(true)`，也不再需要启动前的 `StartRestart` 可用性探针。CEF/WS 断开（`OSError`/`EOFError`/“CEF 连接已关闭·已断开”）仍记为“已受理未确认”，Loader 明确报错才落到 `restart: failed` 并保留单独重试。
+- 受支持 Loader 3.2.9 / 3.3.0 / 3.3.1 均提供该路由，且启动注入时都会在 `deckyHasLoaded` 存在的情况下 `killall -s SIGTERM steamwebhelper`，因此没有版本分支、没有 `StartRestart` 兜底、没有新增配置。状态字段与 RPC 名保持原样，理由见[设计 6.3](design.md#63-更新完成后的界面重载2026-11-04)。
+- 界面：`app-update-view.tsx` 的 `restarting` 文案与 `app-update.tsx` 的进行中/失败入口/错误说明改为“正在重新加载界面”“重新加载界面”“更新已安装，界面重新加载失败”；`performance.timeOrigin` 判定未改。
+- 界面间距（同一轮，已按实机实测修正）：根因不是行内边距，而是 Steam `Field` 把行内容按左右两半分配（实机行宽 486.19 px 减去 12 px 内距后，右半为 231.09 px），按钮固定 `minWidth: 240` 超出右半 9 px，直接溢出到行右缘（改前右缘 786.7 px，同页数值列 778.09 px）。中间尝试的 `marginRight: 12` 无效并被实机测量否决；最终改为 `width: '100%'`、`minWidth: 0`，按钮铺满右半：实机测量按钮右缘 778.09 px，与数值列和全宽按钮完全对齐，宽度按文案自适应（“检查更新”=112 px）。前端测试断言改为 `width`/`minWidth`。
+- 过度设计审阅（实现级）：未新增超时、重试、倒计时、配置或状态机；唯一新增分支是桥接 op 与既有断连容错复用，未发现应删除的防御逻辑。
+
+### 本轮定向验证
+
+| 平台/范围 | 命令 | 结果 |
+| --- | --- | --- |
+| Windows / 桥接夹具 | `node scripts/test-install-decky-bridge.mjs` | 14 项通过（新增 `reload_ui` 委派与 Loader 拒绝两条） |
+| WSL Ubuntu / 安装器 | `python3 -m unittest discover -s scripts -p test_install_decky.py` | 41 项通过（Python 3.10.12） |
+| WSL Ubuntu / 更新宿主 | `python3 -m unittest discover -s apps/decky/backend -p "test_app_update*.py"` | 15 项通过 |
+| Windows / 前端测试 | `npm test -w apps/decky` | 111 项通过（含更新按钮宽度断言） |
+| Windows / 类型与构建 | `npm run typecheck -w apps/decky`、`npm run build -w apps/decky` | 通过；产物 `apps/decky/dist/index.js` |
+| 实机与发布 | 已部署验证（见下节） | 完整 UI 跨版本自更新、实体手柄与完整发布矩阵待验收 |
+
+## 2026-11-04：实机部署与界面验证（方案 A + 按钮布局）
+
+- 设备：Devkit 当前配对 `steamdeck` / `192.168.31.186` / `deck`；主机公钥 `SHA256:1eQWToCx6mKr5lz/YPXgwit390H7XTkWcpR56L0mJx8`（ED25519），与本仓库既有 `.artifacts/p0-deck-baseline`、`shiravune-deck-validation` 记录一致；用户级 `known_hosts` 的旧条目与本轮无关，未采纳。设备时间 2026-11-04 01:33–01:40 (+08:00)。
+- 基线：`plugin_loader` active、Loader 3.3.1、PatchHub 0.5.4 实例 1、协议 5、任务 45 条且无在途任务；插件目录 `root:root 755`，按技能要求走 Loader 本地 ZIP 安装而非直接覆盖。
+- 构建：沿用 `target/linux/release` 的 2026-11-03 23:52 Linux 产物（其后无 `crates/` 改动），重新 `package:plugin` 与 SBOM（`Cargo.lock` 与既有 SBOM 记录不一致，重新生成到 `.artifacts/dependencies.cdx.json`），产物 27 文件。
+- 部署经两轮：第一轮 `patchhub-decky.zip`（`0d56ce0f…`，含 `marginRight: 12` 的按钮）实机测量显示按钮仍溢出到行右缘，判定该方案无效；第二轮 `dff1dbef90c206f3946c1be5198e27de984d9cf85838febd4e6982f427f185cc`（7,913,404 字节，改 `width: '100%'` + `minWidth: 0`）为最终部署包，设备 `sha256sum` 一致。
+- 正式目录核对：`dist/index.js` = `aad9a45769f7184bdc6f30b8891e0351e245c94d8029b0d189d9918a98601b9e`（与本地构建一致），`backend/install-decky.py` = `20cfed46…`，`bin/patchhub-core|worker` 具执行位，`package.json` 0.5.4；Loader 实例唯一、协议 5、HTTP bundle 字节与哈希一致。
+- 界面（真实 854×534 CSS viewport，设备原生 1281×801 截图）：更新行容器右缘 790.09 px、内容右缘 778.09 px；按钮右缘 778.09 px，与“当前占用”数值列和“清理全部安装备份”按钮完全对齐；按钮宽 112 px、高 44 px，按文案自适应。改前同一行按钮右缘 786.7 px、宽 240 px（溢出内距）。
+- 重载机制实测：经 Loader 路由 `utilities/restart_webhelper` 触发一次（与更新末端同一调用），CEF target 全部重建、Decky 重新注入、插件实例恢复为 1、HTTP bundle 仍为 `aad9a457…`，设置页重新打开后渲染的是新按钮布局——证明“WebHelper 重载 → 新前端生效”成立，不需要重启 Steam 客户端。QAM 可正常打开。
+- Loader 3.3.1 行为记录：本地 ZIP 重装会把本插件从 `pluginOrder` 移除（`browser.py` 保存旧顺序后未恢复，仅新装时追加）。本轮按原位置恢复为 `['Storage Cleaner','PatchHub']`；其他 Loader 设置前后一致。产品自更新路径有自己的 `restore_settings`，不受该行为影响。
+- 归档：`.artifacts/decky-ui-reload-deploy-20261104-013314/`（`summary.json`、`manifest.json`、`baseline.json`、`verified*.json`、`measure*.json`、`settings-update-row.png`、`qam.png`、各步表达式）。远端暂存 `/home/deck/patchhub-validation/ui-reload-20261104-013314/` 已按精确路径清理，SSH 隧道已关闭；调试部署未创建旧版备份。
+- 待验收：从真实旧版本走完整自更新（下载 → 安装 → 末端重载 → 新界面），游戏运行中重载的副作用，实体手柄焦点/返回。
