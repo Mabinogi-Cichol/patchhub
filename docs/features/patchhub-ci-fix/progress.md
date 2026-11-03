@@ -2,6 +2,18 @@
 
 [设计](design.md)
 
+## 2026-11-03：本地验证与 CI 对齐
+
+状态：已实现，本地三个 job 逐步骤通过；在线 CI 与 Steam Deck 实机待验证。分支 `fix/cache-smoke-request-read`，未提交、推送或发布。
+
+- 用户确认触发范围：完整本地对齐只在发布版本前执行（打 tag、创建或核验发行附件之前），日常开发改为按改动范围的定向验证，避免每次改动都跑三 job 全矩阵。本轮三 job 全量执行属于排查 CI #98 失败并首次建立流程，规则与指南已按此收敛。
+
+- 依据 [本地 CI 验证](../../local-ci-validation.md) 与当前 workflow 执行；本轮变更含 `crates/**`，选择器返回 core/windows/decky 全为 true，逐 job、逐平台、逐 step 记录见[静态目录移除施工记录](../remove-static-catalog/progress.md#2026-11-03ci-98-后续修复)。
+- WSL 实际约束一：以 root 运行 core 测试时 CLI 有 7 项失败，均为 `installer_host_requires_non_root` 及相关断言；GitHub runner 为非 root，改以非 root 用户重跑全部通过。未为本地环境放宽生产校验。
+- WSL 实际约束二：在 `/mnt/e`（drvfs）上以非 root 构建时 `mlua-sys` 构建脚本无法复制头文件（Operation not permitted）。core 与 Decky 改在 ext4 工作副本执行，使用独立 `CARGO_TARGET_DIR`，同步来源与工作区状态记录在副本 `.ci-sync-stamp`。
+- 本机偏差与阻塞：Windows 侧 Node 为 24.14.0（CI 为 22），Rust 1.94.0 一致；未安装 NSIS `makensis`，安装包步骤留待线上 CI。Windows 打包入口、SBOM 与便携包已实际生成本地核对。
+- 未新增 workflow 解析器、配置或重试框架；上述环境处理只影响本地执行方式，不修改生产代码或 CI 任务。
+
 ## 2026-10-29：Windows CI 再次失败与构建精简
 
 状态：已实现，本地验证通过；完整在线 CI、缓存命中与耗时改善待验证。用户明确要求直接在 `main` 修复；基线 `48be014`，随后授权按功能代码与文档拆分本地提交，未推送。

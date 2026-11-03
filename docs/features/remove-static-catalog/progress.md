@@ -4,6 +4,42 @@
 
 ## 状态
 
+### 2026-11-03：CI #98 后续修复
+
+- [CI #98](https://github.com/Mabinogi-Cichol/patchhub/actions/runs/41620527586) 在 Linux Core 的 Clippy 阶段失败：`cache_smoke.rs:213` 未处理 `Read::read` 返回长度，触发 `clippy::unused_io_amount`。Windows Core 被 matrix fail-fast 取消；Windows 打包与 Decky 成功。
+- 从已包含目录移除改动的 `main` 创建独立修复分支 `fix/cache-smoke-request-read`。本机 HTTP 测试服务改用已有 BufReader 按行读取至请求头空行；头部未完成即 EOF 时断言失败，不再假设一次 TCP read 能读完请求。
+- 过度设计审阅：沿接受连接、读取头部、返回 ZIP 路径复核，仅修正测试 HTTP 边界；无新增依赖、重试、超时、硬限制或生产逻辑修改。
+- 本地验证通过：CI 同参数四包 `cargo clippy --all-targets --locked -- -D warnings`、`cargo fmt --all -- --check`、`cargo test -p patchhub-cli --test cache_smoke --locked` 以及 `git diff --check`。日志在 `.artifacts/ci-98/`。
+- 按 [本地 CI 验证](../../local-ci-validation.md) 补齐全 job 覆盖：`crates/cli/tests/cache_smoke.rs` 命中 `crates/**`，选择器返回 core/windows/decky 三个 job 全为 true。Windows core、WSL Linux core、Windows 打包入口与 Decky Linux 全部按 workflow 逐步骤执行，结果见下表。本轮属于排查 CI #98 失败并建立流程；此后完整对齐只在发布版本前执行，日常开发按改动范围做定向验证。
+- WSL 首轮以 root 运行 core 测试时，CLI 7 项失败（`installer_host_requires_non_root` 抢先于 `state_overlaps_game`、能力与备份断言返回 false、清理用例 unwrap 失败）。GitHub runner 为非 root，改以本机非 root 用户 `codex-p6` 重跑后全部通过；这是验证环境差异，不构成代码修复，未放宽生产 root 拒绝逻辑。
+- `/mnt/e`（drvfs）上以非 root 构建时 `mlua-sys` 构建脚本复制头文件失败（Operation not permitted），core 与 Decky 均改在 ext4 工作副本执行并各自使用独立 `CARGO_TARGET_DIR`，与 Windows 编译产物不共享。副本来源与提交/工作区状态记入各副本 `.ci-sync-stamp`。
+
+| job / platform | step / 完整命令 | 结果 | 日志或产物 | 未验证原因 |
+| --- | --- | --- | --- | --- |
+| changes | `python scripts/project_version.py --check`、`test_project_version.py`（12 项）、`.github/ci` 单测（9 项）、`select_jobs(paths)` | 通过 | `.artifacts/ci-98/windows-core.log` | — |
+| core / Windows | `cargo test --locked -p patchhub-protocol` | 通过 | `.artifacts/ci-98/windows-core.log` | — |
+| core / Windows | `cargo fmt --all -- --check` | 通过 | 同上 | — |
+| core / Windows | `cargo clippy -p patchhub-core -p patchhub-cli -p patchhub-protocol -p patchhub-contract-gen --all-targets --locked -- -D warnings` | 通过 | 同上 | — |
+| core / Windows | `cargo test -p patchhub-core -p patchhub-cli --locked`、`cargo build -p patchhub-core -p patchhub-cli --locked` | 通过 | 同上 | — |
+| core / Windows | `test_sf95_audit.py`（18 项）、`test_sf95_worker.py`（5 项） | 通过 | 同上 | — |
+| core / WSL Linux | `cargo run --locked -p patchhub-contract-gen -- check` | 通过（Linux 专属步骤） | `~/wsl-ci-logs/core-contract-gen-check.log` | — |
+| core / WSL Linux | `cargo test --locked -p patchhub-protocol`、`cargo fmt --all -- --check` | 通过 | `core-protocol-test.log`、`core-fmt-check.log` | — |
+| core / WSL Linux | 四包 `--all-targets` `-D warnings` Clippy | 通过，0 warning | `core-clippy-4pkgs.log` | — |
+| core / WSL Linux | `cargo test -p patchhub-core -p patchhub-cli --locked` | 通过（381 通过/6 忽略 与 CLI 50 通过） | `core-core-cli-test.log` | — |
+| core / WSL Linux | `cargo build -p patchhub-core -p patchhub-cli --locked`、`test_sf95_audit.py`、`test_sf95_worker.py` | 通过 | `core-core-cli-build.log`、`core-sf95-*.log` | — |
+| windows | 六组 Python 单测、`npm ci`、`npm run test:contracts` | 通过 | `.artifacts/ci-98/windows-job.log` | — |
+| windows | `cargo build --release --locked -p patchhub-cli -p patchhub-installer-worker --bin patchhub-core --bin patchhub-worker` | 通过 | 同上 | — |
+| windows | `./scripts/build-windows-flutter.ps1 -SkipRust`、`cargo metadata`、含 Flutter 依赖的 SBOM、`package-artifacts.py --platform windows` | 通过 | `.artifacts/patchhub-windows-portable.zip`（44 项，0 个 catalog/trust-keys 资源，含 core/worker） | — |
+| windows | `./scripts/build-windows-installer.ps1 -Makensis …` | 未执行 | — | 本机无 NSIS `makensis`，留待线上 CI |
+| decky / WSL Linux | 四组 Python 单测（含 `test_install_decky.py`、`test_decky_bootstrap.py`）、`npm ci`、`npm run test:contracts`、`npm run typecheck` | 通过 | `~/wsl-ci-logs/decky-*.log` | — |
+| decky / WSL Linux | `npm run test -w apps/decky`（107/107）、`node --test scripts/test-install-decky-bridge.mjs`（11/11） | 通过 | `decky-decky-frontend-tests.log`、`decky-bridge-tests.log` | — |
+| decky / WSL Linux | Linux `cargo build --release … --bin patchhub-core --bin patchhub-worker`、`PATCHHUB_TEST_CORE=<本轮 release core>` 后端测试 124 项 | 通过 | `decky-linux-release-build.log`、`decky-decky-backend-tests.log` | — |
+| decky / WSL Linux | `npm run package:plugin -w apps/decky`、`cargo metadata`、`build-sbom.py`、`package-artifacts.py --platform decky` | 通过 | `patchhub-decky.zip`（27 项，bin 仅 core/worker/runtime.json，无 catalog 资源） | — |
+| 生成物一致性 | `git diff --exit-code -- Cargo.lock package-lock.json … packages/contracts/generated packages/contracts/fixtures …` | 通过（exit 0） | `.artifacts/ci-98/windows-job.log` | Decky 副本无 `.git`，该步在 Windows 仓库对同一同步源码执行 |
+| core / windows 环境 | Node 版本 | 记录偏差 | — | 本机 Node 24.14.0，CI 用 22；Rust 1.94.0 与 workflow 一致 |
+
+- 待验证：本修复提交后的在线 CI（含 Linux/Windows matrix、NSIS 安装包与线上 artifact 上传）、Steam Deck 实机。未提交、推送、部署或发布。
+
 已实现。2026-11-03 本地 Rust、Flutter、Decky 前后端及双端打包资源检查通过；最终 Windows 发行包重建、资源/二进制/schema 核对，以及从真实便携包提取核心后的干净应用全链路实测均通过。Linux ELF 发行构建、Steam Deck 实机、真实来源网站/游戏内效果及原生 UI 交互待验证。本轮按代码与文档分开创建本地提交；未推送、合并或发布。
 
 ## 2026-11-03：调查与实现
