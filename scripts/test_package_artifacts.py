@@ -30,6 +30,15 @@ class PackagingTests(unittest.TestCase):
         with patch.object(packager, 'ROOT', root), patch.object(packager, 'OUTPUT', root / '.artifacts'), patch.object(sys, 'argv', ['package-artifacts.py', '--platform', platform]):
             packager.main()
 
+    def test_production_decky_package_rejects_debug_source_marker(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.fixture(root)
+            self.write(root, 'apps/decky/plugin-output/debug-update-source.json', b'{"base_url":"http://127.0.0.1:1234/test"}')
+            with self.assertRaisesRegex(ValueError, 'debug update source'):
+                self.run_package(root, 'decky')
+            self.assertFalse((root / '.artifacts/patchhub-decky.zip').exists())
+
     def test_decky_rejects_stale_script_runtime_license(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

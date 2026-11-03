@@ -53,6 +53,8 @@ def validate_sbom(sbom, plugin, decky):
 
 
 def validate_decky(plugin):
+    if (plugin / 'debug-update-source.json').exists():
+        raise ValueError('Production Decky packages must not contain a debug update source')
     package = json.loads((plugin / 'package.json').read_text(encoding='utf-8'))
     if package['version'] != project_version(ROOT):
         raise ValueError('Rebuild Decky plugin: application version differs from Cargo.toml')

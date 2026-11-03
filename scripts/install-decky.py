@@ -128,11 +128,25 @@ def version_tag(value):
     return value
 
 
-def fetch(url, output=None):
+def debug_source(root):
+    path = Path(root) / 'debug-update-source.json'
+    if not path.exists():
+        return None
+    base = json_read(path)['base_url']
+    url = urllib.parse.urlsplit(base)
+    require(url.scheme == 'http' and url.hostname == '127.0.0.1' and url.port
+            and not (url.username or url.password or url.query or url.fragment)
+            and re.fullmatch(r'/[a-zA-Z0-9-]+', url.path), 'debug 更新源必须是设备 loopback 的独立会话 HTTP 地址')
+    return base
+
+
+def fetch(url, output=None, source=None):
     request = urllib.request.Request(url, headers={"User-Agent": "patchhub-decky-installer", "Accept": "application/vnd.github+json" if "/api.github.com/" in url else "application/octet-stream"})
-    require(urllib.parse.urlsplit(url).scheme == "https", "下载必须使用 HTTPS")
+    def allowed(value):
+        return (value.startswith(source + '/') if source else urllib.parse.urlsplit(value).scheme == 'https')
+    require(allowed(url), "下载必须使用 HTTPS 或已启用的 debug 会话源")
     with urllib.request.urlopen(request, timeout=30) as response:
-        require(urllib.parse.urlsplit(response.url).scheme == "https", "拒绝非 HTTPS 重定向")
+        require(allowed(response.url), "拒绝更新源之外的重定向")
         target = output.open("wb") if output else None
         blocks, size = [], 0
         try:
@@ -153,9 +167,13 @@ def fetch(url, output=None):
         return b"".join(blocks)
 
 
-def release_package(work, requested, download=fetch):
-    suffix = "latest" if requested is None else "tags/" + urllib.parse.quote(version_tag(requested), safe="")
-    release = json.loads(download(f"https://api.github.com/repos/{REPOSITORY}/releases/{suffix}"))
+def release_url(requested, source=None):
+    suffix = 'latest' if requested is None else 'tags/' + urllib.parse.quote(version_tag(requested), safe='')
+    return f'{source}/{suffix}' if source else f'https://api.github.com/repos/{REPOSITORY}/releases/{suffix}'
+
+
+def release_package(work, requested, download=fetch, source=None):
+    release = json.loads(download(release_url(requested, source)))
     tag = version_tag(release.get("tag_name"))
     require(not release.get("draft") and (requested is not None or not release.get("prerelease")), "不是正式发布版本")
     require(requested is None or requested == tag, "Release Tag 不匹配")
@@ -165,7 +183,8 @@ def release_package(work, requested, download=fetch):
         matches = [item for item in assets if item.get("name") == name]
         require(len(matches) == 1, f"Release 缺少唯一附件：{name}")
         url = matches[0].get("browser_download_url")
-        expected = f"https://github.com/{REPOSITORY}/releases/download/{tag}/{name}"
+        expected = (f"{source}/download/{tag}/{name}" if source else
+                    f"https://github.com/{REPOSITORY}/releases/download/{tag}/{name}")
         require(url == expected, "附件不属于冻结后的仓库版本")
         selected[name] = url
     sums = download(selected["SHA256SUMS.txt"]).decode("utf-8")
@@ -901,9 +920,11 @@ def main(argv=None):
         finally:
             os.close(cache_fd)
         try:
-            package = release_package(work, options.version)
+            source = debug_source(plugin) if gui else None
+            download = (lambda url, output=None: fetch(url, output, source=source)) if source else fetch
+            package = release_package(work, options.version, download=download, source=source)
             if gui:
-                release = json.loads(fetch(f'https://api.github.com/repos/{REPOSITORY}/releases/tags/{options.version}'))
+                release = json.loads(download(release_url(options.version, source)))
                 selected = gui['candidate']
                 require(release['id'] == selected['release_id'], 'Release identity changed')
                 for key in ('asset', 'sums'):

@@ -612,6 +612,77 @@ if __name__ == "__main__":
     unittest.main()
 
 
+class DebugTransportTests(unittest.TestCase):
+    def test_production_does_not_accept_http(self):
+        with self.assertRaises(m.InstallError):
+            m.fetch('http://127.0.0.1:34567/session/latest')
+
+    def test_debug_scope_rejects_other_origin_and_session(self):
+        for url in ['http://example.com:34567/session/latest', 'http://127.0.0.1:34567/other/latest']:
+            with self.assertRaises(m.InstallError):
+                m.fetch(url, source='http://127.0.0.1:34567/session')
+
+    def test_real_loopback_http_download_and_progress(self):
+        import http.server
+        import threading
+        data = b'actual HTTP bytes'
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(200)
+                self.send_header('Content-Length', str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+            def log_message(self, *args):
+                pass
+        server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+        thread = threading.Thread(target=server.serve_forever)
+        thread.start()
+        try:
+            base = f'http://127.0.0.1:{server.server_port}/session'
+            with tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                (root / 'debug-update-source.json').write_text(json.dumps({'base_url': base}))
+                self.assertEqual(m.debug_source(root), base)
+                events = []
+                with patch.object(m, 'DOWNLOAD_PROGRESS', lambda *event: events.append(event)):
+                    m.fetch(base + '/download/v0.5.4/' + m.ASSET, root / 'package.zip', source=base)
+                self.assertEqual((root / 'package.zip').read_bytes(), data)
+                self.assertEqual(events[0][:2], (len(data), len(data)))
+                self.assertEqual(m.release_url('v0.5.4', base), base + '/tags/v0.5.4')
+        finally:
+            server.shutdown()
+            thread.join()
+            server.server_close()
+
+
+class DebugReleaseTests(unittest.TestCase):
+    def test_same_package_validation_hash_and_frozen_source_are_required(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            original = root / 'original.zip'
+            create_package(original)
+            base = 'http://127.0.0.1:12345/session'
+            prefix = base + '/download/v0.2.0/'
+            release = {'tag_name': 'v0.2.0', 'assets': [{'name': name, 'browser_download_url': prefix + name}
+                       for name in (m.ASSET, 'SHA256SUMS.txt')]}
+            checksum = m.digest(original)
+            def download(url, output=None):
+                if url == base + '/tags/v0.2.0':
+                    return json.dumps(release).encode()
+                if url == prefix + 'SHA256SUMS.txt':
+                    return (checksum + '  ' + m.ASSET).encode()
+                self.assertEqual(url, prefix + m.ASSET)
+                output.write_bytes(original.read_bytes())
+            result = m.release_package(root, 'v0.2.0', download, source=base)
+            self.assertEqual(result['version'], '0.2.0')
+            checksum = '0' * 64
+            with self.assertRaisesRegex(m.InstallError, 'SHA-256'):
+                m.release_package(root, 'v0.2.0', download, source=base)
+            release['assets'][0]['browser_download_url'] = 'http://127.0.0.1:12345/other/package.zip'
+            with self.assertRaises(m.InstallError):
+                m.release_package(root, 'v0.2.0', download, source=base)
+
+
 class UpdateDrainTests(unittest.TestCase):
     def test_active_rollback_is_polled_without_the_loader_mutation_deadline(self):
         from unittest.mock import Mock

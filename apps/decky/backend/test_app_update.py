@@ -234,3 +234,40 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
             service = AppUpdate(root, root, fetch=fetch, clock=lambda: 100000)
             await asyncio.gather(service.check(True), service.check(True))
             self.assertEqual(len(calls), 1)
+
+
+class DebugSourceTests(unittest.IsolatedAsyncioTestCase):
+    async def test_debug_state_is_isolated_and_production_rejects_local_assets(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'package.json').write_text('{"version":"0.3.0"}')
+            host = root / 'host-v3'
+            host.mkdir()
+            production = host / 'app-update.json'
+            production.write_text('{"last_notified_tag":"v0.4.0","retry_at":99999999999}')
+            before = production.read_bytes()
+            source = 'http://127.0.0.1:43210/session'
+            (root / 'debug-update-source.json').write_text(json.dumps({'base_url': source}))
+            data = release()
+            for item in data['assets']:
+                item['browser_download_url'] = f"{source}/download/v0.4.0/{item['name']}"
+            service = AppUpdate(root, root, fetch=lambda: data)
+            self.assertEqual((await service.check(manual=True))['state'], 'available')
+            self.assertIsNotNone(service.claim_notice())
+            self.assertIsNone(service.claim_notice())
+            self.assertEqual(production.read_bytes(), before)
+            self.assertEqual(service.worker_dir.name, 'patchhub-app-update-debug')
+            with self.assertRaises(ValueError):
+                candidate(data, '0.3.0')
+
+    async def test_marker_rejects_non_loopback_or_unscoped_sources(self):
+        from app_update import debug_source
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.assertIsNone(debug_source(root))
+            for source in ['http://example.com:80/session', 'http://127.0.0.1:80',
+                           'https://127.0.0.1:80/session', 'http://u@127.0.0.1:80/session',
+                           'http://127.0.0.1:80/session?x=1']:
+                (root / 'debug-update-source.json').write_text(json.dumps({'base_url': source}))
+                with self.assertRaises(ValueError):
+                    debug_source(root)

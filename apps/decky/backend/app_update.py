@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import signal
 import ssl
+import urllib.parse
 from pathlib import Path
 
 from plugin_settings import _write_json
@@ -49,7 +50,22 @@ def newer(remote, local):
     return len(rp.split('.')) > len(lp.split('.'))
 
 
-def candidate(release, current, asset=ASSET):
+def debug_source(root):
+    # Only explicit developer packages carry this marker; production packaging
+    # excludes it. Never accept a source supplied by a candidate or RPC.
+    path = Path(root) / 'debug-update-source.json'
+    if not path.exists():
+        return None
+    base = json.loads(path.read_text(encoding='utf-8'))['base_url']
+    url = urllib.parse.urlsplit(base)
+    if (url.scheme != 'http' or url.hostname != '127.0.0.1' or not url.port
+            or url.username or url.password or url.query or url.fragment
+            or not re.fullmatch(r'/[a-zA-Z0-9-]+', url.path)):
+        raise ValueError('debug 更新源必须是设备 loopback 的独立会话 HTTP 地址')
+    return base
+
+
+def candidate(release, current, asset=ASSET, source=None):
     version(current)
     tag = release['tag_name']
     version(tag)
@@ -67,7 +83,8 @@ def candidate(release, current, asset=ASSET):
         if len(matches) != 1:
             return {**result, 'state': 'unavailable', 'error': '新版已发布，当前平台更新包尚不可用'}
         item = matches[0]
-        expected = f"https://github.com/{REPOSITORY}/releases/download/{tag}/{name}"
+        expected = (f"{source}/download/{tag}/{name}" if source else
+                    f"https://github.com/{REPOSITORY}/releases/download/{tag}/{name}")
         if item.get('browser_download_url') != expected:
             raise ValueError('附件不属于官方冻结版本')
         selected[name] = item
@@ -80,8 +97,8 @@ class RateLimited(Exception):
         super().__init__('GitHub 请求受限，请稍后重试')
 
 
-def fetch_release():
-    request = urllib.request.Request(API, headers={'User-Agent': 'patchhub',
+def fetch_release(source=None):
+    request = urllib.request.Request(source + "/latest" if source else API, headers={'User-Agent': 'patchhub',
         'Accept': 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28'})
     try:
         # Loader's frozen interpreter resolves its bundled CA location incorrectly on
@@ -99,9 +116,11 @@ def fetch_release():
 class AppUpdate:
     def __init__(self, root, state_dir, fetch=fetch_release, clock=time.time):
         self.root = Path(root)
-        self.path = Path(state_dir) / 'host-v3' / 'app-update.json'
+        self.source = debug_source(self.root)
+        self.path = Path(state_dir) / 'host-v3' / ('app-update-debug.json' if self.source else 'app-update.json')
         self.current = json.loads((self.root / 'package.json').read_text(encoding='utf-8'))['version']
-        self.fetch, self.clock = fetch, clock
+        self.fetch = (lambda: fetch_release(self.source)) if self.source and fetch is fetch_release else fetch
+        self.clock = clock
         self.data = {}
         load_error = None
         try:
@@ -116,7 +135,7 @@ class AppUpdate:
         if load_error:
             self.result = {'state': 'failed', 'current': self.current, 'error': load_error}
         self.pending = None
-        self.worker_dir = Path.home() / '.cache' / 'patchhub-app-update'
+        self.worker_dir = Path.home() / '.cache' / ('patchhub-app-update-debug' if self.source else 'patchhub-app-update')
 
     def snapshot(self):
         worker = self.worker_dir / 'result.json'
@@ -212,7 +231,7 @@ class AppUpdate:
         self.result = {'state': 'checking', 'current': self.current}
         try:
             version(self.current)
-            self.result = candidate(await asyncio.to_thread(self.fetch), self.current)
+            self.result = candidate(await asyncio.to_thread(self.fetch), self.current, source=self.source)
             self.data['last_success_at'] = now
             self.data.pop('retry_at', None)
         except RateLimited as error:
