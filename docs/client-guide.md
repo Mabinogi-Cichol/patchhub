@@ -1,20 +1,20 @@
-# Alpha 客户端与目录维护
+# Alpha 客户端与来源管理
 
-Windows 使用 Flutter / Material 3，Decky 使用 @decky/api 和 @decky/ui；两端调用同一个 Rust CLI。核心路径、目录、公钥和状态路径由宿主配置。前端只传入实例、release、受限 operation 与 request ID，不能指定目标目录、核心程序或执行脚本。
+Windows 使用 Flutter / Material 3，Decky 使用 @decky/api 和 @decky/ui；两端调用同一个 Rust CLI。核心程序、Steam 根目录与状态路径由宿主配置。前端只传入实例、动态 selection 或手动下载选择、受限 operation 与 request ID，不能指定目标目录、核心程序或执行脚本。
 
 ## 使用流程
 
-扫描游戏库 → 选择游戏与补丁 → 打开官方来源 / 导入 ZIP → 点击“安装补丁”或“重新安装补丁”一次完成获取、校验与安装。安装后重新扫描文件指纹和持久事务。不提供产品级补丁卸载；新 ZIP/EXE 安装直接覆盖，不创建自动备份或回滚。写入后失败、取消或中断会保留已写内容，必要时重新安装；请自行备份重要文件和存档。历史事务按其原有记录处理。
+扫描游戏库 → 更新来源并匹配 → 选择补丁或来源下载项 → 点击“安装补丁”或“重新安装补丁”一次完成获取、校验与安装。安装后重新扫描文件指纹和持久事务。不提供产品级补丁卸载；新 ZIP/EXE 安装直接覆盖，不创建自动备份或回滚。写入后失败、取消或中断会保留已写内容，必要时重新安装；请自行备份重要文件和存档。历史事务按其原有记录处理。
 
-来源条目仅供引导时，“状态未知”表示没有审核指纹，不能当作未安装。目录签名表示本工具维护端认可这些数据，不代表发行商授权，也不能代替游戏内运行验证。
+来源条目仅供引导时，“状态未知”表示没有审核指纹，不能当作未安装。程序仅内置来源规则与解析脚本，按用户本机游戏动态查询匹配，不随程序分发逐游戏静态目录。
 
 Shiravune 的普通更新与到期更新会在后台运行网站 JavaScript、保留站点会话并读取语言列表，无需打开网页或手工采集。Windows 需要 Microsoft Edge WebView2 Runtime，Decky 使用 Steam 自带浏览器；网站真正要求本人声明或真人验证时会明确失败，不能视为更新完成。来源脚本改变后需重新更新索引与匹配，旧解析结果不迁移；内部 SHA-256 用于识别脚本内容，普通卡片只显示 Lua / API，完整摘要可在脚本编辑器查看。
 
-Decky 手动 ZIP 导入限于用户 Downloads 或本工具下载缓存；Windows 通过原生文件选择器导入。安装无需确认步骤，安装前应关闭游戏并暂停 Steam 更新；有平台、版本或来源阻止条件时禁用安装入口。安装结果按实际事务状态显示，失败或中断不当作成功。Windows 安装时显示实际阶段与字节、文件进度，并提供“取消安装”；Decky 安装保持前台，离开进度界面即请求取消。不要在提交文件时强制杀死宿主。
+两端均使用动态来源选择；缺少下载项时可从来源网页补充下载直链。安装无需确认步骤，安装前应关闭游戏并暂停 Steam 更新；有平台、版本或来源阻止条件时禁用安装入口。安装结果按实际事务状态显示，失败或中断不当作成功。Windows 安装时显示实际阶段与字节、文件进度，并提供“取消安装”；Decky 安装保持前台，离开进度界面即请求取消。不要在提交文件时强制杀死宿主。
 
-Decky 点击“安装补丁 / 重新安装补丁”即开始自动获取、校验与安装；维护审核的条目先查 Downloads 和工具缓存，按完整 SHA-256 复用文件，patch.moe 的其他精确匹配游戏保留归档相对路径并解压至游戏根目录，内部按当前 build 和原文件哈希生成本地计划。安装为一次任务，成功后按缓存设置处理下载缓存；新链路不创建 `.stage` 暂存或安装备份。缓存与备份设置可清理下载缓存及历史安装备份，安装失败后的文件按上面的直接覆盖语义处理。下载缓存的前台进度、取消与结果见 [精简安装流程](features/simplified-install-flow/design.md) 与 [Decky UX](features/decky-ux/design.md)。
+Decky 点击“安装补丁 / 重新安装补丁”即开始自动获取、校验与安装；从已启用并订阅的来源解析下载项，校验下载内容，ZIP 补丁保留归档相对路径并解压至游戏根目录，内部按当前 build 和原文件哈希生成本地计划。安装为一次任务，成功后按缓存设置处理下载缓存；新链路不创建 `.stage` 暂存或安装备份。缓存与备份设置可清理下载缓存及历史安装备份，安装失败后的文件按上面的直接覆盖语义处理。下载缓存的前台进度、取消与结果见 [精简安装流程](features/simplified-install-flow/design.md) 与 [Decky UX](features/decky-ux/design.md)。
 
-订阅源的通用安装状态位于 `~/.local/share/patchhub/installer/rust-v1/`，使用统一 schema、内容存储、任务与收据，不再复用 `publisher/<release>/<instance-hash>/` 旧布局；官方获取缓存默认在安装成功后删除。每个 Steam 库实例隔离，重启插件后安装记录仍可路由。设备上的签名只固定本机文件计划，不宣称逐游戏维护审核或运行兼容性；公开目录的签名、信任数据库与密钥不被修改。插件保持默认非 root 运行；非 ZIP 和需要执行安装程序的来源需另行处理。
+订阅源的通用安装状态位于 `~/.local/share/patchhub/installer/rust-v1/`，使用统一 schema、内容存储、任务与收据，不再复用 `publisher/<release>/<instance-hash>/` 旧布局；官方获取缓存默认在安装成功后删除。每个 Steam 库实例隔离，重启插件后安装记录仍可路由。安装边界固定本机游戏实例、来源选择和文件内容；公开静态目录、其信任数据库准入和维护密钥已移除，历史本地计划与事务保持原有契约。插件保持默认非 root 运行；非 ZIP 和需要执行安装程序的来源需另行处理。
 
 ## 构建
 
@@ -67,19 +67,17 @@ Windows：执行 `pwsh -NoProfile -File scripts/build-windows-flutter.ps1`，生
 
 Linux：`sh scripts/build-linux.sh` 使用仓库内隔离工具链，测试核心与 CLI，并输出 `target/linux/release/patchhub-core`。然后 `npm run package:plugin -w apps/decky` 生成 plugin-output 目录。安装到 Decky 前应检查二进制可执行权限、文件所属用户、宿主版本和日志；root 宿主启动核心时按游戏用户降权并同步 HOME / XDG，状态存于用户 ~/.local/share/patchhub；商店审核另设门槛。
 
-## 维护签名目录
+## 来源与动态安装
 
-`patchhub-core keygen PRIVATE PUBLIC KEY_ID` 创建 Ed25519 私钥与公钥目录；文件存在时拒绝覆盖，Unix 私钥文件权限为 0600。Windows 私钥继承目录 ACL，应保存在受限维护目录。
+先扫描本机 Steam 游戏，再更新补丁来源和匹配候选。安装时重新解析选择并检查实例、来源启用与订阅、下载内容、路径和游戏事实，生成本地安装计划及事务。客户端没有公开目录有效期，也不加载旧安装包残留的目录资源。历史事务继续从本地 journal/plan 读取和恢复。
 
-`patchhub-core sign-catalog CATALOG PRIVATE KEY_ID OUTPUT LIFETIME_SECONDS [REVOCATIONS_JSON]` 对严格校验的目录生成签名，最长有效期 90 天。签名覆盖原始 payload 字节。可选的撤销文件是 release_id 字符串数组，例如 `["withdrawn-release"]`，写入签名 payload 的 revoked_release_ids；拒绝重复或空 ID。撤销密钥通过升级受信公钥文件实施。生产维护需离线密钥、密钥轮换和审核流程。revision 4 使用维护密钥 alpha-local-2026-10，公钥目录同时保留 alpha-local-2026；私钥不提交或打包。
-
-`patchhub-core schema OUTPUT` 导出 payload JSON Schema。现役 IPC 仅支持 v5，必需 host 六字段和显式 operation/cleanup_policy；旧版本混装在写入前拒绝。跨语言类型、校验和夹具详见 [共享契约](../packages/contracts/README.md)。修改配方必须递增 revision；同一 state 拒绝目录版本回退。客户端签名到期后禁用安装，仍可显示开发目录中的官方来源引导。
+现役 IPC v5 的 host 仅包含 roots、state_dir、platform；安装和预览使用 selection_id，手动直链安装使用 manual_download。release_id 保留为补丁及历史收据身份，不再作为公开安装输入；本地 archive 与目录维护命令已移除。详见 [共享契约](../packages/contracts/README.md) 与 [清理设计](features/remove-static-catalog/design.md)。
 
 ## 验证边界
 
-旧 `scripts/smoke-transaction.py` 已在跨平台安装器迁移收口（2026-10-11）删除；其协议 v1 安装/卸载与强杀恢复结果仅为历史基线。现役 v5 子进程检查位于 [projection_smoke.rs](../crates/cli/tests/projection_smoke.rs)、[cache_smoke.rs](../crates/cli/tests/cache_smoke.rs) 与 [CLI 协议测试](../crates/cli/src/main.rs)及宿主测试，覆盖真实 JSONL、版本写前拒绝、签名 ZIP、长实例身份和首终态消费。
+旧 `scripts/smoke-transaction.py` 已在跨平台安装器迁移收口（2026-10-11）删除；其协议 v1 安装/卸载与强杀恢复结果仅为历史基线。现役 v5 子进程检查位于 [projection_smoke.rs](../crates/cli/tests/projection_smoke.rs)、[cache_smoke.rs](../crates/cli/tests/cache_smoke.rs) 与 [CLI 协议测试](../crates/cli/src/main.rs)及宿主测试，覆盖真实 JSONL、版本写前拒绝、无公开目录的动态来源查询/匹配/安装、长实例身份和首终态消费。
 
-`python scripts/benchmark-projection.py --binary target/release/patchhub-core.exe --output .artifacts/projection.json` 使用 v5 release CLI 测量四组隔离夹具，包含真实签名 ZIP 安装后动态收据投影；省略 `--binary` 则在临时源码副本构建 plain/counted，并核对哈希次数与响应等价，`--profile release` 可测发行构建。Linux 应显式提供本机 `--cargo` 或 `--binary`。`benchmark-scan.py CORE_BINARY FIXTURE_PARENT` 使用 v5 测量两库 500 清单，空目录 catalog 避免读取内嵌补丁。基准均不写用户游戏，不代表冷缓存或实机验收；真实样本检查继续使用 `scripts/run-windows-check.ps1` 和自动化套件。两端游戏内生效与 Deck 实体手柄须单独确认。
+`python scripts/benchmark-scan.py CORE_BINARY FIXTURE_PARENT` 使用 v5 测量两库 500 个 Steam 清单，完全不需要静态补丁目录。原签名目录投影基准已退役，历史结果保留在对应施工记录。基准不写用户游戏，不代表冷缓存或实机验收；真实样本检查继续使用自动化套件。两端游戏内生效与 Deck 实体手柄须单独确认。
 
 默认不上传游戏库，不设置遥测。诊断与状态保存在本机；分享日志前应删除用户名、库路径与下载 URL 参数。安全安装拒绝链接、路径越界、危险 ZIP 成员、哈希错误和未知 build；同账户篡改完整 journal 与父目录 TOCTOU 的剩余风险见 install-design.md。
 

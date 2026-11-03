@@ -53,7 +53,7 @@ Inno Setup、NSIS、7z SFX 保留适配器扩展位置，按独立样本决定�
 | [install.ts](../../../apps/decky/src/install.ts) / [index.tsx](../../../apps/decky/src/index.tsx) / [session.ts](../../../apps/decky/src/session.ts) | 安装类型仅放行 `managed_zip`、`publisher_zip`，发现项仅来源引导 | 增加 EXE 准备状态、确认与中文错误、取消/租约和备份确认 |
 | [打包脚本](../../../apps/decky/scripts/package-plugin.mjs) / [CI](../../../.github/workflows/ci.yml) | Linux CLI + Python 后端随插件分发 | 增加经固定版本和许可审核的提取代码/依赖，测试真实打包产物 |
 
-共享契约 [catalog-payload.schema.json](../../../packages/contracts/catalog-payload.schema.json)、[Rust catalog.rs](../../../crates/core/src/catalog.rs) 如增加字段必须同步生成和验证。优先将 EXE 来源证据保存在后端关联元数据中，Rust 继续接收 `managed_zip` 配方；不得未经契约更新把新字段塞入 `deny_unknown_fields` 的输入。
+共享契约 旧 catalog-payload.schema.json（随公开静态目录移除退役）、[Rust catalog.rs](../../../crates/core/src/catalog.rs) 如增加字段必须同步生成和验证。优先将 EXE 来源证据保存在后端关联元数据中，Rust 继续接收 `managed_zip` 配方；不得未经契约更新把新字段塞入 `deny_unknown_fields` 的输入。
 
 ## 4. 信任模型与能力升级
 

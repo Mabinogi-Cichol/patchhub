@@ -13,7 +13,7 @@
 - stdin/stdout **单行 JSON-lines**，一行一个对象；单行错误不终止后续请求。包含行末一个 LF，不设固定整行大小上限。
 - 请求：`{protocol_version, request_id, method, params}`，`deny_unknown_fields`；`request_id` 1–128 字节、非空、无控制字符；Steam instance_id 保留完整路径身份，单独上限 16 KiB，其余业务 ID 256 字节。
 - 响应成功：`{protocol_version, request_id, ok:true, result}`；失败：`{protocol_version, request_id, ok:false, error:{code, detail?}}`。`detail` 可选、完整不截断的底层诊断；无法解析的输入 `request_id` 为 null。
-- 宿主固定注入必需的 `params.host`，包含 `roots`/`catalog`/`signed_catalog`/`trust_keys`/`state_dir`/`platform` 六字段；可空路径也必须显式给出 null；UI 只传实例、选择与受限操作意图，不传配方/目标路径/任意 URL。
+- 宿主固定注入必需的 `params.host`，包含 `roots`/`state_dir`/`platform` 三字段；可空路径也必须显式给出 null；UI 只传实例、选择与受限操作意图，不传配方/目标路径/任意 URL。
 
 ## 执行面
 
@@ -30,7 +30,7 @@
 
 旧 `refresh_sources`/`scan_sources`/`discover_game` 已删除，调用返回 `unsupported_method`；更早的 `plan_install` 等已删除方法同样如此。
 
-`get_capabilities` 是唯一能力协商入口，返回 `installer`、`sources` 子对象与合并 `methods`。`install_patch` 为唯一安装入口（仅 `serve-task`）：`{instance_id, selection_id? | release_id?, operation:"install"|"reinstall"|"overwrite", archive?, cleanup_policy:"disabled"|"after_commit"}`；operation 和 cleanup_policy 均必需，幂等 ID 仅使用外层 request_id。`selection_id` 与 `release_id` 互斥（同给 `invalid_request`，皆缺 `selection_or_release_required`）。后端按 `release_id`（签名，优先）/ `zip-selection-*`（动态 ZIP）/ `exe-selection-*`（动态 EXE）路由。
+`get_capabilities` 是唯一能力协商入口，返回 installer、sources 与 methods。contracts 版本为 projection=3、actions=2、outcome=1、request_validation=3；混装旧核心在写入前拒绝。install_patch 为唯一安装入口（仅 serve-task），业务输入为 instance_id、selection_id 或 manual_download、operation、cleanup_policy；幂等 ID 仅使用外层 request_id。selection_id 与 manual_download 互斥，皆缺返回 selection_required。preview 只接受 instance_id 与 selection_id。release_id 仍是结果和历史事务身份，不能用作安装输入。PatchActions 仅包含 automatic/reinstall/overwrite/primary，不再提供静态目录的 local_archive 入口。
 
 来源面参数与结果：
 
@@ -63,11 +63,11 @@
 ## 能力与错误
 
 - `get_capabilities.sources`（v5）：`index_schema_version`、`detail_schema_version`、`match_schema_version`、`schedule_schema_version`、`adapter_version`、`parser_version`、`encoding_version`（除 `parser_version=2` 外均为 1）与 9 个来源方法；`validate_capabilities` 要求版本与 methods 精确一致。生命周期写入前校验版本、methods、四项 contracts 版本及全部 installer/source 版本；不匹配必须先于状态目录创建或修改。
-- `get_capabilities.installer.links.*.available`（按平台探针）决定是否可安装；`formats` 仅表示核心支持该类格式，不代表本机可用。隔离缺失只阻断对应 EXE，来源页与签名 ZIP 保留。
+- `get_capabilities.installer.links.*.available`（按平台探针）决定是否可安装；`formats` 仅表示核心支持该类格式，不代表本机可用。隔离缺失只阻断对应 EXE，来源页与动态 ZIP 路线保留。
 - 新增/冻结错误码：`unsupported_protocol`、`capability_mismatch`、`installer_schema_unsupported`、`cleanup_failed`、`task_required`、`unknown_source`、`source_not_indexable`、`instance_required`、`instance_not_found`。契约不匹配明确报错并保留真实 `detail`，不做“仅静态扫描”降级。
 
-## 目录与信任
+## 动态来源与本地事务
 
-目录模型与 schema 位于 `catalog-payload.schema.json`；权威 Rust 类型在 core 的 `catalog` / `trust` / `install` 与 `crates/cli/src/runtime.rs`。签名封装含 `schema_version`、`key_id`、`payload`（base64 原始 JSON）、`signature`（base64 Ed25519）；payload 含 `catalog`、`generated_at`、`expires_at`、`revoked_release_ids`。
+客户端只内置来源规则和解析脚本。HostInputs 不接受 catalog、signed_catalog、trust_keys；scan 不再返回 catalog_revision/catalog_trust/catalog_error。预览与安装使用 selection_id，既有 manual_download 用于来源候选的显式下载直链；release_id/archive 不再是公开请求字段。未知旧字段明确拒绝，不设双读或空目录兜底。
 
-目录记账使用 SQLite 防回退，同一写事务重新检查 revision。扫描失败时不能将 unknown 解释成未安装。语言按目录声明与审核配方选择，不能只根据游戏名称推断。
+历史事务及本地 InstallPlan 的 release_id、catalog_revision 等已存储字段保留原序列化契约，卸载/恢复从本地 journal、plan、收据和备份读取，不依赖公开目录。下载哈希、ZIP 路径约束、来源重新准入、游戏事实、request ledger 及既有计划授权边界仍由核心负责。详见 [设计](../../docs/features/remove-static-catalog/design.md)。

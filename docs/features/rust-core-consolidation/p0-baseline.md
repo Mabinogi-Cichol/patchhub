@@ -1,6 +1,6 @@
 # P0 投影性能与固定输入基线
 
-设计：[design.md](design.md)。施工记录：[progress.md](progress.md)。工具：[benchmark-projection.py](../../../scripts/benchmark-projection.py)。日期：2026-10-11（Asia/Shanghai）。
+设计：[design.md](design.md)。施工记录：[progress.md](progress.md)。工具：原 benchmark-projection.py（已退役，源码见此记录对应历史 Git 版本）。日期：2026-10-11（Asia/Shanghai）。
 
 本次实测当前 v3 调用链；不代表 P1 核心 API 已实现或 v4 已验证。测量对象是 Windows debug CLI 的进程启动、受限 JSONL serve、完整 scan 与 JSON 序列化，总耗时不等于投影函数单独耗时。每个场景 6 次独立进程，第 1 次单列，后 5 次记录中位数/最大值。fixture 创建已预热文件系统，未测冷缓存；不同磁盘、release 构建和后台负载不可直接与此数值比较。
 
