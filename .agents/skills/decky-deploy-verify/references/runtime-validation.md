@@ -54,16 +54,16 @@ node .agents/skills/decky-deploy-verify/scripts/cef.mjs --target '<列表中的�
 
 Decky Loader 的 `/ws` 可能与 Steam 前端单连接冲突。若直连立即关闭，不反复争抢或误报服务宕机；改用 SharedJSContext 已有前端连接。
 
-历史项目使用内部 `window.__DECKY_SECRET_INTERNALS_DO_NOT_USE_OR_YOU_WILL_BE_FIRED_deckyLoaderAPIInit.connect(2, pluginName)` 获取插件 API，并 `api.call('scan', false)`。它是版本相关内部入口；使用前核对当前对象与签名，优先现有插件 API，不把它视为公共稳定接口，也不要创建新的网络 `/ws`。
+历史项目使用内部 `window.__DECKY_SECRET_INTERNALS_DO_NOT_USE_OR_YOU_WILL_BE_FIRED_deckyLoaderAPIInit.connect(2, pluginName)` 获取插件 API，并 `api.call('scan')`。它是版本相关内部入口；使用前核对当前对象与签名，优先现有插件 API，不把它视为公共稳定接口，也不要创建新的网络 `/ws`。
 
 最低验证：
 
 - `list_tasks` 可返回且不存在非终态任务；前置检查须在重载前完成。
-- `scan(false)` 返回真实库结构，记录实际游戏/实例计数、诊断与与本功能相关字段；不要求与历史的 34/38 等计数相等。
+- `scan()` 返回真实库结构，记录实际游戏/实例计数、诊断与与本功能相关字段；不要求与历史的 34/38 等计数相等。
 - `list_transactions` 能读取真实记录；不为“清洁验收”删除旧数据库或 receipt。
 - 修改了新 RPC 时实际调用并检查预期字段，如 `exe_installation_reviews(instance_id)`；按本轮扫描取 instance_id，不能硬编码历史样本或要求 profiles 永远为零。
 
-`scan(false)` 不强制刷新来源，但可能更新派生缓存；按真实状态描述。来源刷新、开关、订阅或缓存清理验证需要相应授权，并保存/恢复本次测试改变的选择；不能把安装按钮点击当作普通 smoke test。实际准备/下载/安装游戏补丁另外按该功能范围执行。
+`scan()` 不强制刷新来源，但可能更新派生缓存；按真实状态描述。来源刷新、开关、订阅或缓存清理验证需要相应授权，并保存/恢复本次测试改变的选择；不能把安装按钮点击当作普通 smoke test。实际准备/下载/安装游戏补丁另外按该功能范围执行。
 
 ## 4. 真实画面与交互
 
@@ -83,6 +83,6 @@ DevTools 导航、DOM 点击、脚本滚动是实机运行证据；只有用户/
 
 ## 5. 结果归档
 
-每轮 JSON/施工记录至少包括设备/时间、代码版本或工作区范围、清单/ZIP SHA、部署方式、备份位置、服务与插件实例、HTTP bundle SHA、RPC 结果摘要、截图及 viewport、明确待验收项、清理状态。认证 token、私钥和真实库原始路径仅在确有必要时留于忽略目录，不进入技能、日志摘要或 Git。
+每轮 JSON/施工记录至少包括设备/时间、代码版本或工作区范围、清单/ZIP SHA、部署方式、备份策略（有备份时注明位置）、服务与插件实例、HTTP bundle SHA、RPC 结果摘要、截图及 viewport、明确待验收项、清理状态。认证 token、私钥和真实库原始路径仅在确有必要时留于忽略目录，不进入技能、日志摘要或 Git。
 
 历史依据（仅说明流程来源）：[UX 施工记录](../../../../docs/features/decky-ux/progress.md)、[Kagura 验收](../../../../docs/features/kagura-hgamer-fallback/acceptance.md)、[EXE 施工记录](../../../../docs/features/exe-patch-installation/progress.md)。忽略目录 `.artifacts` 的旧脚本可供核对，但本技能不依赖它们存在。
