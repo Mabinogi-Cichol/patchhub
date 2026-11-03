@@ -48,6 +48,8 @@ function mount() {
 test('update replaces the same single control with progress, without a modal or overlapping polls', async () => {
   const ui = mount(); ui.render();
   assert.equal(ui.requests.length, 1); assert.equal(ui.timers.size, 0);
+  assert.equal(ui.button('检查更新').style.width, '100%');
+  assert.equal(ui.button('检查更新').style.minWidth, 0);
   ui.requests.shift().resolve({ state: 'available', current: '0.4.0', tag: 'v0.5.0' }); await tick();
   const html = ui.render(); assert.doesNotMatch(html, /发布时间|稍后|跳过|查看更新进度/);
   ui.button('更新至 v0.5.0').onClick(clickEvent);
@@ -98,34 +100,34 @@ test('no new notice stays quiet after the startup check', async () => {
   assert.equal(ui.toasts.length, 0); stop();
 });
 
-test('a completed request from an old Steam context does not keep the new client restarting', async () => {
+test('a completed request from an old Steam context does not keep the new client reloading', async () => {
   const ui = mount(); ui.render();
   ui.requests.shift().resolve({ state: 'idle', current: '0.5.0', execution: {
     state: 'completed', restart: 'requested', restart_context: 122,
-  } }); await tick(); assert.doesNotMatch(ui.render(), /正在重启/);
+  } }); await tick(); assert.doesNotMatch(ui.render(), /正在重新加载/);
   assert.ok(ui.button('检查更新')); ui.cleanup();
 });
 
-test('restart failure retries only the client restart', async () => {
+test('reload failure retries only the UI reload', async () => {
   const ui = mount(); ui.render();
   ui.requests.shift().resolve({ state: 'idle', execution: {
     state: 'completed', restart: 'failed', restart_error: 'fixture',
-  } }); await tick(); ui.render(); ui.button('重启客户端').onClick(clickEvent);
+  } }); await tick(); ui.render(); ui.button('重新加载界面').onClick(clickEvent);
   assert.equal(ui.requests[0].method, 'restart_app_update_client');
   assert.deepEqual(ui.requests[0].args, [456]); ui.cleanup();
 });
 
 
-test('restart indicator uses the rendering page context rather than SharedJSContext', async () => {
+test('reload indicator uses the rendering page context rather than SharedJSContext', async () => {
   const ui = mount(); ui.render();
   ui.requests.shift().resolve({ state: 'idle', execution: {
     state: 'completed', restart: 'requested', restart_context: 456,
   } }); await tick();
-  assert.match(ui.render(), /正在重启客户端/);
+  assert.match(ui.render(), /正在重新加载界面/);
   const [id, timer] = [...ui.timers.entries()][0]; ui.timers.delete(id); void timer();
   ui.requests.shift().resolve({ state: 'idle', execution: {
     state: 'completed', restart: 'requested', restart_context: 123,
   } }); await tick();
-  assert.doesNotMatch(ui.render(), /正在重启客户端/);
+  assert.doesNotMatch(ui.render(), /正在重新加载/);
   ui.cleanup();
 });
