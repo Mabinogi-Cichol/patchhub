@@ -1,4 +1,4 @@
-"""Fixed-method Decky to Rust JSON-lines bridge. UI cannot select a binary or catalog."""
+"""Fixed-method Decky to Rust JSON-lines bridge. UI cannot select a binary or host paths."""
 import asyncio
 import inspect
 import os
@@ -47,13 +47,9 @@ _journal_read_locks = WeakValueDictionary()
 
 
 class CoreBridge:
-    def __init__(self, binary: Path, catalog: Path,
-                 signed_catalog: Path | None = None, trust_keys: Path | None = None,
+    def __init__(self, binary: Path,
                  state_dir: Path | None = None, run_uid: int | None = None, run_gid: int | None = None, user_home: Path | None = None):
         self.binary = binary.resolve(strict=True)
-        self.catalog = catalog.resolve(strict=True)
-        self.signed_catalog = signed_catalog.resolve(strict=True) if signed_catalog and signed_catalog.is_file() else None
-        self.trust_keys = trust_keys.resolve(strict=True) if trust_keys and trust_keys.is_file() else None
         self.state_dir = state_dir.resolve() if state_dir else None
         self.process_identity = {"user": run_uid, "group": run_gid, "extra_groups": []} if run_uid is not None else {}
         self.active_calls = set()
@@ -96,11 +92,11 @@ class CoreBridge:
         return await self._call("scan", {})
 
     @classmethod
-    def selection(cls, instance_id, release_id=None, selection_id=None, manual_download=None):
-        if sum(value is not None for value in (release_id, selection_id, manual_download)) > 1:
+    def selection(cls, instance_id, selection_id=None, manual_download=None):
+        if sum(value is not None for value in (selection_id, manual_download)) > 1:
             raise ValueError("invalid_request")
-        if release_id is None and selection_id is None and manual_download is None:
-            raise ValueError("selection_or_release_required")
+        if selection_id is None and manual_download is None:
+            raise ValueError("selection_required")
         params = {"instance_id": validate_id(instance_id, MAX_INSTANCE_ID_BYTES)}
         if manual_download is not None:
             if not isinstance(manual_download, dict) or set(manual_download) != {"source_id", "candidate_id", "url"}:
@@ -111,27 +107,20 @@ class CoreBridge:
                 raise ValueError("invalid_download_url")
             params["manual_download"] = dict(manual_download)
             return params
-        key, value = ("selection_id", selection_id) if selection_id is not None else ("release_id", release_id)
-        params[key] = cls._id(value)
+        params["selection_id"] = cls._id(selection_id)
         return params
 
-    async def preview(self, instance_id, release_id=None, selection_id=None):
-        return await self._call("preview", self.selection(instance_id, release_id, selection_id))
+    async def preview(self, instance_id, selection_id=None):
+        return await self._call("preview", self.selection(instance_id, selection_id))
 
-    async def install_patch(self, instance_id, release_id=None, selection_id=None,
-                            archive=None, operation=None, request_id=None,
+    async def install_patch(self, instance_id, selection_id=None,
+                            operation=None, request_id=None,
                             cleanup_policy="disabled", manual_download=None):
-        params = self.selection(instance_id, release_id, selection_id, manual_download)
+        params = self.selection(instance_id, selection_id, manual_download)
         if operation not in ("install", "reinstall", "overwrite"):
             raise ValueError("invalid_operation")
         if cleanup_policy not in ("disabled", "after_commit"):
             raise ValueError("invalid_cleanup_policy")
-        if archive is not None:
-            if manual_download is not None:
-                raise ValueError("invalid_request")
-            if selection_id is not None:
-                raise ValueError("archive_not_allowed_for_selection")
-            params["archive"] = str(archive)
         params.update(operation=operation, cleanup_policy=cleanup_policy)
         return await self._call("install_patch", params, request_id=request_id)
 
@@ -189,11 +178,9 @@ class CoreBridge:
         if method not in METHODS:
             raise ValueError("unsupported_method")
         request_id = str(uuid.uuid4()) if request_id is None else validate_id(request_id, 128, "invalid_request_id")
-        if set(params) & {"host", "roots", "catalog", "signed_catalog", "trust_keys", "state_dir", "platform", "request_id"}:
+        if set(params) & {"host", "roots", "state_dir", "platform", "request_id"}:
             raise ValueError("host_parameter_forbidden")
-        host = {"roots": [], "catalog": str(self.catalog), "platform": "steamos",
-                "signed_catalog": str(self.signed_catalog) if self.signed_catalog else None,
-                "trust_keys": str(self.trust_keys) if self.trust_keys else None,
+        host = {"roots": [], "platform": "steamos",
                 "state_dir": str(self.state_dir) if self.state_dir else None}
         request = {"protocol_version": PROTOCOL_VERSION, "request_id": request_id, "method": method,
                    "params": {"host": host, **params}}

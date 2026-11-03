@@ -10,7 +10,7 @@ JOBS = ("core", "windows", "decky")
 # Keep build dependencies here when adding a new source tree or build input.
 RULES = (
     (JOBS, (
-        "crates/**", "packages/contracts/**", "catalog/trust-keys.json",
+        "crates/**", "packages/contracts/**",
         "Cargo.toml", "Cargo.lock", "rust-toolchain.toml", ".cargo/**",
         ".github/workflows/**", ".github/ci/**", ".gitattributes",
         "scripts/project_version.py", "scripts/test_project_version.py",
@@ -31,12 +31,10 @@ RULES = (
         "scripts/windows-update.ps1", "scripts/update_manifest.py", "scripts/test_windows_update.py",
         "scripts/test_windows_single_instance.py",
         "scripts/fixtures/app-update.json",
-        "catalog/catalog.json", "catalog/signed-catalog.json",
         "docs/client-guide.md", "docs/privacy.md",
     )),
     (("decky",), (
         "apps/decky/**", "install.sh", "scripts/build-linux.sh",
-        "catalog/catalog.json", "catalog/signed-catalog.json",
         "scripts/install-decky.py", "scripts/test_install_decky.py",
         "scripts/test_decky_bootstrap.py", "scripts/test-install-decky-bridge.mjs",
         "scripts/fixtures/app-update.json",

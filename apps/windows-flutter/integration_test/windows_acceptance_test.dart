@@ -18,19 +18,10 @@ import 'package:patchhub_windows/pages/library_page.dart';
 
 class AcceptancePaths extends CorePaths {
   AcceptancePaths(this.spec)
-    : super(
-        binary: spec['binary'],
-        stateDirectory: spec['state'],
-        resourceDirectory: spec['resources'],
-      );
+    : super(binary: spec['binary'], stateDirectory: spec['state']);
   final Map<String, dynamic> spec;
   @override
-  Map<String, Object?> get host => {
-    ...super.host,
-    'roots': spec['roots'],
-    'signed_catalog': spec['signed_catalog'],
-    'trust_keys': spec['trust_keys'],
-  };
+  Map<String, Object?> get host => {...super.host, 'roots': spec['roots']};
 }
 
 // Observe the actual native close callback without destroying the test connection.
@@ -148,8 +139,7 @@ void main() {
       final originalSave = await saveFile.readAsBytes();
       final task = model.tasks.startInstall({
         'instance_id': row.id,
-        'release_id': spec['release_id'],
-        'archive': spec['archive'],
+        'manual_download': spec['manual_download'],
         'operation': 'overwrite',
         'cleanup_policy': 'disabled',
       });

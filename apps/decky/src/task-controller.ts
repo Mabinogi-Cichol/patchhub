@@ -24,7 +24,7 @@ export type TaskSnapshot = {
   selection_id?: string | null;
 };
 export type TaskApi = {
-  install(instance: string, release: string | null, selection: string | null, archive: string | null, operation: "install" | "reinstall" | "overwrite", requestId: string, manualDownload?: ManualDownloadInput | null): Promise<{ task_id: string }>;
+  install(instance: string, selection: string | null, operation: "install" | "reinstall" | "overwrite", requestId: string, manualDownload?: ManualDownloadInput | null): Promise<{ task_id: string }>;
   status(id: string): Promise<TaskSnapshot>;
   cancel(id: string): Promise<TaskSnapshot>;
   list(): Promise<TaskSnapshot[]>;
@@ -122,8 +122,8 @@ export function createTaskController(api: TaskApi, pollMs = 750, retryMs = 1500)
     getSnapshot: () => current,
     isBusy: () => starting || !!current && !taskIsTerminal(current.state),
     subscribe(listener: () => void) { listeners.add(listener); return () => { listeners.delete(listener); }; },
-    startInstall: (instance: string, release: string | null, selection: string | null, operation: "install" | "reinstall" | "overwrite", requestId: string, archive = "", manualDownload: ManualDownloadInput | null = null) =>
-      begin(instance, release, selection, () => api.install(instance, release, selection, archive || null, operation, requestId, manualDownload)),
+    startInstall: (instance: string, selection: string | null, operation: "install" | "reinstall" | "overwrite", requestId: string, manualDownload: ManualDownloadInput | null = null) =>
+      begin(instance, null, selection, () => api.install(instance, selection, operation, requestId, manualDownload)),
     requestCancel, resume,
     claimTerminal(value: TaskSnapshot) {
       if (!taskIsTerminal(value.state) || current?.task_id !== value.task_id || current.state !== value.state) return false;

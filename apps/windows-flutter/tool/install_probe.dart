@@ -7,19 +7,12 @@ import 'package:patchhub_windows/host/core_task.dart';
 
 class ProbePaths extends CorePaths {
   ProbePaths(this.spec)
-    : super(
-        binary: spec['binary'],
-        stateDirectory: spec['state'],
-        resourceDirectory: spec['resources'],
-      );
+    : super(binary: spec['binary'], stateDirectory: spec['state']);
   final Map<String, dynamic> spec;
   @override
   Map<String, Object?> get host => {
     ...super.host,
     if (spec['roots'] != null) 'roots': spec['roots'],
-    if (spec['signed_catalog'] != null)
-      'signed_catalog': spec['signed_catalog'],
-    if (spec['trust_keys'] != null) 'trust_keys': spec['trust_keys'],
   };
 }
 
@@ -47,11 +40,7 @@ Future<void> main(List<String> args) async {
     'instance_id': row['game']['instance_id'],
     'operation': spec['operation'] ?? 'overwrite',
     'cleanup_policy': 'disabled',
-    if (spec['release_id'] != null)
-      'release_id': spec['release_id']
-    else
-      'selection_id': patch['selection_id'],
-    if (spec['archive'] != null) 'archive': spec['archive'],
+    'selection_id': patch['selection_id'],
   };
   final task = CoreTask.start(client, 'install_patch', arguments);
   final events = <Map<String, dynamic>>[];

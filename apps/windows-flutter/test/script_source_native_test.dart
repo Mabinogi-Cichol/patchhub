@@ -24,7 +24,6 @@ void main() {
       final paths = CorePaths(
         binary: binary.path,
         stateDirectory: '${temp.path}/state',
-        resourceDirectory: temp.path,
       );
       final client = CoreClient(paths, protocol);
       final bundled = await client.call('get_script_source', {

@@ -2,10 +2,10 @@
 use crate::*;
 use serde_json::{json, Value};
 pub fn capabilities() -> Value {
-    json!({"protocol_version":5,"methods":METHODS,"contracts":ContractVersions::default(),"installer":{"schema_version":1,"selection_version":1,"content_version":1,"adapter_version":1,"policy_schema_version":1,"report_schema_version":1,"formats":{"zip":"supported","exe":"supported"},"strategies":["managed_zip","publisher_zip","publisher_exe"],"links":{"zip":{"available":true,"blockers":[]},"exe":{"available":true,"blockers":[]}}},"sources":{"index_schema_version":1,"detail_schema_version":1,"match_schema_version":1,"schedule_schema_version":1,"adapter_version":1,"parser_version":patchhub_core::sources::PARSER_VERSION,"encoding_version":1,"script_api_version":1,"methods":SOURCE_METHODS}})
+    json!({"protocol_version":5,"methods":METHODS,"contracts":ContractVersions::default(),"installer":{"schema_version":1,"selection_version":1,"content_version":1,"adapter_version":1,"policy_schema_version":1,"report_schema_version":1,"formats":{"zip":"supported","exe":"supported"},"strategies":["publisher_zip","publisher_exe"],"links":{"zip":{"available":true,"blockers":[]},"exe":{"available":true,"blockers":[]}}},"sources":{"index_schema_version":1,"detail_schema_version":1,"match_schema_version":1,"schedule_schema_version":1,"adapter_version":1,"parser_version":patchhub_core::sources::PARSER_VERSION,"encoding_version":1,"script_api_version":1,"methods":SOURCE_METHODS}})
 }
 pub fn host() -> Value {
-    json!({"roots":[],"catalog":null,"signed_catalog":null,"trust_keys":null,"state_dir":null,"platform":"windows"})
+    json!({"roots":[],"state_dir":null,"platform":"windows"})
 }
 pub fn candidate() -> Value {
     json!({"candidate_id":"candidate-0123456789abcdef01234567","source_id":"fixture","source_record_id":"https://example.com/game","game_appid":42,"parent_appid":null,"aliases":[],"game_title":"Fixture","patch_title":"Patch","variant":"base","requires_dlc":null,"excludes_dlc":null,"platforms":["windows"],"patch_kind":"adult_content","languages":["zh_cn"],"version_raw":null,"version_evidence":[],"version_identity":"fixture","published_at":null,"patch_updated_at":null,"source_page":"https://example.com/game","upstream_page":null,"mirrors":[],"format_reported":"zip","format_observed":"unknown","capability":"discover_only","identity_evidence":[],"provenance":[],"match_basis":"appid","observed_at":"2026-10-11T00:00:00Z","cache_status":"fresh","warnings":[],"fingerprint":"fixture"})
@@ -20,7 +20,7 @@ pub fn scan() -> Value {
     let available = json!({"available":true,"blockers":[]});
     let unavailable =
         json!({"available":false,"blockers":[{"code":"reinstall_unowned_or_incomplete"}]});
-    json!({"catalog_revision":1,"catalog_trust":"signed","catalog_error":null,"platform":"windows","roots":[],"steam_languages":{},"installs":[{"game":{"instance_id":"instance","appid":42,"name":"Fixture","localized_name":null,"name_language":null,"library_path":"fixture/library","install_path":"fixture/library/steamapps/common/game","buildid":null,"availability":"installed","kind":"game"},"match_status":"matched","patches":[{"release_id":"release","name":"Patch","source_page":"https://example.com/game","support_level":"managed_zip","actions":{"automatic":available,"local_archive":available,"reinstall":unavailable,"overwrite":available,"primary":{"operation":"overwrite","label":"install","input":"automatic"}},"compatibility":"verified","blockers":[],"detection":{"status":"not_detected","files":[{"path":"patch.dat","status":"missing","actual_sha256":null}]}}],"discovery":discovery(),"diagnostics":[]}],"diagnostics":[]})
+    json!({"platform":"windows","roots":[],"steam_languages":{},"installs":[{"game":{"instance_id":"instance","appid":42,"name":"Fixture","localized_name":null,"name_language":null,"library_path":"fixture/library","install_path":"fixture/library/steamapps/common/game","buildid":null,"availability":"installed","kind":"game"},"match_status":"matched","patches":[{"release_id":"release","selection_id":"zip-selection-0123456789abcdef01234567-42","name":"Patch","source_page":"https://example.com/game","support_level":"publisher_zip","actions":{"automatic":available,"reinstall":unavailable,"overwrite":available,"primary":{"operation":"overwrite","label":"install","input":"automatic"}},"compatibility":"verified","blockers":[],"detection":{"status":"not_detected","files":[{"path":"patch.dat","status":"missing","actual_sha256":null}]}}],"discovery":discovery(),"diagnostics":[]}],"diagnostics":[]})
 }
 pub fn transaction(state: &str) -> Value {
     json!({"transaction_id":"transaction","plan_id":"plan","instance_id":"instance","release_id":"release","state":state,"error":null,"created_at":1,"updated_at":1,"has_replacements":false,"selection_id":null,"content_id":null,"direct":false})
@@ -73,7 +73,7 @@ pub fn success_result(method: Method) -> Value {
             json!({"settings_revision":1,"instances":[scan()["installs"][0].clone()]})
         }
         Method::Preview => {
-            json!({"instance_id":"instance","release_id":"release","selection_id":null,"catalog_revision":1,"executable":false,"blockers":[],"changes":[{"path":"patch.dat","action":"replace","baseline_matches":null,"actual_sha256":null}],"diagnostics":[]})
+            json!({"instance_id":"instance","release_id":"release","selection_id":null,"executable":false,"blockers":[],"changes":[{"path":"patch.dat","action":"replace","baseline_matches":null,"actual_sha256":null}],"diagnostics":[]})
         }
         Method::InstallPatch => outcome("committed", "completed"),
         Method::ListTransactions | Method::Recover => json!([transaction("committed")]),
@@ -126,11 +126,11 @@ pub fn request(method: Method) -> Value {
         Method::ProjectInstances => p["instance_ids"] = json!(["instance"]),
         Method::Preview => {
             p["instance_id"] = json!("instance");
-            p["release_id"] = json!("release");
+            p["selection_id"] = json!("zip-selection-0123456789abcdef01234567-42");
         }
         Method::InstallPatch => {
             p["instance_id"] = json!("instance");
-            p["release_id"] = json!("release");
+            p["selection_id"] = json!("zip-selection-0123456789abcdef01234567-42");
             p["operation"] = json!("overwrite");
             p["cleanup_policy"] = json!("disabled");
         }
@@ -277,8 +277,18 @@ pub fn cases() -> Value {
     r["params"]["host"]
         .as_object_mut()
         .unwrap()
-        .remove("catalog");
+        .remove("state_dir");
     bad(&mut requests, "required-null-host", r, "invalid_request");
+    for key in ["catalog", "signed_catalog", "trust_keys"] {
+        let mut r = request(Method::Scan);
+        r["params"]["host"][key] = json!("retired-resource.json");
+        bad(
+            &mut requests,
+            &format!("retired-host-{key}"),
+            r,
+            "invalid_request",
+        );
+    }
     let mut r = request(Method::InstallPatch);
     r["params"].as_object_mut().unwrap().remove("operation");
     bad(&mut requests, "required-operation", r, "invalid_request");
@@ -310,15 +320,15 @@ pub fn cases() -> Value {
         requests.push(json!({"name":name,"request":r,"task_channel":false,"error":error}));
     }
     let mut r = request(Method::Preview);
-    r["params"]["selection_id"] = json!("zip-selection-0123456789abcdef01234567-42");
+    r["params"]["release_id"] = json!("release");
     requests.push(
         json!({"name":"target-xor","request":r,"task_channel":false,"error":"invalid_request"}),
     );
     let mut r = request(Method::InstallPatch);
-    r["params"].as_object_mut().unwrap().remove("release_id");
+    r["params"].as_object_mut().unwrap().remove("selection_id");
     r["params"]["selection_id"] = json!("zip-selection-0123456789abcdef01234567-42");
     r["params"]["archive"] = json!("local.zip");
-    requests.push(json!({"name":"selection-archive","request":r,"task_channel":true,"error":"archive_not_allowed_for_selection"}));
+    requests.push(json!({"name":"selection-archive","request":r,"task_channel":true,"error":"invalid_request"}));
     requests.push(json!({"name":"task-required","request":request(Method::InstallPatch),"task_channel":false,"error":"task_required"}));
     let mut r = request(Method::RematchGame);
     r["params"].as_object_mut().unwrap().remove("instance_id");
@@ -462,7 +472,7 @@ pub fn cases() -> Value {
         requests.push(json!({"name":"business-id-exact","request":r,"task_channel":false}));
     }
     let mut r = request(Method::Preview);
-    r["params"]["release_id"] = json!("界".repeat(86));
+    r["params"]["selection_id"] = json!("界".repeat(86));
     requests.push(
         json!({"name":"business-id-over","request":r,"task_channel":false,"error":"invalid_id"}),
     );
@@ -684,7 +694,7 @@ pub fn cases() -> Value {
     manual["params"]
         .as_object_mut()
         .unwrap()
-        .remove("release_id");
+        .remove("selection_id");
     manual["params"]["manual_download"] = json!({"source_id":"fixture","candidate_id":"candidate-0123456789abcdef01234567","url":"https://user-download.example/download?id=42"});
     requests.push(json!({"name":"manual-download","request":manual.clone(),"task_channel":true}));
     for (field, value) in [

@@ -22,7 +22,7 @@ import { TaskProgressView, TaskResultView } from "./task-progress-view";
 import { candidateConditions, candidateLanguage, candidateSource, safeSourceUrl } from "./discovery";
 
 const scan = callable<[], ScanResult>("scan");
-const previewRpc = callable<[string, string | null, string | null], Preview>("preview");
+const previewRpc = callable<[string, string], Preview>("preview");
 const projectInstancesRpc = callable<[string[]], ProjectInstancesResult>("project_instances");
 const listSourcesRpc = callable<[], SourceSubscription[]>("list_sources");
 const setSourceUpdateIntervalRpc = callable<[string, number], { interval_hours: number }>("set_source_update_interval");
@@ -306,9 +306,7 @@ function GameManager({ item, seg, panel }: { item: Install; seg: string; panel?:
   const entries = displayPatches(item);
   const [selectedDownload, setSelectedDownload] = useState("");
   const [selectedKey, setSelectedKey] = useState(entries[0]?.key ?? "");
-  const [archive, setArchive] = useState("");
   const [preview, setPreview] = useState<Preview | null>(null);
-  const [manual, setManual] = useState(false);
   const [manualUrl, setManualUrl] = useState("");
   const [manualLinkExpanded, setManualLinkExpanded] = useState(false);
   const [pathsExpanded, setPathsExpanded] = useState(false);
@@ -322,8 +320,8 @@ function GameManager({ item, seg, panel }: { item: Install; seg: string; panel?:
   const identity = patch?.selection_id ?? patch?.release_id ?? "";
   // The core's dynamic EXE preview route only returns exe_check_required.
   const previewAvailable = !!patch && !patch.selection_id?.startsWith("exe-selection-");
-  useEffect(() => { setPreview(null); setArchive(""); setManual(false); setManualUrl(""); setManualLinkExpanded(false); }, [item.game.instance_id, selectedKey, identity]);
-  const primaryAction = primaryInstallAction(patch, !!archive.trim());
+  useEffect(() => { setPreview(null); setManualUrl(""); setManualLinkExpanded(false); }, [item.game.instance_id, selectedKey, identity]);
+  const primaryAction = primaryInstallAction(patch);
   const primaryAvailable = primaryAction.available;
   const actionBlockers = primaryActionBlockers(patch);
   const owned = transactions.filter(t => t.instance_id === item.game.instance_id).reverse();
@@ -331,7 +329,7 @@ function GameManager({ item, seg, panel }: { item: Install; seg: string; panel?:
   const unfinished = transactions.filter(needsRecovery);
   useEffect(() => {
     if (!entries.some(entry => entry.key === selectedKey)) {
-      setSelectedKey(entries[0]?.key ?? ""); setArchive("");
+      setSelectedKey(entries[0]?.key ?? "");
     }
   }, [item.patches, item.discovery, selectedKey]);
   useEffect(() => {
@@ -367,7 +365,7 @@ function GameManager({ item, seg, panel }: { item: Install; seg: string; panel?:
     // registers on the first render.
     if (navigate.current) navigate.current(target); else Navigation.Navigate(target);
   }
-  function chooseRelease(next: string) { setSelectedKey(next); setSelectedDownload(""); setArchive(""); setPreview(null); }
+  function chooseRelease(next: string) { setSelectedKey(next); setSelectedDownload(""); setPreview(null); }
   function changeGameSource(sourceId: string, subscribed: boolean) {
     void session.work("正在更新此游戏的订阅源…", async () => {
       await setGameSource(item.game.appid, sourceId, subscribed);
@@ -400,8 +398,8 @@ function GameManager({ item, seg, panel }: { item: Install; seg: string; panel?:
       refreshAfterMutation("任务已安全取消。", undefined, instance);
     }
   }
-  async function beginInstall(localArchive?: string) {
-    const input = installInput(patch, localArchive);
+  async function beginInstall() {
+    const input = installInput(patch);
     if (input === null || !patch || busy || tasks.isBusy()) return;
     try {
       const operation = primaryAction.operation;
@@ -409,7 +407,7 @@ function GameManager({ item, seg, panel }: { item: Install; seg: string; panel?:
       const requestId = pendingRequestIds.get(key) ?? crypto.randomUUID();
       pendingRequestIds.set(key, requestId);
       hideTask();
-      const pending = tasks.startInstall(item.game.instance_id, patch.selection_id ? null : patch.release_id, patch.selection_id ?? null, operation, requestId, input);
+      const pending = tasks.startInstall(item.game.instance_id, patch.selection_id!, operation, requestId);
       showTask(item.game.appid, game, patch.name, finishTask);
       await pending;
       pendingRequestIds.delete(key);
@@ -428,7 +426,7 @@ function GameManager({ item, seg, panel }: { item: Install; seg: string; panel?:
     pendingRequestIds.set(key, requestId);
     try {
       hideTask();
-      const pending = tasks.startInstall(item.game.instance_id, null, null, "overwrite", requestId, "", input);
+      const pending = tasks.startInstall(item.game.instance_id, null, "overwrite", requestId, input);
       showTask(item.game.appid, game, candidate.patch_title, finishTask);
       await pending;
       pendingRequestIds.delete(key);
@@ -437,7 +435,7 @@ function GameManager({ item, seg, panel }: { item: Install; seg: string; panel?:
   function viewPreview() {
     if (!patch || busy) return;
     setPreview(null);
-    void session.work("正在检查文件变更…", () => previewRpc(item.game.instance_id, patch.selection_id ? null : patch.release_id, patch.selection_id ?? null), setPreview, item.game.instance_id);
+    void session.work("正在检查文件变更…", () => previewRpc(item.game.instance_id, patch.selection_id!), setPreview, item.game.instance_id);
   }
   const gameTask = Object.values(sourceTasks).find(task => !sourceTaskTerminal(task.state)
     && sourceTaskTargets(task, item.game.instance_id, item.game.appid));
@@ -469,7 +467,7 @@ function GameManager({ item, seg, panel }: { item: Install; seg: string; panel?:
           <Row><Action disabled={!manualDownloadInput(candidate, manualUrl) || !!busy || tasks.isBusy()} onClick={() => void beginManualInstall()}>下载安装补丁</Action></Row>
         </>}
       </PanelSection></> : !patch ? <PanelSection><Row><Status>暂无补丁结果</Status><Action onClick={() => navigatePanel("sources")}>游戏订阅</Action></Row></PanelSection> : <>
-      {selected?.kind === "installable" && selected.choices.length > 1 && <PanelSection title="下载文件与镜像"><Row><DropdownItem label="选择下载项" layout="below" selectedOption={patch.selection_id ?? patch.release_id} rgOptions={selected.choices.map(p => ({ data: p.selection_id ?? p.release_id, label: `${p.download_label || "来源下载"} · ${p.download_url ? downloadFileName(p.download_url) : p.name}` }))} onChange={option => { setSelectedDownload(option.data); setPreview(null); setArchive(""); }} /></Row></PanelSection>}
+      {selected?.kind === "installable" && selected.choices.length > 1 && <PanelSection title="下载文件与镜像"><Row><DropdownItem label="选择下载项" layout="below" selectedOption={patch.selection_id ?? patch.release_id} rgOptions={selected.choices.map(p => ({ data: p.selection_id ?? p.release_id, label: `${p.download_label || "来源下载"} · ${p.download_url ? downloadFileName(p.download_url) : p.name}` }))} onChange={option => { setSelectedDownload(option.data); setPreview(null); }} /></Row></PanelSection>}
       <PanelSection title={installed ? "覆盖安装" : "安装补丁"}>
         <Row><Status>安装时请关闭游戏并暂停 Steam 更新。</Status></Row>
         {actionBlockers.map((blocker, i) => <Row key={`action-${blocker.code}-${i}`}><Status warning>{reason(blocker.code)}{blocker.detail ? ` · ${blocker.detail}` : ""}</Status></Row>)}
@@ -479,9 +477,6 @@ function GameManager({ item, seg, panel }: { item: Install; seg: string; panel?:
         </>}
         <Row><Action disabled={!primaryAvailable || !!busy || tasks.isBusy()} onClick={() => void beginInstall()}>{primaryAction.label === "overwrite" ? "覆盖安装补丁" : "安装补丁"}</Action></Row>
         {!patch.download_url && !primaryAvailable && <Row><Status>未找到下载链接</Status></Row>}
-        {patch.actions.local_archive.available && <Row><Action onClick={() => setManual(value => !value)}>导入本地 ZIP（可选）{manual ? " ▴" : " ▾"}</Action></Row>}
-        {(manual && patch.actions.local_archive.available) && <><Row><TextField label="Downloads 内的 ZIP 路径" value={archive} onChange={e => setArchive(e.target.value)} /></Row>
-          <Row><Action disabled={!archive.trim() || !patch.actions.local_archive.available || !!busy || tasks.isBusy()} onClick={() => void beginInstall(archive)}>使用本地 ZIP {primaryAction.label === "overwrite" ? "覆盖安装" : "安装"}</Action></Row></>}
       </PanelSection>
     </>}
     {entries.length > 0 && <PatchDetails key={item.game.instance_id}>

@@ -76,14 +76,13 @@ class PackagingTests(unittest.TestCase):
         if windows:
             bundle = root / 'apps/windows-flutter/build/windows/x64/runner/Release'
             for path in ('patchhub.exe', 'patchhub-core.exe', 'patchhub-worker.exe',
-                         'flutter_windows.dll', 'msvcp140.dll', 'vcruntime140.dll', 'vcruntime140_1.dll', 'file_selector_windows_plugin.dll',
+                         'flutter_windows.dll', 'msvcp140.dll', 'vcruntime140.dll', 'vcruntime140_1.dll',
                          'url_launcher_windows_plugin.dll', 'window_manager_plugin.dll',
                          'screen_retriever_windows_plugin.dll', 'webview_flutter_windows_plugin.dll',
                          'WebView2Loader.dll', 'data/icudtl.dat', 'data/app.so',
                          'data/flutter_assets/AssetManifest.bin', 'data/flutter_assets/NOTICES.Z',
                          'data/flutter_assets/assets/protocol-v5.schema.json',
                          'data/flutter_assets/assets/shiravune-browser.js',
-                         'resources/catalog.json', 'resources/signed-catalog.json', 'resources/trust-keys.json',
                          'resources/licenses/Flutter-LICENSE', 'resources/licenses/Dart-LICENSE'):
                 self.write(bundle, path)
             self.write(root, 'apps/windows-flutter/pubspec.lock', b'dart lock')

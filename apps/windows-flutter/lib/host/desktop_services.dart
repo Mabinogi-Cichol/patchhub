@@ -1,6 +1,5 @@
 import 'dart:io';
 
-import 'package:file_selector/file_selector.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 class DesktopServices {
@@ -12,15 +11,6 @@ class DesktopServices {
     if (!await launchUrl(Uri.directory(path, windows: true))) {
       throw FileSystemException('无法打开游戏目录', path);
     }
-  }
-
-  Future<String?> selectArchive() async {
-    final file = await openFile(
-      acceptedTypeGroups: [
-        const XTypeGroup(label: 'ZIP 补丁', extensions: ['zip']),
-      ],
-    );
-    return file?.path;
   }
 
   Future<void> openSource(Uri uri) async {

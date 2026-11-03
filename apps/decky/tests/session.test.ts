@@ -6,14 +6,14 @@ import type { SourceTaskApi, SourceTaskSnapshot } from "../src/source-tasks.ts";
 import { setListPreferences } from "../src/preferences.ts";
 
 const report: ScanResult = {
-  roots: [], catalog_revision: 1, catalog_trust: "signed", platform: "steamos",
+  roots: [], platform: "steamos",
   installs: [], diagnostics: [],
 };
 
 const game = (instance: string, appid = 1227890): Install => ({
   game: { instance_id: instance, appid, name: "Summer Memories", library_path: instance,
     install_path: `${instance}/game`, buildid: null, availability: "installed", kind: "game" },
-  patches: [], match_status: "no_catalog_match",
+  patches: [], match_status: "no_match",
 });
 const rowReport = (): ScanResult => ({ ...report, generation: 3, settings_revision: 4, installs: [game("a")] });
 const match = (fields: Partial<GameMatch> = {}): GameMatch => ({

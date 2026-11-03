@@ -20,11 +20,11 @@ const source = readFileSync(new URL("../src/index.tsx", import.meta.url), "utf8"
 const output = ts.transpileModule(`${source}\nexport { GameManager, QuickAccess, GlobalSources, Manager };`, { compilerOptions: {
   jsx: ts.JsxEmit.ReactJSX, module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022,
 } }).outputText;
-const game = (): Install => ({ game: { instance_id: "game", appid: 1, name: "测试游戏", library_path: "/library", install_path: "/library/game", buildid: "123", availability: "installed", kind: "game" }, patches: [], match_status: "no_catalog_match", discovery: { status: "failed", candidates: [], diagnostics: [{ code: "source_refresh_failed", detail: "query-secret", source_id: null }] } });
+const game = (): Install => ({ game: { instance_id: "game", appid: 1, name: "测试游戏", library_path: "/library", install_path: "/library/game", buildid: "123", availability: "installed", kind: "game" }, patches: [], match_status: "no_match", discovery: { status: "failed", candidates: [], diagnostics: [{ code: "source_refresh_failed", detail: "query-secret", source_id: null }] } });
 const candidate = { source_id: "publisher", candidate_id: "candidate-1", patch_title: "来源补丁", source_page: "https://example.test/source", match_basis: "appid", warnings: ["language_unknown"], format_reported: "unknown", format_observed: "unknown" } as SourceCandidate;
 const available = { available: true, blockers: [] };
 const unavailable = { available: false, blockers: [] };
-const patch = (fields: Partial<Patch> = {}): Patch => ({ release_id: "release", name: "补丁", source_page: "https://example.test/source", support_level: "managed_zip", compatibility: "verified_metadata", blockers: [], detection: { status: "not_detected", files: [] }, actions: { automatic: available, local_archive: available, overwrite: available, reinstall: unavailable, primary: { input: "automatic", operation: "overwrite", label: "install" } }, ...fields });
+const patch = (fields: Partial<Patch> = {}): Patch => ({ release_id: "release", name: "补丁", source_page: "https://example.test/source", support_level: "managed_zip", compatibility: "verified_metadata", blockers: [], detection: { status: "not_detected", files: [] }, actions: { automatic: available, overwrite: available, reinstall: unavailable, primary: { input: "automatic", operation: "overwrite", label: "install" } }, ...fields });
 
 // Render the actual page JSX with native Decky controls represented by HTML.
 // Hook state is retained so native control callbacks can be exercised without Steam.
@@ -304,20 +304,15 @@ test("a retained failed rematch does not surface its error in global source task
   assert.match(html, /匹配全部游戏/);
 });
 
-test("eligible local ZIP import stays optional even with no automatic download", async () => {
+test("source with no automatic download exposes no retired local archive input", async () => {
   const item = game();
-  item.patches = [patch({ actions: { automatic: unavailable, local_archive: available, overwrite: available, reinstall: unavailable, primary: { input: "unavailable", operation: "overwrite", label: "install" } } })];
+  item.patches = [patch({ actions: { automatic: unavailable, overwrite: available, reinstall: unavailable, primary: { input: "unavailable", operation: "overwrite", label: "install" } } })];
   const page = mount(item);
   const html = page.render();
   assert.match(html, /未找到下载链接/);
   assert.equal(page.button("安装补丁").disabled, true);
   assert.doesNotMatch(html, /ZIP 路径|请先选择本地/);
-  page.button("导入本地 ZIP（可选） ▾").onClick();
-  page.render();
-  page.controls.find(control => control.name === "TextField")!.props.onChange({ target: { value: "/home/deck/Downloads/p.zip" } });
-  page.render();
-  await page.button("使用本地 ZIP 安装").onClick();
-  assert.deepEqual(Array.from(page.installs[0]), ["game", "release", null, "overwrite", "request-1", "/home/deck/Downloads/p.zip"]);
+
 });
 
 test("source-only candidates accept a manual URL and use the same installation task", async () => {
@@ -336,8 +331,8 @@ test("source-only candidates accept a manual URL and use the same installation t
   assert.equal(page.button("下载安装补丁").disabled, false);
   await page.button("下载安装补丁").onClick();
   const args = page.installs[0];
-  assert.deepEqual(Array.from(args.slice(0, 6)), ["game", null, null, "overwrite", "request-1", ""]);
-  assert.equal(JSON.stringify(args[6]), JSON.stringify({ source_id: "publisher", candidate_id: "candidate-1", url: "https://downloads.example.test/download?id=1" }));
+  assert.deepEqual(Array.from(args.slice(0, 4)), ["game", null, "overwrite", "request-1"]);
+  assert.equal(JSON.stringify(args[4]), JSON.stringify({ source_id: "publisher", candidate_id: "candidate-1", url: "https://downloads.example.test/download?id=1" }));
 });
 
 test("patch and exact mirror selectors remain native Decky dropdowns", () => {

@@ -167,8 +167,6 @@ class _LibraryPageState extends State<LibraryPage> {
     final issues = <(String, Object)>[
       if (model.stateRefreshError case final failure?) ('状态刷新失败', failure),
       if (model.error case final failure?) ('游戏库读取失败', failure),
-      if (model.snapshot?.catalogError case final failure?)
-        ('补丁目录不可用', failure),
     ];
     final rows = model.snapshot?.rows ?? <GameRow>[];
     final visible = filterGames(rows, filter, query);

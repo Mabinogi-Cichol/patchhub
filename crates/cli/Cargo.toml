@@ -15,9 +15,6 @@ patchhub-protocol = { path = "../protocol" }
 serde.workspace = true
 serde_json.workspace = true
 schemars.workspace = true
-ed25519-dalek.workspace = true
-base64.workspace = true
-getrandom.workspace = true
 rusqlite.workspace = true
 fs2.workspace = true
 zip.workspace = true

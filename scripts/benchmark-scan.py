@@ -39,11 +39,8 @@ def main():
             (library / 'steamapps/common' / name).mkdir()
             manifest = f'"AppState" {{ "appid" "{appid}" "name" {quoted(name)} "installdir" {quoted(name)} "buildid" "1" "StateFlags" "4" }}'
             (library / f'steamapps/appmanifest_{appid}.acf').write_text(manifest, encoding='utf-8')
-        catalog = fixture / 'catalog.json'
-        catalog.write_text(json.dumps({'schema_version': 1, 'revision': 1, 'releases': []}), encoding='utf-8')
         request = {'protocol_version': 5, 'request_id': 'benchmark', 'method': 'scan',
-                   'params': {'host': {'roots': [str(libraries[0])], 'catalog': str(catalog),
-                                       'signed_catalog': None, 'trust_keys': None, 'state_dir': None,
+                   'params': {'host': {'roots': [str(libraries[0])], 'state_dir': None,
                                        'platform': 'windows' if os.name == 'nt' else 'steamos'}}}
         durations = []
         for _ in range(6):

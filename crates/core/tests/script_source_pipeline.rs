@@ -1,9 +1,9 @@
 //! P3 real update/matching/read/selection paths, using deterministic HTML transport.
 use patchhub_core::{
-    catalog::{Catalog, Platform},
+    catalog::Platform,
     install::TransactionSnapshot,
     installer::{exe_resolve, manual_selection, resolve},
-    projection::{self, CatalogView, HostCapabilities, ProjectionInputs},
+    projection::{self, HostCapabilities, ProjectionInputs},
     sources::{
         self,
         http::{FakeFetcher, FetchResponse, RequestContext},
@@ -308,17 +308,11 @@ fn readonly_projection_and_preview_reject_retired_selection_without_running_lua(
         let snapshot = SourceSnapshot::load(temp.path(), std::slice::from_ref(&query), 500)
             .unwrap()
             .unwrap();
-        let catalog = Catalog {
-            schema_version: 1,
-            revision: 1,
-            releases: vec![],
-        };
         let tx = TransactionSnapshot::default();
         let caps = HostCapabilities::default();
         let cancel = AtomicBool::new(false);
         let inputs = ProjectionInputs {
             steam: &steam,
-            catalog: CatalogView::Development(&catalog),
             sources: Some(&snapshot),
             transactions: &tx,
             roots: &[],
@@ -364,17 +358,11 @@ fn readonly_projection_and_preview_reject_retired_selection_without_running_lua(
     let snapshot = SourceSnapshot::load(temp.path(), &[query.clone()], 500)
         .unwrap()
         .unwrap();
-    let catalog = Catalog {
-        schema_version: 1,
-        revision: 1,
-        releases: vec![],
-    };
     let tx = TransactionSnapshot::default();
     let caps = HostCapabilities::default();
     let cancel = AtomicBool::new(false);
     let inputs = ProjectionInputs {
         steam: &steam,
-        catalog: CatalogView::Development(&catalog),
         sources: Some(&snapshot),
         transactions: &tx,
         roots: &[],

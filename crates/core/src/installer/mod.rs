@@ -1,6 +1,6 @@
 //! Shared installer services and persistent `installer/rust-v1/` state schema.
 //!
-//! The CLI calls [`service::install`] for signed ZIP, publisher ZIP and publisher
+//! The CLI calls [`service::install`] for publisher ZIP and publisher
 //! EXE requests. The service validates the host and delegates to the shared
 //! request ledger and direct-install orchestrators. Recovery and
 //! discard also enter through [`service`]; [`cache::CacheService`] owns cache
@@ -21,7 +21,6 @@ pub mod outcome;
 pub mod requests;
 pub mod resolve;
 pub mod service;
-mod signed;
 pub mod space;
 pub mod store;
 pub mod task;

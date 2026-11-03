@@ -9,7 +9,6 @@ void main() {
     final snapshot = ScanSnapshot({
       'installs': [],
       'diagnostics': [],
-      'catalog_error': null,
       'steam_languages': {
         r'\\?\C:\Steam': 'japanese',
         r'D:\OtherSteam': 'schinese',

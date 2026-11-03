@@ -155,13 +155,12 @@ export function reason(code: string): string {
     instance_not_found: "游戏实例已变化，请重新扫描。",
     release_not_found: "补丁版本不在当前目录中，请重新扫描。",
     version_incompatible: "游戏版本尚未验证，不能自动安装。",
-    catalog_untrusted: "补丁目录尚未通过签名验证，不能安装。",
+
     hash_mismatch: "导入包哈希与审核记录不符。",
     file_changed: "游戏文件已变化，请重新预览。",
     recovery_conflict: "检测到恢复冲突，已保留后续修改。",
     unsupported_method: "当前核心版本尚不支持此操作。",
     no_archive_selected: "请先选择本地 ZIP 文件。",
-    artifact_requires_manual_download: "未找到下载链接",
     build_not_verified: "当前游戏 build 尚未审核，自动安装已禁用。",
     platform_not_verified: "当前平台尚未审核，自动安装已禁用。",
     source_requires_guidance: "此条目提供补丁来源引导，尚不能自动安装。",
@@ -229,10 +228,10 @@ export function reason(code: string): string {
     exe_conditions_required: "请确认游戏版本与 DLC 适用条件。",
     exe_insufficient_space: "检查或安装此补丁所需空间不足，请清理空间后重试。",
     game_not_ready: "游戏尚未完整安装或库不可访问，请检查 Steam 下载状态。",
-    signed_catalog_required: "需要有效的签名目录才能安装。",
-    catalog_expired: "签名目录已到期，请更新目录后重新生成计划。",
-    catalog_rollback: "目录版本低于本机已验证版本，请使用较新的可信目录。",
-    release_revoked: "此补丁版本已被维护端撤销，不能安装。",
+
+
+
+
     plan_has_blockers: "安装计划存在阻止条件，请先处理列出的问题。",
     game_closed_confirmation_required: "请关闭游戏并暂停 Steam 更新后确认。",
     game_changed_or_unavailable: "游戏版本或库状态已变化，请重新扫描和预检。",
@@ -285,9 +284,9 @@ export function reason(code: string): string {
      ,selection_not_found: "补丁选择已不在来源结果中，请重新查找。"
      ,discovery_candidate_revalidation_incomplete: "部分已知补丁尚未完成核验，保留上次候选，请继续查找。"
      ,selection_stale: "补丁来源记录与当前解析版本不兼容，请重新查找来源。"
-     ,local_archive_signed_only: "此来源不支持导入本地 ZIP，请使用来源自动安装。"
-     ,selection_or_release_required: "缺少补丁选择或发行版本，请重新选择。"
-     ,archive_not_allowed_for_selection: "动态来源补丁不能导入本地 ZIP，请从来源直接安装。"
+
+     ,selection_required: "缺少补丁选择，请重新选择。"
+
      ,zip_download_unavailable: "此来源未提供可下载的 ZIP，请查看来源说明。"
      ,zip_download_ambiguous: "来源提供了多个 ZIP 下载，无法唯一确定，请查看来源说明。"
      ,exe_candidate_variant_unsupported: "此补丁的版本类型暂不支持自动安装，请查看来源说明。"
@@ -329,18 +328,15 @@ export function patchState(status: string): string {
 }
 
 
-/** Input choice uses authoritative snapshot facts; archive selection remains local UI state. */
-export function primaryInstallAction(patch: Patch | null | undefined, archiveSelected: boolean, route: "primary" | "local_archive" = "primary") {
+/** Input choice uses authoritative dynamic-selection snapshot facts. */
+export function primaryInstallAction(patch: Patch | null | undefined) {
   const primary = patch?.actions.primary;
-  const input = route === "local_archive" ? "local_archive" : primary?.input === "automatic" ? "automatic" : "unavailable";
-  const available = !!patch && (input === "automatic" ? patch.actions.automatic.available
-    : input === "local_archive" ? patch.actions.local_archive.available && archiveSelected : false);
+  const input = primary?.input === "automatic" ? "automatic" : "unavailable";
+  const available = !!patch && input === "automatic" && patch.actions.automatic.available;
   return { operation: primary?.operation ?? "overwrite", label: primary?.label ?? "install", input, available };
 }
-export function installInput(patch: Patch | null | undefined, localArchive?: string): string | null {
-  if (!patch) return null;
-  if (localArchive !== undefined) return localArchive.trim() && patch.actions.local_archive.available ? localArchive : null;
-  return patch.actions.primary.input === "automatic" && patch.actions.automatic.available ? "" : null;
+export function installInput(patch: Patch | null | undefined): string | null {
+  return patch?.actions.primary.input === "automatic" && patch.actions.automatic.available ? "" : null;
 }
 export function actionBlockers(patch: Patch | null | undefined): ActionBlocker[] {
   if (!patch) return [];

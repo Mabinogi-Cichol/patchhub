@@ -71,9 +71,13 @@ foreach ($taskBinary in @('patchhub-core.exe','patchhub-worker.exe')) {
 }
 $taskResources = Join-Path $taskOutput 'resources'
 New-Item -ItemType Directory -Path $taskResources -Force | Out-Null
-foreach ($taskResource in @('catalog.json','signed-catalog.json','trust-keys.json')) {
-    Copy-Item -LiteralPath (Join-Path $taskRoot "catalog/$taskResource") -Destination $taskResources
+# Incremental Flutter builds reuse this directory, including resources from old releases.
+foreach ($taskObsoleteResource in @('catalog.json','signed-catalog.json','trust-keys.json')) {
+    $taskObsoletePath = Join-Path $taskResources $taskObsoleteResource
+    if (Test-Path -LiteralPath $taskObsoletePath) { Remove-Item -LiteralPath $taskObsoletePath -Force }
 }
+$taskObsoletePicker = Join-Path $taskOutput 'file_selector_windows_plugin.dll'
+if (Test-Path -LiteralPath $taskObsoletePicker) { Remove-Item -LiteralPath $taskObsoletePicker -Force }
 Copy-Item -LiteralPath (Join-Path $taskRoot 'LICENSE') -Destination $taskResources
 New-Item -ItemType Directory -Path (Join-Path $taskResources 'licenses') -Force | Out-Null
 Copy-Item -LiteralPath (Join-Path $taskRoot 'scripts/licenses/sfextract-MIT.txt') -Destination (Join-Path $taskResources 'licenses')

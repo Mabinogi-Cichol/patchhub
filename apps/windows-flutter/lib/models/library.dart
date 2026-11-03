@@ -34,11 +34,9 @@ class ScanSnapshot {
           .toList(),
       diagnostics = (value['diagnostics'] as List).cast<Map<String, dynamic>>(),
       steamLanguages = (value['steam_languages'] as Map? ?? {})
-          .cast<String, String>(),
-      catalogError = value['catalog_error'] as Map<String, dynamic>?;
+          .cast<String, String>();
   final List<GameRow> rows;
   final List<Map<String, dynamic>> diagnostics;
-  final Map<String, dynamic>? catalogError;
   final Map<String, String> steamLanguages;
 
   String? steamLanguage(String root) {

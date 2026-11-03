@@ -18,7 +18,7 @@ class CacheCleanupTests(unittest.IsolatedAsyncioTestCase):
         return plugin
 
     async def install(self, plugin):
-        started = await plugin.start_patch_install_task("instance", "signed", operation="install")
+        started = await plugin.start_patch_install_task("instance", "zip-selection-0123456789abcdef01234567-42", operation="install")
         task = plugin.tasks.get(started["task_id"])
         await task.worker
         return task.snapshot()
@@ -28,7 +28,7 @@ class CacheCleanupTests(unittest.IsolatedAsyncioTestCase):
         plugin = self.make_plugin(cleanup=cleanup)
         result = await self.install(plugin)
         self.assertEqual(result["state"], "completed")
-        plugin.bridge.install_patch.assert_awaited_once_with("instance", "signed", None, None, "install", unittest.mock.ANY, "after_commit")
+        plugin.bridge.install_patch.assert_awaited_once_with("instance", "zip-selection-0123456789abcdef01234567-42", "install", unittest.mock.ANY, "after_commit")
         self.assertEqual(result["result"]["cleanup"], cleanup)
         self.assertEqual(plugin._cache_result, cleanup)
         plugin.bridge.cleanup_cache.assert_not_awaited()
@@ -37,7 +37,7 @@ class CacheCleanupTests(unittest.IsolatedAsyncioTestCase):
         cleanup = {"status": "not_requested", "performed": False, "removed_bytes": 0, "failures": []}
         plugin = self.make_plugin(False, cleanup=cleanup)
         result = await self.install(plugin)
-        plugin.bridge.install_patch.assert_awaited_once_with("instance", "signed", None, None, "install", unittest.mock.ANY, "disabled")
+        plugin.bridge.install_patch.assert_awaited_once_with("instance", "zip-selection-0123456789abcdef01234567-42", "install", unittest.mock.ANY, "disabled")
         self.assertEqual(result["result"]["cleanup"], cleanup)
         plugin.bridge.cleanup_cache.assert_not_awaited()
 

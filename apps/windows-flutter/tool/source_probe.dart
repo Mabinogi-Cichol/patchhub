@@ -14,11 +14,7 @@ Future<void> main(List<String> args) async {
     ) as Map<String, dynamic>,
   );
   final client = CoreClient(
-    CorePaths(
-      binary: args[0],
-      stateDirectory: args[1],
-      resourceDirectory: args[2],
-    ),
+    CorePaths(binary: args[0], stateDirectory: args[1]),
     protocol,
   );
   final scan = await client.call('scan') as Map<String, dynamic>;

@@ -105,14 +105,7 @@ fn strict_method_params_and_nullable_facts() {
             "invalid_request"
         );
     }
-    for key in [
-        "roots",
-        "catalog",
-        "signed_catalog",
-        "trust_keys",
-        "state_dir",
-        "platform",
-    ] {
+    for key in ["roots", "state_dir", "platform"] {
         let mut r = fixtures::request(Method::Scan);
         r["params"]["host"].as_object_mut().unwrap().remove(key);
         assert_eq!(

@@ -20,7 +20,7 @@ String dartExecutable() {
 class ProcessFixtureClient extends CoreClient {
   ProcessFixtureClient(this.scenario, {this.gate})
     : super(
-        CorePaths(binary: '', stateDirectory: '', resourceDirectory: ''),
+        CorePaths(binary: '', stateDirectory: ''),
         WireProtocol(
           jsonDecode(File('assets/protocol-v5.schema.json').readAsStringSync())
               as Map<String, dynamic>,

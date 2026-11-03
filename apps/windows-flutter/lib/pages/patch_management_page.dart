@@ -13,10 +13,9 @@ import '../models/library.dart';
 import '../presentation/library_presentation.dart';
 import 'install_dialog.dart';
 
-Map<String, Object?> selectionArguments(Map<String, dynamic> patch) =>
-    patch['selection_id'] != null
-    ? {'selection_id': patch['selection_id']}
-    : {'release_id': patch['release_id']};
+Map<String, Object?> selectionArguments(Map<String, dynamic> patch) => {
+  'selection_id': patch['selection_id'],
+};
 
 class PatchManagementPage extends StatefulWidget {
   const PatchManagementPage({
@@ -49,9 +48,7 @@ class PatchManagementPage extends StatefulWidget {
 }
 
 class _PatchManagementPageState extends State<PatchManagementPage> {
-  bool localRoute = false;
   bool reading = false;
-  String? archive;
   final manualUrl = TextEditingController();
   Object? error;
   Map<String, dynamic>? preview;
@@ -84,20 +81,6 @@ class _PatchManagementPageState extends State<PatchManagementPage> {
     }
   }
 
-  Future<void> chooseArchive() async {
-    try {
-      final file = await widget.desktop.selectArchive();
-      if (mounted && file != null) {
-        setState(() {
-          archive = file;
-          localRoute = true;
-        });
-      }
-    } catch (failure) {
-      if (mounted) setState(() => error = failure);
-    }
-  }
-
   Future<void> readPreview() async {
     final patch = widget.patch!;
     setState(() {
@@ -117,15 +100,8 @@ class _PatchManagementPageState extends State<PatchManagementPage> {
     }
   }
 
-  bool available(Map<String, dynamic> patch) {
-    final input = localRoute ? 'local_archive' : 'automatic';
-    final allowed = input == 'automatic'
-        ? patch['actions']['automatic']['available'] == true
-        : input == 'local_archive' &&
-              patch['actions']['local_archive']['available'] == true &&
-              archive != null;
-    return allowed;
-  }
+  bool available(Map<String, dynamic> patch) =>
+      patch['actions']['automatic']['available'] == true;
 
   bool get manualReady {
     final uri = Uri.tryParse(manualUrl.text.trim());
@@ -171,7 +147,6 @@ class _PatchManagementPageState extends State<PatchManagementPage> {
           ...selectionArguments(latest),
           'operation': latest['actions']['primary']['operation'],
           'cleanup_policy': 'disabled',
-          if (localRoute) 'archive': archive,
         };
       }
       final task = widget.model.tasks.startInstall(arguments);
@@ -208,18 +183,9 @@ class _PatchManagementPageState extends State<PatchManagementPage> {
     final sourceId =
         (patch?['source_id'] ?? candidate?['source_id']) as String?;
     final url = (patch?['source_page'] ?? candidate?['source_page']) as String?;
-    final input = patch == null
-        ? 'unavailable'
-        : localRoute
-        ? 'local_archive'
-        : 'automatic';
     final blockers = patch == null
         ? <dynamic>[]
-        : input == 'automatic'
-        ? patch['actions']['automatic']['blockers'] as List
-        : input == 'local_archive'
-        ? patch['actions']['local_archive']['blockers'] as List
-        : patch['actions']['overwrite']['blockers'] as List;
+        : patch['actions']['automatic']['blockers'] as List;
     final busy =
         widget.model.tasks.installation?.running == true ||
         widget.model.scanning ||
@@ -353,32 +319,6 @@ class _PatchManagementPageState extends State<PatchManagementPage> {
         for (final blocker in blockers)
           SelectableText(
             '${statusLabel(blocker['code'])}${blocker['detail'] == null ? '' : '\n${blocker['detail']}'}',
-          ),
-        if (patch['actions']['local_archive']['available'] == true)
-          ExpansionTile(
-            key: PageStorageKey(
-              '${widget.row.id}:${widget.entry.selectionKey}:local-zip',
-            ),
-            title: const Text('使用本地 ZIP（可选）'),
-            children: [
-              OutlinedButton(
-                onPressed: busy ? null : chooseArchive,
-                child: const Text('选择本地 ZIP'),
-              ),
-              if (archive != null)
-                SelectableText(
-                  '已选择：$archive',
-                  key: const PageStorageKey('local-archive'),
-                ),
-            ],
-          ),
-        if (localRoute)
-          TextButton(
-            onPressed: () => setState(() {
-              localRoute = false;
-              archive = null;
-            }),
-            child: const Text('取消本地文件选择'),
           ),
       ] else ...[
         const SizedBox(height: 16),
@@ -710,8 +650,6 @@ class _PatchManagementPageState extends State<PatchManagementPage> {
                           label: Text(
                             patch == null
                                 ? '下载并安装'
-                                : localRoute
-                                ? '使用本地 ZIP 安装'
                                 : patch['actions']['primary']['label'] ==
                                       'overwrite'
                                 ? '覆盖安装补丁'

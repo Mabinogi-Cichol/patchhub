@@ -51,7 +51,7 @@ class V5BridgeTests(unittest.IsolatedAsyncioTestCase):
         self.addCleanup(self.temp.cleanup)
         binary = Path(self.temp.name) / "patchhub-core"
         binary.touch()
-        self.bridge = CoreBridge(binary, binary)
+        self.bridge = CoreBridge(binary)
         self.bridge._preflight_done = True
 
     async def test_control_cancel_continues_until_receipt_drains(self):
@@ -81,12 +81,12 @@ class V5BridgeTests(unittest.IsolatedAsyncioTestCase):
     async def test_host_cleanup_policy_is_sent_and_invalid_values_rejected(self):
         with patch("bridge.asyncio.create_subprocess_exec", new_callable=AsyncMock) as spawn:
             with self.assertRaisesRegex(ValueError, "invalid_cleanup_policy"):
-                await self.bridge.install_patch("local", release_id="signed", operation="overwrite", cleanup_policy="enabled")
+                await self.bridge.install_patch("local", selection_id="zip-selection-0123456789abcdef01234567-42", operation="overwrite", cleanup_policy="enabled")
             spawn.assert_not_called()
         peer = Peer()
         with patch("bridge.asyncio.create_subprocess_exec", return_value=peer):
             pending = asyncio.create_task(self.bridge.install_patch(
-                "local", release_id="signed", cleanup_policy="after_commit", operation="overwrite"))
+                "local", selection_id="zip-selection-0123456789abcdef01234567-42", cleanup_policy="after_commit", operation="overwrite"))
             while peer.request is None:
                 await asyncio.sleep(0)
             self.assertEqual(peer.request["params"]["cleanup_policy"], "after_commit")
@@ -97,7 +97,7 @@ class V5BridgeTests(unittest.IsolatedAsyncioTestCase):
         manager = TaskManager()
         peer = Peer()
         async def work(task):
-            return await self.bridge.install_patch("local", release_id="signed", operation="overwrite")
+            return await self.bridge.install_patch("local", selection_id="zip-selection-0123456789abcdef01234567-42", operation="overwrite")
         with patch("bridge.asyncio.create_subprocess_exec", return_value=peer):
             task = manager.get(manager.start("install", work)["task_id"])
             while peer.request is None:
@@ -118,7 +118,7 @@ class V5BridgeTests(unittest.IsolatedAsyncioTestCase):
                 return [receipt], extra
             with patch("bridge.asyncio.create_subprocess_exec", return_value=_FakeProcess(factory)):
                 with self.assertLogs("bridge", level="WARNING") as captured:
-                    self.assertEqual((await self.bridge.install_patch("local", "signed", operation="overwrite"))["state"], "committed")
+                    self.assertEqual((await self.bridge.install_patch("local", "zip-selection-0123456789abcdef01234567-42", operation="overwrite"))["state"], "committed")
             self.assertIn("core_output_after_terminal:", captured.output[0])
 
     async def test_terminal_result_returns_before_unbounded_tail_or_exit_observation(self):
@@ -168,7 +168,7 @@ class V5BridgeTests(unittest.IsolatedAsyncioTestCase):
                 try:
                     with patch("bridge.asyncio.create_subprocess_exec", return_value=peer), patch("bridge.TERMINAL_DRAIN_SECONDS", .2), patch("bridge.TERMINAL_DRAIN_BYTES", 1024):
                         with self.assertLogs("bridge", level="WARNING") as captured:
-                            pending_call = asyncio.create_task(self.bridge.install_patch("local", "signed", operation="overwrite"))
+                            pending_call = asyncio.create_task(self.bridge.install_patch("local", "zip-selection-0123456789abcdef01234567-42", operation="overwrite"))
                             completed, _ = await asyncio.wait({pending_call}, timeout=.5)
                             self.assertIn(pending_call, completed, "valid receipt remained blocked on terminal transport")
                             result = pending_call.result()
@@ -208,7 +208,7 @@ class V5BridgeTests(unittest.IsolatedAsyncioTestCase):
         manager = TaskManager()
         with patch("bridge.asyncio.create_subprocess_exec", return_value=_FakeProcess(factory)):
             async def work(task):
-                return await self.bridge.install_patch("local", "signed", operation="overwrite")
+                return await self.bridge.install_patch("local", "zip-selection-0123456789abcdef01234567-42", operation="overwrite")
             task = manager.get(manager.start("install", work)["task_id"])
             await task.worker
         self.assertEqual(task.snapshot()["error"], "analysis_failed")
@@ -227,10 +227,10 @@ class V5BridgeTests(unittest.IsolatedAsyncioTestCase):
     def test_root_requires_an_explicit_unprivileged_identity(self):
         with patch("bridge.os.geteuid", return_value=0, create=True):
             with self.assertRaisesRegex(ValueError, "unprivileged_user_required"):
-                CoreBridge(self.bridge.binary, self.bridge.catalog)
+                CoreBridge(self.bridge.binary)
             with self.assertRaisesRegex(ValueError, "unprivileged_user_required"):
-                CoreBridge(self.bridge.binary, self.bridge.catalog, run_uid=0, run_gid=0)
-            bridge = CoreBridge(self.bridge.binary, self.bridge.catalog, run_uid=1000, run_gid=1000)
+                CoreBridge(self.bridge.binary, run_uid=0, run_gid=0)
+            bridge = CoreBridge(self.bridge.binary, run_uid=1000, run_gid=1000)
             self.assertEqual(bridge.process_identity, {"user": 1000, "group": 1000, "extra_groups": []})
             self.assertEqual(bridge.worker, bridge.binary.with_name("patchhub-worker"))
 
@@ -278,13 +278,13 @@ class V5BridgeTests(unittest.IsolatedAsyncioTestCase):
 
     def test_bridge_has_no_total_call_timeout(self):
         with self.assertRaises(TypeError):
-            CoreBridge(self.bridge.binary, self.bridge.catalog, timeout=1)
+            CoreBridge(self.bridge.binary, timeout=1)
         self.assertFalse(hasattr(self.bridge, "timeout"))
 
     async def test_progressing_call_is_not_interrupted_by_a_total_duration(self):
         peer = Peer()
         with patch("bridge.asyncio.create_subprocess_exec", return_value=peer):
-            pending = asyncio.create_task(self.bridge.install_patch("local", release_id="signed", operation="overwrite"))
+            pending = asyncio.create_task(self.bridge.install_patch("local", selection_id="zip-selection-0123456789abcdef01234567-42", operation="overwrite"))
             while peer.request is None:
                 await asyncio.sleep(0)
             done, _ = await asyncio.wait({pending}, timeout=.3)

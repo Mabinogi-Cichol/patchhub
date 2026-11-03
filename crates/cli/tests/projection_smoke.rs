@@ -1,6 +1,5 @@
 //! Actual JSONL subprocess coverage for the projection adapter (current v4).
 use serde_json::{json, Value};
-use sha2::{Digest, Sha256};
 use std::{
     fs,
     io::Write,
@@ -11,14 +10,7 @@ use std::{
 fn wire_params(method: &str, mut legacy: Value) -> Value {
     let object = legacy.as_object_mut().unwrap();
     let mut host = serde_json::Map::new();
-    for key in [
-        "roots",
-        "catalog",
-        "signed_catalog",
-        "trust_keys",
-        "state_dir",
-        "platform",
-    ] {
+    for key in ["roots", "state_dir", "platform"] {
         let default = match key {
             "roots" => json!([]),
             "platform" => json!(if cfg!(windows) { "windows" } else { "steamos" }),
@@ -33,15 +25,8 @@ fn wire_params(method: &str, mut legacy: Value) -> Value {
         );
     }
     let keys: &[&str] = match method {
-        "preview" => &["instance_id", "release_id", "selection_id"],
-        "install_patch" => &[
-            "instance_id",
-            "release_id",
-            "selection_id",
-            "archive",
-            "operation",
-            "cleanup_policy",
-        ],
+        "preview" => &["instance_id", "selection_id"],
+        "install_patch" => &["instance_id", "selection_id", "operation", "cleanup_policy"],
         _ => &[],
     };
     object.retain(|key, value| keys.contains(&key.as_str()) && !value.is_null());
@@ -104,17 +89,8 @@ fn scan_and_preview_roundtrip_preserve_instance_identity_and_evidence() {
         b"installed",
     )
     .unwrap();
-    let catalog = temp.path().join("catalog.json");
-    let sha = format!("{:x}", Sha256::digest(b"installed"));
-    fs::write(&catalog, json!({"schema_version":1,"revision":1,"releases":[{
-        "patch_id":"test","release_id":"test-v1","appid":42,"name":"Test patch","version":"1",
-        "language":"zh-CN","category":"content_restore","source_page":"https://example.invalid/patch",
-        "support_level":"managed_zip","platforms":["windows","steamos"],"verified_buildids":["100"],
-        "detection":[{"path":"patch.dat","sha256":sha}],
-        "recipe":{"artifact_sha256":"0".repeat(64),"files":[{"source":"patch.dat","destination":"patch.dat","original_sha256":null,"installed_sha256":sha}]}
-    }]}).to_string()).unwrap();
     let state = temp.path().join("absent-state");
-    let params = json!({"roots":[left,right],"catalog":catalog,"state_dir":state});
+    let params = json!({"roots":[left,right],"state_dir":state});
     let response = call("scan", params.clone());
     assert_eq!(response["ok"], true, "{response}");
     let rows = response["result"]["installs"].as_array().unwrap();
@@ -128,44 +104,11 @@ fn scan_and_preview_roundtrip_preserve_instance_identity_and_evidence() {
         rows[0]["game"]["instance_id"],
         rows[1]["game"]["instance_id"]
     );
-    let statuses: Vec<_> = rows
+    assert!(rows
         .iter()
-        .map(|row| row["patches"][0]["detection"]["status"].as_str().unwrap())
-        .collect();
-    assert!(statuses.contains(&"installed_external"));
-    assert!(statuses.contains(&"not_detected"));
-    for row in rows {
-        let patch = &row["patches"][0];
-        assert!(patch.get("download_available").is_none());
-        assert!(patch.get("auto_installable").is_none());
-        assert!(patch.get("reinstall_available").is_none());
-        for action in ["automatic", "local_archive", "reinstall", "overwrite"] {
-            assert_eq!(patch["actions"][action]["available"], false);
-            assert!(patch["actions"][action]["blockers"].is_array());
-        }
-        assert_eq!(patch["actions"]["primary"]["operation"], "overwrite");
-        assert_eq!(patch["actions"]["primary"]["input"], "unavailable");
-        assert_eq!(
-            patch["actions"]["primary"]["label"],
-            if patch["detection"]["status"] == "installed_external" {
-                "overwrite"
-            } else {
-                "install"
-            }
-        );
-    }
-    let mut preview = params;
-    preview["instance_id"] = rows[0]["game"]["instance_id"].clone();
-    preview["release_id"] = json!("test-v1");
-    let response = call("preview", preview);
-    assert_eq!(response["ok"], true, "{response}");
-    assert_eq!(response["result"]["executable"], false);
-    assert!(!state.exists(), "read-only RPC must not initialize state");
-    assert_eq!(
-        fs::read(left.join("steamapps/common/测试游戏/patch.dat")).unwrap(),
-        b"installed"
-    );
-    assert!(!right.join("steamapps/common/测试游戏/patch.dat").exists());
+        .all(|row| row["patches"].as_array().unwrap().is_empty()));
+    assert!(response["result"].get("catalog_error").is_none());
+    assert!(!state.exists());
 }
 
 #[test]

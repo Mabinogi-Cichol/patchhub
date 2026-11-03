@@ -116,7 +116,7 @@ class BridgeStreamTests(unittest.IsolatedAsyncioTestCase):
         self.addCleanup(self.temp.cleanup)
         path = Path(self.temp.name) / "binary"
         path.touch()
-        self.bridge = CoreBridge(path, path, state_dir=Path(self.temp.name) / "state")
+        self.bridge = CoreBridge(path, state_dir=Path(self.temp.name) / "state")
 
     async def test_preflight_refuses_old_versions_missing_contracts_and_schemas_before_write(self):
         variants = [("version", version, "unsupported_protocol") for version in (1, 2, 3)] + [
@@ -136,7 +136,7 @@ class BridgeStreamTests(unittest.IsolatedAsyncioTestCase):
                 return [], row
             with patch("bridge.asyncio.create_subprocess_exec", side_effect=lambda *a, **kw: _FakeProcess(factory)):
                 with self.assertRaisesRegex((RuntimeError, ValueError), expected):
-                    await self.bridge.install_patch("instance", "release", operation="overwrite")
+                    await self.bridge.install_patch("instance", "zip-selection-0123456789abcdef01234567-42", operation="overwrite")
             self.assertEqual([row["method"] for row in captured], ["get_capabilities"])
             self.assertFalse(self.bridge.state_dir.exists())
 
@@ -147,14 +147,14 @@ class BridgeStreamTests(unittest.IsolatedAsyncioTestCase):
             return [], response(request["method"], request_id)
         with patch("bridge.asyncio.create_subprocess_exec", side_effect=lambda *a, **kw: _FakeProcess(factory)):
             with self.assertRaisesRegex(ValueError, "invalid_operation"):
-                await self.bridge.install_patch("instance", "release")
-            await self.bridge.install_patch("instance", "release", operation="overwrite", request_id="same")
+                await self.bridge.install_patch("instance", "zip-selection-0123456789abcdef01234567-42")
+            await self.bridge.install_patch("instance", "zip-selection-0123456789abcdef01234567-42", operation="overwrite", request_id="same")
         request = captured[-1]
         self.assertEqual(request["request_id"], "same")
         self.assertNotIn("request_id", request["params"])
-        self.assertEqual(set(request["params"]["host"]), {"roots", "catalog", "signed_catalog", "trust_keys", "state_dir", "platform"})
-        self.assertIsNone(request["params"]["host"]["signed_catalog"])
-        self.assertIsNone(request["params"]["host"]["trust_keys"])
+        self.assertEqual(set(request["params"]["host"]), {"roots", "state_dir", "platform"})
+
+
 
     async def test_event_sequence_duplicate_backward_and_terminal_wins(self):
         self.bridge._preflight_done = True
@@ -207,7 +207,7 @@ class BridgeStreamTests(unittest.IsolatedAsyncioTestCase):
             peer = Process(tail)
             with patch("bridge.asyncio.create_subprocess_exec", return_value=peer):
                 with self.assertLogs("bridge", level="WARNING") as captured:
-                    result = await self.bridge.install_patch("instance", "release", operation="overwrite")
+                    result = await self.bridge.install_patch("instance", "zip-selection-0123456789abcdef01234567-42", operation="overwrite")
             self.assertEqual(result["state"], "committed")
             self.assertEqual(result["disposition"], "completed")
             self.assertEqual(peer.readline_calls, 1)
@@ -227,7 +227,7 @@ class BridgeStreamTests(unittest.IsolatedAsyncioTestCase):
                 return [], response("install_patch", request_id, outcome(state, error))
             with patch("bridge.asyncio.create_subprocess_exec", return_value=Process(factory)):
                 with self.assertLogs("bridge", level="WARNING") as captured:
-                    result = await self.bridge.install_patch("instance", "release", operation="overwrite")
+                    result = await self.bridge.install_patch("instance", "zip-selection-0123456789abcdef01234567-42", operation="overwrite")
             self.assertEqual(result["disposition"], disposition)
             self.assertIn("core_exit_after_terminal: 17", captured.output[0])
 
@@ -318,9 +318,8 @@ class BridgeIntegrationTests(unittest.IsolatedAsyncioTestCase):
         if not configured and not binary.exists():
             self.skipTest("core binary not built")
         with tempfile.TemporaryDirectory() as temporary:
-            catalog = Path(temporary) / "catalog.json"
-            catalog.write_text('{"schema_version":1,"revision":0,"releases":[]}')
-            bridge = CoreBridge(binary, catalog, state_dir=Path(temporary) / "state")
+
+            bridge = CoreBridge(binary, state_dir=Path(temporary) / "state")
             await bridge.preflight()
             service = SourceService(bridge, Path(temporary) / "state")
             bundled = await service.get_script_source("patchmoe")
@@ -356,25 +355,23 @@ class BridgeIntegrationTests(unittest.IsolatedAsyncioTestCase):
         binary = Path(configured_binary) if configured_binary else root / "target/debug" / ("patchhub-core.exe" if os.name == "nt" else "patchhub-core")
         if not configured_binary and not binary.exists(): self.skipTest("core binary not built")
         with tempfile.TemporaryDirectory() as temporary:
-            catalog = Path(temporary) / "catalog.json"
-            catalog.write_text(json.dumps({"schema_version": 1, "revision": 0, "releases": []}))
-            bridge = CoreBridge(binary, catalog, state_dir=Path(temporary) / "state")
+
+            bridge = CoreBridge(binary, state_dir=Path(temporary) / "state")
             await bridge.preflight()
-            self.assertEqual((await bridge.scan())["catalog_trust"], "unsigned_development")
+            self.assertNotIn("catalog_trust", await bridge.scan())
             with self.assertRaisesRegex(CoreError, "instance_not_found"):
-                await bridge.preview("nonexistent-p5-instance", "nonexistent-release")
+                await bridge.preview("nonexistent-p5-instance", "zip-selection-0123456789abcdef01234567-42")
 
 
 class BridgeJournalReadTests(unittest.IsolatedAsyncioTestCase):
     async def test_same_state_reads_across_bridges_queue_and_sources_remain_independent(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            binary, catalog = root / "binary", root / "catalog.json"
+            binary = root / "binary"
             binary.write_bytes(b"stub")
-            catalog.write_text("{}")
-            first = CoreBridge(binary, catalog, state_dir=root / "state")
-            second = CoreBridge(binary, catalog, state_dir=root / "state" / ".." / "state")
-            other = CoreBridge(binary, catalog, state_dir=root / "other")
+            first = CoreBridge(binary, state_dir=root / "state")
+            second = CoreBridge(binary, state_dir=root / "state" / ".." / "state")
+            other = CoreBridge(binary, state_dir=root / "other")
             entered, release = asyncio.Event(), asyncio.Event()
 
             async def hold(*args):
@@ -415,10 +412,9 @@ class BridgeJournalReadTests(unittest.IsolatedAsyncioTestCase):
     async def test_real_busy_errors_are_not_hidden_and_queue_is_released(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            binary, catalog = root / "binary", root / "catalog.json"
+            binary = root / "binary"
             binary.write_bytes(b"stub")
-            catalog.write_text("{}")
-            bridge = CoreBridge(binary, catalog, state_dir=root / "state")
+            bridge = CoreBridge(binary, state_dir=root / "state")
             bridge._exchange_call = AsyncMock(side_effect=[RuntimeError("installer_busy"), []])
             with self.assertRaisesRegex(RuntimeError, "installer_busy"):
                 await bridge.scan()
@@ -430,12 +426,12 @@ class ManualDownloadBridgeTests(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as directory:
             binary = Path(directory) / "patchhub-core"
             binary.touch()
-            bridge = CoreBridge(binary, binary)
+            bridge = CoreBridge(binary)
             bridge._call = AsyncMock(return_value={"state": "committed"})
             link = {"source_id": "fixture", "candidate_id": "candidate-a", "url": "https://user.example/download"}
             await bridge.install_patch("instance", operation="overwrite", request_id="manual", manual_download=link)
             bridge._call.assert_awaited_once_with("install_patch", {"instance_id": "instance", "manual_download": link, "operation": "overwrite", "cleanup_policy": "disabled"}, request_id="manual")
             with self.assertRaisesRegex(ValueError, "invalid_request"):
-                await bridge.install_patch("instance", release_id="signed", operation="overwrite", manual_download=link)
-            with self.assertRaisesRegex(ValueError, "invalid_request"):
+                await bridge.install_patch("instance", selection_id="zip-selection-0123456789abcdef01234567-42", operation="overwrite", manual_download=link)
+            with self.assertRaises(TypeError):
                 await bridge.install_patch("instance", archive="local.zip", operation="overwrite", manual_download=link)

@@ -4,10 +4,6 @@ use patchhub_core::{
     install::InstallOperation,
     installer::{outcome::CancellationCause, service::*, HttpResponse, Transport},
     projection::DomainError,
-    trust::{
-        revision::{TrustRevisionStore, TrustedCatalogMaterial, TrustedCatalogProvider},
-        VerifiedCatalog,
-    },
 };
 use std::{fs, io, path::Path};
 fn platform() -> Platform {
@@ -15,21 +11,6 @@ fn platform() -> Platform {
         Platform::Windows
     } else {
         Platform::Steamos
-    }
-}
-struct Provider;
-impl TrustedCatalogProvider for Provider {
-    fn load(&self) -> Result<TrustedCatalogMaterial, DomainError> {
-        panic!("invalid boundary must reject before reading trust")
-    }
-}
-struct Revision;
-impl TrustRevisionStore for Revision {
-    fn highest_revision(&self) -> Result<u64, DomainError> {
-        panic!("invalid boundary before reading revisions")
-    }
-    fn remember_verified_revision(&self, _: &VerifiedCatalog) -> Result<(), DomainError> {
-        panic!("invalid boundary before writing revisions")
     }
 }
 struct Offline;
@@ -58,20 +39,19 @@ fn invoke(host: &ValidatedHostContext, id: &str) -> DomainError {
             request_id: RequestId::new("request").unwrap(),
             instance_id: InstanceId::new(id).unwrap(),
             operation: InstallOperation::Overwrite,
-            target: InstallTarget::SignedRelease {
-                release_id: ReleaseId::new("release").unwrap(),
-                archive: None,
+            target: InstallTarget::PublisherZipSelection {
+                selection_id: ZipSelectionId::new(&format!("zip-selection-{}-42", "a".repeat(24)))
+                    .unwrap(),
             },
             cleanup_policy: CleanupPolicy::Disabled,
         },
         InstallerDeps {
             host,
-            catalog: &Provider,
-            revision_store: &Revision,
+
             transport: &Offline,
             worker: None,
             control: &Lease,
-            clock: &SystemClock,
+
             emit: &mut emit,
         },
     )
@@ -130,20 +110,6 @@ fn write_rescans_steam_instead_of_using_context_time_facts() {
     assert!(!state.exists());
 }
 #[test]
-fn unbound_trust_store_is_rejected_before_any_state_write() {
-    let t = tempfile::tempdir().unwrap();
-    let root = t.path().join("Steam");
-    manifest(&root, "Game");
-    let id = patchhub_core::steam::scan(std::slice::from_ref(&root))
-        .installs
-        .remove(0)
-        .instance_id;
-    let state = t.path().join("state");
-    let host = ValidatedHostContext::new(&state, &[root], platform()).unwrap();
-    assert_eq!(invoke(&host, &id).code, "trust_state_mismatch");
-    assert!(!state.exists());
-}
-#[test]
 fn recovery_empty_state_is_readonly() {
     let t = tempfile::tempdir().unwrap();
     let state = t.path().join("state");
@@ -160,7 +126,6 @@ fn publisher_download_cancel_is_standard_cancel_before_any_transaction() {
             model::{GameQuery, SourceIndex, SourceIndexEntry},
             Sources,
         },
-        trust::revision::SqliteTrustRevisionStore,
     };
     struct DownloadFailure(&'static str);
     impl Transport for DownloadFailure {
@@ -184,7 +149,7 @@ fn publisher_download_cancel_is_standard_cancel_before_any_transaction() {
             .instance_id;
         let state = t.path().join("state");
         let host = ValidatedHostContext::new(&state, &[root], platform()).unwrap();
-        let now = SystemClock.now_seconds().unwrap();
+        let now = patchhub_core::clock::now().unwrap();
         let sources = Sources::open(&state).unwrap();
         sources
             .store()
@@ -229,7 +194,6 @@ fn publisher_download_cancel_is_standard_cancel_before_any_transaction() {
         let candidate = sources.registry().index_candidates(&query).remove(0);
         let selection = patchhub_core::installer::zip_selection_id(&candidate).unwrap();
         drop(sources);
-        let revisions = SqliteTrustRevisionStore::new(&state).unwrap();
         let mut emit = |_| {};
         let error = install(
             InstallRequest {
@@ -243,12 +207,11 @@ fn publisher_download_cancel_is_standard_cancel_before_any_transaction() {
             },
             InstallerDeps {
                 host: &host,
-                catalog: &Provider,
-                revision_store: &revisions,
+
                 transport: &DownloadFailure(transport_code),
                 worker: None,
                 control: &Lease,
-                clock: &SystemClock,
+
                 emit: &mut emit,
             },
         )
@@ -289,7 +252,6 @@ fn script_source_update_to_isolated_zip_and_exe_install() {
             http::{FakeFetcher, FetchResponse, RequestContext},
             matching, update, GameQuery, Sources,
         },
-        trust::revision::SqliteTrustRevisionStore,
     };
     use patchhub_installer_worker::production::WorkerRuntime;
     use serde_json::json;
@@ -442,7 +404,6 @@ fn script_source_update_to_isolated_zip_and_exe_install() {
             body: Box::new(io::Cursor::new(payload)),
         })));
         let host = ValidatedHostContext::new(&state, &[root], platform()).unwrap();
-        let revisions = SqliteTrustRevisionStore::new(&state).unwrap();
         let worker = WorkerRuntime::new(std::path::PathBuf::from(
             std::env::var_os("SF_WORKER_TEST_BIN").unwrap(),
         ))
@@ -458,12 +419,11 @@ fn script_source_update_to_isolated_zip_and_exe_install() {
             },
             InstallerDeps {
                 host: &host,
-                catalog: &Provider,
-                revision_store: &revisions,
+
                 transport: &transport,
                 worker: Some(&worker),
                 control: &Lease,
-                clock: &SystemClock,
+
                 emit: &mut emit,
             },
         )

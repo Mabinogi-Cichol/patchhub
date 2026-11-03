@@ -1,22 +1,14 @@
 import 'dart:io';
 
 class CorePaths {
-  CorePaths({
-    required this.binary,
-    required this.stateDirectory,
-    required this.resourceDirectory,
-  });
+  CorePaths({required this.binary, required this.stateDirectory});
 
   final String binary;
   final String stateDirectory;
-  final String resourceDirectory;
 
   static CorePaths resolve() {
     const root = String.fromEnvironment('PATCHHUB_ROOT');
     final executableDirectory = File(Platform.resolvedExecutable).parent.path;
-    final resourceDirectory = root.isEmpty
-        ? '$executableDirectory/resources'
-        : '$root/catalog';
     final binary = root.isEmpty
         ? '$executableDirectory/patchhub-core.exe'
         : '$root/target/debug/patchhub-core.exe';
@@ -30,24 +22,13 @@ class CorePaths {
     }
     return CorePaths(
       binary: binary,
-      stateDirectory: override.isNotEmpty
-          ? override
-          : '$appData/PatchHub',
-      resourceDirectory: resourceDirectory,
+      stateDirectory: override.isNotEmpty ? override : '$appData/PatchHub',
     );
-  }
-
-  String? _resource(String name) {
-    final path = '$resourceDirectory/$name';
-    return File(path).existsSync() ? path : null;
   }
 
   Map<String, Object?> get host => {
     'roots': <String>[],
     'platform': 'windows',
     'state_dir': stateDirectory,
-    'catalog': null,
-    'signed_catalog': _resource('signed-catalog.json'),
-    'trust_keys': _resource('trust-keys.json'),
   };
 }

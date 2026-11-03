@@ -1,28 +1,14 @@
 //! Actual v4 subprocess policy and cache-result integration, only temporary state.
-use base64::{engine::general_purpose::STANDARD, Engine};
-use ed25519_dalek::{Signer, SigningKey};
 use serde_json::{json, Value};
-use sha2::{Digest, Sha256};
 use std::{
     fs,
     io::{BufRead, BufReader, Read, Write},
     process::{Command, Stdio},
 };
-fn hash(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
-}
-
 fn wire_params(method: &str, mut legacy: Value) -> Value {
     let object = legacy.as_object_mut().unwrap();
     let mut host = serde_json::Map::new();
-    for key in [
-        "roots",
-        "catalog",
-        "signed_catalog",
-        "trust_keys",
-        "state_dir",
-        "platform",
-    ] {
+    for key in ["roots", "state_dir", "platform"] {
         let default = match key {
             "roots" => json!([]),
             "platform" => json!(if cfg!(windows) { "windows" } else { "steamos" }),
@@ -37,15 +23,18 @@ fn wire_params(method: &str, mut legacy: Value) -> Value {
         );
     }
     let keys: &[&str] = match method {
-        "preview" => &["instance_id", "release_id", "selection_id"],
+        "preview" => &["instance_id", "selection_id"],
         "install_patch" => &[
             "instance_id",
-            "release_id",
             "selection_id",
-            "archive",
             "operation",
             "cleanup_policy",
+            "manual_download",
         ],
+        "import_script_source" => &["rule", "api_version", "code"],
+        "set_source_enabled" => &["source_id", "enabled"],
+        "update_source" => &["source_id"],
+        "rematch_game" => &["appid"],
         _ => &[],
     };
     object.retain(|key, value| keys.contains(&key.as_str()) && !value.is_null());
@@ -57,13 +46,15 @@ fn wire_params(method: &str, mut legacy: Value) -> Value {
     legacy
 }
 
-fn call(method: &str, id: &str, params: Value) -> Value {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_patchhub-core"))
-        .arg(if method == "install_patch" {
-            "serve-task"
-        } else {
-            "serve"
-        })
+fn call(binary: &std::path::Path, method: &str, id: &str, params: Value) -> Value {
+    let mut child = Command::new(binary)
+        .arg(
+            if ["install_patch", "update_source", "rematch_game"].contains(&method) {
+                "serve-task"
+            } else {
+                "serve"
+            },
+        )
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -114,7 +105,7 @@ fn call(method: &str, id: &str, params: Value) -> Value {
     response
 }
 #[test]
-fn cli_after_commit_policy_reaches_core_and_replay_does_not_delete_new_cache() {
+fn clean_app_queries_matches_installs_and_replays_without_a_public_catalog() {
     if patchhub_core::installer::host_identity_blocker().is_some() {
         return;
     }
@@ -132,19 +123,97 @@ fn cli_after_commit_policy_reaches_core_and_replay_does_not_delete_new_cache() {
     .unwrap();
     zip.write_all(b"patched").unwrap();
     zip.finish().unwrap();
-    let now = patchhub_core::trust::now().unwrap();
-    let payload = serde_json::to_vec(&json!({"catalog":{"schema_version":1,"revision":1,"releases":[{
-        "patch_id":"fixture","release_id":"fixture-v1","appid":42,"name":"Fixture","version":"1","language":"en","category":"content_restore",
-        "source_page":"https://publisher.example/patch","support_level":"managed_zip","platforms":["windows","steamos"],"verified_buildids":["100"],
-        "detection":[{"path":"patch.dat","sha256":hash(b"patched")}],
-        "recipe":{"artifact_sha256":hash(&fs::read(&archive).unwrap()),"files":[{"source":"patch.dat","destination":"patch.dat","original_sha256":null,"installed_sha256":hash(b"patched")}]}
-    }]},"generated_at":now-1,"expires_at":now+3600,"revoked_release_ids":[]})).unwrap();
-    let signing = SigningKey::from_bytes(&[19; 32]);
-    let signed = temp.path().join("signed.json");
-    let keys = temp.path().join("keys.json");
-    fs::write(&signed, json!({"schema_version":1,"key_id":"fixture","payload":STANDARD.encode(&payload),"signature":STANDARD.encode(signing.sign(&payload).to_bytes())}).to_string()).unwrap();
-    fs::write(&keys, json!({"schema_version":1,"keys":[{"key_id":"fixture","public_key":STANDARD.encode(signing.verifying_key().to_bytes()),"revoked":false}]}).to_string()).unwrap();
     let state = temp.path().join("state");
+    let app = temp.path().join("application");
+    fs::create_dir(&app).unwrap();
+    let binary = app.join(if cfg!(windows) {
+        "patchhub-core.exe"
+    } else {
+        "patchhub-core"
+    });
+    fs::copy(env!("CARGO_BIN_EXE_patchhub-core"), &binary).unwrap();
+    let clean = call(
+        &binary,
+        "scan",
+        "clean",
+        json!({"roots":[library],"state_dir":state}),
+    );
+    assert_eq!(clean["ok"], true, "{clean}");
+    assert!(clean["result"].get("catalog_error").is_none());
+    assert!(clean["result"]["installs"][0]["patches"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+    assert!(!state.exists());
+    let defaults = call(
+        &binary,
+        "list_sources",
+        "defaults",
+        json!({"state_dir":state}),
+    );
+    for source in defaults["result"].as_array().unwrap() {
+        assert_eq!(source["origin"], "builtin");
+        let result = call(
+            &binary,
+            "set_source_enabled",
+            "disable",
+            json!({"state_dir":state,"source_id":source["id"],"enabled":false}),
+        );
+        assert_eq!(result["ok"], true, "{result}");
+    }
+    let code = r#"return {
+        collect_index=function() return {entries={{title='Game',page='https://example.com/game',kind='product'}},complete=true} end,
+        resolve_page=function(ctx,rule,page) return {title='Game',page=page,kind='product',steam_ids={42},text='English patch',mirrors={{url='https://download.example.com/fixture.zip',format='zip'}}} end
+    }"#;
+    let imported = call(
+        &binary,
+        "import_script_source",
+        "import",
+        json!({"state_dir":state,"rule":{"id":"custom","name":"Fixture","adapter":"lua","enabled":true,"pages":["https://example.com/list"],"page_hosts":["example.com"],"download_hosts":["download.example.com"],"root_layout":"game_root"},"api_version":1,"code":code}),
+    );
+    assert_eq!(imported["ok"], true, "{imported}");
+    let updated = call(
+        &binary,
+        "update_source",
+        "update",
+        json!({"state_dir":state,"source_id":"custom"}),
+    );
+    assert_eq!(updated["ok"], true, "{updated}");
+    let matched = call(
+        &binary,
+        "rematch_game",
+        "match",
+        json!({"roots":[library],"state_dir":state,"appid":42}),
+    );
+    assert_eq!(matched["ok"], true, "{matched}");
+    let candidate = &matched["result"]["results"][0]["candidates"][0];
+    assert_eq!(candidate["source_id"], "custom", "{matched}");
+    let projected = call(
+        &binary,
+        "scan",
+        "project",
+        json!({"roots":[library],"state_dir":state}),
+    );
+    assert_eq!(
+        projected["result"]["installs"][0]["patches"][0]["source_id"], "custom",
+        "{projected}"
+    );
+    assert!(
+        projected["result"]["installs"][0]["patches"][0]["selection_id"]
+            .as_str()
+            .unwrap()
+            .starts_with("zip-selection-")
+    );
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}/fixture.zip", listener.local_addr().unwrap());
+    let bytes = fs::read(&archive).unwrap();
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut request = [0; 4096];
+        stream.read(&mut request).unwrap();
+        write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/zip\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", bytes.len()).unwrap();
+        stream.write_all(&bytes).unwrap();
+    });
     let paths = patchhub_core::installer::InstallerPaths::new(&state);
     fs::create_dir_all(paths.downloads_dir()).unwrap();
     let cache = paths.downloads_dir().join("discard-me");
@@ -153,20 +222,27 @@ fn cli_after_commit_policy_reaches_core_and_replay_does_not_delete_new_cache() {
         .installs
         .remove(0)
         .instance_id;
-    let params = json!({"roots":[library],"state_dir":state,"instance_id":id,"signed_catalog":signed,"trust_keys":keys,"release_id":"fixture-v1","archive":archive,"cleanup_policy":"after_commit"});
-    let result = call("install_patch", "cli-cleanup", params.clone());
+    let params = json!({"roots":[library],"state_dir":state,"instance_id":id,"manual_download":{"source_id":"custom","candidate_id":candidate["candidate_id"],"url":url},"cleanup_policy":"after_commit"});
+    let result = call(&binary, "install_patch", "cli-cleanup", params.clone());
     assert_eq!(result["ok"], true, "{result}");
+    server.join().unwrap();
     assert_eq!(result["result"]["state"], "committed");
     assert_eq!(result["result"]["cleanup"]["status"], "completed");
-    assert_eq!(result["result"]["cleanup"]["removed_bytes"], 5);
+    assert!(
+        result["result"]["cleanup"]["removed_bytes"]
+            .as_u64()
+            .unwrap()
+            >= 5
+    );
     assert!(!cache.exists());
     fs::write(&cache, b"new").unwrap();
-    let replay = call("install_patch", "cli-cleanup", params);
+    let replay = call(&binary, "install_patch", "cli-cleanup", params);
     assert_eq!(replay["ok"], true, "{replay}");
     assert_eq!(replay["result"]["plan_id"], result["result"]["plan_id"]);
     assert_eq!(replay["result"]["cleanup"]["status"], "not_requested");
     assert_eq!(fs::read(cache).unwrap(), b"new");
     let manual = call(
+        &binary,
         "cleanup_cache",
         "manual",
         json!({"roots":[temp.path().join("Steam")],"state_dir":state}),

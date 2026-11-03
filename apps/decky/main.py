@@ -49,8 +49,7 @@ class Plugin:
             if account.pw_uid == 0 or Path(account.pw_dir) != home:
                 raise ValueError("unprivileged_user_required")
             run_uid, run_gid = account.pw_uid, account.pw_gid
-        self.bridge = CoreBridge(root / "bin/patchhub-core", root / "bin/catalog.json",
-            signed_catalog=root / "bin/signed-catalog.json", trust_keys=root / "bin/trust-keys.json",
+        self.bridge = CoreBridge(root / "bin/patchhub-core",
             state_dir=state_dir, run_uid=run_uid, run_gid=run_gid, user_home=home)
         await self.bridge.preflight()
         prepare_host_state(state_dir, home, run_uid, run_gid)
@@ -140,8 +139,8 @@ class Plugin:
             self.sources.settings_revision = revision
         return result
 
-    async def preview(self, instance_id, release_id=None, selection_id=None):
-        return await self.bridge.preview(instance_id, release_id, selection_id)
+    async def preview(self, instance_id, selection_id=None):
+        return await self.bridge.preview(instance_id, selection_id)
 
     async def list_sources(self):
         return await self.sources.reload_sources()
@@ -336,54 +335,31 @@ class Plugin:
         self._require_idle()
         return await self.bridge.discard_plan(plan_id)
 
-    def _local_archive(self, archive):
-        if not isinstance(archive, str) or not archive:
-            raise ValueError("invalid_archive")
-        if archive.startswith("~/"):
-            path = Path(decky.DECKY_USER_HOME) / archive[2:]
-        elif archive.startswith("~"):
-            raise ValueError("invalid_archive")
-        else:
-            path = Path(archive)
-        if not path.is_absolute() or not _no_links(path):
-            raise ValueError("invalid_archive")
-        path = path.resolve(strict=True)
-        if path.suffix.lower() != ".zip" or not path.is_file() or path.stat().st_nlink != 1:
-            raise ValueError("invalid_archive")
-        if not (path.is_relative_to(self.downloads) or path.is_relative_to(self.bridge.state_dir / "downloads")):
-            raise ValueError("archive_outside_downloads")
-        return path
-
-    async def start_patch_install_task(self, instance_id, release_id=None, selection_id=None,
-                                       archive=None, operation=None, request_id=None, manual_download=None):
-        self.bridge.selection(instance_id, release_id, selection_id, manual_download)
+    async def start_patch_install_task(self, instance_id, selection_id=None,
+                                       operation=None, request_id=None, manual_download=None):
+        self.bridge.selection(instance_id, selection_id, manual_download)
         manual_download = dict(manual_download) if manual_download is not None else None
-        if manual_download is not None and archive is not None:
-            raise ValueError("invalid_request")
         if operation not in ("install", "reinstall", "overwrite"):
             raise ValueError("invalid_operation")
-        if selection_id is not None and archive is not None:
-            raise ValueError("archive_not_allowed_for_selection")
-        local = self._local_archive(archive) if archive is not None else None
         request_id = str(uuid.uuid4()) if request_id is None else validate_id(request_id, 128, "invalid_request_id")
         cleanup_policy = "after_commit" if self.settings.auto_cleanup else "disabled"
 
         async def work(task):
             task.check()
-            args = (instance_id, release_id, selection_id, local, operation, request_id, cleanup_policy)
+            args = (instance_id, selection_id, operation, request_id, cleanup_policy)
             result = await self.bridge.install_patch(*args, manual_download=manual_download) if manual_download is not None else await self.bridge.install_patch(*args)
             if isinstance(result.get("cleanup"), dict):
                 self._cache_result = result["cleanup"]
             return result
 
-        return self.tasks.start("install", work, instance_id=instance_id, release_id=release_id,
+        return self.tasks.start("install", work, instance_id=instance_id,
             selection_id=selection_id, operation=operation, request_id=request_id,
-            archive_path=str(local) if local is not None else None, manual_download=manual_download)
+            manual_download=manual_download)
 
-    async def start_install(self, instance_id, release_id=None, selection_id=None,
-                            archive=None, operation=None, request_id=None, manual_download=None):
-        return await self.start_patch_install_task(instance_id, release_id, selection_id,
-            archive, operation, request_id, manual_download)
+    async def start_install(self, instance_id, selection_id=None,
+                            operation=None, request_id=None, manual_download=None):
+        return await self.start_patch_install_task(instance_id, selection_id,
+            operation, request_id, manual_download)
 
     async def task_status(self, task_id):
         return self.tasks.status(task_id)

@@ -1,11 +1,7 @@
 #[cfg(test)]
-use patchhub_core::catalog::SupportLevel;
+use patchhub_core::catalog;
 use patchhub_core::projection::DomainError;
-use patchhub_core::{
-    catalog::{self, Catalog, Platform},
-    install, installer, projection, sources, steam,
-    trust::{self, VerifiedCatalog},
-};
+use patchhub_core::{catalog::Platform, clock, install, installer, projection, sources, steam};
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::sync::Arc;
@@ -18,20 +14,14 @@ use std::{
 #[derive(Debug, Default, Clone, Serialize)]
 pub struct Params {
     pub roots: Vec<PathBuf>,
-    pub catalog: Option<PathBuf>,
     pub platform: Option<Platform>,
     pub instance_id: Option<String>,
     /// AppID alternative to `instance_id` for game-scoped source methods
     /// (P5 §1; resolution priority `instance_id` → `appid`).
     pub appid: Option<u32>,
-    pub release_id: Option<String>,
-    pub signed_catalog: Option<PathBuf>,
-    pub trust_keys: Option<PathBuf>,
     pub state_dir: Option<PathBuf>,
-    pub archive: Option<PathBuf>,
     pub plan_id: Option<String>,
-    /// Dynamic content-route selection (`exe-selection-*`), mutually exclusive
-    /// with `release_id` (p1-host-contract §1.1 A).
+    /// Source-derived ZIP/EXE selection, mutually exclusive with manual_download.
     pub selection_id: Option<String>,
     pub manual_download: Option<installer::service::ManualDownloadInput>,
     pub operation: install::InstallOperation,
@@ -65,21 +55,16 @@ impl Params {
         let text = |key: &str| v.get(key).and_then(Value::as_str).map(str::to_owned);
         Self {
             roots: h.roots.clone(),
-            catalog: h.catalog.clone(),
-            signed_catalog: h.signed_catalog.clone(),
-            trust_keys: h.trust_keys.clone(),
             state_dir: h.state_dir.clone(),
             platform: Some(h.platform),
             request_id: Some(request.request_id.clone()),
             instance_id: text("instance_id"),
             appid: v.get("appid").and_then(Value::as_u64).map(|n| n as u32),
-            release_id: text("release_id"),
             selection_id: text("selection_id"),
             manual_download: v.get("manual_download").filter(|v| !v.is_null()).map(|v| {
                 serde_json::from_value(v.clone()).expect("validated manual download input")
             }),
             plan_id: text("plan_id"),
-            archive: text("archive").map(PathBuf::from),
             source_id: text("source_id"),
             name: text("name"),
             operation: match text("operation").as_deref() {
@@ -169,8 +154,8 @@ impl ProgressCursor {
     /// `substage` (p1-host-contract §2.1).
     pub fn event(&mut self, progress: &patchhub_core::operation::Progress) -> Value {
         let (stage, substage) = match progress.stage.as_str() {
-            // Archive telemetry can precede an explicit stage in signed/local ZIP
-            // routes. Protocol v4 never exposes the internal empty default.
+            // Archive telemetry can precede an explicit extraction stage.
+            // The public protocol never exposes the internal empty default.
             "" => ("connecting", None),
             "backing_up" | "writing" | "committing" => ("applying", Some(progress.stage.as_str())),
             other => (other, None),
@@ -211,7 +196,7 @@ fn capabilities(_params: &Params) -> Value {
             "policy_schema_version": 1,
             "report_schema_version": 1,
             "formats": { "zip": "supported", "exe": "supported" },
-            "strategies": ["managed_zip", "publisher_zip", "publisher_exe"],
+            "strategies": ["publisher_zip", "publisher_exe"],
             "links": {
                 "zip": { "available": installer::host_identity_blocker().is_none(),
                     "blockers": installer::host_identity_blocker().map(|code|json!([{"code":code}])).unwrap_or_else(||json!([])) },
@@ -231,7 +216,7 @@ fn capabilities(_params: &Params) -> Value {
             "methods": SOURCE_METHODS,
         },
         "methods": methods,
-        "contracts": {"projection_version":2,"actions_version":1,"outcome_version":1,"request_validation_version":2},
+        "contracts": patchhub_protocol::ContractVersions::default(),
     })
 }
 
@@ -373,52 +358,6 @@ fn state_safe(path: &Path) -> Result<(), DomainError> {
     Ok(())
 }
 
-struct CatalogFiles<'a>(&'a Params);
-impl trust::revision::TrustedCatalogProvider for CatalogFiles<'_> {
-    fn load(&self) -> Result<trust::revision::TrustedCatalogMaterial, projection::DomainError> {
-        let path = self
-            .0
-            .signed_catalog
-            .as_ref()
-            .ok_or_else(|| projection::DomainError::code("signed_catalog_required"))?;
-        let keys = match &self.0.trust_keys {
-            Some(path) => trust::load_keys(path)?,
-            None => serde_json::from_str(include_str!("../../../catalog/trust-keys.json"))
-                .map_err(|e| projection::DomainError::new("invalid_trust_keys", e.to_string()))?,
-        };
-        Ok(trust::revision::TrustedCatalogMaterial {
-            envelope: trust::read_bounded(path, catalog::MAX_CATALOG_BYTES * 2)?,
-            keys,
-        })
-    }
-}
-struct ReadOnlyRevisionFloor;
-impl trust::revision::TrustRevisionStore for ReadOnlyRevisionFloor {
-    fn highest_revision(&self) -> Result<u64, projection::DomainError> {
-        Ok(0)
-    }
-    fn remember_verified_revision(
-        &self,
-        _: &VerifiedCatalog,
-    ) -> Result<(), projection::DomainError> {
-        Err(projection::DomainError::code("state_dir_required"))
-    }
-}
-fn verify_signed(params: &Params, now: u64) -> Result<VerifiedCatalog, DomainError> {
-    let provider = CatalogFiles(params);
-    match &params.state_dir {
-        Some(state) => {
-            let games = steam::scan(&params.roots);
-            let store =
-                trust::revision::SqliteTrustRevisionStore::new_for_games(state, &games.installs)
-                    .map_err(projection_error)?;
-            trust::revision::verify_catalog(&provider, &store, now).map_err(projection_error)
-        }
-        None => trust::revision::verify_catalog(&provider, &ReadOnlyRevisionFloor, now)
-            .map_err(projection_error),
-    }
-}
-
 fn canonical_future(path: &Path) -> Result<PathBuf, DomainError> {
     let absolute = std::path::absolute(path).map_err(err)?;
     let mut base = absolute.as_path();
@@ -482,7 +421,7 @@ pub fn execute_controlled(
     if params.roots.len() > 32 {
         return Err(DomainError::code("too_many_roots"));
     }
-    if method == "scan" && (params.instance_id.is_some() || params.release_id.is_some()) {
+    if method == "scan" && (params.instance_id.is_some() || params.selection_id.is_some()) {
         return Err(DomainError::code("unexpected_preview_arguments"));
     }
     if let Some(code) = installer::host_identity_blocker() {
@@ -557,40 +496,7 @@ pub fn execute_controlled(
     if method == "install_patch" {
         return install_patch(&params, &report, platform, cancel);
     }
-    let projection_now = trust::now().map_err(err)?;
-    let mut catalog_error = None;
-    let verified = if params.signed_catalog.is_some() {
-        match verify_signed(&params, projection_now) {
-            Ok(c) => Some(c),
-            Err(e) => {
-                catalog_error = Some(e);
-                None
-            }
-        }
-    } else {
-        None
-    };
-    let catalog = match verified.as_ref() {
-        Some(c) => c.catalog().clone(),
-        None => match params.catalog.as_ref() {
-            Some(path) => match catalog::load(path) {
-                Ok(c) => c,
-                Err(e) => {
-                    catalog_error = Some(err(e));
-                    Catalog {
-                        schema_version: 1,
-                        revision: 0,
-                        releases: vec![],
-                    }
-                }
-            },
-            None => Catalog {
-                schema_version: 1,
-                revision: 0,
-                releases: vec![],
-            },
-        },
-    };
+    let projection_now = clock::now().map_err(err)?;
     let transactions = params
         .state_dir
         .as_ref()
@@ -624,10 +530,6 @@ pub fn execute_controlled(
     };
     let inputs = projection::ProjectionInputs {
         steam: &report,
-        catalog: match verified.as_ref() {
-            Some(catalog) => projection::CatalogView::Verified(catalog),
-            None => projection::CatalogView::Development(&catalog),
-        },
         sources: source_snapshot.as_ref(),
         transactions: &transactions,
         roots: &roots,
@@ -652,17 +554,15 @@ pub fn execute_controlled(
             return Err(DomainError::code("state_dir_required"));
         }
         // Internal direct-call checks mirror the public protocol target boundary.
-        let target = match (params.release_id, params.selection_id) {
-            (Some(_), Some(_)) => return Err(DomainError::code("invalid_request")),
-            (None, None) => return Err(DomainError::code("selection_or_release_required")),
-            (Some(id), None) => projection::PreviewTarget::SignedRelease(id),
-            (None, Some(id)) if id.starts_with("exe-selection-") => {
+        let target = match params.selection_id {
+            Some(id) if id.starts_with("exe-selection-") => {
                 projection::PreviewTarget::PublisherExeSelection(id)
             }
-            (None, Some(id)) if id.starts_with("zip-selection-") => {
+            Some(id) if id.starts_with("zip-selection-") => {
                 projection::PreviewTarget::PublisherZipSelection(id)
             }
-            _ => return Err(DomainError::code("invalid_selection_id")),
+            Some(_) => return Err(DomainError::code("invalid_selection_id")),
+            None => return Err(DomainError::code("selection_required")),
         };
         return value(
             projection::preview(
@@ -679,10 +579,7 @@ pub fn execute_controlled(
     }
     let mut projected = projection::scan(inputs).map_err(projection_error)?;
     projected.installs = attach_match_discovery(projected.installs, params.state_dir.as_deref())?;
-    let mut result = value(projected)?;
-    // Catalog failures remain structured read-only diagnostics.
-    result["catalog_error"] = json!(catalog_error);
-    Ok(result)
+    value(projected)
 }
 
 /// Replaces each projection's discovery snapshot with the persisted match
@@ -1320,8 +1217,7 @@ mod tests {
 }
 
 /// Single-task install entry point (p1-host-contract §1.1 A; p1-zip-orchestration
-/// §4.1). Validates mutual exclusion and dispatches to the signed `release_id`
-/// route (priority) or the dynamic `selection_id` prefix route.
+/// §4.1). Validates selection/manual-input exclusivity and dispatches the source route.
 struct HostLease<'a> {
     cancel: &'a AtomicBool,
 }
@@ -1356,38 +1252,25 @@ fn install_patch(
     )
     .map_err(projection_error)?;
     let target = if let Some(input) = &params.manual_download {
-        if params.release_id.is_some() || params.selection_id.is_some() || params.archive.is_some()
-        {
+        if params.selection_id.is_some() {
             return Err(DomainError::code("invalid_request"));
         }
         InstallTarget::ManualDownload {
             input: input.clone(),
         }
     } else {
-        match (params.release_id.as_deref(), params.selection_id.as_deref()) {
-            (Some(_), Some(_)) => return Err(DomainError::code("invalid_request")),
-            (None, None) => return Err(DomainError::code("selection_or_release_required")),
-            (Some(release), None) => InstallTarget::SignedRelease {
-                release_id: ReleaseId::new(release).map_err(projection_error)?,
-                archive: params
-                    .archive
-                    .as_deref()
-                    .map(LocalArchive::new)
-                    .transpose()
-                    .map_err(projection_error)?,
-            },
-            (None, Some(selection)) => {
-                if params.archive.is_some() {
-                    return Err(DomainError::code("archive_not_allowed_for_selection"));
+        let selection = params
+            .selection_id
+            .as_deref()
+            .ok_or_else(|| DomainError::code("selection_required"))?;
+        {
+            if selection.starts_with("zip-selection-") {
+                InstallTarget::PublisherZipSelection {
+                    selection_id: ZipSelectionId::new(selection).map_err(projection_error)?,
                 }
-                if selection.starts_with("zip-selection-") {
-                    InstallTarget::PublisherZipSelection {
-                        selection_id: ZipSelectionId::new(selection).map_err(projection_error)?,
-                    }
-                } else {
-                    InstallTarget::PublisherExeSelection {
-                        selection_id: ExeSelectionId::new(selection).map_err(projection_error)?,
-                    }
+            } else {
+                InstallTarget::PublisherExeSelection {
+                    selection_id: ExeSelectionId::new(selection).map_err(projection_error)?,
                 }
             }
         }
@@ -1395,10 +1278,6 @@ fn install_patch(
     let state = state(params)?;
     let host =
         ValidatedHostContext::new(&state, &params.roots, platform).map_err(projection_error)?;
-    let games = steam::scan(&params.roots);
-    let revision =
-        trust::revision::SqliteTrustRevisionStore::new_for_games(&state, &games.installs)
-            .map_err(projection_error)?;
     let transport = installer::https_transport().map_err(err)?;
     let runtime_result = if matches!(
         target,
@@ -1419,14 +1298,11 @@ fn install_patch(
         },
         InstallerDeps {
             host: &host,
-            catalog: &CatalogFiles(params),
-            revision_store: &revision,
             transport: transport.as_ref(),
             worker: runtime_result
                 .as_ref()
                 .and_then(|result| result.as_ref().ok()),
             control: &lease,
-            clock: &SystemClock,
             emit: &mut |_| {},
         },
     )
@@ -2081,16 +1957,12 @@ mod sources_tests {
                 !patch["blockers"].as_array().unwrap().iter().any(|blocker|
                     blocker == "preexisting_installation_requires_review")
             }));
-            for (release_id, selection_id) in [
-                (Some("signed".into()), None),
-                (None, Some("zip-selection-test".into())),
-                (None, Some("exe-selection-test".into())),
-            ] {
+            for selection_id in [Some("zip-selection-test".into()), Some("exe-selection-test".into())] {
                 let error = execute(
                     "install_patch",
                     Params {
                         roots: roots.clone(), state_dir: Some(state.clone()),
-                        instance_id: Some(instance.clone()), release_id, selection_id,
+                        instance_id: Some(instance.clone()), selection_id,
                         request_id: Some("new-user-action".into()),
                         operation: install::InstallOperation::Overwrite,
                         ..Default::default()
@@ -2297,330 +2169,6 @@ mod sources_tests {
 }
 
 #[cfg(test)]
-mod install_flow_tests {
-    use super::*;
-    use sha2::{Digest, Sha256};
-    use std::io::Write;
-    use zip::{write::SimpleFileOptions, ZipWriter};
-
-    fn fixture() -> (tempfile::TempDir, Params, PathBuf) {
-        let temp = tempfile::tempdir().unwrap();
-        let root = temp.path().join("Steam");
-        let game = root.join("steamapps/common/Test");
-        fs::create_dir_all(&game).unwrap();
-        fs::write(root.join("steamapps/appmanifest_42.acf"),
-            "\"AppState\" { \"appid\" \"42\" \"name\" \"Test\" \"installdir\" \"Test\" \"buildid\" \"100\" \"StateFlags\" \"4\" \"UserConfig\" { \"language\" \"schinese\" } \"MountedConfig\" { \"language\" \"schinese\" } }").unwrap();
-        let archive = temp.path().join("patch.zip");
-        let mut zip = ZipWriter::new(fs::File::create(&archive).unwrap());
-        zip.start_file(
-            "patch.dat",
-            SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored),
-        )
-        .unwrap();
-        zip.write_all(b"patch content").unwrap();
-        zip.finish().unwrap();
-        let digest = |bytes: &[u8]| format!("{:x}", Sha256::digest(bytes));
-        let catalog = temp.path().join("catalog.json");
-        fs::write(&catalog, json!({"schema_version":1,"revision":1,"releases":[{
-            "patch_id":"test","release_id":"test-v1","appid":42,"name":"Test patch","version":"1",
-            "language":"zh-CN","category":"content_restore","source_page":"https://example.invalid/patch",
-            "support_level":"managed_zip","platforms":["windows","steamos"],"verified_buildids":["100"],
-            "detection":[{"path":"patch.dat","sha256":digest(b"patch content")}],
-            "recipe":{"artifact_sha256":digest(&fs::read(&archive).unwrap()),"files":[{
-                "source":"patch.dat","destination":"patch.dat","original_sha256":null,"installed_sha256":digest(b"patch content")}]}
-        }]}).to_string()).unwrap();
-        let private = temp.path().join("private");
-        let keys = temp.path().join("keys.json");
-        let signed = temp.path().join("signed.json");
-        crate::maintenance::run(
-            "keygen",
-            &[
-                private.display().to_string(),
-                keys.display().to_string(),
-                "test-key".into(),
-            ],
-        )
-        .unwrap();
-        crate::maintenance::run(
-            "sign-catalog",
-            &[
-                catalog.display().to_string(),
-                private.display().to_string(),
-                "test-key".into(),
-                signed.display().to_string(),
-                "3600".into(),
-            ],
-        )
-        .unwrap();
-        let instance_id = steam::scan(std::slice::from_ref(&root))
-            .installs
-            .remove(0)
-            .instance_id;
-        let params = Params {
-            roots: vec![root],
-            instance_id: Some(instance_id),
-            release_id: Some("test-v1".into()),
-            signed_catalog: Some(signed),
-            trust_keys: Some(keys),
-            state_dir: Some(temp.path().join("state")),
-            archive: Some(archive),
-            request_id: Some("request-1".into()),
-            ..Default::default()
-        };
-        (temp, params, game)
-    }
-
-    fn copy_params(params: &Params) -> Params {
-        params.clone()
-    }
-
-    #[test]
-    fn signed_envelope_above_four_mib_preserves_existing_eight_mib_limit() {
-        use base64::{engine::general_purpose::STANDARD, Engine};
-        use ed25519_dalek::{Signer, SigningKey};
-        let (temp, params, game) = fixture();
-        let path = params.signed_catalog.as_ref().unwrap();
-        let mut envelope: trust::SignedEnvelope =
-            serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
-        let mut payload = STANDARD.decode(&envelope.payload).unwrap();
-        payload.resize(3 * 1024 * 1024 + 128 * 1024, b' ');
-        let secret: [u8; 32] = STANDARD
-            .decode(fs::read(temp.path().join("private")).unwrap())
-            .unwrap()
-            .try_into()
-            .unwrap();
-        envelope.payload = STANDARD.encode(&payload);
-        envelope.signature =
-            STANDARD.encode(SigningKey::from_bytes(&secret).sign(&payload).to_bytes());
-        let bytes = serde_json::to_vec(&envelope).unwrap();
-        assert!(bytes.len() > catalog::MAX_CATALOG_BYTES as usize);
-        assert!(bytes.len() < (catalog::MAX_CATALOG_BYTES * 2) as usize);
-        fs::write(path, bytes).unwrap();
-        verify_signed(&params, trust::now().unwrap()).unwrap();
-        execute("preview", copy_params(&params)).unwrap();
-        assert!(!params.state_dir.as_ref().unwrap().exists());
-        assert!(!game.join("patch.dat").exists());
-        assert_eq!(
-            execute("install_patch", params).unwrap()["state"],
-            "committed"
-        );
-    }
-
-    #[test]
-    fn signed_scan_and_preview_do_not_create_or_advance_trust_state() {
-        let (_temp, params, game) = fixture();
-        let state = params.state_dir.as_ref().unwrap();
-        assert!(!state.exists());
-        let mut scan = copy_params(&params);
-        scan.instance_id = None;
-        scan.release_id = None;
-        scan.archive = None;
-        let result = execute("scan", copy_params(&scan)).unwrap();
-        assert_eq!(result["catalog_trust"], "signed");
-        assert!(!state.exists(), "scan must not initialize any state");
-        execute("preview", copy_params(&params)).unwrap();
-        assert!(!state.exists(), "preview must not initialize any state");
-        assert!(!game.join("patch.dat").exists());
-
-        fs::create_dir_all(state).unwrap();
-        rusqlite::Connection::open(state.join("trust.sqlite")).unwrap().execute_batch("CREATE TABLE catalog_revision(id INTEGER PRIMARY KEY, revision INTEGER NOT NULL); INSERT INTO catalog_revision VALUES(1,0);").unwrap();
-        let trust_before = fs::read(state.join("trust.sqlite")).unwrap();
-        execute("scan", scan).unwrap();
-        execute("preview", copy_params(&params)).unwrap();
-        assert_eq!(
-            trust::revision::TrustRevisionStore::highest_revision(
-                &trust::revision::SqliteTrustRevisionStore::new(state).unwrap()
-            )
-            .unwrap(),
-            0
-        );
-        assert_eq!(fs::read(state.join("trust.sqlite")).unwrap(), trust_before);
-        assert!(!state.join("installer").exists());
-        assert!(!state.join("sources").exists());
-    }
-
-    #[test]
-    fn one_step_signed_install_retry_and_reinstall_are_bound_and_idempotent() {
-        let (_temp, params, game) = fixture();
-        let first = execute("install_patch", copy_params(&params)).unwrap();
-        assert_eq!(first["state"], "committed");
-        let repeated = execute("install_patch", copy_params(&params)).unwrap();
-        assert_eq!(first["transaction_id"], repeated["transaction_id"]);
-        let mut conflict = copy_params(&params);
-        conflict.operation = install::InstallOperation::Reinstall;
-        assert_eq!(
-            execute("install_patch", conflict).unwrap_err().code,
-            "request_id_binding_conflict"
-        );
-        let mut reinstall = copy_params(&params);
-        reinstall.request_id = Some("request-2".into());
-        reinstall.operation = install::InstallOperation::Reinstall;
-        assert_eq!(
-            execute("install_patch", reinstall).unwrap()["state"],
-            "committed"
-        );
-        fs::write(game.join("patch.dat"), b"damaged").unwrap();
-        let mut damaged = copy_params(&params);
-        damaged.request_id = Some("request-damaged".into());
-        damaged.operation = install::InstallOperation::Reinstall;
-        // Direct overwrite semantics: the explicit reinstall writes the selected
-        // release; the projection keeps the reinstall action unavailable in the UI.
-        assert_eq!(
-            execute("install_patch", damaged).unwrap()["state"],
-            "committed"
-        );
-        assert_eq!(fs::read(game.join("patch.dat")).unwrap(), b"patch content");
-        let mut overwrite = copy_params(&params);
-        overwrite.request_id = Some("request-overwrite".into());
-        overwrite.operation = install::InstallOperation::Overwrite;
-        assert_eq!(
-            execute("install_patch", overwrite).unwrap()["state"],
-            "committed"
-        );
-        assert_eq!(fs::read(game.join("patch.dat")).unwrap(), b"patch content");
-    }
-
-    /// End-to-end task channel: `install_patch` streams flat `install_progress`
-    /// events with a strictly increasing sequence, followed by exactly one
-    /// final response (terminal-once; p1-host-contract §2.2/§2.3).
-    #[test]
-    fn task_streams_install_progress_then_single_terminal_response() {
-        use std::sync::{Arc, Mutex};
-        let (_temp, params, _game) = fixture();
-        let request = json!({
-            "protocol_version": 5,
-            "request_id": "request-1",
-            "method": "install_patch",
-            "params": crate::tests::wire_params("install_patch", serde_json::to_value(&params).unwrap()),
-        })
-        .to_string();
-        let events = Arc::new(Mutex::new(Vec::new()));
-        let sink = {
-            let events = Arc::clone(&events);
-            move |value| events.lock().unwrap().push(value)
-        };
-        let response = crate::run_task(request.as_bytes(), Arc::new(AtomicBool::new(false)), sink);
-        let events = events.lock().unwrap();
-        assert!(!events.is_empty(), "install_patch must stream progress");
-        assert!(events
-            .iter()
-            .all(|event| event["event"] == "install_progress"));
-        assert!(events
-            .iter()
-            .all(|event| event["request_id"] == "request-1"));
-        assert!(events.iter().all(|event| event["instance_id"].is_string()));
-        let sequences: Vec<u64> = events
-            .iter()
-            .map(|event| event["sequence"].as_u64().unwrap())
-            .collect();
-        assert_eq!(sequences, (0..sequences.len() as u64).collect::<Vec<_>>());
-        // Terminal-once: the task returns a single final response after events.
-        assert_eq!(response["ok"], true);
-        assert_eq!(response["protocol_version"], 5);
-        assert_eq!(response["result"]["state"], "committed");
-    }
-
-    #[test]
-    fn install_patch_route_matrix() {
-        let (_temp, params, _game) = fixture();
-
-        let mut conflict = copy_params(&params);
-        conflict.selection_id = Some("zip-selection-000000000000000000000000-42".into());
-        assert_eq!(
-            execute("install_patch", conflict).unwrap_err().code,
-            "invalid_request"
-        );
-
-        let mut neither = copy_params(&params);
-        neither.release_id = None;
-        assert_eq!(
-            execute("install_patch", neither).unwrap_err().code,
-            "selection_or_release_required"
-        );
-
-        let mut invalid = copy_params(&params);
-        invalid.release_id = None;
-        invalid.archive = None;
-        invalid.selection_id = Some("candidate-000000000000000000000000".into());
-        assert_eq!(
-            execute("install_patch", invalid).unwrap_err().code,
-            "invalid_selection_id"
-        );
-
-        let mut exe = copy_params(&params);
-        exe.release_id = None;
-        exe.archive = None;
-        exe.selection_id = Some("exe-selection-000000000000000000000000-42".into());
-        assert_eq!(
-            execute("install_patch", exe).unwrap_err().code,
-            "selection_not_found"
-        );
-
-        let mut archive = copy_params(&params);
-        archive.release_id = None;
-        archive.selection_id = Some("zip-selection-000000000000000000000000-42".into());
-        archive.archive = Some(PathBuf::from("unused.zip"));
-        assert_eq!(
-            execute("install_patch", archive).unwrap_err().code,
-            "archive_not_allowed_for_selection"
-        );
-    }
-
-    #[test]
-    fn signed_install_uses_the_installer_root_and_new_ledger() {
-        let (temp, params, _game) = fixture();
-        let result = execute("install_patch", copy_params(&params)).unwrap();
-        assert_eq!(result["state"], "committed");
-        assert_eq!(result["content_id"], Value::Null);
-        let root = temp.path().join("state/installer/rust-v1");
-        assert!(root.join("journal.sqlite").exists());
-        assert!(root.join("requests.sqlite").exists());
-        let transactions = execute(
-            "list_transactions",
-            Params {
-                roots: params.roots.clone(),
-                state_dir: params.state_dir.clone(),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-        assert_eq!(transactions.as_array().unwrap().len(), 1);
-    }
-
-    #[test]
-    fn preview_selection_route_is_read_only() {
-        let (_temp, params, _game) = fixture();
-        let game = steam::scan(std::slice::from_ref(&params.roots[0]))
-            .installs
-            .remove(0);
-        let mut preview = copy_params(&params);
-        preview.release_id = None;
-        preview.selection_id = Some("candidate-000000000000000000000000".into());
-        assert_eq!(
-            execute("preview", preview).unwrap_err().code,
-            "invalid_selection_id"
-        );
-
-        let mut exe = copy_params(&params);
-        exe.release_id = None;
-        exe.selection_id = Some("exe-selection-000000000000000000000000-42".into());
-        assert_eq!(
-            execute("preview", exe).unwrap_err().code,
-            "selection_not_found"
-        );
-
-        let mut zip = copy_params(&params);
-        zip.release_id = None;
-        zip.instance_id = Some(game.instance_id);
-        zip.selection_id = Some("zip-selection-000000000000000000000000-42".into());
-        let result = execute("preview", zip).unwrap();
-        assert_eq!(result["executable"], false);
-        assert_eq!(result["blockers"][0], "selection_not_found");
-        assert!(result["changes"].as_array().unwrap().is_empty());
-    }
-}
-
-#[cfg(test)]
 mod dynamic_projection_tests {
     use super::*;
     use patchhub_core::sources::model::{
@@ -2765,39 +2313,6 @@ mod dynamic_projection_tests {
         params.clone()
     }
 
-    fn dynamic_release(
-        release_id: &str,
-        archive: &Path,
-        mappings: &[catalog::FileMapping],
-    ) -> catalog::PatchRelease {
-        let digest = format!("{:x}", Sha256::digest(fs::read(archive).unwrap()));
-        catalog::PatchRelease {
-            patch_id: release_id.to_string(),
-            release_id: release_id.to_string(),
-            appid: APPID,
-            name: "Dynamic".to_string(),
-            version: "0".to_string(),
-            language: "zh-CN".to_string(),
-            category: "publisher_zip".to_string(),
-            source_page: "https://kagurafan.com/patches/game".to_string(),
-            support_level: SupportLevel::ManagedZip,
-            platforms: vec![Platform::Windows, Platform::Steamos],
-            verified_buildids: vec!["100".to_string()],
-            detection: mappings
-                .iter()
-                .map(|mapping| catalog::Fingerprint {
-                    path: mapping.destination.clone(),
-                    sha256: mapping.installed_sha256.clone(),
-                })
-                .collect(),
-            recipe: Some(catalog::Recipe {
-                artifact_sha256: digest,
-                files: mappings.to_vec(),
-            }),
-            artifact: None,
-        }
-    }
-
     fn install_dynamic_committed(
         state: &Path,
         game: &steam::GameInstall,
@@ -2827,61 +2342,67 @@ mod dynamic_projection_tests {
             }
             mappings
         };
-        let release = dynamic_release(release_id, archive, &mappings);
-        use base64::{engine::general_purpose::STANDARD, Engine};
-        use ed25519_dalek::{Signer, SigningKey};
-        let key = SigningKey::from_bytes(&[9; 32]);
-        let now = trust::now().unwrap();
-        let payload = serde_json::to_vec(&trust::CatalogPayload {
-            catalog: Catalog {
-                schema_version: 1,
-                revision: 1,
-                releases: vec![release],
-            },
-            generated_at: now - 1,
-            expires_at: now + 3600,
-            revoked_release_ids: vec![],
-        })
-        .unwrap();
-        let envelope = trust::SignedEnvelope {
-            schema_version: 1,
-            key_id: "fixture".into(),
-            payload: STANDARD.encode(&payload),
-            signature: STANDARD.encode(key.sign(&payload).to_bytes()),
+        // Seed a historical committed plan directly. No public catalog is needed
+        // to project/recover transactions written by earlier versions.
+        let id = uuid_for_fixture();
+        let plan = install::InstallPlan {
+            operation: install::InstallOperation::Overwrite,
+            recipe_sha256: None,
+            plan_id: id.clone(),
+            instance_id: game.instance_id.clone(),
+            release_id: release_id.into(),
+            catalog_revision: 1,
+            created_at: 100,
+            expires_at: None,
+            install: game.clone(),
+            changes: mappings
+                .iter()
+                .map(|m| install::PlannedChange {
+                    path: m.destination.clone(),
+                    action: "add".into(),
+                    original_sha256: None,
+                    installed_sha256: Some(m.installed_sha256.clone()),
+                    size: 7,
+                    source: None,
+                })
+                .collect(),
+            disk_requirement: 7,
+            space_budget: None,
+            blockers: vec![],
+            preconditions: vec![],
         };
-        let signed = state.join("fixture-signed.json");
-        let keys = state.join("fixture-keys.json");
-        fs::write(&signed, serde_json::to_vec(&envelope).unwrap()).unwrap();
-        fs::write(
-            &keys,
-            serde_json::to_vec(&trust::TrustKeys {
-                schema_version: 1,
-                keys: vec![trust::TrustKey {
-                    key_id: "fixture".into(),
-                    public_key: STANDARD.encode(key.verifying_key().to_bytes()),
-                    revoked: false,
-                }],
-            })
-            .unwrap(),
+        for m in &mappings {
+            fs::write(game.install_path.join(&m.destination), b"patched").unwrap();
+        }
+        let job = paths.root().join("jobs").join(&id);
+        fs::create_dir_all(&job).unwrap();
+        fs::write(job.join("plan.json"), serde_json::to_vec(&plan).unwrap()).unwrap();
+        let conn = rusqlite::Connection::open(paths.root().join("journal.sqlite")).unwrap();
+        conn.execute_batch("CREATE TABLE IF NOT EXISTS jobs(id TEXT PRIMARY KEY NOT NULL, document TEXT NOT NULL); CREATE TABLE IF NOT EXISTS transactions(id TEXT PRIMARY KEY NOT NULL, document TEXT NOT NULL);").unwrap();
+        let transaction = install::Transaction {
+            transaction_id: id.clone(),
+            plan_id: id.clone(),
+            instance_id: game.instance_id.clone(),
+            release_id: release_id.into(),
+            state: "committed".into(),
+            error: None,
+            created_at: 100,
+            updated_at: 100,
+            has_replacements: false,
+            selection_id: None,
+            content_id: None,
+            direct: false,
+        };
+        let job = json!({"plan": plan, "transaction": transaction, "progress": ["installed"], "created_dirs": []});
+        conn.execute(
+            "INSERT INTO jobs(id,document) VALUES(?1,?2)",
+            rusqlite::params![id, serde_json::to_string(&job).unwrap()],
         )
         .unwrap();
-        let value = execute(
-            "install_patch",
-            Params {
-                roots: vec![game.library_path.clone()],
-                state_dir: Some(state.to_owned()),
-                instance_id: Some(game.instance_id.clone()),
-                release_id: Some(release_id.to_owned()),
-                signed_catalog: Some(signed),
-                trust_keys: Some(keys),
-                archive: Some(archive.to_owned()),
-                request_id: Some(format!("fixture-{}", release_id)),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-        assert_eq!(value["state"], "committed");
-        value["plan_id"].as_str().unwrap().to_owned()
+        id
+    }
+    fn uuid_for_fixture() -> String {
+        "00000000-0000-4000-8000-000000000042".into()
     }
 
     #[test]
@@ -3050,51 +2571,6 @@ mod dynamic_projection_tests {
             .unwrap()
             .iter()
             .any(|blocker| blocker == "exe_candidate_variant_unsupported"));
-    }
-
-    #[test]
-    fn scan_lets_a_signed_release_win_over_the_dynamic_selection() {
-        let (temp, params, _game, _archive, selection_id) = fixture();
-        let digest = format!("{:x}", Sha256::digest(b"patched"));
-        let catalog_path = temp.path().join("catalog.json");
-        fs::write(
-            &catalog_path,
-            json!({
-                "schema_version": 1,
-                "revision": 1,
-                "releases": [{
-                    "patch_id": "dynamic", "release_id": "source-kagura-cn-42", "appid": 42,
-                    "name": "Dynamic", "version": "1", "language": "zh-CN", "category": "publisher_zip",
-                    "source_page": "https://kagurafan.com/patches/game",
-                    "support_level": "managed_zip", "platforms": ["windows", "steamos"],
-                    "verified_buildids": ["100"],
-                    "detection": [{ "path": "data.txt", "sha256": digest }],
-                    "recipe": { "artifact_sha256": "0".repeat(64), "files": [
-                        { "source": "data.txt", "destination": "data.txt",
-                          "original_sha256": null, "installed_sha256": digest }] }
-                }]
-            })
-            .to_string(),
-        )
-        .unwrap();
-        let mut scan = clone_params(&params);
-        scan.instance_id = None;
-        scan.catalog = Some(catalog_path);
-        let result = execute("scan", scan).unwrap();
-        let patches = result["installs"][0]["patches"].as_array().unwrap();
-        let matching: Vec<_> = patches
-            .iter()
-            .filter(|patch| patch["release_id"] == "source-kagura-cn-42")
-            .collect();
-        assert_eq!(
-            matching.len(),
-            1,
-            "signature priority must deduplicate: {patches:?}"
-        );
-        assert_eq!(matching[0]["support_level"], "managed_zip");
-        assert!(patches
-            .iter()
-            .all(|patch| patch["selection_id"] != selection_id.as_str()));
     }
 
     #[test]

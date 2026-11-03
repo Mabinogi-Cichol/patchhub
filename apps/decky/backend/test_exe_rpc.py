@@ -19,25 +19,25 @@ class ExeRpcTests(unittest.IsolatedAsyncioTestCase):
             recover=AsyncMock(return_value=[{"transaction_id": "core-id", "state": "rolled_back"}]))
 
     async def test_exe_archive_import_rejected_before_core(self):
-        with self.assertRaisesRegex(ValueError, "archive_not_allowed_for_selection"):
-            await self.plugin.start_patch_install_task("instance", None, self.selection, "/tmp/arbitrary.exe", "overwrite")
+        with self.assertRaises(TypeError):
+            await self.plugin.start_patch_install_task("instance", self.selection, archive="/tmp/arbitrary.exe", operation="overwrite")
         self.plugin.bridge.install_patch.assert_not_awaited()
         self.assertFalse(self.plugin.tasks.busy())
 
     async def test_preview_delegates_read_only_selection_to_core(self):
-        result = await self.plugin.preview("instance", None, self.selection)
+        result = await self.plugin.preview("instance", self.selection)
         self.assertFalse(result["executable"])
-        self.plugin.bridge.preview.assert_awaited_once_with("instance", None, self.selection)
+        self.plugin.bridge.preview.assert_awaited_once_with("instance", self.selection)
 
     async def test_terminal_identity_is_preserved_without_publisher_wrapper(self):
-        start = await self.plugin.start_patch_install_task("instance", None, self.selection, None, "reinstall", "request")
+        start = await self.plugin.start_patch_install_task("instance", self.selection, "reinstall", "request")
         task = self.plugin.tasks.get(start["task_id"])
         await task.worker
         result = task.snapshot()["result"]
         self.assertEqual(result["transaction_id"], "core-id")
         self.assertEqual(result["selection_id"], self.selection)
         self.assertEqual(result["content_id"], "exe-content-actual")
-        self.plugin.bridge.install_patch.assert_awaited_once_with("instance", None, self.selection, None, "reinstall", "request", "disabled")
+        self.plugin.bridge.install_patch.assert_awaited_once_with("instance", self.selection, "reinstall", "request", "disabled")
 
     async def test_history_and_recovery_have_one_core_state_root(self):
         self.assertEqual((await self.plugin.list_transactions())[0]["state"], "needs_recovery")
@@ -47,13 +47,13 @@ class ExeRpcTests(unittest.IsolatedAsyncioTestCase):
     async def test_manual_download_snapshot_and_request_identity(self):
         self.plugin.settings.auto_cleanup = True
         link = {"source_id": "fixture", "candidate_id": "candidate-" + "a" * 24, "url": "https://user.example/download"}
-        start = await self.plugin.start_patch_install_task("instance", None, None, None, "overwrite", "manual", link)
+        start = await self.plugin.start_patch_install_task("instance", None, "overwrite", "manual", link)
         snapshot = dict(link)
         link["url"] = "https://user.example/changed"
         task = self.plugin.tasks.get(start["task_id"])
         await task.worker
-        self.plugin.bridge.install_patch.assert_awaited_once_with("instance", None, None, None, "overwrite", "manual", "after_commit", manual_download=snapshot)
+        self.plugin.bridge.install_patch.assert_awaited_once_with("instance", None, "overwrite", "manual", "after_commit", manual_download=snapshot)
         with self.assertRaisesRegex(ValueError, "request_identity_changed"):
-            await self.plugin.start_patch_install_task("instance", None, None, None, "overwrite", "manual", link)
+            await self.plugin.start_patch_install_task("instance", None, "overwrite", "manual", link)
         with self.assertRaisesRegex(ValueError, "invalid_request"):
-            await self.plugin.start_patch_install_task("instance", "signed", None, None, "overwrite", "conflict", link)
+            await self.plugin.start_patch_install_task("instance", "signed", "overwrite", "conflict", link)

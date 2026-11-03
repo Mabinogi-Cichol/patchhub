@@ -42,9 +42,4 @@ for (const name of binaries) {
   runtime.push({ path: `bin/${name}`, size: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex") });
 }
 writeFileSync(join(output, "bin/runtime.json"), JSON.stringify({ protocol_version: 5, worker_protocol: 1, files: runtime }, null, 2) + "\n");
-copyFileSync(join(root, "catalog/catalog.json"), join(output, "bin/catalog.json"));
-for (const file of ["signed-catalog.json", "trust-keys.json"]) {
-  const source = join(root, "catalog", file);
-  if (existsSync(source)) copyFileSync(source, join(output, "bin", file));
-}
 console.log(output);

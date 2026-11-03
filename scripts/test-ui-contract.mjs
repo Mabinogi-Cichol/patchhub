@@ -15,12 +15,12 @@ for (const id of ["", "a".repeat(129), "\u0001", "界".repeat(43)]) assert.equal
 assert.equal(protocol.validId("界".repeat(42), protocol.MAX_REQUEST_ID_BYTES), true);
 assert.equal(ui.reason("unknown_future_code"), "unknown_future_code");
 const patch = success("scan").installs[0].patches[0];
-assert.equal(ui.primaryInstallAction(patch, false).available, true);
+assert.equal(ui.primaryInstallAction(patch).available, true);
 const blocked = structuredClone(patch);
 blocked.actions.automatic = { available: false, blockers: [{ code: "game_not_ready" }] };
 blocked.actions.primary.input = "unavailable";
 blocked.detection.status = "installed_managed";
-assert.equal(ui.primaryInstallAction(blocked, true).available, false);
+assert.equal(ui.primaryInstallAction(blocked).available, false);
 assert.equal(ui.installInput(blocked), null);
 const committed = success("install_patch");
 committed.cleanup = {status:"partial",performed:true,removed_bytes:0,failures:[{code:"cleanup_failed",detail:"disk"}]};

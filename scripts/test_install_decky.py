@@ -23,7 +23,7 @@ def create_package(path, version="0.2.0", changes=None):
     elf = b"\x7fELF\x02\x01\x01" + b"\0" * 11 + struct.pack("<H", 62) + b"fixture"
     files = {name: b"fixture" for name in (
         "main.py", "dist/index.js", "backend/bridge.py", "backend/tasks.py", "backend/protocol.py", "backend/v5.schema.json",
-        "bin/catalog.json", "bin/signed-catalog.json", "bin/trust-keys.json", "LICENSE", "licenses/sfextract-MIT.txt", "dependencies.cdx.json")}
+        "LICENSE", "licenses/sfextract-MIT.txt", "dependencies.cdx.json")}
     files["plugin.json"] = json.dumps({"name": m.NAME, "api_version": 1, "flags": []}).encode()
     files["package.json"] = json.dumps({"name": "@patchhub/decky", "version": version, "type": "module"}).encode()
     entries = []

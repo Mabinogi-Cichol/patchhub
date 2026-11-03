@@ -24,7 +24,7 @@ import 'package:window_manager/window_manager.dart';
 class VisualReadClient extends CoreClient {
   VisualReadClient(this.data)
     : super(
-        CorePaths(binary: '', stateDirectory: '', resourceDirectory: ''),
+        CorePaths(binary: '', stateDirectory: ''),
         WireProtocol(
           jsonDecode(File('assets/protocol-v5.schema.json').readAsStringSync()),
         ),

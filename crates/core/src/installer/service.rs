@@ -4,7 +4,7 @@ use super::{
         CancellationCause, CleanupErrorCode, CleanupFailure, CleanupResult, CleanupStatus,
         InstallerOutcome,
     },
-    signed, InstallerPaths, Transport, WorkerRuntime,
+    InstallerPaths, Transport, WorkerRuntime,
 };
 use crate::{
     catalog::Platform,
@@ -12,7 +12,6 @@ use crate::{
     operation,
     projection::DomainError,
     sources, steam,
-    trust::revision::{TrustRevisionStore, TrustedCatalogProvider},
 };
 use std::{
     path::{Path, PathBuf},
@@ -47,7 +46,6 @@ identity!(RequestId, 128, "invalid_request_id");
 /// Steam identity includes both complete paths; never hash or truncate durable IDs.
 pub const MAX_INSTANCE_ID_BYTES: usize = 16 * 1024;
 identity!(InstanceId, MAX_INSTANCE_ID_BYTES, "invalid_instance_id");
-identity!(ReleaseId, 256, "invalid_release_id");
 identity!(PlanId, 256, "invalid_plan_id");
 #[derive(Debug, Clone)]
 pub struct ZipSelectionId(String);
@@ -76,31 +74,6 @@ impl ExeSelectionId {
         &self.0
     }
 }
-#[derive(Debug, Clone)]
-pub struct LocalArchive(PathBuf);
-impl LocalArchive {
-    pub fn new(path: &Path) -> Result<Self, DomainError> {
-        let path = std::path::absolute(path)?;
-        // The signed entry checks this file's declared digest once before the
-        // single extraction pass; the user keeps ownership of the file.
-        let meta = std::fs::symlink_metadata(&path)?;
-        if !meta.is_file() || meta.file_type().is_symlink() {
-            return Err(DomainError::code("invalid_local_archive"));
-        }
-        #[cfg(windows)]
-        {
-            use std::os::windows::fs::MetadataExt;
-            if meta.file_attributes() & 0x400 != 0 {
-                return Err(DomainError::code("invalid_local_archive"));
-            }
-        }
-        install::validate_projection_state(&path, &[])?;
-        Ok(Self(path))
-    }
-    pub fn path(&self) -> &Path {
-        &self.0
-    }
-}
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema, ts_rs::TS)]
 #[serde(deny_unknown_fields)]
 pub struct ManualDownloadInput {
@@ -110,19 +83,9 @@ pub struct ManualDownloadInput {
 }
 #[derive(Debug, Clone)]
 pub enum InstallTarget {
-    ManualDownload {
-        input: ManualDownloadInput,
-    },
-    SignedRelease {
-        release_id: ReleaseId,
-        archive: Option<LocalArchive>,
-    },
-    PublisherZipSelection {
-        selection_id: ZipSelectionId,
-    },
-    PublisherExeSelection {
-        selection_id: ExeSelectionId,
-    },
+    ManualDownload { input: ManualDownloadInput },
+    PublisherZipSelection { selection_id: ZipSelectionId },
+    PublisherExeSelection { selection_id: ExeSelectionId },
 }
 #[derive(
     Debug,
@@ -214,27 +177,15 @@ impl ValidatedHostContext {
         Ok(report)
     }
 }
-pub trait Clock: Sync {
-    fn now_seconds(&self) -> Result<u64, DomainError>;
-}
-pub struct SystemClock;
-impl Clock for SystemClock {
-    fn now_seconds(&self) -> Result<u64, DomainError> {
-        crate::trust::now().map_err(Into::into)
-    }
-}
 pub trait TaskLease: Sync {
     fn cancelled(&self) -> bool;
     fn cancellation_cause(&self) -> Option<CancellationCause>;
 }
 pub struct InstallerDeps<'a> {
     pub host: &'a ValidatedHostContext,
-    pub catalog: &'a dyn TrustedCatalogProvider,
-    pub revision_store: &'a dyn TrustRevisionStore,
     pub transport: &'a dyn Transport,
     pub worker: Option<&'a WorkerRuntime>,
     pub control: &'a dyn TaskLease,
-    pub clock: &'a dyn Clock,
     pub emit: &'a mut dyn FnMut(operation::Progress),
 }
 fn task_error(e: super::ZipTaskError) -> DomainError {
@@ -264,10 +215,6 @@ pub fn install(
     if game.availability != "installed" {
         return Err(DomainError::code("game_not_ready"));
     }
-    if deps.revision_store.state_dir() != Some(deps.host.state_dir()) {
-        return Err(DomainError::code("trust_state_mismatch"));
-    }
-    let now = deps.clock.now_seconds()?;
     let reason = || {
         deps.control.cancellation_cause().or_else(|| {
             deps.control
@@ -313,28 +260,6 @@ pub fn install(
                         .map_err(|error| std::io::Error::other(error.code))
                 },
                 || match &request.target {
-                    InstallTarget::SignedRelease {
-                        release_id,
-                        archive,
-                    } => signed::install_signed(
-                        signed::SignedInstallInputs {
-                            game,
-                            release_id: release_id.as_str(),
-                            archive: archive.as_ref().map(LocalArchive::path),
-                            operation: request.operation,
-                            request_id: request.request_id.as_str(),
-                            now,
-                        },
-                        signed::SignedInstallDeps {
-                            paths,
-                            provider: deps.catalog,
-                            revision_store: deps.revision_store,
-                            transport: deps.transport,
-                            cancel: &cancel,
-                            cancel_reason: &reason,
-                            platform: deps.host.platform,
-                        },
-                    ),
                     InstallTarget::ManualDownload { input } => {
                         let source = sources::Sources::open(deps.host.state_dir())?;
                         let selection = super::manual_selection::resolve_download(
@@ -582,13 +507,6 @@ mod manual_download_tests {
         orchestrator::tests as fixtures,
     };
     use super::*;
-    use crate::trust::revision::{SqliteTrustRevisionStore, TrustedCatalogMaterial};
-    struct NoCatalog;
-    impl TrustedCatalogProvider for NoCatalog {
-        fn load(&self) -> Result<TrustedCatalogMaterial, DomainError> {
-            panic!("manual source route must not load catalog")
-        }
-    }
     struct Lease(bool);
     impl TaskLease for Lease {
         fn cancelled(&self) -> bool {
@@ -636,8 +554,6 @@ mod manual_download_tests {
             },
         )
         .unwrap();
-        let revision =
-            SqliteTrustRevisionStore::new_for_games(&state, std::slice::from_ref(&game)).unwrap();
         let input = ManualDownloadInput {
             source_id: candidate.source_id,
             candidate_id: candidate.candidate_id,
@@ -659,12 +575,11 @@ mod manual_download_tests {
                             },
                             InstallerDeps {
                                 host: &host,
-                                catalog: &NoCatalog,
-                                revision_store: &revision,
+
                                 transport: &transport,
                                 worker: None,
                                 control: &Lease(cancelled),
-                                clock: &SystemClock,
+
                                 emit: &mut |_| {},
                             },
                         )
@@ -782,9 +697,6 @@ mod manual_download_tests {
                 },
             )
             .unwrap();
-            let revision =
-                SqliteTrustRevisionStore::new_for_games(&state, std::slice::from_ref(&game))
-                    .unwrap();
             let transport = super::super::https_transport().unwrap();
             let lease = FlagLease(AtomicBool::new(false));
             let cancelled_at = std::thread::scope(|scope| {
@@ -815,12 +727,11 @@ mod manual_download_tests {
                             },
                             InstallerDeps {
                                 host: &host,
-                                catalog: &NoCatalog,
-                                revision_store: &revision,
+
                                 transport: transport.as_ref(),
                                 worker: None,
                                 control: lease,
-                                clock: &SystemClock,
+
                                 emit: &mut |_| {},
                             },
                         )
@@ -871,8 +782,6 @@ mod manual_download_tests {
             },
         )
         .unwrap();
-        let revision =
-            SqliteTrustRevisionStore::new_for_games(&state, std::slice::from_ref(&game)).unwrap();
         let result = operation::run(
             Arc::new(AtomicBool::new(false)),
             |_| {},
@@ -887,12 +796,11 @@ mod manual_download_tests {
                     },
                     InstallerDeps {
                         host: &host,
-                        catalog: &NoCatalog,
-                        revision_store: &revision,
+
                         transport: &transport,
                         worker: None,
                         control: &Lease(false),
-                        clock: &SystemClock,
+
                         emit: &mut |_| {},
                     },
                 )

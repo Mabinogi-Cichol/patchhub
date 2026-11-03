@@ -28,10 +28,6 @@
               "available": true,
               "blockers": []
             },
-            "local_archive": {
-              "available": true,
-              "blockers": []
-            },
             "overwrite": {
               "available": true,
               "blockers": []
@@ -64,18 +60,19 @@
           },
           "name": "Patch",
           "release_id": "release",
+          "selection_id": "zip-selection-0123456789abcdef01234567-42",
           "source_page": "https://example.com/game",
-          "support_level": "managed_zip"
+          "support_level": "publisher_zip"
         }
       ]
     },
     "entries": [
       {
         "kind": "installable",
-        "key": "release",
+        "key": "zip-selection-0123456789abcdef01234567-42",
         "title": "Patch",
         "choices": [
-          "release"
+          "zip-selection-0123456789abcdef01234567-42"
         ]
       }
     ],
@@ -122,10 +119,6 @@
               "available": true,
               "blockers": []
             },
-            "local_archive": {
-              "available": true,
-              "blockers": []
-            },
             "overwrite": {
               "available": true,
               "blockers": []
@@ -158,18 +151,19 @@
           },
           "name": "Patch",
           "release_id": "release",
+          "selection_id": "zip-selection-0123456789abcdef01234567-42",
           "source_page": "https://example.com/game",
-          "support_level": "managed_zip"
+          "support_level": "publisher_zip"
         }
       ]
     },
     "entries": [
       {
         "kind": "installable",
-        "key": "release",
+        "key": "zip-selection-0123456789abcdef01234567-42",
         "title": "Patch",
         "choices": [
-          "release"
+          "zip-selection-0123456789abcdef01234567-42"
         ]
       }
     ],
@@ -540,10 +534,6 @@
               "available": true,
               "blockers": []
             },
-            "local_archive": {
-              "available": true,
-              "blockers": []
-            },
             "overwrite": {
               "available": true,
               "blockers": []
@@ -576,20 +566,16 @@
           },
           "name": "Patch",
           "release_id": "release",
-          "source_page": "https://example.com/game",
-          "support_level": "managed_zip",
-          "candidate_id": "candidate-0123456789abcdef01234567",
-          "source_id": "fixture",
           "selection_id": "automatic",
+          "source_page": "https://example.com/game",
+          "support_level": "publisher_zip",
+          "candidate_id": "candidate-0123456789abcdef01234567",
+          "source_id": "fixture",
           "download_url": "https://example.com/patch.exe"
         },
         {
           "actions": {
             "automatic": {
-              "available": true,
-              "blockers": []
-            },
-            "local_archive": {
               "available": true,
               "blockers": []
             },
@@ -625,20 +611,16 @@
           },
           "name": "Patch",
           "release_id": "release",
-          "source_page": "https://example.com/game",
-          "support_level": "managed_zip",
-          "candidate_id": "candidate-0123456789abcdef01234567",
-          "source_id": "fixture",
           "selection_id": "manual-same-file",
+          "source_page": "https://example.com/game",
+          "support_level": "publisher_zip",
+          "candidate_id": "candidate-0123456789abcdef01234567",
+          "source_id": "fixture",
           "download_url": "https://example.com/patch.exe"
         },
         {
           "actions": {
             "automatic": {
-              "available": true,
-              "blockers": []
-            },
-            "local_archive": {
               "available": true,
               "blockers": []
             },
@@ -674,11 +656,11 @@
           },
           "name": "Patch",
           "release_id": "release",
+          "selection_id": "manual-mirror",
           "source_page": "https://example.com/game",
-          "support_level": "managed_zip",
+          "support_level": "publisher_zip",
           "candidate_id": "candidate-0123456789abcdef01234567",
           "source_id": "fixture",
-          "selection_id": "manual-mirror",
           "download_url": "https://mirror.example.com/patch.exe"
         }
       ]
@@ -852,10 +834,6 @@
               "available": true,
               "blockers": []
             },
-            "local_archive": {
-              "available": true,
-              "blockers": []
-            },
             "overwrite": {
               "available": true,
               "blockers": []
@@ -888,9 +866,9 @@
           },
           "name": "Patch",
           "release_id": "release",
-          "source_page": "https://example.com/game",
-          "support_level": "managed_zip",
           "selection_id": "selection-dlc",
+          "source_page": "https://example.com/game",
+          "support_level": "publisher_zip",
           "candidate_id": "candidate-0"
         },
         {
@@ -899,10 +877,6 @@
               "available": true,
               "blockers": []
             },
-            "local_archive": {
-              "available": true,
-              "blockers": []
-            },
             "overwrite": {
               "available": true,
               "blockers": []
@@ -935,9 +909,9 @@
           },
           "name": "Patch",
           "release_id": "release",
-          "source_page": "https://example.com/game",
-          "support_level": "managed_zip",
           "selection_id": "selection-unknown",
+          "source_page": "https://example.com/game",
+          "support_level": "publisher_zip",
           "candidate_id": "candidate-1"
         },
         {
@@ -946,10 +920,6 @@
               "available": true,
               "blockers": []
             },
-            "local_archive": {
-              "available": true,
-              "blockers": []
-            },
             "overwrite": {
               "available": true,
               "blockers": []
@@ -982,9 +952,9 @@
           },
           "name": "Patch",
           "release_id": "release",
-          "source_page": "https://example.com/game",
-          "support_level": "managed_zip",
           "selection_id": "selection-base",
+          "source_page": "https://example.com/game",
+          "support_level": "publisher_zip",
           "candidate_id": "candidate-2"
         }
       ]

@@ -114,7 +114,6 @@ void main() {
           CorePaths(
             binary: '$path/program/patchhub-core.exe',
             stateDirectory: '$path/state',
-            resourceDirectory: '$path/program/resources',
           ),
           protocol,
         ),

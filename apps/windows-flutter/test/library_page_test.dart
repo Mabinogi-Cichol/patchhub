@@ -15,7 +15,7 @@ import 'package:patchhub_windows/pages/library_page.dart';
 class FixtureClient extends CoreClient {
   FixtureClient()
     : super(
-        CorePaths(binary: '', stateDirectory: '', resourceDirectory: ''),
+        CorePaths(binary: '', stateDirectory: ''),
         WireProtocol(
           jsonDecode(File('assets/protocol-v5.schema.json').readAsStringSync())
               as Map<String, dynamic>,
@@ -34,7 +34,6 @@ class FixtureClient extends CoreClient {
     if (method != 'scan') return <Map<String, dynamic>>[];
     scans++;
     return {
-      'catalog_error': null,
       'diagnostics': [],
       'installs': [
         {

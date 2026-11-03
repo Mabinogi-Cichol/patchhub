@@ -64,19 +64,9 @@
     },
     "ActionBlockerCode": {
       "enum": [
-        "unsigned_catalog",
-        "catalog_unavailable",
-        "catalog_expired",
-        "catalog_revision_rollback",
-        "catalog_rollback",
-        "release_revoked",
-        "release_not_matched",
-        "platform_not_verified",
         "game_not_ready",
         "build_not_verified",
         "source_requires_guidance",
-        "artifact_requires_manual_download",
-        "recipe_missing",
         "source_not_enabled",
         "source_not_subscribed",
         "exe_source_disabled",
@@ -93,8 +83,7 @@
         "unprivileged_user_required",
         "reinstall_unowned_or_incomplete",
         "reinstall_content_identity_changed",
-        "needs_recovery",
-        "local_archive_signed_only"
+        "needs_recovery"
       ],
       "type": "string"
     },
@@ -290,14 +279,6 @@
     "Capability": {
       "enum": [
         "discover_only"
-      ],
-      "type": "string"
-    },
-    "CatalogTrust": {
-      "enum": [
-        "signed",
-        "unsigned_development",
-        "unavailable"
       ],
       "type": "string"
     },
@@ -1036,12 +1017,6 @@
     "HostInputs": {
       "additionalProperties": false,
       "properties": {
-        "catalog": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
         "platform": {
           "$ref": "#/$defs/Platform"
         },
@@ -1052,19 +1027,7 @@
           "maxItems": 32,
           "type": "array"
         },
-        "signed_catalog": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
         "state_dir": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "trust_keys": {
           "type": [
             "string",
             "null"
@@ -1073,9 +1036,6 @@
       },
       "required": [
         "roots",
-        "catalog",
-        "signed_catalog",
-        "trust_keys",
         "state_dir",
         "platform"
       ],
@@ -1154,7 +1114,6 @@
     "InstallInputKind": {
       "enum": [
         "automatic",
-        "local_archive",
         "unavailable"
       ],
       "type": "string"
@@ -1169,49 +1128,10 @@
     },
     "InstallPatchParams": {
       "additionalProperties": false,
-      "allOf": [
-        {
-          "anyOf": [
-            {
-              "properties": {
-                "selection_id": {
-                  "type": "null"
-                }
-              }
-            },
-            {
-              "properties": {
-                "archive": {
-                  "type": "null"
-                }
-              }
-            }
-          ]
-        }
-      ],
       "oneOf": [
         {
           "properties": {
             "manual_download": {
-              "type": "null"
-            },
-            "release_id": {
-              "type": "string"
-            },
-            "selection_id": {
-              "type": "null"
-            }
-          },
-          "required": [
-            "release_id"
-          ]
-        },
-        {
-          "properties": {
-            "manual_download": {
-              "type": "null"
-            },
-            "release_id": {
               "type": "null"
             },
             "selection_id": {
@@ -1225,14 +1145,8 @@
         },
         {
           "properties": {
-            "archive": {
-              "type": "null"
-            },
             "manual_download": {
               "$ref": "#/$defs/ManualDownloadInput"
-            },
-            "release_id": {
-              "type": "null"
             },
             "selection_id": {
               "type": "null"
@@ -1244,12 +1158,6 @@
         }
       ],
       "properties": {
-        "archive": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
         "cleanup_policy": {
           "$ref": "#/$defs/CleanupPolicy"
         },
@@ -1272,12 +1180,6 @@
         },
         "operation": {
           "$ref": "#/$defs/InstallOperation"
-        },
-        "release_id": {
-          "type": [
-            "string",
-            "null"
-          ]
         },
         "selection_id": {
           "type": [
@@ -1481,7 +1383,6 @@
         },
         "strategies": {
           "const": [
-            "managed_zip",
             "publisher_zip",
             "publisher_exe"
           ]
@@ -1960,7 +1861,7 @@
     "MatchStatus": {
       "enum": [
         "matched",
-        "no_catalog_match"
+        "no_match"
       ],
       "type": "string"
     },
@@ -2172,9 +2073,6 @@
         "automatic": {
           "$ref": "#/$defs/ActionAvailability"
         },
-        "local_archive": {
-          "$ref": "#/$defs/ActionAvailability"
-        },
         "overwrite": {
           "$ref": "#/$defs/ActionAvailability"
         },
@@ -2187,7 +2085,6 @@
       },
       "required": [
         "automatic",
-        "local_archive",
         "reinstall",
         "overwrite",
         "primary"
@@ -2282,22 +2179,6 @@
       "oneOf": [
         {
           "properties": {
-            "release_id": {
-              "type": "string"
-            },
-            "selection_id": {
-              "type": "null"
-            }
-          },
-          "required": [
-            "release_id"
-          ]
-        },
-        {
-          "properties": {
-            "release_id": {
-              "type": "null"
-            },
             "selection_id": {
               "pattern": "^(zip|exe)-selection-[0-9a-f]{24}-[1-9][0-9]*$",
               "type": "string"
@@ -2315,12 +2196,6 @@
         "instance_id": {
           "type": "string",
           "x-max-utf8-bytes": 16384
-        },
-        "release_id": {
-          "type": [
-            "string",
-            "null"
-          ]
         },
         "selection_id": {
           "type": [
@@ -2343,11 +2218,6 @@
             "type": "string"
           },
           "type": "array"
-        },
-        "catalog_revision": {
-          "format": "uint64",
-          "minimum": 0,
-          "type": "integer"
         },
         "changes": {
           "items": {
@@ -2383,7 +2253,6 @@
       },
       "required": [
         "blockers",
-        "catalog_revision",
         "changes",
         "diagnostics",
         "executable",
@@ -3350,24 +3219,6 @@
     "ScanReport": {
       "additionalProperties": false,
       "properties": {
-        "catalog_error": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/DomainError"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "catalog_revision": {
-          "format": "uint64",
-          "minimum": 0,
-          "type": "integer"
-        },
-        "catalog_trust": {
-          "$ref": "#/$defs/CatalogTrust"
-        },
         "diagnostics": {
           "items": {
             "$ref": "#/$defs/ProjectionDiagnostic"
@@ -3415,8 +3266,6 @@
         }
       },
       "required": [
-        "catalog_revision",
-        "catalog_trust",
         "platform",
         "roots",
         "steam_languages",

@@ -5,7 +5,7 @@ import { installationResult, installSummary, type InstallerOutcome, type ActionB
 
 const availability = (available: boolean, blockers: { code: ActionBlockerCode; detail?: string }[] = []) => ({ available, blockers });
 const actions = (values: Partial<PatchActions> = {}): PatchActions => ({
-  automatic: availability(false), local_archive: availability(false), reinstall: availability(false), overwrite: availability(false),
+  automatic: availability(false), reinstall: availability(false), overwrite: availability(false),
   primary: { operation: "overwrite", label: "install", input: "unavailable" }, ...values,
 });
 const patch = (fields: Partial<Patch> = {}): Patch => ({
@@ -24,34 +24,27 @@ test("install summary consumes required backend actions", () => {
   assert.equal(installSummary(row([{ ...available, actions: actions({ overwrite: availability(true) }), detection: { status: "partial_or_conflict", files: [] } }])), "补丁文件不完整，可覆盖安装");
 });
 
-test("automatic primary input is enabled only by automatic action and wins over archive", () => {
+test("automatic primary input requires the core action", () => {
   const value = patch({ actions: actions({
-    automatic: availability(true), local_archive: availability(true),
-    primary: { operation: "overwrite", label: "install", input: "automatic" },
+    automatic: availability(true), primary: { operation: "overwrite", label: "install", input: "automatic" },
   }) });
-  assert.deepEqual(primaryInstallAction(value, false), { operation: "overwrite", label: "install", input: "automatic", available: true });
+  assert.deepEqual(primaryInstallAction(value), { operation: "overwrite", label: "install", input: "automatic", available: true });
   assert.equal(installInput(value), "");
-  assert.equal(installInput(value, "C:/Downloads/patch.zip"), "C:/Downloads/patch.zip");
 });
 
-test("optional archive never becomes primary when automatic download is unavailable", () => {
+test("unavailable automatic download keeps the primary action disabled", () => {
   const value = patch({ actions: actions({
-    automatic: availability(false, [{ code: "artifact_requires_manual_download" }]), local_archive: availability(true),
-    primary: { operation: "overwrite", label: "install", input: "unavailable" },
+    automatic: availability(false, [{ code: "zip_download_unavailable" }]), primary: { operation: "overwrite", label: "install", input: "unavailable" },
   }) });
-  assert.equal(primaryInstallAction(value, false).available, false);
-  assert.equal(primaryInstallAction(value, true).available, false);
-  assert.equal(primaryInstallAction(value, true, "local_archive").available, true);
+  assert.equal(primaryInstallAction(value).available, false);
   assert.equal(installInput(value), null);
-  assert.equal(installInput(value, "C:/Downloads/local.zip"), "C:/Downloads/local.zip");
-  assert.equal(installInput(value, "  "), null);
 });
 
 test("unavailable external overwrite keeps its label but remains disabled", () => {
   const value = patch({ detection: { status: "installed_external", files: [] }, actions: actions({
     overwrite: availability(true), primary: { operation: "overwrite", label: "overwrite", input: "unavailable" },
   }) });
-  assert.deepEqual(primaryInstallAction(value, true), { operation: "overwrite", label: "overwrite", input: "unavailable", available: false });
+  assert.deepEqual(primaryInstallAction(value), { operation: "overwrite", label: "overwrite", input: "unavailable", available: false });
   assert.equal(installInput(value), null);
   assert.equal(installInput(null), null);
 });
@@ -71,8 +64,7 @@ test("manual downloads bind the candidate and complete URL without requiring a f
 
 test("blocker display follows the selected path and omits unrelated reinstall advice", () => {
   const value = patch({ actions: actions({
-    automatic: availability(true), local_archive: availability(false, [{ code: "local_archive_signed_only" }]),
-    reinstall: availability(false, [{ code: "reinstall_unowned_or_incomplete" }]),
+    automatic: availability(true), reinstall: availability(false, [{ code: "reinstall_unowned_or_incomplete" }]),
     overwrite: availability(false, [{ code: "needs_recovery" }]),
     primary: { operation: "overwrite", label: "install", input: "automatic" },
   }) });

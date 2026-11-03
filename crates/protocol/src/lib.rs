@@ -174,17 +174,14 @@ impl Method {
 #[serde(deny_unknown_fields)]
 pub struct HostInputs {
     pub roots: Vec<PathBuf>,
-    pub catalog: Option<PathBuf>,
-    pub signed_catalog: Option<PathBuf>,
-    pub trust_keys: Option<PathBuf>,
     pub state_dir: Option<PathBuf>,
     pub platform: Platform,
 }
 macro_rules! params { ($name:ident {$($fields:tt)*}) => { #[derive(Debug,Clone,Serialize,Deserialize,JsonSchema,TS)] #[serde(deny_unknown_fields)] pub struct $name { pub host:HostInputs,$($fields)* } }; }
 params!(HostParams {});
 params!(ProjectInstancesParams{pub instance_ids:Vec<String>,});
-params!(PreviewParams{pub instance_id:String,#[ts(optional = nullable)]pub release_id:Option<String>,#[ts(optional = nullable)]pub selection_id:Option<String>,});
-params!(InstallPatchParams{pub instance_id:String,#[ts(optional = nullable)]pub release_id:Option<String>,#[ts(optional = nullable)]pub selection_id:Option<String>,#[ts(optional = nullable)]pub archive:Option<PathBuf>,#[ts(optional = nullable)]pub manual_download:Option<ManualDownloadInput>,pub operation:InstallOperation,pub cleanup_policy:CleanupPolicy,});
+params!(PreviewParams{pub instance_id:String,#[ts(optional = nullable)]pub selection_id:Option<String>,});
+params!(InstallPatchParams{pub instance_id:String,#[ts(optional = nullable)]pub selection_id:Option<String>,#[ts(optional = nullable)]pub manual_download:Option<ManualDownloadInput>,pub operation:InstallOperation,pub cleanup_policy:CleanupPolicy,});
 params!(DiscardPlanParams{pub plan_id:String,});
 params!(ListGameSourcesParams{#[ts(optional = nullable)]pub instance_id:Option<String>,#[ts(optional = nullable)]pub appid:Option<u32>,});
 params!(SetSourceEnabledParams{pub source_id:String,pub enabled:bool,});
@@ -330,17 +327,10 @@ pub fn validate_request(
             .get("host")
             .and_then(Value::as_object)
             .ok_or_else(|| ProtocolError::code("invalid_request"))?;
-        if h.len() != 6
-            || ![
-                "roots",
-                "catalog",
-                "signed_catalog",
-                "trust_keys",
-                "state_dir",
-                "platform",
-            ]
-            .iter()
-            .all(|k| h.contains_key(*k))
+        if h.len() != 3
+            || !["roots", "state_dir", "platform"]
+                .iter()
+                .all(|k| h.contains_key(*k))
         {
             return Err(ProtocolError::code("invalid_request"));
         }
@@ -379,14 +369,9 @@ pub fn validate_request(
             }
         }
         if matches!(method, Method::Preview | Method::InstallPatch) {
-            let release = p.get("release_id").and_then(Value::as_str);
             let selection = p.get("selection_id").and_then(Value::as_str);
             let manual = p.get("manual_download").filter(|v| !v.is_null());
-            if usize::from(release.is_some())
-                + usize::from(selection.is_some())
-                + usize::from(manual.is_some())
-                > 1
-            {
+            if usize::from(selection.is_some()) + usize::from(manual.is_some()) > 1 {
                 return Err(ProtocolError::code("invalid_request"));
             }
             if let Some(manual) = manual {
@@ -399,26 +384,20 @@ pub fn validate_request(
                         return Err(ProtocolError::code("invalid_id"));
                     }
                 }
-                if p.get("archive").is_some_and(|v| !v.is_null()) {
-                    return Err(ProtocolError::code("invalid_request"));
-                }
                 if !manual.get("url").and_then(Value::as_str).is_some_and(|s| {
                     patchhub_core::installer::acquire::validate_manual_download(s).is_ok()
                 }) {
                     return Err(ProtocolError::code("invalid_download_url"));
                 }
             }
-            if release.is_none() && selection.is_none() && manual.is_none() {
-                return Err(ProtocolError::code("selection_or_release_required"));
+            if selection.is_none() && manual.is_none() {
+                return Err(ProtocolError::code("selection_required"));
             }
             if let Some(s) = selection {
                 if patchhub_core::installer::service::ZipSelectionId::new(s).is_err()
                     && patchhub_core::installer::service::ExeSelectionId::new(s).is_err()
                 {
                     return Err(ProtocolError::code("invalid_selection_id"));
-                }
-                if p.get("archive").is_some_and(|a| !a.is_null()) {
-                    return Err(ProtocolError::code("archive_not_allowed_for_selection"));
                 }
             }
         }
@@ -465,10 +444,10 @@ pub struct ContractVersions {
 impl Default for ContractVersions {
     fn default() -> Self {
         Self {
-            projection_version: 2,
-            actions_version: 1,
+            projection_version: 3,
+            actions_version: 2,
             outcome_version: 1,
-            request_validation_version: 2,
+            request_validation_version: 3,
         }
     }
 }
@@ -567,7 +546,7 @@ pub fn validate_capabilities(v: &Value) -> Result<Capabilities, ProtocolError> {
     }
     if c.installer.formats.zip != "supported"
         || c.installer.formats.exe != "supported"
-        || c.installer.strategies != ["managed_zip", "publisher_zip", "publisher_exe"]
+        || c.installer.strategies != ["publisher_zip", "publisher_exe"]
     {
         return Err(ProtocolError::code("capability_mismatch"));
     }
@@ -776,7 +755,6 @@ pub fn validate_response(
                     "instance_id",
                     "release_id",
                     "selection_id",
-                    "catalog_revision",
                     "executable",
                     "blockers",
                     "changes",
@@ -945,7 +923,7 @@ fn validate_projection(v: &Value) -> Result<(), ProtocolError> {
             if p["actions"]["primary"]["operation"] != "overwrite" {
                 return Err(ProtocolError::code("invalid_core_response"));
             }
-            for a in ["automatic", "local_archive", "reinstall", "overwrite"] {
+            for a in ["automatic", "reinstall", "overwrite"] {
                 let action = &p["actions"][a];
                 if action["available"].as_bool()
                     != action["blockers"].as_array().map(|b| b.is_empty())
@@ -1315,14 +1293,8 @@ pub fn schema() -> Value {
     let defs = v["$defs"].as_object_mut().unwrap();
     defs.get_mut("ManualDownloadInput").unwrap()["properties"]["url"]["pattern"] =
         serde_json::json!("^[hH][tT][tT][pP][sS]?://[^/]+");
-    defs.get_mut("HostInputs").unwrap()["required"] = serde_json::json!([
-        "roots",
-        "catalog",
-        "signed_catalog",
-        "trust_keys",
-        "state_dir",
-        "platform"
-    ]);
+    defs.get_mut("HostInputs").unwrap()["required"] =
+        serde_json::json!(["roots", "state_dir", "platform"]);
     defs.get_mut("HostInputs").unwrap()["properties"]["roots"]["maxItems"] = serde_json::json!(32);
     for name in [
         "SuccessResponse",
@@ -1344,17 +1316,15 @@ pub fn schema() -> Value {
     for name in ["PreviewParams", "InstallPatchParams"] {
         let d = defs.get_mut(name).unwrap();
         d["oneOf"] = serde_json::json!([
-        {"required":["release_id"],"properties":{"release_id":{"type":"string"},"selection_id":{"type":"null"}}},
-        {"required":["selection_id"],"properties":{"selection_id":{"type":"string","pattern":"^(zip|exe)-selection-[0-9a-f]{24}-[1-9][0-9]*$"},"release_id":{"type":"null"}}}
+            {"required":["selection_id"],"properties":{"selection_id":{"type":"string","pattern":"^(zip|exe)-selection-[0-9a-f]{24}-[1-9][0-9]*$"}}}
         ]);
         if name == "InstallPatchParams" {
             d["oneOf"][0]["properties"]["manual_download"] = serde_json::json!({"type":"null"});
-            d["oneOf"][1]["properties"]["manual_download"] = serde_json::json!({"type":"null"});
             d["oneOf"].as_array_mut().unwrap().push(serde_json::json!({"required":["manual_download"],"properties":{
-                "manual_download":{"$ref":"#/$defs/ManualDownloadInput"},"release_id":{"type":"null"},"selection_id":{"type":"null"},"archive":{"type":"null"}}}));
-            d["allOf"] = serde_json::json!([{"anyOf":[{"properties":{"selection_id":{"type":"null"}}},{"properties":{"archive":{"type":"null"}}}]}]);
+                "manual_download":{"$ref":"#/$defs/ManualDownloadInput"},"selection_id":{"type":"null"}}}));
         }
     }
+
     for name in [
         "ListGameSourcesParams",
         "SetGameSourceParams",
@@ -1415,7 +1385,7 @@ pub fn schema() -> Value {
     defs.get_mut("InstallerFormats").unwrap()["properties"]["exe"] =
         serde_json::json!({"const":"supported"});
     defs.get_mut("InstallerCapabilities").unwrap()["properties"]["strategies"] =
-        serde_json::json!({"const":["managed_zip","publisher_zip","publisher_exe"]});
+        serde_json::json!({"const":["publisher_zip","publisher_exe"]});
     defs.get_mut("WireLinkCapability").unwrap()["oneOf"] = serde_json::json!([{"properties":{"available":{"const":true},"blockers":{"maxItems":0}}},{"properties":{"available":{"const":false},"blockers":{"minItems":1}}}]);
     defs.get_mut("PreviewReport").unwrap()["properties"]["executable"] =
         serde_json::json!({"const":false});

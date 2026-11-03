@@ -25,7 +25,7 @@ class InstallPipelineTests(unittest.IsolatedAsyncioTestCase):
                     "cleanup": {"status": "completed", "performed": True, "removed_bytes": 12, "failures": []}}),
                 cleanup_cache=AsyncMock(return_value={"performed": True, "removed_bytes": 12}))
             request_id = str(uuid.uuid4())
-            args = ("local", None, "zip-selection-value-1", None, "install", request_id)
+            args = ("local", "zip-selection-value-1", "install", request_id)
             first = await plugin.start_patch_install_task(*args)
             task = plugin.tasks.get(first["task_id"])
             await task.worker
@@ -33,19 +33,19 @@ class InstallPipelineTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(first, retry)
             self.assertEqual(task.snapshot()["state"], "completed")
             self.assertEqual(task.snapshot()["result"]["transaction_id"], "tx-1")
-            plugin.bridge.install_patch.assert_awaited_once_with("local", None, "zip-selection-value-1", None, "install", request_id, "after_commit")
+            plugin.bridge.install_patch.assert_awaited_once_with("local", "zip-selection-value-1", "install", request_id, "after_commit")
             plugin.bridge.cleanup_cache.assert_not_awaited()
             with self.assertRaisesRegex(ValueError, "request_identity_changed"):
-                await plugin.start_patch_install_task("local", None, "zip-selection-changed-1", None, "install", request_id)
+                await plugin.start_patch_install_task("local", "zip-selection-changed-1", "install", request_id)
 
     async def test_selection_archive_and_conflicting_ids_are_rejected_before_task(self):
         plugin = module.Plugin()
         plugin.tasks = module.TaskManager()
         plugin.bridge = types.SimpleNamespace(selection=module.CoreBridge.selection)
-        with self.assertRaisesRegex(ValueError, "archive_not_allowed_for_selection"):
-            await plugin.start_patch_install_task("local", None, "exe-selection-a-1", "a.zip", "install")
+        with self.assertRaises(TypeError):
+            await plugin.start_patch_install_task("local", "exe-selection-a-1", archive="a.zip", operation="install")
         with self.assertRaisesRegex(ValueError, "invalid_request"):
-            await plugin.start_patch_install_task("local", "release", "exe-selection-a-1")
+            await plugin.start_patch_install_task("local", "zip-selection-a-1", manual_download={})
         self.assertFalse(plugin.tasks.busy())
 
     async def test_public_rpc_waits_for_startup_migration_and_reports_failure(self):

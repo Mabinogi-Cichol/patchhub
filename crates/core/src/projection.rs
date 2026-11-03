@@ -2,13 +2,12 @@
 //! this module never discovers Steam again or opens a writable source/store.
 use crate::{
     actions::{ActionBlocker, ActionBlockerCode, PatchActions},
-    catalog::{self, Catalog, PatchMatch, Platform, SupportLevel},
+    catalog::{self, PatchMatch, Platform, SupportLevel},
     detection,
     install::{self, TransactionSnapshot},
     installer,
     sources::{self, snapshot::SourceSnapshot},
     steam,
-    trust::VerifiedCatalog,
 };
 use serde::Serialize;
 use std::{
@@ -106,15 +105,8 @@ impl Default for HostCapabilities {
         }
     }
 }
-#[derive(Clone, Copy)]
-pub enum CatalogView<'a> {
-    Verified(&'a VerifiedCatalog),
-    Development(&'a Catalog),
-    Unavailable { error: &'a DomainError },
-}
 pub struct ProjectionInputs<'a> {
     pub steam: &'a steam::ScanReport,
-    pub catalog: CatalogView<'a>,
     pub sources: Option<&'a SourceSnapshot>,
     pub transactions: &'a TransactionSnapshot,
     pub roots: &'a [PathBuf],
@@ -125,23 +117,13 @@ pub struct ProjectionInputs<'a> {
 }
 #[derive(Debug, Clone, Copy, Serialize, ts_rs::TS, schemars::JsonSchema, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum CatalogTrust {
-    Signed,
-    UnsignedDevelopment,
-    Unavailable,
-}
-#[derive(Debug, Clone, Copy, Serialize, ts_rs::TS, schemars::JsonSchema, serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
 pub enum MatchStatus {
     Matched,
-    NoCatalogMatch,
+    NoMatch,
 }
 #[derive(Debug, Serialize, ts_rs::TS, schemars::JsonSchema, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ScanReport {
-    pub catalog_revision: u64,
-    pub catalog_trust: CatalogTrust,
-    pub catalog_error: Option<DomainError>,
     pub platform: Platform,
     pub roots: Vec<PathBuf>,
     /// Steam interface language by canonical install root, including roots with no localized names.
@@ -174,7 +156,6 @@ pub struct InstanceProjection {
 }
 #[derive(Debug, Clone)]
 pub enum PreviewTarget {
-    SignedRelease(String),
     PublisherZipSelection(String),
     PublisherExeSelection(String),
 }
@@ -197,7 +178,6 @@ pub struct PreviewReport {
     pub instance_id: String,
     pub release_id: Option<String>,
     pub selection_id: Option<String>,
-    pub catalog_revision: u64,
     #[ts(type = "false")]
     pub executable: bool,
     pub blockers: Vec<String>,
@@ -210,13 +190,6 @@ fn query(game: &steam::GameInstall) -> sources::GameQuery {
         name: game.name.clone(),
         localized_name: game.localized_name.clone(),
         instance_id: Some(game.instance_id.clone()),
-    }
-}
-fn catalog<'a>(inputs: &ProjectionInputs<'a>) -> Option<&'a Catalog> {
-    match inputs.catalog {
-        CatalogView::Verified(c) => Some(c.catalog()),
-        CatalogView::Development(c) => Some(c),
-        CatalogView::Unavailable { .. } => None,
     }
 }
 fn check_cancel(inputs: &ProjectionInputs<'_>) -> Result<(), DomainError> {
@@ -239,9 +212,6 @@ fn validate(inputs: &ProjectionInputs<'_>) -> Result<(), DomainError> {
             return Err(DomainError::code("invalid_snapshot_time"));
         }
         install::validate_projection_state(snapshot.state_root(), &inputs.steam.installs)?;
-    }
-    if let Some(catalog) = catalog(inputs) {
-        catalog.validate()?;
     }
     Ok(())
 }
@@ -318,15 +288,7 @@ pub fn scan(inputs: ProjectionInputs<'_>) -> Result<ScanReport, DomainError> {
         .map(|g| g.instance_id.clone())
         .collect();
     let installs = project_batch_impl(&inputs, &ids)?;
-    let (catalog_trust, catalog_error) = match inputs.catalog {
-        CatalogView::Verified(_) => (CatalogTrust::Signed, None),
-        CatalogView::Development(_) => (CatalogTrust::UnsignedDevelopment, None),
-        CatalogView::Unavailable { error } => (CatalogTrust::Unavailable, Some(error.clone())),
-    };
     Ok(ScanReport {
-        catalog_revision: catalog(&inputs).map_or(0, |c| c.revision),
-        catalog_trust,
-        catalog_error,
         platform: inputs.platform,
         roots: inputs.roots.to_vec(),
         steam_languages: inputs.steam.steam_languages.clone(),
@@ -368,85 +330,14 @@ fn project_instance_impl(
     instance_id: &str,
 ) -> Result<InstanceProjection, DomainError> {
     let game = game(inputs, instance_id)?;
-    let (mut patches, evidence) = catalog(inputs)
-        .map(|c| catalog::matches_with_diagnostics(game, c, inputs.platform, inputs.cancel))
-        .unwrap_or_default();
-    let mut diagnostics = evidence_diagnostics(game, evidence);
+    let mut patches = Vec::<PatchMatch>::new();
+    let mut diagnostics = vec![];
     let needs_recovery = inputs
         .transactions
         .transactions()
         .iter()
         .any(|t| t.instance_id == game.instance_id && t.state == "needs_recovery");
     let instance_blockers = instance_action_blockers(game, inputs.cancel);
-    let signed_ids: HashSet<_> = patches.iter().map(|p| p.release_id.clone()).collect();
-    for patch in &mut patches {
-        if let CatalogView::Verified(verified) = inputs.catalog {
-            if let Err(error) = verified.ensure_active(&patch.release_id, inputs.now) {
-                patch.blockers.push(error.to_string());
-            }
-        }
-        let owned = latest_plan(inputs, game, &patch.release_id, None)
-            .is_some_and(|p| !p.changes.is_empty());
-        if owned && patch.detection.status == "installed_external" {
-            patch.detection.status = "installed_managed".into();
-        } else if owned && patch.detection.status == "not_detected" {
-            patch.detection.status = "partial_or_conflict".into();
-        } else if !owned
-            && inputs.transactions.transactions().iter().any(|t| {
-                t.instance_id == game.instance_id
-                    && t.release_id == patch.release_id
-                    && t.state == "committed"
-            })
-        {
-            patch.detection.status = "unknown".into();
-            diagnostics.push(ProjectionDiagnostic {
-                code: "committed_plan_unreadable".into(),
-                path: None,
-                message: patch.release_id.clone(),
-                instance_id: Some(game.instance_id.clone()),
-            });
-        }
-        let release = catalog(inputs)
-            .and_then(|c| c.releases.iter().find(|r| r.release_id == patch.release_id))
-            .expect("catalog match has a release");
-        let mut common = instance_blockers.clone();
-        common.extend(
-            patch
-                .blockers
-                .iter()
-                .map(|code| ActionBlocker::from_domain(&DomainError::code(code))),
-        );
-        match inputs.catalog {
-            CatalogView::Verified(_) => (),
-            CatalogView::Development(_) => {
-                common.push(ActionBlocker::code(ActionBlockerCode::UnsignedCatalog))
-            }
-            CatalogView::Unavailable { error } => common.push(ActionBlocker::new(
-                ActionBlockerCode::CatalogUnavailable,
-                error.to_string(),
-            )),
-        }
-        if release.recipe.is_none() {
-            common.push(ActionBlocker::code(ActionBlockerCode::RecipeMissing));
-        }
-        common.extend(capability_blockers(&inputs.capabilities.zip));
-        common.extend(unsafe_evidence_blockers(&patch.detection, &diagnostics));
-        let mut automatic = common.clone();
-        if release.artifact.is_none() {
-            automatic.push(ActionBlocker::code(
-                ActionBlockerCode::ArtifactRequiresManualDownload,
-            ));
-        }
-        let reinstall = signed_reinstall_blocker(inputs, game, release, &patch.detection);
-        patch.actions = PatchActions::evaluate(
-            automatic,
-            common,
-            reinstall,
-            receipt_evidence(inputs, game, &patch.release_id, None)
-                || installed_evidence(&patch.detection),
-            needs_recovery,
-        );
-    }
     let (source_summaries, matches, discovery) = if let Some(snapshot) = inputs.sources {
         let registry = snapshot.registry();
         let query = query(game);
@@ -501,10 +392,9 @@ fn project_instance_impl(
             check_cancel(inputs)?;
             let release_id =
                 installer::resolve::source_release_id_from_source(&candidate.source_id, game.appid);
-            if signed_ids.contains(&release_id)
-                || patches
-                    .iter()
-                    .any(|p| p.selection_id.as_deref() == Some(&selection_id))
+            if patches
+                .iter()
+                .any(|p| p.selection_id.as_deref() == Some(&selection_id))
             {
                 continue;
             }
@@ -568,10 +458,6 @@ fn project_instance_impl(
             let detection =
                 dynamic_detection(inputs, game, &release_id, &selection_id, &mut diagnostics);
             automatic.extend(unsafe_evidence_blockers(&detection, &diagnostics));
-            let mut local_archive = instance_blockers.clone();
-            local_archive.push(ActionBlocker::code(
-                ActionBlockerCode::LocalArchiveSignedOnly,
-            ));
             let reinstall = dynamic_reinstall_blocker(
                 inputs,
                 game,
@@ -583,7 +469,6 @@ fn project_instance_impl(
             let receipt = receipt_evidence(inputs, game, &release_id, Some(&selection_id));
             let actions = PatchActions::evaluate(
                 automatic,
-                local_archive,
                 reinstall,
                 receipt || installed_evidence(&detection),
                 needs_recovery,
@@ -631,7 +516,7 @@ fn project_instance_impl(
     Ok(InstanceProjection {
         game: game.clone(),
         match_status: if patches.is_empty() {
-            MatchStatus::NoCatalogMatch
+            MatchStatus::NoMatch
         } else {
             MatchStatus::Matched
         },
@@ -715,46 +600,6 @@ fn unsafe_evidence_blockers(
         })
         .map(|d| ActionBlocker::new(ActionBlockerCode::GameNotReady, &d.code))
         .collect()
-}
-fn signed_reinstall_blocker(
-    inputs: &ProjectionInputs<'_>,
-    game: &steam::GameInstall,
-    release: &catalog::PatchRelease,
-    detection: &catalog::Detection,
-) -> Option<ActionBlockerCode> {
-    let Some(plan) = latest_plan(inputs, game, &release.release_id, None) else {
-        return Some(ActionBlockerCode::ReinstallUnownedOrIncomplete);
-    };
-    let Some(recipe) = release.recipe.as_ref() else {
-        return Some(ActionBlockerCode::ReinstallUnownedOrIncomplete);
-    };
-    let identity = install::recipe_identity(release).ok();
-    let same_targets = plan.changes.len() == recipe.files.len()
-        && plan.changes.iter().zip(&recipe.files).all(|(c, m)| {
-            c.path == m.destination
-                && c.installed_sha256.as_deref() == Some(m.installed_sha256.as_str())
-        });
-    if plan.install.buildid != game.buildid
-        || !same_targets
-        || plan
-            .recipe_sha256
-            .as_ref()
-            .is_some_and(|h| Some(h) != identity.as_ref())
-    {
-        return Some(ActionBlockerCode::ReinstallContentIdentityChanged);
-    }
-    if plan.changes.is_empty()
-        || !recipe.files.iter().all(|m| {
-            detection.files.iter().any(|f| {
-                f.path == m.destination
-                    && f.status == "match"
-                    && f.actual_sha256.as_deref() == Some(m.installed_sha256.as_str())
-            })
-        })
-    {
-        return Some(ActionBlockerCode::ReinstallUnownedOrIncomplete);
-    }
-    None
 }
 fn dynamic_reinstall_blocker(
     inputs: &ProjectionInputs<'_>,
@@ -900,62 +745,16 @@ pub fn preview(
 ) -> Result<PreviewReport, DomainError> {
     validate(inputs)?;
     let game = game(inputs, &request.instance_id)?;
-    let revision = catalog(inputs).map_or(0, |c| c.revision);
     let mut report = PreviewReport {
         instance_id: game.instance_id.clone(),
         release_id: None,
         selection_id: None,
-        catalog_revision: revision,
         executable: false,
         blockers: vec![],
         changes: vec![],
         diagnostics: diagnostics(inputs),
     };
     match request.target {
-        PreviewTarget::SignedRelease(id) => {
-            if id.is_empty()
-                || id.len() > 256
-                || id.chars().any(char::is_control)
-                || id.starts_with("zip-selection-")
-                || id.starts_with("exe-selection-")
-            {
-                return Err(DomainError::code("invalid_release_id"));
-            }
-            let catalog = catalog(inputs).ok_or_else(|| DomainError::code("release_not_found"))?;
-            let (signed, evidence) = catalog::preview_with_diagnostics(
-                game,
-                catalog,
-                &id,
-                inputs.platform,
-                inputs.cancel,
-            )?;
-            report.release_id = Some(id.clone());
-            report.blockers = signed.blockers;
-            if let CatalogView::Verified(verified) = inputs.catalog {
-                if let Err(error) = verified.ensure_active(&id, inputs.now) {
-                    report.blockers.push(error.to_string());
-                }
-            }
-            let unknown_paths: HashSet<_> =
-                evidence.iter().map(|file| file.path.as_str()).collect();
-            report.changes = signed
-                .changes
-                .into_iter()
-                .map(|c| ProposedChange {
-                    baseline_matches: if unknown_paths.contains(c.path.as_str()) {
-                        None
-                    } else {
-                        Some(c.baseline_matches)
-                    },
-                    path: c.path,
-                    action: c.action,
-                    actual_sha256: c.actual_sha256,
-                })
-                .collect();
-            report
-                .diagnostics
-                .extend(evidence_diagnostics(game, evidence));
-        }
         PreviewTarget::PublisherZipSelection(id) => {
             if installer::resolve::parse_zip_selection_id(&id).is_none() {
                 return Err(DomainError::code("invalid_selection_id"));

@@ -6,8 +6,8 @@ import 'package:patchhub_windows/host/core_paths.dart';
 import 'package:patchhub_windows/models/library.dart';
 
 Future<void> main(List<String> args) async {
-  if (args.length != 3) {
-    throw ArgumentError('core_probe <core.exe> <state-copy> <resources>');
+  if (args.length != 2) {
+    throw ArgumentError('core_probe <core.exe> <state-copy>');
   }
   final protocol = WireProtocol(
     jsonDecode(
@@ -17,11 +17,7 @@ Future<void> main(List<String> args) async {
     ) as Map<String, dynamic>,
   );
   final client = CoreClient(
-    CorePaths(
-      binary: args[0],
-      stateDirectory: args[1],
-      resourceDirectory: args[2],
-    ),
+    CorePaths(binary: args[0], stateDirectory: args[1]),
     protocol,
   );
   final capabilities = await client.capabilities();

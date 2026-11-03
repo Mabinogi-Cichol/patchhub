@@ -1,5 +1,4 @@
 use patchhub_core::{
-    catalog::{self, Catalog, PatchRelease, Platform, Recipe, SupportLevel},
     detection::{self, EvidenceStatus},
     steam::GameInstall,
 };
@@ -206,37 +205,4 @@ fn junction_ancestor_is_rejected_even_when_target_is_missing() {
     // Remove only the junction itself; never traverse its target.
     fs::remove_dir(&linked).unwrap();
     assert_eq!(code(&result), "evidence_linked_path");
-}
-#[test]
-fn empty_recipe_is_not_evidence_of_installation() {
-    let temp = tempfile::tempdir().unwrap();
-    let release = PatchRelease {
-        patch_id: "p".into(),
-        release_id: "r".into(),
-        appid: 1,
-        name: "p".into(),
-        version: "1".into(),
-        language: "zh".into(),
-        category: "test".into(),
-        source_page: "https://example.invalid".into(),
-        support_level: SupportLevel::DiscoverOnly,
-        platforms: vec![Platform::Windows],
-        verified_buildids: vec![],
-        detection: vec![],
-        recipe: Some(Recipe {
-            artifact_sha256: digest(b""),
-            files: vec![],
-        }),
-        artifact: None,
-    };
-    let game = game(temp.path());
-    assert_eq!(catalog::detect(&game, &release).status, "unknown");
-    let catalog = Catalog {
-        schema_version: 1,
-        revision: 1,
-        releases: vec![release],
-    };
-    let result =
-        catalog::matches_with_cancel(&game, &catalog, Platform::Windows, &AtomicBool::new(true));
-    assert_eq!(result[0].detection.status, "unknown");
 }

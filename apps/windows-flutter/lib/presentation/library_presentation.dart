@@ -262,7 +262,6 @@ String statusLabel(dynamic value) =>
       'dlc_conditions_unknown': 'DLC 适用条件待确认',
       'language_unknown': '语言待确认',
       'cancelled': '已取消',
-      'local_archive_signed_only': '此来源不支持导入本地 ZIP',
       'source_not_subscribed': '尚未订阅此来源',
       'source_not_enabled': '来源已停用',
     }[value] ??

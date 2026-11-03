@@ -1,9 +1,9 @@
 //! P4 per-game discovery through the production matcher and read/selection views.
 use patchhub_core::{
-    catalog::{Catalog, Platform},
+    catalog::Platform,
     install::TransactionSnapshot,
     installer::{exe_resolve, manual_selection, resolve},
-    projection::{self, CatalogView, HostCapabilities, ProjectionInputs},
+    projection::{self, HostCapabilities, ProjectionInputs},
     sources::{
         self,
         http::{FakeFetcher, FetchRequest, FetchResponse, Fetcher, RequestContext},
@@ -517,18 +517,12 @@ fn readonly_projection_and_old_selection_resolution_do_not_execute_replacement_c
     let snapshot = SourceSnapshot::load(temp.path(), &[game()], 500)
         .unwrap()
         .unwrap();
-    let catalog = Catalog {
-        schema_version: 1,
-        revision: 1,
-        releases: vec![],
-    };
     let tx = TransactionSnapshot::default();
     let caps = HostCapabilities::default();
     let cancel = AtomicBool::new(false);
     let row = projection::project_instance(
         &ProjectionInputs {
             steam: &steam,
-            catalog: CatalogView::Development(&catalog),
             sources: Some(&snapshot),
             transactions: &tx,
             roots: &[],

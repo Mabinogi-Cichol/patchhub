@@ -192,7 +192,7 @@ def validate_package(archive, expected_version=None):
         version_tag("v" + str(version))
         require(package.get("name") == "@patchhub/decky" and package.get("type") == "module" and not package.get("remote_binary"), "插件 package.json 不匹配")
         require(expected_version is None or version == expected_version, "包内版本与 Release Tag 不一致")
-        required = {"main.py", "dist/index.js", "backend/bridge.py", "backend/tasks.py", "backend/protocol.py", "backend/v5.schema.json", "bin/catalog.json", "bin/signed-catalog.json", "bin/trust-keys.json", "LICENSE", "licenses/sfextract-MIT.txt", "dependencies.cdx.json"}
+        required = {"main.py", "dist/index.js", "backend/bridge.py", "backend/tasks.py", "backend/protocol.py", "backend/v5.schema.json", "LICENSE", "licenses/sfextract-MIT.txt", "dependencies.cdx.json"}
         require(required <= files.keys(), "插件运行文件不完整")
         require(runtime.get("protocol_version") == 5 and runtime.get("worker_protocol") == 1, "不支持的 runtime 协议")
         binaries = runtime.get("files", [])

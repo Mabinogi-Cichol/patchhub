@@ -1,4 +1,3 @@
-mod maintenance;
 mod runtime;
 
 use patchhub_core::catalog::Platform;
@@ -214,15 +213,15 @@ fn stream_sources_task(
 }
 
 const HELP: &str = "PatchHub Core\n\
-Usage: patchhub-core scan [--steam-root PATH]... [--catalog PATH] [--platform windows|steamos]\n\
-       patchhub-core preview --instance ID --release ID [scan options]\n\
+Usage: patchhub-core scan [--steam-root PATH]... [--platform windows|steamos]\n\
+       patchhub-core preview --instance ID --selection ID [scan options]\n\
        patchhub-core serve  (versioned JSON-lines on stdin/stdout)\n\
-Installation requires a signed catalog. Close the game and pause Steam updates before installing.
+Installation resolves a locally matched source selection. Close the game and pause Steam updates before installing.
 Methods: get_capabilities scan project_instances preview install_patch list_transactions recover discard_plan cleanup_cache cache_status backup_status cleanup_backups.
 Sources: list_sources list_game_sources set_source_enabled set_source_name set_game_source remove_source set_source_update_interval update_source match_games rematch_game.
-Options: --signed-catalog --trust-keys --state-dir --archive --operation install|reinstall --request-id ID.
+Options: --state-dir --selection --operation install|reinstall --request-id ID.
 Source options: --source-id ID --name TEXT --appid N --enabled true|false --subscribed true|false --rule JSON --interval-hours N --name-hint TEXT --force --force-details --instance-id ID --match-instance ID.
-Maintenance: keygen PRIVATE PUBLIC KEY_ID; sign-catalog CATALOG PRIVATE KEY_ID OUTPUT LIFETIME_SECONDS; schema OUTPUT.";
+";
 
 fn parse_bool(value: &str) -> Result<bool, String> {
     match value {
@@ -254,9 +253,6 @@ fn run() -> Result<(), String> {
         }
         return serve(&mut io::stdin().lock(), &mut io::stdout().lock()).map_err(|e| e.to_string());
     }
-    if ["keygen", "sign-catalog", "schema"].contains(&command.as_str()) {
-        return maintenance::run(&command, &args.collect::<Vec<_>>());
-    }
     let mut params = Params::default();
     while let Some(flag) = args.next() {
         if flag == "--force" {
@@ -269,10 +265,8 @@ fn run() -> Result<(), String> {
         }
         let value = args.next().ok_or_else(|| format!("missing_value:{flag}"))?;
         match flag.as_str() {
-            "--signed-catalog" => params.signed_catalog = Some(PathBuf::from(value)),
-            "--trust-keys" => params.trust_keys = Some(PathBuf::from(value)),
+            "--selection" => params.selection_id = Some(value),
             "--state-dir" => params.state_dir = Some(PathBuf::from(value)),
-            "--archive" => params.archive = Some(PathBuf::from(value)),
             "--request-id" => params.request_id = Some(value),
             "--source-id" => params.source_id = Some(value),
             "--interval-hours" => {
@@ -305,9 +299,7 @@ fn run() -> Result<(), String> {
                 }
             }
             "--steam-root" => params.roots.push(PathBuf::from(value)),
-            "--catalog" if params.catalog.is_none() => params.catalog = Some(PathBuf::from(value)),
             "--instance" if params.instance_id.is_none() => params.instance_id = Some(value),
-            "--release" if params.release_id.is_none() => params.release_id = Some(value),
             "--platform" if params.platform.is_none() => {
                 params.platform = Some(match value.as_str() {
                     "windows" => Platform::Windows,
@@ -338,58 +330,13 @@ fn main() -> ExitCode {
 
 #[cfg(test)]
 mod tests {
-    pub(crate) fn wire_params(method: &str, mut legacy: Value) -> Value {
-        let object = legacy.as_object_mut().unwrap();
-        let mut host = serde_json::Map::new();
-        for key in [
-            "roots",
-            "catalog",
-            "signed_catalog",
-            "trust_keys",
-            "state_dir",
-            "platform",
-        ] {
-            let default = match key {
-                "roots" => json!([]),
-                "platform" => json!(if cfg!(windows) { "windows" } else { "steamos" }),
-                _ => Value::Null,
-            };
-            host.insert(
-                key.into(),
-                object
-                    .remove(key)
-                    .filter(|v| !v.is_null())
-                    .unwrap_or(default),
-            );
-        }
-        let keys: &[&str] = match method {
-            "preview" => &["instance_id", "release_id", "selection_id"],
-            "install_patch" => &[
-                "instance_id",
-                "release_id",
-                "selection_id",
-                "archive",
-                "operation",
-                "cleanup_policy",
-            ],
-            _ => &[],
-        };
-        object.retain(|key, value| keys.contains(&key.as_str()) && !value.is_null());
-        if method == "install_patch" {
-            object.entry("operation").or_insert(json!("overwrite"));
-            object.entry("cleanup_policy").or_insert(json!("disabled"));
-        }
-        object.insert("host".into(), Value::Object(host));
-        legacy
-    }
-
     use super::*;
     use std::io::Cursor;
 
     #[test]
     fn protocol_recovers_after_a_bad_line_larger_than_the_removed_cap() {
         let root = tempfile::tempdir().unwrap();
-        let valid = json!({"protocol_version":5,"request_id":"r1","method":"scan","params":{"host":{"roots":[root.path()],"catalog":null,"signed_catalog":null,"trust_keys":null,"state_dir":null,"platform":"windows"}}}).to_string();
+        let valid = json!({"protocol_version":5,"request_id":"r1","method":"scan","params":{"host":{"roots":[root.path()],"state_dir":null,"platform":"windows"}}}).to_string();
         // A line past the old 64 KiB cap is framed and parsed like any other.
         let input = format!("{}\nbroken\n{valid}\n", "x".repeat(70_000));
         let mut output = Vec::new();
@@ -415,7 +362,7 @@ mod tests {
             "protocol_version":5,
             "request_id":"big",
             "method":"match_games",
-            "params":{"host":{"roots":[],"catalog":null,"signed_catalog":null,"trust_keys":null,"state_dir":null,"platform":"windows"},"name_hints":hints},
+            "params":{"host":{"roots":[],"state_dir":null,"platform":"windows"},"name_hints":hints},
         });
         let bytes = serde_json::to_vec(&request).unwrap();
         assert!(bytes.len() > 64 * 1024);
@@ -425,7 +372,7 @@ mod tests {
     #[test]
     fn protocol_rejects_old_versions_unknown_methods_and_fields() {
         let request = |version, method| {
-            json!({"protocol_version":version,"request_id":"r","method":method,"params":{"host":{"roots":[],"catalog":null,"signed_catalog":null,"trust_keys":null,"state_dir":null,"platform":"windows"}}})
+            json!({"protocol_version":version,"request_id":"r","method":method,"params":{"host":{"roots":[],"state_dir":null,"platform":"windows"}}})
                 .to_string()
         };
         for old in [1, 2, 3, 4] {
@@ -436,13 +383,13 @@ mod tests {
             respond(request(5, "uninstall").as_bytes())["error"]["code"],
             "unsupported_method"
         );
-        assert_eq!(respond(br#"{"protocol_version":5,"request_id":"r","method":"scan","params":{"host":{"roots":[],"catalog":null,"signed_catalog":null,"trust_keys":null,"state_dir":null,"platform":"windows"},"shell":"evil"}}"#)["error"]["code"], "invalid_request");
+        assert_eq!(respond(br#"{"protocol_version":5,"request_id":"r","method":"scan","params":{"host":{"roots":[],"state_dir":null,"platform":"windows"},"shell":"evil"}}"#)["error"]["code"], "invalid_request");
     }
 
     #[test]
     fn request_id_is_validated_for_length_and_control_characters() {
         let with_id = |id: &str| {
-            json!({"protocol_version":5,"request_id":id,"method":"get_capabilities","params":{"host":{"roots":[],"catalog":null,"signed_catalog":null,"trust_keys":null,"state_dir":null,"platform":"windows"}}})
+            json!({"protocol_version":5,"request_id":id,"method":"get_capabilities","params":{"host":{"roots":[],"state_dir":null,"platform":"windows"}}})
                 .to_string()
         };
         assert_eq!(
@@ -498,7 +445,7 @@ mod tests {
         assert_eq!(actual, expected);
 
         let capabilities = respond(
-            br#"{"protocol_version":5,"request_id":"c","method":"get_capabilities","params":{"host":{"roots":[],"catalog":null,"signed_catalog":null,"trust_keys":null,"state_dir":null,"platform":"windows"}}}"#,
+            br#"{"protocol_version":5,"request_id":"c","method":"get_capabilities","params":{"host":{"roots":[],"state_dir":null,"platform":"windows"}}}"#,
         );
         let methods: Vec<&str> = capabilities["result"]["methods"]
             .as_array()
@@ -515,7 +462,7 @@ mod tests {
     #[test]
     fn get_capabilities_has_v5_installer_and_sources_shape() {
         let capabilities = respond(
-            br#"{"protocol_version":5,"request_id":"c","method":"get_capabilities","params":{"host":{"roots":[],"catalog":null,"signed_catalog":null,"trust_keys":null,"state_dir":null,"platform":"windows"}}}"#,
+            br#"{"protocol_version":5,"request_id":"c","method":"get_capabilities","params":{"host":{"roots":[],"state_dir":null,"platform":"windows"}}}"#,
         );
         let result = &capabilities["result"];
         assert_eq!(result["protocol_version"], 5);
@@ -540,7 +487,7 @@ mod tests {
     #[test]
     fn serve_channel_rejects_task_methods_with_task_required() {
         let request = |method| {
-            json!({"protocol_version":5,"request_id":"r","method":method,"params":{"host":{"roots":[],"catalog":null,"signed_catalog":null,"trust_keys":null,"state_dir":null,"platform":"windows"}}}).to_string()
+            json!({"protocol_version":5,"request_id":"r","method":method,"params":{"host":{"roots":[],"state_dir":null,"platform":"windows"}}}).to_string()
         };
         // Task-channel methods must not run on the plain `serve` loop.
         for method in [
@@ -586,7 +533,7 @@ mod tests {
                 "protocol_version": 5,
                 "request_id": "d",
                 "method": method,
-                "params": {"host":{"roots":[],"catalog":null,"signed_catalog":null,"trust_keys":null,"state_dir":null,"platform":"windows"}},
+                "params": {"host":{"roots":[],"state_dir":null,"platform":"windows"}},
             })
             .to_string();
             assert_eq!(
@@ -604,12 +551,12 @@ mod tests {
         let events = Rc::new(RefCell::new(Vec::new()));
         let captured = Rc::clone(&events);
         let mut cursor =
-            runtime::ProgressCursor::new(5, "signed".into(), Some("instance".into()), None);
+            runtime::ProgressCursor::new(5, "zip-task".into(), Some("instance".into()), None);
         patchhub_core::operation::run(
             Arc::new(AtomicBool::new(false)),
             move |progress| captured.borrow_mut().push(cursor.event(progress)),
             || {
-                // Same ordering as signed download and local ZIP verification.
+                // Archive telemetry can precede an explicit extraction stage.
                 patchhub_core::operation::archive(123);
                 patchhub_core::operation::stage("validating", Some(123), Some(1));
             },
@@ -619,7 +566,7 @@ mod tests {
         assert_eq!(rows[0]["stage"], "connecting");
         assert_eq!(rows[0]["archive_bytes"], 123);
         assert_eq!(rows[0]["sequence"], 0);
-        assert_eq!(rows[0]["request_id"], "signed");
+        assert_eq!(rows[0]["request_id"], "zip-task");
         assert_eq!(rows[0]["instance_id"], "instance");
         assert!(rows[0]["selection_id"].is_null());
         assert_eq!(rows[1]["stage"], "validating");
@@ -728,7 +675,7 @@ mod tests {
 
     #[test]
     fn v5_capabilities_pass_the_shared_response_validator() {
-        let value = respond(json!({"protocol_version":5,"request_id":"cap","method":"get_capabilities","params":{"host":{"roots":[],"catalog":null,"signed_catalog":null,"trust_keys":null,"state_dir":null,"platform":"windows"}}}).to_string().as_bytes());
+        let value = respond(json!({"protocol_version":5,"request_id":"cap","method":"get_capabilities","params":{"host":{"roots":[],"state_dir":null,"platform":"windows"}}}).to_string().as_bytes());
         patchhub_protocol::validate_response(
             &value,
             "cap",
@@ -738,54 +685,9 @@ mod tests {
     }
 
     #[test]
-    fn scan_to_preview_preserves_instance_and_is_read_only() {
-        let temp = tempfile::tempdir().unwrap();
-        let root = temp.path().join("Steam");
-        std::fs::create_dir_all(root.join("steamapps/common/Test/game")).unwrap();
-        std::fs::write(root.join("steamapps/appmanifest_42.acf"),
-            "\"AppState\" { \"appid\" \"42\" \"name\" \"Synthetic\" \"installdir\" \"Test\" \"buildid\" \"100\" \"StateFlags\" \"4\" }").unwrap();
-        let hash = "0".repeat(64);
-        let catalog_path = temp.path().join("catalog.json");
-        let data = json!({"schema_version":1,"revision":1,"releases":[{
-            "patch_id":"test","release_id":"test-v1","appid":42,"name":"Synthetic patch",
-            "version":"1","language":"zh-CN","category":"content_restore",
-            "source_page":"https://example.invalid/patch","support_level":"managed_zip",
-            "platforms":["windows"],"verified_buildids":["100"],
-            "detection":[{"path":"game/patch.rpa","sha256":hash}],
-            "recipe":{"artifact_sha256":hash,"files":[{"source":"patch.rpa","destination":"game/patch.rpa",
-                "original_sha256":null,"installed_sha256":hash}]}
-        }]});
-        std::fs::write(&catalog_path, data.to_string()).unwrap();
-        let params = |instance| Params {
-            roots: vec![root.clone()],
-            catalog: Some(catalog_path.clone()),
-            platform: Some(Platform::Windows),
-            instance_id: instance,
-            release_id: None,
-            ..Default::default()
-        };
-        let scan = execute("scan", params(None)).unwrap();
-        assert_eq!(scan["installs"][0]["match_status"], "matched");
-        assert_eq!(
-            scan["installs"][0]["patches"][0]["detection"]["status"],
-            "not_detected"
-        );
-        let id = scan["installs"][0]["game"]["instance_id"]
-            .as_str()
-            .unwrap()
-            .to_owned();
-        let mut preview_params = params(Some(id));
-        preview_params.release_id = Some("test-v1".into());
-        let result = execute("preview", preview_params).unwrap();
-        assert_eq!(result["executable"], false);
-        assert_eq!(result["changes"][0]["baseline_matches"], true);
-        assert!(!root.join("steamapps/common/Test/game/patch.rpa").exists());
-    }
-
-    #[test]
     fn protocol_exposes_sources_capabilities_and_rejects_unknown() {
         let capabilities = respond(
-            br#"{"protocol_version":5,"request_id":"c","method":"get_capabilities","params":{"host":{"roots":[],"catalog":null,"signed_catalog":null,"trust_keys":null,"state_dir":null,"platform":"windows"}}}"#,
+            br#"{"protocol_version":5,"request_id":"c","method":"get_capabilities","params":{"host":{"roots":[],"state_dir":null,"platform":"windows"}}}"#,
         );
         assert_eq!(capabilities["ok"], true);
         assert!(capabilities["result"]["methods"]
@@ -794,11 +696,11 @@ mod tests {
             .iter()
             .any(|method| method == "match_games"));
         let unknown = respond(
-            br#"{"protocol_version":5,"request_id":"u","method":"source_magic","params":{"host":{"roots":[],"catalog":null,"signed_catalog":null,"trust_keys":null,"state_dir":null,"platform":"windows"}}}"#,
+            br#"{"protocol_version":5,"request_id":"u","method":"source_magic","params":{"host":{"roots":[],"state_dir":null,"platform":"windows"}}}"#,
         );
         assert_eq!(unknown["error"]["code"], "unsupported_method");
         let missing_state = respond(
-            br#"{"protocol_version":5,"request_id":"s","method":"list_sources","params":{"host":{"roots":[],"catalog":null,"signed_catalog":null,"trust_keys":null,"state_dir":null,"platform":"windows"}}}"#,
+            br#"{"protocol_version":5,"request_id":"s","method":"list_sources","params":{"host":{"roots":[],"state_dir":null,"platform":"windows"}}}"#,
         );
         assert_eq!(missing_state["error"]["code"], "state_dir_required");
     }
@@ -817,7 +719,7 @@ mod tests {
         let job = paths.jobs_dir().join("plan-1");
         std::fs::create_dir_all(&job).unwrap();
         std::fs::write(job.join("0.stage"), b"stage").unwrap();
-        let host = json!({"roots": [], "catalog": null, "signed_catalog": null, "trust_keys": null, "state_dir": state, "platform": if cfg!(windows) {"windows"} else {"steamos"}});
+        let host = json!({"roots": [], "state_dir": state, "platform": if cfg!(windows) {"windows"} else {"steamos"}});
         let request = |method: &str| {
             respond(serde_json::to_vec(&json!({"protocol_version":5,"request_id":"cache-rpc","method":method,"params":{"host":host}})).unwrap().as_slice())
         };
@@ -878,7 +780,7 @@ mod tests {
         std::fs::create_dir_all(&job).unwrap();
         std::fs::write(job.join("0.backup"), b"original").unwrap();
         std::fs::write(job.join("0.stage"), b"stage").unwrap();
-        let host = json!({"state_dir":state,"roots":[dir.path().join("no-steam")],"catalog":null,"signed_catalog":null,"trust_keys":null,"platform":if cfg!(windows) {"windows"} else {"steamos"}});
+        let host = json!({"state_dir":state,"roots":[dir.path().join("no-steam")],"platform":if cfg!(windows) {"windows"} else {"steamos"}});
         let request = |method: &str, params: Value| {
             respond(serde_json::to_vec(&json!({"protocol_version":5,"request_id":"backup-rpc","method":method,"params":params})).unwrap().as_slice())
         };

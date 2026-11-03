@@ -1,8 +1,5 @@
-use base64::{engine::general_purpose::STANDARD, Engine};
-use ed25519_dalek::{Signer, SigningKey};
-use patchhub_core::trust::*;
 use patchhub_core::{
-    catalog::{Catalog, Fingerprint, PatchRelease, Platform, SupportLevel},
+    catalog::Platform,
     install::{InstallOperation, InstallPlan, PlannedChange, Transaction, TransactionSnapshot},
     projection::*,
     sources::{
@@ -25,16 +22,8 @@ fn fixture() -> (tempfile::TempDir, steam::ScanReport) {
     let report = steam::scan(&[library]);
     (temp, report)
 }
-fn catalog() -> Catalog {
-    Catalog {
-        schema_version: 1,
-        revision: 5,
-        releases: vec![],
-    }
-}
 fn inputs<'a>(
     steam: &'a steam::ScanReport,
-    catalog: &'a Catalog,
     source: Option<&'a SourceSnapshot>,
     transactions: &'a TransactionSnapshot,
     capabilities: &'a HostCapabilities,
@@ -42,7 +31,6 @@ fn inputs<'a>(
 ) -> ProjectionInputs<'a> {
     ProjectionInputs {
         steam,
-        catalog: CatalogView::Development(catalog),
         sources: source,
         transactions,
         roots: &[],
@@ -120,60 +108,6 @@ fn load(state: &Path, steam: &steam::ScanReport, now: u64) -> SourceSnapshot {
         .collect();
     SourceSnapshot::load(state, &queries, now).unwrap().unwrap()
 }
-fn release() -> PatchRelease {
-    PatchRelease {
-        patch_id: "p".into(),
-        release_id: "source-kagura-cn-42".into(),
-        appid: 42,
-        name: "Signed priority".into(),
-        version: "1".into(),
-        language: "zh-CN".into(),
-        category: "adult_content".into(),
-        source_page: "https://kagurafan.com/patches/game".into(),
-        support_level: SupportLevel::ManagedZip,
-        platforms: vec![Platform::Windows],
-        verified_buildids: vec!["100".into()],
-        detection: vec![Fingerprint {
-            path: "data.txt".into(),
-            sha256: format!("{:x}", Sha256::digest(b"patched")),
-        }],
-        recipe: Some(patchhub_core::catalog::Recipe {
-            artifact_sha256: "a".repeat(64),
-            files: vec![patchhub_core::catalog::FileMapping {
-                source: "data.txt".into(),
-                destination: "data.txt".into(),
-                original_sha256: None,
-                installed_sha256: format!("{:x}", Sha256::digest(b"patched")),
-            }],
-        }),
-        artifact: None,
-    }
-}
-fn verified(catalog: Catalog) -> VerifiedCatalog {
-    let key = SigningKey::from_bytes(&[7; 32]);
-    let payload = serde_json::to_vec(&CatalogPayload {
-        catalog,
-        generated_at: 1000,
-        expires_at: 2000,
-        revoked_release_ids: vec![],
-    })
-    .unwrap();
-    let envelope = SignedEnvelope {
-        schema_version: 1,
-        key_id: "test".into(),
-        payload: STANDARD.encode(&payload),
-        signature: STANDARD.encode(key.sign(&payload).to_bytes()),
-    };
-    let keys = TrustKeys {
-        schema_version: 1,
-        keys: vec![TrustKey {
-            key_id: "test".into(),
-            public_key: STANDARD.encode(key.verifying_key().to_bytes()),
-            revoked: false,
-        }],
-    };
-    VerifiedCatalog::from_bytes(&serde_json::to_vec(&envelope).unwrap(), &keys, 1500, 0).unwrap()
-}
 fn records(
     game: &steam::GameInstall,
     selection: &str,
@@ -227,11 +161,10 @@ fn batch_order_dedup_and_existing_steam_snapshot() {
     let mut second = steam.installs[0].clone();
     second.instance_id = "second-library-instance".into();
     steam.installs.push(second);
-    let c = catalog();
     let tx = TransactionSnapshot::default();
     let caps = HostCapabilities::default();
     let cancel = AtomicBool::new(false);
-    let i = inputs(&steam, &c, None, &tx, &caps, &cancel);
+    let i = inputs(&steam, None, &tx, &caps, &cancel);
     let ids = vec![
         "second-library-instance".into(),
         steam.installs[0].instance_id.clone(),
@@ -255,53 +188,16 @@ fn batch_order_dedup_and_existing_steam_snapshot() {
     );
 }
 #[test]
-fn signed_priority_zip_and_exe_and_injected_expiration() {
-    for exe in [false, true] {
-        let (temp, steam) = fixture();
-        let state = temp.path().join("state");
-        let mut candidate = candidate();
-        if exe {
-            candidate.mirrors[0].format = "exe".into();
-            candidate.mirrors[0].url = "https://kaguraserver.com/a.exe".into();
-        }
-        seed(&state, candidate);
-        let source = load(&state, &steam, 1500);
-        let c = Catalog {
-            releases: vec![release()],
-            ..catalog()
-        };
-        let signed = verified(c.clone());
-        let tx = TransactionSnapshot::default();
-        let caps = HostCapabilities::default();
-        let cancel = AtomicBool::new(false);
-        let mut i = inputs(&steam, &c, Some(&source), &tx, &caps, &cancel);
-        i.catalog = CatalogView::Verified(&signed);
-        let row = project_instance(&i, &steam.installs[0].instance_id).unwrap();
-        assert_eq!(row.patches.len(), 1);
-        assert_eq!(row.patches[0].name, "Signed priority");
-        assert!(row.patches[0].selection_id.is_none());
-        let expired_source = load(&state, &steam, 2000);
-        i.now = 2000;
-        i.sources = Some(&expired_source);
-        let row = project_instance(&i, &steam.installs[0].instance_id).unwrap();
-        assert!(row.patches[0]
-            .blockers
-            .iter()
-            .any(|b| b == "catalog_expired"));
-    }
-}
-#[test]
 fn frozen_subscriptions_and_shared_stale_codes() {
     let (temp, steam) = fixture();
     let state = temp.path().join("state");
     let now = seed(&state, candidate());
     let source = load(&state, &steam, now);
-    let c = catalog();
     let tx = TransactionSnapshot::default();
     let caps = HostCapabilities::default();
     let cancel = AtomicBool::new(false);
     let first = project_instance(
-        &inputs(&steam, &c, Some(&source), &tx, &caps, &cancel),
+        &inputs(&steam, Some(&source), &tx, &caps, &cancel),
         &steam.installs[0].instance_id,
     )
     .unwrap();
@@ -313,14 +209,14 @@ fn frozen_subscriptions_and_shared_stale_codes() {
         .unwrap();
     drop(handle);
     let old = project_instance(
-        &inputs(&steam, &c, Some(&source), &tx, &caps, &cancel),
+        &inputs(&steam, Some(&source), &tx, &caps, &cancel),
         &steam.installs[0].instance_id,
     )
     .unwrap();
     assert!(old.patches[0].actions.automatic.available);
     let changed = load(&state, &steam, now);
     let row = project_instance(
-        &inputs(&steam, &c, Some(&changed), &tx, &caps, &cancel),
+        &inputs(&steam, Some(&changed), &tx, &caps, &cancel),
         &steam.installs[0].instance_id,
     )
     .unwrap();
@@ -344,7 +240,7 @@ fn frozen_subscriptions_and_shared_stale_codes() {
     // subscription or invalidates the live selection (design D08/S04).
     let stale = load(&state, &steam, now + 6 * 3600 + 1);
     let row = project_instance(
-        &inputs(&steam, &c, Some(&stale), &tx, &caps, &cancel),
+        &inputs(&steam, Some(&stale), &tx, &caps, &cancel),
         &steam.installs[0].instance_id,
     )
     .unwrap();
@@ -363,7 +259,6 @@ fn selection_instance_live_bytes_and_superseded_binding() {
     let now = seed(&state, candidate);
     let source = load(&state, &steam, now);
     let game = &steam.installs[0];
-    let c = catalog();
     let caps = HostCapabilities::default();
     let cancel = AtomicBool::new(false);
     fs::write(game.install_path.join("data.txt"), b"patched").unwrap();
@@ -371,14 +266,14 @@ fn selection_instance_live_bytes_and_superseded_binding() {
     let (superseded, old) = records(game, &selection, "superseded", 40, "wrong.txt");
     let tx = TransactionSnapshot::from_records(vec![t, superseded], vec![p, old]);
     let row = project_instance(
-        &inputs(&steam, &c, Some(&source), &tx, &caps, &cancel),
+        &inputs(&steam, Some(&source), &tx, &caps, &cancel),
         &game.instance_id,
     )
     .unwrap();
     assert_eq!(row.patches[0].detection.status, "installed_managed");
     fs::write(game.install_path.join("data.txt"), b"modified").unwrap();
     let row = project_instance(
-        &inputs(&steam, &c, Some(&source), &tx, &caps, &cancel),
+        &inputs(&steam, Some(&source), &tx, &caps, &cancel),
         &game.instance_id,
     )
     .unwrap();
@@ -386,7 +281,7 @@ fn selection_instance_live_bytes_and_superseded_binding() {
     assert_eq!(row.patches[0].detection.files[0].status, "mismatch");
     fs::remove_file(game.install_path.join("data.txt")).unwrap();
     let row = project_instance(
-        &inputs(&steam, &c, Some(&source), &tx, &caps, &cancel),
+        &inputs(&steam, Some(&source), &tx, &caps, &cancel),
         &game.instance_id,
     )
     .unwrap();
@@ -399,7 +294,7 @@ fn selection_instance_live_bytes_and_superseded_binding() {
         }
         let tx = TransactionSnapshot::from_records(vec![t], vec![p]);
         let row = project_instance(
-            &inputs(&steam, &c, Some(&source), &tx, &caps, &cancel),
+            &inputs(&steam, Some(&source), &tx, &caps, &cancel),
             &game.instance_id,
         )
         .unwrap();
@@ -416,7 +311,6 @@ fn newest_unreadable_empty_or_unsafe_plan_is_unknown() {
     let source = load(&state, &steam, now);
     let game = &steam.installs[0];
     fs::write(game.install_path.join("data.txt"), b"patched").unwrap();
-    let c = catalog();
     let caps = HostCapabilities::default();
     let cancel = AtomicBool::new(false);
     for mode in 0..3 {
@@ -431,7 +325,7 @@ fn newest_unreadable_empty_or_unsafe_plan_is_unknown() {
         }
         let tx = TransactionSnapshot::from_records(vec![old, new], plans);
         let row = project_instance(
-            &inputs(&steam, &c, Some(&source), &tx, &caps, &cancel),
+            &inputs(&steam, Some(&source), &tx, &caps, &cancel),
             &game.instance_id,
         )
         .unwrap();
@@ -456,19 +350,17 @@ fn preview_scan_absent_state_stays_absent() {
     let state = temp.path().join("absent");
     let tx = TransactionSnapshot::load_ro(&state, &steam).unwrap();
     assert!(!state.exists());
-    let c = Catalog {
-        releases: vec![release()],
-        ..catalog()
-    };
     let caps = HostCapabilities::default();
     let cancel = AtomicBool::new(false);
-    let i = inputs(&steam, &c, None, &tx, &caps, &cancel);
-    assert!(scan(inputs(&steam, &c, None, &tx, &caps, &cancel)).is_ok());
+    let i = inputs(&steam, None, &tx, &caps, &cancel);
+    assert!(scan(inputs(&steam, None, &tx, &caps, &cancel)).is_ok());
     let p = preview(
         &i,
         PreviewRequest {
             instance_id: steam.installs[0].instance_id.clone(),
-            target: PreviewTarget::SignedRelease(release().release_id),
+            target: PreviewTarget::PublisherZipSelection(
+                "zip-selection-0123456789abcdef01234567-42".into(),
+            ),
         },
     )
     .unwrap();
@@ -493,12 +385,11 @@ fn snapshot_overlap_and_cancel_are_rejected() {
             .to_string(),
         "state_overlaps_game"
     );
-    let c = catalog();
     let tx = TransactionSnapshot::default();
     let caps = HostCapabilities::default();
     let cancel = AtomicBool::new(true);
     assert_eq!(
-        scan(inputs(&steam, &c, None, &tx, &caps, &cancel))
+        scan(inputs(&steam, None, &tx, &caps, &cancel))
             .unwrap_err()
             .code,
         "cancelled"
@@ -556,11 +447,10 @@ fn corrupted_latest_database_plan_preserves_receipt_or_suppresses_unknown_identi
         let tx = TransactionSnapshot::load_ro(&state, &steam).unwrap();
         assert!(!tx.diagnostics().is_empty());
         assert_eq!(tx.receipts_complete(), !corrupt_receipt);
-        let c = catalog();
         let caps = HostCapabilities::default();
         let cancel = AtomicBool::new(false);
         let row = project_instance(
-            &inputs(&steam, &c, Some(&source), &tx, &caps, &cancel),
+            &inputs(&steam, Some(&source), &tx, &caps, &cancel),
             &game.instance_id,
         )
         .unwrap();
@@ -573,11 +463,10 @@ fn source_snapshot_time_must_match_projection_clock() {
     let state = temp.path().join("state");
     let now = seed(&state, candidate());
     let source = load(&state, &steam, now);
-    let c = catalog();
     let tx = TransactionSnapshot::default();
     let caps = HostCapabilities::default();
     let cancel = AtomicBool::new(false);
-    let mut i = inputs(&steam, &c, Some(&source), &tx, &caps, &cancel);
+    let mut i = inputs(&steam, Some(&source), &tx, &caps, &cancel);
     i.now += 1;
     assert_eq!(scan(i).unwrap_err().code, "invalid_snapshot_time");
 }
@@ -602,7 +491,6 @@ fn zip_and_exe_selection_previews_are_typed_and_read_only() {
         let game = &steam.installs[0];
         let (t, p) = records(game, &selection, "committed", 20, "data.txt");
         let tx = TransactionSnapshot::from_records(vec![t], vec![p]);
-        let c = catalog();
         let caps = HostCapabilities {
             zip: LinkCapability {
                 available: true,
@@ -614,7 +502,7 @@ fn zip_and_exe_selection_previews_are_typed_and_read_only() {
             },
         };
         let cancel = AtomicBool::new(false);
-        let i = inputs(&steam, &c, Some(&source), &tx, &caps, &cancel);
+        let i = inputs(&steam, Some(&source), &tx, &caps, &cancel);
         let target = if exe {
             PreviewTarget::PublisherExeSelection(selection.clone())
         } else {
@@ -641,38 +529,6 @@ fn zip_and_exe_selection_previews_are_typed_and_read_only() {
         assert!(!state.join("installer").exists());
         assert!(!game.install_path.join("data.txt").exists());
     }
-}
-
-#[test]
-fn unreadable_preview_baseline_is_null_and_diagnostic_not_conflict() {
-    let (_temp, steam) = fixture();
-    let game = &steam.installs[0];
-    fs::create_dir(game.install_path.join("data.txt")).unwrap();
-    let c = Catalog {
-        releases: vec![release()],
-        ..catalog()
-    };
-    let tx = TransactionSnapshot::default();
-    let caps = HostCapabilities::default();
-    let cancel = AtomicBool::new(false);
-    let report = preview(
-        &inputs(&steam, &c, None, &tx, &caps, &cancel),
-        PreviewRequest {
-            instance_id: game.instance_id.clone(),
-            target: PreviewTarget::SignedRelease(release().release_id),
-        },
-    )
-    .unwrap();
-    assert_eq!(report.changes[0].baseline_matches, None);
-    assert_eq!(report.changes[0].actual_sha256, None);
-    assert!(report
-        .diagnostics
-        .iter()
-        .any(|d| d.code == "evidence_not_regular_file"));
-    assert!(!report
-        .blockers
-        .iter()
-        .any(|b| b.starts_with("baseline_conflict:")));
 }
 
 #[test]
@@ -720,11 +576,10 @@ fn damaged_newer_overlay_timestamp_never_falls_back_to_older_receipt() {
         30
     );
     assert!(tx.plan(&new.plan_id).is_none());
-    let c = catalog();
     let caps = HostCapabilities::default();
     let cancel = AtomicBool::new(false);
     let row = project_instance(
-        &inputs(&steam, &c, Some(&source), &tx, &caps, &cancel),
+        &inputs(&steam, Some(&source), &tx, &caps, &cancel),
         &game.instance_id,
     )
     .unwrap();
@@ -735,11 +590,10 @@ fn damaged_newer_overlay_timestamp_never_falls_back_to_older_receipt() {
 fn scanner_generated_long_identity_is_preserved() {
     let (_temp, mut steam) = fixture();
     steam.installs[0].instance_id = "库".repeat(100);
-    let c = catalog();
     let tx = TransactionSnapshot::default();
     let caps = HostCapabilities::default();
     let cancel = AtomicBool::new(false);
-    let report = scan(inputs(&steam, &c, None, &tx, &caps, &cancel)).unwrap();
+    let report = scan(inputs(&steam, None, &tx, &caps, &cancel)).unwrap();
     assert_eq!(
         report.installs[0].game.instance_id,
         steam.installs[0].instance_id
@@ -747,228 +601,11 @@ fn scanner_generated_long_identity_is_preserved() {
 }
 
 // P4 action fixtures use the actual projection rather than client permissions.
-fn signed_records(
-    game: &steam::GameInstall,
-    release: &PatchRelease,
-    state: &str,
-) -> (Transaction, InstallPlan) {
-    let (mut t, mut p) = records(game, "unused-selection", state, 20, "data.txt");
-    t.release_id = release.release_id.clone();
-    t.selection_id = None;
-    t.content_id = None;
-    p.release_id = release.release_id.clone();
-    p.recipe_sha256 = Some(patchhub_core::install::recipe_identity(release).unwrap());
-    (t, p)
-}
 fn has_action_blocker(
     availability: &patchhub_core::actions::ActionAvailability,
     code: patchhub_core::actions::ActionBlockerCode,
 ) -> bool {
     availability.blockers.iter().any(|b| b.code == code)
-}
-#[test]
-fn signed_actions_receipt_and_input_truth_table() {
-    use patchhub_core::actions::{ActionBlockerCode::*, InstallInputKind, PrimaryLabel};
-    // No receipt, external, partial, complete managed, damaged managed, content
-    // changed, build changed and historical superseded all remain distinct.
-    for case in [
-        "new",
-        "external",
-        "partial",
-        "managed",
-        "damaged",
-        "content",
-        "build",
-        "superseded",
-        "unreadable_plan",
-        "unreadable_missing",
-    ] {
-        let (_temp, steam) = fixture();
-        let game = &steam.installs[0];
-        let r = release();
-        if !matches!(case, "new" | "damaged" | "unreadable_missing") {
-            fs::write(
-                game.install_path.join("data.txt"),
-                if case == "partial" {
-                    b"changed".as_slice()
-                } else {
-                    b"patched".as_slice()
-                },
-            )
-            .unwrap();
-        }
-        let (t, mut p) = signed_records(
-            game,
-            &r,
-            if case == "superseded" {
-                "superseded"
-            } else {
-                "committed"
-            },
-        );
-        if case == "content" {
-            p.recipe_sha256 = Some("b".repeat(64));
-        }
-        if case == "build" {
-            p.install.buildid = Some("older".into());
-        }
-        let tx = if matches!(case, "new" | "external" | "partial") {
-            TransactionSnapshot::default()
-        } else {
-            TransactionSnapshot::from_records(
-                vec![t],
-                if matches!(case, "unreadable_plan" | "unreadable_missing") {
-                    vec![]
-                } else {
-                    vec![p]
-                },
-            )
-        };
-        let c = Catalog {
-            releases: vec![r],
-            ..catalog()
-        };
-        let signed = verified(c.clone());
-        let caps = HostCapabilities::default();
-        let cancel = AtomicBool::new(false);
-        let mut i = inputs(&steam, &c, None, &tx, &caps, &cancel);
-        i.catalog = CatalogView::Verified(&signed);
-        let row = project_instance(&i, &game.instance_id).unwrap();
-        let a = &row.patches[0].actions;
-        assert!(!a.automatic.available, "{case}");
-        assert!(has_action_blocker(
-            &a.automatic,
-            ArtifactRequiresManualDownload
-        ));
-        assert!(a.local_archive.available, "{case}");
-        assert!(a.overwrite.available, "{case}");
-        assert_eq!(a.primary.input, InstallInputKind::Unavailable);
-        assert_eq!(a.reinstall.available, case == "managed", "{case}");
-        if matches!(case, "content" | "build") {
-            assert!(has_action_blocker(
-                &a.reinstall,
-                ReinstallContentIdentityChanged
-            ));
-        } else if case != "managed" {
-            assert!(has_action_blocker(
-                &a.reinstall,
-                ReinstallUnownedOrIncomplete
-            ));
-        }
-        assert_eq!(
-            a.primary.label,
-            if case == "new" {
-                PrimaryLabel::Install
-            } else {
-                PrimaryLabel::Overwrite
-            },
-            "{case}"
-        );
-    }
-}
-#[test]
-fn signed_trust_links_and_recipe_never_bypassed_by_matching_files() {
-    use patchhub_core::actions::ActionBlockerCode::*;
-    for case in [
-        "unsigned",
-        "expired",
-        "identity",
-        "unavailable_link",
-        "platform",
-        "build",
-        "game",
-    ] {
-        let (_temp, mut steam) = fixture();
-        let mut r = release();
-        fs::write(steam.installs[0].install_path.join("data.txt"), b"patched").unwrap();
-        if case == "platform" {
-            r.platforms = vec![Platform::Steamos];
-        }
-        if case == "build" {
-            r.verified_buildids = vec!["other".into()];
-        }
-        if case == "game" {
-            steam.installs[0].availability = "downloading".into();
-        }
-        let game = &steam.installs[0];
-        let c = Catalog {
-            releases: vec![r],
-            ..catalog()
-        };
-        let signed = verified(c.clone());
-        let tx = TransactionSnapshot::default();
-        let mut caps = HostCapabilities::default();
-        if case == "identity" {
-            caps.zip.available = false;
-            caps.zip.blockers = vec![DomainError::code("installer_host_requires_non_root")];
-        }
-        if case == "unavailable_link" {
-            caps.zip.available = false;
-        }
-        let cancel = AtomicBool::new(false);
-        let mut i = inputs(&steam, &c, None, &tx, &caps, &cancel);
-        if case != "unsigned" {
-            i.catalog = CatalogView::Verified(&signed);
-        }
-        if case == "expired" {
-            i.now = 2000;
-        }
-        let row = project_instance(&i, &game.instance_id).unwrap();
-        let a = &row.patches[0].actions;
-        assert!(
-            !a.automatic.available
-                && !a.local_archive.available
-                && !a.reinstall.available
-                && !a.overwrite.available,
-            "{case}"
-        );
-        let expected = match case {
-            "unsigned" => UnsignedCatalog,
-            "expired" => CatalogExpired,
-            "identity" => InstallerHostRequiresNonRoot,
-            "unavailable_link" => SourceRequiresGuidance,
-            "platform" => PlatformNotVerified,
-            "build" => BuildNotVerified,
-            _ => GameNotReady,
-        };
-        assert!(has_action_blocker(&a.local_archive, expected), "{case}");
-    }
-}
-#[test]
-fn recovery_blocks_all_current_instance_patches_but_other_instances_are_independent() {
-    use patchhub_core::actions::ActionBlockerCode::NeedsRecovery;
-    for same_instance in [false, true] {
-        let (_temp, steam) = fixture();
-        let game = &steam.installs[0];
-        let r = release();
-        let (mut t, _) = signed_records(game, &r, "needs_recovery");
-        t.release_id = "different-patch".into();
-        if !same_instance {
-            t.instance_id = "another-library".into();
-        }
-        let tx = TransactionSnapshot::from_records(vec![t], vec![]);
-        let c = Catalog {
-            releases: vec![r],
-            ..catalog()
-        };
-        let signed = verified(c.clone());
-        let caps = HostCapabilities::default();
-        let cancel = AtomicBool::new(false);
-        let mut i = inputs(&steam, &c, None, &tx, &caps, &cancel);
-        i.catalog = CatalogView::Verified(&signed);
-        let row = project_instance(&i, &game.instance_id).unwrap();
-        let a = &row.patches[0].actions;
-        for availability in [&a.automatic, &a.local_archive, &a.reinstall, &a.overwrite] {
-            assert_eq!(
-                has_action_blocker(availability, NeedsRecovery),
-                same_instance
-            );
-            if same_instance {
-                assert!(!availability.available);
-            }
-        }
-        assert_eq!(a.local_archive.available, !same_instance);
-    }
 }
 #[test]
 fn publisher_actions_resolve_urls_and_distinguish_format_links_and_unknown_detection() {
@@ -992,7 +629,6 @@ fn publisher_actions_resolve_urls_and_distinguish_format_links_and_unknown_detec
         }
         let now = seed(&state, candidate);
         let source = load(&state, &steam, now);
-        let c = catalog();
         let tx = TransactionSnapshot::default();
         let mut caps = HostCapabilities::default();
         caps.exe.blockers.clear();
@@ -1002,7 +638,7 @@ fn publisher_actions_resolve_urls_and_distinguish_format_links_and_unknown_detec
         }
         let cancel = AtomicBool::new(false);
         let row = project_instance(
-            &inputs(&steam, &c, Some(&source), &tx, &caps, &cancel),
+            &inputs(&steam, Some(&source), &tx, &caps, &cancel),
             &steam.installs[0].instance_id,
         )
         .unwrap();
@@ -1015,8 +651,7 @@ fn publisher_actions_resolve_urls_and_distinguish_format_links_and_unknown_detec
             "{case}"
         );
         assert_eq!(a.overwrite.available, a.automatic.available);
-        assert!(!a.local_archive.available && !a.reinstall.available);
-        assert!(has_action_blocker(&a.local_archive, LocalArchiveSignedOnly));
+        assert!(!a.reinstall.available);
         if case == "bad_url" {
             assert!(has_action_blocker(&a.automatic, InvalidDownloadUrl));
         }
@@ -1036,132 +671,6 @@ fn publisher_actions_resolve_urls_and_distinguish_format_links_and_unknown_detec
         );
         // Raw discovery mirror facts still survive; actions do not replace discovery.
         assert!(!row.discovery.unwrap().candidates[0].mirrors.is_empty());
-    }
-}
-#[test]
-fn serialized_action_stress_records_actual_jsonl_bytes_without_raising_cap() {
-    let (_temp, mut steam) = fixture();
-    let first = steam.installs[0].clone();
-    steam.installs = (0..500)
-        .map(|n| {
-            let mut g = first.clone();
-            g.instance_id = format!("instance-{n}");
-            g
-        })
-        .collect();
-    let tx = TransactionSnapshot::default();
-    let caps = HostCapabilities {
-        zip: LinkCapability {
-            available: false,
-            blockers: vec![DomainError::new(
-                "installer_host_requires_non_root",
-                "x".repeat(2048),
-            )],
-        },
-        exe: HostCapabilities::default().exe,
-    };
-    let cancel = AtomicBool::new(false);
-    let mut measurements = Vec::new();
-    for patches in [1, 4] {
-        let c = Catalog {
-            releases: (0..patches)
-                .map(|n| {
-                    let mut r = release();
-                    r.release_id = format!("stress-release-{n}");
-                    r
-                })
-                .collect(),
-            ..catalog()
-        };
-        let signed = verified(c.clone());
-        let mut i = inputs(&steam, &c, None, &tx, &caps, &cancel);
-        i.catalog = CatalogView::Verified(&signed);
-        let report = scan(i).unwrap();
-        let envelope = serde_json::json!({"protocol_version":5,"request_id":"stress","ok":true,"result":report});
-        let bytes = serde_json::to_vec(&envelope).unwrap().len() + 1;
-        measurements.push(serde_json::json!({"instances":500,"patches_per_instance":patches,"bytes_including_lf":bytes,"limit_bytes":8*1024*1024,"within_limit":bytes <= 8*1024*1024}));
-    }
-    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../.artifacts/rust-core-consolidation/p6/wire-size.json");
-    fs::create_dir_all(path.parent().unwrap()).unwrap();
-    fs::write(path, serde_json::to_vec_pretty(&serde_json::json!({"producer":"actual_core_projection","detail_bytes":2048,"protocol_version":5,"measurements":measurements})).unwrap()).unwrap();
-    assert!(measurements[0]["within_limit"].as_bool().unwrap());
-    assert!(!measurements[1]["within_limit"].as_bool().unwrap());
-}
-
-#[test]
-fn signed_automatic_is_preferred_and_revocation_blocks_both_inputs() {
-    use patchhub_core::actions::{
-        ActionBlockerCode::ReleaseRevoked, InstallInputKind, PrimaryLabel,
-    };
-    for revoked in [false, true] {
-        let (_temp, steam) = fixture();
-        let mut r = release();
-        r.artifact = Some(patchhub_core::catalog::Artifact {
-            url: "https://example.invalid/patch.zip".into(),
-            size: 7,
-            sha256: r.recipe.as_ref().unwrap().artifact_sha256.clone(),
-            allowed_redirect_hosts: vec!["example.invalid".into()],
-        });
-        let c = Catalog {
-            releases: vec![r.clone()],
-            ..catalog()
-        };
-        let key = SigningKey::from_bytes(&[7; 32]);
-        let payload = serde_json::to_vec(&CatalogPayload {
-            catalog: c.clone(),
-            generated_at: 1000,
-            expires_at: 2000,
-            revoked_release_ids: if revoked {
-                vec![r.release_id.clone()]
-            } else {
-                vec![]
-            },
-        })
-        .unwrap();
-        let envelope = SignedEnvelope {
-            schema_version: 1,
-            key_id: "test".into(),
-            payload: STANDARD.encode(&payload),
-            signature: STANDARD.encode(key.sign(&payload).to_bytes()),
-        };
-        let keys = TrustKeys {
-            schema_version: 1,
-            keys: vec![TrustKey {
-                key_id: "test".into(),
-                public_key: STANDARD.encode(key.verifying_key().to_bytes()),
-                revoked: false,
-            }],
-        };
-        let signed =
-            VerifiedCatalog::from_bytes(&serde_json::to_vec(&envelope).unwrap(), &keys, 1500, 0)
-                .unwrap();
-        let tx = TransactionSnapshot::default();
-        let caps = HostCapabilities::default();
-        let cancel = AtomicBool::new(false);
-        let mut i = inputs(&steam, &c, None, &tx, &caps, &cancel);
-        i.catalog = CatalogView::Verified(&signed);
-        let row = project_instance(&i, &steam.installs[0].instance_id).unwrap();
-        let a = &row.patches[0].actions;
-        assert_eq!(a.automatic.available, !revoked);
-        assert_eq!(a.local_archive.available, !revoked);
-        assert_eq!(a.overwrite.available, !revoked);
-        assert_eq!(
-            a.primary.input,
-            if revoked {
-                InstallInputKind::Unavailable
-            } else {
-                InstallInputKind::Automatic
-            }
-        );
-        assert_eq!(a.primary.label, PrimaryLabel::Install);
-        if revoked {
-            assert!(has_action_blocker(&a.automatic, ReleaseRevoked));
-            assert!(has_action_blocker(&a.local_archive, ReleaseRevoked));
-        }
-        let json = serde_json::to_value(row).unwrap();
-        assert!(json["patches"][0].get("actions").is_some());
-        assert!(json["patches"][0].get("download_available").is_none());
     }
 }
 #[test]
@@ -1208,11 +717,10 @@ fn dynamic_complete_receipt_reinstalls_but_changed_selection_or_files_cannot() {
             t.content_id = Some("different-content".into());
         }
         let tx = TransactionSnapshot::from_records(vec![t], vec![p]);
-        let c = catalog();
         let caps = HostCapabilities::default();
         let cancel = AtomicBool::new(false);
         let row = project_instance(
-            &inputs(&steam, &c, Some(&source), &tx, &caps, &cancel),
+            &inputs(&steam, Some(&source), &tx, &caps, &cancel),
             &game.instance_id,
         )
         .unwrap();
@@ -1243,12 +751,11 @@ fn action_instance_boundary_is_checked_even_without_dynamic_file_receipts() {
     fs::create_dir(&outside).unwrap();
     steam.installs[0].install_path = outside;
     let source = load(&state, &steam, now);
-    let c = catalog();
     let tx = TransactionSnapshot::default();
     let caps = HostCapabilities::default();
     let cancel = AtomicBool::new(false);
     let row = project_instance(
-        &inputs(&steam, &c, Some(&source), &tx, &caps, &cancel),
+        &inputs(&steam, Some(&source), &tx, &caps, &cancel),
         &steam.installs[0].instance_id,
     )
     .unwrap();
@@ -1331,11 +838,10 @@ fn manual_unknown_candidate_binds_download_and_instance_without_faking_metadata(
                 blockers: vec![],
             },
         };
-        let c = catalog();
         let tx = TransactionSnapshot::default();
         let cancel = AtomicBool::new(false);
         let row = project_instance(
-            &inputs(&steam, &c, Some(&snapshot), &tx, &caps, &cancel),
+            &inputs(&steam, Some(&snapshot), &tx, &caps, &cancel),
             &steam.installs[0].instance_id,
         )
         .unwrap();

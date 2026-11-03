@@ -38,11 +38,7 @@ class InstallFixtureModel extends AppModel {
   }
 }
 
-class FixtureDesktop extends DesktopServices {
-  String? file;
-  @override
-  Future<String?> selectArchive() async => file;
-}
+class FixtureDesktop extends DesktopServices {}
 
 Future<void> mountPatch(
   WidgetTester tester,
@@ -134,50 +130,26 @@ void main() {
     },
   );
 
-  testWidgets(
-    'local file cancel does not start installation; selected ZIP uses only release identity',
-    (tester) async {
-      final model = InstallFixtureModel('chunked');
-      final patch = model.snapshot!.rows.single.patches.single;
-      patch['actions']['primary']['input'] = 'unavailable';
-      patch['actions']['automatic']['available'] = false;
-      final desktop = FixtureDesktop();
-      await mountPatch(tester, model, desktop);
-      expect(find.text('需要选择本地 ZIP'), findsNothing);
-      await tester.ensureVisible(find.text('使用本地 ZIP（可选）'));
-      await tester.tap(find.text('使用本地 ZIP（可选）'));
-      await tester.pumpAndSettle();
-      await tester.ensureVisible(find.text('选择本地 ZIP'));
-      await tester.tap(find.text('选择本地 ZIP'));
-      await tester.pumpAndSettle();
-      expect(model.tasks.installation, isNull);
-      expect(
-        tester.widget<FilledButton>(find.byType(FilledButton)).onPressed,
-        isNull,
-      );
-      desktop.file = 'fixture/patch.zip';
-      await tester.tap(find.text('选择本地 ZIP'));
-      await tester.pumpAndSettle();
-      await tester.runAsync(() => tester.tap(find.text('使用本地 ZIP 安装')));
-      await tester.pump();
-      final task = model.tasks.installation!;
-      expect(task.arguments, {
-        'instance_id': 'instance',
-        'release_id': 'release',
-        'operation': 'overwrite',
-        'cleanup_policy': 'disabled',
-        'archive': 'fixture/patch.zip',
-      });
-      await tester.runAsync(() => task.done);
-      await tester.pumpAndSettle();
-      expect(find.text('安装完成'), findsOneWidget);
-      await tester.tap(find.text('关闭结果'));
-      await tester.pumpAndSettle();
-      expect(task.cancelRequested, isFalse);
-      await tester.pumpWidget(const SizedBox.shrink());
-      model.dispose();
-    },
-  );
+  testWidgets('unavailable dynamic selection has no retired local ZIP input', (
+    tester,
+  ) async {
+    final model = InstallFixtureModel('chunked');
+    final patch = model.snapshot!.rows.single.patches.single;
+    patch['actions']['primary']['input'] = 'unavailable';
+    patch['actions']['automatic']['available'] = false;
+    final desktop = FixtureDesktop();
+    await mountPatch(tester, model, desktop);
+    expect(find.text('需要选择本地 ZIP'), findsNothing);
+    expect(find.text('使用本地 ZIP（可选）'), findsNothing);
+    expect(find.text('选择本地 ZIP'), findsNothing);
+    expect(model.tasks.installation, isNull);
+    expect(
+      tester.widget<FilledButton>(find.byType(FilledButton)).onPressed,
+      isNull,
+    );
+    await tester.pumpWidget(const SizedBox.shrink());
+    model.dispose();
+  });
 
   testWidgets('completed receipt survives a failed state refresh', (
     tester,

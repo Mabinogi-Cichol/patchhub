@@ -147,7 +147,7 @@ class SourceTasksRpcTests(unittest.IsolatedAsyncioTestCase):
     async def test_install_runs_without_cancelling_source_tasks(self):
         plugin = self.plugin()
         plugin.bridge.install_patch = AsyncMock(return_value={"disposition": "completed", "state": "committed"})
-        started = await plugin.start_patch_install_task("local", "signed", None, None, "install", "request-1")
+        started = await plugin.start_patch_install_task("local", "zip-selection-0123456789abcdef01234567-42", "install", "request-1")
         await plugin.tasks.get(started["task_id"]).worker
         self.assertEqual((await plugin.task_status(started["task_id"]))["state"], "completed")
         plugin.sources.cancel_task.assert_not_called()

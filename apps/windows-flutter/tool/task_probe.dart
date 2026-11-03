@@ -6,9 +6,9 @@ import 'package:patchhub_windows/host/core_paths.dart';
 import 'package:patchhub_windows/host/core_task.dart';
 
 Future<void> main(List<String> args) async {
-  if (args.length != 4 && args.length != 5) {
+  if (args.length != 3 && args.length != 4) {
     throw ArgumentError(
-      'task_probe <core> <state-copy> <resources> <source_id> [complete]',
+      'task_probe <core> <state-copy> <source_id> [complete]',
     );
   }
   final protocol = WireProtocol(
@@ -19,21 +19,17 @@ Future<void> main(List<String> args) async {
     ) as Map<String, dynamic>,
   );
   final client = CoreClient(
-    CorePaths(
-      binary: args[0],
-      stateDirectory: args[1],
-      resourceDirectory: args[2],
-    ),
+    CorePaths(binary: args[0], stateDirectory: args[1]),
     protocol,
   );
   final task = CoreTask.start(client, 'update_source', {
-    'source_id': args[3],
-    'force': args.length != 5,
+    'source_id': args[2],
+    'force': args.length != 4,
   });
   final events = <Map<String, dynamic>>[];
   task.events.listen((event) {
     events.add(event);
-    if (args.length != 5) task.cancel();
+    if (args.length != 4) task.cancel();
   });
   await task.done;
   stdout.writeln(

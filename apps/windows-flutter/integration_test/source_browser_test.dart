@@ -16,7 +16,6 @@ class SourcePaths extends CorePaths {
     : super(
         binary: '$root/target/release/patchhub-core.exe',
         stateDirectory: state,
-        resourceDirectory: '$root/catalog',
       );
   final String library;
   @override

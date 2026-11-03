@@ -10,8 +10,7 @@ use std::{
 };
 
 fn call(state: &Path, method: &str, mut params: Value) -> Value {
-    params["host"] = json!({"roots":[],"catalog":null,"signed_catalog":null,"trust_keys":null,
-        "state_dir":state,"platform":if cfg!(windows) {"windows"} else {"steamos"}});
+    params["host"] = json!({"roots":[],"state_dir":state,"platform":if cfg!(windows) {"windows"} else {"steamos"}});
     let mut child = Command::new(env!("CARGO_BIN_EXE_patchhub-core"))
         .arg("serve")
         .stdin(Stdio::piped())

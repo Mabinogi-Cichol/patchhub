@@ -66,6 +66,8 @@ void _validateCapabilities(Map<String, dynamic> value) {
   ]) {
     if (contracts[key] !=
         (key == 'request_validation_version' || key == 'projection_version'
+            ? 3
+            : key == 'actions_version'
             ? 2
             : 1)) {
       throw const CoreError('capability_mismatch');
@@ -106,11 +108,7 @@ void _validateCapabilities(Map<String, dynamic> value) {
   }
   if (installer['formats']['zip'] != 'supported' ||
       installer['formats']['exe'] != 'supported' ||
-      !equal(installer['strategies'], [
-        'managed_zip',
-        'publisher_zip',
-        'publisher_exe',
-      ])) {
+      !equal(installer['strategies'], ['publisher_zip', 'publisher_exe'])) {
     throw const CoreError('capability_mismatch');
   }
   for (final format in ['zip', 'exe']) {

@@ -158,8 +158,7 @@ class ProjectVersionTests(unittest.TestCase):
             target = self.root / relative
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(versions.ROOT / relative, target)
-        for relative in ('catalog/catalog.json', 'catalog/signed-catalog.json', 'catalog/trust-keys.json',
-                         'LICENSE', 'packages/contracts/generated/v5.schema.json',
+        for relative in ('LICENSE', 'packages/contracts/generated/v5.schema.json',
                          'target/release/patchhub-core.exe', 'target/release/patchhub-worker.exe'):
             target = self.root / relative
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -175,12 +174,18 @@ class ProjectVersionTests(unittest.TestCase):
             ')\nexit /b 0\n', encoding='utf-8')
         bundle = self.root / 'apps/windows-flutter/build/windows/x64/runner/Release'
         bundle.mkdir(parents=True)
+        stale = ('catalog.json', 'signed-catalog.json', 'trust-keys.json')
+        (bundle / 'resources').mkdir()
+        for name in stale:
+            (bundle / 'resources' / name).write_text('obsolete', encoding='utf-8')
         prepare(bundle, '0.0.1', root=self.root)
         self.bump('9.8.7')
         result = subprocess.run(['pwsh', '-NoProfile', '-File', str(self.root / 'scripts/build-windows-flutter.ps1'),
                                  '-Flutter', str(sdk / 'bin/flutter.bat'), '-SkipRust', '-Preview'],
                                 capture_output=True, text=True, encoding='utf-8')
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue(all(not (bundle / 'resources' / name).exists() for name in stale))
+        self.assertFalse((self.root / 'catalog').exists())
         self.assertEqual(versions.check(self.root), '9.8.7')
         self.assertEqual(json.loads((bundle / 'app-version.json').read_text())['version'], '9.8.7')
         self.assertEqual(json.loads((bundle / 'update-manifest.json').read_text())['version'], '9.8.7')
@@ -202,7 +207,7 @@ class ProjectVersionTests(unittest.TestCase):
                          'scripts/licenses/Lua-5.4-LICENSE.txt', 'scripts/licenses/mlua-MIT.txt',
                          'apps/windows-flutter/assets/shiravune-browser.js',
                          'packages/contracts/generated/protocol.py', 'packages/contracts/generated/v5.schema.json',
-                         'catalog/catalog.json', 'catalog/signed-catalog.json', 'catalog/trust-keys.json'):
+                         ):
             target = self.root / relative
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text('fixture', encoding='utf-8')
@@ -216,6 +221,8 @@ class ProjectVersionTests(unittest.TestCase):
         result = subprocess.run(['node', str(app / 'scripts/package-plugin.mjs')], capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(json.loads((app / 'plugin-output/package.json').read_text())['version'], '9.8.7')
+        self.assertFalse((self.root / 'catalog').exists())
+        self.assertEqual({p.name for p in (app / 'plugin-output/bin').iterdir()}, {'patchhub-core', 'patchhub-worker', 'runtime.json'})
         self.assertEqual(versions.check(self.root), '9.8.7')
 
 
