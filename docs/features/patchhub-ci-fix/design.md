@@ -45,3 +45,11 @@
 4. 提交和推送后另行核验完整 GitHub CI；本轮本地测试不代表被失败步骤阻断的打包、构建和附件上传已在线通过。
 
 不调整 workflow、模块选择、重试、超时或既有业务限制，不发布版本、不操作设备。
+
+## 2026-11-03：Windows 并发脚本导入 CI 失败调查（待定位）
+
+- 目标提交 `3ac65f44ebfa2176716a645608c803689605cd78` 的 [push run 41458277929](https://github.com/Mabinogi-Cichol/patchhub/actions/runs/41458277929/job/125320569553) 在 `racing_first_imports_of_the_same_id_have_exactly_one_winner` 失败；11 项中 10 项通过。一个导入成功的断言已通过，但另一方错误不是 `script_source_exists`；原断言没有输出实际错误。
+- Ubuntu Core、Windows 打包和 Decky 均成功。相同 SHA 的另一次 push run 41458274856 为 success，不能将单个成功运行当作本次失败已解决。
+- 分支 `fix/script-import-windows-lock` 从 main 创建。当前仅补充测试诊断，生产代码不变；施工和验证见 [progress.md](progress.md)。根因及生产修复待确定。
+- 已检查导入编译、带文件锁的最新设置读取/编辑/原子写入、注册表重载及 Windows 文件读取边界。锁的现有两秒等待和原子写入重试只是排查线索；线上未输出实际错误，本地未复现，不将它们认定为根因或据此调整阈值。
+- 验收：保留恰好一个成功、失败必须为重复 ID、revision 只增加一次及源码可重读的原断言；失败时输出两方结果。后续需要带诊断的线上失败结果才能决定生产修复，完整 CI 待验证。
