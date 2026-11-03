@@ -276,6 +276,9 @@ class Plugin:
     async def recover_app_update(self):
         return self.app_update.start(recover=True)
 
+    async def restart_app_update_client(self, client_context=None):
+        return self.app_update.start(restart_only=True, client_context=client_context)
+
     def _prepare_app_update(self):
         patch_busy = hasattr(self, 'tasks') and self.tasks.busy()
         source_busy = hasattr(self, 'sources') and any(t['state'] not in ('completed', 'failed', 'cancelled') for t in self.sources.task_status())
@@ -294,10 +297,10 @@ class Plugin:
         self._app_update_gate = False
         return {'ready': True}
 
-    async def start_app_update(self, tag):
+    async def start_app_update(self, tag, client_context=None):
         self._prepare_app_update()
         try:
-            return self.app_update.start(tag)
+            return self.app_update.start(tag, client_context=client_context)
         except BaseException:
             self._app_update_gate = False
             raise
@@ -390,7 +393,7 @@ def _await_startup(method):
     async def ready(self, *args, **kwargs):
         update_methods = {'get_app_update_status', 'check_app_update', 'skip_app_update',
                           'claim_app_update_notice', 'start_app_update', 'cancel_app_update',
-                          'recover_app_update', 'prepare_app_update'}
+                          'recover_app_update', 'prepare_app_update', 'restart_app_update_client'}
         event = getattr(self, "_startup_ready", None)
         if event is not None:
             await event.wait()

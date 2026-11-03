@@ -138,6 +138,12 @@ test('restore only own settings membership and neighbour position; retain added 
   assert.deepEqual(e.settings.frozenPlugins,['new']);
 });
 
+test('accept verified Loader 3.3.1 installation adapter',async()=>{
+  const e=environment(),dispatch=e.backend.dispatch.bind(e.backend);
+  e.backend.dispatch=async(route,...args)=>route==='updater/get_version_info'?{current:'v3.3.1'}:dispatch(route,...args);
+  assert.equal((await e.run('probe',{})).plugins.length,1);
+});
+
 test('reject unsupported version and disconnected or foreign busy Loader',async()=>{
   const e=environment(),dispatch=e.backend.dispatch.bind(e.backend);
   e.backend.dispatch=async(route,...args)=>route==='updater/get_version_info'?{current:'v4.0.0'}:dispatch(route,...args);

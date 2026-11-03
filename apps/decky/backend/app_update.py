@@ -132,6 +132,10 @@ class AppUpdate:
                 latest = json.loads(worker.read_text(encoding='utf-8'))
                 if latest.get('state') in ('completed', 'failed'):
                     execution = latest
+                elif execution.get('stage') == 'restarting':
+                    execution = {**execution, 'state': 'completed', 'restart': 'failed',
+                        'restart_error': '重启执行进程已退出，客户端重启结果未确认'}
+                    _write_json(worker, execution)
                 else:
                     execution = {'state': 'failed', 'error': '更新进程已退出，请重试或恢复未完成的更新'}
                     _write_json(worker, execution)
@@ -139,11 +143,13 @@ class AppUpdate:
                 'retry_at': self.data.get('retry_at'),
                 'needs_recovery': (Path.home() / '.cache/patchhub-decky-install/journal.json').exists()}
 
-    def start(self, tag=None, recover=False):
-        if not recover and (self.result.get('state') != 'available' or tag != self.result.get('tag')):
+    def start(self, tag=None, recover=False, restart_only=False, client_context=None):
+        if not recover and not restart_only and (self.result.get('state') != 'available' or tag != self.result.get('tag')):
             raise ValueError('更新候选已变化，请重新检查')
         self.worker_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
         status = self.snapshot().get('execution') or {}
+        if restart_only and (status.get('state') != 'completed' or status.get('restart') != 'failed'):
+            raise RuntimeError('没有需要重试的客户端重启')
         if status.get('state') in ('preparing', 'applying'):
             raise RuntimeError('更新已在进行，请查看更新结果或完成恢复')
         # This trusted script is copied outside the directory Loader will remove.
@@ -152,16 +158,25 @@ class AppUpdate:
             raise RuntimeError('未找到 SteamOS Python 3，请使用终端安装入口检查运行环境')
         shutil.copyfile(self.root / 'backend' / 'install-decky.py', self.worker_dir / 'install-decky.py')
         request = self.worker_dir / 'request.json'
-        _write_json(request, {'candidate': self.result, 'plugin': str(self.root), 'status': str(self.worker_dir / 'result.json'), 'recover': recover})
-        _write_json(self.worker_dir / 'result.json', {'state': 'applying', 'stage': 'recovering'} if recover else {'state': 'preparing'})
+        _write_json(request, {'candidate': {'tag': status['version']} if restart_only else self.result,
+            'plugin': str(self.root), 'status': str(self.worker_dir / 'result.json'), 'recover': recover,
+            'restart_only': restart_only, 'installed_version': status.get('version'), 'client_context': client_context})
+        _write_json(self.worker_dir / 'result.json',
+            {**status, 'state': 'applying', 'stage': 'restarting', 'percent': 100} if restart_only
+            else {'state': 'applying', 'stage': 'recovering'} if recover else {'state': 'preparing', 'percent': 0})
         with (self.worker_dir / 'worker.log').open('wb') as log:
             environment = dict(os.environ)
             if 'LD_LIBRARY_PATH_ORIG' in environment:
                 environment['LD_LIBRARY_PATH'] = environment.pop('LD_LIBRARY_PATH_ORIG')
             else:
                 environment.pop('LD_LIBRARY_PATH', None)
-            worker = subprocess.Popen([python, str(self.worker_dir / 'install-decky.py'), '--gui-request', str(request)],
-                stdin=subprocess.DEVNULL, stdout=log, stderr=log, start_new_session=True, close_fds=True, env=environment)
+            try:
+                worker = subprocess.Popen([python, str(self.worker_dir / 'install-decky.py'), '--gui-request', str(request)],
+                    stdin=subprocess.DEVNULL, stdout=log, stderr=log, start_new_session=True, close_fds=True, env=environment)
+            except OSError:
+                if restart_only:
+                    _write_json(self.worker_dir / 'result.json', status)
+                raise
         _write_json(self.worker_dir / 'worker.json', {'pid': worker.pid})
         return self.snapshot()
 

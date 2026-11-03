@@ -19,6 +19,48 @@ m = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(m)
 
 
+class ClientRestartTests(unittest.TestCase):
+    def test_whole_download_progress_uses_release_size_and_ignores_metadata(self):
+        events = []
+        with patch.object(m, 'UPDATE_PROGRESS', events.append):
+            m.download_progress(100, 100, 'https://example.com/SHA256SUMS.txt')
+            m.download_progress(25, 0, 'https://example.com/' + m.ASSET, 100)
+            m.download_progress(100, 0, 'https://example.com/' + m.ASSET, 100)
+            m.download_progress(25, 0, 'https://example.com/' + m.ASSET)
+        self.assertEqual([e['percent'] for e in events], [20, 80, 0])
+
+    def test_restart_persists_install_success_before_calling_steam(self):
+        with tempfile.TemporaryDirectory() as directory:
+            status = Path(directory) / 'result.json'
+            from unittest.mock import Mock
+            loader = Mock()
+            def evaluate(expression):
+                if 'typeof' in expression:
+                    return 123
+                saved = m.json_read(status)
+                self.assertEqual(saved['state'], 'completed')
+                self.assertEqual(saved['percent'], 100)
+                self.assertEqual(saved['restart_context'], 123)
+                self.assertIn('StartRestart(true)', expression)
+                raise m.InstallError('CEF 连接已断开')
+            loader.cdp.evaluate.side_effect = evaluate
+            m.restart_client(loader, {'status': str(status), 'client_context': 123}, 'v0.5.4')
+            self.assertEqual(m.json_read(status)['restart'], 'requested')
+
+    def test_restart_error_does_not_turn_installed_version_into_failed_install(self):
+        with tempfile.TemporaryDirectory() as directory:
+            status = Path(directory) / 'result.json'
+            from unittest.mock import Mock
+            loader = Mock()
+            loader.cdp.evaluate.side_effect = m.InstallError('unsupported client')
+            m.restart_client(loader, {'status': str(status)}, 'v0.5.4')
+            result = m.json_read(status)
+            self.assertEqual(result['state'], 'completed')
+            self.assertEqual(result['version'], 'v0.5.4')
+            self.assertEqual(result['restart'], 'failed')
+            self.assertIn('unsupported client', result['restart_error'])
+
+
 def create_package(path, version="0.2.0", changes=None):
     elf = b"\x7fELF\x02\x01\x01" + b"\0" * 11 + struct.pack("<H", 62) + b"fixture"
     files = {name: b"fixture" for name in (
@@ -207,6 +249,7 @@ class InstallerTests(unittest.TestCase):
             self.installer.install(self.package, yes=True)
         self.assertEqual([event['stage'] for event in events], ['backing_up', 'installing', 'verifying', 'cleanup'])
         self.assertTrue(all(event['state'] == 'applying' for event in events))
+        self.assertEqual([event['percent'] for event in events], [85, 90, 95, 99])
 
     def test_failed_install_reports_recovery_stage_before_terminal_error(self):
         self.old()

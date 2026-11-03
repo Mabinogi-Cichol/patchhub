@@ -18,6 +18,33 @@ def release():
         for i, name in enumerate((ASSET, 'SHA256SUMS.txt'))]}
 
 
+class RestartRetryTests(unittest.TestCase):
+    def test_retry_launches_restart_only_and_rejects_a_second_request(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'package.json').write_text('{"version":"0.5.3"}')
+            (root / 'backend').mkdir()
+            (root / 'backend/install-decky.py').write_text('# fixture')
+            service = AppUpdate(root, root)
+            service.worker_dir = root / 'worker'
+            service.worker_dir.mkdir()
+            (service.worker_dir / 'result.json').write_text(json.dumps({
+                'state': 'completed', 'version': 'v0.5.3', 'restart': 'failed'}))
+            with patch('app_update.shutil.which', return_value='python3'), patch('app_update.subprocess.Popen', return_value=Mock(pid=123)):
+                service.start(restart_only=True, client_context=123)
+            request = json.loads((service.worker_dir / 'request.json').read_text())
+            self.assertTrue(request['restart_only'])
+            self.assertEqual(request['installed_version'], 'v0.5.3')
+            self.assertEqual(request['client_context'], 123)
+            self.assertEqual(request['candidate']['tag'], 'v0.5.3')
+            result = service.snapshot()['execution']
+            self.assertEqual(result['state'], 'completed')
+            self.assertEqual(result['version'], 'v0.5.3')
+            service.snapshot = Mock(return_value={'execution': {'state': 'applying', 'stage': 'restarting'}})
+            with self.assertRaises(RuntimeError):
+                service.start(restart_only=True)
+
+
 class VersionTests(unittest.TestCase):
     def test_shared_contract(self):
         fixtures = json.loads((Path(__file__).parents[3] / 'scripts/fixtures/app-update.json').read_text())

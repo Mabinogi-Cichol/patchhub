@@ -37,7 +37,37 @@ UPDATE_PROGRESS = None
 
 def update_progress(state, stage):
     if UPDATE_PROGRESS:
-        UPDATE_PROGRESS({'state': state, 'stage': stage})
+        percent = {'validating': 80, 'preparing': 85, 'backing_up': 85,
+                   'installing': 90, 'verifying': 95, 'cleanup': 99}.get(stage, 0)
+        UPDATE_PROGRESS({'state': state, 'stage': stage, 'percent': percent})
+
+
+def download_progress(size, total, url, expected_size=0):
+    if UPDATE_PROGRESS and urllib.parse.urlsplit(url).path.endswith('/' + ASSET):
+        total = expected_size or total
+        UPDATE_PROGRESS({'state': 'preparing', 'stage': 'downloading', 'bytes': size, 'total': total,
+                         'percent': min(80, int(size / total * 80)) if total else 0})
+
+
+def restart_client(loader, gui, version):
+    """Only the GUI success path (or an explicit retry) requests a client restart."""
+    result = {'state': 'completed', 'version': version, 'percent': 100}
+    try:
+        loader.cdp.evaluate("(() => { if (typeof SteamClient?.User?.StartRestart !== 'function') throw new Error('Steam 客户端重启接口不可用'); return true; })()")
+        result.update(restart='requested', restart_context=gui.get('client_context'))
+        atomic_json(Path(gui['status']), result)
+        try:
+            loader.cdp.evaluate('(() => { SteamClient.User.StartRestart(true); return true; })()')
+        except (OSError, EOFError):
+            # The client can close CDP before delivering the result. This is
+            # an unconfirmed request, not proof of installation failure.
+            pass
+        except InstallError as error:
+            if str(error) not in ('CEF 连接已关闭', 'CEF 连接已断开'):
+                raise
+    except Exception as error:
+        result.update(restart='failed', restart_error=str(error))
+        atomic_json(Path(gui['status']), result)
 
 
 class InstallError(RuntimeError):
@@ -423,7 +453,7 @@ BRIDGE = r"""async (op, a) => {
      if (!Array.isArray(settings[k]) || settings[k].some(x => typeof x !== 'string')) fail('invalid_settings');
    }
    const version=await b.call('updater/get_version_info');
-   if (!['v3.2.9','3.2.9','v3.3.0','3.3.0'].includes(version?.current)) fail('unsupported_loader_version');
+   if (!['v3.2.9','3.2.9','v3.3.0','3.3.0','v3.3.1','3.3.1'].includes(version?.current)) fail('unsupported_loader_version');
    return {plugins: matches, settings, instances: l.plugins.filter(p => p.name===name).map(p => ({version:p.version, valid:!!p.titleView})), user:await b.call('utilities/get_user_info')};
  }
  if (op === 'tasks') {
@@ -809,8 +839,8 @@ def main(argv=None):
         options.homebrew = Path(gui['plugin']).parent.parent
         global DOWNLOAD_PROGRESS, UPDATE_PROGRESS
         UPDATE_PROGRESS = lambda value: atomic_json(Path(gui['status']), value)
-        DOWNLOAD_PROGRESS = lambda size, total, url: atomic_json(Path(gui['status']), {
-            'state': 'preparing', 'stage': 'downloading', 'bytes': size, 'total': total, 'file': urllib.parse.urlsplit(url).path.rsplit('/', 1)[-1]}) if urllib.parse.urlsplit(url).path.endswith('/' + ASSET) else None
+        expected_size = gui.get('candidate', {}).get('asset', {}).get('size', 0)
+        DOWNLOAD_PROGRESS = lambda size, total, url: download_progress(size, total, url, expected_size)
     require(sys.version_info >= (3, 10) and sys.platform == "linux", "请使用 Steam Deck 上的 Python 3.10+ 运行")
     require(os.geteuid() != 0, "请以 Steam 用户运行，不要使用 sudo")
     require(not options.recover or (not options.version and not options.check and not options.yes), "--recover 不能与版本、安装或检查参数组合")
@@ -823,6 +853,12 @@ def main(argv=None):
     for sig in (signal.SIGTERM, signal.SIGHUP):
         signal.signal(sig, lambda signum, frame: (_ for _ in ()).throw(KeyboardInterrupt()))
     with workspace_lock(cache):
+        if gui and gui.get('restart_only'):
+            try:
+                restart_client(loader, gui, gui['installed_version'])
+            finally:
+                loader.cdp.close()
+            return
         if work.exists():
             no_links(work)
             require(work.is_dir() and work.stat().st_uid == os.geteuid() and stat.S_IMODE(work.stat().st_mode) == 0o700, "恢复目录所有者/权限异常")
@@ -867,7 +903,7 @@ def main(argv=None):
             if 'backend/app_update.py' in package['files']:
                 loader.call('finish_app_update')
             if gui:
-                atomic_json(Path(gui['status']), {'state': 'completed', 'version': options.version})
+                restart_client(loader, gui, options.version)
             print(f"{package['tag']} 安装及运行验证通过；本次备份、下载与恢复记录已清理。")
         finally:
             loader.cdp.close()
@@ -884,7 +920,10 @@ if __name__ == "__main__":
         if '--gui-request' in sys.argv:
             try:
                 request = json_read(Path(sys.argv[sys.argv.index('--gui-request') + 1]))
-                atomic_json(Path(request['status']), {'state': 'failed', 'error': str(error) or '已取消'})
+                result = ({'state': 'completed', 'version': request['installed_version'], 'percent': 100,
+                           'restart': 'failed', 'restart_error': str(error) or '已取消'}
+                          if request.get('restart_only') else {'state': 'failed', 'error': str(error) or '已取消'})
+                atomic_json(Path(request['status']), result)
             except Exception as status_error:
                 print(f'无法写入更新结果：{status_error}', file=sys.stderr)
         print(f"未完成：{error or '已取消'}。", file=sys.stderr)
