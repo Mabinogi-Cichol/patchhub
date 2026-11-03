@@ -2,6 +2,26 @@
 
 本清单区分已构建产物与已验收发行版。当前版本仍为开发 Alpha，完整开发计划的样本数量及双端 UI 门槛尚未达到。
 
+## v0.5.3 发布记录（2026-11-03）
+
+- 用户授权发布；发布提交 `d41fa74447d7e7ea2c8bd828e030895b20a12b98`（版本同步 `d41fa74`，此前含 cache_smoke 请求头修复 `880518f`、本地 CI 文档 `a0d0128`、记录更新 `ce5f047` 及两个合并提交）。main 与注解 Tag v0.5.3 推送，Tag 对象 `ae0411308bdf19639cf6b06707acd99535a404a8` 指向该提交。
+- [标签 CI 41629719888](https://github.com/Mabinogi-Cichol/patchhub/actions/runs/41629719888) 的 changes、双平台 core、windows、decky、ci 和 release 共 7 个任务全部成功；三个安装包均来自本次 Tag 的新构建。
+- 发布前完成[本地 CI 完整对齐](local-ci-validation.md)：Windows core、WSL Linux core、windows 打包入口与 decky 全步骤通过；本机缺 NSIS `makensis`，安装包步骤由线上 CI 完成并核验。
+- [正式 Release v0.5.3](https://github.com/Mabinogi-Cichol/patchhub/releases/tag/v0.5.3) 于北京时间 2026-11-03 19:52:59 发布，标题与 Tag 均为 v0.5.3，非草稿、非预发行。正文按「新增与优化 / 问题修复」中文格式，与[发行说明](releases/v0.5.3.md)一致；公开附件严格为三个安装包及 SHA256SUMS.txt。
+- 已下载全部四个附件：大小、GitHub digest、清单中的文件名与 SHA-256 全部一致。ZIP CRC 与内容白名单通过（Windows 43 文件、Decky 27 文件），两端均无 catalog/trust-keys 资源；Windows PE、NSIS x86 安装器、Decky ELF64 x86-64 PIE 与 0755 执行位、runtime.json 摘要与二进制一致。
+- 版本映射核对：`app-version.json`、`update-manifest.json`、两端 SBOM 与 Decky `package.json` 均为 0.5.3；SBOM 记录 Cargo/npm 锁摘要与 Tag 内容一致（Windows 按实际 CRLF 检出规则），组件数 Windows 495、Decky 438。`protocol-v5.schema.json` 与 `shiravune-browser.js` 与 Tag 内资源逐字节相同。
+- Windows 便携包在隔离状态目录启动后正常关闭：FileVersion / ProductVersion 均为 0.5.3+1，运行 10 秒后退出码 0，关闭耗时 1069ms。
+- 未执行：NSIS 安装、Decky 包部署到 Steam Deck、真实发行商下载与游戏安装、游戏内效果及原生 UI 交互验收；不将源码阶段记录作为本次安装包的实机证明。
+- 证据保存在忽略目录 `.artifacts/release-v0.5.3/`（下载附件、便携包启动状态）与 `.artifacts/ci-98/`（CI/Release API 与日志）。
+
+| 附件 | 字节 | SHA-256 |
+| --- | --- | --- |
+| patchhub-decky.zip | 7909018 | `0a0e625ef774f6614f44492f0ff04751be75b9c1825b83093ec1ba6d148503db` |
+| patchhub-windows-portable.zip | 19807539 | `1df4f9473f0fcc024bc2b739ed780082cf2d662811739c9c89dac9713b19bddd` |
+| patchhub-windows-x64-setup.exe | 14915407 | `759c56d4343ef306e9acd37f22c6bc0a0b5f9614f1026c4b4baff8484aa1296e` |
+| SHA256SUMS.txt | 278 | `bfb24d0ff42df517af2199adc151ee3d33fa7bd8ae6ef268beac3a87b81b7f79` |
+
+
 ## v0.5.1 发布记录（2026-11-01）
 
 - 用户授权合并和发布；Decky 修复代码 `52f28b7`、功能文档 `d102957`、版本同步 `8e98e4f`、发行说明 `a747f14` 分别提交后合并至 main，合并提交 `f66d0dd704138fd75377fa922d9e552c5672044d`。main 与注解 Tag v0.5.1 原子推送，Tag 对象 `3a307ee77e28e31265bd3ba642fa4df088616c81` 固定指向该合并提交；后续核验文档不移动 Tag。

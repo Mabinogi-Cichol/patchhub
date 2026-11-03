@@ -38,7 +38,7 @@
 | 生成物一致性 | `git diff --exit-code -- Cargo.lock package-lock.json … packages/contracts/generated packages/contracts/fixtures …` | 通过（exit 0） | `.artifacts/ci-98/windows-job.log` | Decky 副本无 `.git`，该步在 Windows 仓库对同一同步源码执行 |
 | core / windows 环境 | Node 版本 | 记录偏差 | — | 本机 Node 24.14.0，CI 用 22；Rust 1.94.0 与 workflow 一致 |
 
-- 待验证：本修复提交后的在线 CI（含 Linux/Windows matrix、NSIS 安装包与线上 artifact 上传）、Steam Deck 实机。已在本地提交并合入 `main`（`31f8b35`），未推送、部署或发布。
+- 线上验证：Tag `v0.5.3` 的 [CI 41629719888](https://github.com/Mabinogi-Cichol/patchhub/actions/runs/41629719888) 七个任务全部成功（changes、双平台 core、windows、decky、ci、release），三个发行附件来自该 Tag 构建并经下载核验；详见[发行检查](../../release-checklist.md#v053-发布记录2026-11-03)。Steam Deck 实机与真实游戏内效果仍待验证。
 
 已实现。2026-11-03 本地 Rust、Flutter、Decky 前后端及双端打包资源检查通过；最终 Windows 发行包重建、资源/二进制/schema 核对，以及从真实便携包提取核心后的干净应用全链路实测均通过。Linux ELF 发行构建、Steam Deck 实机、真实来源网站/游戏内效果及原生 UI 交互待验证。本轮按代码与文档分开创建本地提交；未推送、合并或发布。
 

@@ -1,6 +1,6 @@
 # 功能开发文档
 
-2026-11-03：CI #98 的静态目录移除全链路测试存在 TCP 读取长度未处理问题，已修正请求头读取；按本地 CI 指南完成 core（Windows/WSL Linux）、windows、decky 三 job 逐步骤验证，完整对齐的触发范围已收敛为发布前执行，在线 CI 待验证。详见[设计](remove-static-catalog/design.md)与[施工记录](remove-static-catalog/progress.md)。
+2026-11-03：CI #98 的静态目录移除全链路测试存在 TCP 读取长度未处理问题，已修正请求头读取；按本地 CI 指南完成 core（Windows/WSL Linux）、windows、decky 三 job 逐步骤验证，完整对齐的触发范围已收敛为发布前执行，修复随 v0.5.3 发布，标签 CI 七个任务全部成功。详见[设计](remove-static-catalog/design.md)与[施工记录](remove-static-catalog/progress.md)。
 
 2026-10-29：Windows 安装进度弹窗已按用户图例重设计，13 项相关回归与深浅主题 / 大字体 12 张原生夹具截图通过，用户视觉验收待完成。详见[设计](windows-install-progress/design.md)与[施工记录](windows-install-progress/progress.md)。
 
