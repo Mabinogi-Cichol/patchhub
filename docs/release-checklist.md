@@ -2,6 +2,25 @@
 
 本清单区分已构建产物与已验收发行版。当前版本仍为开发 Alpha，完整开发计划的样本数量及双端 UI 门槛尚未达到。
 
+## v0.5.5 发布记录（2026-11-04）
+
+- 用户授权合并并发布；功能提交 `d1321fb`（更新完成改为重载 Steam 界面）、`69917a5`（更新入口重载文案与按钮布局）、文档 `82725c1`、版本同步 `9107fd1`，合并提交 `cdc6d38`。`main` 推送至 `cdc6d38`，注解 Tag v0.5.5（Tag 对象 `70f9d5b2507567b92ba467594de2c0b9febce9f1`）指向该提交。
+- 发布前完成[本地 CI 完整对齐](local-ci-validation.md)：changes 的版本检查、版本单测 12 项与 CI 选择器单测 9 项通过，实际变更路径选出 core / windows / decky 三个 job；Windows core 全部步骤（protocol、fmt、clippy、core/cli 测试与 build、sf95 audit 18 项与 worker 5 项）通过，WSL Ubuntu 的 Linux core（含 contract-gen check）与 decky 全步骤通过；windows job 的六组 Python 单测、npm ci、契约、release core/worker、Flutter 292 项测试与构建、metadata+SBOM、便携包通过。本机缺 NSIS `makensis`，安装包步骤由线上 CI 完成并核验。工具版本：Windows Rust 1.94.0、Node 22.23.4、Flutter 3.47.7、Python 3.12.10；WSL 使用 ext4 工作副本与仓库自带 Node 22.23.4、Python 3.12.16。
+- decky job 首次在 WSL 因 `python3` 为 3.10（缺 `tomllib`）导致 `package:plugin` 的版本同步失败，改用仓库自带 Python 3.12 后重跑通过；该差异属本机环境，未改动 CI 命令。
+- [标签 CI 41689409243](https://github.com/Mabinogi-Cichol/patchhub/actions/runs/41689409243) 的 changes、双平台 core、windows、decky、ci 和 release 共 7 个任务全部成功；三个安装包均来自本次 Tag 的新构建。同提交的 `main` 推送运行 41689392521 同样成功。
+- [正式 Release v0.5.5](https://github.com/Mabinogi-Cichol/patchhub/releases/tag/v0.5.5) 于北京时间 2026-11-04 02:09:41 发布，标题与 Tag 均为 v0.5.5，非草稿、非预发行。正文按「新增与优化 / 问题修复」中文格式替换了工作流自动生成的变更日志，与[发行说明](releases/v0.5.5.md)一致；公开附件严格为三个安装包及 SHA256SUMS.txt。
+- 已下载全部四个附件：大小、GitHub digest、清单中的文件名与 SHA-256 全部一致。ZIP CRC 与内容白名单通过（Windows 43 文件、Decky 27 文件），Decky 条目全部位于 `patchhub/` 下，`package.json` 为 0.5.5、`plugin.json` 名称 PatchHub，Core/worker 为 ELF，`runtime.json` 摘要与二进制一致，SBOM 应用版本 0.5.5。
+- Windows 便携包 `patchhub.exe` 为 PE，包内含 `client-guide.md`、`privacy.md`、`LICENSE`，无 PDB，SBOM 应用版本 0.5.5；NSIS 安装器为 PE。锁摘要核对：Decky SBOM 的 Cargo/npm 摘要与 Tag 的 LF blob 一致；Windows SBOM 的 Cargo/Dart 摘要与 Windows runner 的 CRLF 检出内容一致，属既有平台差异。
+- 未执行：NSIS 安装、Decky 正式包部署到 Steam Deck、真实发行商下载与游戏安装、正式来源跨版本自更新整链及实体手柄验收；本轮早前在设备上完成的候选 ZIP 部署与 WebHelper 重载实测不作为本次公开附件的实机证明。
+- 证据保存在忽略目录 `.artifacts/release-v0.5.5/`（下载附件与核验脚本）与 `.artifacts/ci-local-055/`（本地步骤日志、WSL 副本来源与运行记录）。
+
+| 附件 | 字节 | SHA-256 |
+| --- | --- | --- |
+| patchhub-decky.zip | 7905928 | `3890c136a8165fab0a9bfeb948631b233cf7a9b62860753961436cf41f775f6b` |
+| patchhub-windows-portable.zip | 19806786 | `f50ec737381235eb278b0f1f10ba3fe9b1c3a798dd362688a43206f974734243` |
+| patchhub-windows-x64-setup.exe | 14916475 | `45bef7ebf192e87f7983aca5999a11b12bf3b23619e335fe38cd3daa2a56f385` |
+| SHA256SUMS.txt | 278 | `cdc020f4d43eb19a19540ab6056c728af4770f4feb062a4043c4578c5aeb1f2b` |
+
 ## v0.5.4 发布记录（2026-11-04）
 
 - 用户授权发布；功能提交 `af1caaa`（更新时主动取消业务并等待恢复收尾）、`448edf2`（隔离本地更新源与一键真机测试）、文档 `e3467dd`、`93129c4`、版本同步 `e126cd9`、发行说明 `48308f0` 分别提交；`main` 快进至 `48308f0`，与注解 Tag v0.5.4 原子推送，Tag 对象 `54c85f4e15d166c97fe2798b3697a6f85993548a` 指向该提交。

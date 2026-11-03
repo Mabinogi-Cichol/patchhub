@@ -297,3 +297,26 @@
 - Loader 3.3.1 行为记录：本地 ZIP 重装会把本插件从 `pluginOrder` 移除（`browser.py` 保存旧顺序后未恢复，仅新装时追加）。本轮按原位置恢复为 `['Storage Cleaner','PatchHub']`；其他 Loader 设置前后一致。产品自更新路径有自己的 `restore_settings`，不受该行为影响。
 - 归档：`.artifacts/decky-ui-reload-deploy-20261104-013314/`（`summary.json`、`manifest.json`、`baseline.json`、`verified*.json`、`measure*.json`、`settings-update-row.png`、`qam.png`、各步表达式）。远端暂存 `/home/deck/patchhub-validation/ui-reload-20261104-013314/` 已按精确路径清理，SSH 隧道已关闭；调试部署未创建旧版备份。
 - 待验收：从真实旧版本走完整自更新（下载 → 安装 → 末端重载 → 新界面），游戏运行中重载的副作用，实体手柄焦点/返回。
+
+## 2026-11-04：合并 main、本地 CI 全量对齐与 v0.5.5 发布
+
+- 用户要求合并 main 并发布 v0.5.5。分支 `fix/decky-update-ui-reload` 按范围拆分提交：`d1321fb`（安装器终点动作）、`69917a5`（前端文案与按钮布局）、`82725c1`（调研/设计/计划/施工记录），另 `9107fd1` 同步 0.5.5 版本字段；`--no-ff` 合并为 `cdc6d38` 后推送 main，注解 Tag v0.5.5（对象 `70f9d5b`）指向该提交。
+- 发布前按 `.github/workflows/ci.yml` 与[本地 CI 验证](../../local-ci-validation.md)执行完整对齐：`select_jobs` 依实际变更选出 core / windows / decky 三个 job；Windows 与 WSL 各用本平台工具链，WSL 为 ext4 工作副本（同步来源 `cdc6d38`，排除 `.git`、`node_modules`、`target`、`.tools`、`.artifacts`、`.local`）。
+
+| job / 平台 | 步骤（完整命令） | 结果 |
+| --- | --- | --- |
+| changes | `python scripts/project_version.py --check`；`test_project_version.py`；`.github/ci` 单测；`select_jobs` 实际路径 | 通过（12 + 9 项，选中 core/windows/decky） |
+| core / Windows | `cargo test --locked -p patchhub-protocol`；`cargo fmt --all -- --check`；四包 `--all-targets` Clippy `-D warnings`；`cargo test/-build -p patchhub-core -p patchhub-cli --locked`；sf95 audit/worker 单测 | 通过（audit 18 项、worker 5 项） |
+| core / WSL Linux | 同 Windows 步骤，另 `cargo run --locked -p patchhub-contract-gen -- check` | 通过 |
+| windows | 六组 Python 单测、`npm ci`、`test:contracts`、release core/worker、`build-windows-flutter.ps1 -SkipRust`、metadata、含 Flutter 的 SBOM、`package-artifacts --platform windows` | 通过（Flutter 292 项测试与构建成功）；便携包 19,872,569 字节 |
+| windows / NSIS | `build-windows-installer.ps1` | 未执行：本机无 `makensis`，由线上 CI 完成并核验 |
+| decky / WSL Linux | 四组 Python 单测、`npm ci`、`test:contracts`、`typecheck`、111 项前端测试、bridge 14 项、Linux release core/worker、后端 15 项（`PATCHHUB_TEST_CORE`）、`package:plugin`、metadata/SBOM、`package-artifacts --platform decky`、锁与生成物对比 | 通过（Decky ZIP 7,909,542 字节） |
+| 生成物漂移 | Windows `git diff --exit-code` 列表、Decky 副本 `diff -r` | 无漂移 |
+| artifact / release | 上传与 Release 由 CI 完成，本地核验下载附件 | 见下 |
+
+- 环境差异：WSL 登录 shell 的 `PATH` 为空，脚本显式设置；WSL 自带 `python3` 为 3.10（无 `tomllib`），`package:plugin` 的版本同步首次失败，改用仓库自带 Python 3.12.16 后通过；WSL 无 Node，安装仓库锁定版本 Node 22.23.4 到用户目录。未改动 CI 命令与参数。
+- [标签 CI 41689409243](https://github.com/Mabinogi-Cichol/patchhub/actions/runs/41689409243) 七个任务全部成功；同提交 main 推送运行 41689392521 亦成功。
+- [Release v0.5.5](https://github.com/Mabinogi-Cichol/patchhub/releases/tag/v0.5.5) 于北京时间 2026-11-04 02:09:41 发布，标题与 Tag 一致、非草稿非预发行；工作流自动正文已替换为项目格式，与 [`docs/releases/v0.5.5.md`](../../releases/v0.5.5.md) 一致。
+- 附件核验：四个附件大小、GitHub digest 与 `SHA256SUMS.txt` 全部一致（`patchhub-decky.zip` 7,905,928 / `3890c136…`；`patchhub-windows-portable.zip` 19,806,786 / `f50ec737…`；`patchhub-windows-x64-setup.exe` 14,916,475 / `45bef7eb…`）。Decky 27 文件、Windows 43 文件，CRC 与白名单通过；Decky `package.json` 与 SBOM 为 0.5.5、Core/worker 为 ELF 且 `runtime.json` 摘要一致；Windows `patchhub.exe` 为 PE、含说明与许可、无 PDB；安装器为 PE。
+- 锁摘要：Decky SBOM 的 Cargo/npm 与 Tag 的 LF blob 一致；Windows SBOM 的 Cargo/Dart 与 Windows runner 的 CRLF 检出内容一致（本机工作区同为 CRLF），属既有平台差异。
+- 未执行：NSIS 安装、正式包在 Deck 的再次部署、正式来源跨版本自更新整链、实体手柄；本轮此前的候选 ZIP 部署与重载实测不作为公开附件的实机证明。发布记录见[发行检查](../../release-checklist.md)。
