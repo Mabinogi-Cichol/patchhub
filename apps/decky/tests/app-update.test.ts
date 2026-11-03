@@ -11,6 +11,7 @@ const require = createRequire(import.meta.url);
 const output = ts.transpileModule(readFileSync(new URL('../src/app-update.tsx', import.meta.url), 'utf8'), {
   compilerOptions: { jsx: ts.JsxEmit.ReactJSX, module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
 }).outputText;
+const clickEvent = { currentTarget: { ownerDocument: { defaultView: { performance: { timeOrigin: 456 } } } } };
 const tick = () => new Promise(resolve => setImmediate(resolve));
 
 function mount() {
@@ -19,6 +20,7 @@ function mount() {
   const native: Record<string, any> = {};
   for (const name of ['DialogButton', 'Field', 'PanelSection', 'PanelSectionRow']) native[name] = (props: any) => {
     controls.push({ name, props });
+    if (name === 'DialogButton') props.ref?.(clickEvent.currentTarget);
     return React.createElement('div', {}, props.children);
   };
   native.showModal = (element: any) => { modals.push(element); return { Close() { closed++; } }; };
@@ -48,11 +50,11 @@ test('update replaces the same single control with progress, without a modal or 
   assert.equal(ui.requests.length, 1); assert.equal(ui.timers.size, 0);
   ui.requests.shift().resolve({ state: 'available', current: '0.4.0', tag: 'v0.5.0' }); await tick();
   const html = ui.render(); assert.doesNotMatch(html, /发布时间|稍后|跳过|查看更新进度/);
-  ui.button('更新至 v0.5.0').onClick();
-  ui.button('更新至 v0.5.0').onClick();
+  ui.button('更新至 v0.5.0').onClick(clickEvent);
+  ui.button('更新至 v0.5.0').onClick(clickEvent);
   assert.equal(ui.requests.length, 1);
   assert.match(ui.render(), /0%/);
-  const start = ui.requests.shift(); assert.equal(start.method, 'start_app_update'); assert.deepEqual(start.args, ['v0.5.0', 123]);
+  const start = ui.requests.shift(); assert.equal(start.method, 'start_app_update'); assert.deepEqual(start.args, ['v0.5.0', 456]);
   start.resolve({ state: 'available', execution: { state: 'preparing', percent: 32 } }); await tick();
   assert.match(ui.render(), /32%/); assert.equal(ui.modals.length, 0);
   const [id, timer] = [...ui.timers.entries()][0]; ui.timers.delete(id); void timer();
@@ -78,7 +80,7 @@ test('startup awaits a fresh check then posts a native clickable update tip', as
   const claim = ui.requests.shift(); assert.equal(claim.method, 'claim_app_update_notice');
   claim.resolve({ state: 'available', tag: 'v0.6.0' }); await tick();
   assert.equal(ui.toasts.length, 1); assert.equal(ui.toasts[0].title, '发现新版 v0.6.0');
-  ui.toasts[0].onClick(); assert.deepEqual(ui.navigations, ['/settings']);
+  ui.toasts[0].onClick(clickEvent); assert.deepEqual(ui.navigations, ['/settings']);
   assert.equal(ui.modals.length, 0); assert.equal(ui.timers.size, 1);
   stop(); assert.equal(ui.timers.size, 0);
 });
@@ -108,7 +110,22 @@ test('restart failure retries only the client restart', async () => {
   const ui = mount(); ui.render();
   ui.requests.shift().resolve({ state: 'idle', execution: {
     state: 'completed', restart: 'failed', restart_error: 'fixture',
-  } }); await tick(); ui.render(); ui.button('重启客户端').onClick();
+  } }); await tick(); ui.render(); ui.button('重启客户端').onClick(clickEvent);
   assert.equal(ui.requests[0].method, 'restart_app_update_client');
-  assert.deepEqual(ui.requests[0].args, [123]); ui.cleanup();
+  assert.deepEqual(ui.requests[0].args, [456]); ui.cleanup();
+});
+
+
+test('restart indicator uses the rendering page context rather than SharedJSContext', async () => {
+  const ui = mount(); ui.render();
+  ui.requests.shift().resolve({ state: 'idle', execution: {
+    state: 'completed', restart: 'requested', restart_context: 456,
+  } }); await tick();
+  assert.match(ui.render(), /正在重启客户端/);
+  const [id, timer] = [...ui.timers.entries()][0]; ui.timers.delete(id); void timer();
+  ui.requests.shift().resolve({ state: 'idle', execution: {
+    state: 'completed', restart: 'requested', restart_context: 123,
+  } }); await tick();
+  assert.doesNotMatch(ui.render(), /正在重启客户端/);
+  ui.cleanup();
 });

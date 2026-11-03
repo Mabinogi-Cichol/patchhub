@@ -610,3 +610,25 @@ class AdapterTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class UpdateDrainTests(unittest.TestCase):
+    def test_active_rollback_is_polled_without_the_loader_mutation_deadline(self):
+        from unittest.mock import Mock
+        loader = m.Loader.__new__(m.Loader)
+        loader.timeout = 0
+        states = iter([{'known': True, 'done': False}, {'known': True, 'done': False},
+                       {'known': True, 'done': True, 'ok': True}])
+        loader.call = Mock(side_effect=lambda op, **args: next(states) if op == 'status' else True)
+        with patch.object(m.time, 'sleep'):
+            loader.prepare_app_update()
+        self.assertEqual([c.args[0] for c in loader.call.call_args_list],
+                         ['prepare_app_update', 'status', 'status', 'status', 'forget'])
+
+    def test_failed_cleanup_is_not_permission_to_install(self):
+        from unittest.mock import Mock
+        loader = m.Loader.__new__(m.Loader)
+        loader.call = Mock(side_effect=lambda op, **args: {'known': True, 'done': True, 'ok': False, 'error': 'rollback failed'} if op == 'status' else True)
+        with self.assertRaisesRegex(m.InstallError, 'rollback failed'):
+            loader.prepare_app_update()
+        self.assertEqual(loader.call.call_args.args[0], 'forget')

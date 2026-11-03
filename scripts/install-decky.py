@@ -38,7 +38,7 @@ UPDATE_PROGRESS = None
 def update_progress(state, stage):
     if UPDATE_PROGRESS:
         percent = {'validating': 80, 'preparing': 85, 'backing_up': 85,
-                   'installing': 90, 'verifying': 95, 'cleanup': 99}.get(stage, 0)
+                   'cancelling': 80, 'installing': 90, 'verifying': 95, 'cleanup': 99}.get(stage, 0)
         UPDATE_PROGRESS({'state': state, 'stage': stage, 'percent': percent})
 
 
@@ -461,9 +461,15 @@ BRIDGE = r"""async (op, a) => {
    if (!Array.isArray(tasks) || tasks.some(t => !['completed','failed','cancelled'].includes(t.state))) fail('active_or_unknown_tasks');
    return true;
  }
- if (op === 'prepare_app_update' || op === 'finish_app_update') {
-   return await b.call('loader/call_plugin_method',name,op);
+ if (op === 'prepare_app_update') {
+   if (jobs[a.id]) fail('prepare_already_started');
+   const j = jobs[a.id] = {done:false, ok:false};
+   j.promise = b.call('loader/call_plugin_method',name,op)
+     .then(()=>{j.ok=true;},e=>{j.error=String(e?.message||e);})
+     .finally(()=>{j.done=true;});
+   return true;
  }
+ if (op === 'finish_app_update') return await b.call('loader/call_plugin_method',name,op);
  if (op === 'runtime') {
    const plugins = (await b.call('loader/get_plugins')).filter(p => p.name===name);
    const front = l.plugins.filter(p => p.name===name);
@@ -592,6 +598,22 @@ class Loader:
 
     def call(self, op, **args):
         return self.cdp.evaluate(f"({BRIDGE})({json.dumps(op)}, {json.dumps(args, ensure_ascii=True)})")
+
+    def prepare_app_update(self):
+        # Cancellation/rollback is real progress, not a CEF request timeout.
+        # Reuse the existing bridge jobs; each poll is a short request.
+        identity = secrets.token_hex(16)
+        self.call('prepare_app_update', id=identity)
+        try:
+            while True:
+                status = self.call('status', id=identity)
+                require(status['known'], '取消收尾执行上下文已丢失')
+                if status['done']:
+                    require(status['ok'], '更新前取消收尾失败：' + str(status.get('error')))
+                    return
+                time.sleep(.5)
+        finally:
+            self.call('forget', id=identity)
 
     def identity(self):
         return loader_identity()
@@ -897,7 +919,8 @@ def main(argv=None):
             require(loader_root() / "plugins" / FOLDER == plugin, "--homebrew 与 Loader 实际插件根目录不同")
             loader.identity()
             if gui:
-                loader.call('prepare_app_update')
+                update_progress('preparing', 'cancelling')
+                loader.prepare_app_update()
                 update_progress('applying', 'preparing')
             installer.install(package, yes=options.yes)
             if 'backend/app_update.py' in package['files']:

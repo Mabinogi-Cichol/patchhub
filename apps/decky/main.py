@@ -101,6 +101,8 @@ class Plugin:
         service key, so repeated scans while it is active do not stack. Sources
         without an index still go through matching and report `incomplete`.
         """
+        if getattr(self, '_app_update_gate', False):
+            return None
         instances = self._pending_match_instances(report)
         if not instances:
             return None
@@ -264,7 +266,13 @@ class Plugin:
         status = self.app_update.snapshot()
         execution = status.get('execution') or {}
         if execution.get('state') in ('completed', 'failed') and not (Path(decky.DECKY_USER_HOME) / '.cache/patchhub-decky-install/journal.json').exists():
-            self._app_update_gate = False
+            drain = getattr(self, '_app_update_drain', None)
+            if drain is not None:
+                outcomes = await asyncio.gather(drain, return_exceptions=True)
+                if isinstance(outcomes[0], BaseException):
+                    status = {**status, 'execution': {**execution, 'state': 'failed',
+                        'error': f"{execution.get('error', '')}；取消收尾失败：{outcomes[0]}"}}
+            self._resume_app_work()
         return status
 
     async def skip_app_update(self, tag):
@@ -279,31 +287,66 @@ class Plugin:
     async def restart_app_update_client(self, client_context=None):
         return self.app_update.start(restart_only=True, client_context=client_context)
 
-    def _prepare_app_update(self):
-        patch_busy = hasattr(self, 'tasks') and self.tasks.busy()
-        source_busy = hasattr(self, 'sources') and any(t['state'] not in ('completed', 'failed', 'cancelled') for t in self.sources.task_status())
-        if getattr(self, '_active_host_calls', 0) > 1 or patch_busy or source_busy:
-            raise RuntimeError('请先完成或取消补丁、来源与扫描任务，再更新插件')
+    def _resume_app_work(self):
+        self._app_update_gate = False
+        scheduler = getattr(self, '_scheduler', None)
+        if scheduler is not None and scheduler.done():
+            self._scheduler = asyncio.create_task(self._scheduler_loop())
+
+    def _begin_app_update(self):
         self._app_update_gate = True
-        return {'ready': True}
+        # Background scans/scheduling must not enqueue new matching work after
+        # the UI switches to updating. Writers use the existing cancel channel.
+        calls = dict(getattr(self, '_business_calls', {}))
+        background = [getattr(self, name, None) for name in ('_startup_check', '_scheduler')]
+        reads = {'scan', 'preview', 'project_instances', 'list_sources', 'list_transactions',
+                 'get_script_source', 'cache_status', 'backup_status', 'get_settings'}
+        for task, method in calls.items():
+            if method in reads:
+                task.cancel()
+        for task in background:
+            if task is not None:
+                task.cancel()
+        logging.getLogger(__name__).info('app_update_cancel_started rpc=%s', list(calls.values()))
+        # This task requests all domain cancellations immediately, in parallel
+        # with the independent worker's HTTP download and package validation.
+        self._app_update_drain = asyncio.create_task(self._drain_app_work(calls, background))
+
+    async def _drain_app_work(self, calls, background):
+        patch_tasks = [task for task in self.tasks.tasks.values()
+                       if task.snapshot()['state'] not in ('completed', 'failed', 'cancelled')]
+        results = await asyncio.gather(self.tasks.shutdown(), self.sources.cancel_pending(),
+            *calls, *(task for task in background if task is not None), return_exceptions=True)
+        for result in results:
+            if isinstance(result, BaseException) and not isinstance(result, asyncio.CancelledError) and str(result) != 'app_update_cancelled':
+                raise RuntimeError(f'更新前取消收尾失败：{result}') from result
+        for task in patch_tasks:
+            value = task.snapshot()
+            if value['state'] not in ('completed', 'cancelled') or ((value.get('result') or {}).get('recovery') or {}).get('required'):
+                raise RuntimeError(f"补丁任务取消收尾失败：{value.get('error_detail') or value.get('error')}")
+
+        recovered = await self.bridge.recover()
+        if any(item['state'] == 'needs_recovery' for item in recovered):
+            raise RuntimeError('业务事务恢复尚未完成，不能替换插件')
+        logging.getLogger(__name__).info('app_update_cancel_completed')
 
     async def prepare_app_update(self):
-        return self._prepare_app_update()
+        if not getattr(self, '_app_update_gate', False):
+            self._begin_app_update()
+        await asyncio.shield(self._app_update_drain)
+        return {'ready': True}
 
     async def finish_app_update(self):
         if (Path(decky.DECKY_USER_HOME) / '.cache/patchhub-decky-install/journal.json').exists():
             raise RuntimeError('更新事务尚未完成')
         await self.bridge.recover()
-        self._app_update_gate = False
+        self._resume_app_work()
         return {'ready': True}
 
     async def start_app_update(self, tag, client_context=None):
-        self._prepare_app_update()
-        try:
-            return self.app_update.start(tag, client_context=client_context)
-        except BaseException:
-            self._app_update_gate = False
-            raise
+        result = self.app_update.start(tag, client_context=client_context)
+        self._begin_app_update()
+        return result
 
     async def get_settings(self):
         return {**self.settings.snapshot(), "cache": getattr(self, "_cache_result", None)}
@@ -376,6 +419,9 @@ class Plugin:
         return [task.snapshot() for task in self.tasks.tasks.values()]
 
     async def _unload(self):
+        drain = getattr(self, '_app_update_drain', None)
+        if drain is not None:
+            await asyncio.gather(drain, return_exceptions=True)
         for name in ("_startup_check", "_scheduler", "_app_update_checker"):
             background = getattr(self, name, None)
             if background is not None:
@@ -400,14 +446,27 @@ def _await_startup(method):
             if self._startup_error is not None and method.__name__ not in update_methods:
                 raise RuntimeError("plugin_startup_failed") from self._startup_error
         allowed = {'get_capabilities', 'list_tasks', 'source_task_status', 'get_app_update_status',
-                   'prepare_app_update', 'finish_app_update', 'check_app_update', 'skip_app_update', 'cancel_app_update', 'recover_app_update', 'claim_app_update_notice'}
+                   'prepare_app_update', 'finish_app_update', 'check_app_update', 'skip_app_update', 'cancel_app_update', 'recover_app_update', 'claim_app_update_notice', 'task_status', 'cancel_task', 'cancel_source_task', 'restart_app_update_client'}
         if getattr(self, '_app_update_gate', False) and method.__name__ not in allowed:
             raise RuntimeError('plugin_update_in_progress')
-        self._active_host_calls = getattr(self, '_active_host_calls', 0) + 1
+        calls = self.__dict__.setdefault('_business_calls', {})
+        task = asyncio.current_task()
+        previous = calls.get(task)
+        tracked = method.__name__ not in allowed | update_methods | {'task_status', 'cancel_task', 'cancel_source_task'}
+        if tracked:
+            calls[task] = method.__name__
         try:
             return await method(self, *args, **kwargs)
+        except asyncio.CancelledError:
+            if getattr(self, '_app_update_gate', False):
+                raise RuntimeError('app_update_cancelled') from None
+            raise
         finally:
-            self._active_host_calls -= 1
+            if tracked:
+                if previous is None:
+                    calls.pop(task, None)
+                else:
+                    calls[task] = previous
     return ready
 
 

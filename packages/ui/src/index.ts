@@ -263,6 +263,7 @@ export function reason(code: string): string {
     ,download_http_error: "下载服务返回错误，请稍后重试。"
     ,download_network_error: "补丁下载网络连接失败，请检查网络后重试。"
     ,download_not_zip: "下载内容不是有效 ZIP，未执行安装。"
+     ,app_update_cancelled: "已停止当前操作，正在更新应用。"
      ,task_cancelled: "已取消安装，未提交更改。"
      ,install_in_progress: "已有安装任务正在进行，请等待完成。"
      ,request_id_required: "安装请求缺少标识，请重试。"

@@ -95,6 +95,16 @@ class SourceService:
         await asyncio.gather(*(task["worker"] for task in tasks if task["worker"] is not None),
                              return_exceptions=True)
 
+    async def cancel_pending(self):
+        """Cancel current work without closing the reusable source service."""
+        tasks = [task for task in self._tasks.values() if task['state'] not in TERMINAL]
+        for task in tasks:
+            self.cancel_task(task['task_id'])
+        await asyncio.gather(*(task['worker'] for task in tasks if task['worker'] is not None))
+        for task in tasks:
+            if task['state'] == 'failed' or (task['state'] == 'cancelled' and task.get('error') not in CANCELLED_CODES):
+                raise RuntimeError(f"来源任务取消收尾失败：{task.get('error_detail') or task.get('error')}")
+
     # -- snapshot bookkeeping ---------------------------------------------
     def _apply_summaries(self, summaries):
         if not isinstance(summaries, list):

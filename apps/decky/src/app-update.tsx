@@ -66,6 +66,7 @@ export function AppUpdatePanel() {
   const { value, setValue, error: statusError } = useUpdateStatus({ state: 'idle' });
   const [busy, setBusy] = useState(false);
   const [starting, setStarting] = useState(false);
+  const [clientContext, setClientContext] = useState<number>();
   const inFlight = useRef(false);
   const work = async (action: () => Promise<Update>, installing = false) => {
     if (inFlight.current) return;
@@ -81,7 +82,7 @@ export function AppUpdatePanel() {
   const executing = starting || updateExecuting(execution);
   // A new Steam JS context means the previous request must not drive this UI.
   const restarting = execution?.state === 'completed' && execution.restart === 'requested'
-    && execution.restart_context === performance.timeOrigin;
+    && execution.restart_context === clientContext;
   const restartFailed = execution?.state === 'completed' && execution.restart === 'failed';
   const label = executing ? updateProgressLabel(starting ? { state: 'preparing', percent: 0 } : execution!)
     : restarting ? '100% · 正在重启客户端'
@@ -98,16 +99,18 @@ export function AppUpdatePanel() {
     if (error) toaster.toast({ title: '应用更新', body: error });
   };
   const act = () => {
+    const context = clientContext!;
     if (executing || restarting || busy) return;
     detail();
-    if (restartFailed) void work(() => restart(performance.timeOrigin), true);
+    if (restartFailed) void work(() => restart(context), true);
     else if (value.needs_recovery) void work(recover, true);
-    else if (value.state === 'available') void work(() => start(value.tag!, performance.timeOrigin), true);
+    else if (value.state === 'available') void work(() => start(value.tag!, context), true);
     else void work(check);
   };
   return <PanelSection title="应用更新"><PanelSectionRow>
     <Field label={`当前版本 ${value.current ?? '…'}`} childrenLayout="inline" spacingBetweenLabelAndChild="none">
       <DialogButton style={{ minWidth: 240, minHeight: 44, width: 280, maxWidth: '100%', whiteSpace: 'nowrap' }}
+        ref={(button: HTMLDivElement | null) => { if (button) setClientContext(button.ownerDocument.defaultView!.performance.timeOrigin); }}
         aria-label={executing || restarting ? label : `${label}，更新完成后自动重启 Steam 客户端`}
         aria-disabled={busy || executing || restarting} onClick={act}>
         <span role="status" aria-live="polite">{label}</span>

@@ -3,7 +3,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, AsyncMock, patch
 import importlib.util
 import sys
 import types
@@ -65,32 +65,93 @@ class VersionTests(unittest.TestCase):
             candidate(data, '0.3.0')
 
 
-class MaintenanceTests(unittest.TestCase):
-    def setUp(self):
+class MaintenanceTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        from tasks import TaskManager
+        from source_service import SourceService
+        from bridge import CoreBridge
         sys.modules.setdefault('decky', types.ModuleType('decky'))
         spec = importlib.util.spec_from_file_location('app_update_plugin', Path(__file__).parents[1] / 'main.py')
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
         self.plugin = module.Plugin()
-        self.plugin.tasks = Mock()
-        self.plugin.tasks.busy.return_value = False
-        self.plugin.sources = Mock()
-        self.plugin.sources.task_status.return_value = []
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        root = Path(self.temp.name)
+        binary = root / 'binary'
+        binary.touch()
+        self.plugin.bridge = CoreBridge(binary)
+        self.plugin.bridge._preflight_done = True
+        self.plugin.bridge.recover = AsyncMock(return_value=[])
+        self.plugin.tasks = TaskManager()
+        self.plugin.sources = SourceService(self.plugin.bridge, root)
+        self.plugin.app_update = Mock()
+        self.plugin.app_update.start.return_value = {'execution': {'state': 'preparing', 'percent': 0}}
+        self.plugin.app_update.check = AsyncMock(return_value={'state': 'available'})
 
-    def test_source_and_inflight_calls_block_update_without_closing_gate(self):
-        self.plugin.sources.task_status.return_value = [{'state':'running'}]
-        with self.assertRaises(RuntimeError):
-            self.plugin._prepare_app_update()
-        self.assertFalse(getattr(self.plugin, '_app_update_gate', False))
-        self.plugin.sources.task_status.return_value = []
-        self.plugin._active_host_calls = 2
-        with self.assertRaises(RuntimeError):
-            self.plugin._prepare_app_update()
+    async def test_click_starts_download_while_writer_cancels_and_prepare_waits_for_rollback(self):
+        from test_tasks import ControlledProcess
+        process = ControlledProcess(restoring=True)
+        async def work(task):
+            return await self.plugin.bridge.install_patch('instance', 'zip-selection-0123456789abcdef01234567-42', operation='overwrite')
+        with patch('bridge.asyncio.create_subprocess_exec', return_value=process):
+            receipt = self.plugin.tasks.start('install', work)
+            while process.request is None:
+                await asyncio.sleep(0)
+            result = await self.plugin.start_app_update('v0.5.4')
+            self.assertEqual(result['execution']['state'], 'preparing')
+            self.plugin.app_update.start.assert_called_once()
+            await asyncio.wait_for(process.cancel_received.wait(), 1)
+            self.assertEqual(process.messages[1], b'cancel\n')
+            prepare = asyncio.create_task(self.plugin.prepare_app_update())
+            await asyncio.sleep(0)
+            self.assertFalse(prepare.done())
+            self.assertEqual(self.plugin.tasks.status(receipt['task_id'])['state'], 'rolling_back')
+            self.plugin.bridge.recover.assert_not_awaited()
+            self.assertEqual((await self.plugin.check_app_update())['state'], 'available')
+            with self.assertRaisesRegex(RuntimeError, 'plugin_update_in_progress'):
+                await self.plugin.update_source('patchmoe')
+            process.finish('rolled_back')
+            self.assertTrue((await prepare)['ready'])
+            self.assertEqual(self.plugin.tasks.status(receipt['task_id'])['state'], 'cancelled')
+            self.plugin.bridge.recover.assert_awaited_once()
 
-    def test_idle_host_enters_maintenance(self):
-        self.plugin._active_host_calls = 1
-        self.assertTrue(self.plugin._prepare_app_update()['ready'])
-        self.assertTrue(self.plugin._app_update_gate)
+    async def test_active_scan_is_cancelled_and_does_not_start_late_matching(self):
+        started = asyncio.Event()
+        async def scan():
+            started.set()
+            await asyncio.Event().wait()
+        self.plugin.bridge.scan = scan
+        scan_call = asyncio.create_task(self.plugin.scan())
+        await started.wait()
+        await self.plugin.start_app_update('v0.5.4')
+        self.assertTrue((await self.plugin.prepare_app_update())['ready'])
+        with self.assertRaisesRegex(RuntimeError, 'app_update_cancelled'):
+            await scan_call
+        self.assertIsNone(self.plugin._start_pending_match({'installs': []}))
+
+    async def test_failed_source_cancellation_blocks_replacement(self):
+        from bridge import CoreError
+        started = asyncio.Event()
+        async def call(method, params, on_event=None, cancel=None):
+            started.set()
+            while not cancel.is_set():
+                await asyncio.sleep(0)
+            raise CoreError('source_disk_failed', 'write did not finish')
+        self.plugin.bridge._call = call
+        self.plugin.sources.start_update_source('patchmoe')
+        await started.wait()
+        await self.plugin.start_app_update('v0.5.4')
+        with self.assertRaisesRegex(RuntimeError, '取消收尾失败'):
+            await self.plugin.prepare_app_update()
+        self.plugin.bridge.recover.assert_not_awaited()
+        self.assertFalse(self.plugin.sources._closed)
+
+    async def test_unresolved_recovery_blocks_replacement(self):
+        self.plugin.bridge.recover.return_value = [{'state': 'needs_recovery'}]
+        await self.plugin.start_app_update('v0.5.4')
+        with self.assertRaisesRegex(RuntimeError, '恢复尚未完成'):
+            await self.plugin.prepare_app_update()
 
 
 class ServiceTests(unittest.IsolatedAsyncioTestCase):
