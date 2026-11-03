@@ -422,11 +422,18 @@ fn racing_first_imports_of_the_same_id_have_exactly_one_winner() {
         })
         .collect();
     let results: Vec<_> = handles.into_iter().map(|h| h.join().unwrap()).collect();
-    assert_eq!(results.iter().filter(|r| r.is_ok()).count(), 1);
-    assert!(results
-        .iter()
-        .filter_map(|r| r.as_ref().err())
-        .all(|e| e.to_string() == "script_source_exists"));
+    assert_eq!(
+        results.iter().filter(|r| r.is_ok()).count(),
+        1,
+        "{results:?}"
+    );
+    assert!(
+        results
+            .iter()
+            .filter_map(|r| r.as_ref().err())
+            .all(|e| e.to_string() == "script_source_exists"),
+        "{results:?}"
+    );
     let reopened = Sources::open(state.path()).unwrap();
     assert_eq!(reopened.settings_revision(), 2);
     reopened.get_script_source("racing").unwrap();

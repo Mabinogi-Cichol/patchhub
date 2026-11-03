@@ -90,3 +90,15 @@
 - 首轮已按要求分别提交并合并 main；本轮 Windows 补充修复提交 `119d49c`，Decky 启动入口测试提交 `386b051`，文档独立提交后合并本地 main；合并提交 ID 以 Git 历史为准。沿用本轮有效验证，无新增功能代码，不重复测试，未推送。
 - [ ] 补充修复提交并推送后检查新 head 的完整在线 CI。
 - [ ] 完整在线构建、打包及附件上传待验证；本轮未部署或发布。
+
+## 2026-11-03：Windows 并发脚本导入测试失败调查
+
+状态：已补充诊断，根因及生产修复待定位。方案见 [design.md](design.md#2026-11-03windows-并发脚本导入-ci-失败调查待定位)。
+
+- 已读取提交 `3ac65f44ebfa2176716a645608c803689605cd78` 的 [失败 job](https://github.com/Mabinogi-Cichol/patchhub/actions/runs/41458277929/job/125320569553)：`cargo test -p patchhub-core -p patchhub-cli --locked` 在 `script_source_import.rs:426` 失败；一个导入成功，但失败一方的错误不是 `script_source_exists`。原日志不包含该错误，不能确定具体原因。
+- 在 `fix/script-import-windows-lock` 中，为成功数量和失败错误两个断言附加完整 `results`；不放宽断言，不跳过并发测试，未修改生产锁、重试或业务逻辑。
+- 原生 Windows、仓库 Rust 1.94.0：定向测试连续 100 次通过；完整导入测试目标 11 项单次通过，再直接执行测试二进制连续 200 轮全部通过（每轮均含 11 项）。日志分别为 `.artifacts/import-race-repeat.log`、`.artifacts/import-suite-before.log`、`.artifacts/import-suite-repeat.log`，重复执行日志只保留最后一轮。
+- 最终诊断改动的测试/格式验证结果见后续追加记录。尚未执行完整核心回归、线上带诊断重跑、部署或发布；本次没有修复或验证生产根因，不标记 CI 故障已解决。
+- 过度设计复核（overengineering-review）：沿实际编译、设置锁和原子替换路径检查，仅增加错误证据输出，无新增防御、限制、重试或抽象；不根据未证实的超时猜测改动生产路径。
+
+最终检查：cargo fmt --all -- --check 与脚本导入完整目标 11 项通过；git diff --check 通过。诊断代码已本地提交为 `d54ca77`，文档单独提交；未推送，线上根因仍待带诊断的失败结果确认。
