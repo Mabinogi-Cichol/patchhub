@@ -1,8 +1,70 @@
 # Windows 与 Decky 客户端自更新施工记录
 
 - 设计：[design.md](design.md)。
-- 当前状态：**双端自更新已实现；本轮 Decky 更新阻断、进度与完成提示修复经自动化、用户真实更新和原生界面验证通过，已随 v0.5.1 发布。Windows 完整安装版矩阵、正式版本间更新及实体手柄验收仍待完成。**
+- 当前状态：**Decky 单行更新候选已部署，原生页面、RPC 与真实 Steam 客户端重启验证通过；完整 UI 跨版本更新及实体手柄待验收。双端自更新已实现；本轮 Decky 更新阻断、进度与完成提示修复经自动化、用户真实更新和原生界面验证通过，已随 v0.5.1 发布。Windows 完整安装版矩阵、正式版本间更新及实体手柄验收仍待完成。**
 - 修复归档分支：`fix/decky-self-update`，基于 `main@37f50fd`；原实现分支 `feature/client-self-update`（基于 `main@81a2965`）的历史记录保留。
+
+## 2026-11-03：提交与本地合并安排
+
+- 用户要求先提交当前改动并合并本地 main，再创建新会话实现 debug 本地更新源与一键测试脚本。
+- 自更新代码及必要测试提交为 `063c69f`；功能设计/施工记录与部署技能分别提交，不包含忽略目录中的设备数据、安装包或截图。
+- 沿用本轮已完成且输入未变的定向验证与设备记录，不重跑完整 CI 或无关构建；提交前核对差异、暂存范围和文档链接。后台普通检查间隔按实际 `INTERVAL = 24 * 60 * 60` 更正文档，启动检查绕过该间隔的行为不变。
+- 本轮仅本地提交并将 main 快进至当前分支，不推送、不打 Tag、不发布。完整 UI 跨版本自更新和实体手柄仍待验收；后续 debug 自更新源尚未实现，交由用户指定的新会话推进。
+
+## 2026-11-03：启动检查与原生 tips 通知
+
+- 用户追加要求启动插件时检查更新并使用原生 tips。沿用当前功能分支和更新入口，不新增配置或通知服务。
+- 原后台循环检查可能受24 小时间隔限制，前端启动只领取旧通知且每分钟才再次领取。现前端初始化立即调用 `check_app_update`，等待本次检查完成后才调用 `claim_app_update_notice`，发现新 Tag 使用现有 `toaster.toast`，点击进入更新二级页。
+- 后端继续复用在途检查和 GitHub 限流 `retry_at`，不重复发起并行检查；同一版本通知沿用持久化去重。没有新版不提示，后台检查失败记日志，不打断插件主界面。通知读取改为串行检查结束后安排下次读取，卸载后不领取/显示迟到通知，清理计时器。
+- 本地 typecheck、8 项更新组件/交互回归通过；包含启动检查→通知顺序、原生 toast 点击跳转、无新版静默及卸载中断。前端构建通过。设备增量替换 `dist/index.js` 与 map，未创建备份，文件及 HTTP bundle 哈希一致：`9b8e1b102ced422a3ffa63f78442d25266f139c1b02ef65844c978d95a73ab9d`。
+
+- 通过 Loader 正常重新导入前端后，唯一实例为 0.5.3、服务 active；`last_attempt_at` 从 `1793717531.075253` 推进至 `1793717728.664066`，间隔约 198 秒，证明启动检查未受24 小时间隔跳过。真实状态 `up_to_date / v0.5.3`，没有多余通知。
+- 设备证据 `.artifacts/decky-update-startup-20261103/`：`manifest.json`、`predeploy.json`、`reloaded.json`、`verified.json`、`check-completed.json`。远端暂存已清理，SSH 隧道已关闭。未在真实设备伪造新 Tag；有新版原生 tips 与点击跳转由本轮组件回归覆盖，真实更高版本提示与实体手柄仍待验收。
+
+## 2026-11-03：候选设备部署与 Steam 客户端重启验证
+
+- 用户授权部署当前候选；采用 `decky-deploy-verify` 技能。Devkit 当前所选设备经既有可信 SSH 主机密钥校验，部署前插件 0.5.2、Loader 3.3.1，补丁历史任务 45 条、来源任务 0，均无活动任务。
+- 实际 Loader 为 3.3.1，核对官方 [browser.py](https://github.com/SteamDeckHomebrew/decky-loader/blob/v3.3.1/backend/decky_loader/browser.py) 与 [utilities.py](https://github.com/SteamDeckHomebrew/decky-loader/blob/v3.3.1/backend/decky_loader/utilities.py) 的本地 ZIP、安装请求/确认事件及参数契约后，将 3.3.1 纳入现有适配集合。新增针对性桥接测试后 12 项通过；未放开未知 Loader 版本。
+- 使用仓库 `.tools/linux-cargo` / `.tools/linux-rustup` 在 WSL 构建当前 0.5.3 Linux Core/worker（`cargo build --locked --release -p patchhub-cli -p patchhub-installer-worker --bin patchhub-core --bin patchhub-worker`），重新生成当前锁文件 SBOM，沿用此前已通过前端验证；完成生产装包。
+- 实机发现 SharedJSContext 与 Steam 主页面的 `performance.timeOrigin` 不同。修正为由按钮所在页面把标记传入 start/restart RPC，宿主原样转交独立安装器，避免用后台上下文标记判断主页面是否已重启。修正后前端 5 项、typecheck、构建、Linux 安装器 35 项及更新宿主 11 项通过；增加前端/宿主参数传递断言并复测。
+- 最终候选 ZIP：7,910,854 字节，SHA-256 `6b5354ce9a60fb06b0febeb11b65a72a209fb5d19c0f7a1f78d172852d4251ba`。设备整包与逐成员验证通过，经真实 Loader 确认事件完成安装；正式 27 文件哈希/大小一致，Core/worker 均可执行。HTTP bundle 与本地最终构建哈希一致：`66fdb3e4da876dc8e54961f67ffc4d84a415dcd0218f2a4a1a20495724ded951`。
+- 新版后端及前端均 0.5.3、实例 1、Loader active。真实 `scan()` 返回 27 个游戏实例，任务 45 条、事务 25 条，无活动补丁/来源任务；本仓库当前 scan RPC 无参数，最初尝试 `scan(false)` 的签名错误已按实际接口修正，不计为功能失败。Loader 安装移除的本插件排序已仅恢复 PatchHub 原位置，其他插件设置保留。
+- 通过独立状态文件运行生产 `restart_client` 函数完成真实客户端重启验证，未伪造或覆盖产品更新事务结果。Steam PID 3239 → 53238，系统 boot ID 保持不变；新客户端自动加载唯一 0.5.3 实例、真实 RPC 与最终 bundle 再次通过。此项证明客户端重启及新版加载，不等同于完整 UI 跨版本自更新链验收。
+- 原生画面：Steam 实际 CSS viewport 854×534，CDP 截图文件 1281×801；更新区域仅“当前版本 0.5.3 + 检查更新”一行，无横向溢出，按钮滚动进入视口后 240×44 CSS px。真实 DOM 点击检查更新，原位置呈现“检查中…”后恢复按钮，通知显示已是最新正式版。QAM 实际打开 PatchHub 面板，无重复更新区域。均已查看截图；实体手柄未操作。
+- 用户明确调整调试部署策略：默认不创建、不保留旧版备份，已固化至部署技能及关联参考。首次部署曾按旧规则生成备份，现已按本轮指示删除本地旧版 ZIP、归档及对应清单；设备本轮暂存目录与其中旧版备份全部清理，不删除其他历史目录。候选清单、验证 JSON 和截图继续保留。
+- 设备证据：`.artifacts/decky-update-ui-restart-20261103/summary.json`、`manifest.json`、`final-device.txt`、`post-restart-rpc.json`、`restart-smoke.json`、`settings-checked.png`、`qam-plugin.png`。验证后关闭本轮菜单并恢复原 Steam 网络设置页，关闭本轮 SSH 隧道。
+- 尚待验收：从实际旧版本的更新按钮完成完整下载→百分比→安装→自动客户端重启链；实体手柄焦点/返回。当前候选与公开最新发行均为 0.5.3，未伪造高版本候选或改写产品更新记录。未提交、合并、推送、Tag 或 Release。
+
+## 2026-11-03：Decky 单行更新与客户端重启施工
+
+- 分支 `fix/decky-update-ui-restart`，基线 `main@f5488d8`；保留此前计划文档改动，未提交、合并、推送或部署。范围见[专项计划](decky-ui-restart-plan.md)。本轮代码已实现，设备验收待完成。
+- 前端更新区域改为一行当前运行版本与唯一控件。检查/更新/恢复/重启重试共用该位置；点击后立即显示百分比，保持同一个原生 DialogButton 以保留焦点，不再自动弹进度窗口或展示多行详情。清理旧 Modal、重复进度、取消/稍后/跳过等界面专属逻辑；后台检测与通知机制保留。
+- 安装器发布整体进度：真实 ZIP 字节占 0–80%，校验完成 85%、备份完成 90%、安装完成 95%、运行验证后进入清理 99%，全部收尾后 100%。可信总量优先取冻结 Release 附件大小，无总量不模拟增长；清单/API 下载不影响 ZIP 进度。前端约 1 秒串行读取，临时断连保留最后进度。
+- 当前 Decky UI 依赖的 `User.ts` 明确提供客户端重启签名 `StartRestart(force: boolean): void`。独立执行者在正常 GUI 安装、运行验证及门禁收尾后，先持久化 installed/completed 结果，再通过既有 CDP 调用 `SteamClient.User.StartRestart(true)`；未调用 reboot、shutdown 或替代为 Loader/WebHelper 重启。历史结果查询不发起重启；CLI、检查模式、失败回滚和恢复清理不进入该调用。
+- 增加显式重启重试 RPC；只接受安装成功但重启失败结果，不重新下载包。重启进程退出、启动失败或客户端 API 错误保留已安装版本；调用造成的 CEF 关闭/断开仅表示请求未获回执，不将安装改写为失败。无定时重试、倒计时或循环重启。
+- 手工完整路径与过度设计复核见[复核记录](review.md)。SharedJSContext `performance.timeOrigin` 与插件渲染上下文的一致性、实际客户端进程重建、boot ID 不变、新组件加载均待实机确认。
+
+### 本轮定向验证
+
+| 平台/范围 | 命令 | 结果 |
+| --- | --- | --- |
+| Windows / 前端测试 | `npm test -w apps/decky` | 107 项通过；最后新增失败状态文案后更新相关 5 项再次通过 |
+| Windows / 类型 | `npm run typecheck -w apps/decky` | 通过 |
+| Windows / 构建 | `npm run build -w apps/decky` | 最终源码构建通过，版本同步无变更；产物 `apps/decky/dist/index.js` |
+| WSL Ubuntu / 安装器 | `python3 -m unittest discover -s scripts -p test_install_decky.py` | 最终 35 项通过；包括实际安装/恢复夹具、整体进度、重启前持久化、预期断连与重启接口失败 |
+| WSL Ubuntu / 更新宿主 | `python3 -m unittest discover -s apps/decky/backend -p "test_app_update*.py"` | 11 项通过；含独立执行者跨宿主退出/目录移除存活和重启重试 |
+| Windows / Loader 桥接 | `node scripts/test-install-decky-bridge.mjs` | 11 项通过 |
+| 文档与差异 | `git diff --check`、新增文档相对链接核对 | 通过 |
+| Windows / Python 补充尝试 | `python -m unittest discover -s scripts -p test_install_decky.py` | 当时 34 项中 25 项依平台跳过；后续 Windows 宿主回归未完成，已停止该会话，不计为通过；改在目标 Linux 环境完成上列回归 |
+| 实机与发行 | 未执行 | 未部署、未重启设备、未打包发布；原生 1280×800、实体手柄、从按钮完整更新与客户端重启、新页面加载、其他插件恢复均待验收；未运行发布完整矩阵 |
+
+## 2026-11-03：Decky 单行更新与客户端重启计划（待实现）
+
+- 用户要求二级页面只保留当前版本与状态按钮，点击更新后按钮原位变为实时百分比；完成后强制重启 Steam 客户端以加载新版插件。
+- 在干净的 `main@f5488d8` 上创建 `fix/decky-update-ui-restart`，复用本功能目录，新增[专项计划](decky-ui-restart-plan.md)，同步设计与索引。未修改运行代码，未提交、部署或重启设备。
+- 已静态核对 `app-update.tsx`、`app-update-view.tsx` 和安装器成功收尾路径，确认现状有重复进度与自动弹窗，独立安装器具备跨插件卸载的执行边界。
+- 官方 Loader 3.3.0 `updater.py` 的更新重启调用重启 Loader 服务，`utilities.py` 另提供 WebHelper 重启；尚未核实满足完整 Steam 客户端重启的具体接口与实机效果，列为 P0。来源链接见专项计划。
+- 计划级过度设计审阅完成；定向测试、构建、设备进程及 boot ID、实体手柄、新版页面加载全部待实施验证。本轮仅检查文档差异与相对链接，不重复执行代码构建。
 
 ## 2026-11-01：v0.5.1 已合并发布
 
