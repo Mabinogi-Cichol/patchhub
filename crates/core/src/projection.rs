@@ -332,11 +332,6 @@ fn project_instance_impl(
     let game = game(inputs, instance_id)?;
     let mut patches = Vec::<PatchMatch>::new();
     let mut diagnostics = vec![];
-    let needs_recovery = inputs
-        .transactions
-        .transactions()
-        .iter()
-        .any(|t| t.instance_id == game.instance_id && t.state == "needs_recovery");
     let instance_blockers = instance_action_blockers(game, inputs.cancel);
     let (source_summaries, matches, discovery) = if let Some(snapshot) = inputs.sources {
         let registry = snapshot.registry();
@@ -370,7 +365,6 @@ fn project_instance_impl(
                 })
                 .collect();
             if !usable
-                || game.buildid.is_none()
                 || artifacts.len() > 1
                 || candidate
                     .mirrors
@@ -433,14 +427,6 @@ fn project_instance_impl(
                     detail: error.detail,
                 }));
             }
-            if game.availability != "installed" {
-                blockers.push("game_not_ready".into());
-                automatic.push(ActionBlocker::code(ActionBlockerCode::GameNotReady));
-            }
-            if has_zip && !manual && game.buildid.is_none() {
-                blockers.push("build_not_verified".into());
-                automatic.push(ActionBlocker::code(ActionBlockerCode::BuildNotVerified));
-            }
             let link = if has_zip {
                 &inputs.capabilities.zip
             } else {
@@ -457,22 +443,9 @@ fn project_instance_impl(
             automatic.extend(capability);
             let detection =
                 dynamic_detection(inputs, game, &release_id, &selection_id, &mut diagnostics);
-            automatic.extend(unsafe_evidence_blockers(&detection, &diagnostics));
-            let reinstall = dynamic_reinstall_blocker(
-                inputs,
-                game,
-                &release_id,
-                &selection_id,
-                &detection,
-                has_zip,
-            );
             let receipt = receipt_evidence(inputs, game, &release_id, Some(&selection_id));
-            let actions = PatchActions::evaluate(
-                automatic,
-                reinstall,
-                receipt || installed_evidence(&detection),
-                needs_recovery,
-            );
+            let actions =
+                PatchActions::evaluate(automatic, receipt || installed_evidence(&detection));
             patches.push(PatchMatch {
                 download_url,
                 download_label,
@@ -490,14 +463,8 @@ fn project_instance_impl(
                 actions,
                 compatibility: if manual {
                     "manual_selection_required"
-                } else if has_zip {
-                    if blockers.is_empty() {
-                        "verified_metadata"
-                    } else {
-                        "needs_review"
-                    }
                 } else {
-                    "check_required"
+                    "archive_extraction"
                 }
                 .into(),
                 blockers,
@@ -574,73 +541,6 @@ fn instance_action_blockers(game: &steam::GameInstall, cancel: &AtomicBool) -> V
         .map(|e| ActionBlocker::new(ActionBlockerCode::GameNotReady, e.to_string()))
         .into_iter()
         .collect()
-}
-fn unsafe_evidence_blockers(
-    detection: &catalog::Detection,
-    diagnostics: &[ProjectionDiagnostic],
-) -> Vec<ActionBlocker> {
-    diagnostics
-        .iter()
-        .filter(|d| {
-            matches!(
-                d.code.as_str(),
-                "evidence_linked_path"
-                    | "evidence_boundary_violation"
-                    | "evidence_invalid_path"
-                    | "evidence_not_regular_file"
-            )
-        })
-        .filter(|d| {
-            d.path.as_ref().is_some_and(|path| {
-                detection
-                    .files
-                    .iter()
-                    .any(|f| path == &PathBuf::from(&f.path))
-            })
-        })
-        .map(|d| ActionBlocker::new(ActionBlockerCode::GameNotReady, &d.code))
-        .collect()
-}
-fn dynamic_reinstall_blocker(
-    inputs: &ProjectionInputs<'_>,
-    game: &steam::GameInstall,
-    release: &str,
-    selection: &str,
-    detection: &catalog::Detection,
-    zip: bool,
-) -> Option<ActionBlockerCode> {
-    let Some(plan) = latest_plan(inputs, game, release, Some(selection)) else {
-        return Some(ActionBlockerCode::ReinstallUnownedOrIncomplete);
-    };
-    let transaction = inputs
-        .transactions
-        .transactions()
-        .iter()
-        .find(|t| t.plan_id == plan.plan_id && t.state == "committed");
-    // ZIP retains source release_id and recipe_sha256; EXE retains its generated
-    // exe-content identity in both release_id and content_id.
-    let identity_changed = transaction.is_none_or(|t| {
-        t.selection_id.as_deref() != Some(selection)
-            || if zip {
-                plan.release_id != release
-                    || t.content_id
-                        .as_ref()
-                        .is_some_and(|h| Some(h) != plan.recipe_sha256.as_ref())
-            } else {
-                t.content_id.as_deref() != Some(plan.release_id.as_str())
-            }
-    });
-    if plan.install.buildid != game.buildid || identity_changed {
-        return Some(ActionBlockerCode::ReinstallContentIdentityChanged);
-    }
-    if plan.changes.is_empty()
-        || (zip && plan.recipe_sha256.is_none())
-        || detection.status != "installed_managed"
-        || !detection.files.iter().all(|f| f.status == "match")
-    {
-        return Some(ActionBlockerCode::ReinstallUnownedOrIncomplete);
-    }
-    None
 }
 fn latest_plan<'a>(
     inputs: &'a ProjectionInputs<'_>,
@@ -825,7 +725,6 @@ pub fn preview(
                 },
             )?;
             report.selection_id = Some(id);
-            report.blockers.push("exe_check_required".into());
         }
     }
     check_cancel(inputs)?;

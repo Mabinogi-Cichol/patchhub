@@ -1039,16 +1039,13 @@ dependencies = [
 name = "patchhub-installer-format"
 version = "0.5.5"
 dependencies = [
- "base64 0.22.1",
- "caseless",
+ "encoding_rs",
  "lzma-rust2",
  "quick-xml",
  "serde",
  "serde_json",
  "sha2",
  "tempfile",
- "unicode-general-category",
- "unicode-normalization",
 ]
 
 [[package]]

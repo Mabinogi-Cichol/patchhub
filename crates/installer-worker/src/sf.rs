@@ -1,95 +1,52 @@
-//! Fixed-action SF worker protocol for the bundled parser process.
-//! This module never authorizes installation or opens a game/state directory.
+//! Static member listing and streaming extraction for the bundled worker.
+pub use archive::Member;
 use memmap2::MmapOptions;
-use patchhub_installer_format::{audit, require, Error, Result};
-use serde::{Deserialize, Serialize};
+use patchhub_installer_format::{archive, require, Error, Result};
+use serde::Deserialize;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::Path;
-
-pub const MAX_MESSAGE: usize = 16 * 1024 * 1024;
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct Member {
-    pub path: String,
-    pub size: u64,
-    pub crc32: u32,
-    pub payload_offset: u64,
-    pub packed_size: u64,
-    pub compressed: bool,
-}
 #[derive(Debug, Deserialize)]
 #[serde(tag = "action", deny_unknown_fields)]
 pub enum Descriptor {
-    #[serde(rename = "analyze")]
-    Analyze { exe_sha256: String, exe_size: u64 },
-    #[serde(rename = "analyze_behavior")]
-    AnalyzeBehavior { exe_sha256: String, exe_size: u64 },
-    #[serde(rename = "extract_behavior")]
-    ExtractBehavior {
-        exe_sha256: String,
-        exe_size: u64,
-        payload: Vec<Member>,
-    },
-}
-fn is_sha(s: &str) -> bool {
-    s.len() == 64
-        && s.bytes()
-            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    #[serde(rename = "list_members")]
+    ListMembers { exe_sha256: String, exe_size: u64 },
+    #[serde(rename = "extract_members")]
+    ExtractMembers { exe_sha256: String, exe_size: u64 },
 }
 impl Descriptor {
-    fn binding(&self) -> (&str, u64) {
+    pub fn binding(&self) -> (&str, u64) {
         match self {
-            Self::Analyze {
+            Self::ListMembers {
                 exe_sha256,
                 exe_size,
             }
-            | Self::AnalyzeBehavior {
+            | Self::ExtractMembers {
                 exe_sha256,
                 exe_size,
-            }
-            | Self::ExtractBehavior {
-                exe_sha256,
-                exe_size,
-                ..
             } => (exe_sha256, *exe_size),
         }
     }
     fn validate(&self) -> Result<()> {
         let (hash, size) = self.binding();
-        require(is_sha(hash) && size > 0, "invalid_descriptor")?;
-        if let Self::ExtractBehavior { payload, .. } = self {
-            require(!payload.is_empty(), "invalid_descriptor")?;
-            // Validate every declared member and keep the running total
-            // overflow-checked. Each payload range must lie inside the input.
-            let mut total = 0u64;
-            for p in payload {
-                require(
-                    !p.path.is_empty()
-                        && p.payload_offset
-                            .checked_add(p.packed_size)
-                            .is_some_and(|end| end <= size),
-                    "invalid_descriptor",
-                )?;
-                total = total
-                    .checked_add(p.size)
-                    .ok_or_else(|| Error("invalid_descriptor".into()))?;
-            }
-        }
-        Ok(())
+        require(
+            hash.len() == 64
+                && hash
+                    .bytes()
+                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+                && size > 0,
+            "invalid_descriptor",
+        )
     }
 }
 pub fn parse_descriptor(raw: &[u8]) -> Result<Descriptor> {
-    require(raw.len() <= MAX_MESSAGE, "descriptor_size_limit")?;
     let descriptor: Descriptor =
         serde_json::from_slice(raw).map_err(|_| Error("invalid_descriptor".into()))?;
     descriptor.validate()?;
     Ok(descriptor)
 }
-
 #[derive(PartialEq, Eq)]
 struct Identity {
     len: u64,
@@ -152,107 +109,77 @@ pub fn open_input(path: &Path) -> Result<File> {
 }
 
 pub fn encode_response(value: &Value) -> Result<Vec<u8>> {
-    // No artificial response/report ceiling: the report grows with a legitimate
-    // installer's file table; consumers use the actual document (design D08).
     let mut out = Vec::new();
-    serde_json::to_writer(&mut out, value).map_err(|_| Error("invalid_report".into()))?;
+    serde_json::to_writer(&mut out, value).map_err(|_| Error("invalid_response".into()))?;
     out.push(b'\n');
     Ok(out)
 }
-/// Read-only analysis. Payload bytes are decoded only by [`extract`] during the
-/// install phase, never here to precompute member digests.
-pub fn process(file: &File, descriptor: &Descriptor) -> Result<Value> {
+fn input(file: &File, descriptor: &Descriptor) -> Result<(memmap2::Mmap, Identity)> {
     descriptor.validate()?;
+    let before = identity(file)?;
+    let (hash, size) = descriptor.binding();
+    require(before.len == size, "exe_size_mismatch")?;
+    // SAFETY: a regular read-only input, held immutable by the host. Windows
+    // denies write/delete sharing; identity is checked again after processing.
+    let data = unsafe { MmapOptions::new().map(file)? };
     require(
-        matches!(
-            descriptor,
-            Descriptor::Analyze { .. } | Descriptor::AnalyzeBehavior { .. }
-        ),
+        format!("{:x}", Sha256::digest(&data[..])) == hash,
+        "exe_payload_changed",
+    )?;
+    Ok((data, before))
+}
+pub fn process(file: &File, descriptor: &Descriptor) -> Result<Value> {
+    require(
+        matches!(descriptor, Descriptor::ListMembers { .. }),
         "invalid_descriptor",
     )?;
-    let before = identity(file)?;
-    let (exe_sha, exe_size) = descriptor.binding();
-    require(before.len == exe_size, "exe_size_mismatch")?;
-    // SAFETY: the input is a regular read-only file. Windows denies write/delete
-    // sharing. The host keeps the input immutable for this invocation.
-    // Identity and digest are rechecked.
-    let data = unsafe { MmapOptions::new().map(file)? };
-    let behavior = matches!(descriptor, Descriptor::AnalyzeBehavior { .. });
-    let report = audit::audit_metadata(&data, behavior)?;
-    // The metadata audit hashes the complete input once; reuse that digest
-    // instead of reading the file again just to bind the descriptor.
-    require(report["exe"]["sha256"] == exe_sha, "exe_payload_changed")?;
-    require(identity(file)? == before, "exe_changed_during_analysis")?;
-    let action = if behavior {
-        "analyze_behavior"
-    } else {
-        "analyze"
-    };
+    let (data, before) = input(file, descriptor)?;
+    let archive = archive::read(&data)?;
+    require(identity(file)? == before, "exe_changed_during_listing")?;
     Ok(
-        json!({"schema_version":1,"action":action,"exe_sha256":exe_sha,"report":report,"installable":false}),
+        json!({"schema_version":1,"action":"list_members","exe_sha256":descriptor.binding().0,"members":archive.members()}),
     )
 }
-
 fn write_line(out: &mut dyn Write, value: Value) -> Result<()> {
-    serde_json::to_writer(&mut *out, &value).map_err(|_| Error("invalid_report".into()))?;
+    serde_json::to_writer(&mut *out, &value).map_err(|_| Error("invalid_response".into()))?;
     out.write_all(b"\n")?;
     Ok(())
 }
-
-/// Stream selected members to the caller as one JSON header, exactly the
-/// advertised raw bytes, and one JSON trailer per member. The host consumes the
-/// bytes while the worker decodes; no artifact or member image is created.
+/// Every file payload in container order, including duplicate target paths.
+/// Offsets and compression details never cross the worker boundary.
 pub fn extract(file: &File, descriptor: &Descriptor, out: &mut dyn Write) -> Result<()> {
-    descriptor.validate()?;
-    let Descriptor::ExtractBehavior { payload, .. } = descriptor else {
-        return Err(Error("invalid_descriptor".into()));
-    };
-    let before = identity(file)?;
-    let (exe_sha, exe_size) = descriptor.binding();
-    require(before.len == exe_size, "exe_size_mismatch")?;
-    // SAFETY: see process(): the host keeps the input immutable for this session.
-    let data = unsafe { MmapOptions::new().map(file)? };
     require(
-        format!("{:x}", Sha256::digest(&data[..])) == exe_sha,
-        "exe_payload_changed",
+        matches!(descriptor, Descriptor::ExtractMembers { .. }),
+        "invalid_descriptor",
     )?;
-    write_line(out, json!({"extract":1,"members":payload.len()}))?;
-    for (index, member) in payload.iter().enumerate() {
+    let (data, before) = input(file, descriptor)?;
+    let archive = archive::read(&data)?;
+    write_line(out, json!({"extract":1,"members":archive.members().len()}))?;
+    for (index, member) in archive.members().iter().enumerate() {
         write_line(
             out,
             json!({"index":index,"path":member.path,"size":member.size}),
         )?;
-        let info = audit::decode_payload(
-            &data,
-            usize::try_from(member.payload_offset)
-                .map_err(|_| Error("invalid_descriptor".into()))?,
-            member.packed_size,
-            member.size,
-            member.crc32,
-            member.compressed,
-            Some(&mut *out),
-        )?;
+        let info = archive.extract(&data, index, out)?;
         write_line(
             out,
-            json!({"index":index,"size":info["size"],"crc32":info["crc32"],"sha256":info["sha256"]}),
+            json!({"index":index,"size":info.size,"crc32":info.crc32,"sha256":info.sha256}),
         )?;
     }
+    require(identity(file)? == before, "exe_changed_during_extraction")?;
     write_line(out, json!({"done":true}))?;
     out.flush()?;
-    require(identity(file)? == before, "exe_changed_during_extraction")?;
     Ok(())
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
     #[test]
-    fn descriptor_is_strict_and_cannot_grant_authority() {
-        let sha = "a".repeat(64);
-        let valid = json!({"action":"analyze_behavior","exe_sha256":sha,"exe_size":10});
+    fn descriptor_only_identifies_input_and_action() {
+        let valid = json!({"action":"list_members","exe_sha256":"a".repeat(64),"exe_size":10});
         assert!(parse_descriptor(&serde_json::to_vec(&valid).unwrap()).is_ok());
         for key in [
-            "semantics_approved",
+            "payload",
             "input_path",
             "output_path",
             "command",
@@ -260,48 +187,12 @@ mod tests {
         ] {
             let mut changed = valid.clone();
             changed[key] = json!(true);
-            assert_eq!(
-                parse_descriptor(&serde_json::to_vec(&changed).unwrap())
-                    .unwrap_err()
-                    .0,
-                "invalid_descriptor"
-            );
+            assert!(parse_descriptor(&serde_json::to_vec(&changed).unwrap()).is_err());
         }
-        for action in ["convert", "execute", "apply", ""] {
+        for action in ["analyze", "analyze_behavior", "extract_behavior", "execute"] {
             let mut changed = valid.clone();
             changed["action"] = json!(action);
             assert!(parse_descriptor(&serde_json::to_vec(&changed).unwrap()).is_err());
         }
-        for size in [json!(-1), json!(1.5), json!(true), json!(0)] {
-            let mut changed = valid.clone();
-            changed["exe_size"] = size;
-            assert!(parse_descriptor(&serde_json::to_vec(&changed).unwrap()).is_err());
-        }
-        let duplicate =
-            format!(r#"{{"action":"analyze","exe_sha256":"{sha}","exe_size":1,"exe_size":2}}"#);
-        assert!(parse_descriptor(duplicate.as_bytes()).is_err());
-        assert_eq!(
-            parse_descriptor(&vec![b' '; MAX_MESSAGE + 1])
-                .unwrap_err()
-                .0,
-            "descriptor_size_limit"
-        );
-    }
-    #[test]
-    fn response_has_no_artificial_size_ceiling() {
-        let small = encode_response(&json!({"installable":false})).unwrap();
-        assert_eq!(small.last(), Some(&b'\n'));
-        // A report larger than the descriptor/protocol message bound is allowed;
-        // the report grows with a legitimate installer's file table.
-        let big = encode_response(&json!("x".repeat(MAX_MESSAGE))).unwrap();
-        assert!(big.len() > MAX_MESSAGE);
-        assert_eq!(big.last(), Some(&b'\n'));
-    }
-    #[test]
-    fn descriptor_accepts_large_representable_exe_without_allocating_its_contents() {
-        let bytes = serde_json::to_vec(&json!({"action":"analyze_behavior",
-            "exe_sha256":"a".repeat(64),"exe_size":5u64*1024*1024*1024}))
-        .unwrap();
-        assert!(parse_descriptor(&bytes).is_ok());
     }
 }

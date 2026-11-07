@@ -1,17 +1,8 @@
-//! Single-task dynamic publisher ZIP orchestration
-//! (p1-zip-orchestration §3).
-//!
-//! `install_zip` runs **inside** an `operation::run` scope (the caller wraps it)
-//! and performs: request-idempotency gate → acquire → member mapping → entry
-//! facts → direct extraction → commit, plus lease/cancellation integration.
-//! Mapping and extraction share one archive handle; the journal lock is held
-//! only for the direct-install begin/commit writes.
-//!
-//! The signed catalog route reuses the shared helpers here for its ledger and
-//! outcome plumbing.
+//! Publisher ZIP acquisition, static member mapping and direct extraction.
+//! Mapping and streaming share one archive handle. History failures accompany
+//! the real result; they never authorize or stop directory writes.
 
 use super::acquire::{self, DownloadRequest, Transport};
-use super::facts;
 use super::outcome::CancellationCause;
 use super::resolve::ResolvedZipCandidate;
 use super::store::InstallerPaths;
@@ -128,8 +119,8 @@ pub fn request_binding(
 
 /// Idempotency gate (p1-zip-orchestration §3.4). Returns `Some(transaction)`
 /// when a terminal record must be replayed, `None` when the caller should
-/// proceed, and a conflict/interrupted error otherwise. On a new request it
-/// inserts the binding with a null `content_id`.
+/// proceed, and a binding conflict otherwise. Callers first claim OS request
+/// ownership; a non-terminal journal left by a dead owner is not an active task.
 pub fn begin_request(
     paths: &InstallerPaths,
     request_id: &str,
@@ -169,70 +160,10 @@ pub fn begin_request(
                 return Ok(Some(transaction));
             }
         }
-        return Err(ZipTaskError::code(
-            "install_request_in_progress_or_interrupted",
-        ));
-    }
-    // A failed ledger backfill must still replay its real journal transaction.
-    // Only new request-derived UUIDs use this fallback; legacy random plans use
-    // the original ledger plan_id above. The existing binding remains mandatory.
-    let reserved = super::requests::request_plan_id(request_id);
-    let transactions = install::list_transactions_at(paths.root()).map_err(internal)?;
-    if let Some(transaction) = transactions.iter().find(|t| t.plan_id == reserved) {
-        let plan = install::get_plan_ro(paths.root(), &reserved).map_err(internal)?;
-        if plan.instance_id != binding.instance_id
-            || plan.install.instance_id != binding.instance_id
-            || transaction.instance_id != binding.instance_id
-            || plan.release_id != transaction.release_id
-            || binding.content_id.as_ref().is_some_and(|content| {
-                transaction
-                    .content_id
-                    .as_ref()
-                    .or(plan.recipe_sha256.as_ref())
-                    != Some(content)
-            })
-            || operation_name(plan.operation) != binding.operation
-            || transaction.selection_id != binding.selection_id
-            || binding
-                .release_id
-                .as_ref()
-                .is_some_and(|id| id != &transaction.release_id)
-        {
-            return Err(ZipTaskError::code("request_id_binding_conflict"));
-        }
-        if is_terminal(&transaction.state) {
-            return Ok(Some(transaction.clone()));
-        }
-        return Err(ZipTaskError::code(
-            "install_request_in_progress_or_interrupted",
-        ));
-    }
-    // No plan yet: an unrelated non-terminal transaction for the same instance
-    // means an interrupted write the host must recover first.
-    let transactions = install::list_transactions_at(paths.root()).map_err(internal)?;
-    if transactions.iter().any(|item| {
-        item.instance_id == binding.instance_id && !is_terminal(&item.state) && !item.direct
-    }) {
-        return Err(ZipTaskError::code(
-            "install_request_in_progress_or_interrupted",
-        ));
+        // RequestClaim already proves no live owner holds this request. Retry
+        // the selected archive directly; old applying state requires no recovery.
     }
     Ok(None)
-}
-
-/// Whether an already-resolved `content_id` for this request conflicts with the
-/// content resolved now (p1-zip-orchestration §3.4 step 3).
-pub fn content_conflict(
-    paths: &InstallerPaths,
-    request_id: &str,
-    content_id: &str,
-) -> ZipTaskResult<bool> {
-    let ledger = super::requests::RequestLedger::open(paths).map_err(internal)?;
-    Ok(ledger
-        .get(request_id)
-        .map_err(internal)?
-        .and_then(|record| record.binding.content_id)
-        .is_some_and(|existing| existing != content_id))
 }
 
 /// Back-fills `plan_id` / `content_id` once the plan exists (step 5).
@@ -311,9 +242,6 @@ fn map_recipe_error(error: io::Error) -> ZipTaskError {
     if code == "download_cancelled" {
         return ZipTaskError::code("cancelled");
     }
-    if code == "zip_metadata_limit" {
-        return ZipTaskError::new("resource_limit", code);
-    }
     if code == "zip_metadata_invalid" {
         return ZipTaskError::code(code);
     }
@@ -328,9 +256,6 @@ pub(crate) fn map_plan_error(error: io::Error) -> ZipTaskError {
     let code = error.to_string();
     if code.starts_with("insufficient_space:") {
         return ZipTaskError::new("insufficient_space", code);
-    }
-    if code == "plan_metadata_limit" {
-        return ZipTaskError::new("resource_limit", code);
     }
     if [
         "insufficient_space",
@@ -350,10 +275,6 @@ pub(crate) fn map_plan_error(error: io::Error) -> ZipTaskError {
     } else {
         ZipTaskError::new("plan_failed", code)
     }
-}
-
-fn map_fact_failure(failure: &facts::FactFailure) -> ZipTaskError {
-    ZipTaskError::new(failure.code.clone(), failure.detail.clone())
 }
 
 /// Identity of the archive plus the resolved target mapping. The per-file
@@ -389,16 +310,64 @@ fn map_direct_error(error: io::Error) -> ZipTaskError {
     ZipTaskError::new("zip_extract_failed", error.to_string())
 }
 
-/// The journal is authoritative after a plan has been bound. A summary write
-/// failure must not erase a commit or rollback; replay consults that plan's journal.
-pub(crate) fn record_terminal_fact(
+pub(crate) fn append_warning(transaction: &mut Transaction, warning: impl fmt::Display) {
+    let warning = warning.to_string();
+    match &mut transaction.error {
+        Some(error) => {
+            error.push_str("; ");
+            error.push_str(&warning);
+        }
+        slot @ None => *slot = Some(warning),
+    }
+}
+pub(crate) fn claim_request(
     paths: &InstallerPaths,
-    request_id: &str,
+    request: &str,
+    warnings: &mut Vec<String>,
+) -> ZipTaskResult<Option<super::requests::RequestClaim>> {
+    match super::requests::RequestClaim::acquire(paths, request) {
+        Ok(claim) => Ok(Some(claim)),
+        Err(error) if error.to_string() == "install_request_in_progress_or_interrupted" => {
+            Err(ZipTaskError::code(error.to_string()))
+        }
+        Err(error) => {
+            warnings.push(format!("request_history_failed: {error}"));
+            Ok(None)
+        }
+    }
+}
+pub(crate) fn begin_extraction_request(
+    paths: &InstallerPaths,
+    request: &str,
     binding: &super::requests::RequestBinding,
-    content_id: &str,
-    transaction: &Transaction,
+    warnings: &mut Vec<String>,
+) -> ZipTaskResult<Option<Transaction>> {
+    match begin_request(paths, request, binding) {
+        Ok(transaction) => Ok(transaction),
+        Err(error)
+            if matches!(
+                error.code.as_str(),
+                "request_id_binding_conflict" | "install_request_in_progress_or_interrupted"
+            ) =>
+        {
+            Err(error)
+        }
+        Err(error) => {
+            warnings.push(format!("request_history_failed: {error}"));
+            Ok(None)
+        }
+    }
+}
+pub(crate) fn record_extraction_terminal(
+    paths: &InstallerPaths,
+    request: &str,
+    binding: &super::requests::RequestBinding,
+    content: &str,
+    transaction: &mut Transaction,
 ) {
-    let _ = record_terminal(paths, request_id, binding, content_id, transaction);
+    if let Err(error) = record_terminal(paths, request, binding, content, transaction) {
+        append_warning(transaction, format!("request_history_failed: {error}"));
+    }
 }
 
 /// Stage-boundary gate: local cancel flag, then the live cancellation cause,
@@ -439,35 +408,8 @@ pub(crate) fn execute_zip_acquired(
     deps: ZipInstallDeps<'_>,
     acquired: Option<acquire::AcquiredArchive>,
 ) -> ZipTaskResult<super::InstallExecution> {
-    if let Some(code) = super::host_identity_blocker() {
-        return Err(ZipTaskError::code(code));
-    }
-    let _claim =
-        super::requests::RequestClaim::acquire(deps.paths, inputs.request_id).map_err(internal)?;
-    let control = super::task::TaskControl::new(
-        deps.paths,
-        inputs.request_id,
-        &inputs.game.instance_id,
-        &inputs.selection.selection_id,
-    )
-    .map_err(internal)?;
-    let requested = deps.cancel;
-    control.run_with_cause(requested, deps.cancel_reason, || {
-        let deps = ZipInstallDeps {
-            cancel: &control.cancel,
-            ..deps
-        };
-        install_zip_inner(inputs, deps, &control, requested, acquired)
-    })
-}
-
-fn install_zip_inner(
-    inputs: ZipInstallInputs<'_>,
-    deps: ZipInstallDeps<'_>,
-    control: &super::task::TaskControl,
-    requested: &AtomicBool,
-    acquired: Option<acquire::AcquiredArchive>,
-) -> ZipTaskResult<super::InstallExecution> {
+    let mut warnings = Vec::new();
+    let _claim = claim_request(deps.paths, inputs.request_id, &mut warnings)?;
     let binding = request_binding(
         &inputs.game.instance_id,
         Some(&inputs.selection.selection_id),
@@ -475,15 +417,13 @@ fn install_zip_inner(
         inputs.operation,
         None,
     );
-    if let Some(transaction) = begin_request(deps.paths, inputs.request_id, &binding)? {
+    if let Some(transaction) =
+        begin_extraction_request(deps.paths, inputs.request_id, &binding, &mut warnings)?
+    {
         return Ok(super::InstallExecution::replay(transaction));
     }
-
-    control
-        .check_requested_with_cause(requested, deps.cancel_reason)
-        .map_err(|_| ZipTaskError::code("cancelled"))?;
-    operation::stage("connecting", None, None);
     boundary(&deps)?;
+    operation::stage("connecting", None, None);
     let request = DownloadRequest {
         url: &inputs.selection.download_url,
         download_hosts: &inputs.selection.rule.download_hosts,
@@ -495,50 +435,24 @@ fn install_zip_inner(
         None => acquire::acquire_with(deps.transport, &request, deps.paths, deps.cancel, |_, _| {})
             .map_err(map_download_error)?,
     };
-    control
-        .check_requested_with_cause(requested, deps.cancel_reason)
-        .map_err(|_| ZipTaskError::code("download_cancelled"))?;
-
-    // One archive handle serves mapping and the single extraction pass. Mapping
-    // reads only the central directory and the few wrapper-detection headers.
+    warnings.extend(acquired.warnings);
+    boundary(&deps)?;
+    operation::stage("reading_archive", None, None);
     let mut zip = zip_recipe::open(&acquired.path).map_err(map_recipe_error)?;
     let members = zip_recipe::plan(&mut zip, &inputs.game.install_path, deps.cancel)
         .map_err(map_recipe_error)?;
-
-    let buildid = inputs.game.buildid.as_deref();
-    let expectation = inputs.selection.expectation(buildid);
-    let facts = facts::game_facts_unreviewed(inputs.game, &expectation, deps.cancel);
-    if !facts.is_valid() {
-        return Err(match facts.failures().first() {
-            Some(failure) => map_fact_failure(failure),
-            None => ZipTaskError::code("game_not_ready"),
-        });
-    }
-
     let identity =
         content_identity(inputs.selection, &acquired.sha256, &members).map_err(internal)?;
-    if content_conflict(deps.paths, inputs.request_id, &identity)? {
-        return Err(ZipTaskError::code("request_id_binding_conflict"));
-    }
     let files: Vec<(String, u64)> = members
         .iter()
-        .map(|member| (member.destination.clone(), member.size))
+        .map(|m| (m.destination.clone(), m.size))
         .collect();
-    let sizes = super::space::zip_target_sizes(&inputs.game.install_path, &members)
-        .map_err(map_plan_error)?;
-    super::space::ZipSpaceBudget::for_direct_overwrite(&sizes)
-        .and_then(|budget| budget.inspect(deps.paths.root(), &inputs.game.install_path))
-        .map_err(map_plan_error)?;
-    let total = members.iter().try_fold(0u64, |sum, member| {
-        sum.checked_add(member.size)
+    let total = members.iter().try_fold(0u64, |sum, m| {
+        sum.checked_add(m.size)
             .ok_or_else(|| ZipTaskError::code("zip_size_overflow"))
     })?;
-
-    control
-        .check_requested_with_cause(requested, deps.cancel_reason)
-        .map_err(|_| ZipTaskError::code("cancelled"))?;
     boundary(&deps)?;
-    let plan = install::begin_direct_at(
+    let mut plan = install::begin_direct_at(
         deps.paths.root(),
         inputs.game,
         &inputs.selection.release_id,
@@ -549,61 +463,52 @@ fn install_zip_inner(
         Some(&identity),
     )
     .map_err(map_plan_error)?;
-
+    for warning in warnings {
+        plan.warning(warning);
+    }
+    if let Err(error) = record_plan(
+        deps.paths,
+        inputs.request_id,
+        &binding,
+        &plan.plan_id,
+        &identity,
+    ) {
+        plan.warning(format!("request_history_failed: {error}"));
+    }
     let mut wrote = false;
-    let outcome = (|| {
-        control
-            .attach_plan(deps.paths, &plan.plan_id)
-            .map_err(internal)?;
-        record_plan(
-            deps.paths,
-            inputs.request_id,
-            &binding,
-            &plan.plan_id,
-            &identity,
-        )?;
-        boundary(&deps)?;
-        operation::stage("extracting", Some(total), Some(files.len()));
-        let installed =
-            zip_direct::extract(&mut zip, &members, &plan.targets, deps.cancel, &mut wrote)
-                .map_err(map_direct_error)?;
-        boundary(&deps)?;
-        install::commit_direct_at(deps.paths.root(), &plan.plan_id, &installed)
-            .map_err(map_plan_error)
-    })();
-    let transaction = match outcome {
-        Ok(transaction) => transaction,
+    operation::stage("extracting", Some(total), Some(files.len()));
+    let outcome = zip_direct::extract(&mut zip, &members, &plan.targets, deps.cancel, &mut wrote)
+        .map_err(map_direct_error);
+    let mut transaction = match outcome {
+        Ok(installed) => {
+            install::commit_direct_at(&mut plan, &installed).map_err(map_plan_error)?
+        }
         Err(error) => {
-            // The journal precedes the first game write, so an interrupted
-            // install is reported as incomplete. Written files stay as they are.
             let cancelled = (deps.cancel_reason)().is_some()
                 || deps.cancel.load(Ordering::Relaxed)
                 || error.code == "cancelled";
             let code = if cancelled {
                 if wrote {
-                    "cancelled_incomplete".to_owned()
+                    "cancelled_incomplete"
                 } else {
-                    "task_cancelled".to_owned()
+                    "task_cancelled"
                 }
+                .to_owned()
             } else if wrote {
                 format!("install_incomplete: {error}")
             } else {
                 error.to_string()
             };
-            let failed = install::fail_direct_at(deps.paths.root(), &plan.plan_id, &code)
-                .map_err(internal)?;
-            let _ = control.revoke_for_failure();
-            record_terminal_fact(deps.paths, inputs.request_id, &binding, &identity, &failed);
-            return Ok(super::InstallExecution::fresh(failed));
+            install::fail_direct_at(&mut plan, &code).map_err(map_plan_error)?
         }
     };
     operation::stage("cleanup", None, None);
-    record_terminal_fact(
+    record_extraction_terminal(
         deps.paths,
         inputs.request_id,
         &binding,
         &identity,
-        &transaction,
+        &mut transaction,
     );
     Ok(super::InstallExecution::fresh(transaction))
 }
@@ -946,15 +851,65 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn metadata_limits_and_invalid_zip_have_distinct_errors() {
-        let resource = map_recipe_error(io::Error::other("zip_metadata_limit"));
-        assert_eq!(resource.code, "resource_limit");
-        assert_eq!(resource.detail.as_deref(), Some("zip_metadata_limit"));
-        let invalid = map_recipe_error(io::Error::other("zip_metadata_invalid"));
-        assert_eq!(invalid.code, "zip_metadata_invalid");
-        let plan = map_plan_error(io::Error::other("plan_metadata_limit"));
-        assert_eq!(plan.code, "resource_limit");
-        assert_eq!(plan.detail.as_deref(), Some("plan_metadata_limit"));
+    fn same_request_retries_abandoned_applying_and_then_replays_completion() {
+        let (temp, game, archive) = setup();
+        let (state, paths) = dynamic_paths(&temp);
+        let id = zip_selection_id(&candidate()).unwrap();
+        let selection = seed_and_resolve(&state, &id);
+        let binding = request_binding(
+            &game.instance_id,
+            Some(&id),
+            None,
+            InstallOperation::Overwrite,
+            None,
+        );
+        {
+            let _claim = super::super::requests::RequestClaim::acquire(&paths, "restart").unwrap();
+            assert!(begin_request(&paths, "restart", &binding)
+                .unwrap()
+                .is_none());
+            let plan = install::begin_direct_at(
+                paths.root(),
+                &game,
+                &selection.release_id,
+                Some(&id),
+                Some("old-input"),
+                InstallOperation::Overwrite,
+                &[("data.txt".into(), 7)],
+                None,
+            )
+            .unwrap();
+            record_plan(&paths, "restart", &binding, &plan.plan_id, "old-input").unwrap();
+            assert!(super::super::requests::RequestClaim::acquire(&paths, "restart").is_err());
+            // Dropping these handles models process exit; persisted state is applying.
+        }
+        let cancel = AtomicBool::new(false);
+        let transport = transport(archive);
+        let run = |transport: &dyn Transport| {
+            install_zip(
+                ZipInstallInputs {
+                    game: &game,
+                    selection: &selection,
+                    operation: InstallOperation::Overwrite,
+                    request_id: "restart",
+                },
+                ZipInstallDeps {
+                    paths: &paths,
+                    transport,
+                    cancel: &cancel,
+                    cancel_reason: &|| None,
+                },
+            )
+        };
+        let transaction = run(&transport).unwrap();
+        assert_eq!(transaction.state, "committed");
+        assert_eq!(
+            fs::read(game.install_path.join("data.txt")).unwrap(),
+            b"patched"
+        );
+        let replay = run(&FakeTransport::new(vec![])).unwrap();
+        assert_eq!(replay.transaction_id, transaction.transaction_id);
+        assert_eq!(replay.state, "committed");
     }
 
     #[test]
@@ -1086,6 +1041,175 @@ pub(crate) mod tests {
         let job = paths.jobs_dir().join(&transaction.plan_id);
         assert!(!job.join("0.stage").exists());
         assert!(!job.join("0.backup").exists());
+    }
+
+    fn duplicate_zip() -> Vec<u8> {
+        let mut archive = build_zip(&[
+            ("a.bin", b"first"),
+            ("b.bin", b"middle"),
+            ("c.bin", b"last"),
+        ]);
+        // ZipWriter rejects duplicate names. Replace same-length local and
+        // central names to exercise an ordinary ZIP with a,b,a records.
+        for offset in 0..archive.len() - 4 {
+            if &archive[offset..offset + 5] == b"c.bin" {
+                archive[offset..offset + 5].copy_from_slice(b"a.bin");
+            }
+        }
+        archive
+    }
+
+    #[test]
+    fn duplicate_zip_members_stream_in_order_and_history_keeps_last_digest() {
+        let (temp, game, _) = setup();
+        let (state, paths) = dynamic_paths(&temp);
+        let selection = manual_selection(None, None);
+        let files = Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::clone(&files);
+        let result = operation::run(
+            Arc::new(AtomicBool::new(false)),
+            move |p| {
+                if p.stage == "extracting" {
+                    sink.lock().unwrap().push(p.files_done);
+                }
+            },
+            || {
+                install_zip(
+                    ZipInstallInputs {
+                        game: &game,
+                        selection: &selection,
+                        operation: InstallOperation::Install,
+                        request_id: "duplicate",
+                    },
+                    ZipInstallDeps {
+                        paths: &paths,
+                        transport: &transport(duplicate_zip()),
+                        cancel: &AtomicBool::new(false),
+                        cancel_reason: &|| None,
+                    },
+                )
+            },
+        )
+        .unwrap();
+        assert_eq!(result.state, "committed");
+        assert_eq!(fs::read(game.install_path.join("a.bin")).unwrap(), b"last");
+        assert_eq!(
+            fs::read(game.install_path.join("b.bin")).unwrap(),
+            b"middle"
+        );
+        assert!(files.lock().unwrap().contains(&3));
+        let plan = install::get_plan_at(paths.root(), &result.plan_id).unwrap();
+        assert_eq!(plan.changes.len(), 2);
+        let last = plan.changes.iter().find(|c| c.path == "a.bin").unwrap();
+        assert_eq!(
+            last.installed_sha256.as_deref(),
+            Some(sha256_hex(b"last").as_str())
+        );
+        let _ = state;
+    }
+
+    #[test]
+    fn corrupt_earlier_duplicate_is_not_silently_replaced_by_later_member() {
+        let (temp, game, _) = setup();
+        let (state, paths) = dynamic_paths(&temp);
+        let selection = manual_selection(None, None);
+        let mut archive = duplicate_zip();
+        let first_payload = 30
+            + u16::from_le_bytes([archive[26], archive[27]]) as usize
+            + u16::from_le_bytes([archive[28], archive[29]]) as usize;
+        archive[first_payload] ^= 0xff;
+        let result = run_install(
+            &game,
+            &selection,
+            &paths,
+            &state,
+            &transport(archive),
+            &AtomicBool::new(false),
+            "duplicate-corrupt",
+            InstallOperation::Install,
+        )
+        .unwrap();
+        assert_eq!(result.state, "failed");
+        assert!(result
+            .error
+            .as_deref()
+            .unwrap()
+            .starts_with("install_incomplete:"));
+        assert!(!game.install_path.join("b.bin").exists());
+        assert_ne!(fs::read(game.install_path.join("a.bin")).unwrap(), b"last");
+    }
+
+    #[test]
+    fn unavailable_history_does_not_stop_remaining_members_or_change_success() {
+        let (temp, game, _) = setup();
+        let state = temp.path().join("blocked-state");
+        let paths = InstallerPaths::new(&state);
+        let bytes = build_zip(&[("a.bin", b"one"), ("b.bin", b"two")]);
+        let archive = temp.path().join("input.zip");
+        fs::write(&archive, &bytes).unwrap();
+        fs::write(&state, b"a file occupies the auxiliary state directory").unwrap();
+        let selection = manual_selection(None, None);
+        let result = execute_zip_acquired(
+            ZipInstallInputs {
+                game: &game,
+                selection: &selection,
+                operation: InstallOperation::Install,
+                request_id: "history-unavailable",
+            },
+            ZipInstallDeps {
+                paths: &paths,
+                transport: &FakeTransport::new(Vec::new()),
+                cancel: &AtomicBool::new(false),
+                cancel_reason: &|| None,
+            },
+            Some(acquire::AcquiredArchive {
+                path: archive,
+                sha256: sha256_hex(&bytes),
+                size: bytes.len() as u64,
+                final_url: selection.download_url.clone(),
+                source: acquire::Acquisition::Downloaded,
+                format: "zip".into(),
+                warnings: Vec::new(),
+            }),
+        )
+        .unwrap()
+        .transaction;
+        assert_eq!(result.state, "committed");
+        assert!(result
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("history_save_failed"));
+        assert_eq!(fs::read(game.install_path.join("a.bin")).unwrap(), b"one");
+        assert_eq!(fs::read(game.install_path.join("b.bin")).unwrap(), b"two");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn case_aliases_follow_windows_filesystem_and_history_keeps_final_write() {
+        let (temp, game, _) = setup();
+        let (state, paths) = dynamic_paths(&temp);
+        let selection = manual_selection(None, None);
+        let result = run_install(
+            &game,
+            &selection,
+            &paths,
+            &state,
+            &transport(build_zip(&[("A.bin", b"first"), ("a.bin", b"last")])),
+            &AtomicBool::new(false),
+            "case-alias",
+            InstallOperation::Install,
+        )
+        .unwrap();
+        assert_eq!(result.state, "committed");
+        assert_eq!(fs::read(game.install_path.join("A.bin")).unwrap(), b"last");
+        let plan = install::get_plan_at(paths.root(), &result.plan_id).unwrap();
+        assert_eq!(plan.changes.len(), 1);
+        assert_eq!(plan.changes[0].path, "a.bin");
+        assert_eq!(
+            plan.changes[0].installed_sha256.as_deref(),
+            Some(sha256_hex(b"last").as_str())
+        );
     }
 
     #[test]
@@ -1277,7 +1401,8 @@ pub(crate) mod tests {
         let mut mappings = Vec::new();
         for member in members {
             let installed = {
-                let mut file = zip.by_index(member.index).unwrap();
+                let mut entry = zip.entry(member.index).unwrap();
+                let mut file = entry.by_index(0).unwrap();
                 let mut hasher = sha2::Sha256::new();
                 std::io::copy(&mut file, &mut hasher).unwrap();
                 format!("{:x}", hasher.finalize())
@@ -1299,7 +1424,6 @@ pub(crate) mod tests {
         selection: &ResolvedZipCandidate,
         acquired: &acquire::AcquiredArchive,
         mappings: &[crate::catalog::FileMapping],
-        expectation: &crate::installer::facts::FactsExpectation,
     ) -> crate::catalog::PatchRelease {
         use crate::catalog::{Artifact, Fingerprint, Platform, Recipe, SupportLevel};
         crate::catalog::PatchRelease {
@@ -1313,7 +1437,7 @@ pub(crate) mod tests {
             source_page: selection.candidate.source_page.clone(),
             support_level: SupportLevel::ManagedZip,
             platforms: vec![Platform::Windows, Platform::Steamos],
-            verified_buildids: expectation.verified_buildids.clone(),
+            verified_buildids: Vec::new(),
             detection: mappings
                 .iter()
                 .map(|mapping| Fingerprint {
@@ -1341,16 +1465,17 @@ pub(crate) mod tests {
         archive: &Path,
     ) -> crate::catalog::PatchRelease {
         let mappings = legacy_mappings(archive, &game.install_path);
-        let expectation = selection.expectation(game.buildid.as_deref());
         let bytes = fs::read(archive).unwrap();
         let acquired = acquire::AcquiredArchive {
+            format: "zip".into(),
+            warnings: Vec::new(),
             path: archive.to_path_buf(),
             sha256: sha256_hex(&bytes),
             size: bytes.len() as u64,
             final_url: selection.download_url.clone(),
             source: acquire::Acquisition::Downloaded,
         };
-        let mut release = legacy_release(selection, &acquired, &mappings, &expectation);
+        let mut release = legacy_release(selection, &acquired, &mappings);
         // These legacy preparation fixtures use catalog-style admission.
         release.verified_buildids = game.buildid.clone().into_iter().collect();
         release
@@ -1443,14 +1568,14 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn facts_requires_dlc_missing_blocks_without_a_transaction() {
+    fn dlc_requirement_does_not_block_extraction() {
         let (temp, game, archive) = setup();
         let (state, paths) = dynamic_paths(&temp);
         write_manifest(&game, "schinese", "4", Some("100"), None);
         let selection = manual_selection(Some(vec![2_303_802]), None);
         let transport = transport(archive);
         let cancel = AtomicBool::new(false);
-        let error = run_install(
+        let transaction = run_install(
             &game,
             &selection,
             &paths,
@@ -1460,20 +1585,23 @@ pub(crate) mod tests {
             "req-dlc-required",
             InstallOperation::Install,
         )
-        .unwrap_err();
-        assert_eq!(error.code, "exe_dlc_unknown");
-        assert_no_transactions(&paths);
+        .unwrap();
+        assert_eq!(transaction.state, "committed");
+        assert_eq!(
+            fs::read(game.install_path.join("data.txt")).unwrap(),
+            b"patched"
+        );
     }
 
     #[test]
-    fn facts_excludes_dlc_hit_blocks_without_a_transaction() {
+    fn dlc_exclusion_does_not_block_extraction() {
         let (temp, game, archive) = setup();
         let (state, paths) = dynamic_paths(&temp);
         write_manifest(&game, "schinese", "4", Some("100"), Some(2_303_999));
         let selection = manual_selection(None, Some(vec![2_303_999]));
         let transport = transport(archive);
         let cancel = AtomicBool::new(false);
-        let error = run_install(
+        let transaction = run_install(
             &game,
             &selection,
             &paths,
@@ -1483,9 +1611,12 @@ pub(crate) mod tests {
             "req-dlc-excluded",
             InstallOperation::Install,
         )
-        .unwrap_err();
-        assert_eq!(error.code, "exe_dlc_excluded");
-        assert_no_transactions(&paths);
+        .unwrap();
+        assert_eq!(transaction.state, "committed");
+        assert_eq!(
+            fs::read(game.install_path.join("data.txt")).unwrap(),
+            b"patched"
+        );
     }
 
     #[test]
@@ -1548,7 +1679,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn facts_missing_manifest_blocks_without_a_transaction() {
+    fn missing_manifest_does_not_block_selected_directory() {
         let (temp, game, archive) = setup();
         let (state, paths) = dynamic_paths(&temp);
         fs::remove_file(
@@ -1560,7 +1691,7 @@ pub(crate) mod tests {
         let selection = manual_selection(None, None);
         let transport = transport(archive);
         let cancel = AtomicBool::new(false);
-        let error = run_install(
+        let transaction = run_install(
             &game,
             &selection,
             &paths,
@@ -1570,20 +1701,23 @@ pub(crate) mod tests {
             "req-manifest",
             InstallOperation::Install,
         )
-        .unwrap_err();
-        assert_eq!(error.code, "exe_manifest_unavailable");
-        assert_no_transactions(&paths);
+        .unwrap();
+        assert_eq!(transaction.state, "committed");
+        assert_eq!(
+            fs::read(game.install_path.join("data.txt")).unwrap(),
+            b"patched"
+        );
     }
 
     #[test]
-    fn facts_changed_buildid_blocks_stale_game_identity() {
+    fn changed_buildid_does_not_block_extraction() {
         let (temp, game, archive) = setup();
         let (state, paths) = dynamic_paths(&temp);
         write_manifest(&game, "schinese", "4", None, None);
         let selection = manual_selection(None, None);
         let transport = transport(archive);
         let cancel = AtomicBool::new(false);
-        let error = run_install(
+        let transaction = run_install(
             &game,
             &selection,
             &paths,
@@ -1593,20 +1727,23 @@ pub(crate) mod tests {
             "req-build",
             InstallOperation::Install,
         )
-        .unwrap_err();
-        assert_eq!(error.code, "exe_game_identity_changed");
-        assert_no_transactions(&paths);
+        .unwrap();
+        assert_eq!(transaction.state, "committed");
+        assert_eq!(
+            fs::read(game.install_path.join("data.txt")).unwrap(),
+            b"patched"
+        );
     }
 
     #[test]
-    fn facts_not_ready_blocks_game_not_ready() {
+    fn manifest_state_does_not_block_extraction() {
         let (temp, game, archive) = setup();
         let (state, paths) = dynamic_paths(&temp);
         write_manifest(&game, "schinese", "2", Some("100"), None);
         let selection = manual_selection(None, None);
         let transport = transport(archive);
         let cancel = AtomicBool::new(false);
-        let error = run_install(
+        let transaction = run_install(
             &game,
             &selection,
             &paths,
@@ -1616,9 +1753,12 @@ pub(crate) mod tests {
             "req-not-ready",
             InstallOperation::Install,
         )
-        .unwrap_err();
-        assert_eq!(error.code, "game_not_ready");
-        assert_no_transactions(&paths);
+        .unwrap();
+        assert_eq!(transaction.state, "committed");
+        assert_eq!(
+            fs::read(game.install_path.join("data.txt")).unwrap(),
+            b"patched"
+        );
     }
 
     #[test]
@@ -1792,15 +1932,18 @@ pub(crate) mod tests {
             InstallOperation::Install,
         )
         .unwrap();
-        assert_eq!(
-            serde_json::to_value(&replay).unwrap(),
-            serde_json::to_value(&t).unwrap()
-        );
+        assert_eq!(replay.transaction_id, t.transaction_id);
+        assert_eq!(replay.state, "committed");
+        assert!(t
+            .error
+            .as_deref()
+            .is_some_and(|e| e.contains("request_history_failed")));
     }
 
     #[test]
     fn cancellation_during_extract_keeps_written_files() {
-        let (temp, game, archive) = setup();
+        let (temp, game, _) = setup();
+        let archive = build_zip(&[("data.txt", b"patched"), ("next.txt", b"unwritten")]);
         let (state, paths) = dynamic_paths(&temp);
         let selection_id = zip_selection_id(&candidate()).unwrap();
         let selection = seed_and_resolve(&state, &selection_id);
@@ -1969,6 +2112,75 @@ pub(crate) mod tests {
             b"different bytes"
         );
     }
+    #[test]
+    fn production_recovery_keeps_legacy_backups_and_latest_direct_files_read_only() {
+        for replace in [false, true] {
+            for old_state in ["applying", "needs_recovery"] {
+                let (temp, game, archive) = setup();
+                let (_state, paths) = dynamic_paths(&temp);
+                if replace {
+                    fs::write(game.install_path.join("data.txt"), b"original").unwrap();
+                }
+                let archive_path = temp.path().join("legacy.zip");
+                fs::write(&archive_path, &archive).unwrap();
+                let selection = manual_selection(None, None);
+                let old = prepare_dynamic_plan(
+                    &paths,
+                    &game,
+                    &selection,
+                    &archive_path,
+                    InstallOperation::Install,
+                );
+                let backup = paths.job(&old.plan_id).unwrap().join("0.backup");
+                if replace {
+                    fs::write(&backup, b"original").unwrap();
+                }
+                edit_journal(paths.root(), &old.plan_id, |job| {
+                    job["transaction"]["state"] = old_state.into();
+                    job["progress"][0] = "installed".into();
+                });
+                fs::write(game.install_path.join("data.txt"), b"patched").unwrap();
+                let mut plan = install::begin_direct_at(
+                    paths.root(),
+                    &game,
+                    "new-extraction",
+                    Some("selection"),
+                    Some("content"),
+                    InstallOperation::Overwrite,
+                    &[("data.txt".into(), 7)],
+                    None,
+                )
+                .unwrap();
+                let committed = install::commit_direct_at(
+                    &mut plan,
+                    &[("data.txt".into(), sha256_hex(b"patched"))],
+                )
+                .unwrap();
+                drop(plan);
+                // Also prove protection does not depend on newer auxiliary history.
+                let db = rusqlite::Connection::open(paths.root().join("journal.sqlite")).unwrap();
+                db.execute("DELETE FROM jobs WHERE id=?1", [&committed.plan_id])
+                    .unwrap();
+                drop(db);
+                let result = install::recover_checked_at(paths.root(), |_| Ok(())).unwrap();
+                assert!(result.is_empty());
+                assert_eq!(
+                    fs::read(game.install_path.join("data.txt")).unwrap(),
+                    b"patched"
+                );
+                let old_record = install::list_transactions_at(paths.root())
+                    .unwrap()
+                    .into_iter()
+                    .find(|t| t.plan_id == old.plan_id)
+                    .unwrap();
+                assert_eq!(old_record.state, old_state);
+                if replace {
+                    assert_eq!(fs::read(backup).unwrap(), b"original");
+                }
+            }
+        }
+    }
+
     #[test]
     fn recover_of_an_interrupted_add_plan_rolls_back() {
         let (temp, game, archive) = setup();

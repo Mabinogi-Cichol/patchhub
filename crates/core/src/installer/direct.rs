@@ -5,10 +5,9 @@
 //! the resolved game targets; it never creates a staging copy or archive.
 use crate::{
     install::{self, DirectTarget},
-    installer::exe_report::PayloadEntry,
     operation,
 };
-use patchhub_installer_worker::WorkerError;
+use patchhub_installer_worker::{sf::Member, WorkerError};
 use serde_json::Value;
 use std::{
     collections::BTreeSet,
@@ -32,20 +31,21 @@ enum Parse {
 }
 
 pub(crate) struct DirectWriter<'a> {
-    expected: &'a [PayloadEntry],
+    expected: &'a [Member],
     targets: &'a [DirectTarget],
     line: Vec<u8>,
     parse: Parse,
     current: Option<Current>,
     next: usize,
     started: bool,
+    opened: bool,
     done: bool,
     installed: Vec<Option<String>>,
     parents: BTreeSet<PathBuf>,
 }
 
 impl<'a> DirectWriter<'a> {
-    pub fn new(expected: &'a [PayloadEntry], targets: &'a [DirectTarget]) -> Self {
+    pub fn new(expected: &'a [Member], targets: &'a [DirectTarget]) -> Self {
         Self {
             expected,
             targets,
@@ -54,6 +54,7 @@ impl<'a> DirectWriter<'a> {
             current: None,
             next: 0,
             started: false,
+            opened: false,
             done: false,
             installed: vec![None; expected.len()],
             parents: BTreeSet::new(),
@@ -61,7 +62,13 @@ impl<'a> DirectWriter<'a> {
     }
 
     pub fn feed(&mut self, chunk: &[u8]) -> Result<(), WorkerError> {
-        operation::check().map_err(|e| WorkerError::new("cancelled", None, e.to_string()))?;
+        operation::check().map_err(|e| {
+            if e.to_string() == "task_cancelled" {
+                WorkerError::new("cancelled", None, e.to_string())
+            } else {
+                err(e.to_string())
+            }
+        })?;
         if self.done {
             return Err(err("member data after done"));
         }
@@ -89,9 +96,6 @@ impl<'a> DirectWriter<'a> {
                     let rest = &chunk[at..];
                     let Some(newline) = rest.iter().position(|b| *b == b'\n') else {
                         self.line.extend_from_slice(rest);
-                        if self.line.len() > 64 * 1024 {
-                            return Err(err("member header too large"));
-                        }
                         return Ok(());
                     };
                     self.line.extend_from_slice(&rest[..newline]);
@@ -173,6 +177,7 @@ impl<'a> DirectWriter<'a> {
         operation::file(index, &expected.path);
         let file = install::open_direct_target(&target.file)
             .map_err(|e| err(format!("game write failed: {e}")))?;
+        self.opened = true;
         self.current = Some(Current {
             index,
             file: BufWriter::new(file),
@@ -223,7 +228,7 @@ impl<'a> DirectWriter<'a> {
     }
 
     pub fn opened_any(&self) -> bool {
-        self.current.is_some() || self.next > 0
+        self.opened
     }
 
     pub fn finish(self) -> Result<Vec<(String, String)>, WorkerError> {
@@ -251,14 +256,11 @@ mod tests {
     use super::*;
     use std::fs;
 
-    fn expected() -> Vec<PayloadEntry> {
-        vec![PayloadEntry {
+    fn expected() -> Vec<Member> {
+        vec![Member {
             path: "a/b.bin".into(),
             size: 5,
             crc32: 907060870,
-            payload_offset: 0,
-            packed_size: 0,
-            compressed: false,
         }]
     }
 

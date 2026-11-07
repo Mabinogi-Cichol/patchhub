@@ -23,9 +23,9 @@ String installStage(dynamic stage, dynamic substage) =>
       'connecting': '正在连接',
       'downloading': '正在下载',
       'validating': '正在校验',
-      'analyzing_installer': '正在分析安装器',
+      'reading_archive': '正在读取归档目录',
       'extracting': '正在提取',
-      'planning': '正在生成计划',
+      'planning': '正在准备解压',
       'applying': '正在写入',
       'rolling_back': '正在恢复已修改文件',
       'cleanup': '正在清理',
@@ -130,7 +130,7 @@ class _InstallDialogState extends State<InstallDialog> {
     final title = task.running
         ? '安装进度'
         : needsRecovery
-        ? '仍需恢复'
+        ? '历史安装未完成'
         : task.error != null
         ? ([
                 'cancelled',
@@ -139,10 +139,10 @@ class _InstallDialogState extends State<InstallDialog> {
               ].contains(task.error!.code)
               ? '已取消安装'
               : '安装未完成')
-        : outcome?['error'] == 'cancelled_incomplete'
+        : outcome?['cause']?['code'] == 'cancelled_incomplete'
         ? '已取消，安装未完成'
         : switch (outcome?['disposition']) {
-            'completed' => '安装完成',
+            'completed' => outcome?['direct'] == true ? '文件已解压到目标目录' : '安装完成',
             'cancelled' => '已取消安装',
             _ => '安装失败',
           };
@@ -259,7 +259,7 @@ class _InstallDialogState extends State<InstallDialog> {
               SelectableText(
                 '清理未完成：${failure['code']}\n${failure['detail'] ?? ''}',
               ),
-            if (needsRecovery) const Text('请进入操作记录查看未完成操作，并使用全局恢复入口处理。'),
+            if (needsRecovery) const Text('历史记录仅供查看，不会恢复旧备份；可重新安装补丁。'),
             ExpansionTile(
               title: const Text('操作与清理详情'),
               children: [SelectableText(jsonEncode(outcome))],

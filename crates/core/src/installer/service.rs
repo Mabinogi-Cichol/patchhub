@@ -212,9 +212,6 @@ pub fn install(
         .iter()
         .find(|game| game.instance_id == request.instance_id.as_str())
         .ok_or_else(|| DomainError::code("instance_not_found"))?;
-    if game.availability != "installed" {
-        return Err(DomainError::code("game_not_ready"));
-    }
     let reason = || {
         deps.control.cancellation_cause().or_else(|| {
             deps.control
@@ -226,12 +223,14 @@ pub fn install(
     let done = AtomicBool::new(false);
     let paths = &deps.host.paths;
     let cache_guard = Arc::new(super::cache_lock::CacheLock::shared(deps.host)?);
-    super::init_atomic(paths)?;
+    let initialization_warning = super::init_atomic(paths)
+        .err()
+        .map(|error| format!("history_initialization_failed: {error}"));
     (deps.emit)(operation::Progress {
         stage: "planning".into(),
         ..Default::default()
     });
-    let execution = std::thread::scope(|scope| {
+    let mut execution = std::thread::scope(|scope| {
         let control = deps.control;
         let flag = cancel.clone();
         let done = &done;
@@ -268,10 +267,13 @@ pub fn install(
                             input,
                         )
                         .map_err(|e| DomainError::code(e.code))?;
-                        let claim = super::requests::RequestClaim::acquire(
+                        let mut warnings = Vec::new();
+                        let claim = super::orchestrator::claim_request(
                             paths,
                             request.request_id.as_str(),
-                        )?;
+                            &mut warnings,
+                        )
+                        .map_err(task_error)?;
                         let binding = super::orchestrator::request_binding(
                             &game.instance_id,
                             Some(&selection.selection_id),
@@ -279,17 +281,18 @@ pub fn install(
                             request.operation,
                             None,
                         );
-                        if let Some(transaction) = super::orchestrator::begin_request(
+                        if let Some(transaction) = super::orchestrator::begin_extraction_request(
                             paths,
                             request.request_id.as_str(),
                             &binding,
+                            &mut warnings,
                         )
                         .map_err(task_error)?
                         {
                             return Ok(super::InstallExecution::replay(transaction));
                         }
                         operation::stage("connecting", None, None);
-                        let acquired = super::acquire::acquire_manual_with(
+                        let mut acquired = super::acquire::acquire_manual_with(
                             deps.transport,
                             &selection.download_url,
                             paths,
@@ -297,8 +300,9 @@ pub fn install(
                         )
                         .map_err(super::orchestrator::map_download_error)
                         .map_err(task_error)?;
+                        acquired.warnings.extend(warnings);
                         drop(claim);
-                        if acquired.path.extension().is_some_and(|ext| ext == "exe") {
+                        if acquired.format == "exe" {
                             let runtime = deps
                                 .worker
                                 .ok_or_else(|| DomainError::code("bundled_worker_missing"))?;
@@ -404,6 +408,13 @@ pub fn install(
             error
         }
     })?;
+    if let Some(warning) = initialization_warning {
+        let error = &mut execution.transaction.error;
+        *error = Some(match error.take() {
+            Some(previous) => format!("{previous}; {warning}"),
+            None => warning,
+        });
+    }
     let mut outcome = InstallerOutcome::from_transaction(&execution.transaction, None, None);
     // Never upgrade a shared lock. The route's task/request owners are gone here.
     drop(cache_guard);
@@ -527,6 +538,171 @@ mod manual_download_tests {
             final_url: url.into(),
             body: Box::new(std::io::Cursor::new(bytes)),
         }
+    }
+    /// Opt-in local acceptance: uses the public service with a file-backed HTTP
+    /// transport and a synthetic Steam library. Never starts the input EXE.
+    #[test]
+    #[ignore = "requires PATCHHUB_TEST_ARCHIVE, PATCHHUB_TEST_OUTPUT and PATCHHUB_TEST_WORKER"]
+    fn local_archive_through_production_service() {
+        use std::{collections::BTreeMap, fs};
+        let archive = PathBuf::from(std::env::var_os("PATCHHUB_TEST_ARCHIVE").expect("archive"));
+        let output = PathBuf::from(std::env::var_os("PATCHHUB_TEST_OUTPUT").expect("output"));
+        fs::create_dir(&output).expect("use a fresh independent output directory");
+        let library = output.join("Steam");
+        let target = library.join("steamapps/common/ExtractionTest");
+        fs::create_dir_all(&target).unwrap();
+        // No build ID and no game CRC/DLC fixtures: neither is an extraction prerequisite.
+        fs::write(library.join("steamapps/appmanifest_42.acf"), r#""AppState" { "appid" "42" "name" "ExtractionTest" "installdir" "ExtractionTest" "StateFlags" "4" }"#).unwrap();
+        let game = steam::scan(std::slice::from_ref(&library))
+            .installs
+            .remove(0);
+        let state = output.join("state");
+        let source = sources::Sources::open(&state).unwrap();
+        let mut candidate = fixtures::candidate();
+        candidate.mirrors.clear();
+        candidate.variant = sources::model::Variant::Unknown;
+        candidate.languages = vec!["unmatched-language".into()];
+        candidate.requires_dlc = Some(vec![999999]);
+        fixtures::save_match(&source, game.appid, candidate.clone());
+        drop(source);
+        let cached = std::env::var_os("PATCHHUB_TEST_SHA256");
+        if let Some(hash) = &cached {
+            let hash = hash.to_str().unwrap();
+            let format = archive.extension().unwrap().to_str().unwrap();
+            let downloads = InstallerPaths::new(&state).downloads_dir();
+            fs::create_dir_all(&downloads).unwrap();
+            fs::copy(&archive, downloads.join(format!("{hash}.{format}"))).unwrap();
+            fs::write(
+                downloads.join(format!("{hash}.json")),
+                serde_json::to_vec(&serde_json::json!({
+                    "format":format,"url":"https://local.example/archive","sha256":hash,
+                    "size":archive.metadata().unwrap().len(),"etag":"fixture"
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+        }
+        struct FileTransport(PathBuf, bool);
+        impl Transport for FileTransport {
+            fn get(
+                &self,
+                url: &str,
+                _: Option<&str>,
+                _: Option<&str>,
+            ) -> std::io::Result<HttpResponse> {
+                let file = fs::File::open(&self.0)?;
+                Ok(HttpResponse {
+                    status: if self.1 { 304 } else { 200 },
+                    location: None,
+                    content_type: None,
+                    content_length: Some(file.metadata()?.len()),
+                    etag: None,
+                    last_modified: None,
+                    final_url: url.into(),
+                    body: Box::new(file),
+                })
+            }
+        }
+        let host = ValidatedHostContext::new(
+            &state,
+            &[library],
+            if cfg!(windows) {
+                Platform::Windows
+            } else {
+                Platform::Steamos
+            },
+        )
+        .unwrap();
+        let worker = WorkerRuntime::new(PathBuf::from(
+            std::env::var_os("PATCHHUB_TEST_WORKER").expect("worker"),
+        ))
+        .unwrap();
+        let result = install(
+            InstallRequest {
+                request_id: RequestId::new("local-archive-acceptance").unwrap(),
+                instance_id: InstanceId::new(&game.instance_id).unwrap(),
+                operation: InstallOperation::Overwrite,
+                target: InstallTarget::ManualDownload {
+                    input: ManualDownloadInput {
+                        source_id: candidate.source_id,
+                        candidate_id: candidate.candidate_id,
+                        url: "https://local.example/archive".into(),
+                    },
+                },
+                cleanup_policy: CleanupPolicy::Disabled,
+            },
+            InstallerDeps {
+                host: &host,
+                transport: &FileTransport(archive, cached.is_some()),
+                worker: Some(&worker),
+                control: &Lease(false),
+                emit: &mut |_| {},
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            result.disposition,
+            super::super::outcome::Disposition::Completed,
+            "{result:?}"
+        );
+        let mut files = BTreeMap::new();
+        fn collect(root: &Path, directory: &Path, files: &mut BTreeMap<String, (u64, String)>) {
+            for entry in fs::read_dir(directory).unwrap() {
+                let path = entry.unwrap().path();
+                if path == root.join(".patchhub.lock") {
+                    continue;
+                }
+                if path.is_dir() {
+                    collect(root, &path, files);
+                } else {
+                    let digest =
+                        super::super::facts::digest_file(&path, &AtomicBool::new(false)).unwrap();
+                    files.insert(
+                        path.strip_prefix(root)
+                            .unwrap()
+                            .to_str()
+                            .unwrap()
+                            .replace('\\', "/"),
+                        (digest.size, digest.sha256),
+                    );
+                }
+            }
+        }
+        collect(&target, &target, &mut files);
+        let bytes: u64 = files.values().map(|(size, _)| *size).sum();
+        let mut groups = BTreeMap::<String, usize>::new();
+        for path in files.keys() {
+            *groups
+                .entry(path.split('/').next().unwrap().into())
+                .or_default() += 1;
+        }
+        let summary = serde_json::json!({"platform":std::env::consts::OS,"outcome":result,"files":files,"file_count":files.len(),"bytes":bytes,"groups":groups});
+        fs::write(
+            output.join("production-verification.json"),
+            serde_json::to_vec_pretty(&summary).unwrap(),
+        )
+        .unwrap();
+        if let Some(reference) = std::env::var_os("PATCHHUB_TEST_REFERENCE") {
+            let rows: Vec<serde_json::Value> =
+                serde_json::from_slice(&fs::read(reference).unwrap()).unwrap();
+            assert_eq!(files.len(), rows.len());
+            for row in rows {
+                let name = row["path"]
+                    .as_str()
+                    .unwrap()
+                    .strip_prefix("payload/")
+                    .unwrap();
+                let actual = files.get(name).unwrap_or_else(|| panic!("missing {name}"));
+                assert_eq!(actual.0, row["size"].as_u64().unwrap(), "{name}");
+                assert_eq!(actual.1, row["sha256"].as_str().unwrap(), "{name}");
+            }
+        }
+        println!(
+            "production extraction: {} files, {} bytes, evidence {}",
+            files.len(),
+            bytes,
+            output.display()
+        );
     }
     #[test]
     fn manual_download_installs_extensionless_redirect_and_binds_identity() {

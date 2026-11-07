@@ -15,28 +15,13 @@ fn unhex(s: &str) -> Vec<u8> {
         .map(|p| u8::from_str_radix(std::str::from_utf8(p).unwrap(), 16).unwrap())
         .collect()
 }
-fn analyze(file: &fs::File, sha: &str, size: u64) -> Value {
-    let raw = json!({"action":"analyze_behavior","exe_sha256":sha,"exe_size":size});
+fn list_members(file: &fs::File, sha: &str, size: u64) -> Value {
+    let raw = json!({"action":"list_members","exe_sha256":sha,"exe_size":size});
     let descriptor = sf::parse_descriptor(&serde_json::to_vec(&raw).unwrap()).unwrap();
     sf::process(file, &descriptor).unwrap()
 }
-fn extraction_descriptor(report: &Value, sha: &str, size: u64) -> Value {
-    let members: Vec<_> = report["report"]["files"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|f| {
-            json!({
-                "path": f["destination"],
-                "size": f["unpacked_size"],
-                "crc32": f["crc32"],
-                "payload_offset": f["payload_offset"],
-                "packed_size": f["packed_size"],
-                "compressed": f["compressed"],
-            })
-        })
-        .collect();
-    json!({"action":"extract_behavior","exe_sha256":sha,"exe_size":size,"payload":members})
+fn extraction_descriptor(_report: &Value, sha: &str, size: u64) -> Value {
+    json!({"action":"extract_members","exe_sha256":sha,"exe_size":size})
 }
 /// Parse the framed stream: header, then (member header, raw bytes, trailer)*, done.
 fn parse_frames(bytes: &[u8]) -> Vec<(String, Vec<u8>, String)> {
@@ -70,23 +55,18 @@ fn parse_frames(bytes: &[u8]) -> Vec<(String, Vec<u8>, String)> {
     members
 }
 #[test]
-fn analysis_matches_frozen_python_reports_without_payload_digests() {
+fn listing_exposes_only_member_paths_sizes_and_checksums() {
     for case in cases() {
         let root = tempfile::tempdir().unwrap();
-        let input = root.path().join("archive.exe");
-        fs::write(&input, unhex(case["data_hex"].as_str().unwrap())).unwrap();
-        let file = sf::open_input(&input).unwrap();
-        let report = analyze(
-            &file,
+        let path = root.path().join("archive.exe");
+        fs::write(&path, unhex(case["data_hex"].as_str().unwrap())).unwrap();
+        let report = list_members(
+            &sf::open_input(&path).unwrap(),
             case["descriptor"]["exe_sha256"].as_str().unwrap(),
             case["descriptor"]["exe_size"].as_u64().unwrap(),
         );
-        assert_eq!(report["report"], case["report"], "{}", case["name"]);
-        for row in report["report"]["files"].as_array().unwrap() {
-            assert!(row.get("payload").is_none());
-            assert!(row["payload_offset"].as_u64().is_some());
-            assert!(row["packed_size"].as_u64().is_some());
-        }
+        let expected = &case["members"];
+        assert_eq!(report["members"], json!(expected));
     }
 }
 #[test]
@@ -98,7 +78,7 @@ fn extraction_streams_exact_bytes_and_verifies_the_manifest() {
         let file = sf::open_input(&input).unwrap();
         let sha = case["descriptor"]["exe_sha256"].as_str().unwrap();
         let size = case["descriptor"]["exe_size"].as_u64().unwrap();
-        let report = analyze(&file, sha, size);
+        let report = list_members(&file, sha, size);
         let descriptor = extraction_descriptor(&report, sha, size);
         let parsed = sf::parse_descriptor(&serde_json::to_vec(&descriptor).unwrap()).unwrap();
         let mut out = Vec::new();
@@ -122,20 +102,12 @@ fn every_extraction_binding_is_checked_before_member_bytes() {
     let file = sf::open_input(&input).unwrap();
     let sha = case["descriptor"]["exe_sha256"].as_str().unwrap();
     let size = case["descriptor"]["exe_size"].as_u64().unwrap();
-    let report = analyze(&file, sha, size);
+    let report = list_members(&file, sha, size);
     for (key, value, code) in [
         ("exe_sha256", json!("0".repeat(64)), "exe_payload_changed"),
         ("exe_size", json!(1), "exe_size_mismatch"),
-        (
-            "payload",
-            json!([{"path":"wrong.bin","size":1,"crc32":0,"payload_offset":0,"packed_size":1,"compressed":false}]),
-            "payload_crc_mismatch",
-        ),
     ] {
         let mut raw = extraction_descriptor(&report, sha, size);
-        if key == "exe_size" {
-            raw["payload"] = json!([{"path":"x","size":0,"crc32":0,"payload_offset":0,"packed_size":0,"compressed":false}]);
-        }
         raw[key] = value;
         let descriptor = match sf::parse_descriptor(&serde_json::to_vec(&raw).unwrap()) {
             Ok(d) => d,
@@ -147,18 +119,6 @@ fn every_extraction_binding_is_checked_before_member_bytes() {
             code
         );
     }
-}
-#[test]
-fn descriptor_rejects_out_of_range_member_ranges() {
-    let sha = "a".repeat(64);
-    let raw = json!({"action":"extract_behavior","exe_sha256":sha,"exe_size":10,
-        "payload":[{"path":"a","size":5,"crc32":0,"payload_offset":8,"packed_size":5,"compressed":false}]});
-    assert_eq!(
-        sf::parse_descriptor(&serde_json::to_vec(&raw).unwrap())
-            .unwrap_err()
-            .0,
-        "invalid_descriptor"
-    );
 }
 #[test]
 fn binary_rejects_extra_arguments() {

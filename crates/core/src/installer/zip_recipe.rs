@@ -1,630 +1,390 @@
-//! Publisher ZIP metadata and path mapping (p0-contracts §2.4/§4.1; port of
-//! `publisher.py::_relative`, `_extra_safe`, `_wrapped_xp3_paths` and
-//! `_wrapped_ypf_paths`).
-//!
-//! The module only reads the archive index and the few member headers needed to
-//! recognise the XP3/YPF wrapper layouts. It never decodes member content and
-//! never writes to the game tree; `zip_direct` performs the single streaming
-//! extraction after [`plan`]/[`plan_mapped`] has fixed every target path.
-
+//! Read ZIP members in container order and retain their relative structure.
 use super::{invalid, Result};
-use crate::catalog::FileMapping;
 use crate::operation;
-use std::collections::{HashMap, HashSet};
-use std::fs::{self, File};
-use std::io::Read;
-use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
-use zip::ZipArchive;
+use std::{
+    fs::{self, File},
+    io::{self, Read, Seek, SeekFrom},
+    path::Path,
+    sync::atomic::{AtomicBool, Ordering},
+};
+use zip::{HasZipMetadata, ZipArchive};
 
-/// XP3 archive signature (`58 50 33 0d 0a 20 0a 1a 8b 67 01`, 11 bytes).
-const XP3_SIGNATURE: [u8; 11] = [
-    0x58, 0x50, 0x33, 0x0d, 0x0a, 0x20, 0x0a, 0x1a, 0x8b, 0x67, 0x01,
-];
-
-/// One selected archive member and the game-relative path it installs to.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Member {
-    /// Member index in the ZIP central directory.
     pub index: usize,
-    /// Exact archive member name (`FileMapping.source` for signed recipes).
     pub source: String,
-    /// Validated destination relative to the game root.
     pub destination: String,
-    /// Declared uncompressed size.
     pub size: u64,
-    /// Digest declared by a signed recipe; checked while extracting.
     pub expected_sha256: Option<String>,
 }
-
-/// One archive member with the fields the mapping needs, detached from `zip`.
-struct Entry {
-    index: usize,
-    name: String,
-    is_dir: bool,
-    size: u64,
-    mode: u32,
-    extra: Vec<u8>,
+/// zip 6 indexes entries by name and loses duplicates. Keep the raw central
+/// records in order, presenting each record through an in-memory metadata view
+/// while all payload reads still come directly from the original file.
+pub struct Archive {
+    file: File,
+    records: Vec<Vec<u8>>,
+    central_start: u64,
+    archive_offset: u64,
+}
+pub fn open(path: &Path) -> Result<Archive> {
+    from_file(File::open(path)?)
+}
+fn u16_at(bytes: &[u8], at: usize) -> u16 {
+    u16::from_le_bytes(bytes[at..at + 2].try_into().unwrap())
+}
+fn u32_at(bytes: &[u8], at: usize) -> u32 {
+    u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap())
+}
+fn u64_at(bytes: &[u8], at: usize) -> u64 {
+    u64::from_le_bytes(bytes[at..at + 8].try_into().unwrap())
+}
+fn read_at<const N: usize>(file: &mut File, position: u64) -> Result<[u8; N]> {
+    file.seek(SeekFrom::Start(position))?;
+    let mut bytes = [0u8; N];
+    file.read_exact(&mut bytes)?;
+    Ok(bytes)
 }
 
-/// Opens and preflights the archive once; the same handle is used for mapping
-/// and for the subsequent extraction.
-pub fn open(archive: &Path) -> Result<ZipArchive<File>> {
-    from_file(File::open(archive)?)
-}
-
-/// Wraps an already-open file (the signed local-ZIP route holds one handle for
-/// the identity check and extraction).
-pub fn from_file(mut file: File) -> Result<ZipArchive<File>> {
-    crate::zip_metadata::preflight(&mut file)?;
-    ZipArchive::new(file).map_err(|e| invalid(format!("invalid_zip:{e}")))
-}
-
-fn validate_root(root: &Path) -> Result<()> {
-    if !root.is_dir() || !no_links(root) {
-        return Err(invalid("unsafe_game_root"));
+fn zip64_footer(file: &mut File, locator: u64, declared: u64) -> Result<(u64, [u8; 56])> {
+    let header = read_at::<56>(file, declared)?;
+    if &header[..4] == b"PK\x06\x06"
+        && declared
+            .checked_add(12)
+            .and_then(|p| p.checked_add(u64_at(&header, 4)))
+            == Some(locator)
+    {
+        return Ok((declared, header));
     }
-    Ok(())
-}
-
-/// Validates the archive and maps every selected member to a game-relative
-/// path, applying the XP3/YPF wrapper rules of the publisher sources.
-pub fn plan(zip: &mut ZipArchive<File>, root: &Path, cancel: &AtomicBool) -> Result<Vec<Member>> {
-    validate_root(root)?;
-    let entries = collect_entries(zip, cancel)?;
-    validate_entries(&entries, cancel)?;
-    let mapped = mapping_paths(zip, root, &entries, cancel)?;
-    finish_plan(&entries, &mapped, root, cancel)
-}
-
-/// Validates the archive against a signed recipe's `source → destination`
-/// mapping. Members not named by the recipe are validated but not installed.
-pub fn plan_mapped(
-    zip: &mut ZipArchive<File>,
-    root: &Path,
-    mappings: &[FileMapping],
-    cancel: &AtomicBool,
-) -> Result<Vec<Member>> {
-    validate_root(root)?;
-    let entries = collect_entries(zip, cancel)?;
-    validate_entries(&entries, cancel)?;
-    let by_name: HashMap<String, &Entry> = entries
-        .iter()
-        .map(|entry| (entry.name.to_lowercase(), entry))
-        .collect();
-    let mut mapped: HashMap<String, Option<String>> = HashMap::new();
-    let mut expected: HashMap<String, String> = HashMap::new();
-    let mut order: HashMap<String, usize> = HashMap::new();
-    for (position, mapping) in mappings.iter().enumerate() {
-        relative(&mapping.destination)?;
-        let entry = by_name
-            .get(&mapping.source.to_lowercase())
-            .ok_or_else(|| invalid("recipe_source_missing"))?;
-        if entry.is_dir || entry.name != mapping.source {
-            return Err(invalid("recipe_source_mismatch"));
-        }
-        if mapped
-            .insert(entry.name.clone(), Some(mapping.destination.clone()))
-            .is_some()
-        {
-            return Err(invalid("recipe_duplicate_source"));
-        }
-        expected.insert(entry.name.clone(), mapping.installed_sha256.clone());
-        order.insert(entry.name.clone(), position);
-    }
-    for entry in &entries {
-        mapped.entry(entry.name.clone()).or_insert(None);
-    }
-    let mut members = finish_plan(&entries, &mapped, root, cancel)?;
-    // The journal keeps the signed recipe order so the projection can compare
-    // `plan.changes` with `recipe.files` positionally.
-    members.sort_by_key(|member| order.get(&member.source).copied().unwrap_or(usize::MAX));
-    for member in &mut members {
-        member.expected_sha256 = expected.get(&member.source).cloned();
-    }
-    Ok(members)
-}
-
-/// Reads member metadata once so later passes can borrow `zip` mutably.
-fn collect_entries(zip: &mut ZipArchive<File>, cancel: &AtomicBool) -> Result<Vec<Entry>> {
-    let mut entries = Vec::with_capacity(zip.len());
-    for index in 0..zip.len() {
+    // Prepended executable data can shift the physical ZIP64 record while its
+    // disk-relative locator remains unchanged. Its size field identifies the
+    // actual record ending at the locator; scan metadata without a size limit.
+    let mut end = locator;
+    while end > 0 {
         operation::check()?;
-        if cancel.load(Ordering::Relaxed) {
-            return Err(invalid("download_cancelled"));
+        let start = end.saturating_sub(64 * 1024);
+        let read_end = end.saturating_add(11).min(locator);
+        let mut bytes = vec![0u8; (read_end - start) as usize];
+        file.seek(SeekFrom::Start(start))?;
+        file.read_exact(&mut bytes)?;
+        for index in (0..(end - start) as usize).rev() {
+            if index + 12 <= bytes.len() && &bytes[index..index + 4] == b"PK\x06\x06" {
+                let position = start + index as u64;
+                if u64_at(&bytes, index + 4) >= 44
+                    && position
+                        .checked_add(12)
+                        .and_then(|p| p.checked_add(u64_at(&bytes, index + 4)))
+                        == Some(locator)
+                {
+                    return Ok((position, read_at(file, position)?));
+                }
+            }
         }
-        let file = zip
-            .by_index(index)
-            .map_err(|e| invalid(format!("invalid_zip:{e}")))?;
-        let decoded = file.name().to_string();
-        if !name_encoding_ok(file.name_raw(), &decoded) {
-            return Err(invalid("zip_name_encoding"));
-        }
-        let name = decoded
-            .strip_suffix('/')
-            .unwrap_or(decoded.as_str())
-            .to_string();
-        entries.push(Entry {
-            index,
-            name,
-            is_dir: file.is_dir(),
-            size: file.size(),
-            mode: file.unix_mode().unwrap_or(0) & 0o170000,
-            extra: file.extra_data().map(<[u8]>::to_vec).unwrap_or_default(),
-        });
+        end = start;
     }
-    Ok(entries)
+    Err(invalid("invalid_zip64_footer"))
 }
 
-/// Port of `publisher.py::_relative` plus the reserved-prefix and encoding
-/// checks from `_recipe`.
-fn validate_entries(entries: &[Entry], cancel: &AtomicBool) -> Result<()> {
-    let mut names: HashSet<String> = HashSet::new();
-    let mut prefixes: HashMap<String, String> = HashMap::new();
-    for entry in entries {
+/// Locate the directory using ZIP/ZIP64 footer fields. The comment's 16-bit
+/// width bounds this search; no payload size or member-count policy is applied.
+fn directory(file: &mut File) -> Result<(u64, u64, u64, u64)> {
+    let end = file.seek(SeekFrom::End(0))?;
+    let start = end.saturating_sub(22 + u16::MAX as u64);
+    let mut tail = vec![0u8; (end - start) as usize];
+    file.seek(SeekFrom::Start(start))?;
+    file.read_exact(&mut tail)?;
+    let at = (0..tail.len().saturating_sub(21))
+        .rev()
+        .find(|at| {
+            &tail[*at..*at + 4] == b"PK\x05\x06"
+                && *at + 22 + u16_at(&tail, *at + 20) as usize == tail.len()
+        })
+        .ok_or_else(|| invalid("invalid_zip_footer"))?;
+    let eocd = &tail[at..];
+    let position = start + at as u64;
+    if u16_at(eocd, 4) != 0 || u16_at(eocd, 6) != 0 {
+        return Err(invalid("zip_split_archive_unsupported"));
+    }
+    let mut count = u16_at(eocd, 10) as u64;
+    let mut size = u32_at(eocd, 12) as u64;
+    let mut offset = u32_at(eocd, 16) as u64;
+    let mut directory_end = position;
+    if position >= 20 {
+        let locator = read_at::<20>(file, position - 20)?;
+        if &locator[..4] == b"PK\x06\x07" {
+            if u32_at(&locator, 4) != 0 || u32_at(&locator, 16) != 1 {
+                return Err(invalid("zip_split_archive_unsupported"));
+            }
+            let (physical, header) = zip64_footer(file, position - 20, u64_at(&locator, 8))?;
+            if u32_at(&header, 16) != 0
+                || u32_at(&header, 20) != 0
+                || u64_at(&header, 24) != u64_at(&header, 32)
+            {
+                return Err(invalid("zip_split_archive_unsupported"));
+            }
+            count = u64_at(&header, 32);
+            size = u64_at(&header, 40);
+            offset = u64_at(&header, 48);
+            directory_end = physical;
+        } else if count == u16::MAX as u64 || size == u32::MAX as u64 || offset == u32::MAX as u64 {
+            return Err(invalid("missing_zip64_footer"));
+        }
+    }
+    let central_start = directory_end
+        .checked_sub(size)
+        .ok_or_else(|| invalid("invalid_zip_directory"))?;
+    let archive_offset = central_start
+        .checked_sub(offset)
+        .ok_or_else(|| invalid("invalid_zip_offset"))?;
+    Ok((central_start, archive_offset, count, directory_end))
+}
+
+/// Keep only metadata consumed by the decoder or filename reader. ZIP comments,
+/// timestamps and other descriptive extra fields never gate payload extraction.
+fn extraction_record(mut record: Vec<u8>) -> Result<Vec<u8>> {
+    let name_end = 46 + u16_at(&record, 28) as usize;
+    let extra_end = name_end + u16_at(&record, 30) as usize;
+    let mut extra = Vec::new();
+    let mut at = name_end;
+    while at + 4 <= extra_end {
+        let tag = u16_at(&record, at);
+        let size = u16_at(&record, at + 2) as usize;
+        let consumed = matches!(tag, 0x0001 | 0x7075 | 0x9901);
+        if at + 4 + size > extra_end {
+            if consumed {
+                return Err(invalid("invalid_zip_extraction_metadata"));
+            }
+            break;
+        }
+        if consumed {
+            extra.extend_from_slice(&record[at..at + 4 + size]);
+        }
+        at += 4 + size;
+    }
+    record.truncate(name_end);
+    record[30..32].copy_from_slice(&(extra.len() as u16).to_le_bytes());
+    record[32..34].copy_from_slice(&0u16.to_le_bytes());
+    record.extend(extra);
+    Ok(record)
+}
+
+pub fn from_file(mut file: File) -> Result<Archive> {
+    let (central_start, archive_offset, count, directory_end) = directory(&mut file)?;
+    file.seek(SeekFrom::Start(central_start))?;
+    let mut records = Vec::new();
+    for _ in 0..count {
         operation::check()?;
-        if cancel.load(Ordering::Relaxed) {
-            return Err(invalid("download_cancelled"));
-        }
-        relative(&entry.name)?;
-        if entry
-            .name
-            .split('/')
-            .any(|part| part.to_ascii_lowercase().starts_with(".patchhub-"))
+        if file
+            .stream_position()?
+            .checked_add(46)
+            .is_none_or(|end| end > directory_end)
         {
-            return Err(invalid("reserved_installer_path"));
+            return Err(invalid("invalid_zip_directory"));
         }
-        let key = entry.name.to_lowercase();
-        if !names.insert(key) {
-            return Err(invalid("zip_duplicate_or_case_collision"));
+        let mut record = vec![0u8; 46];
+        file.read_exact(&mut record)?;
+        if &record[..4] != b"PK\x01\x02" {
+            return Err(invalid("invalid_zip_directory"));
         }
-        let mut prefix = String::new();
-        for part in entry.name.split('/') {
-            if !prefix.is_empty() {
-                prefix.push('/');
-            }
-            prefix.push_str(part);
-            let lower = prefix.to_lowercase();
-            match prefixes.get(&lower) {
-                Some(previous) if previous != &prefix => {
-                    return Err(invalid("zip_duplicate_or_case_collision"));
-                }
-                None => {
-                    prefixes.insert(lower, prefix.clone());
-                }
-                _ => {}
-            }
+        let variable: usize = [28, 30, 32]
+            .into_iter()
+            .map(|at| u16_at(&record, at) as usize)
+            .sum();
+        if file
+            .stream_position()?
+            .checked_add(variable as u64)
+            .is_none_or(|end| end > directory_end)
+        {
+            return Err(invalid("invalid_zip_directory"));
         }
-
-        if entry.is_dir {
-            if entry.mode != 0 && entry.mode != 0o040000 {
-                return Err(invalid("zip_link_or_special_file"));
-            }
-        } else if entry.mode != 0 && entry.mode != 0o100000 {
-            return Err(invalid("zip_link_or_special_file"));
-        }
-        extra_safe(&entry.extra)?;
+        record.resize(46 + variable, 0);
+        file.read_exact(&mut record[46..])?;
+        records.push(extraction_record(record)?);
     }
-    Ok(())
+    // A directory digital signature is metadata rather than a file member.
+    let position = file.stream_position()?;
+    if position != directory_end {
+        let signature = read_at::<6>(&mut file, position)?;
+        if &signature[..4] != b"PK\x05\x05"
+            || file
+                .stream_position()?
+                .checked_add(u16_at(&signature, 4) as u64)
+                != Some(directory_end)
+        {
+            return Err(invalid("invalid_zip_directory"));
+        }
+    }
+    Ok(Archive {
+        file,
+        records,
+        central_start: central_start - archive_offset,
+        archive_offset,
+    })
 }
-
-/// Port of `publisher.py::_relative`.
-fn relative(name: &str) -> Result<()> {
+impl Archive {
+    pub fn len(&self) -> usize {
+        self.records.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.records.is_empty()
+    }
+    pub(crate) fn entry(&mut self, index: usize) -> Result<ZipArchive<EntryReader<'_>>> {
+        let mut tail = self
+            .records
+            .get(index)
+            .ok_or_else(|| invalid("zip_member_missing"))?
+            .clone();
+        let size = tail.len() as u64;
+        let zip64_start = self
+            .central_start
+            .checked_add(size)
+            .ok_or_else(|| invalid("zip_size_overflow"))?;
+        // A ZIP64 footer also represents small ZIPs and avoids narrowing an
+        // existing large archive offset in this one-record metadata view.
+        tail.extend_from_slice(b"PK\x06\x06");
+        tail.extend_from_slice(&44u64.to_le_bytes());
+        tail.extend_from_slice(&45u16.to_le_bytes());
+        tail.extend_from_slice(&45u16.to_le_bytes());
+        tail.extend_from_slice(&0u32.to_le_bytes());
+        tail.extend_from_slice(&0u32.to_le_bytes());
+        tail.extend_from_slice(&1u64.to_le_bytes());
+        tail.extend_from_slice(&1u64.to_le_bytes());
+        tail.extend_from_slice(&size.to_le_bytes());
+        tail.extend_from_slice(&self.central_start.to_le_bytes());
+        tail.extend_from_slice(b"PK\x06\x07");
+        tail.extend_from_slice(&0u32.to_le_bytes());
+        tail.extend_from_slice(&zip64_start.to_le_bytes());
+        tail.extend_from_slice(&1u32.to_le_bytes());
+        tail.extend_from_slice(b"PK\x05\x06");
+        tail.extend_from_slice(&[0u8; 4]);
+        tail.extend_from_slice(&1u16.to_le_bytes());
+        tail.extend_from_slice(&1u16.to_le_bytes());
+        tail.extend_from_slice(&u32::MAX.to_le_bytes());
+        tail.extend_from_slice(&u32::MAX.to_le_bytes());
+        tail.extend_from_slice(&0u16.to_le_bytes());
+        let reader = EntryReader {
+            file: &mut self.file,
+            tail,
+            central_start: self.central_start,
+            archive_offset: self.archive_offset,
+            position: 0,
+        };
+        ZipArchive::new(reader).map_err(|e| invalid(format!("invalid_zip:{e}")))
+    }
+}
+pub(crate) struct EntryReader<'a> {
+    file: &'a mut File,
+    tail: Vec<u8>,
+    central_start: u64,
+    archive_offset: u64,
+    position: u64,
+}
+impl Read for EntryReader<'_> {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        let count = if self.position < self.central_start {
+            let limit = (self.central_start - self.position).min(buffer.len() as u64) as usize;
+            self.file.seek(SeekFrom::Start(
+                self.archive_offset
+                    .checked_add(self.position)
+                    .ok_or_else(|| invalid("zip_size_overflow"))?,
+            ))?;
+            self.file.read(&mut buffer[..limit])?
+        } else {
+            let offset = usize::try_from(self.position - self.central_start)
+                .map_err(|_| invalid("zip_size_overflow"))?;
+            if offset >= self.tail.len() {
+                return Ok(0);
+            }
+            let count = buffer.len().min(self.tail.len() - offset);
+            buffer[..count].copy_from_slice(&self.tail[offset..offset + count]);
+            count
+        };
+        self.position = self
+            .position
+            .checked_add(count as u64)
+            .ok_or_else(|| invalid("zip_size_overflow"))?;
+        Ok(count)
+    }
+}
+impl Seek for EntryReader<'_> {
+    fn seek(&mut self, from: SeekFrom) -> io::Result<u64> {
+        let position = match from {
+            SeekFrom::Start(position) => i128::from(position),
+            SeekFrom::End(delta) => {
+                i128::from(self.central_start) + self.tail.len() as i128 + i128::from(delta)
+            }
+            SeekFrom::Current(delta) => i128::from(self.position) + i128::from(delta),
+        };
+        self.position = u64::try_from(position).map_err(|_| invalid("invalid_zip_seek"))?;
+        Ok(self.position)
+    }
+}
+/// Filename support otherwise follows the target filesystem.
+pub(crate) fn relative(name: &str) -> Result<()> {
+    // A colon names an alternate data stream on Windows, rather than a
+    // regular archive member. Linux permits colons in ordinary filenames.
+    #[cfg(windows)]
+    if name.contains(':') {
+        return Err(invalid("unsafe_relative_path"));
+    }
     if name.is_empty()
-        || name.len() > 1024
-        || name.contains(['\\', ':'])
-        || name.chars().any(|c| (c as u32) < 32)
+        || name.contains('\0')
+        || name.starts_with(['/', '\\'])
+        || (name.as_bytes().get(1) == Some(&b':') && name.as_bytes()[0].is_ascii_alphabetic())
+        || name.split(['/', '\\']).any(|p| p == "..")
+        || !name.split(['/', '\\']).any(|p| !p.is_empty() && p != ".")
     {
         return Err(invalid("unsafe_relative_path"));
     }
-    for part in name.split('/') {
-        let device = part
-            .split('.')
-            .next()
-            .unwrap_or_default()
-            .to_ascii_uppercase();
-        let numbered_device = device.len() == 4
-            && (device.starts_with("COM") || device.starts_with("LPT"))
-            && device.as_bytes()[3].is_ascii_digit();
-        if part.is_empty()
-            || part == "."
-            || part == ".."
-            || part.ends_with(['.', ' '])
-            || part.chars().any(|c| "<>\"|?*".contains(c))
-            || ["CON", "PRN", "AUX", "NUL"].contains(&device.as_str())
-            || numbered_device
-        {
-            return Err(invalid("unsafe_relative_path"));
-        }
-    }
     Ok(())
 }
-
-/// Port of `publisher.py::_extra_safe`.
-pub(crate) fn extra_safe(extra: &[u8]) -> Result<()> {
-    let mut i = 0usize;
-    while i + 4 <= extra.len() {
-        let tag = u16::from_le_bytes([extra[i], extra[i + 1]]);
-        let size = u16::from_le_bytes([extra[i + 2], extra[i + 3]]) as usize;
-        i += 4;
-        if i + size > extra.len() {
-            return Err(invalid("zip_invalid_extra_metadata"));
-        }
-        let record = &extra[i..i + size];
-        if tag == 0x000d || tag == 0x756e {
-            return Err(invalid("zip_unsafe_extra_metadata"));
-        }
-        if tag == 0x000a {
-            // NTFS timestamps are descriptive and never applied. Validate its
-            // reserved prefix and subrecord framing, without default-value gates.
-            if record.len() < 4 {
-                return Err(invalid("zip_invalid_extra_metadata"));
-            }
-            let mut at = 4;
-            while at + 4 <= record.len() {
-                let length = u16::from_le_bytes([record[at + 2], record[at + 3]]) as usize;
-                at += 4;
-                if length > record.len() - at {
-                    return Err(invalid("zip_invalid_extra_metadata"));
-                }
-                at += length;
-            }
-            if at != record.len() {
-                return Err(invalid("zip_invalid_extra_metadata"));
-            }
-        }
-        i += size;
+pub fn plan(zip: &mut Archive, root: &Path, cancel: &AtomicBool) -> Result<Vec<Member>> {
+    if !root.is_absolute() || !root.is_dir() || !no_links(root) {
+        return Err(invalid("unsafe_game_root"));
     }
-    if i != extra.len() {
-        return Err(invalid("zip_invalid_extra_metadata"));
-    }
-    Ok(())
-}
-
-/// The zip crate decodes flagged names lossily from UTF-8 and unflagged names
-/// as CP437. Python rejects non-ASCII names that are not UTF-8 flagged, which is
-/// equivalent to `decoded == from_utf8_lossy(raw)` for non-ASCII raw bytes.
-pub(crate) fn name_encoding_ok(raw: &[u8], decoded: &str) -> bool {
-    // zip decodes unflagged legacy names using CP437. Accept that lossless
-    // standard representation, but never a replacement-decoded UTF-8 name.
-    raw == decoded.as_bytes()
-        || (std::str::from_utf8(raw).is_err() && !decoded.contains('\u{fffd}'))
-}
-
-const YPF_SIGNATURE: [u8; 4] = *b"YPF\0";
-const ASF_SIGNATURE: [u8; 16] = [
-    0x30, 0x26, 0xb2, 0x75, 0x8e, 0x66, 0xcf, 0x11, 0xa6, 0xd9, 0x00, 0xaa, 0x00, 0x62, 0xce, 0x6c,
-];
-
-fn mapping_paths(
-    zip: &mut ZipArchive<File>,
-    root: &Path,
-    entries: &[Entry],
-    cancel: &AtomicBool,
-) -> Result<HashMap<String, Option<String>>> {
-    let xp3 = wrapped_xp3_paths(zip, root, entries, cancel)?;
-    if !xp3.is_empty() {
-        return Ok(xp3);
-    }
-    wrapped_ypf_paths(zip, root, entries, cancel)
-}
-
-fn wrapped_ypf_paths(
-    zip: &mut ZipArchive<File>,
-    root: &Path,
-    entries: &[Entry],
-    cancel: &AtomicBool,
-) -> Result<HashMap<String, Option<String>>> {
-    let pac = root.join("pac");
-    if !no_links(&pac) || !pac.is_dir() {
-        return Ok(HashMap::new());
-    }
-    let mut has_game_ypf = false;
-    for item in fs::read_dir(&pac)? {
-        operation::check()?;
-        if cancel.load(Ordering::Relaxed) {
-            return Err(invalid("download_cancelled"));
-        }
-        let path = item?.path();
-        if path
-            .extension()
-            .is_some_and(|ext| ext.eq_ignore_ascii_case("ypf"))
-            && no_links(&path)
-            && path.is_file()
-            && file_starts_with(&path, &YPF_SIGNATURE)?
-        {
-            has_game_ypf = true;
-            break;
-        }
-    }
-    if !has_game_ypf {
-        return Ok(HashMap::new());
-    }
-    let files: Vec<&Entry> = entries.iter().filter(|entry| !entry.is_dir).collect();
-    let candidate = files.iter().any(|entry| {
-        let parts: Vec<_> = entry.name.split('/').collect();
-        parts.len() >= 3 && parts[1].eq_ignore_ascii_case("pac")
-    });
-    if !candidate {
-        return Ok(HashMap::new());
-    }
-    let mut wrapper: Option<&str> = None;
-    let mut has_patch_ypf = false;
-    let mut mapped = HashMap::new();
-    for entry in files {
-        operation::check()?;
-        if cancel.load(Ordering::Relaxed) {
-            return Err(invalid("download_cancelled"));
-        }
-        let parts: Vec<_> = entry.name.split('/').collect();
-        if parts.len() != 3
-            || !parts[1].eq_ignore_ascii_case("pac")
-            || !parts[2].to_ascii_lowercase().ends_with(".ypf")
-        {
-            return Err(invalid("zip_wrapped_layout_unsupported"));
-        }
-        if let Some(previous) = wrapper {
-            if previous != parts[0] {
-                return Err(invalid("zip_wrapped_layout_unsupported"));
-            }
-        } else {
-            wrapper = Some(parts[0]);
-        }
-        let ypf = entry_starts_with(zip, entry.index, &YPF_SIGNATURE)?;
-        if !ypf && !entry_starts_with(zip, entry.index, &ASF_SIGNATURE)? {
-            return Err(invalid("zip_wrapped_layout_unsupported"));
-        }
-        has_patch_ypf |= ypf;
-        mapped.insert(entry.name.clone(), Some(format!("pac/{}", parts[2])));
-    }
-    if !has_patch_ypf {
-        return Err(invalid("zip_wrapped_layout_unsupported"));
-    }
-    Ok(mapped)
-}
-
-/// Revalidate final paths after optional wrapper mapping and detect existing
-/// paths that differ only in case on case-sensitive filesystems.
-fn validate_destinations(
-    entries: &[Entry],
-    mapped: &HashMap<String, Option<String>>,
-    root: &Path,
-    cancel: &AtomicBool,
-) -> Result<()> {
-    let mut files = HashSet::new();
-    let mut prefixes: HashMap<String, String> = HashMap::new();
-    let mut disk_names: HashMap<PathBuf, HashMap<String, Option<String>>> = HashMap::new();
-    for entry in entries.iter().filter(|entry| !entry.is_dir) {
-        operation::check()?;
-        if cancel.load(Ordering::Relaxed) {
-            return Err(invalid("download_cancelled"));
-        }
-        let destination = match mapped.get(&entry.name) {
-            Some(None) => continue,
-            Some(Some(path)) => path.as_str(),
-            None => entry.name.as_str(),
-        };
-        relative(destination)?;
-        let key = destination.to_lowercase();
-        if !files.insert(key) {
-            return Err(invalid("zip_duplicate_or_case_collision"));
-        }
-        let mut prefix = String::new();
-        let mut parent = root.to_path_buf();
-        for part in destination.split('/') {
-            if !prefix.is_empty() {
-                prefix.push('/');
-            }
-            prefix.push_str(part);
-            let lower = prefix.to_lowercase();
-            if let Some(previous) = prefixes.get(&lower) {
-                if previous != &prefix {
-                    return Err(invalid("zip_duplicate_or_case_collision"));
-                }
-            } else {
-                prefixes.insert(lower, prefix.clone());
-            }
-            if !disk_names.contains_key(&parent) {
-                let mut names = HashMap::new();
-                match fs::read_dir(&parent) {
-                    Ok(items) => {
-                        for item in items {
-                            let name = item?.file_name().to_string_lossy().into_owned();
-                            let folded = name.to_lowercase();
-                            names
-                                .entry(folded)
-                                .and_modify(|old: &mut Option<String>| {
-                                    if old.as_deref() != Some(name.as_str()) {
-                                        *old = None;
-                                    }
-                                })
-                                .or_insert(Some(name));
-                        }
-                    }
-                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                    Err(error) => return Err(error),
-                }
-                disk_names.insert(parent.clone(), names);
-            }
-            if disk_names[&parent]
-                .get(&part.to_lowercase())
-                .is_some_and(|name| name.as_deref() != Some(part))
-            {
-                return Err(invalid("zip_target_case_collision"));
-            }
-            parent.push(part);
-        }
-    }
-    for entry in entries.iter().filter(|entry| !entry.is_dir) {
-        operation::check()?;
-        if cancel.load(Ordering::Relaxed) {
-            return Err(invalid("download_cancelled"));
-        }
-        let destination = match mapped.get(&entry.name) {
-            Some(None) => continue,
-            Some(Some(path)) => path.as_str(),
-            None => entry.name.as_str(),
-        };
-        if has_file_directory_collision(destination, &files, &HashSet::new()) {
-            return Err(invalid("zip_file_directory_collision"));
-        }
-    }
-    Ok(())
-}
-
-fn finish_plan(
-    entries: &[Entry],
-    mapped: &HashMap<String, Option<String>>,
-    root: &Path,
-    cancel: &AtomicBool,
-) -> Result<Vec<Member>> {
-    validate_destinations(entries, mapped, root, cancel)?;
     let mut members = Vec::new();
-    for entry in entries.iter().filter(|entry| !entry.is_dir) {
-        let destination = match mapped.get(&entry.name) {
-            Some(None) => continue,
-            Some(Some(destination)) => destination.clone(),
-            None => entry.name.clone(),
-        };
-        // Target type, links and on-disk case collisions are checked once by
-        // `zip_target_sizes` and again under the game lock by
-        // `install::begin_direct_at`; mapping only fixes the path.
-        members.push(Member {
-            index: entry.index,
-            source: entry.name.clone(),
-            destination,
-            size: entry.size,
-            expected_sha256: None,
-        });
+    for index in 0..zip.len() {
+        operation::check()?;
+        if cancel.load(Ordering::Relaxed) {
+            return Err(invalid("cancelled"));
+        }
+        let mut entry = zip.entry(index)?;
+        let file = entry
+            .by_index(0)
+            .map_err(|e| invalid(format!("invalid_zip:{e}")))?;
+        if file.get_metadata().is_utf8 && std::str::from_utf8(file.name_raw()).is_err() {
+            return Err(invalid("zip_name_encoding"));
+        }
+        let source = file.name().trim_end_matches(['/', '\\']);
+        if file.is_dir() && source.split(['/', '\\']).all(|part| part == ".") {
+            continue;
+        }
+        let destination = source.replace('\\', "/");
+        relative(&destination)?;
+        let destination = destination
+            .split('/')
+            .filter(|part| !part.is_empty() && *part != ".")
+            .collect::<Vec<_>>()
+            .join("/");
+        let mode = file.unix_mode().unwrap_or(0) & 0o170000;
+        if (file.is_dir() && mode != 0 && mode != 0o040000)
+            || (!file.is_dir() && mode != 0 && mode != 0o100000)
+        {
+            return Err(invalid("zip_link_or_special_file"));
+        }
+        if !file.is_dir() {
+            members.push(Member {
+                index,
+                source: source.into(),
+                destination,
+                size: file.size(),
+                expected_sha256: None,
+            });
+        }
     }
     if members.is_empty() {
         return Err(invalid("empty_recipe"));
     }
     Ok(members)
-}
-
-/// Port of `publisher.py::_wrapped_xp3_paths`.
-fn wrapped_xp3_paths(
-    zip: &mut ZipArchive<File>,
-    root: &Path,
-    entries: &[Entry],
-    cancel: &AtomicBool,
-) -> Result<HashMap<String, Option<String>>> {
-    let base = root.join("data.xp3");
-    if !no_links(&base) || !base.is_file() {
-        return Ok(HashMap::new());
-    }
-    if !file_starts_with(&base, &XP3_SIGNATURE)? {
-        return Ok(HashMap::new());
-    }
-
-    let non_dirs: Vec<&Entry> = entries.iter().filter(|entry| !entry.is_dir).collect();
-    if non_dirs.is_empty() {
-        return Ok(HashMap::new());
-    }
-    let mut top: Option<&str> = None;
-    for entry in &non_dirs {
-        operation::check()?;
-        if cancel.load(Ordering::Relaxed) {
-            return Err(invalid("download_cancelled"));
-        }
-        let mut parts = entry.name.split('/');
-        let (Some(first), Some(_), None) = (parts.next(), parts.next(), parts.next()) else {
-            return Ok(HashMap::new());
-        };
-        match top {
-            None => top = Some(first),
-            Some(existing) if existing == first => {}
-            Some(_) => return Ok(HashMap::new()),
-        }
-    }
-
-    let is_patch = |entry: &Entry| entry.name.split('/').nth(1).is_some_and(patch_name);
-    let patches: Vec<&Entry> = non_dirs
-        .iter()
-        .copied()
-        .filter(|entry| is_patch(entry))
-        .collect();
-    if patches.is_empty() {
-        return Ok(HashMap::new());
-    }
-    for entry in &non_dirs {
-        let basename = entry.name.split('/').nth(1).unwrap_or_default();
-        if !patch_name(basename) && !readme_name(basename) {
-            return Err(invalid("zip_wrapped_layout_unsupported"));
-        }
-    }
-    for entry in &patches {
-        if !entry_starts_with(zip, entry.index, &XP3_SIGNATURE)? {
-            return Err(invalid("zip_wrapped_layout_unsupported"));
-        }
-    }
-    let mut mapped = HashMap::new();
-    for entry in &non_dirs {
-        let basename = entry.name.split('/').nth(1).unwrap_or_default();
-        mapped.insert(
-            entry.name.clone(),
-            patch_name(basename).then(|| basename.to_string()),
-        );
-    }
-    Ok(mapped)
-}
-
-fn patch_name(name: &str) -> bool {
-    let lower = name.to_ascii_lowercase();
-    let Some(rest) = lower.strip_prefix("patch") else {
-        return false;
-    };
-    let Some(digits) = rest.strip_suffix(".xp3") else {
-        return false;
-    };
-    digits.bytes().all(|b| b.is_ascii_digit())
-}
-
-fn readme_name(name: &str) -> bool {
-    name.eq_ignore_ascii_case("readme.txt") || name.eq_ignore_ascii_case("readme.md")
-}
-
-fn has_file_directory_collision(
-    name: &str,
-    names: &HashSet<String>,
-    directory_names: &HashSet<String>,
-) -> bool {
-    let parts: Vec<&str> = name.split('/').collect();
-    (1..parts.len()).any(|count| {
-        let parent = parts[..count].join("/").to_lowercase();
-        names.contains(&parent) && !directory_names.contains(&parent)
-    })
-}
-
-fn file_starts_with(path: &Path, signature: &[u8]) -> Result<bool> {
-    let mut file = File::open(path)?;
-    let mut head = vec![0u8; signature.len()];
-    let mut filled = 0usize;
-    while filled < head.len() {
-        let count = file.read(&mut head[filled..])?;
-        if count == 0 {
-            break;
-        }
-        filled += count;
-    }
-    Ok(filled == signature.len() && head == signature)
-}
-
-fn entry_starts_with(zip: &mut ZipArchive<File>, index: usize, signature: &[u8]) -> Result<bool> {
-    let mut file = zip
-        .by_index(index)
-        .map_err(|e| invalid(format!("invalid_zip:{e}")))?;
-    let mut head = vec![0u8; signature.len()];
-    let mut filled = 0usize;
-    while filled < head.len() {
-        let count = file.read(&mut head[filled..])?;
-        if count == 0 {
-            break;
-        }
-        filled += count;
-    }
-    Ok(filled == signature.len() && head == signature)
 }
 
 /// `no_links` port: true when neither `path` nor any ancestor is a symlink /
@@ -656,475 +416,193 @@ fn linked(metadata: &fs::Metadata) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::catalog::FileMapping;
     use std::io::Write;
-    use tempfile::TempDir;
-    use zip::write::SimpleFileOptions;
-    use zip::{CompressionMethod, ZipWriter};
-
-    const SIGNATURE: [u8; 11] = XP3_SIGNATURE;
-
-    fn zip_with(path: &Path, members: &[(&str, &[u8])]) {
-        let mut zip = ZipWriter::new(File::create(path).unwrap());
-        let options = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
-        for (name, data) in members {
-            zip.start_file(*name, options).unwrap();
-            zip.write_all(data).unwrap();
+    use zip::{write::SimpleFileOptions, ZipWriter};
+    #[test]
+    fn preserves_wrappers_extras_case_and_unicode() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("input.zip");
+        let mut writer = ZipWriter::new(File::create(&path).unwrap());
+        for name in [
+            "wrapper/patch.xp3",
+            "wrapper/readme.txt",
+            "A.txt",
+            "a.txt",
+            "内容.txt",
+        ] {
+            writer
+                .start_file(name, SimpleFileOptions::default())
+                .unwrap();
+            writer.write_all(b"x").unwrap();
         }
-        zip.finish().unwrap();
-    }
-
-    fn game_dir(temp: &TempDir) -> PathBuf {
-        let root = temp.path().join("game");
-        fs::create_dir_all(&root).unwrap();
-        root
-    }
-
-    fn plan_zip(archive: &Path, root: &Path) -> Result<Vec<Member>> {
-        let mut zip = open(archive)?;
-        plan(&mut zip, root, &AtomicBool::new(false))
-    }
-
-    fn recipe_err(name: &str, members: &[(&str, &[u8])]) -> String {
-        let temp = tempfile::tempdir().unwrap();
-        let root = game_dir(&temp);
-        let archive = temp.path().join(name);
-        zip_with(&archive, members);
-        plan_zip(&archive, &root).unwrap_err().to_string()
-    }
-
-    #[test]
-    fn preserves_root_paths_without_reading_content() {
-        let temp = tempfile::tempdir().unwrap();
-        let root = game_dir(&temp);
-        fs::write(root.join("data.txt"), b"original").unwrap();
-        let archive = temp.path().join("patch.zip");
-        zip_with(
-            &archive,
-            &[("data.txt", b"patched"), ("sub/new.txt", b"new")],
-        );
-        let files = plan_zip(&archive, &root).unwrap();
-        assert_eq!(files.len(), 2);
-        assert_eq!(files[0].source, "data.txt");
-        assert_eq!(files[0].destination, "data.txt");
-        assert_eq!(files[0].size, 7);
-        assert_eq!(files[0].expected_sha256, None);
-        assert_eq!(files[1].destination, "sub/new.txt");
-        // Mapping never mutates the game tree.
-        assert_eq!(fs::read(root.join("data.txt")).unwrap(), b"original");
-        assert!(!root.join("sub").exists());
-    }
-
-    #[test]
-    fn wrapped_xp3_maps_patches_to_root_basename() {
-        let temp = tempfile::tempdir().unwrap();
-        let root = game_dir(&temp);
-        let base = [SIGNATURE.as_slice(), b"base"].concat();
-        fs::write(root.join("data.xp3"), &base).unwrap();
-        fs::write(
-            root.join("patch.xp3"),
-            [SIGNATURE.as_slice(), b"old"].concat(),
+        writer.finish().unwrap();
+        let members = plan(
+            &mut open(&path).unwrap(),
+            temp.path(),
+            &AtomicBool::new(false),
         )
         .unwrap();
-        let archive = temp.path().join("patch.zip");
-        zip_with(
-            &archive,
-            &[
-                (
-                    "Arbitrary wrapper/patch.xp3",
-                    [SIGNATURE.as_slice(), b"new"].concat().as_slice(),
-                ),
-                ("Arbitrary wrapper/Readme.txt", b"instructions"),
-            ],
+        assert_eq!(
+            members
+                .iter()
+                .map(|m| m.destination.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "wrapper/patch.xp3",
+                "wrapper/readme.txt",
+                "A.txt",
+                "a.txt",
+                "内容.txt"
+            ]
         );
-        let files = plan_zip(&archive, &root).unwrap();
-        assert_eq!(files.len(), 1);
-        assert_eq!(files[0].source, "Arbitrary wrapper/patch.xp3");
-        assert_eq!(files[0].destination, "patch.xp3");
     }
-
     #[test]
-    fn wrapped_xp3_is_not_guessed_without_matching_data_xp3() {
+    fn normalizes_relative_root_prefix_and_directory_separators() {
         let temp = tempfile::tempdir().unwrap();
-        let root = game_dir(&temp);
-        fs::write(root.join("data.xp3"), b"different engine").unwrap();
-        let archive = temp.path().join("patch.zip");
-        zip_with(
-            &archive,
-            &[(
-                "Wrapper/patch.xp3",
-                [SIGNATURE.as_slice(), b"new"].concat().as_slice(),
-            )],
-        );
-        let files = plan_zip(&archive, &root).unwrap();
-        assert_eq!(files[0].destination, "Wrapper/patch.xp3");
-    }
-
-    #[test]
-    fn wrapped_xp3_unknown_members_and_bad_signatures_block() {
-        let temp = tempfile::tempdir().unwrap();
-        let root = game_dir(&temp);
-        fs::write(
-            root.join("data.xp3"),
-            [SIGNATURE.as_slice(), b"base"].concat(),
-        )
-        .unwrap();
-        let patch = [SIGNATURE.as_slice(), b"a"].concat();
-
-        let first = temp.path().join("bad.zip");
-        zip_with(
-            &first,
-            &[
-                ("wrapper/patch.xp3", patch.as_slice()),
-                ("wrapper/run.exe", b"unknown"),
-            ],
-        );
-        assert_eq!(
-            plan_zip(&first, &root).unwrap_err().to_string(),
-            "zip_wrapped_layout_unsupported"
-        );
-
-        let second = temp.path().join("bad2.zip");
-        zip_with(&second, &[("wrapper/patch.xp3", b"not XP3")]);
-        assert_eq!(
-            plan_zip(&second, &root).unwrap_err().to_string(),
-            "zip_wrapped_layout_unsupported"
-        );
-    }
-
-    #[test]
-    fn traversal_case_collision_and_directory_collision_rejected() {
-        assert_eq!(
-            recipe_err("t.zip", &[("../escape", b"bad")]),
-            "unsafe_relative_path"
-        );
-        assert_eq!(
-            recipe_err("c.zip", &[("A.txt", b"one"), ("a.txt", b"two")]),
-            "zip_duplicate_or_case_collision"
-        );
-        assert_eq!(
-            recipe_err("d.zip", &[("file", b"one"), ("file/child", b"two")]),
-            "zip_file_directory_collision"
-        );
-    }
-
-    #[test]
-    fn device_names_and_reserved_paths_rejected() {
-        assert_eq!(
-            recipe_err("dev.zip", &[("CON", b"x")]),
-            "unsafe_relative_path"
-        );
-        assert_eq!(
-            recipe_err("dev2.zip", &[("LPT1.txt", b"x")]),
-            "unsafe_relative_path"
-        );
-        assert_eq!(
-            recipe_err("res.zip", &[(".patchhub-state", b"x")]),
-            "reserved_installer_path"
-        );
-    }
-
-    #[test]
-    fn unsafe_extra_metadata_rejected() {
-        let temp = tempfile::tempdir().unwrap();
-        let root = game_dir(&temp);
-        let archive = temp.path().join("extra.zip");
-        let mut options =
-            zip::write::FullFileOptions::default().compression_method(CompressionMethod::Stored);
-        options
-            .add_extra_data(0xbeef, b"unsafe-tag", false)
+        let path = temp.path().join("relative.zip");
+        let mut writer = ZipWriter::new(File::create(&path).unwrap());
+        writer
+            .add_directory("./", SimpleFileOptions::default())
             .unwrap();
-        let mut zip = ZipWriter::new(File::create(&archive).unwrap());
-        zip.start_file("data.txt", options).unwrap();
-        zip.write_all(b"bytes").unwrap();
-        zip.finish().unwrap();
-
-        // The crate refuses to write reserved tags, so rewrite the first
-        // occurrence (local header) to the unsafe PKWARE Unix tag 0x000d.
-        let mut bytes = fs::read(&archive).unwrap();
-        let mut patched = 0usize;
-        for index in 0..bytes.len().saturating_sub(3) {
-            if bytes[index] == 0xef
-                && bytes[index + 1] == 0xbe
-                && bytes[index + 2] == b"unsafe-tag".len() as u8
-            {
-                bytes[index] = 0x0d;
-                bytes[index + 1] = 0x00;
-                patched += 1;
-            }
-        }
-        assert!(patched > 0, "test setup failed to find the extra field");
-        fs::write(&archive, &bytes).unwrap();
-        assert_eq!(
-            plan_zip(&archive, &root).unwrap_err().to_string(),
-            "zip_unsafe_extra_metadata"
-        );
-    }
-
-    #[test]
-    fn symlink_member_rejected() {
-        let temp = tempfile::tempdir().unwrap();
-        let root = game_dir(&temp);
-        let archive = temp.path().join("link.zip");
-        let mut zip = ZipWriter::new(File::create(&archive).unwrap());
-        zip.add_symlink("link", "target", SimpleFileOptions::default())
+        writer
+            .start_file("./dir//file.bin", SimpleFileOptions::default())
             .unwrap();
-        zip.finish().unwrap();
-        assert_eq!(
-            plan_zip(&archive, &root).unwrap_err().to_string(),
-            "zip_link_or_special_file"
-        );
-    }
-
-    #[test]
-    fn high_ratio_and_more_than_8192_members_are_valid() {
-        let temp = tempfile::tempdir().unwrap();
-        let root = game_dir(&temp);
-        let archive = temp.path().join("many.zip");
-        let mut zip = ZipWriter::new(File::create(&archive).unwrap());
-        let options = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
-        for index in 0..8200 {
-            zip.add_directory(format!("dir{index}/"), options).unwrap();
-        }
-        zip.start_file("zeros.bin", options).unwrap();
-        zip.write_all(&vec![0u8; 2 * 1024 * 1024]).unwrap();
-        zip.finish().unwrap();
-        let files = plan_zip(&archive, &root).unwrap();
-        assert_eq!(files.len(), 1);
-        assert_eq!(files[0].destination, "zeros.bin");
-    }
-
-    #[test]
-    fn empty_recipe() {
-        let temp = tempfile::tempdir().unwrap();
-        let root = game_dir(&temp);
-        let empty = temp.path().join("empty.zip");
-        zip_with(&empty, &[]);
-        assert_eq!(
-            plan_zip(&empty, &root).unwrap_err().to_string(),
-            "empty_recipe"
-        );
-    }
-
-    #[test]
-    fn ypf_wrapper_maps_to_pac_and_accepts_asf_video() {
-        let temp = tempfile::tempdir().unwrap();
-        let root = game_dir(&temp);
-        fs::create_dir(root.join("pac")).unwrap();
-        fs::write(
-            root.join("pac/bn.ypf"),
-            [YPF_SIGNATURE.as_slice(), b"old"].concat(),
-        )
-        .unwrap();
-        let archive = temp.path().join("patch.zip");
-        let ypf = [YPF_SIGNATURE.as_slice(), b"new"].concat();
-        let asf = [ASF_SIGNATURE.as_slice(), b"video"].concat();
-        zip_with(
-            &archive,
-            &[
-                ("wrapper/pac/bn.ypf", &ypf),
-                ("wrapper/pac/update1.ypf", &ypf),
-                ("wrapper/pac/video.ypf", &asf),
-            ],
-        );
-        let files = plan_zip(&archive, &root).unwrap();
-        assert_eq!(files.len(), 3);
-        assert_eq!(files[0].destination, "pac/bn.ypf");
-        assert_eq!(files[1].destination, "pac/update1.ypf");
-        assert_eq!(files[2].destination, "pac/video.ypf");
-    }
-
-    #[test]
-    fn ypf_wrapper_rejects_mixed_and_unsafe_layouts() {
-        let temp = tempfile::tempdir().unwrap();
-        let root = game_dir(&temp);
-        fs::create_dir(root.join("pac")).unwrap();
-        fs::write(root.join("pac/bn.ypf"), YPF_SIGNATURE).unwrap();
-        let archive = temp.path().join("mixed.zip");
-        zip_with(
-            &archive,
-            &[
-                ("wrapper/pac/update.ypf", &YPF_SIGNATURE),
-                ("wrapper/run.exe", b"bad"),
-            ],
-        );
-        assert_eq!(
-            plan_zip(&archive, &root).unwrap_err().to_string(),
-            "zip_wrapped_layout_unsupported"
-        );
-        let archive2 = temp.path().join("unsafe.zip");
-        zip_with(&archive2, &[("wrapper/pac/update.ypf", b"unknown")]);
-        assert_eq!(
-            plan_zip(&archive2, &root).unwrap_err().to_string(),
-            "zip_wrapped_layout_unsupported"
-        );
-    }
-
-    #[test]
-    fn ypf_wrapper_rejects_existing_case_collision() {
-        let temp = tempfile::tempdir().unwrap();
-        let root = game_dir(&temp);
-        fs::create_dir(root.join("pac")).unwrap();
-        fs::write(root.join("pac/bn.ypf"), YPF_SIGNATURE).unwrap();
-        fs::write(root.join("pac/Update.ypf"), YPF_SIGNATURE).unwrap();
-        let archive = temp.path().join("case.zip");
-        zip_with(&archive, &[("wrapper/pac/update.ypf", &YPF_SIGNATURE)]);
-        assert_eq!(
-            plan_zip(&archive, &root).unwrap_err().to_string(),
-            "zip_target_case_collision"
-        );
-    }
-
-    #[test]
-    fn six_gib_declared_member_has_no_recipe_size_gate() {
-        let entries = vec![Entry {
-            index: 0,
-            name: "update1.ypf".into(),
-            is_dir: false,
-            size: 6 * 1024 * 1024 * 1024,
-            mode: 0,
-            extra: Vec::new(),
-        }];
-        validate_entries(&entries, &AtomicBool::new(false)).unwrap();
-    }
-
-    #[test]
-    fn signed_mapping_uses_recipe_destinations_and_keeps_declared_digest() {
-        let temp = tempfile::tempdir().unwrap();
-        let root = game_dir(&temp);
-        let archive = temp.path().join("signed.zip");
-        zip_with(
-            &archive,
-            &[("payload.dat", b"patched"), ("readme.txt", b"notes")],
-        );
-        let mut zip = open(&archive).unwrap();
-        let members = plan_mapped(
-            &mut zip,
-            &root,
-            &[FileMapping {
-                source: "payload.dat".into(),
-                destination: "data/original.dat".into(),
-                original_sha256: Some("0".repeat(64)),
-                installed_sha256: "a".repeat(64),
-            }],
+        writer.write_all(b"payload").unwrap();
+        writer.finish().unwrap();
+        let members = plan(
+            &mut open(&path).unwrap(),
+            temp.path(),
             &AtomicBool::new(false),
         )
         .unwrap();
         assert_eq!(members.len(), 1);
-        assert_eq!(members[0].destination, "data/original.dat");
-        assert_eq!(
-            members[0].expected_sha256.as_deref(),
-            Some("a".repeat(64).as_str())
-        );
+        assert_eq!(members[0].destination, "dir/file.bin");
+    }
+    fn zip_bytes(zip64: bool) -> Vec<u8> {
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        let mut writer = ZipWriter::new(&mut bytes);
+        writer
+            .start_file("file.bin", SimpleFileOptions::default().large_file(zip64))
+            .unwrap();
+        writer.write_all(b"payload").unwrap();
+        writer.finish().unwrap();
+        bytes.into_inner()
     }
 
     #[test]
-    fn signed_mapping_requires_the_declared_member() {
+    fn unused_unicode_comment_and_malformed_descriptive_extras_do_not_block_extraction() {
+        let bytes = zip_bytes(false);
+        let start = bytes.windows(4).position(|w| w == b"PK\x01\x02").unwrap();
+        let end = bytes.len() - 22;
+        let mut record = bytes[start..end].to_vec();
+        let name_end = 46 + u16_at(&record, 28) as usize;
+        // 0x6375 is a valid Unicode comment using CRC32 of its raw CP437
+        // comment byte. zip 6 instead compares the decoded UTF-8 comment.
+        let mut extra = vec![0x75, 0x63, 7, 0, 1];
+        extra.extend_from_slice(&0xd1b40d81u32.to_le_bytes());
+        extra.extend_from_slice("é".as_bytes());
+        // The decoder does not consume a malformed timestamp or unknown tail.
+        extra.extend_from_slice(&[0x55, 0x54, 0, 0, 0x34, 0x12, 0xff, 0xff]);
+        record.truncate(name_end);
+        record[30..32].copy_from_slice(&(extra.len() as u16).to_le_bytes());
+        record[32..34].copy_from_slice(&1u16.to_le_bytes());
+        record.extend(extra);
+        record.push(0x82);
+        let mut footer = bytes[end..].to_vec();
+        footer[12..16].copy_from_slice(&(record.len() as u32).to_le_bytes());
+        let mut bytes = bytes[..start].to_vec();
+        bytes.extend(record);
+        bytes.extend(footer);
         let temp = tempfile::tempdir().unwrap();
-        let root = game_dir(&temp);
-        let archive = temp.path().join("signed.zip");
-        zip_with(&archive, &[("payload.dat", b"patched")]);
-        let mut zip = open(&archive).unwrap();
-        let error = plan_mapped(
-            &mut zip,
-            &root,
-            &[FileMapping {
-                source: "missing.dat".into(),
-                destination: "original.dat".into(),
-                original_sha256: None,
-                installed_sha256: "a".repeat(64),
-            }],
-            &AtomicBool::new(false),
-        )
-        .unwrap_err();
-        assert_eq!(error.to_string(), "recipe_source_missing");
+        let path = temp.path().join("metadata.zip");
+        fs::write(&path, bytes).unwrap();
+        let mut archive = open(&path).unwrap();
+        let members = plan(&mut archive, temp.path(), &AtomicBool::new(false)).unwrap();
+        assert_eq!(members[0].destination, "file.bin");
+        let mut entry = archive.entry(0).unwrap();
+        let mut file = entry.by_index(0).unwrap();
+        let mut output = Vec::new();
+        file.read_to_end(&mut output).unwrap();
+        assert_eq!(output, b"payload");
     }
 
     #[test]
-    fn signed_mapping_keeps_recipe_order() {
-        let temp = tempfile::tempdir().unwrap();
-        let root = game_dir(&temp);
-        let archive = temp.path().join("signed.zip");
-        zip_with(&archive, &[("first.dat", b"one"), ("second.dat", b"two")]);
-        let mut zip = open(&archive).unwrap();
-        let members = plan_mapped(
-            &mut zip,
-            &root,
-            &[
-                FileMapping {
-                    source: "second.dat".into(),
-                    destination: "second.dat".into(),
-                    original_sha256: None,
-                    installed_sha256: "b".repeat(64),
-                },
-                FileMapping {
-                    source: "first.dat".into(),
-                    destination: "first.dat".into(),
-                    original_sha256: None,
-                    installed_sha256: "a".repeat(64),
-                },
-            ],
-            &AtomicBool::new(false),
-        )
-        .unwrap();
-        assert_eq!(members[0].source, "second.dat");
-        assert_eq!(members[1].source, "first.dat");
-    }
-
-    #[test]
-    #[ignore = "manual ZIP metadata and mapping scaling benchmark"]
-    fn benchmark_metadata_and_mapping_10k_50k() {
-        use std::time::Instant;
-        for count in [10_000, 50_000] {
-            let temp = tempfile::tempdir().unwrap();
-            let root = game_dir(&temp);
-            let archive = temp.path().join("many.zip");
-            let mut zip = ZipWriter::new(File::create(&archive).unwrap());
-            let options = SimpleFileOptions::default();
-            for index in 0..count {
-                zip.start_file(format!("file{index}.txt"), options).unwrap();
-                zip.write_all(b"x").unwrap();
+    fn zip64_member_and_prepended_archive_decode_from_original_file() {
+        for zip64 in [false, true] {
+            for prefix in [b"".as_slice(), b"MZ inert synthetic prefix".as_slice()] {
+                let temp = tempfile::tempdir().unwrap();
+                let path = temp.path().join("archive.zip");
+                let mut bytes = prefix.to_vec();
+                bytes.extend(zip_bytes(zip64));
+                fs::write(&path, bytes).unwrap();
+                let mut archive = open(&path).unwrap();
+                let members = plan(&mut archive, temp.path(), &AtomicBool::new(false)).unwrap();
+                assert_eq!(members[0].size, 7);
+                let mut entry = archive.entry(0).unwrap();
+                let mut file = entry.by_index(0).unwrap();
+                let mut bytes = Vec::new();
+                file.read_to_end(&mut bytes).unwrap();
+                assert_eq!(bytes, b"payload");
             }
-            zip.finish().unwrap();
-            let start = Instant::now();
-            let members = plan_zip(&archive, &root).unwrap();
-            let mapping_time = start.elapsed();
-            assert_eq!(members.len(), count);
-            eprintln!(
-                "zip files={} mapping_ms={} archive_bytes={}",
-                count,
-                mapping_time.as_millis(),
-                fs::metadata(&archive).unwrap().len()
-            );
         }
     }
-}
-
-#[cfg(test)]
-mod zip64_tests {
-    use super::*;
-    use std::io::Write;
-    use zip::write::SimpleFileOptions;
-    use zip::{CompressionMethod, ZipWriter};
 
     #[test]
-    fn zip64_member_keeps_its_declared_size() {
-        let temp = tempfile::tempdir().unwrap();
-        let root = temp.path().join("game");
-        fs::create_dir_all(&root).unwrap();
-        let archive = temp.path().join("zip64.zip");
-        let mut zip = ZipWriter::new(File::create(&archive).unwrap());
-        let options = SimpleFileOptions::default()
-            .compression_method(CompressionMethod::Stored)
-            .large_file(true);
-        zip.start_file("data.bin", options).unwrap();
-        zip.write_all(b"zip64").unwrap();
-        zip.finish().unwrap();
+    fn zip64_footer_with_extensible_data_and_prepended_bytes_is_located() {
+        let original = zip_bytes(true);
+        let end = original.len() - 22;
+        for extension in [b"".as_slice(), b"unconsumed metadata".as_slice()] {
+            let mut body = original[..end].to_vec();
+            body.extend_from_slice(b"PK\x06\x06");
+            body.extend_from_slice(&(44 + extension.len() as u64).to_le_bytes());
+            body.extend_from_slice(&[45, 0, 45, 0]);
+            body.extend_from_slice(&[0; 8]);
+            body.extend_from_slice(&1u64.to_le_bytes());
+            body.extend_from_slice(&1u64.to_le_bytes());
+            body.extend_from_slice(&(u32_at(&original, end + 12) as u64).to_le_bytes());
+            body.extend_from_slice(&(u32_at(&original, end + 16) as u64).to_le_bytes());
+            body.extend_from_slice(extension);
+            body.extend_from_slice(b"PK\x06\x07");
+            body.extend_from_slice(&0u32.to_le_bytes());
+            body.extend_from_slice(&(end as u64).to_le_bytes());
+            body.extend_from_slice(&1u32.to_le_bytes());
+            let mut footer = original[end..].to_vec();
+            footer[8..12].fill(0xff);
+            footer[12..20].fill(0xff);
+            body.extend(footer);
+            for prefix in [b"".as_slice(), b"MZ inert prefix".as_slice()] {
+                let temp = tempfile::tempdir().unwrap();
+                let path = temp.path().join("zip64.zip");
+                let mut bytes = prefix.to_vec();
+                bytes.extend_from_slice(&body);
+                fs::write(&path, bytes).unwrap();
+                let mut archive = open(&path).unwrap();
+                let mut entry = archive.entry(0).unwrap();
+                let mut file = entry.by_index(0).unwrap();
+                let mut output = Vec::new();
+                file.read_to_end(&mut output).unwrap();
+                assert_eq!(output, b"payload");
+            }
+        }
+    }
 
-        let mut zip = open(&archive).unwrap();
-        let members = plan(&mut zip, &root, &AtomicBool::new(false)).unwrap();
-        assert_eq!(members.len(), 1);
-        assert_eq!(members[0].destination, "data.bin");
-        assert_eq!(members[0].size, 5);
+    #[test]
+    fn relative_boundaries() {
+        for path in [
+            "../outside",
+            "/absolute",
+            "a/../b",
+            "C:/outside",
+            "a\\..\\b",
+        ] {
+            assert!(relative(path).is_err());
+        }
+        for path in ["内容.txt", "A.txt", "a.txt", "dir/trailing.", "./dir//file"] {
+            relative(path).unwrap();
+        }
+        #[cfg(windows)]
+        assert!(relative("file:stream").is_err());
+        #[cfg(unix)]
+        relative("file:stream").unwrap();
     }
 }

@@ -24,23 +24,19 @@ impl CancellationCause {
             Self::UserCancelled => "cancelled",
         }
     }
-    /// Only the writer's exact cleanup suffix may accompany a durable cancel code.
-    /// Other free-form error details never establish cancellation.
+    /// The primary error comes first; auxiliary warnings follow semicolons.
     pub(crate) fn from_transaction_error(error: &str) -> Option<Self> {
-        let head = match error.split_once("; cleanup_pending:") {
-            Some((head, detail)) if !detail.is_empty() => head,
-            Some(_) => return None,
-            None => error,
-        };
-        Self::from_code(head)
+        Self::from_code(error.split("; ").next().unwrap_or(error))
     }
     /// Legacy `lease_expired`/`installer_lease_expired` rows still recover; the
     /// short-term lease is deleted, so they are read back as user cancellation.
     pub fn from_code(code: &str) -> Option<Self> {
         match code {
-            "cancelled" | "task_cancelled" | "lease_expired" | "installer_lease_expired" => {
-                Some(Self::UserCancelled)
-            }
+            "cancelled"
+            | "cancelled_incomplete"
+            | "task_cancelled"
+            | "lease_expired"
+            | "installer_lease_expired" => Some(Self::UserCancelled),
             _ => None,
         }
     }
@@ -167,10 +163,8 @@ impl InstallerOutcome {
         } else {
             let (code, detail) = if cancellation.is_some() {
                 let raw = t.error.as_deref().unwrap();
-                match raw.split_once("; cleanup_pending:") {
-                    Some((code, detail)) => {
-                        (code.to_owned(), Some(format!("cleanup_pending:{detail}")))
-                    }
+                match raw.split_once("; ") {
+                    Some((code, detail)) => (code.to_owned(), Some(detail.to_owned())),
                     None => (raw.to_owned(), None),
                 }
             } else {

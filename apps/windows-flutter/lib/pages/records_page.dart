@@ -5,13 +5,15 @@ import '../models/library.dart';
 import '../presentation/library_presentation.dart';
 import 'source_pages.dart' show sourceTime;
 
-bool needsRecovery(Map<String, dynamic> transaction) => [
-  'backing_up',
-  'applying',
-  'uninstalling',
-  'rolling_back',
-  'needs_recovery',
-].contains(transaction['state']);
+bool needsRecovery(Map<String, dynamic> transaction) =>
+    transaction['direct'] == true &&
+    [
+      'backing_up',
+      'applying',
+      'uninstalling',
+      'rolling_back',
+      'needs_recovery',
+    ].contains(transaction['state']);
 
 class RecordsPage extends StatefulWidget {
   const RecordsPage({super.key, required this.model, required this.row});
@@ -41,7 +43,7 @@ class _RecordsPageState extends State<RecordsPage> {
       final confirmed = await showDialog<bool>(
         context: context,
         builder: (context) => AlertDialog(
-          title: const Text('恢复全部未完成操作'),
+          title: const Text('整理中断记录'),
           content: SizedBox(
             width: 600,
             child: SingleChildScrollView(
@@ -50,7 +52,7 @@ class _RecordsPageState extends State<RecordsPage> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   const Text(
-                    '这是全局操作，可能处理其它游戏的未完成记录。核心会检查所有记录；本入口不提供卸载或恢复成功安装前版本的功能。',
+                    '这是全局操作，可能处理其它游戏的中断解压记录。这里只整理中断状态，不会恢复或删除游戏文件；历史安装记录保持只读。',
                   ),
                   for (final record in pending)
                     ListTile(
@@ -83,7 +85,7 @@ class _RecordsPageState extends State<RecordsPage> {
             ),
             FilledButton(
               onPressed: () => Navigator.pop(context, true),
-              child: const Text('恢复全部未完成操作'),
+              child: const Text('整理中断记录'),
             ),
           ],
         ),
@@ -134,25 +136,25 @@ class _RecordsPageState extends State<RecordsPage> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text('全局有 ${pending.length} 项未完成操作；恢复会检查所有游戏。'),
+                  Text('全局有 ${pending.length} 项中断记录；整理记录不会恢复或删除游戏文件。'),
                   OutlinedButton(
                     onPressed:
                         busy || widget.model.tasks.installation?.running == true
                         ? null
                         : recover,
-                    child: Text(busy ? '正在处理全局恢复' : '恢复全部未完成操作'),
+                    child: Text(busy ? '正在整理中断记录' : '整理中断记录'),
                   ),
                 ],
               ),
             ),
           ),
         if (busy) const LinearProgressIndicator(),
-        if (error != null) SelectableText('恢复失败：$error'),
+        if (error != null) SelectableText('整理失败：$error'),
         if (recoveryResult != null) ...[
           Text(
             recoveryResult!.isEmpty
                 ? '核心未发现需要处理的操作'
-                : '全局恢复已返回 ${recoveryResult!.length} 项实际结果',
+                : '记录整理已返回 ${recoveryResult!.length} 项实际结果',
           ),
           for (final result in recoveryResult!)
             ListTile(
@@ -161,7 +163,7 @@ class _RecordsPageState extends State<RecordsPage> {
                 '${statusLabel(result['state'])}${result['error'] == null ? '' : '\n${result['error']}'}',
               ),
             ),
-          if (refreshFailed) const Text('恢复结果已返回，状态刷新失败；请重新扫描确认。'),
+          if (refreshFailed) const Text('记录整理结果已返回，状态刷新失败；请重新扫描确认。'),
         ],
         if (records.isEmpty) const Text('当前游戏暂无操作记录'),
         for (final record in records)
@@ -169,7 +171,7 @@ class _RecordsPageState extends State<RecordsPage> {
             child: ExpansionTile(
               title: Text(recordName(record)),
               subtitle: Text(
-                '${statusLabel(record['state'])} · ${sourceTime(record['updated_at'])}',
+                '${statusLabel(record['state'])} · ${sourceTime(record['updated_at'])}${record['direct'] == true ? '' : ' · 历史记录（只读）'}',
               ),
               children: [
                 Padding(

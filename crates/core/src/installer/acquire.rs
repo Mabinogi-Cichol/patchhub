@@ -30,8 +30,6 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-const DOWNLOAD_RESERVE_BYTES: u64 = 8 * 1024 * 1024;
-const SPACE_CHECK_INTERVAL_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_REDIRECTS: usize = 5;
 const COPY_BUFFER: usize = 65536;
 const ZIP_MAGIC_LOCAL: [u8; 4] = [0x50, 0x4b, 0x03, 0x04];
@@ -50,10 +48,12 @@ pub enum Acquisition {
 #[derive(Debug, Clone)]
 pub struct AcquiredArchive {
     pub path: PathBuf,
+    pub format: String,
     pub sha256: String,
     pub size: u64,
     pub final_url: String,
     pub source: Acquisition,
+    pub warnings: Vec<String>,
 }
 
 /// A dynamic download request validated against a source rule.
@@ -223,7 +223,15 @@ fn acquire_kind(
     ensure_safe_dir(&dir)?;
     let dir = fs::canonicalize(&dir)?;
 
-    let cached = load_cached(&dir, request, cancel, kind)?;
+    let mut warnings = Vec::new();
+    let cached = match load_cached(&dir, request, cancel, kind) {
+        Ok(cached) => cached,
+        Err(error) if cancel.load(Ordering::Acquire) => return Err(error),
+        Err(error) => {
+            warnings.push(format!("cache_read_failed: {error}"));
+            None
+        }
+    };
     let (etag, last_modified) = match &cached {
         Some((_, meta, _)) => (meta.etag.clone(), meta.last_modified.clone()),
         None => (None, None),
@@ -233,7 +241,7 @@ fn acquire_kind(
         "download-{}.partial",
         uuid::Uuid::new_v4().simple()
     ));
-    let result = download_and_persist(
+    let mut result = download_and_persist(
         transport,
         request,
         &dir,
@@ -248,6 +256,9 @@ fn acquire_kind(
     );
     if result.is_err() {
         let _ = fs::remove_file(&partial);
+    }
+    if let Ok(archive) = &mut result {
+        archive.warnings.append(&mut warnings);
     }
     result
 }
@@ -278,6 +289,7 @@ fn download_and_persist(
             return match cached {
                 Some((path, meta, digest)) => Ok(AcquiredArchive {
                     path: path.clone(),
+                    format: meta.format.clone(),
                     sha256: digest.clone(),
                     size: meta.size,
                     final_url: meta
@@ -285,6 +297,7 @@ fn download_and_persist(
                         .clone()
                         .unwrap_or_else(|| request.url.to_string()),
                     source: Acquisition::Cached,
+                    warnings: Vec::new(),
                 }),
                 None => Err(invalid("download_not_modified_without_cache")),
             };
@@ -332,7 +345,6 @@ fn download_and_persist(
         None,
     );
 
-    check_download_space(dir, total_hint)?;
     let mut body = response.body;
     let mut file = OpenOptions::new()
         .write(true)
@@ -343,23 +355,43 @@ fn download_and_persist(
         size: request.expected_size.or(response.content_length),
         kind,
         total_hint,
-        space_dir: dir,
     };
     let (digest, size, kind) = copy_verified(&mut body, &mut file, &expected, cancel, progress)?;
     file.sync_all()?;
     drop(file);
 
     let destination = dir.join(format!("{digest}.{}", kind.extension()));
-    if destination.exists() {
-        let (existing, existing_size) = hash_file(&destination, cancel)?;
-        if existing != digest || existing_size != size {
-            return Err(invalid("download_cache_conflict"));
+    let mut warnings = Vec::new();
+    // A complete input remains usable even if cache publication fails. Use the
+    // downloaded file itself; only the cache is auxiliary to extraction.
+    let cached = if destination.exists() {
+        match hash_file(&destination, cancel) {
+            Ok((existing, existing_size)) if existing == digest && existing_size == size => true,
+            Err(error) if cancel.load(Ordering::Acquire) => return Err(error),
+            result => {
+                warnings.push(format!(
+                    "cache_publication_failed: existing input differs or is unreadable: {result:?}"
+                ));
+                false
+            }
         }
-        let _ = fs::remove_file(partial);
     } else {
-        fs::hard_link(partial, &destination)?;
-        fs::remove_file(partial)?;
-    }
+        match fs::hard_link(partial, &destination) {
+            Ok(()) => true,
+            Err(error) => {
+                warnings.push(format!("cache_publication_failed: {error}"));
+                false
+            }
+        }
+    };
+    let path = if cached {
+        if let Err(error) = fs::remove_file(partial) {
+            warnings.push(format!("download_cleanup_failed: {error}"));
+        }
+        destination
+    } else {
+        partial.to_path_buf()
+    };
     let meta = CacheEntry {
         format: kind.extension().to_string(),
         url: request.url.to_string(),
@@ -369,14 +401,20 @@ fn download_and_persist(
         last_modified: response.last_modified,
         final_url: Some(final_url.clone()),
     };
-    write_manifest(dir, &meta)?;
+    if cached {
+        if let Err(error) = write_manifest(dir, &meta) {
+            warnings.push(format!("cache_record_failed: {error}"));
+        }
+    }
     operation::archive(size);
     Ok(AcquiredArchive {
-        path: destination,
+        path,
+        format: kind.extension().to_string(),
         sha256: digest,
         size,
         final_url,
         source: Acquisition::Downloaded,
+        warnings,
     })
 }
 
@@ -385,7 +423,6 @@ struct Expected<'a> {
     size: Option<u64>,
     kind: ArchiveKind,
     total_hint: u64,
-    space_dir: &'a Path,
 }
 
 fn copy_verified(
@@ -408,12 +445,6 @@ fn copy_verified(
         let count = reader.read(&mut buffer)?;
         if count == 0 {
             break;
-        }
-        if expected.total_hint == 0
-            && total / SPACE_CHECK_INTERVAL_BYTES
-                != (total.saturating_add(count as u64)) / SPACE_CHECK_INTERVAL_BYTES
-        {
-            check_download_space(expected.space_dir, COPY_BUFFER as u64)?;
         }
         total = total
             .checked_add(count as u64)
@@ -568,19 +599,6 @@ fn write_manifest(dir: &Path, meta: &CacheEntry) -> Result<()> {
 fn hash_file(path: &Path, cancel: &AtomicBool) -> Result<(String, u64)> {
     let digest = super::facts::digest_file(path, cancel)?;
     Ok((digest.sha256, digest.size))
-}
-
-fn check_download_space(dir: &Path, bytes: u64) -> Result<()> {
-    let available = fs2::available_space(dir)?;
-    let required = bytes
-        .checked_add(DOWNLOAD_RESERVE_BYTES)
-        .ok_or_else(|| invalid("download_size_overflow"))?;
-    if available < required {
-        return Err(invalid(format!(
-            "insufficient_space:state:required={required}:available={available}"
-        )));
-    }
-    Ok(())
 }
 
 fn valid_sha256(value: &str) -> bool {
@@ -845,6 +863,55 @@ mod tests {
         server.join().unwrap();
     }
     #[test]
+    fn corrupt_cache_does_not_block_a_complete_fresh_download() {
+        let (_temp, paths) = setup();
+        let bytes = data(b"valid input");
+        let hash = format!("{:x}", Sha256::digest(&bytes));
+        fs::write(
+            paths.downloads_dir().join(format!("{hash}.zip")),
+            b"corrupt",
+        )
+        .unwrap();
+        let hosts = hosts();
+        let req = request("https://download.example.com/a.zip", &hosts);
+        let archive = acquire_with(
+            &FakeTransport::new(vec![response(200, bytes.clone(), None)]),
+            &req,
+            &paths,
+            &AtomicBool::new(false),
+            |_, _| {},
+        )
+        .unwrap();
+        assert_eq!(archive.format, "zip");
+        assert_eq!(fs::read(archive.path).unwrap(), bytes);
+        assert!(archive
+            .warnings
+            .iter()
+            .any(|warning| warning.starts_with("cache_publication_failed:")));
+    }
+    #[test]
+    fn cache_sidecar_failure_does_not_discard_downloaded_archive() {
+        let (_temp, paths) = setup();
+        let bytes = data(b"payload");
+        let hash = format!("{:x}", Sha256::digest(&bytes));
+        fs::create_dir(paths.downloads_dir().join(format!("{hash}.json"))).unwrap();
+        let hosts = hosts();
+        let request = request("https://download.example.com/a.zip", &hosts);
+        let archive = acquire_with(
+            &FakeTransport::new(vec![response(200, bytes.clone(), None)]),
+            &request,
+            &paths,
+            &AtomicBool::new(false),
+            |_, _| {},
+        )
+        .unwrap();
+        assert_eq!(fs::read(archive.path).unwrap(), bytes);
+        assert!(archive
+            .warnings
+            .iter()
+            .any(|warning| warning.starts_with("cache_record_failed:")));
+    }
+    #[test]
     fn explicit_manual_urls_sniff_bytes_and_preserve_real_failures() {
         let (_temp, paths) = setup();
         let url = "http://user.example:8080/payload";
@@ -1025,38 +1092,6 @@ mod tests {
             |_, _| {},
         )
         .is_err());
-    }
-
-    #[test]
-    fn zip_and_exe_use_real_download_space_without_a_format_size_limit() {
-        let (_temp, paths) = setup();
-        let hosts = hosts();
-        let available = fs2::available_space(paths.downloads_dir()).unwrap();
-        let mut zip = request("https://download.example.com/a.zip", &hosts);
-        zip.expected_size = Some(available);
-        let transport = FakeTransport::new(vec![response(200, data(b"small"), Some(available))]);
-        let error =
-            acquire_with(&transport, &zip, &paths, &AtomicBool::new(false), |_, _| {}).unwrap_err();
-        assert!(error.to_string().starts_with("insufficient_space:state:"));
-        assert!(!paths.downloads_dir().read_dir().unwrap().any(|entry| {
-            entry
-                .unwrap()
-                .path()
-                .extension()
-                .is_some_and(|ext| ext == "partial")
-        }));
-
-        // An EXE has no artificial format size cap: it is admitted and checked
-        // against the actual free space exactly like a ZIP, so a declared size
-        // at the volume limit is rejected by the real space check.
-        let mut exe = request("https://download.example.com/a.exe", &hosts);
-        exe.expected_size = Some(available);
-        let mut response = response(200, b"MZ".to_vec(), Some(available));
-        response.final_url = exe.url.into();
-        let transport = FakeTransport::new(vec![response]);
-        let error = acquire_exe_with(&transport, &exe, &paths, &AtomicBool::new(false), |_, _| {})
-            .unwrap_err();
-        assert!(error.to_string().starts_with("insufficient_space:state:"));
     }
 
     #[test]

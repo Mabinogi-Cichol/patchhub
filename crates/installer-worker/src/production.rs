@@ -44,21 +44,15 @@ impl WorkerRuntime {
     ) -> Result<WorkerExecution, WorkerError> {
         cancelled(cancel)?;
         let parsed = sf::parse_descriptor(descriptor).map_err(|e| err("descriptor", e.0))?;
-        let (hash, size) = match &parsed {
-            sf::Descriptor::Analyze {
-                exe_sha256,
-                exe_size,
-            }
-            | sf::Descriptor::AnalyzeBehavior {
-                exe_sha256,
-                exe_size,
-            } => (exe_sha256, *exe_size),
-            sf::Descriptor::ExtractBehavior { .. } => {
-                return Err(err("descriptor", "extraction requires a streaming session"))
-            }
+        let sf::Descriptor::ListMembers {
+            exe_sha256: hash,
+            exe_size: size,
+        } = &parsed
+        else {
+            return Err(err("descriptor", "extraction requires a streaming session"));
         };
-        self.open_session(archive, hash, size, cancel)?
-            .analyze(descriptor, cancel)
+        self.open_session(archive, hash, *size, cancel)?
+            .list_members(descriptor, cancel)
     }
     pub fn open_session(
         &self,
@@ -84,7 +78,7 @@ impl WorkerRuntime {
     }
 }
 impl WorkerSession {
-    pub fn analyze(
+    pub fn list_members(
         &self,
         descriptor: &[u8],
         cancel: &AtomicBool,
@@ -186,33 +180,26 @@ fn validate_response(v: &Value, raw: &[u8]) -> Result<(), WorkerError> {
         .as_object()
         .ok_or_else(|| err("response", "invalid response object"))?;
     let d = sf::parse_descriptor(raw).map_err(|e| err("descriptor", e.0))?;
-    let (action, hash) = match &d {
-        sf::Descriptor::Analyze { exe_sha256, .. } => ("analyze", exe_sha256),
-        sf::Descriptor::AnalyzeBehavior { exe_sha256, .. } => ("analyze_behavior", exe_sha256),
-        sf::Descriptor::ExtractBehavior { .. } => {
-            return Err(err("response", "extraction has no buffered response"))
-        }
+    let sf::Descriptor::ListMembers {
+        exe_sha256: hash, ..
+    } = &d
+    else {
+        return Err(err("response", "extraction has no buffered response"));
     };
-    let keys = [
-        "schema_version",
-        "action",
-        "exe_sha256",
-        "report",
-        "installable",
-    ];
+    let keys = ["schema_version", "action", "exe_sha256", "members"];
     if o.len() != keys.len()
         || keys.iter().any(|k| !o.contains_key(*k))
         || v["exe_sha256"].as_str() != Some(hash)
         || v["schema_version"] != 1
-        || v["action"] != action
-        || v["installable"] != false
-        || !v["report"].is_object()
+        || v["action"] != "list_members"
     {
         return Err(err(
             "response",
             "worker response fields/input binding mismatch",
         ));
     }
+    serde_json::from_value::<Vec<sf::Member>>(v["members"].clone())
+        .map_err(|e| err("response", e.to_string()))?;
     Ok(())
 }
 /// serde_json::Value accepts duplicate object keys. IPC must reject them at
@@ -292,13 +279,13 @@ mod production_tests {
     #[test]
     fn response_cannot_authorize_or_change_action_and_input_binding() {
         let raw = serde_json::to_vec(
-            &serde_json::json!({"action":"analyze","exe_size":1,"exe_sha256":"a".repeat(64)}),
+            &serde_json::json!({"action":"list_members","exe_size":1,"exe_sha256":"a".repeat(64)}),
         )
         .unwrap();
-        let good = serde_json::json!({"schema_version":1,"action":"analyze","exe_sha256":"a".repeat(64),"report":{},"installable":false});
+        let good = serde_json::json!({"schema_version":1,"action":"list_members","exe_sha256":"a".repeat(64),"members":[]});
         assert!(validate_response(&good, &raw).is_ok());
         for (key, value) in [
-            ("installable", serde_json::json!(true)),
+            ("members", serde_json::json!(true)),
             ("exe_sha256", serde_json::json!("b".repeat(64))),
             ("action", serde_json::json!("convert_behavior")),
             ("extra_path", serde_json::json!("/game")),

@@ -310,8 +310,8 @@ export function workflowState(value: string): string {
   const labels: Record<string, string> = {
     manual_selection_required: "按所选下载项安装",
     discover_only: "查看补丁来源", manual_download: "手动下载导入", managed_zip: "审核 ZIP 安装", unsupported: "暂不支持",
-    publisher_zip: "ZIP · 默认解压至游戏根目录", publisher_exe: "自动提取并安装", publisher_default: "按根目录生成计划，效果待验证",
-    check_required: "安装时自动检查条件", conditions_checked: "安装条件已核验", verified_metadata: "目录条件已核对", needs_review: "尚待审核", signed: "已验证签名", unsigned_development: "未签名开发目录",
+    publisher_zip: "ZIP · 默认解压至游戏根目录", publisher_exe: "EXE · 解压至游戏根目录", publisher_default: "按根目录生成计划，效果待验证",
+    archive_extraction: "解压覆盖到目标目录", signed: "已验证签名", unsigned_development: "未签名开发目录",
     planned: "已生成计划", backing_up: "正在备份", backed_up: "备份完成", applying: "正在写入", committed: "安装完成",
     failed: "安装未完成",
     rolling_back: "正在回滚", rolled_back: "已回滚", uninstalling: "正在卸载", uninstalled: "已卸载", needs_recovery: "需要恢复",
@@ -352,7 +352,7 @@ export function progressPercent(done: number, total: number | null | undefined):
   return Math.min(100, Math.max(0, done / total * 100));
 }
 export function progressStageLabel(stage: string, substage?: string | null): string {
-  const labels: Record<string, string> = { connecting:"正在连接", downloading:"正在下载", validating:"正在核对", analyzing_installer:"正在分析安装包", extracting:"正在提取", planning:"正在准备", applying:"正在写入", rolling_back:"正在回滚", cleanup:"正在清理", backing_up:"正在备份", writing:"正在写入", committing:"正在提交" };
+  const labels: Record<string, string> = { connecting:"正在连接", downloading:"正在下载", validating:"正在核对", reading_archive:"正在读取归档目录", extracting:"正在提取", planning:"正在准备", applying:"正在写入", rolling_back:"正在回滚", cleanup:"正在清理", backing_up:"正在备份", writing:"正在写入", committing:"正在提交" };
   return labels[substage ?? stage] ?? stage;
 }
 export function safeSourceUrl(value: string): boolean {
@@ -371,9 +371,12 @@ export function sourceQueryComplete(status: string | null | undefined): boolean 
 }
 /** New invocation outcomes use core disposition; historical transaction display is separate. */
 export function installationResult(outcome: InstallerOutcome, overwrite = false): string {
-  if (outcome.disposition === "completed") return overwrite ? "覆盖安装完成" : "安装完成";
-  if (outcome.recovery?.required) return "操作需要修复，请运行修复后重试。";
-  if (outcome.disposition === "cancelled") return "任务已安全取消。";
+  if (outcome.disposition === "completed") {
+    const message = outcome.direct ? "文件已解压到目标目录" : overwrite ? "覆盖安装完成" : "安装完成";
+    return outcome.error ? `${message}。提示：${outcome.error}` : message;
+  }
+  if (outcome.recovery?.required) return "历史安装未完成；旧备份保持只读，可重新安装补丁。";
+  if (outcome.disposition === "cancelled") return outcome.cause?.code === "cancelled_incomplete" ? reason("cancelled_incomplete") : "任务已安全取消。";
   const failure = outcome.cause?.code ?? outcome.recovery?.code ?? "installation_failed";
   const detail = outcome.cause?.detail ?? outcome.recovery?.detail;
   // Direct EXE installs leave already-written files in place on failure or

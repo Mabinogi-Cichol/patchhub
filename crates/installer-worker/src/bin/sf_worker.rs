@@ -14,11 +14,9 @@ fn main() {
             ));
         }
         let mut raw = Vec::new();
-        std::io::stdin()
-            .take((sf::MAX_MESSAGE + 1) as u64)
-            .read_to_end(&mut raw)?;
+        std::io::stdin().read_to_end(&mut raw)?;
         let descriptor = sf::parse_descriptor(&raw)?;
-        extracting = matches!(descriptor, sf::Descriptor::ExtractBehavior { .. });
+        extracting = matches!(descriptor, sf::Descriptor::ExtractMembers { .. });
         let file = sf::open_input(&input.unwrap())?;
         if extracting {
             // The stream is framed by the host, so a failure must not append a

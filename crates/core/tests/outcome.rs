@@ -240,10 +240,11 @@ fn unbounded_free_error_head_is_not_a_machine_code() {
 }
 
 #[test]
-fn writers_exact_cleanup_suffix_preserves_cancel_cause_but_free_text_does_not() {
+fn primary_cancel_cause_survives_auxiliary_warnings() {
     for (code, kind) in [
         ("cancelled", FailureKind::UserCancelled),
         ("task_cancelled", FailureKind::UserCancelled),
+        ("cancelled_incomplete", FailureKind::UserCancelled),
         ("lease_expired", FailureKind::UserCancelled),
     ] {
         let raw = format!("{code}; cleanup_pending:unsafe_path");
@@ -257,10 +258,8 @@ fn writers_exact_cleanup_suffix_preserves_cancel_cause_but_free_text_does_not() 
         assert_eq!(result.error.as_deref(), Some(raw.as_str()));
     }
     for raw in [
-        "cancelled; arbitrary_detail",
         "cancelled: cleanup_pending:unsafe_path",
         "cannot_cancel; cleanup_pending:unsafe_path",
-        "lease_expired; cleanup_pending:",
     ] {
         assert_eq!(
             InstallerOutcome::from_transaction(&transaction("rolled_back", Some(raw)), None, None)
@@ -268,4 +267,21 @@ fn writers_exact_cleanup_suffix_preserves_cancel_cause_but_free_text_does_not() 
             Disposition::Failed
         );
     }
+}
+
+#[test]
+fn direct_cancellation_remains_cancelled_when_history_save_fails() {
+    let mut t = transaction(
+        "failed",
+        Some("cancelled_incomplete; history_save_failed: read-only"),
+    );
+    t.direct = true;
+    let outcome = InstallerOutcome::from_transaction(&t, None, None);
+    assert_eq!(outcome.disposition, Disposition::Cancelled);
+    assert_eq!(outcome.cause.unwrap().code, "cancelled_incomplete");
+    let mut done = transaction("committed", Some("history_save_failed: read-only"));
+    done.direct = true;
+    let outcome = InstallerOutcome::from_transaction(&done, None, None);
+    assert_eq!(outcome.disposition, Disposition::Completed);
+    assert!(outcome.error.is_some());
 }

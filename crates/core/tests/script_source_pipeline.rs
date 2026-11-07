@@ -348,7 +348,7 @@ fn readonly_projection_and_preview_reject_retired_selection_without_running_lua(
             },
         )
         .unwrap();
-        assert_eq!(report.blockers, vec!["exe_check_required"]);
+        assert_eq!(report.blockers, Vec::<String>::new());
     }
     // Any accidental VM execution in these read paths would never return.
     s.import_script_source(&raw(), 1, "while true do end", true)

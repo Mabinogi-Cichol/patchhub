@@ -1,18 +1,4 @@
-//! Dynamic publisher ZIP candidate selection and resolution
-//! (p1-zip-orchestration §1/§2).
-//!
-//! `zip_selection_id` is a *candidate-level* identity: it proves which source
-//! candidate the UI meant, never that a download is authorized. The value is a
-//! deterministic function of an explicit `zip_candidate_binding` encoded with
-//! the frozen source canonical JSON (`sources::canonical`), so it is stable
-//! across processes and only changes when a meaningful candidate field changes.
-//!
-//! `resolve_zip` re-derives the candidate from the registry cache (the client's
-//! candidate list is never trusted), re-checks source policy/subscription/cache
-//! freshness, picks the single download URL and maps the candidate into the
-//! [`FactsExpectation`] the installer will verify before planning.
-
-use super::facts::FactsExpectation;
+//! Resolve a selected archive URL from the cached source candidate.
 use crate::sources::{
     canonical,
     model::{SourceCandidate, SourceRule, Variant},
@@ -152,42 +138,6 @@ pub struct ResolvedZipCandidate {
     pub settings_revision: u64,
 }
 
-impl ResolvedZipCandidate {
-    pub fn is_manual(&self) -> bool {
-        let automatic = if self.selection_id.starts_with("exe-") {
-            super::exe_resolve::exe_selection_id(&self.candidate)
-        } else {
-            zip_selection_id(&self.candidate)
-        };
-        automatic.as_deref() != Some(self.selection_id.as_str())
-    }
-
-    /// Facts expectation for this candidate (`verified_buildids` = the live
-    /// build, p1-zip-orchestration §2.1 step 8). The orchestrator supplies the
-    /// current `buildid` because the pure source layer has none.
-    pub fn expectation(&self, _buildid: Option<&str>) -> FactsExpectation {
-        FactsExpectation {
-            appid: self.appid,
-            verified_buildids: Vec::new(),
-            requires_dlc: self.candidate.requires_dlc.clone().unwrap_or_default(),
-            excludes_dlc: self.candidate.excludes_dlc.clone().unwrap_or_default(),
-            baselines: Vec::new(),
-        }
-    }
-
-    /// Deterministic digest of the candidate conditions plus the live build
-    /// (`conditions_sha256`, p1-zip-orchestration §7.3). The full condition
-    /// evaluator is not yet implemented; this is the caller-provided placeholder.
-    pub fn conditions_sha256(&self, buildid: Option<&str>) -> String {
-        let conditions = serde_json::json!({
-            "requires_dlc": self.candidate.requires_dlc.clone().unwrap_or_default(),
-            "excludes_dlc": self.candidate.excludes_dlc.clone().unwrap_or_default(),
-            "verified_buildids": buildid.map(str::to_string).into_iter().collect::<Vec<_>>(),
-        });
-        canonical::canonical_sha256(&conditions)
-    }
-}
-
 pub fn source_release_id(rule: &SourceRule, appid: u32) -> String {
     source_release_id_from_source(&rule.id, appid)
 }
@@ -219,9 +169,6 @@ pub fn source_admission_blockers(
     }
     if !registry.game_subscribed(appid, &rule.id) {
         blockers.push("source_not_subscribed".to_string());
-    }
-    if candidate.cache_status == crate::sources::model::CacheStatus::Stale {
-        blockers.push("selection_stale".to_string());
     }
     blockers
 }
@@ -451,20 +398,6 @@ pub fn resolve_zip(
         .find(|rule| rule.id == candidate.source_id)
         .cloned()
         .ok_or_else(|| ResolveError::code("source_not_enabled"))?;
-    // Downloadability is not an automatic identity or variant confirmation.
-    if rule.discovery_only
-        && (!matches!(
-            candidate.match_basis,
-            crate::sources::model::MatchBasis::Appid
-                | crate::sources::model::MatchBasis::VerifiedAlias
-                | crate::sources::model::MatchBasis::OfficialTitle
-        ) || matches!(candidate.variant, Variant::Unknown | Variant::Demo))
-    {
-        return Err(ResolveError::code("source_requires_guidance"));
-    }
-    // Discovery rules are the publisher-ZIP candidate source and may carry
-    // `download_hosts`; only the enabled flag gates them (see progress note on
-    // the §2.1 step-5 `!discovery_only` inconsistency).
     if let Some(code) = source_admission_blocker(registry, &candidate, appid) {
         return Err(ResolveError::code(code));
     }

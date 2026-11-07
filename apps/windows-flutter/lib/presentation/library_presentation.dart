@@ -254,8 +254,7 @@ String statusLabel(dynamic value) =>
       'install_incomplete':
           '安装未完成，已写入的文件未恢复。可重新安装补丁；如需恢复游戏本体，请使用 Steam 验证游戏文件。',
       'manual_selection_required': '按所选下载项安装',
-      'check_required': '安装时检查条件',
-      'verified_metadata': '目录条件已核对',
+      'archive_extraction': '解压覆盖到目标目录',
       'verified': '条件已核对',
       'outside_japan_only': '仅适用于日本以外地区，请核对来源说明',
       'dlc_unknown': 'DLC 拥有及安装状态待确认',

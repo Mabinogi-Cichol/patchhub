@@ -1325,7 +1325,7 @@
         "connecting",
         "downloading",
         "validating",
-        "analyzing_installer",
+        "reading_archive",
         "extracting",
         "planning",
         "applying",

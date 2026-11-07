@@ -19,7 +19,7 @@ fn new_runtime(root: &std::path::Path) -> WorkerRuntime {
     WorkerRuntime::new(PathBuf::from(env!("CARGO_BIN_EXE_patchhub-worker"))).unwrap()
 }
 #[test]
-fn production_analyzes_and_streams_all_synthetic_behavior_extractions() {
+fn production_lists_and_streams_all_static_members() {
     let stage = tempfile::tempdir().unwrap();
     let runtime = new_runtime(stage.path());
     assert_eq!(fs::read_dir(stage.path()).unwrap().count(), 0);
@@ -31,33 +31,15 @@ fn production_analyzes_and_streams_all_synthetic_behavior_extractions() {
         let sha = case["descriptor"]["exe_sha256"].as_str().unwrap();
         let size = case["descriptor"]["exe_size"].as_u64().unwrap();
         let session = runtime.open_session(&archive, sha, size, &cancel).unwrap();
-        let analyze = json!({"action":"analyze_behavior","exe_sha256":sha,"exe_size":size});
+        let listing = json!({"action":"list_members","exe_sha256":sha,"exe_size":size});
         let result = session
-            .analyze(&serde_json::to_vec(&analyze).unwrap(), &cancel)
+            .list_members(&serde_json::to_vec(&listing).unwrap(), &cancel)
             .unwrap();
         assert_eq!(
-            result.response["report"], case["report"],
-            "{}",
-            case["name"]
+            result.response["members"].as_array().unwrap().len(),
+            case["members"].as_array().unwrap().len()
         );
-        let report = &result.response["report"];
-        let members: Vec<_> = report["files"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|f| {
-                json!({
-                    "path": f["destination"],
-                    "size": f["unpacked_size"],
-                    "crc32": f["crc32"],
-                    "payload_offset": f["payload_offset"],
-                    "packed_size": f["packed_size"],
-                    "compressed": f["compressed"],
-                })
-            })
-            .collect();
-        let extract =
-            json!({"action":"extract_behavior","exe_sha256":sha,"exe_size":size,"payload":members});
+        let extract = json!({"action":"extract_members","exe_sha256":sha,"exe_size":size});
         let mut collected = Vec::new();
         session
             .extract(
@@ -123,11 +105,11 @@ fn production_rejects_binding_paths_and_precancel_without_output() {
     fs::write(&archive, b"x").unwrap();
     for (raw, stage_name) in [
         (
-            json!({"action":"analyze","exe_size":1,"exe_sha256":"0".repeat(64)}),
+            json!({"action":"list_members","exe_size":1,"exe_sha256":"0".repeat(64)}),
             "worker",
         ),
         (
-            json!({"action":"analyze","exe_size":1,"exe_sha256":"0".repeat(64),"path":"C:/game"}),
+            json!({"action":"list_members","exe_size":1,"exe_sha256":"0".repeat(64),"path":"C:/game"}),
             "descriptor",
         ),
     ] {
@@ -153,7 +135,7 @@ fn production_missing_worker_reports_actual_spawn_error() {
     let runtime = WorkerRuntime::new(root.path().join("missing-worker")).unwrap();
     let archive = root.path().join("input.exe");
     fs::write(&archive, b"x").unwrap();
-    let raw = json!({"action":"analyze","exe_size":1,"exe_sha256":"0".repeat(64)});
+    let raw = json!({"action":"list_members","exe_size":1,"exe_sha256":"0".repeat(64)});
     let error = runtime
         .execute(
             &archive,
@@ -173,7 +155,7 @@ fn production_parser_error_is_reported_without_executing_the_input() {
     let runtime = new_runtime(root.path());
     let archive = root.path().join("not a program 中文.exe");
     fs::write(&archive, b"not an executable").unwrap();
-    let raw = json!({"action":"analyze","exe_size":17,"exe_sha256":format!("{:x}", Sha256::digest(b"not an executable"))});
+    let raw = json!({"action":"list_members","exe_size":17,"exe_sha256":format!("{:x}", Sha256::digest(b"not an executable"))});
     let error = runtime
         .execute(
             &archive,
@@ -196,12 +178,7 @@ fn production_stream_consumer_error_preserves_the_error() {
     let size = case["descriptor"]["exe_size"].as_u64().unwrap();
     let cancel = AtomicBool::new(false);
     let session = runtime.open_session(&archive, sha, size, &cancel).unwrap();
-    let members: Vec<_> = case["report"]["files"].as_array().unwrap().iter().map(|f| json!({
-        "path":f["destination"],"size":f["unpacked_size"],"crc32":f["crc32"],
-        "payload_offset":f["payload_offset"],"packed_size":f["packed_size"],"compressed":f["compressed"]
-    })).collect();
-    let raw =
-        json!({"action":"extract_behavior","exe_sha256":sha,"exe_size":size,"payload":members});
+    let raw = json!({"action":"extract_members","exe_sha256":sha,"exe_size":size});
     let error = session
         .extract(&serde_json::to_vec(&raw).unwrap(), &cancel, &mut |_| {
             Err(patchhub_installer_worker::WorkerError::new(

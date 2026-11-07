@@ -20,6 +20,7 @@ use std::{
 };
 use uuid::Uuid;
 
+#[cfg(test)]
 pub const MAX_PLAN_METADATA_BYTES: usize = crate::zip_metadata::MAX_METADATA_BYTES as usize;
 
 #[derive(
@@ -674,9 +675,6 @@ impl Store {
     fn save(&self, job: &mut Job) -> io::Result<()> {
         job.transaction.updated_at = now();
         let document = serde_json::to_string(job).map_err(|e| invalid(e.to_string()))?;
-        if document.len() > MAX_PLAN_METADATA_BYTES {
-            return Err(invalid("plan_metadata_limit"));
-        }
         sql(self.conn.execute_batch("SAVEPOINT save_job"))?;
         let result = (|| {
             sql(self.conn.execute("INSERT INTO jobs(id,document) VALUES(?1,?2) ON CONFLICT(id) DO UPDATE SET document=excluded.document", params![job.plan.plan_id, document]))?;
@@ -728,23 +726,15 @@ impl Store {
         // migration for read-only scans; their documents default to format 0.
         let query = if self.has_progress {
             "SELECT document,
-            CASE WHEN coalesce((SELECT sum(length(CAST(state AS BLOB))+32) FROM job_progress WHERE job_id=?1),0)<=?2
-            THEN (SELECT json_group_array(json_array(item,state)) FROM (SELECT item,state FROM job_progress WHERE job_id=?1 ORDER BY item)) ELSE NULL END,
+            (SELECT json_group_array(json_array(item,state)) FROM (SELECT item,state FROM job_progress WHERE job_id=?1 ORDER BY item)),
             (SELECT max(updated_at) FROM job_progress WHERE job_id=?1),
-            CASE WHEN coalesce((SELECT sum(length(CAST(path AS BLOB))+32) FROM job_directories WHERE job_id=?1),0)<=?2
-            THEN (SELECT json_group_array(json_array(item,path)) FROM (SELECT item,path FROM job_directories WHERE job_id=?1 ORDER BY item)) ELSE NULL END
-            FROM jobs WHERE id=?1 AND length(CAST(document AS BLOB))<=?2"
+            (SELECT json_group_array(json_array(item,path)) FROM (SELECT item,path FROM job_directories WHERE job_id=?1 ORDER BY item))
+            FROM jobs WHERE id=?1"
         } else {
-            "SELECT document,'[]',NULL,'[]' FROM jobs WHERE id=?1 AND length(CAST(document AS BLOB))<=?2"
+            "SELECT document,'[]',NULL,'[]' FROM jobs WHERE id=?1"
         };
-        let (document, progress, updated, directories): (
-            String,
-            Option<String>,
-            Option<i64>,
-            Option<String>,
-        ) = sql(self
-            .conn
-            .query_row(query, params![id, MAX_PLAN_METADATA_BYTES as i64], |row| {
+        let (document, progress, updated, directories): (String, String, Option<i64>, String) =
+            sql(self.conn.query_row(query, [id], |row| {
                 Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
             }))?;
         let mut job: Job =
@@ -753,7 +743,6 @@ impl Store {
             if !self.has_progress {
                 return Err(invalid("journal_progress_missing"));
             }
-            let progress = progress.ok_or_else(|| invalid("plan_metadata_limit"))?;
             let deltas: Vec<(usize, String)> =
                 serde_json::from_str(&progress).map_err(|_| invalid("journal_invalid"))?;
             for (index, state) in deltas {
@@ -761,7 +750,6 @@ impl Store {
                     .get_mut(index)
                     .ok_or_else(|| invalid("journal_invalid"))? = state;
             }
-            let directories = directories.ok_or_else(|| invalid("plan_metadata_limit"))?;
             let dirs: Vec<(usize, String)> = serde_json::from_str(&directories)
                 .map_err(|_| invalid("journal_invalid_directory"))?;
             for (index, path) in dirs {
@@ -904,8 +892,12 @@ fn validate_job(job: &Job, id: &str) -> io::Result<()> {
     }
     let mut names = HashSet::new();
     for change in &p.changes {
-        relative(&change.path)?;
-        if !names.insert(change.path.to_lowercase())
+        if job.transaction.direct {
+            crate::installer::zip_recipe::relative(&change.path)?;
+        } else {
+            relative(&change.path)?;
+        }
+        if (!job.transaction.direct && !names.insert(change.path.to_lowercase()))
             || change
                 .installed_sha256
                 .as_ref()
@@ -980,6 +972,7 @@ fn game_lock(install: &GameInstall) -> io::Result<File> {
     Ok(file)
 }
 
+#[cfg(test)]
 fn ensure_no_active(
     store: &Store,
     instance: &str,
@@ -1278,7 +1271,9 @@ pub(crate) fn prepare_for_request_at(
                 return Err(invalid("zip_duplicate_or_case_collision"));
             }
         }
-        if !crate::installer::zip_recipe::name_encoding_ok(member.name_raw(), member.name()) {
+        if zip::HasZipMetadata::get_metadata(&member).is_utf8
+            && std::str::from_utf8(member.name_raw()).is_err()
+        {
             return Err(invalid("zip_name_encoding"));
         }
         let mode = member.unix_mode().unwrap_or(0) & 0o170000;
@@ -1286,9 +1281,6 @@ pub(crate) fn prepare_for_request_at(
             || (!member.is_dir() && mode != 0 && mode != 0o100000)
         {
             return Err(invalid("zip_link_or_special_file"));
-        }
-        if let Some(extra) = member.extra_data() {
-            crate::installer::zip_recipe::extra_safe(extra)?;
         }
         total = total
             .checked_add(member.size())
@@ -2046,16 +2038,40 @@ pub(crate) struct DirectTarget {
     pub file: PathBuf,
 }
 
-/// Held while the worker streams members into the game directory.
+/// Holds the target lock and the in-memory result. History is auxiliary: an
+/// unavailable journal never prevents writing the selected directory.
 #[derive(Debug)]
 pub(crate) struct DirectPlan {
     pub plan_id: String,
     pub targets: Vec<DirectTarget>,
+    root: PathBuf,
+    job: Job,
     pub _lock: File,
 }
+impl DirectPlan {
+    pub(crate) fn warning(&mut self, warning: impl std::fmt::Display) {
+        let warning = warning.to_string();
+        match &mut self.job.transaction.error {
+            Some(existing) => {
+                existing.push_str("; ");
+                existing.push_str(&warning);
+            }
+            error @ None => *error = Some(warning),
+        }
+    }
+    fn save_history(&mut self) {
+        let result = (|| {
+            let store = Store::open_at(&self.root)?;
+            fs::create_dir_all(store.directory(&self.plan_id)?)?;
+            store.save(&mut self.job)
+        })();
+        if let Err(error) = result {
+            self.warning(format!("history_save_failed: {error}"));
+        }
+    }
+}
 
-/// Record a direct install before any game file is changed. No backup, staging
-/// image, archive reference or per-file override is created.
+/// Resolve relative paths without imposing case, Unicode or Steam-state gates.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn begin_direct_at(
     root: &Path,
@@ -2067,61 +2083,48 @@ pub(crate) fn begin_direct_at(
     files: &[(String, u64)],
     recipe_sha256: Option<&str>,
 ) -> io::Result<DirectPlan> {
-    let store = Store::open_at(root)?;
-    validate_install(install, &store.root)?;
-    ensure_no_active(
-        &store,
-        &install.instance_id,
-        None,
-        operation != InstallOperation::Install,
-    )?;
-    if files.is_empty() {
-        return Err(invalid("exe_manifest_invalid"));
+    if !install.install_path.is_absolute() || !install.install_path.is_dir() {
+        return Err(invalid("unsafe_game_root"));
     }
-    let mut changes = Vec::with_capacity(files.len());
+    safe_path(&install.install_path)?;
+    let state = std::path::absolute(root)?;
+    let game = fs::canonicalize(&install.install_path)?;
+    if game.starts_with(&state) || state.starts_with(&game) {
+        return Err(invalid("install_or_state_path_outside_boundary"));
+    }
+    let lock = game_lock(install)?;
+    if files.is_empty() {
+        return Err(invalid("empty_archive"));
+    }
+    let mut changes: Vec<PlannedChange> = Vec::new();
     let mut targets = Vec::with_capacity(files.len());
-    let mut seen = HashSet::new();
     let mut disk = 0u64;
     for (path, size) in files {
-        relative(path)?;
-        if !seen.insert(path.to_lowercase()) {
-            return Err(invalid("journal_invalid"));
-        }
-        let dest = target(&install.install_path, path)?;
-        let action = match fs::symlink_metadata(&dest) {
-            Ok(m) if m.is_file() && !linked(&m) => "replace",
-            Ok(_) => return Err(invalid("target_not_file")),
-            Err(e) if e.kind() == io::ErrorKind::NotFound => "add",
-            Err(e) => return Err(e),
-        };
+        crate::installer::zip_recipe::relative(path)?;
+        let dest = install.install_path.join(path);
+        safe_path(&dest)?;
         disk = disk
             .checked_add(*size)
             .ok_or_else(|| invalid("size_overflow"))?;
-        changes.push(PlannedChange {
+        let change = PlannedChange {
             path: path.clone(),
-            action: action.into(),
+            action: if dest.exists() { "replace" } else { "add" }.into(),
             original_sha256: None,
             installed_sha256: None,
             size: *size,
             source: None,
-        });
+        };
+        if let Some(previous) = changes.iter_mut().find(|c| c.path == *path) {
+            *previous = change;
+        } else {
+            changes.push(change);
+        }
         targets.push(DirectTarget {
             path: path.clone(),
             file: dest,
         });
     }
-    let lock = game_lock(install)?;
     let id = Uuid::new_v4().to_string();
-    let directory = store.directory(&id)?;
-    fs::create_dir(&directory)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&directory, fs::Permissions::from_mode(0o700))?;
-    }
-    if let Some(parent) = directory.parent() {
-        sync_dir(parent)?;
-    }
     let plan = InstallPlan {
         operation,
         recipe_sha256: recipe_sha256.map(str::to_owned),
@@ -2150,12 +2153,12 @@ pub(crate) fn begin_direct_at(
         error: None,
         created_at: now(),
         updated_at: now(),
-        has_replacements: plan.changes.iter().any(|change| change.action != "add"),
-        selection_id: selection_id.map(str::to_string),
-        content_id: content_id.map(str::to_string),
+        has_replacements: false,
+        selection_id: selection_id.map(str::to_owned),
+        content_id: content_id.map(str::to_owned),
         direct: true,
     };
-    let mut job = Job {
+    let job = Job {
         progress: vec!["pending".into(); plan.changes.len()],
         plan,
         transaction,
@@ -2165,89 +2168,98 @@ pub(crate) fn begin_direct_at(
         progress_format: 1,
         archive_source: None,
     };
-    store.save(&mut job)?;
-    Ok(DirectPlan {
+    let mut plan = DirectPlan {
         plan_id: id,
         targets,
+        root: root.to_path_buf(),
+        job,
         _lock: lock,
-    })
+    };
+    plan.save_history();
+    Ok(plan)
 }
 
-/// Persist the digests observed while streaming and commit atomically.
+/// Commit the actual stream result. Duplicate paths retain the last digest.
 pub(crate) fn commit_direct_at(
-    root: &Path,
-    plan_id: &str,
+    plan: &mut DirectPlan,
     installed: &[(String, String)],
 ) -> io::Result<Transaction> {
-    let store = Store::open_at(root)?;
-    let mut job = store.load(plan_id)?;
-    if job.transaction.state == "committed" {
-        return Ok(job.transaction);
+    // Use the target filesystem's resolved names for history only. On Windows,
+    // differently cased members can overwrite the same file; Linux may keep
+    // both. The receipt must describe the final write to each actual file.
+    let mut destinations = HashSet::new();
+    let mut final_paths = HashSet::new();
+    let mut warnings = Vec::new();
+    for (path, _) in installed.iter().rev() {
+        let destination = plan.job.plan.install.install_path.join(path);
+        match fs::canonicalize(&destination) {
+            Ok(destination) => {
+                if !destinations.insert(destination) {
+                    continue;
+                }
+            }
+            Err(error) => warnings.push(format!("history_target_lookup_failed: {path}: {error}")),
+        }
+        final_paths.insert(path.as_str());
     }
-    if job.transaction.state != "applying" {
-        return Err(invalid("plan_already_consumed"));
+    for warning in warnings {
+        plan.warning(warning);
     }
+    plan.job
+        .plan
+        .changes
+        .retain(|change| final_paths.contains(change.path.as_str()));
     let observed: std::collections::HashMap<&str, &str> = installed
         .iter()
-        .map(|(path, sha)| (path.as_str(), sha.as_str()))
+        .map(|(p, s)| (p.as_str(), s.as_str()))
         .collect();
-    if observed.len() != job.plan.changes.len() {
-        return Err(invalid("journal_invalid"));
-    }
-    for change in &mut job.plan.changes {
+    for change in &mut plan.job.plan.changes {
         let sha = observed
             .get(change.path.as_str())
-            .ok_or_else(|| invalid("journal_invalid"))?;
+            .ok_or_else(|| invalid("missing_member_digest"))?;
         if !valid_hash(sha) {
-            return Err(invalid("journal_invalid"));
+            return Err(invalid("invalid_member_digest"));
         }
-        change.installed_sha256 = Some((*sha).to_owned());
+        change.installed_sha256 = Some((*sha).into());
     }
-    job.progress = vec!["installed".into(); job.plan.changes.len()];
-    job.transaction.state = "committed".into();
-    job.transaction.error = None;
-    job.transaction.updated_at = now();
-    sql(store.conn.execute_batch("BEGIN IMMEDIATE"))?;
-    let outcome = (|| {
+    plan.job.progress = vec!["installed".into(); plan.job.plan.changes.len()];
+    plan.job.transaction.state = "committed".into();
+    plan.job.transaction.updated_at = now();
+    operation::committed();
+    plan.save_history();
+    // Superseding old history is descriptive and must not alter extraction.
+    let supersede = (|| {
+        let store = Store::open_at(&plan.root)?;
         for id in store.ids()? {
-            if id == job.plan.plan_id {
+            if id == plan.plan_id {
                 continue;
             }
             let mut previous = store.load(&id)?;
-            if previous.plan.instance_id == job.plan.instance_id
+            if previous.plan.instance_id == plan.job.plan.instance_id
                 && previous.transaction.state == "committed"
             {
                 previous.transaction.state = "superseded".into();
                 store.save(&mut previous)?;
             }
         }
-        store.save(&mut job)
+        Ok::<_, io::Error>(())
     })();
-    if let Err(error) = outcome {
-        let _ = store.conn.execute_batch("ROLLBACK");
-        return Err(error);
+    if let Err(error) = supersede {
+        plan.warning(format!("history_update_failed: {error}"));
     }
-    if let Err(error) = sql(store.conn.execute_batch("COMMIT")) {
-        let _ = store.conn.execute_batch("ROLLBACK");
-        return Err(error);
-    }
-    operation::committed();
-    Ok(job.transaction)
+    Ok(plan.job.transaction.clone())
 }
 
-/// Record an interrupted or failed direct install. Written game files stay as
-/// they are; there is no restore image and no recovery requirement.
-pub(crate) fn fail_direct_at(root: &Path, plan_id: &str, error: &str) -> io::Result<Transaction> {
-    let store = Store::open_at(root)?;
-    let mut job = store.load(plan_id)?;
-    if job.transaction.state == "committed" {
-        return Ok(job.transaction);
+pub(crate) fn fail_direct_at(plan: &mut DirectPlan, error: &str) -> io::Result<Transaction> {
+    plan.job.transaction.state = "failed".into();
+    let warnings = plan.job.transaction.error.take();
+    plan.job.transaction.error = Some(error.to_owned());
+    if let Some(warnings) = warnings {
+        plan.warning(warnings);
     }
-    job.transaction.state = "failed".into();
-    job.transaction.error = Some(error.to_owned());
-    job.transaction.updated_at = now();
-    store.save(&mut job)?;
-    Ok(job.transaction)
+    plan.job.transaction.updated_at = now();
+    plan.save_history();
+    Ok(plan.job.transaction.clone())
 }
 
 #[cfg(test)]
@@ -2516,24 +2528,30 @@ pub(crate) fn recover(state_dir: &Path) -> io::Result<Vec<Transaction>> {
 /// Legacy unit-test entry; production recovery requires host validation or one target plan.
 #[cfg(test)]
 pub(crate) fn recover_at(root: &Path) -> io::Result<Vec<Transaction>> {
-    recover_checked_at(root, |_| Ok(()))
+    recover_selected_at(root, |_| true, |_| Ok(()))
 }
 
 pub(crate) fn recover_checked_at(
     root: &Path,
     validate: impl Fn(&InstallPlan) -> io::Result<()>,
 ) -> io::Result<Vec<Transaction>> {
-    recover_selected_at(root, None, validate)
+    // Production extraction never owns legacy backups. Old records remain
+    // read-only even if saving newer direct history failed.
+    recover_selected_at(root, |transaction| transaction.direct, validate)
 }
 
 #[cfg(test)]
 pub(crate) fn recover_plan_at(root: &Path, plan_id: &str) -> io::Result<Vec<Transaction>> {
-    recover_selected_at(root, Some(plan_id), |_| Ok(()))
+    recover_selected_at(
+        root,
+        |transaction| transaction.plan_id == plan_id,
+        |_| Ok(()),
+    )
 }
 
 fn recover_selected_at(
     root: &Path,
-    plan_id: Option<&str>,
+    selected: impl Fn(&Transaction) -> bool,
     validate: impl Fn(&InstallPlan) -> io::Result<()>,
 ) -> io::Result<Vec<Transaction>> {
     let ids = match Store::open_ro(root) {
@@ -2549,10 +2567,10 @@ fn recover_selected_at(
     // A rejected host boundary must not partially recover earlier candidates.
     let mut candidates = Vec::new();
     for id in store.ids()? {
-        if plan_id.is_some_and(|selected| selected != id) {
+        let job = store.load(&id)?;
+        if !selected(&job.transaction) {
             continue;
         }
-        let job = store.load(&id)?;
         if [
             "planned",
             "rolled_back",
@@ -2707,8 +2725,10 @@ impl TransactionSnapshot {
                         transaction: Transaction,
                     }
                     let document: rusqlite::Result<String> = store.conn.query_row(
-                        "SELECT document FROM jobs WHERE id=?1 AND length(CAST(document AS BLOB))<=?2",
-                        params![id, MAX_PLAN_METADATA_BYTES as i64], |row| row.get(0));
+                        "SELECT document FROM jobs WHERE id=?1",
+                        [&id],
+                        |row| row.get(0),
+                    );
                     let mut recovered_identity = false;
                     if let Ok(document) = document {
                         if let Ok(mut receipt) = serde_json::from_str::<ReceiptOnly>(&document) {
