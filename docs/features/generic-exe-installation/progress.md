@@ -1,8 +1,8 @@
 # 通用 EXE 自动安装施工记录
 
-设计：[design.md](design.md)。当前修订计划：[单一纯解压流程](archive-extraction-plan.md)（2026-11-07，同日最终职责修订，待实现）。历史修订计划：[fix-plan.md](fix-plan.md)。调研：[research.md](research.md)。验收审计：[acceptance.md](acceptance.md)。
+设计：[design.md](design.md)。当前修订计划：[单一纯解压流程](archive-extraction-plan.md)（2026-11-07，同日最终职责修订，已实现）。历史修订计划：[fix-plan.md](fix-plan.md)。调研：[research.md](research.md)。验收审计：[acceptance.md](acceptance.md)。
 
-当前状态：**用户依据完整样本确认采用单一纯解压主流程；受控 Lua 与 fallback 分流方案已撤销。完整样本的独立静态提取已通过，生产实现、自动化、双平台回归与实机仍待执行。下列历史记录不代表新实现已完成。**
+当前状态：**单一纯解压已实现；不再执行/解释安装器 Lua，也不按行为报告、组件或游戏事实授权提取。Windows 定向自动化、双端定向检查，以及 Windows、WSL Linux 的六个现存样本（Celesphonia、SF9.5/9.6/9.7、夏日 DLC、ZIP）生产提取均已通过，逐成员大小/SHA-256 双平台一致；上述样本与定向检查均在最终代码（含生命周期只读修正）上复跑。VBF、夏日本体样本已被用户删除，本轮无法回归。未提交、合并、推送、部署或进行游戏内验收。下列旧阶段验收均不替代本轮验证。**
 
 历史阶段状态：**实施与验收完成。SF9.5–9.7 按安装器行为准入，无新增游戏白名单；四款本地实际安装、重装/失败恢复/存档保护及真实写入取消通过，用户确认四款生效。最终 Decky 部署/RPC/真实页面、合成任务 UI、设备只读 worker 和用户实体手柄验收完成；证据边界见验收审计。**
 
@@ -402,7 +402,9 @@
 | 修订文档格式、链接、互相矛盾要求及改动范围 | 已通过 | 修订计划与新增 Markdown 行的 44 处本地链接均存在，行尾空白及 git diff --check 通过；已核对选中/独立解包、首次写入前降级及 worker 权限边界。源码/依赖无改动，原 README 与自定义源指南内容哈希保持不变；本结果不代表运行时或功能测试通过 |
 
 
-## 2026-11-07：完整样本证据修正与单一纯解压（当前方案，待实现）
+## 2026-11-07：完整样本证据修正与单一纯解压（方案阶段；实施与验证见同日下节）
+
+> 本节是方案定稿时的状态记录。同日下节已完成实现、双端定向验证与样本回归，下表所列“待实现/待执行”不再代表当前状态。
 
 - 独立会话 `01a1b506-1a9e-7060-82a0-f34308256508` 同步完整静态提取结果。用户据此明确：原纯解压 fallback 已满足需求，不需要 Lua 执行环节。本轮据此重写当前计划，保留同日历史讨论事实，撤销“真实 Lua + fallback”实施要求；不修改生产代码。
 - 本会话读取完整输出的 preflight、verification-summary、file-table、payload-verification、metadata-graph、extraction-errors 及两份图库首页，复核 4,038 条成员与校验记录、1,527,850,011 字节、CRC 一致、目标路径无重复。没有重跑完整字节校验或游戏安装；逐成员大小/压缩流/落盘 SHA-256 通过来自独立提取会话报告，边界已标明。
@@ -419,3 +421,105 @@
 | 定向自动化、双平台回归与双端适配 | 待执行 | 不以独立解压结果代替生产实现验证 |
 | 实机部署及游戏内生效 | 待执行 | 本轮不操作设备；提取与生效分开记录 |
 | 文档链接、格式及改动范围 | 已通过 | 本次新增 Markdown 的 41 处本地链接存在，行尾空白及 `git diff --check` 通过；源码/测试/依赖/生成物无修改，原 README 与自定义源指南内容哈希保持不变。不代表功能测试通过 |
+
+
+## 2026-11-07：单一纯解压实施与定向验证
+
+基线：`fix/archive-extraction-flow` / `f8eb9239314b93b613f89619112e3d7638b5758f`，开始时工作区干净；此前独立自定义订阅源指南提交未改动。本轮实现未提交、合并或推送。当前依据为[单一纯解压计划](archive-extraction-plan.md)和[设计顶部决策](design.md)，历史 Lua/组件选择/fallback 讨论保留为历史。
+
+### 实际修改
+
+| 阶段 | 已实施内容 |
+| --- | --- |
+| P0 | service/resolve/exe_resolve/projection 与 CLI 投影移除 stale、变体、缺少 build、StateFlags、旧收据/恢复状态等对有效目标的新提取/重装阻断；来源说明仍展示。来源启用、订阅、URL 下载边界及实际目标路径定位保留。当前入口使用选定的 Steam 扫描实例，未新增独立手动目录/注册表定位入口。 |
+| P1 | `installer-format::archive` 只读成员路径/大小/CRC，偏移/压缩区间留在读取器；按真实 framing 跳过源路径、文案、条件和组件字段。worker 同包协议直接替换为 `list_members` / `extract_members`，host 不发送载荷选择或审核报告。显式 UTF-16、有效 UTF-8、严格 CP936 文件名不使用 replacement/ignore。 |
+| P2 | EXE/ZIP 只有直接流式提取链；删除行为、游戏事实、组件和空间预估许可。普通文件按包顺序覆盖，无备份/回滚。ZIP 保持包内目录结构，移除 XP3/YPF 猜测及额外文件拒绝。 |
+| P3 | 删除 Rust `audit/graph/lua/behavior`、core `exe_report`、TaskControl durable revocation、条件快照/事实准入模型及专属依赖/测试；无消费者 facts 只留下输入 SHA-256/大小，删除已无消费者的游戏事实 CRC 计算；成员实际 CRC 继续由读取器/worker 校验。旧记录模型仅保留只读展示，生产恢复入口只整理 direct 中断记录，不再对旧备份做恢复/删除；历史恢复算法仅由旧单元测试入口使用，不为新提取制造备份。来源适配器 Lua 保留。旧 Python 行为工具明确隔离为开发研究，发行和正常安装不调用；golden 生成器只生成最小静态成员和载荷摘要，删除旧 EXE→ZIP 边界 fixture 生成器。 |
+| P4 | CLI/worker/RPC 与共享生成物、客户端使用指南同步；进度改为 `reading_archive`，两端直接提取完成文案只承诺“文件已解压到目标目录”。取消单列，部分覆盖明确说明不自动恢复；completed 的辅助警告可见。历史/日志/缓存旁车/发布/清理异常附提示，完整输入不因旧缓存损坏或旁车失败被阻断。 |
+
+真实路径边界保留 `..`/绝对路径/链接逃逸防护、Windows ADS 拒绝、实际文件类型/权限/空间/CRC/压缩流错误。目录内实际并发写入继续由 OS 文件锁串行；缓存锁协调真实输入与缓存删除，不是审核或租约。没有新增包大小、数量、报告长度或正常运行时长上限。
+
+### 有证据的库行为与修正
+
+- zip 6 的 `SharedBuilder` 以文件名建 IndexMap，会静默丢失较早同名中央目录成员。新读取器按 EOCD/ZIP64 读取完整原始中央目录顺序，每成员提供仅含必要元数据的内存视图，继续复用库的解码和 CRC；不生成中间 ZIP、不复制载荷。回归覆盖 `a,b,a`、早期损坏成员不能被较晚同名项掩盖、ZIP64/扩展数据及 SFX 前缀。
+- zip 6 会校验未消费的 Unicode comment，且非 ASCII CP437 注释的 CRC 计算错误。提取视图移除不消费的 comment/timestamp/未知 extra，保留 ZIP64、Unicode 路径和必要解码字段；合法 Unicode comment 及无消费者 extra 回归通过。
+- Windows `A.txt`/`a.txt` 可以是同一实际文件。提取不按统一小写规则拒绝，历史按本机 canonical 目标归并为最后写入摘要并同步 progress；Linux 不合并两个不同文件。
+- 独立审查发现取消主因被辅助 warning 遮蔽、EXE 将实际 safety I/O 误报为取消、GUI 部分覆盖取消误报“安全取消”，均已修正并回归。取消主因位于 error 首段，辅助 warning 后附，completed 保持 completed。
+- 删除旧 64 MiB 历史读写门槛；记录失败不改变已完成提取，也不阻断剩余成员。
+- 最后专项复核确认同 request ID 崩溃重试仍被旧 applying 阻断，已修正：OS 请求锁仍拒绝活动重复调用；已完成记录仍重放；已取得所有权后的旧非终态直接重新解压，不需先恢复。内容摘要只更新实际输入历史，不作请求准入。新增回归构造 applying/旧内容摘要、释放锁、同 ID 重试以及无网络完成重放。此最后增量单独重跑 Windows `cargo test --locked --offline -p patchhub-core --lib installer::`：115 passed、0 failed、2 ignored，及 core Clippy；Linux 对应安装器定向测试 120 passed、0 failed、2 ignored，core Clippy 同样通过。独立 reviewer 专项核对通过。
+
+- 生命周期最终复核发现 P1：旧 legacy applying/needs_recovery 在新提取同内容成功后，原恢复仍会把旧 backup 恢复回去或删除旧 add 文件。现已让生产恢复按 transaction.direct 筛选，旧事务全部只读；不依赖“新提交已保存”或 best-effort supersede。回归覆盖真实旧 backup/新增文件、两种中断状态、删除新辅助记录后再恢复，确认最新文件和旧备份都保持不变。Decky 启动取消旧自动恢复调用，不让日志成为启动前置；两端仅向 direct 中断记录提供“整理中断记录”，不再承诺恢复游戏文件。
+
+### 验证记录（普通开发定向验证，未运行发布 job matrix）
+
+| 平台/范围 | 实际命令/结果 | 日志或证据 |
+| --- | --- | --- |
+| Windows Rust | `cargo test --locked --offline -p patchhub-core -p patchhub-cli -p patchhub-protocol -p patchhub-installer-format -p patchhub-installer-worker`：594 passed、0 failed、8 ignored；旧变体/审核/空间预估断言按新职责删除或改写 | `.artifacts/archive-extraction-windows-rust-tests.log` |
+| Windows Rust lint | `cargo fmt --all -- --check`；`cargo clippy -p patchhub-core -p patchhub-cli -p patchhub-protocol -p patchhub-contract-gen -p patchhub-installer-format -p patchhub-installer-worker --all-targets --locked --offline -- -D warnings`：通过 | `.artifacts/archive-extraction-final-clippy.log` |
+| Linux Rust | WSL Ubuntu、uid 1000、原生 1.94.0，`CARGO_TARGET_DIR=target/linux`；`cargo test --locked --offline -p patchhub-core -p patchhub-cli -p patchhub-installer-format -p patchhub-installer-worker -p patchhub-protocol`：603 passed、0 failed、8 ignored；同包 Clippy `--all-targets --locked --offline -- -D warnings` 通过 | `.artifacts/archive-extraction-linux-rust-tests.log`、`archive-extraction-linux-clippy.log` |
+| 共享契约 | `cargo run --locked --offline -p patchhub-contract-gen -- check`、`npm run test:contracts`：通过；Flutter schema 与共享 schema 同步；Cargo.lock 只同步 format 专属依赖删除/encoding_rs 复用 | `.artifacts/archive-extraction-contract-check.log`、`archive-extraction-final-contract-ui.log`；两份 schema 逐字节一致，功能索引/当前计划 180 条相对链接均存在，`git diff --check` 通过 |
+| Python 参考/golden | `python scripts/freeze_sf_rust_fixtures.py`：9 静态 fixture；`python -m unittest discover -s scripts -p test_sf95_audit.py -v`：18 passed；`test_sf95_worker.py`：5 passed；Rust 与 worker fixture 通过 | `.artifacts/archive-extraction-python-audit.log`、`archive-extraction-python-worker.log` |
+| Decky UI | 最终使用 Node 22.23.4（初轮宿主为 24，已按 CI 工具版本重跑）；`npm run typecheck`、`npm run test -w apps/decky`：113 passed；`npm run build:decky`：通过 | `.artifacts/archive-extraction-decky-typecheck.log`、`archive-extraction-decky-test.log`、`archive-extraction-decky-build.log` |
+| Decky RPC/backend | WSL 原生 Python 执行 `PYTHONPATH=apps/decky/backend python -m unittest test_v5_bridge test_tasks test_install_pipeline test_exe_rpc -v`：30 passed | `.artifacts/archive-extraction-decky-backend-linux.log` |
+| Flutter | 仓库 SDK 3.47.7；`flutter analyze --no-pub`：无问题；`flutter test --no-pub test/installation_flow_test.dart test/library_presentation_test.dart test/patch_management_flow_test.dart test/patch_selection_test.dart`：22 passed。沙箱测试器因本机 WebSocket 被阻止失败，正常用户环境重跑通过；未构建 Windows 发行包 | `.artifacts/archive-extraction-flutter-analyze.log`、`archive-extraction-flutter-targeted.log` |
+| 独立实现/过度设计复核 | 按 `overengineering-review` 沿完整入口、解析、写入、结果和取消链检查；上述具体问题修正后最终未发现新的可操作问题。审查为静态结论，不替代实机 | 本聊天只读 reviewer 记录 |
+
+最后同 request ID 修正的日志：`.artifacts/archive-extraction-final-request-tests.log`、`archive-extraction-final-request-clippy.log`、`archive-extraction-linux-request-tests.log`、`archive-extraction-linux-request-clippy.log`；输入摘要移除无消费者 CRC 后再次定向验证的日志为 `archive-extraction-final-installer-tests.log`、`archive-extraction-final-core-clippy.log`、`archive-extraction-linux-installer-tests.log`、`archive-extraction-linux-core-clippy.log`。完整包测试记录为前一稳定基线，最后只按受影响共享安装器范围重跑，不无条件重跑无关双端构建。
+
+### 最终生命周期修正后的双端复验
+
+生产代码最后一次修改是生命周期只读修正（恢复只按 `transaction.direct` 整理，旧事务及其备份保持只读；Decky 启动不再调用旧自动恢复），其后一次修改只位于 `#[cfg(test)]` 的 `install_tests.rs`。以下复跑均包含该生产修改，日志都在忽略目录 `.artifacts/`：
+
+| 平台/范围 | 结果 | 日志 |
+| --- | --- | --- |
+| Windows Rust | `cargo test --locked --offline -p patchhub-core`（`main`/`lib` 及全部集成 target）：570 passed、0 failed、8 ignored；core/CLI/protocol Clippy `--all-targets --locked --offline -- -D warnings` 通过 | `archive-extraction-final-lifecycle-rust.log`、`archive-extraction-final-lifecycle-clippy.log` |
+| Linux Rust | `installer::` 定向 121 passed、0 failed、2 ignored；旧事务只读 2 项单独复跑通过；core Clippy 通过 | `archive-extraction-linux-lifecycle-tests.log`、`archive-extraction-linux-legacy-readonly-tests.log`、`archive-extraction-linux-lifecycle-clippy.log` |
+| Decky UI | `npm run test -w apps/decky` 113 passed；`npm run typecheck`、`npm run build:decky` 通过 | `archive-extraction-final-lifecycle-decky.log`、`archive-extraction-final-lifecycle-typecheck.log`、`archive-extraction-decky-build.log` |
+| Decky backend | `test_v5_bridge test_tasks test_install_pipeline test_exe_rpc`：44 passed | `archive-extraction-final-lifecycle-backend.log` |
+| Flutter | `flutter analyze --no-pub` 无问题；定向测试 23 passed | `archive-extraction-final-lifecycle-flutter-analyze.log`、`archive-extraction-final-lifecycle-flutter.log` |
+| 共享契约 | `cargo run -p patchhub-contract-gen -- check`、`npm run test:contracts` 通过 | `archive-extraction-final-contract-ui.log` |
+
+上表是最终代码的复跑结果，前文 594/603 等记录是前一稳定基线，不能替代本段。
+
+### 完整 Celesphonia 样本：新生产链证据
+
+输入 `C:\Users\wqj78\Downloads\Magical Girl Celesphonia CN Patch v1.05.2.exe` 原文件及独立参考目录保持原样；不执行安装器或 Lua、不写真实游戏目录。
+
+- Windows release worker 与独立参考逐成员路径/大小/CRC32/SHA-256/原始字节比对，4,038 个全部通过，另 9 synthetic 通过：`.artifacts/p2/windows-1794043185670221900-summary.json`。
+- Linux 原生 release worker 同样通过完整比对：`.artifacts/p2/linux-1794050976290695013-summary.json`，使用独立 `target/linux/release/patchhub-worker`。
+- `installer::service::manual_download_tests::local_archive_through_production_service` 用 FileTransport、未提供 build/游戏 CRC/DLC、Unknown 变体和不匹配语言，真实调用 production service → acquisition → worker → direct writer。两平台独立合成 Steam 根目录输出均为 **4,038 个载荷、1,527,850,011 字节**；`www` 3,978、第一图库 25、第二图库 35，所有载荷大小/SHA-256 与参考完全一致，`www/img/pictures/内容.txt` 正确。
+- 首轮验收夹具多计工具自身 `.patchhub.lock`，输出统计为 4,039 而数量断言失败；生产 outcome 实际为 completed。已修正夹具排除工具锁，并独立复核全部 4,038 个真实载荷；保留原始日志与派生核验，不将该夹具断言失败冒称测试绿灯。
+- Windows 真实遇到缓存 hard-link 发布权限失败，仍从已校验 `.partial` 完成提取，outcome 为 completed 并附 `cache_publication_failed`；Linux completed 无警告。这直接验证辅助缓存异常不能改判提取成功。
+- 修复夹具前的 Windows 证据：`.artifacts/archive-extraction-service/windows-1794051350118255100/celesphonia/{production-verification.json,payload-verification-checked.json}`；最终代码复跑见下节。
+- 修复夹具前的 Linux 证据：`.artifacts/archive-extraction-service/linux-1794051395216510168/celesphonia/{production-verification.json,payload-verification-checked.json}`；最终代码补跑见下节。
+
+### 双端最终代码回归
+
+六个现存样本在 Windows 与 WSL Linux 上分别通过真实 production service → worker → direct writer 提取，全部 `committed`：
+
+| 样本 | 双平台文件数 / 字节 | 结果 |
+| --- | --- | --- |
+| Celesphonia | 4,038 / 1,527,850,011 | 双平台逐成员路径/大小/SHA-256 相同，且与独立静态提取参考逐成员一致 |
+| SF9.5 / 2303800 | 1 / 1,373,855,065 | 双平台逐文件 SHA-256 相同 |
+| SF9.6 / 3606360 | 1 / 1,296,894,503 | 双平台逐文件 SHA-256 相同 |
+| SF9.7 / 3721970 | 1 / 914,931,059 | 双平台逐文件 SHA-256 相同 |
+| 夏日 DLC / 1390150 | 5,874 / 277,366,632 | 双平台逐文件 SHA-256 相同 |
+| ZIP / 2743810 | 2 / 840,230,374，外层 `Kudos_Kuppa_patch/` 保留 | 双平台逐文件 SHA-256 相同 |
+
+- Windows 在最终代码上重跑全部六项：`.artifacts/archive-extraction-service/windows-1794056137123953200/summary.json`，Celesphonia 510 秒。此前 `windows-1794051350118255100` 的夹具把 `.patchhub.lock` 计入总数，数量断言失败；修复后的夹具本次直接通过，不再只依赖派生核验。
+- Linux 在最终代码上重跑五项：`.artifacts/archive-extraction-service/linux-1794052667701391674/summary.json`；Celesphonia 用最终测试二进制补跑（852 秒）：`.artifacts/archive-extraction-service/linux-1794057754047685553/`。`linux-1794051395216510168` 是修复夹具前的旧运行，保留为历史。
+- 其余样本通过真实 service 的已缓存输入分支验证（本地副本重新校验 SHA-256 后响应 304），不重复网络下载；提取仍是相同生产链。
+- 逐成员比较与清单摘要：`.artifacts/archive-extraction-final-code-summary.json`；六项 `platform_payloads_equal` 均为 true，Celesphonia 的 `reference_size_sha256_equal` 为 true。
+- 大载荷/原脚本/实际文件列表均留在忽略的 `.artifacts`，不纳入 Git。
+
+### 复核覆盖和当前实现边界
+
+本次使用 3 个子 Agent：成员/worker specialist、核心提取 specialist、独立只读 reviewer，均按本机 multi-agent 技能路由为 `gpt-6.1-sol / high`，仅传递任务所需上下文。最后一次 reviewer 结论无待修改项，未将其当作测试或实机结果。
+
+### 边界和待验收
+
+- 用户本轮确认 VBF 与夏日本体样本已经删除；历史路径 `.artifacts/exe-patch-research/` 不存在，WSL 未找到副本。没有重新下载或以旧历史验收替代，本轮这两项仍待样本恢复后回归。
+- SF ANSI CString 本身只区分 ANSI/UTF-16，未发现可代表成员名的可靠代码页标志；完整样本的 PE 资源声明 1252，但成员名实际为 GBK，因此不能直接套用 PE codepage。当前严格 UTF-8/CP936/UTF-16 支持不等于可消歧全部 CP1252/CP932 等无标记 ANSI；未引入多代码页猜测链。
+- 当前支持已扫描并选定的 Steam 目标，不声称新增独立手动目录/注册表入口或支持任意 EXE、密码/分卷/未实现压缩格式；实际无法读取成员时如实失败。
+- 没有执行原生 EXE、安装器 Lua、真实游戏目录写入、游戏内验证、设备部署、线上 CI 或版本发布。自动化与隔离目录成功不代表原安装器完全等价或游戏内已生效。
+- 本轮代码与文档施工可视为完成：实现、双端定向自动化及六个现存样本的双平台真实提取均已验证。未提交 Git、未合并、未部署，也未写真实游戏或做游戏内验收；设备部署、实际游戏安装与后续发布需另行授权。

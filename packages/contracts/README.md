@@ -48,7 +48,7 @@
 
 四类事件均为平铺 JSONL 任务通道事件，`(request_id, sequence)` 用于去重，`sequence` 从 0 起严格递增、每任务独立；宿主只发 payload，由 `serve-task` 外层注入 `protocol_version`/`request_id`/`sequence`。
 
-- `install_progress`：`instance_id`、`selection_id?`、`stage`、`substage?`、`bytes_done`、`total_bytes?`、`files_done`、`total_files?`、`current_file?`、`archive_bytes?`。`stage`（9）：`connecting`、`downloading`、`validating`、`analyzing_installer`、`extracting`、`planning`、`applying`、`rolling_back`、`cleanup`。内部子状态 `backing_up`/`writing`/`committing` 折叠为 `applying`，仅以 `substage` 诊断；`bytes_done` 随阶段可重置为 0，未知总量为 `null`。
+- `install_progress`：`instance_id`、`selection_id?`、`stage`、`substage?`、`bytes_done`、`total_bytes?`、`files_done`、`total_files?`、`current_file?`、`archive_bytes?`。`stage`（9）：`connecting`、`downloading`、`validating`、`reading_archive`、`extracting`、`planning`、`applying`、`rolling_back`、`cleanup`。内部子状态 `backing_up`/`writing`/`committing` 折叠为 `applying`，仅以 `substage` 诊断；`bytes_done` 随阶段可重置为 0，未知总量为 `null`。
 - `source_progress`：`source_id`、`phase:"index"|"details"|"matched"`、`completed`、`total`、`running`、`settings_revision`。索引更新与详情/匹配阶段明确区分，界面不得把整条任务宣称为纯离线。
 - `source_update`：`source_id`、`status: SourceStatus`、`settings_revision`；`update_source` 终态回显。
 - `match_progress`：`phase:"inventory"|"index"|"details"|"fallback"`、`completed`、`total`、`running`、`settings_revision`。
@@ -56,7 +56,7 @@
 
 ## 终态：`InstallerOutcome`
 
-新安装终态保留原事务字段，并包含 `disposition`（completed/cancelled/failed）、`cause`、`recovery` 和 `cleanup`。`state` 为 committed/rolled_back/needs_recovery/failed；直接 EXE 提取未完成时会返回 failed，已写入文件不自动恢复，必须保留 direct、disposition、cause 和 error 的实际语义。宿主用 disposition 决定提示，取消只在回滚完成且无恢复需求时成立。历史 Transaction 保留原 error 字符串，不反向推导新终态；同一外层 request_id 的重试返回稳定结果。
+新安装终态保留原事务字段，并包含 `disposition`（completed/cancelled/failed）、`cause`、`recovery` 和 `cleanup`。EXE/ZIP 均为 direct 纯提取；未完成可返回 state=failed，已写入文件不自动恢复。用户取消以 disposition=cancelled 单列，部分写入时 cause.code=cancelled_incomplete；宿主不能把它显示为“安全取消”。completed 的辅助 warning 保留在 error 中，不能改判提取结果。历史 Transaction 保留原 error 字符串。活动同 request_id 由 OS 锁拒绝，完成记录重放；释放所有权后的旧非终态可用同 ID 重新提取，不需先恢复旧状态。
 
 计划建立前失败返回 `ok:false + error{code,detail?}`。DomainError 代码为开放字符串，宿主保留未知合法代码，不能把 detail 或历史错误文本解释成权限。
 
@@ -70,4 +70,4 @@
 
 客户端只内置来源规则和解析脚本。HostInputs 不接受 catalog、signed_catalog、trust_keys；scan 不再返回 catalog_revision/catalog_trust/catalog_error。预览与安装使用 selection_id，既有 manual_download 用于来源候选的显式下载直链；release_id/archive 不再是公开请求字段。未知旧字段明确拒绝，不设双读或空目录兜底。
 
-历史事务及本地 InstallPlan 的 release_id、catalog_revision 等已存储字段保留原序列化契约，卸载/恢复从本地 journal、plan、收据和备份读取，不依赖公开目录。下载哈希、ZIP 路径约束、来源重新准入、游戏事实、request ledger 及既有计划授权边界仍由核心负责。详见 [设计](../../docs/features/remove-static-catalog/design.md)。
+历史事务及本地 InstallPlan 的 release_id、catalog_revision 等已存储字段保留原序列化契约并只读展示。生产 recover 仅将已中断的 direct 记录标为未完成；不恢复或删除 legacy 文件/备份，也不改写其历史状态。新安装只校验实际输入、目标目录与文件写入，不依赖游戏事实、行为报告或旧计划授权。详见[单一纯解压设计](../../docs/features/generic-exe-installation/design.md)；[静态目录退役设计](../../docs/features/remove-static-catalog/design.md)保留原阶段范围。

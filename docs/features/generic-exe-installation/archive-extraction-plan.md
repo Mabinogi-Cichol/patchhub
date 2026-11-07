@@ -1,6 +1,6 @@
 # EXE / ZIP 安装精简：单一纯解压流程
 
-日期：2026-11-07（Asia/Shanghai，同日最终职责修订）。状态：**方案已修订，待实现；本轮只改文档，未改代码、构建或部署。**
+日期：2026-11-07（Asia/Shanghai，同日最终职责修订）。状态：**单一纯解压代码已实现；Windows 定向验证、双端定向检查及 Windows、WSL Linux 六个现存样本（Celesphonia、SF9.5/9.6/9.7、夏日 DLC、ZIP）生产提取已通过，逐成员 SHA-256 双平台一致；VBF 与夏日本体样本已被用户删除，未部署。其余验证及缺口以施工记录为准。**
 
 关联：[功能设计](design.md) · [施工记录](progress.md) · [一站式安装](../simplified-install-flow/design.md)。
 
@@ -79,9 +79,9 @@ Windows / Decky 都走共享 Rust 主链；移除分析安装器、审核、游�
 | 阶段 | 范围与完成条件 |
 | --- | --- |
 | P0：固定成员与结果契约 | 沿 [service.rs](../../../crates/core/src/installer/service.rs)、[resolve.rs](../../../crates/core/src/installer/resolve.rs)、[exe_resolve.rs](../../../crates/core/src/installer/exe_resolve.rs)、[projection.rs](../../../crates/core/src/projection.rs) 核对全部入口和重装；已选地址与目标有效，不因 stale、变体、审核或 manifest/DLC 状态禁用动作 |
-| P1：独立读取与路径编码 | 从 [audit.rs](../../../crates/installer-format/src/audit.rs) 提取最小成员读取；[sf.rs](../../../crates/installer-worker/src/sf.rs) 仅列成员/提取。修复真实文件名编码，不为无用字段加多编码兜底 |
+| P1：独立读取与路径编码 | 从旧 `audit.rs` 提取独立 [archive.rs](../../../crates/installer-format/src/archive.rs) 最小成员读取；[sf.rs](../../../crates/installer-worker/src/sf.rs) 仅列成员/提取。修复真实文件名编码，不为无用字段加多编码兜底 |
 | P2：统一直接提取 | [exe_orchestrator.rs](../../../crates/core/src/installer/exe_orchestrator.rs)、[orchestrator.rs](../../../crates/core/src/installer/orchestrator.rs)、[zip_recipe.rs](../../../crates/core/src/installer/zip_recipe.rs) 删除行为/游戏事实准入与布局拒绝；保留目录定位和显式映射；[direct.rs](../../../crates/core/src/installer/direct.rs)、[install.rs](../../../crates/core/src/install.rs) 解耦实际写入与辅助日志，不只删除顶层 if |
-| P3：删除旧模型与新方案残项 | 移除无消费者的 [graph.rs](../../../crates/installer-format/src/graph.rs)、[lua.rs](../../../crates/installer-format/src/lua.rs)、[behavior.rs](../../../crates/installer-format/src/behavior.rs)、[exe_report.rs](../../../crates/core/src/installer/exe_report.rs) 授权内容、IR、条件快照/摘要、专属依赖和拒绝测试；不新增安装器 Lua 运行时、宿主 API、事件驱动或 fallback 分类。来源适配器已有 Lua 与本任务无关，保留其独立功能 |
+| P3：删除旧模型与新方案残项 | 移除无消费者的 `graph.rs`（已删除）、`lua.rs`（已删除）、`behavior.rs`（已删除）、`exe_report.rs`（已删除） 授权内容、IR、条件快照/摘要、专属依赖和拒绝测试；不新增安装器 Lua 运行时、宿主 API、事件驱动或 fallback 分类。来源适配器已有 Lua 与本任务无关，保留其独立功能 |
 | P4：双端与验证 | 同步 CLI/RPC/worker、进度及文案；按第 5 节验证；[acquire.rs](../../../crates/core/src/installer/acquire.rs)、[space.rs](../../../crates/core/src/installer/space.rs) 清理无必要预估及旁车依赖。更新施工记录后再考虑合并；提交、发布、设备部署需后续明确授权 |
 
 通过实际调用者确定共享代码能否删除，不因关键词存在整模块误删。移除生产与发行依赖的无用审计链；如研究工具仍有独立用途，明确隔离为开发工具，不能成为正常安装前置。
@@ -104,7 +104,7 @@ Windows / Decky 都走共享 Rust 主链；移除分析安装器、审核、游�
 
 实施后定向执行受影响 Rust 包（installer-format、installer-worker、core、cli）测试、`cargo fmt --all -- --check`、受影响包 Clippy `--all-targets --locked -- -D warnings`；契约/锁/生成物、Python 参考与 golden、Flutter/Decky 按实际改动同步验证。独立参考以静态全提取清单为准，旧符号选择结果不再作为预期；删除仅验证旧任意拒绝门槛的测试。
 
-Windows 与 WSL Linux 分别验证样本提取与目录写入，产物分离；VBF、夏日本体/DLC 和 ZIP 样本回归实际文件提取，不要求模拟向导。日常不跑完整发布 matrix。独立解压会话通过不代表新生产实现已通过；部署和游戏内生效分别记录，当前仍待执行。
+Windows 与 WSL Linux 分别验证样本提取与目录写入，产物分离；VBF、夏日本体/DLC 和 ZIP 样本回归实际文件提取，不要求模拟向导。日常不跑完整发布 matrix。独立解压会话通过不代表新生产实现已通过；2026-11-07 已用现有六个样本在双端完成生产提取验证（逐成员一致），VBF 与夏日本体因本机样本已被删除未回归；部署和游戏内生效分别记录，尚未执行。
 
 ## 6. 过度设计自审
 
@@ -114,4 +114,4 @@ Windows 与 WSL Linux 分别验证样本提取与目录写入，产物分离；V
 
 保留实际格式解析、正确路径、输入数据校验、目录写入和取消所需处理，删除超出此职责的限制。复用既有 worker 与解压器；当前 worker 为普通子进程，不能冒称已有 OS 沙箱，本方案也不以引入脚本执行为由扩张权限框架。
 
-本节是方案自审，不代表独立审查、实现测试或游戏内验收。本次只改文档，待实现。
+本节是方案自审，不代表独立审查、实现测试或游戏内验收。方案审阅为历史记录；2026-11-07 已实施，独立实现审阅与实际验证结果见施工记录。
