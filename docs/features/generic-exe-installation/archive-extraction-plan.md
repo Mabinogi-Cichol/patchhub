@@ -1,6 +1,6 @@
 # EXE / ZIP 安装精简：单一纯解压流程
 
-日期：2026-11-07（Asia/Shanghai，同日最终职责修订）。状态：**单一纯解压代码已实现；Windows 定向验证、双端定向检查及 Windows、WSL Linux 六个现存样本（Celesphonia、SF9.5/9.6/9.7、夏日 DLC、ZIP）生产提取已通过，逐成员 SHA-256 双平台一致；VBF 与夏日本体样本已被用户删除，未部署。其余验证及缺口以施工记录为准。**
+日期：2026-11-07（Asia/Shanghai，同日最终职责修订）。状态：**单一纯解压代码已实现；Windows 定向验证、双端定向检查及 Windows、WSL Linux 六个现存样本（Celesphonia、SF9.5/9.6/9.7、夏日 DLC、ZIP）生产提取已通过，逐成员 SHA-256 双平台一致；VBF 与夏日本体样本此前被删除，已重新下载同版本官方包完成 Windows 解压回归；未部署。其余验证及缺口以施工记录为准。**
 
 关联：[功能设计](design.md) · [施工记录](progress.md) · [一站式安装](../simplified-install-flow/design.md)。
 
@@ -104,7 +104,7 @@ Windows / Decky 都走共享 Rust 主链；移除分析安装器、审核、游�
 
 实施后定向执行受影响 Rust 包（installer-format、installer-worker、core、cli）测试、`cargo fmt --all -- --check`、受影响包 Clippy `--all-targets --locked -- -D warnings`；契约/锁/生成物、Python 参考与 golden、Flutter/Decky 按实际改动同步验证。独立参考以静态全提取清单为准，旧符号选择结果不再作为预期；删除仅验证旧任意拒绝门槛的测试。
 
-Windows 与 WSL Linux 分别验证样本提取与目录写入，产物分离；VBF、夏日本体/DLC 和 ZIP 样本回归实际文件提取，不要求模拟向导。日常不跑完整发布 matrix。独立解压会话通过不代表新生产实现已通过；2026-11-07 已用现有六个样本在双端完成生产提取验证（逐成员一致），VBF 与夏日本体因本机样本已被删除未回归；部署和游戏内生效分别记录，尚未执行。
+Windows 与 WSL Linux 分别验证样本提取与目录写入，产物分离；VBF、夏日本体/DLC 和 ZIP 样本回归实际文件提取，不要求模拟向导。日常不跑完整发布 matrix。独立解压会话通过不代表新生产实现已通过；2026-11-07 已用现有六个样本在双端完成生产提取验证（逐成员一致），VBF 与夏日本体已重新下载同版本官方包完成 Windows 解压回归；部署和游戏内生效分别记录，尚未执行。
 
 ## 6. 过度设计自审
 

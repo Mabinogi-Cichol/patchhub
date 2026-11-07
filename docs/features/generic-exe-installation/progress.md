@@ -2,7 +2,7 @@
 
 设计：[design.md](design.md)。当前修订计划：[单一纯解压流程](archive-extraction-plan.md)（2026-11-07，同日最终职责修订，已实现）。历史修订计划：[fix-plan.md](fix-plan.md)。调研：[research.md](research.md)。验收审计：[acceptance.md](acceptance.md)。
 
-当前状态：**单一纯解压已实现；不再执行/解释安装器 Lua，也不按行为报告、组件或游戏事实授权提取。Windows 定向自动化、双端定向检查，以及 Windows、WSL Linux 的六个现存样本（Celesphonia、SF9.5/9.6/9.7、夏日 DLC、ZIP）生产提取均已通过，逐成员大小/SHA-256 双平台一致；上述样本与定向检查均在最终代码（含生命周期只读修正）上复跑。VBF、夏日本体样本已被用户删除，本轮无法回归。未提交、合并、推送、部署或进行游戏内验收。下列旧阶段验收均不替代本轮验证。**
+当前状态：**单一纯解压已实现；不再执行/解释安装器 Lua，也不按行为报告、组件或游戏事实授权提取。Windows 定向自动化、双端定向检查，以及 Windows、WSL Linux 的六个现存样本（Celesphonia、SF9.5/9.6/9.7、夏日 DLC、ZIP）生产提取均已通过，逐成员大小/SHA-256 双平台一致；上述样本与定向检查均在最终代码（含生命周期只读修正）上复跑。VBF、夏日本体样本此前被删除，已从 Kagura 官方镜像重新下载同版本包完成 Windows 解压回归。实现与施工记录已本地提交（`8c7afd0`、`934f261`），未合并、推送、部署或进行游戏内验收。下列旧阶段验收均不替代本轮验证。**
 
 历史阶段状态：**实施与验收完成。SF9.5–9.7 按安装器行为准入，无新增游戏白名单；四款本地实际安装、重装/失败恢复/存档保护及真实写入取消通过，用户确认四款生效。最终 Decky 部署/RPC/真实页面、合成任务 UI、设备只读 worker 和用户实体手柄验收完成；证据边界见验收审计。**
 
@@ -512,13 +512,31 @@
 - 逐成员比较与清单摘要：`.artifacts/archive-extraction-final-code-summary.json`；六项 `platform_payloads_equal` 均为 true，Celesphonia 的 `reference_size_sha256_equal` 为 true。
 - 大载荷/原脚本/实际文件列表均留在忽略的 `.artifacts`，不纳入 Git。
 
+### Kagura 官方包重新下载与真实安装目录回归（2026-11-07）
+
+用户要求从 Kagura 官方页面重新下载补丁并验证解压，同时以本机已安装游戏复核。本轮从 `kaguraserver.com` 官方镜像下载，未复用旧本地样本；下载 SHA-256 与历史记录一致。
+
+| 包 | 下载大小 | EXE SHA-256 | 来源 |
+| --- | --- | --- | --- |
+| 魔法少女天穹法妮雅（Celesphonia）CN Patch v1.05.2 | 1,448,004,752 | `5a044ef71ee00195e3768cfca4352fdacffd71bc0ae148345bcb3534b646cc11` | kagurafan 分类页 |
+| VenusBlood FRONTIER v5（1189440） | 1,126,694,464 | `502063d21d2e741533e7479955b6bbdc68dd36d55ad3cd01e86fa509d9056410` | Kagura 游戏页 |
+| 夏日狂想曲 v1.03（1227890） | 126,137,104 | `21400ce2540b91a75cc56c3f90bc2f3f276b9ae3bd1e3fbb522675b0c6332130` | Kagura 游戏页 |
+
+- 用当前代码（生产 service → worker → direct writer）在 Windows 解压到独立合成 Steam 目录，全部 `committed`：
+  - Celesphonia：4,038 文件 / 1,527,850,011 字节；与独立静态提取参考逐成员大小/SHA-256 完全一致。这正是自带安装器脚本、触发本次职责重定的包，纯解压无需执行脚本即可完整还原。
+  - VBF：3 文件 / 1,233,220,433 字节（`extra.xp3` 584,428,965、`extra2.xp3` 648,789,888、说明 txt 1,580）；`extra.xp3`、`extra2.xp3` 的 SHA-256 与 `F:\SteamLibrary\steamapps\common\VenusBlood FRONTIER` 中已安装文件完全一致。
+  - 夏日本体：2,502 文件 / 152,368,950 字节，目录 `www/`。与 `F:\SteamLibrary\steamapps\common\Summer Memories` 比对：2,247 个 SHA-256 相同、247 个不同、8 个不存在。不同的 247 项中，87 项与已测试的夏日 DLC v2.02.1 解压结果完全一致（DLC 覆盖）；其余 160 项在本机安装目录是 4,244/4,658 字节的小文件（集中在 `www/audio/me`），而补丁内容为数百 KB 级音频，属已安装目录自身状态，不据此改判解压失败。
+- 当前 CLI 真实扫描 `F:\SteamLibrary` 识别 1189440 `VenusBlood FRONTIER International`（build 5430305）与 1227890 `Summer Memories`（build 6270017），安装路径分别为 `F:\SteamLibrary\steamapps\common\VenusBlood FRONTIER` 与 `...\Summer Memories`。
+- 本轮只解压到隔离输出，未写入真实游戏目录。证据：`.artifacts/archive-extraction-service/windows-1794059270498611400`（Celesphonia、夏日）、`windows-1794059935330656100`（VBF）；下载包在 `.artifacts/downloads/`。均为忽略目录，不纳入 Git。
+- 本轮开工前已把单一纯解压实现与施工记录分别提交为 `8c7afd0`、`934f261`（本地提交，未推送）。
+
 ### 复核覆盖和当前实现边界
 
 本次使用 3 个子 Agent：成员/worker specialist、核心提取 specialist、独立只读 reviewer，均按本机 multi-agent 技能路由为 `gpt-6.1-sol / high`，仅传递任务所需上下文。最后一次 reviewer 结论无待修改项，未将其当作测试或实机结果。
 
 ### 边界和待验收
 
-- 用户本轮确认 VBF 与夏日本体样本已经删除；历史路径 `.artifacts/exe-patch-research/` 不存在，WSL 未找到副本。没有重新下载或以旧历史验收替代，本轮这两项仍待样本恢复后回归。
+- 用户此前确认 VBF 与夏日本体样本已删除；2026-11-07 已从 Kagura 官方镜像重新下载同版本包（SHA-256 与历史一致）完成 Windows 真实解压回归，见上节；Linux 侧这两项未重跑。
 - SF ANSI CString 本身只区分 ANSI/UTF-16，未发现可代表成员名的可靠代码页标志；完整样本的 PE 资源声明 1252，但成员名实际为 GBK，因此不能直接套用 PE codepage。当前严格 UTF-8/CP936/UTF-16 支持不等于可消歧全部 CP1252/CP932 等无标记 ANSI；未引入多代码页猜测链。
 - 当前支持已扫描并选定的 Steam 目标，不声称新增独立手动目录/注册表入口或支持任意 EXE、密码/分卷/未实现压缩格式；实际无法读取成员时如实失败。
 - 没有执行原生 EXE、安装器 Lua、真实游戏目录写入、游戏内验证、设备部署、线上 CI 或版本发布。自动化与隔离目录成功不代表原安装器完全等价或游戏内已生效。
