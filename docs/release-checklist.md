@@ -2,6 +2,24 @@
 
 本清单区分已构建产物与已验收发行版。当前版本仍为开发 Alpha，完整开发计划的样本数量及双端 UI 门槛尚未达到。
 
+## v0.6.0 发布记录（2026-11-07）
+
+- 用户授权合并并发布；功能提交 `8c7afd0`（EXE/ZIP 安装切换为单一纯解压）、文档 `934f261`、`1155cbc`、版本同步 `72fbca0`、发行说明 `2bb9c65`，合并提交 `2138e78`。`main` 与注解 Tag v0.6.0（Tag 对象 `2db6712`）原子推送，均指向 `2138e78`。
+- 发布前完成[本地 CI 完整对齐](local-ci-validation.md)：changes 的版本检查、版本单测与 CI 选择器单测通过，按实际变更路径选出 core / windows / decky 三个 job；Windows core（protocol、fmt、clippy、core/cli 测试与 build、sf95 audit 18 项与 worker 5 项）通过；WSL Ubuntu 的 Linux core（含 contract-gen check）通过；windows job 的六组 Python 单测、npm ci、契约、release core/worker、Flutter 构建、metadata+SBOM 与便携包通过；decky job 的四组 Python 单测、npm ci、契约、typecheck、Decky 前端测试、bridge、Linux release core/worker、44 项后端测试、plugin 打包、SBOM 与发行 ZIP 通过。本机缺 NSIS `makensis`，安装包步骤由线上 CI 完成并核验。工具版本：Windows Rust 1.94.0、Node 22.23.4、Flutter 3.47.7、Python 3.12.10；WSL 使用 ext4 工作副本（HEAD `2138e78`）与仓库自带 Node 22.23.4、Python 3.12.16、Rust 1.94.0。
+- [标签 CI 42381804320](https://github.com/Mabinogi-Cichol/patchhub/actions/runs/42381804320) 全部任务成功；同提交的 main 推送运行 42381804346 同样成功。三个安装包均来自本次 Tag 的新构建。
+- [正式 Release v0.6.0](https://github.com/Mabinogi-Cichol/patchhub/releases/tag/v0.6.0) 于北京时间 2026-11-07 22:41:16 发布，标题与 Tag 均为 v0.6.0，非草稿、非预发行。正文按「新增与优化 / 问题修复」中文格式替换了工作流自动生成的变更日志，与[发行说明](releases/v0.6.0.md)逐字符一致；公开附件严格为三个安装包及 SHA256SUMS.txt。
+- 已下载全部四个附件：大小、GitHub digest、清单中的文件名与 SHA-256 全部一致。ZIP CRC 与内容白名单通过（Windows 43 文件、Decky 27 文件），Decky 条目全部位于 `patchhub/` 下，`package.json` 与两端 SBOM 应用版本均为 0.6.0，Core/worker 为 ELF64 x86-64 PIE 且 0755，`runtime.json` 摘要与二进制一致，SBOM 的 Cargo/npm/Dart 锁摘要与 Tag 内容一致（Windows 按实际 CRLF 检出规则）。
+- 资源核对：两端包内 `protocol-v5.schema.json`、`shiravune-browser.js` 与 Tag 内源文件逐字节一致；Windows 包内 `app-version.json` 为 0.6.0，`update-manifest.json` 的 43 个文件均存在；PE 架构为应用/核心 x64、NSIS 安装器 x86 引导桩。
+- 未执行：NSIS 安装、Decky 正式包部署到 Steam Deck、真实发行商下载与游戏安装、游戏内效果及实体手柄验收；不将源码阶段记录作为本次安装包的实机证明。
+- 证据保存在忽略目录 `.artifacts/release-v0.6.0/`（release.json、tag-run.json、tag-jobs.json、tag-ci-logs.zip、downloads/、body.md）与 `.artifacts/ci-local-060/`（本地步骤日志、Linux 副本日志与验证脚本）。
+
+| 附件 | 字节 | SHA-256 |
+| --- | --- | --- |
+| patchhub-decky.zip | 7620244 | `7b0f935cf4b83101b1b2fff26214eddf62df8a3339c5b550d0daa61facc96927` |
+| patchhub-windows-portable.zip | 19555466 | `9f7ed5ede957129b91f85fed8348fd079917fe6e4d6710c1b37751204027a4b9` |
+| patchhub-windows-x64-setup.exe | 14715336 | `2e069a7782791953413f189f9cfe0f456e4a3621b47bf78552cfb97e239cea04` |
+| SHA256SUMS.txt | 278 | `86f03d94dde1fa97eebfc73fda21573ba71311b9f007ea5738ce0c0f260a8bbc` |
+
 ## v0.5.5 发布记录（2026-11-04）
 
 - 用户授权合并并发布；功能提交 `d1321fb`（更新完成改为重载 Steam 界面）、`69917a5`（更新入口重载文案与按钮布局）、文档 `82725c1`、版本同步 `9107fd1`，合并提交 `cdc6d38`。`main` 推送至 `cdc6d38`，注解 Tag v0.5.5（Tag 对象 `70f9d5b2507567b92ba467594de2c0b9febce9f1`）指向该提交。
