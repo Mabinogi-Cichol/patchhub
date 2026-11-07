@@ -1,5 +1,7 @@
 # 补丁一站式安装与流程精简
 
+2026-11-07 当前设计修订（已实现）：EXE/ZIP 统一采用纯解压主流程，保留目标目录定位与路径映射，下载后提取全部文件载荷，不执行安装器 Lua、不做组件选择、不再设 fallback 分流。完整样本新证据与用户当前决策取代同日“受控 Lua + fallback”方案。详见[最新修复计划](../generic-exe-installation/archive-extraction-plan.md)及其[施工记录](../generic-exe-installation/progress.md)。下文为历史设计，冲突部分以新计划为准；代码已切换为该流程，实施与双端样本验证结果见其施工记录。
+
 2026-10-07 补充：[通用 EXE 自动安装](../generic-exe-installation/design.md) 沿用本流程，点击后自动完成完整行为/条件检查和安装，不复现安装器向导，不展示条款或增加确认步骤；新内容按支持行为准入。最新验证范围见其[施工记录](../generic-exe-installation/progress.md)。
 
 状态：**后端、Decky 与 Windows 客户端均已迁移到协议 v2；后端/Decky 已部署，自动化、VBF 重装与下载取消、真实界面验证通过；Windows 客户端一站式适配已实施（自动化验证见施工记录）。完整实机矩阵与 Windows 实机回归待验收。** 日期：2026-10-06（Asia/Shanghai），详细范围以施工记录为准。

@@ -318,7 +318,7 @@ function GameManager({ item, seg, panel }: { item: Install; seg: string; panel?:
   const patch = selected?.kind === "installable" ? selected.choices.find(p => (p.selection_id ?? p.release_id) === selectedDownload) ?? selected.patch : undefined;
   const candidate = selected?.kind === "discovery" ? selected.candidate : undefined;
   const identity = patch?.selection_id ?? patch?.release_id ?? "";
-  // The core's dynamic EXE preview route only returns exe_check_required.
+  // EXE members become available after download; no pre-download file preview.
   const previewAvailable = !!patch && !patch.selection_id?.startsWith("exe-selection-");
   useEffect(() => { setPreview(null); setManualUrl(""); setManualLinkExpanded(false); }, [item.game.instance_id, selectedKey, identity]);
   const primaryAction = primaryInstallAction(patch);
@@ -385,7 +385,7 @@ function GameManager({ item, seg, panel }: { item: Install; seg: string; panel?:
       const tx = task.result;
       if (tx?.transaction_id) record(tx);
       const cleanup = task.result?.cleanup;
-      const message = [tx ? installationResult(tx) : "安装完成，正在核对文件状态。",
+      const message = [tx ? installationResult(tx) : "文件已解压到目标目录，正在刷新状态。",
         cleanup ? cacheClearNote(cleanup) : ""].filter(Boolean).join(" ");
       refreshAfterMutation(message, undefined, instance);
     } else if (task.state === "failed") {
@@ -517,13 +517,13 @@ function GameManager({ item, seg, panel }: { item: Install; seg: string; panel?:
   </div>;
   const records = <div className="patch-page" ref={activePanel === "records" ? contentRef : undefined} onScroll={e => panelScroll.current.records = e.currentTarget.scrollTop}>
     {common}
-    {unfinished.length > 0 && <PanelSection title="未完成的操作"><Row><Status warning>以下操作需要恢复；请关闭相关游戏并暂停更新。</Status></Row>
+    {unfinished.length > 0 && <PanelSection title="未完成的操作"><Row><Status warning>以下解压记录已中断；整理记录不会恢复或删除游戏文件，历史记录保持只读。</Status></Row>
       {unfinished.map(tx => <Row key={tx.transaction_id}><Status>{transactionGameName(report?.installs ?? [], tx.instance_id)} · {workflowState(tx.state)}</Status></Row>)}
-      <Row><Action disabled={!!busy} onClick={() => void session.work("正在恢复…", recover, values => {
-        values.forEach(record); refreshAfterMutation("恢复已执行，请检查各项操作结果。", undefined, item.game.instance_id);
-      }, item.game.instance_id)}>修复未完成的操作</Action></Row>
+      <Row><Action disabled={!!busy} onClick={() => void session.work("正在整理中断记录…", recover, values => {
+        values.forEach(record); refreshAfterMutation("中断记录已整理，请检查结果；已写入文件保持原样。", undefined, item.game.instance_id);
+      }, item.game.instance_id)}>整理中断记录</Action></Row>
     </PanelSection>}
-    <PanelSection title="当前游戏记录">{owned.length ? owned.map(tx => <Row key={tx.transaction_id}><Status>{tx.selection_id ?? tx.release_id ?? tx.content_id ?? tx.transaction_id} · {workflowState(tx.state)}{tx.error ? ` · ${reason(tx.error)}` : ""}</Status>
+    <PanelSection title="当前游戏记录">{owned.length ? owned.map(tx => <Row key={tx.transaction_id}><Status>{tx.selection_id ?? tx.release_id ?? tx.content_id ?? tx.transaction_id} · {workflowState(tx.state)}{tx.direct ? "" : " · 历史记录（只读）"}{tx.error ? ` · ${reason(tx.error)}` : ""}</Status>
       </Row>)
       : <Row><Status>没有本工具的操作记录。</Status></Row>}</PanelSection>
   </div>;

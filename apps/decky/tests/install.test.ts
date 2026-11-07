@@ -79,7 +79,7 @@ test("installation RPC result consumes core disposition and recovery", () => {
   assert.match(installationResult(outcome("completed")), /安装完成/);
   assert.match(installationResult(outcome("cancelled")), /安全取消/);
   assert.match(installationResult(outcome("failed")), /安装未完成.*游戏文件已变化/);
-  assert.match(installationResult(outcome("failed", true)), /需要修复/);
+  assert.match(installationResult(outcome("failed", true)), /历史安装未完成/);
   assert.match(
     installationResult({ disposition: "failed", cause: { code: "install_incomplete" } } as InstallerOutcome),
     /安装未完成，已写入的文件未恢复/,
@@ -88,4 +88,17 @@ test("installation RPC result consumes core disposition and recovery", () => {
     installationResult({ disposition: "failed", cause: { code: "cancelled_incomplete" } } as InstallerOutcome),
     /安装已取消，但已写入的文件未恢复/,
   );
+});
+
+
+test("completed direct extraction preserves auxiliary warnings", () => {
+  const result = installationResult({ disposition: "completed", direct: true, error: "history_save_failed: read-only" } as InstallerOutcome);
+  assert.match(result, /文件已解压到目标目录/);
+  assert.match(result, /提示.*history_save_failed/);
+});
+
+test("direct cancellation reports partial writes even with auxiliary warnings", () => {
+  const result = installationResult({ disposition: "cancelled", direct: true, cause: { code: "cancelled_incomplete" }, error: "cancelled_incomplete; history_save_failed" } as InstallerOutcome);
+  assert.match(result, /已写入的文件未恢复/);
+  assert.doesNotMatch(result, /安全取消/);
 });

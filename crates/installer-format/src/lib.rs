@@ -1,8 +1,5 @@
-//! Bounded static Setup Factory parsing. No scripts or installer code are executed.
-pub mod audit;
-pub mod behavior;
-pub mod graph;
-pub mod lua;
+//! Static Setup Factory member parsing. No scripts or installer code are executed.
+pub mod archive;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Error(pub String);

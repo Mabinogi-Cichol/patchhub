@@ -1,8 +1,7 @@
-"""Fixed-path sandbox worker. Converts only byte/metadata/payload-locked inputs.
+"""Development-only historical behavior/conversion oracle.
 
-Backend supplies a reviewed descriptor on stdin; neither package paths nor a
-frontend URL/path/recipe are executable instructions. Run under exe_worker.py.
-This developer entry point does not grant a production profile approval.
+Production installation uses the Rust static member reader. This research tool
+is neither packaged nor invoked by the normal install or reinstall chain.
 """
 import hashlib
 import json

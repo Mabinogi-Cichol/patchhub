@@ -77,7 +77,7 @@ test("unavailable artwork leaves progress and cancellation readable without an i
 });
 
 test("every terminal result contains result and native close hint without progress or action buttons", () => {
-  for (const [state, message] of [["completed", "安装已完成"], ["cancelled", "已安全取消"], ["failed", "安装失败"]] as const) {
+  for (const [state, message] of [["completed", "文件已解压到目标目录"], ["cancelled", "已安全取消"], ["failed", "安装失败"]] as const) {
     const html = renderToStaticMarkup(React.createElement(exports.TaskResultView, { task: task(state), onClose() {} }));
     assert.match(html, new RegExp(message));
     assert.match(html, /data-close-hint="关闭"/);
@@ -89,18 +89,18 @@ test("recovery failure and interrupted work never claim safe cancellation", () =
   const value = task("failed");
   value.result = { transaction_id: "tx", instance_id: "game", release_id: "patch", state: "needs_recovery", disposition: "failed", recovery: {required: true, code: "recovery_conflict"}, error: "recovery_conflict" };
   const html = renderToStaticMarkup(React.createElement(exports.TaskResultView, { task: value, onClose() {} }));
-  assert.match(html, /需要.*(恢复|修复)|仍需检查并恢复原文件/);
+  assert.match(html, /历史安装未完成|解压已中断/);
   assert.match(html, /recovery_conflict/);
   assert.doesNotMatch(html, /已安全取消/);
   value.result = null; value.error = "task_interrupted";
-  assert.match(renderToStaticMarkup(React.createElement(exports.TaskResultView, { task: value, onClose() {} })), /仍需检查并恢复原文件/);
+  assert.match(renderToStaticMarkup(React.createElement(exports.TaskResultView, { task: value, onClose() {} })), /解压已中断/);
 });
 
 
 test("all nine installer stages and applying substages render native progress", () => {
   const stages = {
     connecting: "正在连接", downloading: "下载补丁", validating: "检查已下载补丁",
-    analyzing_installer: "分析安装包", extracting: "提取文件", planning: "检查安装条件",
+    reading_archive: "读取归档目录", extracting: "提取文件", planning: "准备",
     applying: "写入文件", rolling_back: "恢复原文件", cleanup: "清理临时文件",
   };
   for (const [stage, label] of Object.entries(stages)) {
@@ -122,7 +122,7 @@ test("recovery metadata overrides a cancelled-looking host state", () => {
   value.result = { transaction_id: "tx", instance_id: "game", release_id: "patch", state: "needs_recovery", disposition: "failed",
     recovery: { required: true, code: "recovery_conflict", detail: "game file changed" } };
   const html = renderToStaticMarkup(React.createElement(exports.TaskResultView, { task: value, onClose() {} }));
-  assert.match(html, /需要.*(恢复|修复)|仍需检查并恢复原文件/);
+  assert.match(html, /历史安装未完成|解压已中断/);
   assert.match(html, /game file changed/);
   assert.doesNotMatch(html, /已安全取消/);
 });

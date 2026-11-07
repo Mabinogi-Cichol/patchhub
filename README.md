@@ -4,7 +4,7 @@
 
 为 Steam 游戏查找、下载并安装成人内容补丁，支持 **Windows** 和 **Steam Deck**。自动扫描本机游戏库，汇总白舟、神乐等补丁来源；支持的补丁可直接安装，其余可打开来源网页手动处理。
 
-[安装](#安装) · [客户端截图](#客户端截图) · [本地构建](#本地构建)
+[安装](#安装) · [客户端截图](#客户端截图) · [自定义订阅源](#自定义订阅源) · [本地构建](#本地构建)
 
 ## 安装
 
@@ -59,6 +59,10 @@ curl -fsSL https://raw.githubusercontent.com/Mabinogi-Cichol/patchhub/main/insta
 | 安装确认 | 下载进度 |
 | --- | --- |
 | ![安装确认](docs/images/decky/03-install-confirmation.png) | ![下载进度](docs/images/decky/04-download-progress.png) |
+
+## 自定义订阅源
+
+PatchHub 支持在 Windows 和 Steam Deck 上导入 Lua 来源。[自定义订阅源使用指南](docs/custom-subscription-sources.md)介绍如何导入、验证和维护来源，并附有可复制的规则与脚本示例。
 
 ## 本地构建
 

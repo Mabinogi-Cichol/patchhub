@@ -1391,8 +1391,7 @@ fn failed_commit_compaction_preserves_old_receipt_and_rollback_evidence() {
 }
 
 #[test]
-fn recovery_validates_entire_actual_write_set_under_journal_lock_before_restore() {
-    use fs2::FileExt;
+fn production_recovery_keeps_legacy_uninstall_intent_read_only() {
     use std::cell::Cell;
     let first = Fixture::new();
     let mut second = Fixture::new();
@@ -1408,22 +1407,15 @@ fn recovery_validates_entire_actual_write_set_under_journal_lock_before_restore(
         });
     }
     let visited = Cell::new(0);
-    let error = recover_checked_at(&first.state, |_| {
-        let lock = File::open(first.state.join("journal.lock"))?;
-        assert!(
-            lock.try_lock_exclusive().is_err(),
-            "validation must hold the writer lock"
-        );
+    let result = recover_checked_at(&first.state, |_| {
         visited.set(visited.get() + 1);
-        if visited.get() == 2 {
-            Err(std::io::Error::other("recovery_instance_not_found"))
-        } else {
-            Ok(())
-        }
+        Err(std::io::Error::other(
+            "legacy records must not enter a game write boundary",
+        ))
     })
-    .unwrap_err();
-    assert_eq!(error.to_string(), "recovery_instance_not_found");
-    assert_eq!(visited.get(), 2);
+    .unwrap();
+    assert!(result.is_empty());
+    assert_eq!(visited.get(), 0);
     for fixture in [&first, &second] {
         assert_eq!(
             fs::read(fixture.game.join("original.dat")).unwrap(),
@@ -1793,7 +1785,7 @@ fn direct_install_records_no_backup_and_commits_observed_digests() {
         ("original.dat".to_string(), 7u64),
         ("added/new.dat".to_string(), 3),
     ];
-    let plan = crate::install::begin_direct_at(
+    let mut plan = crate::install::begin_direct_at(
         &f.state,
         &game,
         "exe-content-test",
@@ -1821,7 +1813,7 @@ fn direct_install_records_no_backup_and_commits_observed_digests() {
         ("original.dat".to_string(), hash(b"patched")),
         ("added/new.dat".to_string(), hash(b"new")),
     ];
-    let tx = crate::install::commit_direct_at(&f.state, &plan.plan_id, &installed).unwrap();
+    let tx = crate::install::commit_direct_at(&mut plan, &installed).unwrap();
     assert_eq!(tx.state, "committed");
     assert_eq!(fs::read(f.game.join("original.dat")).unwrap(), b"patched");
     assert_eq!(fs::read(f.game.join("added/new.dat")).unwrap(), b"new");
@@ -1856,7 +1848,7 @@ fn interrupted_direct_install_is_marked_failed_and_does_not_block_a_retry() {
     assert_eq!(recovered[0].error.as_deref(), Some("install_incomplete"));
     assert_eq!(fs::read(f.game.join("original.dat")).unwrap(), b"partial");
     // The failed direct run is terminal for the gate: a fresh install can start.
-    let retry = crate::install::begin_direct_at(
+    let mut retry = crate::install::begin_direct_at(
         &f.state,
         &game,
         "exe-content-retry",
@@ -1869,7 +1861,7 @@ fn interrupted_direct_install_is_marked_failed_and_does_not_block_a_retry() {
     .unwrap();
     assert_eq!(list_transactions(&f.state).unwrap().len(), 2);
     assert_eq!(
-        crate::install::fail_direct_at(&f.state, &retry.plan_id, "install_incomplete")
+        crate::install::fail_direct_at(&mut retry, "install_incomplete")
             .unwrap()
             .state,
         "failed"
@@ -1883,7 +1875,7 @@ fn direct_targets_reject_non_file_targets_and_preserve_existing_permissions() {
         .installs
         .remove(0);
     fs::create_dir(f.game.join("occupied")).unwrap();
-    let error = crate::install::begin_direct_at(
+    let plan = crate::install::begin_direct_at(
         &f.state,
         &game,
         "exe-content-test",
@@ -1893,7 +1885,8 @@ fn direct_targets_reject_non_file_targets_and_preserve_existing_permissions() {
         &[("occupied".to_string(), 1)],
         None,
     )
-    .unwrap_err();
+    .unwrap();
+    let error = crate::install::open_direct_target(&plan.targets[0].file).unwrap_err();
     assert_eq!(error.to_string(), "target_not_file");
 }
 

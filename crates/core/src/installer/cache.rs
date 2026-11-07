@@ -222,60 +222,6 @@ impl<'a> CacheService<'a> {
         }
     }
 }
-/// A task's own terminal teardown uses the directory captured before work starts.
-/// This private path never authorizes stale-task reclamation or caller paths.
-pub(crate) struct OwnedTaskDirectory {
-    parent: Node,
-    task: Node,
-    name: std::ffi::OsString,
-}
-impl OwnedTaskDirectory {
-    pub(crate) fn capture(path: &Path) -> io::Result<Self> {
-        let name = path.file_name().ok_or_else(unknown)?.to_os_string();
-        let parent = Node::absolute(path.parent().ok_or_else(unknown)?)?;
-        let task = parent.child(&name, false)?;
-        if !task.file.metadata()?.is_dir() {
-            return Err(unknown());
-        }
-        Ok(Self { parent, task, name })
-    }
-    pub(crate) fn cleanup(self) {
-        // During work Windows needs only a read-only pin. DELETE access on the
-        // directory would conflict with atomic lease publication. At teardown,
-        // release that pin, reopen under the still-pinned parent and verify the
-        // saved volume/file identity before any deletion; the new handle pins it.
-        #[cfg(windows)]
-        let task = {
-            let Ok(expected) = self.task.identity() else {
-                return;
-            };
-            drop(self.task);
-            let Ok(task) = self.parent.child(&self.name, true) else {
-                return;
-            };
-            if task.identity().ok() != Some(expected) {
-                return;
-            }
-            task
-        };
-        #[cfg(not(windows))]
-        let task = self.task;
-        let mut state = Walk::default();
-        let Ok(names) = task.names() else { return };
-        if names
-            .iter()
-            .any(|name| !matches!(name.to_str(), Some("task.json" | "owner.lock" | "revoked")))
-        {
-            return;
-        }
-        for name in names {
-            remove_entry(&task, &name, 1, true, &mut state);
-        }
-        if state.failure_count == 0 {
-            finish_open_entry(task, &self.parent, &self.name, 0, true, &mut state);
-        }
-    }
-}
 fn code(code: CleanupErrorCode) -> &'static str {
     match code {
         CleanupErrorCode::CleanupFailed => "cleanup_failed",
@@ -1017,16 +963,6 @@ mod native {
         Ok(())
     }
     impl Node {
-        pub(crate) fn identity(&self) -> io::Result<(u64, u64)> {
-            let mut info: Information = unsafe { std::mem::zeroed() };
-            if unsafe { GetFileInformationByHandle(self.file.as_raw_handle(), &mut info) } == 0 {
-                return Err(io::Error::last_os_error());
-            }
-            Ok((
-                u64::from(info.volume),
-                (u64::from(info.index_high) << 32) | u64::from(info.index_low),
-            ))
-        }
         pub(crate) fn absolute(path: &Path) -> io::Result<Self> {
             let path = std::path::absolute(path)?;
             let mut current = PathBuf::new();
@@ -1151,37 +1087,6 @@ mod tests {
             remove_children(&root, false, &mut state);
         }
         state
-    }
-    #[test]
-    fn owned_terminal_teardown_cannot_follow_replaced_task_ancestor() {
-        let dir = tempfile::tempdir().unwrap();
-        let tasks = dir.path().join("tasks");
-        let task = tasks.join("owned");
-        fs::create_dir_all(&task).unwrap();
-        fs::write(task.join("task.json"), b"own").unwrap();
-        let owned = OwnedTaskDirectory::capture(&task).unwrap();
-        let outside = dir.path().join("outside");
-        fs::create_dir_all(outside.join("owned")).unwrap();
-        fs::write(outside.join("owned/original.backup"), b"external").unwrap();
-        #[cfg(unix)]
-        {
-            fs::rename(&tasks, dir.path().join("old-tasks")).unwrap();
-            std::os::unix::fs::symlink(&outside, &tasks).unwrap();
-        }
-        #[cfg(windows)]
-        assert!(fs::rename(&tasks, dir.path().join("old-tasks")).is_err());
-        owned.cleanup();
-        assert_eq!(
-            fs::read(outside.join("owned/original.backup")).unwrap(),
-            b"external"
-        );
-        #[cfg(unix)]
-        {
-            assert!(!dir.path().join("old-tasks/owned").exists());
-            fs::remove_file(&tasks).unwrap();
-        }
-        #[cfg(windows)]
-        assert!(!task.exists());
     }
     #[test]
     fn inspect_missing_state_creates_nothing() {

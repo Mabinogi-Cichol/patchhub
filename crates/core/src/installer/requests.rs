@@ -1,8 +1,8 @@
 //! Request-idempotency ledger `installer/rust-v1/requests.sqlite`
 //! (p0-contracts §3.1, p1-host-contract §5.1).
 //!
-//! Frozen binding tuple: `(instance_id, selection_id|release_id, operation,
-//! resolved content_id)`. This is a persistence skeleton only; the protocol
+//! Request binding: `(instance_id, selection_id|release_id, operation)`.
+//! Content identity describes the actual input and history; it is not a gate. This is a persistence skeleton only; the protocol
 //! layer decides idempotent replay vs `request_id_binding_conflict`.
 
 use super::{invalid, Result};
@@ -126,7 +126,7 @@ impl RequestLedger {
         validate_record(record)?;
         let binding = &record.binding;
         let connection = self.connect()?;
-        let changed=connection
+        let changed = connection
             .execute(
                 "INSERT INTO requests(
                     request_id, instance_id, selection_id, release_id, operation,
@@ -147,8 +147,7 @@ impl RequestLedger {
                 WHERE requests.instance_id=excluded.instance_id
                     AND requests.selection_id IS excluded.selection_id
                     AND requests.release_id IS excluded.release_id
-                    AND requests.operation=excluded.operation
-                    AND (requests.content_id IS NULL OR requests.content_id IS excluded.content_id)",
+                    AND requests.operation=excluded.operation",
                 params![
                     record.request_id,
                     binding.instance_id,

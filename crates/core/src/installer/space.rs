@@ -1,153 +1,16 @@
-//! Checked per-volume budget for acquisition, normalization and transaction recovery.
-use super::{
-    exe_report::{relative_path, PayloadEntry},
-    invalid, Result,
-};
+//! Legacy archive-backed transaction recovery space accounting.
+use super::{invalid, Result};
 use serde::{Deserialize, Serialize};
-use std::{
-    fs,
-    path::{Path, PathBuf},
-};
-/// Single per-volume free-space margin covering filesystem allocation, journal
-/// and directory metadata. Keep this the one margin; do not restate it as a
-/// second policy ceiling.
+#[cfg(unix)]
+use std::fs;
+use std::path::{Path, PathBuf};
 pub const SPACE_MARGIN_BYTES: u64 = 16 * 1024 * 1024;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct SpaceBudget {
-    pub state_bytes: u64,
-    pub target_bytes: u64,
-    #[serde(default)]
-    pub same_volume_bytes: Option<u64>,
-}
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct VolumeSpace {
     pub volume_id: String,
     pub available_bytes: u64,
     pub path: PathBuf,
 }
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct SpaceEvidence {
-    pub budget: SpaceBudget,
-    pub state: VolumeSpace,
-    pub target: VolumeSpace,
-    pub same_volume: bool,
-}
-impl SpaceBudget {
-    /// The downloaded input already exists. Direct extraction only needs
-    /// target growth plus the existing volume metadata margin.
-    pub fn for_direct(files: &[(u64, u64)]) -> Result<Self> {
-        let transaction = ZipSpaceBudget::for_direct_overwrite(files)?;
-        let target = transaction.target_peak_bytes.unwrap();
-        let target_bytes = target
-            .checked_add(SPACE_MARGIN_BYTES)
-            .ok_or_else(|| invalid("exe_space_budget_overflow"))?;
-        Ok(Self {
-            state_bytes: SPACE_MARGIN_BYTES,
-            target_bytes,
-            same_volume_bytes: Some(target_bytes),
-        })
-    }
-    pub fn check_available(
-        &self,
-        state_free: u64,
-        target_free: u64,
-        same_volume: bool,
-    ) -> Result<()> {
-        let state_need = if same_volume {
-            match self.same_volume_bytes {
-                Some(bytes) => bytes,
-                None => self
-                    .state_bytes
-                    .checked_add(self.target_bytes)
-                    .ok_or_else(|| invalid("exe_space_budget_overflow"))?,
-            }
-        } else {
-            self.state_bytes
-        };
-        if state_free < state_need {
-            return Err(invalid("exe_state_insufficient_space"));
-        }
-        if target_free
-            < if same_volume {
-                state_need
-            } else {
-                self.target_bytes
-            }
-        {
-            return Err(invalid("exe_target_insufficient_space"));
-        }
-        Ok(())
-    }
-    pub fn inspect(&self, state: &Path, target: &Path) -> Result<SpaceEvidence> {
-        let state = inspect_volume(state)?;
-        let target = inspect_volume(target)?;
-        let same_volume = state.volume_id == target.volume_id;
-        self.check_available(state.available_bytes, target.available_bytes, same_volume)?;
-        Ok(SpaceEvidence {
-            budget: self.clone(),
-            state,
-            target,
-            same_volume,
-        })
-    }
-}
-/// Existing destination sizes are evidence, never a permission to read links.
-pub fn original_sizes(root: &Path, payload: &[PayloadEntry]) -> Result<Vec<(u64, u64)>> {
-    if !root.is_absolute() || !root.is_dir() || !super::zip_recipe::no_links(root) {
-        return Err(invalid("exe_game_identity_changed"));
-    }
-    let mut sizes = Vec::with_capacity(payload.len());
-    for entry in payload {
-        relative_path(&entry.path)?;
-        let path = root.join(&entry.path);
-        if !super::zip_recipe::no_links(&path) {
-            return Err(invalid("linked_target"));
-        }
-        let m = match fs::symlink_metadata(&path) {
-            Ok(m) => m,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                sizes.push((entry.size, 0));
-                continue;
-            }
-            Err(e) => return Err(e),
-        };
-        if !m.is_file() {
-            return Err(invalid("target_not_file"));
-        }
-        sizes.push((entry.size, m.len()));
-    }
-    Ok(sizes)
-}
-/// Existing destination sizes for planned ZIP members, in member order.
-/// Stat-only evidence for the direct-overwrite peak; no content is read.
-pub fn zip_target_sizes(
-    root: &Path,
-    members: &[super::zip_recipe::Member],
-) -> Result<Vec<(u64, u64)>> {
-    if !root.is_absolute() || !root.is_dir() || !super::zip_recipe::no_links(root) {
-        return Err(invalid("zip_game_identity_changed"));
-    }
-    let mut sizes = Vec::with_capacity(members.len());
-    for member in members {
-        let path = root.join(&member.destination);
-        if !super::zip_recipe::no_links(&path) {
-            return Err(invalid("linked_target"));
-        }
-        match fs::symlink_metadata(&path) {
-            Ok(metadata) if metadata.is_file() => sizes.push((member.size, metadata.len())),
-            Ok(_) => return Err(invalid("target_not_file")),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                sizes.push((member.size, 0))
-            }
-            Err(error) => return Err(error),
-        }
-    }
-    Ok(sizes)
-}
-
 pub fn inspect_volume(path: &Path) -> Result<VolumeSpace> {
     if !path.is_absolute() || !super::zip_recipe::no_links(path) || !path.is_dir() {
         return Err(invalid("exe_space_path_invalid"));
@@ -198,59 +61,6 @@ fn volume_identity(path: &Path) -> Result<String> {
 fn volume_identity(_path: &Path) -> Result<String> {
     Err(invalid("exe_space_platform_unsupported"))
 }
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn combined_volume_budget() {
-        let b = SpaceBudget::for_direct(&[(300, 0)]).unwrap();
-        let combined = b.same_volume_bytes.unwrap();
-        // Separate volumes satisfy the per-volume budgets.
-        b.check_available(b.state_bytes, b.target_bytes, false)
-            .unwrap();
-        // A shared volume must cover target growth on both volume observations.
-        assert!(b
-            .check_available(b.state_bytes, b.target_bytes, true)
-            .is_err());
-        b.check_available(combined, combined, true).unwrap();
-        assert!(b.check_available(combined - 1, combined, true).is_err());
-        assert!(b.check_available(combined, combined - 1, true).is_err());
-    }
-    #[test]
-    fn direct_same_volume_peak_only_counts_target_growth() {
-        let margin = SPACE_MARGIN_BYTES;
-        // Replacing three equal files has no net growth; a new 300-byte file
-        // peaks at 300 while it is written.
-        let b = SpaceBudget::for_direct(&[(50, 50), (50, 50), (300, 0)]).unwrap();
-        assert_eq!(b.state_bytes, margin);
-        assert_eq!(b.target_bytes, 300 + margin);
-        assert_eq!(b.same_volume_bytes, Some(300 + margin));
-        assert!(SpaceBudget::for_direct(&[(u64::MAX, 0)]).is_err());
-    }
-    #[test]
-    fn checked_arithmetic() {
-        assert!(SpaceBudget::for_direct(&[(u64::MAX, 0)]).is_err());
-        let b = SpaceBudget {
-            state_bytes: u64::MAX,
-            target_bytes: 1,
-            same_volume_bytes: None,
-        };
-        assert!(b.check_available(u64::MAX, u64::MAX, true).is_err());
-    }
-    #[test]
-    fn directory_volume_and_insufficient_space() {
-        let t = tempfile::tempdir().unwrap();
-        let s = inspect_volume(t.path()).unwrap();
-        assert!(!s.volume_id.is_empty());
-        let b = SpaceBudget {
-            state_bytes: u64::MAX,
-            target_bytes: 0,
-            same_volume_bytes: None,
-        };
-        assert!(b.inspect(t.path(), t.path()).is_err());
-    }
-}
-
 /// Peak extra bytes for ZIP stage, backup, target temporary files and rollback.
 /// The downloaded ZIP already exists when this budget is checked.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -304,20 +114,6 @@ impl ZipSpaceBudget {
         Ok(budget)
     }
 
-    /// Direct overwrite: no stage, backup or restore image is created, so only
-    /// the target peak growth and the margin are reserved. The downloaded ZIP
-    /// already exists and is not counted again.
-    pub fn for_direct_overwrite(files: &[(u64, u64)]) -> Result<Self> {
-        let peak = Self::for_archive(files)?
-            .target_peak_bytes
-            .ok_or_else(|| invalid("space_overflow"))?;
-        Ok(Self {
-            payload_bytes: 0,
-            original_bytes: 0,
-            staged: true,
-            target_peak_bytes: Some(peak),
-        })
-    }
     #[cfg(test)]
     pub fn after_staging(&self) -> Self {
         Self {
@@ -425,16 +221,5 @@ mod zip_budget_tests {
         let mixed = ZipSpaceBudget::for_archive(&[(5, 20), (30, 10), (15, 0)]).unwrap();
         assert_eq!(mixed.target_peak_bytes, Some(20));
         assert!(ZipSpaceBudget::for_archive(&[(u64::MAX, 0), (1, 0)]).is_err());
-    }
-
-    #[test]
-    fn direct_overwrite_reserves_only_target_growth() {
-        let margin = SPACE_MARGIN_BYTES;
-        // Replacing large existing files has no net growth; the old bytes must
-        // not be charged to either volume.
-        let budget = ZipSpaceBudget::for_direct_overwrite(&[(50, 50), (300, 0)]).unwrap();
-        assert_eq!(budget.required(false).unwrap(), (margin, 300 + margin));
-        assert_eq!(budget.required(true).unwrap(), (300 + margin, 300 + margin));
-        assert!(ZipSpaceBudget::for_direct_overwrite(&[(u64::MAX, 0), (1, 0)]).is_err());
     }
 }

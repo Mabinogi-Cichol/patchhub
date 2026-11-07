@@ -12,7 +12,6 @@ pub mod cache;
 mod cache_lock;
 mod direct;
 pub mod exe_orchestrator;
-pub mod exe_report;
 pub mod exe_resolve;
 pub mod facts;
 pub mod manual_selection;
@@ -23,7 +22,6 @@ pub mod resolve;
 pub mod service;
 pub mod space;
 pub mod store;
-pub mod task;
 mod zip_direct;
 pub mod zip_recipe;
 
@@ -31,13 +29,9 @@ pub use acquire::{
     acquire, acquire_with, https_transport, validate_download, AcquiredArchive, Acquisition,
     DownloadRequest, HttpResponse, Transport,
 };
-pub use facts::{
-    digest_file, game_facts, read_file, BaselineExpectation, BaselineFact, BuildFacts, DlcFacts,
-    Fact, FactFailure, FactsExpectation, FileDigest, GameFacts, InstanceFacts, ManifestFacts,
-    MAX_MANIFEST_BYTES,
-};
+pub use facts::{digest_file, FileDigest};
 pub use orchestrator::{
-    begin_request, content_conflict, record_plan, record_terminal, request_binding, ZipTaskError,
+    begin_request, record_plan, record_terminal, request_binding, ZipTaskError,
 };
 pub(crate) use orchestrator::{ZipInstallDeps, ZipInstallInputs};
 pub use requests::{RequestBinding, RequestLedger, RequestRecord};

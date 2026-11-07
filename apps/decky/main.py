@@ -59,9 +59,9 @@ class Plugin:
         self.sources = await SourceService(self.bridge, state_dir).initialize()
         self._scan_generation = 0
         self._cache_result = None
-        # Old recovery is a deployment gate; this RPC reads the new schema only.
-        if not self._app_update_gate:
-            await self.bridge.recover()
+        # Patch extraction never resumes or restores files at startup. Old
+        # transactions stay visible; interrupted direct records can be finalized
+        # from the records page without making history a startup prerequisite.
         self._scheduler = asyncio.create_task(self._scheduler_loop())
         # First-seen local games must enter matching without a user action
         # (design §3.3). The check itself is off the startup critical path.

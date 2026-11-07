@@ -49,7 +49,7 @@ export function TaskResultView({ task, onClose }: { task: TaskSnapshot; onClose:
   const recovery = task.result?.state === "needs_recovery" || task.result?.recovery?.required === true || task.error === "task_interrupted";
   const failure = task.result?.cause?.code ?? task.result?.recovery?.code;
   const incomplete = failure === "install_incomplete" || failure === "cancelled_incomplete";
-  const message = task.result ? installationResult(task.result) : recovery ? "安装已中断，仍需检查并恢复原文件。" : task.state === "completed" ? "安装已完成。"
+  const message = task.result ? installationResult(task.result) : recovery ? "解压已中断，已写入文件不会自动恢复，可重新安装补丁。" : task.state === "completed" ? "文件已解压到目标目录。"
     : task.state === "cancelled" ? "已安全取消。" : "安装失败。";
   const error = incomplete ? undefined : task.result?.recovery?.code ?? task.error ?? task.result?.error;
   return <TaskPanel title="安装结果" onClose={onClose} cancelDescription="关闭">

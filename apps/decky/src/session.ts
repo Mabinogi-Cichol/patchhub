@@ -321,5 +321,5 @@ export function createManagerSession(readSnapshot: () => Promise<Snapshot>, sour
 // Match the journal states that the core can repair. A prepared plan has not
 // changed files and a committed transaction is an ordinary installed patch.
 export function needsRecovery(transaction: Transaction): boolean {
-  return ["backing_up", "backed_up", "applying", "rolling_back", "uninstalling", "needs_recovery"].includes(transaction.state);
+  return transaction.direct === true && ["backing_up", "backed_up", "applying", "rolling_back", "uninstalling", "needs_recovery"].includes(transaction.state);
 }

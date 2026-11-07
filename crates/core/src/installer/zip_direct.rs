@@ -15,12 +15,11 @@ use std::{
     path::PathBuf,
     sync::atomic::{AtomicBool, Ordering},
 };
-use zip::ZipArchive;
 
 /// Extracts every planned member and returns `(destination, sha256)` pairs for
 /// the direct-install commit. Written files are never reverted on failure.
 pub(crate) fn extract(
-    zip: &mut ZipArchive<std::fs::File>,
+    zip: &mut super::zip_recipe::Archive,
     members: &[Member],
     targets: &[DirectTarget],
     cancel: &AtomicBool,
@@ -38,8 +37,9 @@ pub(crate) fn extract(
             return Err(invalid("zip_member_plan_changed"));
         }
         operation::file(at, &member.source);
-        let mut file = zip
-            .by_index(member.index)
+        let mut archive = zip.entry(member.index)?;
+        let mut file = archive
+            .by_index(0)
             .map_err(|e| invalid(format!("invalid_zip:{e}")))?;
         let mut out = BufWriter::new(install::open_direct_target(&target.file)?);
         *wrote = true;

@@ -1,13 +1,6 @@
 //! EXE selections bind authoritative source candidates, never download permission.
-use super::{
-    facts::FactsExpectation,
-    resolve::{select_download_url, MirrorKind, ResolveError, ResolveResult},
-};
-use crate::sources::{
-    canonical,
-    model::{CacheStatus, SourceCandidate, SourceRole, Variant},
-    registry::SourceRegistry,
-};
+use super::resolve::{select_download_url, MirrorKind, ResolveError, ResolveResult};
+use crate::sources::{canonical, model::SourceCandidate, registry::SourceRegistry};
 use serde_json::json;
 pub type ResolvedExeCandidate = super::resolve::ResolvedZipCandidate;
 pub fn exe_selection_id(candidate: &SourceCandidate) -> Option<String> {
@@ -31,15 +24,6 @@ pub fn parse_exe_selection_id(id: &str) -> Option<u32> {
     let rest = id.strip_prefix("exe-selection-")?;
     super::resolve::parse_zip_selection_id(&format!("zip-selection-{rest}"))
 }
-pub fn expectation(selection: &ResolvedExeCandidate) -> FactsExpectation {
-    FactsExpectation {
-        appid: selection.appid,
-        verified_buildids: Vec::new(),
-        requires_dlc: selection.candidate.requires_dlc.clone().unwrap_or_default(),
-        excludes_dlc: selection.candidate.excludes_dlc.clone().unwrap_or_default(),
-        baselines: Vec::new(),
-    }
-}
 pub fn resolve_exe(
     registry: &SourceRegistry,
     game: &crate::sources::GameQuery,
@@ -54,8 +38,7 @@ pub fn resolve_exe(
         return Ok(manual);
     }
     let candidate = registry
-        .cached_discovery(game)
-        .candidates
+        .dynamic_zip_candidates(game)
         .into_iter()
         .find(|c| exe_selection_id(c).as_deref() == Some(id))
         .ok_or_else(|| ResolveError::code("selection_not_found"))?;
@@ -65,28 +48,8 @@ pub fn resolve_exe(
         .find(|r| r.id == candidate.source_id)
         .cloned()
         .ok_or_else(|| ResolveError::code("exe_source_disabled"))?;
-    if rule.role != SourceRole::Publisher
-        || !rule.enabled
-        || !registry.game_subscribed(appid, &rule.id)
-    {
-        return Err(ResolveError::code("exe_source_disabled"));
-    }
-    if candidate.cache_status == CacheStatus::Stale {
-        return Err(ResolveError::code("selection_stale"));
-    }
-    if !matches!(
-        candidate.match_basis,
-        crate::sources::model::MatchBasis::Appid
-            | crate::sources::model::MatchBasis::VerifiedAlias
-            | crate::sources::model::MatchBasis::OfficialTitle
-    ) {
-        return Err(ResolveError::code("exe_candidate_ambiguous"));
-    }
-    // demo/unknown variants can never yield a supported EXE content identity;
-    // reject them at candidate admission so the CLI surfaces a clean blocker
-    // instead of failing mid-plan with `exe_content_identity_invalid`.
-    if !matches!(candidate.variant, Variant::Base | Variant::Dlc) {
-        return Err(ResolveError::code("exe_candidate_variant_unsupported"));
+    if let Some(code) = super::resolve::source_admission_blocker(registry, &candidate, appid) {
+        return Err(ResolveError::code(code));
     }
     let download_url = select_download_url(&candidate, &rule, MirrorKind::Exe)?;
     let language = candidate
@@ -186,9 +149,12 @@ mod tests {
         }
     }
     #[test]
-    fn demo_and_unknown_variants_are_blocked_at_resolution() {
+    fn demo_and_unknown_variants_can_be_extracted() {
         use crate::sources::model::ArtifactFormat;
-        for variant in [Variant::Demo, Variant::Unknown] {
+        for variant in [
+            crate::sources::model::Variant::Demo,
+            crate::sources::model::Variant::Unknown,
+        ] {
             let temp = tempfile::tempdir().unwrap();
             let mut candidate = super::super::orchestrator::tests::candidate();
             candidate.variant = variant;
@@ -201,16 +167,14 @@ mod tests {
             let selection = exe_selection_id(&candidate).expect("projection id");
             let sources = Sources::open(temp.path()).unwrap();
             save_match(&sources, candidate.game_appid.unwrap(), candidate);
-            assert_eq!(
+            assert!(
                 resolve_exe(
                     sources.registry(),
                     &super::super::orchestrator::tests::query(),
-                    &selection,
+                    &selection
                 )
-                .unwrap_err()
-                .code,
-                "exe_candidate_variant_unsupported",
-                "{variant:?}",
+                .is_ok(),
+                "{variant:?}"
             );
         }
     }

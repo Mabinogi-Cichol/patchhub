@@ -2525,7 +2525,7 @@ mod dynamic_projection_tests {
     }
 
     #[test]
-    fn scan_blocks_exe_demo_variant_as_a_clean_blocker() {
+    fn scan_allows_exe_demo_variant_for_static_extraction() {
         let temp = tempfile::tempdir().unwrap();
         let library = temp.path().join("Steam");
         let install = library.join("steamapps").join("common").join("Test");
@@ -2547,8 +2547,7 @@ mod dynamic_projection_tests {
         candidate.mirrors[0].url = "https://kaguraserver.com/a.exe".into();
         candidate.format_reported = ArtifactFormat::Exe;
         candidate.format_observed = ArtifactFormat::Exe;
-        // The demo candidate must still be projected (with its own selection id);
-        // only resolution rejects it, which the UI surfaces as a clean blocker.
+        // Variant describes the source; the chosen archive is still extractable.
         let selection_id = installer::exe_resolve::exe_selection_id(&candidate).unwrap();
         let handle = sources::Sources::open(&state).unwrap();
         save_dynamic_match(&handle, candidate);
@@ -2565,12 +2564,8 @@ mod dynamic_projection_tests {
             .find(|patch| patch["selection_id"] == selection_id.as_str())
             .expect("exe demo selection projected");
         assert_eq!(dynamic["release_id"], "source-kagura-cn-42");
-        assert_eq!(dynamic["actions"]["automatic"]["available"], false);
-        assert!(dynamic["blockers"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|blocker| blocker == "exe_candidate_variant_unsupported"));
+        assert_eq!(dynamic["actions"]["automatic"]["available"], true);
+        assert!(dynamic["blockers"].as_array().unwrap().is_empty());
     }
 
     #[test]

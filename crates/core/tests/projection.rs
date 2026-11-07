@@ -335,7 +335,7 @@ fn newest_unreadable_empty_or_unsafe_plan_is_unknown() {
             row.patches[0].actions.primary.label,
             patchhub_core::actions::PrimaryLabel::Overwrite
         );
-        assert!(!row.patches[0].actions.reinstall.available);
+        assert!(row.patches[0].actions.reinstall.available);
         if mode == 2 {
             assert_eq!(
                 row.patches[0].detection.files[0].status,
@@ -519,7 +519,7 @@ fn zip_and_exe_selection_previews_are_typed_and_read_only() {
         assert!(!p.executable);
         assert_eq!(p.selection_id.as_deref(), Some(selection.as_str()));
         if exe {
-            assert_eq!(p.blockers, vec!["exe_check_required"]);
+            assert!(p.blockers.is_empty());
             assert!(p.changes.is_empty());
         } else {
             assert!(p.blockers.is_empty());
@@ -651,7 +651,7 @@ fn publisher_actions_resolve_urls_and_distinguish_format_links_and_unknown_detec
             "{case}"
         );
         assert_eq!(a.overwrite.available, a.automatic.available);
-        assert!(!a.reinstall.available);
+        assert_eq!(a.reinstall.available, a.automatic.available);
         if case == "bad_url" {
             assert!(has_action_blocker(&a.automatic, InvalidDownloadUrl));
         }
@@ -674,8 +674,7 @@ fn publisher_actions_resolve_urls_and_distinguish_format_links_and_unknown_detec
     }
 }
 #[test]
-fn dynamic_complete_receipt_reinstalls_but_changed_selection_or_files_cannot() {
-    use patchhub_core::actions::ActionBlockerCode::*;
+fn reinstall_uses_selected_archive_even_when_old_receipts_or_files_changed() {
     for case in ["intact", "damaged", "selection", "content", "superseded"] {
         let (temp, steam) = fixture();
         let game = &steam.installs[0];
@@ -708,8 +707,7 @@ fn dynamic_complete_receipt_reinstalls_but_changed_selection_or_files_cannot() {
         t.content_id = None;
         p.release_id = t.release_id.clone();
         p.recipe_sha256 = Some("a".repeat(64));
-        // The selection is unchanged but a mismatched persisted content binding
-        // must still block strict reinstall.
+        // Historical content bindings do not authorize the new extraction.
         if case == "selection" {
             t.selection_id = Some("zip-selection-ffffffffffffffffffffffff-42".into());
         }
@@ -726,19 +724,7 @@ fn dynamic_complete_receipt_reinstalls_but_changed_selection_or_files_cannot() {
         .unwrap();
         let a = &row.patches[0].actions;
         assert!(a.automatic.available && a.overwrite.available);
-        assert_eq!(a.reinstall.available, case == "intact", "{case}");
-        if case == "damaged" || case == "superseded" {
-            assert!(has_action_blocker(
-                &a.reinstall,
-                ReinstallUnownedOrIncomplete
-            ));
-        }
-        if case == "selection" || case == "content" {
-            assert!(has_action_blocker(
-                &a.reinstall,
-                ReinstallContentIdentityChanged
-            ));
-        }
+        assert!(a.reinstall.available, "{case}");
     }
 }
 #[test]
@@ -868,4 +854,36 @@ fn domain_error_detail_is_not_truncated() {
     let error = DomainError::new("exe_manifest_invalid", detail.clone());
     assert_eq!(error.detail.as_deref(), Some(detail.as_str()));
     assert!(error.to_string().ends_with(&detail));
+}
+
+#[test]
+fn valid_target_ignores_build_state_dlc_language_and_old_recovery() {
+    let (temp, mut steam) = fixture();
+    let state = temp.path().join("state");
+    steam.installs[0].buildid = None;
+    steam.installs[0].availability = "updating".into();
+    let mut candidate = candidate();
+    candidate.requires_dlc = Some(vec![999]);
+    candidate.languages = vec!["unmatched".into()];
+    candidate.variant = sources::model::Variant::Unknown;
+    candidate.cache_status = sources::model::CacheStatus::Stale;
+    let now = seed(&state, candidate);
+    let source = load(&state, &steam, now);
+    let game = &steam.installs[0];
+    let (t, p) = records(game, "old-selection", "needs_recovery", 20, "data.txt");
+    let tx = TransactionSnapshot::from_records(vec![t], vec![p]);
+    let caps = HostCapabilities::default();
+    let cancel = AtomicBool::new(false);
+    let row = project_instance(
+        &inputs(&steam, Some(&source), &tx, &caps, &cancel),
+        &game.instance_id,
+    )
+    .unwrap();
+    assert!(!row.patches.is_empty());
+    for patch in row.patches {
+        assert!(
+            patch.actions.automatic.available && patch.actions.reinstall.available,
+            "{patch:?}"
+        );
+    }
 }

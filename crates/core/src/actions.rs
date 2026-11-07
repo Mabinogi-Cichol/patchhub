@@ -123,25 +123,10 @@ pub struct PatchActions {
     pub primary: PrimaryAction,
 }
 impl PatchActions {
-    pub(crate) fn evaluate(
-        automatic: Vec<ActionBlocker>,
-        reinstall_blocker: Option<ActionBlockerCode>,
-        installed_evidence: bool,
-        needs_recovery: bool,
-    ) -> Self {
-        let add_recovery = |mut blockers: Vec<ActionBlocker>| {
-            if needs_recovery {
-                blockers.push(ActionBlocker::code(ActionBlockerCode::NeedsRecovery));
-            }
-            ActionAvailability::from_blockers(blockers)
-        };
-        let automatic = add_recovery(automatic);
+    pub(crate) fn evaluate(automatic: Vec<ActionBlocker>, installed_evidence: bool) -> Self {
+        let automatic = ActionAvailability::from_blockers(automatic);
         let overwrite = automatic.clone();
-        let mut reinstall = overwrite.blockers.clone();
-        if let Some(code) = reinstall_blocker {
-            reinstall.push(ActionBlocker::code(code));
-        }
-        let reinstall = ActionAvailability::from_blockers(reinstall);
+        let reinstall = automatic.clone();
         let input = if automatic.available {
             InstallInputKind::Automatic
         } else {
@@ -168,66 +153,22 @@ impl PatchActions {
 mod tests {
     use super::*;
     #[test]
-    fn input_truth_table_and_stable_deduplication() {
-        use ActionBlockerCode::*;
-        for automatic_ok in [false, true] {
-            for receipt_ok in [false, true] {
-                for recovery in [false, true] {
-                    let automatic = if automatic_ok {
-                        vec![]
-                    } else {
-                        vec![
-                            ActionBlocker::new(ZipDownloadUnavailable, "first"),
-                            ActionBlocker::new(ZipDownloadUnavailable, "second"),
-                        ]
-                    };
-                    let actions = PatchActions::evaluate(
-                        automatic,
-                        (!receipt_ok).then_some(ReinstallUnownedOrIncomplete),
-                        receipt_ok,
-                        recovery,
-                    );
-                    let input_ok = automatic_ok && !recovery;
-                    assert_eq!(actions.automatic.available, automatic_ok && !recovery);
-                    assert_eq!(actions.overwrite.available, input_ok);
-                    assert_eq!(actions.reinstall.available, input_ok && receipt_ok);
-                    assert_eq!(actions.primary.operation, InstallOperation::Overwrite);
-                    assert_eq!(
-                        actions.primary.label,
-                        if receipt_ok {
-                            PrimaryLabel::Overwrite
-                        } else {
-                            PrimaryLabel::Install
-                        }
-                    );
-                    assert_eq!(
-                        actions.primary.input,
-                        if automatic_ok && !recovery {
-                            InstallInputKind::Automatic
-                        } else {
-                            InstallInputKind::Unavailable
-                        }
-                    );
-                    for availability in [&actions.automatic, &actions.reinstall, &actions.overwrite]
-                    {
-                        assert_eq!(availability.available, availability.blockers.is_empty());
-                        let codes: std::collections::HashSet<_> =
-                            availability.blockers.iter().map(|b| b.code).collect();
-                        assert_eq!(codes.len(), availability.blockers.len());
-                    }
-                    if !automatic_ok {
-                        assert_eq!(
-                            actions.automatic.blockers[0].detail.as_deref(),
-                            Some("first")
-                        );
-                    }
-                }
-            }
-        }
+    fn install_and_reinstall_share_the_same_input() {
+        let ready = PatchActions::evaluate(vec![], true);
+        assert!(
+            ready.automatic.available && ready.reinstall.available && ready.overwrite.available
+        );
+        assert_eq!(ready.primary.label, PrimaryLabel::Overwrite);
+        let blocked = PatchActions::evaluate(
+            vec![ActionBlocker::code(ActionBlockerCode::InvalidDownloadUrl)],
+            false,
+        );
+        assert!(!blocked.automatic.available && !blocked.reinstall.available);
+        assert_eq!(blocked.primary.input, InstallInputKind::Unavailable);
     }
     #[test]
     fn required_fields_closed_codes_and_utf8_detail_bound() {
-        let actions = PatchActions::evaluate(vec![], None, false, false);
+        let actions = PatchActions::evaluate(vec![], false);
         let json = serde_json::to_value(&actions).unwrap();
         assert_eq!(
             json["primary"],

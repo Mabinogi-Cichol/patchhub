@@ -13,21 +13,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     let descriptor = fs::read(root.join("descriptor.json"))?;
     let parsed = patchhub_installer_worker::sf::parse_descriptor(&descriptor)?;
-    let (hash, size) = match &parsed {
-        Descriptor::Analyze {
-            exe_sha256,
-            exe_size,
-        }
-        | Descriptor::AnalyzeBehavior {
-            exe_sha256,
-            exe_size,
-        }
-        | Descriptor::ExtractBehavior {
-            exe_sha256,
-            exe_size,
-            ..
-        } => (exe_sha256, *exe_size),
-    };
+    let (hash, size) = parsed.binding();
     let worker = std::env::current_exe()?
         .parent()
         .and_then(|p| p.parent())
@@ -41,7 +27,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cancel = AtomicBool::new(false);
     let start = Instant::now();
     let session = runtime.open_session(&root.join("input/archive.exe"), hash, size, &cancel)?;
-    let response = if matches!(parsed, Descriptor::ExtractBehavior { .. }) {
+    let response = if matches!(parsed, Descriptor::ExtractMembers { .. }) {
         let mut sink = fs::OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -52,7 +38,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         })?;
         serde_json::Value::Null
     } else {
-        session.analyze(&descriptor, &cancel)?.response
+        session.list_members(&descriptor, &cancel)?.response
     };
     let evidence = serde_json::json!({"platform":std::env::consts::OS,"exit_code":0,
         "wall_ms":start.elapsed().as_millis(),"response":response});

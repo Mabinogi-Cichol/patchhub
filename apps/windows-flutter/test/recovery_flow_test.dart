@@ -14,6 +14,7 @@ class RecoveryClient extends FixtureClient {
       'transaction_id': 'tx-one',
       'state': 'needs_recovery',
       'updated_at': 0,
+      'direct': true,
     },
     {
       'instance_id': 'other-game',
@@ -21,6 +22,7 @@ class RecoveryClient extends FixtureClient {
       'transaction_id': 'tx-other',
       'state': 'applying',
       'updated_at': 0,
+      'direct': true,
     },
   ];
   int recoverCalls = 0;
@@ -38,7 +40,7 @@ class RecoveryClient extends FixtureClient {
         {
           ...records.last,
           'state': 'needs_recovery',
-          'error': 'backup_corrupted: explicit detail',
+          'error': 'install_incomplete: explicit detail',
         },
       ];
     }
@@ -62,7 +64,7 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
-      await tester.tap(find.text('恢复全部未完成操作'));
+      await tester.tap(find.text('整理中断记录'));
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 300));
       expect(find.textContaining('其它游戏'), findsOneWidget);
@@ -70,18 +72,19 @@ void main() {
       await tester.tap(find.text('取消'));
       await tester.pumpAndSettle();
       expect(client.recoverCalls, 0);
-      await tester.tap(find.text('恢复全部未完成操作'));
+      await tester.tap(find.text('整理中断记录'));
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 300));
-      await tester.tap(find.widgetWithText(FilledButton, '恢复全部未完成操作'));
+      await tester.tap(find.widgetWithText(FilledButton, '整理中断记录'));
       await tester.pumpAndSettle();
       expect(client.recoverCalls, 1);
       expect(
-        find.textContaining('backup_corrupted: explicit detail'),
+        find.textContaining('install_incomplete: explicit detail'),
         findsOneWidget,
       );
-      expect(find.text('恢复结果已返回，状态刷新失败；请重新扫描确认。'), findsOneWidget);
+      expect(find.text('记录整理结果已返回，状态刷新失败；请重新扫描确认。'), findsOneWidget);
       expect(model.transactions.where(needsRecovery).length, 2);
+      expect(needsRecovery({'state': 'applying', 'direct': false}), isFalse);
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox.shrink());
       model.dispose();
