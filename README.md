@@ -52,13 +52,9 @@ curl -fsSL https://raw.githubusercontent.com/Mabinogi-Cichol/patchhub/main/insta
 
 ### Steam Deck 游戏模式
 
-| 游戏列表 | 补丁选择 |
-| --- | --- |
-| ![游戏列表](docs/images/decky/01-game-list.png) | ![补丁选择](docs/images/decky/02-patch-selection.png) |
-
-| 安装确认 | 下载进度 |
-| --- | --- |
-| ![安装确认](docs/images/decky/03-install-confirmation.png) | ![下载进度](docs/images/decky/04-download-progress.png) |
+| 游戏列表 | 补丁管理 | 下载进度 |
+| --- | --- | --- |
+| ![游戏列表](docs/images/decky/01-game-list.jpg) | ![补丁管理](docs/images/decky/02-patch-management.jpg) | ![下载进度](docs/images/decky/03-download-progress.jpg) |
 
 ## 自定义订阅源
 
