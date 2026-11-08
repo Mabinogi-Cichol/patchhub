@@ -169,6 +169,7 @@ class _RecordsPageState extends State<RecordsPage> {
         for (final record in records)
           Card(
             child: ExpansionTile(
+              key: PageStorageKey('record:${record['transaction_id']}'),
               title: Text(recordName(record)),
               subtitle: Text(
                 '${statusLabel(record['state'])} · ${sourceTime(record['updated_at'])}${record['direct'] == true ? '' : ' · 历史记录（只读）'}',
@@ -176,16 +177,18 @@ class _RecordsPageState extends State<RecordsPage> {
               children: [
                 Padding(
                   padding: const EdgeInsets.all(16),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      if (record['error'] != null)
-                        SelectableText('具体原因：${record['error']}'),
-                      SelectableText(
-                        '事务：${record['transaction_id']}\n计划：${record['plan_id']}\n'
-                        '发行：${record['release_id']}\n选择：${record['selection_id'] ?? '无'}\n创建：${sourceTime(record['created_at'])}',
-                      ),
-                    ],
+                  child: SelectionArea(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        if (record['error'] != null)
+                          Text('具体原因：${record['error']}'),
+                        Text(
+                          '事务：${record['transaction_id']}\n计划：${record['plan_id']}\n'
+                          '发行：${record['release_id']}\n选择：${record['selection_id'] ?? '无'}\n创建：${sourceTime(record['created_at'])}',
+                        ),
+                      ],
+                    ),
                   ),
                 ),
               ],
