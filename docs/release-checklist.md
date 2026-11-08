@@ -2,11 +2,26 @@
 
 本清单区分已构建产物与已验收发行版。当前版本仍为开发 Alpha，完整开发计划的样本数量及双端 UI 门槛尚未达到。
 
-## v0.6.1 发布准备（2026-11-09）
+## v0.6.1 发布记录（2026-11-09）
 
 - 用户授权发布 v0.6.1，包含 v0.6.0 后的提取性能优化、Windows 设置与缓存管理、操作记录灰块修复及安装弹层窗口拖动修复。版本同步提交 `5709a06`，应用版本统一为 0.6.1，Flutter / Windows EXE 版本为 0.6.1+1；第三方依赖未更新。
-- [发行说明](releases/v0.6.1.md)按“新增与优化 / 问题修复”描述用户可感知变化；[完整本地 CI 对齐](releases/v0.6.1-validation.md)逐平台、步骤记录实际命令和通过结果（Windows Flutter 314 项通过 / 1 项跳过；Decky 前端 113 项、桥接 14 项、真实核心后端 129 项通过）。本机已补齐官方 NSIS 3.11 并生成安装包，三个本地产物与锁文件检查通过；最终标签 CI 与公开附件核验待完成。
+- [发行说明](releases/v0.6.1.md)按“新增与优化 / 问题修复”描述用户可感知变化；[完整本地 CI 对齐](releases/v0.6.1-validation.md)逐平台、步骤记录实际命令和通过结果（Windows Flutter 314 项通过 / 1 项跳过；Decky 前端 113 项、桥接 14 项、真实核心后端 129 项通过）。本机已补齐官方 NSIS 3.11 并生成安装包，三个本地产物与锁文件检查通过；最终标签 CI 与公开附件核验结果如下。
 - 本轮发布不执行正式缓存清理、真实游戏写入或 Steam Deck 部署；原生窗口位移、系统安装、设备及正式跨版本更新整链保持待验收。
+
+- 发行说明与完整验证记录提交 `f50391727c1b90f127078b9ab3b51cab812ca552`；`main` 与注解 Tag `v0.6.1`（Tag 对象 `1f72480bacc3dfa610a72640eb0308907b31a1c4`）原子推送，标签固定指向该提交，不移动已发布标签。
+- [标签 CI 42508762654](https://github.com/Mabinogi-Cichol/patchhub/actions/runs/42508762654) 的 changes、双平台 core、windows、decky、ci 与 release 共 7 个任务全部成功；正式三个安装包均由该 SHA 的标签流水线新构建。
+- [正式 Release v0.6.1](https://github.com/Mabinogi-Cichol/patchhub/releases/tag/v0.6.1) 于北京时间 2026-11-09 02:21:18 发布，标题与 Tag 均为 `v0.6.1`，非草稿、非预发行。中文正文与仓库发行说明逐字符读回一致；公开附件严格为三个安装包及 `SHA256SUMS.txt`。
+- 已下载四个公开附件并核对名称、大小、GitHub digest 和清单的三个文件名 / SHA-256；全部一致。ZIP CRC、无重复 / 越界条目与内容白名单通过（Windows 43 文件、Decky 27 文件）；Windows 程序 / DLL 为 PE x86_64、NSIS 引导桩为 x86，Decky core / worker 为 ELF64 x86_64，runtime 大小、哈希与执行位正确。
+- 两端 CycloneDX 1.6 SBOM 应用与 Rust 工作区版本为 0.6.1（Windows 495 组件、Decky 438 组件）；Cargo/npm/Dart 锁及安装器 / Lua 许可摘要、协议与品牌 / 文档 / 后端资源均与标签来源一致，Windows 按实际 CRLF/LF 检出规则核对。公开 Windows EXE 的 FileVersion / ProductVersion 为 `0.6.1+1`，包内更新元数据版本为 0.6.1。
+- 未执行公开便携包启动、NSIS 系统安装、最终 Decky 包部署、实体手柄、真实游戏安装、正式跨版本更新整链及原生窗口拖动实际位移验收；不把本地 / 线上自动化或既有样本验证作为这些项目通过的证明。
+- 公开附件、Release / CI API、完整 CI 日志、`verification.json` 与 `exe-version.json` 保存在 `.artifacts/release-v0.6.1/`；完整本地步骤日志在 `.artifacts/ci-local-061/`。本节发布后的记录单独提交，不改变发行标签。
+
+| 附件 | 字节 | SHA-256 |
+| --- | --- | --- |
+| patchhub-decky.zip | 7616316 | `e619fe909b1890e8f708a642641e951c5b61334ebcda669fd35dfd27d88aab0e` |
+| patchhub-windows-portable.zip | 19564931 | `cd769f53ec3a6aed9c1a7d3f1158d1da2a966662810b3809c1af550e4927d34b` |
+| patchhub-windows-x64-setup.exe | 14723212 | `ec6d05c1466e4d387112066247e9b8b160a527f2fc50b4a6bd5662f1eb8c3bc6` |
+| SHA256SUMS.txt | 278 | `c93df5b51a36b15d59efe14b7ba2712ad60595e1f72192729316751b8e2c4658` |
 
 ## v0.6.0 发布记录（2026-11-07）
 
