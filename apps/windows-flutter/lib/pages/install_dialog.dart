@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import '../host/core_task.dart';
 import '../host/steam_artwork.dart';
 import '../models/app_model.dart';
+import '../presentation/desktop_toolbar.dart';
 import '../presentation/game_artwork.dart';
 import '../presentation/library_presentation.dart';
 
@@ -45,12 +46,22 @@ Future<String?> showInstallDialog(
 }) => showDialog<String>(
   context: context,
   barrierDismissible: false,
-  builder: (_) => InstallDialog(
-    model: model,
-    task: task,
-    game: game,
-    patch: patch,
-    artwork: artwork,
+  useSafeArea: false,
+  // The modal barrier covers the page's custom title bar as well as its body.
+  // Keep window controls inside the route so they remain reachable.
+  builder: (_) => Column(
+    children: [
+      const DesktopToolbar(actions: []),
+      Expanded(
+        child: InstallDialog(
+          model: model,
+          task: task,
+          game: game,
+          patch: patch,
+          artwork: artwork,
+        ),
+      ),
+    ],
   ),
 );
 

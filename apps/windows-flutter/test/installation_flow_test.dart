@@ -11,6 +11,7 @@ import 'package:patchhub_windows/models/library.dart';
 import 'package:patchhub_windows/pages/patch_management_page.dart';
 import 'package:patchhub_windows/pages/install_dialog.dart';
 import 'package:patchhub_windows/presentation/library_presentation.dart';
+import 'package:window_manager/window_manager.dart';
 
 import 'support/process_fixture_client.dart';
 
@@ -68,6 +69,88 @@ Future<void> mountPatch(
 }
 
 void main() {
+  testWidgets('modal install keeps window dragging and controls reachable', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(850, 560);
+    tester.view.devicePixelRatio = 1;
+    tester.platformDispatcher.textScaleFactorTestValue = 1.5;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+    const channel = MethodChannel('window_manager');
+    final calls = <String>[];
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(channel, (
+      call,
+    ) async {
+      calls.add(call.method);
+      if (call.method == 'isMaximized' || call.method == 'isFullScreen') {
+        return false;
+      }
+      return null;
+    });
+    addTearDown(() {
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        channel,
+        null,
+      );
+    });
+    final model = InstallFixtureModel('cancel_wait');
+    var closeRequests = 0;
+    await tester.pumpWidget(
+      PatchHubApp(
+        onClose: () => closeRequests++,
+        home: Builder(
+          builder: (context) => Scaffold(
+            body: TextButton(
+              onPressed: () => showInstallDialog(
+                context,
+                model: model,
+                task: model.tasks.startInstall({}),
+                game: '测试游戏',
+                patch: '测试补丁',
+              ),
+              child: const Text('打开安装'),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.runAsync(() => tester.tap(find.text('打开安装')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+    final task = model.tasks.installation!;
+    final titleBar = find.byType(DragToMoveArea);
+    expect(tester.getCenter(titleBar).dy, 26);
+    await tester.dragFrom(const Offset(200, 26), const Offset(80, 30));
+    await tester.pump();
+    expect(calls, contains('startDragging'));
+    await tester.tap(find.byTooltip('最小化'));
+    await tester.tap(find.byTooltip('最大化或还原'));
+    await tester.pump();
+    expect(calls, containsAll(['minimize', 'isMaximized', 'maximize']));
+    await tester.tap(find.byTooltip('关闭'));
+    expect(closeRequests, 1);
+    // Clicking outside the panel must not dismiss or cancel the installation.
+    await tester.tapAt(const Offset(5, 80));
+    await tester.pump();
+    expect(find.byType(InstallDialog), findsOneWidget);
+    expect(task.cancelRequested, isFalse);
+    await tester.runAsync(() async {
+      await task.cancel();
+      await task.done;
+    });
+    await tester.pumpAndSettle();
+    await tester.dragFrom(const Offset(200, 26), const Offset(80, 30));
+    await tester.pump();
+    expect(calls.where((call) => call == 'startDragging'), hasLength(2));
+    await tester.tap(find.byTooltip('关闭结果'));
+    await tester.pumpAndSettle();
+    expect(find.byType(DragToMoveArea), findsNothing);
+    await tester.pumpWidget(const SizedBox.shrink());
+    model.dispose();
+  });
+
   testWidgets(
     'selecting another candidate installs without extra confirmation',
     (tester) async {
