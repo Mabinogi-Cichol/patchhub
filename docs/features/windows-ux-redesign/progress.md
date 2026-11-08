@@ -2,6 +2,16 @@
 
 设计：[design.md](design.md) · 施工计划：[implementation-plan.md](implementation-plan.md)
 
+### 2026-11-09 操作记录展开修复（已实现，自动化通过，原生待验）
+
+- 用户截图显示展开详情为大片灰色区域。定向测试在原实现复现 `type 'bool' is not a subtype of type 'double?'`：`Expansible` 写入展开状态，详情 `SelectableText` 的 `ScrollPosition` 从同一 PageStorage 路径读取为滚动位置；原有测试只切换记录标签，未展开记录。
+- 每条记录补独立事务状态键，详情改用现有游戏路径所用的 `SelectionArea + Text`，保留完整信息和选择复制；基础复现用例修复后通过。
+- `flutter test test/records_expansion_test.dart --no-pub`：8 项通过，覆盖深浅主题、1337×955 / 850×560 窗口、1.0/1.5 文字缩放、多记录独立展开、长错误滚动到底、滚动返回后的展开状态、收起重开，以及鼠标聚焦后 Ctrl+A / Ctrl+C 完整复制。第一轮小窗口放大文字用例因懒加载记录离屏而无法定位，测试补滚回列表顶部后全部通过；未为此修改产品逻辑。
+- `flutter test test/records_expansion_test.dart test/detail_expansion_test.dart test/game_path_layout_test.dart --no-pub` 中 9 项既有游戏/技术详情与路径布局测试通过；最终新增 8 项单独重跑通过，合计 17 项。命令在 `apps/windows-flutter` 执行，使用仓库 `.tools/flutter/bin/flutter.bat`（3.47.7）。最终 `flutter analyze --no-pub` 无问题，Dart 格式化及 `git diff --check` 通过。
+- 按 overengineering-review 复核实际展开、选择复制和滚动状态路径：修复仅隔离记录展开状态并去除详情文本内部滚动状态，无新增限制、超时、重试或兜底，未发现需修改项。
+- 原生客户端运行与用户视觉验收待完成；验证阶段未构建/部署发行包或发布，当前运行中的客户端尚未更新。
+- 用户随后要求本地提交并合并至 `main`；代码与回归测试已单独提交为 `ab74006`，设计、验证记录与索引另作文档提交。沿用上述已完成验证，不重复运行；不推送远端。
+
 ## 当前状态
 
 2026-10-27 下拉选择框修复已实现，分支 `fix/windows-source-theme-layout`：补丁、镜像与语言偏好统一改为锚定式只选菜单；独立边框、勾选与选中背景，保留原选择框。相关自动化与深浅主题渲染检查通过，原生窗口待验收，不改变下方历史验收结论。
