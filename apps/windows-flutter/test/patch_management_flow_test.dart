@@ -89,7 +89,7 @@ void main() {
         'url': 'https://mirror.example/download',
       },
       'operation': 'overwrite',
-      'cleanup_policy': 'disabled',
+      'cleanup_policy': 'after_commit',
     });
     await tester.runAsync(() => task.done);
     await tester.pumpAndSettle();

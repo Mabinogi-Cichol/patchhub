@@ -85,6 +85,25 @@ Future<void> main(List<String> args) async {
   if (scenario == 'chunked' && method == 'install_patch') {
     event['current_file'] = '中文/补丁.dat';
   }
+  if (scenario == 'cleanup_wait') {
+    event['stage'] = 'cleanup';
+    event['substage'] = null;
+    await emit(event);
+    while (await input.moveNext()) {
+      if (input.current == 'cancel') break;
+    }
+    final receipt = response('install_patch-success');
+    receipt['result']['cleanup'] = {
+      'status': 'failed',
+      'performed': false,
+      'removed_bytes': 0,
+      'failures': [
+        {'code': 'cleanup_failed', 'detail': 'cleanup_fixture_failure'},
+      ],
+    };
+    await emit(receipt);
+    exit(0);
+  }
   await emit(event);
   if (scenario == 'duplicate') {
     await emit(event);

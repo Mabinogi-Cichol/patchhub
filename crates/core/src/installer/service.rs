@@ -222,7 +222,7 @@ pub fn install(
     let cancel = Arc::new(AtomicBool::new(deps.control.cancelled()));
     let done = AtomicBool::new(false);
     let paths = &deps.host.paths;
-    let cache_guard = Arc::new(super::cache_lock::CacheLock::shared(deps.host)?);
+    let cache_guard = super::cache_lock::CacheLock::shared(deps.host)?;
     let initialization_warning = super::init_atomic(paths)
         .err()
         .map(|error| format!("history_initialization_failed: {error}"));
@@ -250,152 +250,142 @@ pub fn install(
             }
         }
         let _finish = Finish(done);
-        let safety_guard = cache_guard.clone();
-        operation::with_cancel(cancel.clone(), || {
-            operation::with_safety(
-                move || {
-                    safety_guard
-                        .validate()
-                        .map_err(|error| std::io::Error::other(error.code))
-                },
-                || match &request.target {
-                    InstallTarget::ManualDownload { input } => {
-                        let source = sources::Sources::open(deps.host.state_dir())?;
-                        let selection = super::manual_selection::resolve_download(
-                            source.registry(),
-                            &query(game),
-                            input,
-                        )
-                        .map_err(|e| DomainError::code(e.code))?;
-                        let mut warnings = Vec::new();
-                        let claim = super::orchestrator::claim_request(
+        operation::with_cancel(cancel.clone(), || match &request.target {
+            InstallTarget::ManualDownload { input } => {
+                let source = sources::Sources::open(deps.host.state_dir())?;
+                let selection = super::manual_selection::resolve_download(
+                    source.registry(),
+                    &query(game),
+                    input,
+                )
+                .map_err(|e| DomainError::code(e.code))?;
+                let mut warnings = Vec::new();
+                let claim = super::orchestrator::claim_request(
+                    paths,
+                    request.request_id.as_str(),
+                    &mut warnings,
+                )
+                .map_err(task_error)?;
+                let binding = super::orchestrator::request_binding(
+                    &game.instance_id,
+                    Some(&selection.selection_id),
+                    None,
+                    request.operation,
+                    None,
+                );
+                if let Some(transaction) = super::orchestrator::begin_extraction_request(
+                    paths,
+                    request.request_id.as_str(),
+                    &binding,
+                    &mut warnings,
+                )
+                .map_err(task_error)?
+                {
+                    return Ok(super::InstallExecution::replay(transaction));
+                }
+                operation::stage("connecting", None, None);
+                let mut acquired = super::acquire::acquire_manual_with(
+                    deps.transport,
+                    &selection.download_url,
+                    paths,
+                    &cancel,
+                )
+                .map_err(super::orchestrator::map_download_error)
+                .map_err(task_error)?;
+                acquired.warnings.extend(warnings);
+                drop(claim);
+                if acquired.format == "exe" {
+                    let runtime = deps
+                        .worker
+                        .ok_or_else(|| DomainError::code("bundled_worker_missing"))?;
+                    super::exe_orchestrator::execute_exe_acquired(
+                        super::exe_orchestrator::ExeInstallInputs {
+                            game,
+                            selection: &selection,
+                            operation: request.operation,
+                            request_id: request.request_id.as_str(),
+                        },
+                        super::exe_orchestrator::ExeInstallDeps {
                             paths,
-                            request.request_id.as_str(),
-                            &mut warnings,
-                        )
-                        .map_err(task_error)?;
-                        let binding = super::orchestrator::request_binding(
-                            &game.instance_id,
-                            Some(&selection.selection_id),
-                            None,
-                            request.operation,
-                            None,
-                        );
-                        if let Some(transaction) = super::orchestrator::begin_extraction_request(
+                            transport: deps.transport,
+                            runtime,
+                            cancel: &cancel,
+                            cancel_reason: &reason,
+                        },
+                        Some(acquired),
+                    )
+                    .map_err(task_error)
+                } else {
+                    super::orchestrator::execute_zip_acquired(
+                        super::ZipInstallInputs {
+                            game,
+                            selection: &selection,
+                            operation: request.operation,
+                            request_id: request.request_id.as_str(),
+                        },
+                        super::ZipInstallDeps {
                             paths,
-                            request.request_id.as_str(),
-                            &binding,
-                            &mut warnings,
-                        )
-                        .map_err(task_error)?
-                        {
-                            return Ok(super::InstallExecution::replay(transaction));
-                        }
-                        operation::stage("connecting", None, None);
-                        let mut acquired = super::acquire::acquire_manual_with(
-                            deps.transport,
-                            &selection.download_url,
-                            paths,
-                            &cancel,
-                        )
-                        .map_err(super::orchestrator::map_download_error)
-                        .map_err(task_error)?;
-                        acquired.warnings.extend(warnings);
-                        drop(claim);
-                        if acquired.format == "exe" {
-                            let runtime = deps
-                                .worker
-                                .ok_or_else(|| DomainError::code("bundled_worker_missing"))?;
-                            super::exe_orchestrator::execute_exe_acquired(
-                                super::exe_orchestrator::ExeInstallInputs {
-                                    game,
-                                    selection: &selection,
-                                    operation: request.operation,
-                                    request_id: request.request_id.as_str(),
-                                },
-                                super::exe_orchestrator::ExeInstallDeps {
-                                    paths,
-                                    transport: deps.transport,
-                                    runtime,
-                                    cancel: &cancel,
-                                    cancel_reason: &reason,
-                                },
-                                Some(acquired),
-                            )
-                            .map_err(task_error)
-                        } else {
-                            super::orchestrator::execute_zip_acquired(
-                                super::ZipInstallInputs {
-                                    game,
-                                    selection: &selection,
-                                    operation: request.operation,
-                                    request_id: request.request_id.as_str(),
-                                },
-                                super::ZipInstallDeps {
-                                    paths,
-                                    transport: deps.transport,
-                                    cancel: &cancel,
-                                    cancel_reason: &reason,
-                                },
-                                Some(acquired),
-                            )
-                            .map_err(task_error)
-                        }
-                    }
-                    InstallTarget::PublisherZipSelection { selection_id } => {
-                        let source = sources::Sources::open(deps.host.state_dir())?;
-                        let selection = super::resolve::resolve_zip(
-                            source.registry(),
-                            &query(game),
-                            selection_id.as_str(),
-                        )
-                        .map_err(|e| DomainError::code(e.code))?;
-                        super::orchestrator::execute_zip(
-                            super::ZipInstallInputs {
-                                game,
-                                selection: &selection,
-                                operation: request.operation,
-                                request_id: request.request_id.as_str(),
-                            },
-                            super::ZipInstallDeps {
-                                paths,
-                                transport: deps.transport,
-                                cancel: &cancel,
-                                cancel_reason: &reason,
-                            },
-                        )
-                        .map_err(task_error)
-                    }
-                    InstallTarget::PublisherExeSelection { selection_id } => {
-                        let source = sources::Sources::open(deps.host.state_dir())?;
-                        let selection = super::exe_resolve::resolve_exe(
-                            source.registry(),
-                            &query(game),
-                            selection_id.as_str(),
-                        )
-                        .map_err(|e| DomainError::code(e.code))?;
-                        let runtime = deps
-                            .worker
-                            .ok_or_else(|| DomainError::code("bundled_worker_missing"))?;
-                        super::exe_orchestrator::execute_exe(
-                            super::exe_orchestrator::ExeInstallInputs {
-                                game,
-                                selection: &selection,
-                                operation: request.operation,
-                                request_id: request.request_id.as_str(),
-                            },
-                            super::exe_orchestrator::ExeInstallDeps {
-                                paths,
-                                transport: deps.transport,
-                                runtime,
-                                cancel: &cancel,
-                                cancel_reason: &reason,
-                            },
-                        )
-                        .map_err(task_error)
-                    }
-                },
-            )
+                            transport: deps.transport,
+                            cancel: &cancel,
+                            cancel_reason: &reason,
+                        },
+                        Some(acquired),
+                    )
+                    .map_err(task_error)
+                }
+            }
+            InstallTarget::PublisherZipSelection { selection_id } => {
+                let source = sources::Sources::open(deps.host.state_dir())?;
+                let selection = super::resolve::resolve_zip(
+                    source.registry(),
+                    &query(game),
+                    selection_id.as_str(),
+                )
+                .map_err(|e| DomainError::code(e.code))?;
+                super::orchestrator::execute_zip(
+                    super::ZipInstallInputs {
+                        game,
+                        selection: &selection,
+                        operation: request.operation,
+                        request_id: request.request_id.as_str(),
+                    },
+                    super::ZipInstallDeps {
+                        paths,
+                        transport: deps.transport,
+                        cancel: &cancel,
+                        cancel_reason: &reason,
+                    },
+                )
+                .map_err(task_error)
+            }
+            InstallTarget::PublisherExeSelection { selection_id } => {
+                let source = sources::Sources::open(deps.host.state_dir())?;
+                let selection = super::exe_resolve::resolve_exe(
+                    source.registry(),
+                    &query(game),
+                    selection_id.as_str(),
+                )
+                .map_err(|e| DomainError::code(e.code))?;
+                let runtime = deps
+                    .worker
+                    .ok_or_else(|| DomainError::code("bundled_worker_missing"))?;
+                super::exe_orchestrator::execute_exe(
+                    super::exe_orchestrator::ExeInstallInputs {
+                        game,
+                        selection: &selection,
+                        operation: request.operation,
+                        request_id: request.request_id.as_str(),
+                    },
+                    super::exe_orchestrator::ExeInstallDeps {
+                        paths,
+                        transport: deps.transport,
+                        runtime,
+                        cancel: &cancel,
+                        cancel_reason: &reason,
+                    },
+                )
+                .map_err(task_error)
+            }
         })
     })
     .map_err(|error| {
@@ -617,32 +607,82 @@ mod manual_download_tests {
             std::env::var_os("PATCHHUB_TEST_WORKER").expect("worker"),
         ))
         .unwrap();
-        let result = install(
-            InstallRequest {
-                request_id: RequestId::new("local-archive-acceptance").unwrap(),
-                instance_id: InstanceId::new(&game.instance_id).unwrap(),
-                operation: InstallOperation::Overwrite,
-                target: InstallTarget::ManualDownload {
-                    input: ManualDownloadInput {
-                        source_id: candidate.source_id,
-                        candidate_id: candidate.candidate_id,
-                        url: "https://local.example/archive".into(),
-                    },
-                },
-                cleanup_policy: CleanupPolicy::Disabled,
+        let cancel_during_extraction = std::env::var_os("PATCHHUB_TEST_CANCEL_EXTRACT").is_some();
+        struct LocalLease(Arc<AtomicBool>);
+        impl TaskLease for LocalLease {
+            fn cancelled(&self) -> bool {
+                self.0.load(Ordering::Relaxed)
+            }
+            fn cancellation_cause(&self) -> Option<CancellationCause> {
+                self.cancelled().then_some(CancellationCause::UserCancelled)
+            }
+        }
+        let lease = LocalLease(Arc::new(AtomicBool::new(false)));
+        let cancellation = lease.0.clone();
+        let started = std::time::Instant::now();
+        let stages = Arc::new(std::sync::Mutex::new(Vec::<(String, f64)>::new()));
+        let reports = stages.clone();
+        let cleanup_policy = if std::env::var_os("PATCHHUB_TEST_AFTER_COMMIT").is_some() {
+            CleanupPolicy::AfterCommit
+        } else {
+            CleanupPolicy::Disabled
+        };
+        let result = operation::run(
+            Arc::new(AtomicBool::new(false)),
+            move |progress| {
+                if cancel_during_extraction
+                    && progress.stage == "extracting"
+                    && progress.bytes_done > 0
+                {
+                    cancellation.store(true, Ordering::Relaxed);
+                }
+                let mut stages = reports.lock().unwrap();
+                if stages
+                    .last()
+                    .is_none_or(|(stage, _)| stage != &progress.stage)
+                {
+                    stages.push((progress.stage.clone(), started.elapsed().as_secs_f64()));
+                }
             },
-            InstallerDeps {
-                host: &host,
-                transport: &FileTransport(archive, cached.is_some()),
-                worker: Some(&worker),
-                control: &Lease(false),
-                emit: &mut |_| {},
+            || {
+                install(
+                    InstallRequest {
+                        request_id: RequestId::new("local-archive-acceptance").unwrap(),
+                        instance_id: InstanceId::new(&game.instance_id).unwrap(),
+                        operation: InstallOperation::Overwrite,
+                        target: InstallTarget::ManualDownload {
+                            input: ManualDownloadInput {
+                                source_id: candidate.source_id,
+                                candidate_id: candidate.candidate_id,
+                                url: "https://local.example/archive".into(),
+                            },
+                        },
+                        cleanup_policy,
+                    },
+                    InstallerDeps {
+                        host: &host,
+                        transport: &FileTransport(archive, cached.is_some()),
+                        worker: Some(&worker),
+                        control: &lease,
+                        emit: &mut |progress| {
+                            stages.lock().unwrap().push((
+                                format!("service:{}", progress.stage),
+                                started.elapsed().as_secs_f64(),
+                            ));
+                        },
+                    },
+                )
             },
         )
         .unwrap();
+        let service_seconds = started.elapsed().as_secs_f64();
         assert_eq!(
             result.disposition,
-            super::super::outcome::Disposition::Completed,
+            if cancel_during_extraction {
+                super::super::outcome::Disposition::Cancelled
+            } else {
+                super::super::outcome::Disposition::Completed
+            },
             "{result:?}"
         );
         let mut files = BTreeMap::new();
@@ -676,13 +716,15 @@ mod manual_download_tests {
                 .entry(path.split('/').next().unwrap().into())
                 .or_default() += 1;
         }
-        let summary = serde_json::json!({"platform":std::env::consts::OS,"outcome":result,"files":files,"file_count":files.len(),"bytes":bytes,"groups":groups});
+        let summary = serde_json::json!({"platform":std::env::consts::OS,"outcome":result,"files":files,"file_count":files.len(),"bytes":bytes,"groups":groups,"service_seconds":service_seconds,"stage_starts":*stages.lock().unwrap()});
         fs::write(
             output.join("production-verification.json"),
             serde_json::to_vec_pretty(&summary).unwrap(),
         )
         .unwrap();
-        if let Some(reference) = std::env::var_os("PATCHHUB_TEST_REFERENCE") {
+        if let Some(reference) =
+            std::env::var_os("PATCHHUB_TEST_REFERENCE").filter(|_| !cancel_during_extraction)
+        {
             let rows: Vec<serde_json::Value> =
                 serde_json::from_slice(&fs::read(reference).unwrap()).unwrap();
             assert_eq!(files.len(), rows.len());
@@ -704,6 +746,130 @@ mod manual_download_tests {
             output.display()
         );
     }
+    #[test]
+    fn after_commit_cleanup_preserves_success_and_skips_replay_failure_and_cancel() {
+        use super::super::{cache::CacheService, cache_lock::CacheLock};
+        use std::fs;
+        for scenario in ["completed", "busy", "failed", "invalid", "cancelled"] {
+            let (temp, game, bytes) = fixtures::setup();
+            let state = temp.path().join("state");
+            let sources = sources::Sources::open(&state).unwrap();
+            let mut candidate = fixtures::candidate();
+            candidate.mirrors.clear();
+            fixtures::save_match(&sources, game.appid, candidate.clone());
+            drop(sources);
+            let host = ValidatedHostContext::new(
+                &state,
+                std::slice::from_ref(&game.library_path),
+                if cfg!(windows) {
+                    Platform::Windows
+                } else {
+                    Platform::Steamos
+                },
+            )
+            .unwrap();
+            super::super::init_atomic(&host.paths).unwrap();
+            let sentinel = host.paths.downloads_dir().join("cleanup-sentinel");
+            fs::write(&sentinel, b"unused cache").unwrap();
+            let url = "https://user.example/patch.zip";
+            let transport = FakeTransport::new(vec![response(
+                url,
+                if scenario == "invalid" {
+                    b"invalid ZIP".to_vec()
+                } else {
+                    bytes
+                },
+            )]);
+            let request = || InstallRequest {
+                request_id: RequestId::new("cleanup-regression").unwrap(),
+                instance_id: InstanceId::new(&game.instance_id).unwrap(),
+                operation: InstallOperation::Overwrite,
+                target: InstallTarget::ManualDownload {
+                    input: ManualDownloadInput {
+                        source_id: candidate.source_id.clone(),
+                        candidate_id: candidate.candidate_id.clone(),
+                        url: url.into(),
+                    },
+                },
+                cleanup_policy: CleanupPolicy::AfterCommit,
+            };
+            let invoke = |emit: &mut dyn FnMut(operation::Progress)| {
+                install(
+                    request(),
+                    InstallerDeps {
+                        host: &host,
+                        transport: &transport,
+                        worker: None,
+                        control: &Lease(scenario == "cancelled"),
+                        emit,
+                    },
+                )
+            };
+            // An active cleaner rejects installation at entry, before network or game writes.
+            let cleaner = CacheLock::exclusive(&host).unwrap();
+            assert_eq!(invoke(&mut |_| {}).unwrap_err().code, "installer_busy");
+            assert!(transport.calls().is_empty());
+            drop(cleaner);
+            let mut competitor = None;
+            let mut cleanups = 0;
+            let result = operation::run(
+                Arc::new(AtomicBool::new(false)),
+                |_| {},
+                || {
+                    invoke(&mut |p| {
+                        if p.stage == "planning" {
+                            assert_eq!(
+                                CacheService::new(&host).cleanup().unwrap_err().code,
+                                "installer_busy"
+                            );
+                        }
+                        if p.stage == "cleanup" {
+                            cleanups += 1;
+                            if scenario == "busy" {
+                                competitor = Some(CacheLock::shared(&host).unwrap());
+                            } else if scenario == "failed" {
+                                fs::remove_dir(host.paths.reports_dir()).unwrap();
+                                fs::write(host.paths.reports_dir(), b"not a directory").unwrap();
+                            }
+                        }
+                    })
+                },
+            );
+            drop(competitor);
+            if matches!(scenario, "invalid" | "cancelled") {
+                assert!(result.is_err());
+                assert_eq!(cleanups, 0);
+                assert!(sentinel.exists());
+            } else {
+                let result = result.unwrap();
+                assert_eq!(result.state, "committed");
+                assert_eq!(
+                    result.disposition,
+                    super::super::outcome::Disposition::Completed
+                );
+                assert_eq!(cleanups, 1);
+                let expected = match scenario {
+                    "busy" => CleanupStatus::Busy,
+                    "failed" => CleanupStatus::Failed,
+                    _ => CleanupStatus::Completed,
+                };
+                assert_eq!(result.cleanup.status, expected);
+                assert_eq!(sentinel.exists(), scenario != "completed");
+                fs::write(&sentinel, b"must survive replay").unwrap();
+                let replay = invoke(&mut |p| assert_ne!(p.stage, "cleanup")).unwrap();
+                assert_eq!(replay.transaction_id, result.transaction_id);
+                assert_eq!(replay.cleanup.status, CleanupStatus::NotRequested);
+                assert!(sentinel.exists());
+                assert_eq!(
+                    fs::read(game.install_path.join("data.txt")).unwrap(),
+                    b"patched"
+                );
+            }
+            // Every terminal path releases the installer's shared lock.
+            CacheLock::exclusive(&host).unwrap();
+        }
+    }
+
     #[test]
     fn manual_download_installs_extensionless_redirect_and_binds_identity() {
         let (temp, game, bytes) = fixtures::setup();

@@ -127,7 +127,7 @@ class _PatchManagementPageState extends State<PatchManagementPage> {
             'url': manualUrl.text.trim(),
           },
           'operation': 'overwrite',
-          'cleanup_policy': 'disabled',
+          'cleanup_policy': 'after_commit',
         };
       } else {
         final identity =
@@ -146,7 +146,7 @@ class _PatchManagementPageState extends State<PatchManagementPage> {
           'instance_id': widget.row.id,
           ...selectionArguments(latest),
           'operation': latest['actions']['primary']['operation'],
-          'cleanup_policy': 'disabled',
+          'cleanup_policy': 'after_commit',
         };
       }
       final task = widget.model.tasks.startInstall(arguments);

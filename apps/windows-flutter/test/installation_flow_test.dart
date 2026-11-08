@@ -121,10 +121,42 @@ void main() {
       await tester.pump();
       final task = model.tasks.installation!;
       expect(task.arguments['selection_id'], 'selected-alternative');
+      expect(task.arguments['cleanup_policy'], 'after_commit');
       expect(task.arguments.containsKey('release_id'), isFalse);
       await tester.runAsync(() => task.done);
       await tester.pumpAndSettle();
       expect(find.text('安装完成'), findsOneWidget);
+      await tester.pumpWidget(const SizedBox.shrink());
+      model.dispose();
+    },
+  );
+
+  testWidgets(
+    'cleanup stays busy until successful receipt with cleanup failure',
+    (tester) async {
+      final model = InstallFixtureModel('cleanup_wait');
+      await mountPatch(tester, model, FixtureDesktop());
+      await tester.runAsync(() => tester.tap(find.text('安装补丁')));
+      final task = model.tasks.installation!;
+      await tester.runAsync(() async {
+        while (task.running && task.progress?['stage'] != 'cleanup') {
+          await Future<void>.delayed(const Duration(milliseconds: 10));
+        }
+      });
+      await tester.pump();
+      expect(task.error, isNull, reason: task.diagnostics);
+      expect(task.running, isTrue);
+      expect(find.text('正在清理'), findsWidgets);
+      expect(find.text('安装完成'), findsNothing);
+      // A late cancel releases the fixture; committed success keeps precedence.
+      await tester.runAsync(() async {
+        await task.cancel();
+        await task.done;
+      });
+      await tester.pumpAndSettle();
+      expect(task.running, isFalse);
+      expect(find.text('安装完成'), findsOneWidget);
+      expect(find.textContaining('cleanup_fixture_failure'), findsOneWidget);
       await tester.pumpWidget(const SizedBox.shrink());
       model.dispose();
     },
