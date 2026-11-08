@@ -6,6 +6,7 @@ import '../host/core_client.dart';
 import '../host/core_task.dart';
 import '../host/source_tasks.dart';
 import 'library.dart';
+import 'cache_model.dart';
 
 List<String> dueSources(
   List<Map<String, dynamic>> sources,
@@ -27,11 +28,12 @@ List<String> dueSources(
     .toList();
 
 class AppModel extends ChangeNotifier {
-  AppModel(this.client) : tasks = AppTasks(client) {
+  AppModel(this.client) : tasks = AppTasks(client), cache = CacheModel(client) {
     tasks.addListener(_taskChanged);
   }
   final CoreClient client;
   final AppTasks tasks;
+  final CacheModel cache;
   ScanSnapshot? snapshot;
   List<Map<String, dynamic>> sources = [];
   List<Map<String, dynamic>> transactions = [];
@@ -360,6 +362,7 @@ class AppModel extends ChangeNotifier {
     _scheduler?.cancel();
     tasks.removeListener(_taskChanged);
     tasks.dispose();
+    cache.dispose();
     super.dispose();
   }
 }

@@ -28,7 +28,7 @@ void main() {
         await tester.tap(find.text('未匹配游戏'));
         await tester.pumpAndSettle();
         expect(tester.takeException(), isNull);
-        await tester.tap(find.text('全局来源'));
+        await tester.tap(find.widgetWithText(TextButton, '设置'));
         await tester.pumpAndSettle();
         expect(find.text('返回游戏'), findsOneWidget);
         expect(tester.takeException(), isNull);

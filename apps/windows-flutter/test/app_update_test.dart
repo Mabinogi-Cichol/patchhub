@@ -6,6 +6,39 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:patchhub_windows/host/app_update.dart';
 
 void main() {
+  test(
+    'ready package survives checks and known version survives a failed recheck',
+    () async {
+      final root = Directory.systemTemp.createTempSync('app-update-settings-');
+      var calls = 0;
+      final update = AppUpdate(
+        directory: root,
+        current: '0.3.0',
+        stateFile: File('${root.path}/state.json'),
+        fetchRelease: () async {
+          calls++;
+          throw const HttpException('offline');
+        },
+      );
+      try {
+        update.result = {'state': 'ready', 'tag': 'v0.4.0'};
+        await update.check(manual: true);
+        expect(calls, 0);
+        expect(update.result['state'], 'ready');
+        update.result = {...update.result, 'state': 'available'};
+        final observed = <bool>[];
+        update.addListener(() => observed.add(update.hasUpdate));
+        await update.check(manual: true);
+        expect(update.result['state'], 'failed');
+        expect(update.result['tag'], 'v0.4.0');
+        expect(observed, everyElement(isTrue));
+      } finally {
+        update.dispose();
+        root.deleteSync(recursive: true);
+      }
+    },
+  );
+
   test('shared semantic version contract', () {
     final fixture = jsonDecode(
       File('../../scripts/fixtures/app-update.json').readAsStringSync(),

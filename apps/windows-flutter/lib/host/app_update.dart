@@ -116,12 +116,14 @@ class AppUpdate extends ChangeNotifier {
   Timer? _timer;
   HttpClient? _download;
   bool cancelled = false;
-  bool lastCheckWasManual = false;
   int bytes = 0, total = 0;
   String downloadLabel = '正在下载更新包…';
   bool get busy =>
       ['checking', 'downloading', 'applying'].contains(result['state']);
   bool get skipped => data['skipped_tag'] == result['tag'];
+  bool get hasUpdate =>
+      result['tag'] != null &&
+      AppVersion(result['tag'] as String).compareTo(AppVersion(current)) > 0;
   File? package;
   Map<String, dynamic>? outcome;
   Future<void>? _initialization;
@@ -198,7 +200,7 @@ class AppUpdate extends ChangeNotifier {
 
   Future<void> check({bool manual = false}) async {
     if (_pending != null) return _pending;
-    if (result['state'] == 'downloading' || result['state'] == 'applying') {
+    if (['downloading', 'applying', 'ready'].contains(result['state'])) {
       return;
     }
     final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
@@ -207,7 +209,6 @@ class AppUpdate extends ChangeNotifier {
         (!manual && delta >= 0 && delta < 86400)) {
       return;
     }
-    lastCheckWasManual = manual;
     _pending = _check(now);
     try {
       await _pending;
@@ -218,7 +219,7 @@ class AppUpdate extends ChangeNotifier {
 
   Future<void> _check(int now) async {
     data['last_attempt_at'] = now;
-    result = {'state': 'checking'};
+    result = {...result, 'state': 'checking'};
     notifyListeners();
     try {
       AppVersion(current);
@@ -229,13 +230,18 @@ class AppUpdate extends ChangeNotifier {
       data['last_success_at'] = now;
       data.remove('retry_at');
     } catch (e) {
-      result = {'state': 'failed', 'current': current, 'error': '$e'};
+      result = {
+        ...result,
+        'state': 'failed',
+        'current': current,
+        'error': '$e',
+      };
     }
     data['candidate'] = result;
     try {
       await _save();
     } catch (e) {
-      result = {'state': 'failed', 'error': '更新记录保存失败：$e'};
+      result = {...result, 'state': 'failed', 'error': '更新记录保存失败：$e'};
     }
     notifyListeners();
   }
@@ -243,6 +249,11 @@ class AppUpdate extends ChangeNotifier {
   Future<void> skip() async {
     data['skipped_tag'] = result['tag'];
     await _save();
+    notifyListeners();
+  }
+
+  void recordApplyFailure(Object error) {
+    result = {...result, 'state': 'failed', 'error': '$error'};
     notifyListeners();
   }
 

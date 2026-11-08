@@ -77,7 +77,6 @@ class VisualUpdate extends AppUpdate {
   Future<void> initialize() async {}
   @override
   Future<void> check({bool manual = false}) async {
-    lastCheckWasManual = manual;
     result = {'state': 'up_to_date'};
     notifyListeners();
   }
@@ -269,7 +268,7 @@ void main() {
             for (final page in {
               '操作记录': 'records',
               '游戏订阅': 'subscriptions',
-              '全局来源': 'sources',
+              '设置': 'sources',
             }.entries) {
               await tester.tap(find.text(page.key));
               await tester.pumpAndSettle();
@@ -306,13 +305,16 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(TextButton, '设置'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(ListTile, '关于'));
+      await tester.pumpAndSettle();
       final before = tester.getRect(find.byType(LibraryPage));
       await tester.tap(find.text('检查更新'));
       await tester.pumpAndSettle();
-      expect(find.text('当前已是最新正式版。'), findsOneWidget);
+      expect(find.text('当前已是最新正式版'), findsOneWidget);
       expect(tester.getRect(find.byType(LibraryPage)), before);
-      await tester.tap(find.text('关闭'));
-      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('app-update-banner')), findsNothing);
       expect(tester.getRect(find.byType(LibraryPage)), before);
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox.shrink());

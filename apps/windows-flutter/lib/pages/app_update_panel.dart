@@ -22,7 +22,6 @@ class AppUpdatePanel extends StatefulWidget {
 }
 
 class _AppUpdatePanelState extends State<AppUpdatePanel> {
-  String? dismissed;
   bool applying = false;
   Object? error;
   @override
@@ -58,7 +57,7 @@ class _AppUpdatePanelState extends State<AppUpdatePanel> {
         await File('${work.path}/abort.json').writeAsString('{}', flush: true);
       }
       widget.lifecycle.returnToApp();
-      update.result = {...update.result, 'state': 'failed', 'error': '$e'};
+      update.recordApplyFailure(e);
       if (mounted) {
         setState(() {
           error = e;
@@ -68,13 +67,8 @@ class _AppUpdatePanelState extends State<AppUpdatePanel> {
     }
   }
 
-  Future<void> showUpdates({bool check = true}) async {
+  Future<void> showUpdates() async {
     setState(() => error = null);
-    if (check &&
-        widget.update.result['state'] != 'ready' &&
-        widget.update.result['state'] != 'downloading') {
-      unawaited(widget.update.check(manual: true));
-    }
     await showDialog<void>(
       context: context,
       builder: (dialogContext) => StatefulBuilder(
@@ -218,59 +212,71 @@ class _AppUpdatePanelState extends State<AppUpdatePanel> {
     listenable: widget.update,
     builder: (context, _) {
       final u = widget.update;
-      final visible =
-          !u.lastCheckWasManual &&
-          u.result['state'] == 'available' &&
-          !u.skipped &&
-          dismissed != u.result['tag'];
-      return Column(
-        children: [
-          Expanded(child: widget.child),
-          Material(
-            color: Theme.of(context).colorScheme.surfaceContainer,
-            child: SafeArea(
-              top: false,
-              child: Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 16,
-                  vertical: 4,
-                ),
-                child: Column(
-                  children: [
-                    if (visible)
-                      Row(
-                        children: [
-                          Expanded(child: Text('发现新版本 ${u.result['tag']}')),
-                          TextButton(
-                            onPressed: () => showUpdates(check: false),
-                            child: const Text('查看更新'),
-                          ),
-                          TextButton(
-                            onPressed: () => setState(
-                              () => dismissed = u.result['tag'] as String?,
-                            ),
-                            child: const Text('稍后'),
-                          ),
-                        ],
-                      ),
-                    Row(
+      final visible = u.hasUpdate && !u.skipped;
+      final state = u.result['state'];
+      final label = switch (state) {
+        'downloading' => '${u.downloadLabel} · ${_downloadSize(u.bytes)}',
+        'ready' => '更新已就绪 ${u.result['tag']}',
+        'failed' => '更新操作失败 · ${u.result['tag']}',
+        'checking' => '正在检查更新 · ${u.result['tag']}',
+        _ => '发现新版本 ${u.result['tag']}',
+      };
+      return AppUpdateScope(
+        update: u,
+        showDetails: () => showUpdates(),
+        child: Column(
+          children: [
+            Expanded(child: widget.child),
+            if (visible)
+              Material(
+                key: const ValueKey('app-update-banner'),
+                color: Theme.of(context).colorScheme.surfaceContainer,
+                child: SafeArea(
+                  top: false,
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 4,
+                    ),
+                    child: Row(
                       children: [
-                        Expanded(child: Text('版本 ${u.current}')),
+                        Expanded(child: Text(applying ? '正在准备重启…' : label)),
                         TextButton(
-                          onPressed: applying ? null : showUpdates,
-                          child: const Text('检查更新'),
+                          onPressed: applying ? null : () => showUpdates(),
+                          child: Text(switch (state) {
+                            'downloading' => '查看进度',
+                            'ready' => '重启更新',
+                            'failed' => '查看详情',
+                            _ => '查看更新',
+                          }),
                         ),
                       ],
                     ),
-                  ],
+                  ),
                 ),
               ),
-            ),
-          ),
-        ],
+          ],
+        ),
       );
     },
   );
+}
+
+/// Shares the existing update model and dialog with the About page.
+class AppUpdateScope extends InheritedWidget {
+  const AppUpdateScope({
+    super.key,
+    required this.update,
+    required this.showDetails,
+    required super.child,
+  });
+  final AppUpdate update;
+  final VoidCallback showDetails;
+  static AppUpdateScope? maybeOf(BuildContext context) =>
+      context.dependOnInheritedWidgetOfExactType<AppUpdateScope>();
+  @override
+  bool updateShouldNotify(AppUpdateScope oldWidget) =>
+      update != oldWidget.update;
 }
 
 String _downloadSize(int bytes) {

@@ -7,6 +7,7 @@ import 'package:patchhub_windows/app.dart';
 import 'package:patchhub_windows/host/app_lifecycle.dart';
 import 'package:patchhub_windows/host/app_update.dart';
 import 'package:patchhub_windows/pages/app_update_panel.dart';
+import 'package:patchhub_windows/pages/settings_page.dart';
 
 class PanelUpdate extends AppUpdate {
   PanelUpdate()
@@ -22,7 +23,6 @@ class PanelUpdate extends AppUpdate {
   @override
   Future<void> check({bool manual = false}) async {
     checks++;
-    lastCheckWasManual = manual;
     result = {'state': 'checking'};
     pending = Completer<void>();
     notifyListeners();
@@ -32,7 +32,7 @@ class PanelUpdate extends AppUpdate {
   void complete(String state, {String error = '无法连接更新服务'}) {
     result = {
       'state': state,
-      'tag': 'v0.4.0',
+      if (state == 'available' || state == 'unavailable') 'tag': 'v0.4.0',
       'notes': '版本说明\n' * 50,
       'error': error,
     };
@@ -45,6 +45,18 @@ class PanelUpdate extends AppUpdate {
     bytes = downloaded;
     total = length;
     result = {...result, 'state': 'downloading'};
+    notifyListeners();
+  }
+
+  @override
+  Future<void> skip() async {
+    data['skipped_tag'] = result['tag'];
+    notifyListeners();
+  }
+
+  @override
+  void cancelDownload() {
+    result = {...result, 'state': 'failed', 'error': '已取消下载'};
     notifyListeners();
   }
 
@@ -63,7 +75,10 @@ void main() {
           body: AppUpdatePanel(
             update: update,
             lifecycle: AppLifecycle(),
-            child: const SizedBox.expand(key: ValueKey('main-content')),
+            child: const SizedBox.expand(
+              key: ValueKey('main-content'),
+              child: AboutPage(),
+            ),
           ),
         ),
       ),
@@ -80,26 +95,70 @@ void main() {
       final before = tester.getRect(find.byKey(const ValueKey('main-content')));
       await tester.tap(find.text('检查更新'));
       await tester.pumpAndSettle();
-      expect(find.text('正在检查 GitHub Release…'), findsOneWidget);
+      expect(find.text('正在检查更新…'), findsOneWidget);
       expect(
         tester.getRect(find.byKey(const ValueKey('main-content'))),
         before,
       );
       update.complete(state);
       await tester.pumpAndSettle();
-      expect(find.byType(AlertDialog), findsOneWidget);
+      expect(find.byType(AlertDialog), findsNothing);
       expect(tester.takeException(), isNull);
-      await tester.tap(find.text('关闭'));
-      await tester.pumpAndSettle();
-      expect(find.textContaining('发现新版本'), findsNothing);
+      expect(
+        find.textContaining('发现新版本'),
+        state == 'available' || state == 'unavailable'
+            ? findsOneWidget
+            : findsNothing,
+      );
       expect(
         tester.getRect(find.byKey(const ValueKey('main-content'))),
-        before,
+        state == 'available' || state == 'unavailable' ? isNot(before) : before,
       );
       await tester.pumpWidget(const SizedBox.shrink());
       update.dispose();
     });
   }
+
+  testWidgets(
+    'cancel, failed download, ready and explicit skip preserve reachable actions',
+    (tester) async {
+      final update = PanelUpdate()
+        ..result = {'state': 'available', 'tag': 'v0.4.0', 'notes': 'notes'};
+      await mount(tester, update);
+      await tester.tap(find.text('查看更新').last);
+      await tester.pumpAndSettle();
+      update.progress(2048, 4096);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('取消下载'));
+      await tester.pumpAndSettle();
+      expect(
+        find.descendant(
+          of: find.byType(AlertDialog),
+          matching: find.textContaining('已取消下载'),
+        ),
+        findsOneWidget,
+      );
+      await tester.tap(find.text('关闭'));
+      await tester.pumpAndSettle();
+      expect(find.text('查看详情'), findsOneWidget);
+      await tester.tap(find.text('查看详情'));
+      await tester.pumpAndSettle();
+      expect(find.text('重新检查'), findsOneWidget);
+      update.complete('available');
+      await tester.pumpAndSettle();
+      await tester.ensureVisible(find.text('跳过此版本'));
+      await tester.tap(find.text('跳过此版本'));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('app-update-banner')), findsNothing);
+      expect(find.textContaining('（已跳过）'), findsOneWidget);
+      update.result = {...update.result, 'tag': 'v0.5.0'};
+      update.progress(1, 2);
+      await tester.pumpAndSettle();
+      expect(find.text('查看进度'), findsOneWidget);
+      await tester.pumpWidget(const SizedBox.shrink());
+      update.dispose();
+    },
+  );
 
   testWidgets('download progress tracks bytes and supports unknown length', (
     tester,
@@ -109,6 +168,9 @@ void main() {
     await tester.tap(find.text('检查更新'));
     await tester.pumpAndSettle();
     update.complete('available');
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('查看更新').last);
+    await tester.pumpAndSettle();
     update.progress(5 * 1024 * 1024, 20 * 1024 * 1024);
     await tester.pump();
     expect(
@@ -159,6 +221,8 @@ void main() {
         error: 'HandshakeException: Connection terminated during handshake',
       );
       await tester.pumpAndSettle();
+      await tester.tap(find.text('查看更新').first);
+      await tester.pumpAndSettle();
       expect(find.textContaining('上次安装结果：更新目录中还有 PatchHub 进程'), findsOneWidget);
       expect(find.textContaining('本次更新操作失败：连接更新服务时 TLS 握手中断'), findsOneWidget);
       await tester.tap(find.text('重新检查'));
@@ -184,7 +248,7 @@ void main() {
       await check;
       await tester.pumpAndSettle();
       expect(find.text('发现新版本 v0.4.0'), findsOneWidget);
-      await tester.tap(find.text('查看更新'));
+      await tester.tap(find.text('查看更新').last);
       await tester.pumpAndSettle();
       expect(update.checks, 1);
       await tester.ensureVisible(find.text('下载更新'));
@@ -193,7 +257,7 @@ void main() {
       expect(find.text('重启并更新'), findsOneWidget);
       await tester.tap(find.text('关闭'));
       await tester.pumpAndSettle();
-      await tester.tap(find.text('检查更新'));
+      await tester.tap(find.text('重启更新'));
       await tester.pumpAndSettle();
       expect(find.text('重启并更新'), findsOneWidget);
       expect(update.checks, 1);
