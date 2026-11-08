@@ -8,6 +8,80 @@
 
 2026-10-15 当前增量状态：**默认值限制移除已实现，自动化、双平台回归及 Steam Deck 部署/隔离 worker/RPC/真实页面验收通过；未写入实际游戏，历史验收不覆盖本次修订。**
 
+## 2026-11-09：提取性能修复实施与验证
+
+状态：**代码、定向自动化、Windows 隔离性能和现存 EXE 回归已完成；同日按用户后续指示本地提交，未合并、推送、发布、更新已安装应用、写真实游戏或部署设备。** 保留开工时已有文档修改，沿用 `fix/archive-extraction-performance`，开工 HEAD `f21d1a7f47b96d7a29ab7197655b4838f04b7ec6`，未创建 worktree。关联[设计](design.md)与[完整计划](extraction-performance-plan.md)。下节保留计划阶段历史事实。
+
+### 实际修改与代码复核
+
+- `service::install` 删除 `Arc<CacheLock>` 克隆及 `operation::with_safety` 包装，改为直接持有共享锁；`operation` 删除专用 safety 字段、初始化、恢复回调和每块执行分支。取消、原有 gate、持久提交优先语义不变；不调整缓冲、摘要、sync_all 或解压方式。
+- 获取锁时的一次性身份核对及共享/独占互斥保留；仍在安装返回前持锁，AfterCommit 前显式释放。`recover` / `discard_plan` 与缓存删除边界仍使用 `CacheLock::validate`，没有将逐块复查迁到进度或每文件回调。
+- Windows 自动安装和手动下载两个请求均改为 `after_commit`。沿用现有同一 CLI 任务和清理结果展示，清理忙碌/失败不改判已提交成功；Decky 用户偏好不变。搜索 Flutter 实际调用未发现额外可并发手动清理入口（仅生成协议方法元数据），无需新忙碌状态。
+- 补充核心业务回归：清理持独占锁时安装入口拒绝且不下载；安装持共享锁时清理拒绝；新提交清理成功/忙碌/失败；取消/非法包失败不清理；同 request 重放不下载、不清理且保留新缓存；所有返回路径释放锁。复用 opt-in 隔离生产服务夹具记录阶段起点、服务总耗时和摘要，并支持提交后清理与真实提取中取消；这些仅为测试代码，没有新增产品遥测或后台任务。
+- 按 `overengineering-review` 逐一阅读本次 diff、完整安装入口、取消/进度、ZIP/EXE 提取、持久提交及缓存锁获取/释放与清理路径，并检查 Flutter 请求、任务 running 和结果 UI。**最终未发现需修改的过度设计项**：直接删除昂贵机制，没有 TTL、每文件复查、重试、调度器或新开关；必要的文件边界、数据校验和 I/O 错误继续保留。此为本聊天静态复核，未使用子 Agent，不替代实机。
+
+### 定向验证
+
+命令均在仓库根运行，Flutter 命令在 `apps/windows-flutter`。日志根目录 `L=.artifacts/extraction-performance/`（本地忽略材料）。Windows 使用仓库 `.tools/cargo` / `.tools/rustup` 的 Rust 1.94.0；WSL Ubuntu 默认非 root uid 1000，使用 `.tools/linux-cargo` / `.tools/linux-rustup`，独立 `CARGO_TARGET_DIR=target/linux`。没有执行发布前完整 CI matrix。
+
+| 平台 / 范围 | 实际命令与结果 | 日志（相对 L） |
+| --- | --- | --- |
+| Windows / core 安装器 | `cargo test --locked --offline -p patchhub-core installer::`：116 passed、2 ignored；包含 ZIP、下载、进度取消、缓存跨进程互斥 | `windows-installer-tests.log` |
+| WSL / core 安装器 | 相同命令：121 passed、2 ignored，Linux 额外路径/锁测试执行 | `linux-installer-tests.log` |
+| 双平台 / AfterCommit 增补 | `cargo test --locked --offline -p patchhub-core --lib after_commit_cleanup`：各 1 passed（测试内部覆盖五种场景及入口互斥、重放） | `windows-cleanup-test.log`、`linux-cleanup-test.log` |
+| Windows / 公共服务和结果 | `cargo test --locked --offline -p patchhub-core --test installer_service --test cache --test outcome`：2 + 5 + 9 passed、1 ignored | `windows-service-tests.log` |
+| WSL / 公共服务和结果 | 相同命令：1 + 6 + 9 passed、1 ignored | `linux-service-tests.log` |
+| Windows / 共享安装引擎 | `cargo test --locked --offline -p patchhub-core --lib install_tests::`：62 passed，包含签名 recipe、真实写入取消和晚到取消成功优先 | `windows-install-tests.log` |
+| WSL / 共享安装引擎 | 相同命令：66 passed | `linux-install-tests.log` |
+| 双平台 / core Clippy | `cargo clippy --locked --offline -p patchhub-core --all-targets -- -D warnings`：通过；Windows 最终运行 `CARGO_INCREMENTAL=0` 避免本环境增量 hard-link 回退警告 | `windows-clippy-final.log`、`linux-clippy-final.log` |
+| Rust / 格式 | `cargo fmt --all -- --check`：通过 | `rust-fmt.log` |
+| Flutter / 安装流程 | `.tools/flutter` SDK，`flutter test --no-pub test/installation_flow_test.dart test/patch_management_flow_test.dart`：12 passed；含双入口参数、清理期间忙碌/进度窗、晚到取消后成功且独立展示清理失败 | `flutter-test-final.log` |
+| Flutter / 分析与格式 | `flutter analyze --no-pub lib/pages/patch_management_page.dart test/installation_flow_test.dart test/patch_management_flow_test.dart test/support/fake_core.dart`：无问题；相同四文件 `dart format --output=none --set-exit-if-changed`：0 changed | `flutter-analyze.log`、`dart-format.log` |
+
+初轮沙箱 Windows TCP 测试两项失败，Flutter 被用户 telemetry 状态权限阻止，WSL 返回 E_ACCESSDENIED；同范围在正常用户执行环境重跑通过。新增 Flutter 夹具最初未清空非 applying 阶段的 substage，导致协议校验失败，已按生产映射修为 `stage=cleanup, substage=null` 后 12 项通过。新增 Rust 回归最初尝试 clone 非 Clone 请求，已改为测试闭包每次构造请求后编译/回归通过。保留失败日志，不将其当作通过证据。没有改协议、锁文件或生成物，未运行无关 UI 构建、网络线上用例或发行打包。
+
+### 同级生 ZIP：相同条件的生产服务性能对比
+
+- 原包只读输入：`C:/Users/wqj78/AppData/Roaming/PatchHub/installer/rust-v1/downloads/d006bd8b1f0eb0d7e95503cdef7cbcb79bba48704a79389bf22ee8db99c20103.zip`。每次复制到独立测试缓存，由生产获取路径重新校验 SHA-256 后走 304 缓存分支；正式缓存和游戏未变更。
+- 修改前/后均 `cargo test --release --locked --offline -p patchhub-core --lib --no-run`，同仓库默认 release profile、相同锁文件与依赖（不是早期只读基准的混合 profile）。修改前仅增加 opt-in 测试计时，产品保持 HEAD 基线；二进制保存在 `baseline.exe`。修改后 `after.exe` 的生产代码为本轮改动；后续 `cancel.exe` 仅扩展测试取消观察，生产代码相同。计时没有绕过 `service::install` / acquisition / ZIP 或 worker / direct writer。
+- 输入 C 盘，输出/测试缓存均为 E 盘 `.artifacts/extraction-performance/{before,after,after-commit}` 下相同层级 `Steam/steamapps/common/ExtractionTest` 与 `state/installer/rust-v1`；逐次串行运行，测试不接触真实游戏。输出 E 盘与原 F 盘并不相同，因此比较只说明本次同条件收益。
+- 计时从调用 install 前开始，排除准备源索引、复制测试缓存及结果全量回读摘要验证；总测试进程耗时还包括这些工作，不能拿 264.19/10.55 等测试总时长混作服务耗时。现有 `extracting` 进度区间包含文件 flush/sync 和持久提交，无法由已有阶段事件进一步精确分离“纯提取”与“提交”；下表如实合并记录，没有新增产品计时点。前置包含获取/哈希/规划，终态包含请求历史收尾。
+
+| 运行 | 清理策略 | 前置至 extracting | 提取及持久提交 | 提交后缓存清理 | install 服务总耗时 |
+| --- | --- | ---: | ---: | ---: | ---: |
+| 修改前 | disabled | 1.159 s | 261.173 s | 未请求 | 262.345 s |
+| 修改后，同策略对比 | disabled | 1.144 s | 7.479 s | 未请求 | 8.634 s |
+| 修改后，Windows 新策略 | after_commit | 1.096 s | 7.372 s | 0.145 s | 8.627 s |
+
+提取及提交同策略对比约 **34.92 倍**，耗时减少 **97.14%**。AfterCommit 独占清理实际 completed，移除隔离缓存 1,402,320,882 字节，未改写游戏提取结果。三次完整输出均为 **3 文件 / 1,563,269,624 字节**，逐成员路径、大小和 SHA-256 一致，并以 `mode=ro` 读取正式 journal 对比事务 `72d17032-08bb-4d7e-b79f-8c40ba358fed` 的 plan.changes，全部匹配：
+
+| 路径 | 字节 | SHA-256 |
+| --- | ---: | --- |
+| update/FileInfo.xml | 635 | `cff93b955c310aac5b6c5347e61636a22dcca50ee77f3527dd5b2ba818e39192` |
+| update/update.arc | 1,361,715,366 | `9f0b2985e0b0cece55ff4904c4800ba8719b55b0baa4a8bf0927b5bc061e5426` |
+| update/voice2.arc | 201,553,623 | `c56708fc79d2806af0eddb89b25b25876b05a62df77733eb50f1f2485762c22d` |
+
+本轮为每条件一次完整测量；并非多轮统计或物理冷缓存测试，不承诺用户真实 F 盘安装为 7 秒。此前 5.9 秒无写盘调查与 163 秒抽样外推不参与此验收计算。详细原始阶段、输出清单、outcome 见 `L/summary.json`、各运行 `production-verification.json` 及 `before.log` / `after.log` / `after-commit.log`；release 构建日志 `extraction-performance-baseline-build.log` 位于 `.artifacts/`，修改后日志为 `L/after-build.log`、`L/cancel-build.log`。
+
+### 现存 EXE 与提取中取消
+
+- 开工核实现存 `.artifacts/downloads/summer-memories-v1.03.exe`，126,137,104 字节，SHA-256 `21400ce2540b91a75cc56c3f90bc2f3f276b9ae3bd1e3fbb522675b0c6332130`；使用仓库现存 release `target/release/patchhub-worker.exe`，未执行原 EXE。
+- 同一公共服务 + after_commit 输出 **2,502 文件 / 152,368,950 字节**，committed；所有路径/大小/SHA-256 与先前隔离生产服务记录 `.artifacts/archive-extraction-service/windows-1794059270498611400/summer-memories/production-verification.json` 一致。服务 28.340 s，其中提取及提交 21.149 s，提交后清理 0.079 s（completed）；此处仅回归，未跑本包修改前性能对比。
+- 对上述 EXE 和同级生 ZIP 分别在首次 extracting 字节进度后通过真实 TaskLease 发出取消：服务分别 3.702 s / 1.100 s 返回 disposition=cancelled、state=failed、error=cancelled_incomplete；EXE 留存 1 个已开始写入的文件 / 521,737 字节，ZIP 留存已完成 XML 及开始写入的大文件（已完成字节合计 635）。两者 cleanup=not_requested，不回滚已写文件、不自动删除缓存；这是直接提取的既定未完成语义。
+- 证据 `L/summer-exe.log`、`summer-exe-cancel.log`、`zip-cancel.log` 和对应输出目录 `production-verification.json`；test 入口为 `installer::service::manual_download_tests::local_archive_through_production_service --ignored --exact --nocapture`，使用 `PATCHHUB_TEST_ARCHIVE` / `OUTPUT` / `WORKER` / `SHA256`；新策略设 `PATCHHUB_TEST_AFTER_COMMIT=1`，取消回归另设 `PATCHHUB_TEST_CANCEL_EXTRACT=1`。
+
+### 待验证与交付边界
+
+本地 Windows/WSL 定向自动化和 Windows 隔离生产服务验证通过；线上 CI 未触发。未更新已安装 Windows 0.6.0，未在 F 盘真实游戏写入或游戏内验收，未部署 Steam Deck，未执行 EXE/Lua 原安装器。实施结束时未提交；同日按用户“提交GIT”指示，代码与必要测试已本地提交为 `94e243b`（`fix(installer): 移除提取热路径重复校验并启用 Windows 提交后清理`），本记录、设计和计划另作文档提交。提交沿用上述有效验证，未新增代码、未重复运行测试。未合并、推送、tag 或发布；后续真实环境验收不能用本轮隔离结果替代。
+
+## 2026-11-09：提取性能修复计划（待实现）
+
+- 已制定[提取性能修复计划](extraction-performance-plan.md)，分支 `fix/archive-extraction-performance` 从 `main` 创建；本轮仅新增和更新文档，产品代码未修改。
+- 调查基于 2026-11-08 正式安装记录和只读样本：同级生 Remake ZIP 3 文件、1,563,269,624 字节、事务约 209 秒；逐块缓存身份复查约 171,254 次，release 只读解压/CRC/摘要约 5.9 秒；真实校验抽样外推约 163 秒，不是原安装分段实测。正式游戏未被调查重写。
+- 用户明确指出 UI 已阻止安装期间操作，清理冲突应在入口处理；缓存路径被外部进程替换不是已知正常使用问题。方案删除热路径完整复查及专用回调，保留入口锁互斥，不替换为低频复查或新增状态机制。
+- 同日按用户修订计划：Windows 自动安装和手动下载均启用 `after_commit`，成功提交并释放共享锁后复用现有清理，任务与进度窗覆盖清理阶段；清理失败不改写安装成功。已加入 Flutter 请求策略及清理终态验证要求，仍待实现。
+- 已完成计划过度设计审阅和相对链接检查；修复代码、定向测试、fmt/Clippy、双平台验证、相同条件性能对比及最终代码审阅均待执行。未提交、合并、发布、更新安装程序或操作 Steam Deck。
+
 ## 任务状态
 
 | 工作 | 状态 | 结果/待办 |

@@ -1,5 +1,7 @@
 # 功能开发文档
 
+2026-11-09：单一纯解压的[提取性能修复计划](generic-exe-installation/extraction-performance-plan.md)已实施并完成双平台定向自动化及 Windows 隔离生产服务性能对比；删除逐块缓存身份复查，保留入口互斥与真实文件操作边界，并启用 Windows 安装成功后自动缓存清理。已安装应用、真实游戏与设备验收未执行，详见[设计](generic-exe-installation/design.md)与[施工记录](generic-exe-installation/progress.md)。
+
 2026-11-04：Decky 更新入口精简、启动检查与原生提示、点击更新主动取消在途业务，以及隔离本地更新源与一键真机测试已随 v0.5.4 发布；标签 CI 七个任务全部成功，附件哈希、包内来源与便携包启动核验通过。实体手柄与正式 GitHub 来源跨版本更新仍待验收。详见[设计](decky-debug-update/design.md)与[施工记录](decky-debug-update/progress.md)。
 
 2026-11-03：CI #98 的静态目录移除全链路测试存在 TCP 读取长度未处理问题，已修正请求头读取；按本地 CI 指南完成 core（Windows/WSL Linux）、windows、decky 三 job 逐步骤验证，完整对齐的触发范围已收敛为发布前执行，修复随 v0.5.3 发布，标签 CI 七个任务全部成功。详见[设计](remove-static-catalog/design.md)与[施工记录](remove-static-catalog/progress.md)。
