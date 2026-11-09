@@ -1,5 +1,16 @@
 import '../models/library.dart';
 
+/// Formats filesystem paths for display and copying without changing model data.
+String displayGamePath(String path) {
+  if (path.startsWith(r'\\?\UNC\')) {
+    return r'\\' + path.substring(8);
+  }
+  if (RegExp(r'^\\\\\?\\[A-Za-z]:\\').hasMatch(path)) {
+    return path.substring(4);
+  }
+  return path;
+}
+
 enum GameFilter {
   matched('有补丁'),
   all('全部游戏'),

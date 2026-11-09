@@ -13,6 +13,8 @@ void main() {
       r'\\?\F:\Steam Library\steamapps\common\中文游戏目录\'
       '${List.filled(12, 'LongDirectoryWithoutSpaces').join()}';
   const libraryPath = r'\\?\F:\Steam Library\中文游戏库';
+  final displayInstallPath = installPath.substring(4);
+  final displayLibraryPath = libraryPath.substring(4);
   for (final size in [
     const Size(1440, 900),
     const Size(1382, 1169),
@@ -49,16 +51,18 @@ void main() {
           await tester.pumpAndSettle();
           final path = find.byKey(const ValueKey('game-install-path'));
           final library = find.byKey(const ValueKey('game-library-path'));
-          expect(tester.widget<Text>(path).data, installPath);
-          expect(tester.widget<Text>(library).data, libraryPath);
+          expect(tester.widget<Text>(path).data, displayInstallPath);
+          expect(tester.widget<Text>(library).data, displayLibraryPath);
+          expect(row.game['install_path'], installPath);
+          expect(row.game['library_path'], libraryPath);
           final paragraph = tester.renderObject<RenderParagraph>(
             find.descendant(of: path, matching: find.byType(RichText)),
           );
           final lastCharacter = paragraph
               .getBoxesForSelection(
                 TextSelection(
-                  baseOffset: installPath.length - 1,
-                  extentOffset: installPath.length,
+                  baseOffset: displayInstallPath.length - 1,
+                  extentOffset: displayInstallPath.length,
                 ),
               )
               .single;
@@ -74,7 +78,7 @@ void main() {
           expect(tester.getRect(library).bottom, lessThanOrEqualTo(footer.top));
           expect(library.hitTestable(), findsOneWidget);
 
-          // Copy through the real selection shortcut, preserving the raw path.
+          // Copy through the real selection shortcut using the displayed path.
           if (size.width == 1382 && scale == 1) {
             String? copied;
             tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
@@ -100,7 +104,7 @@ void main() {
             await tester.sendKeyEvent(LogicalKeyboardKey.keyC);
             await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
             await tester.pump();
-            expect(copied, libraryPath);
+            expect(copied, displayLibraryPath);
             await mouse.removePointer();
           }
           await tester.tap(find.text('操作记录'));

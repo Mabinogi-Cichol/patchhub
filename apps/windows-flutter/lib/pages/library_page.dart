@@ -490,7 +490,10 @@ class _LibraryPageState extends State<LibraryPage> {
                                                             ),
                                                             if (multiple)
                                                               Text(
-                                                                '${item.game['library_path']}',
+                                                                displayGamePath(
+                                                                  item.game['library_path']
+                                                                      as String,
+                                                                ),
                                                                 style: TextStyle(
                                                                   fontSize: 12,
                                                                   color: scheme
@@ -879,7 +882,7 @@ class _LibraryPageState extends State<LibraryPage> {
               Text('游戏信息', style: Theme.of(context).textTheme.titleMedium),
               const SizedBox(height: 12),
               SelectableText(
-                'AppID：${row.game['appid']}\n游戏 Build：${row.game['buildid'] ?? '未知'}\n安装路径：${row.game['install_path']}\n库位置：${row.game['library_path']}',
+                'AppID：${row.game['appid']}\n游戏 Build：${row.game['buildid'] ?? '未知'}\n安装路径：${displayGamePath(row.game['install_path'] as String)}\n库位置：${displayGamePath(row.game['library_path'] as String)}',
                 key: const PageStorageKey('empty-game-info-text'),
               ),
             ],

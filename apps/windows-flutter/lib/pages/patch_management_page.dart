@@ -460,7 +460,7 @@ class _PatchManagementPageState extends State<PatchManagementPage> {
         const SizedBox(height: 4),
         SelectionArea(
           child: Text(
-            widget.row.game['install_path'] as String,
+            displayGamePath(widget.row.game['install_path'] as String),
             key: const ValueKey('game-install-path'),
           ),
         ),
@@ -469,7 +469,7 @@ class _PatchManagementPageState extends State<PatchManagementPage> {
         const SizedBox(height: 4),
         SelectionArea(
           child: Text(
-            widget.row.game['library_path'] as String,
+            displayGamePath(widget.row.game['library_path'] as String),
             key: const ValueKey('game-library-path'),
           ),
         ),
