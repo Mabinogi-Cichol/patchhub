@@ -28,6 +28,15 @@ void main() {
         await tester.tap(find.text('未匹配游戏'));
         await tester.pumpAndSettle();
         expect(tester.takeException(), isNull);
+        final info = tester.widget<SelectableText>(
+          find.byKey(const PageStorageKey('empty-game-info-text')),
+        );
+        expect(
+          info.data,
+          contains(r'安装路径：F:\SteamLibrary\steamapps\common\Unmatched Game'),
+        );
+        expect(info.data, contains(r'库位置：F:\SteamLibrary'));
+        expect(info.data, isNot(contains(r'\\?\')));
         await tester.tap(find.widgetWithText(TextButton, '设置'));
         await tester.pumpAndSettle();
         expect(find.text('返回游戏'), findsOneWidget);

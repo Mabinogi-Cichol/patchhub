@@ -42,6 +42,11 @@ class FixtureClient extends CoreClient {
             'appid': 1,
             'name': '未匹配游戏',
             'localized_name': null,
+            'library_path': r'\\?\F:\SteamLibrary',
+            'install_path':
+                r'\\?\F:\SteamLibrary\steamapps\common\Unmatched Game',
+            'availability': 'installed',
+            'kind': 'game',
           },
           'patches': [],
           'diagnostics': [],
