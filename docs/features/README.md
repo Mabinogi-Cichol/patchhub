@@ -2,6 +2,7 @@
 
 | 功能 | 状态 | 设计 | 施工记录 |
 | --- | --- | --- | --- |
+| Windows 游戏路径显示修复 | 已实现，15 项定向测试与静态分析通过；原生应用待验收 | [设计](windows-game-path-display/design.md) | [施工记录](windows-game-path-display/progress.md) |
 | Windows 设置入口与缓存管理 | 已实现；定向自动化/真实字体渲染通过，原生窗口与用户验收待完成 | [设计](windows-settings/design.md) | [施工记录](windows-settings/progress.md) |
 
 2026-11-09：单一纯解压的[提取性能修复计划](generic-exe-installation/extraction-performance-plan.md)已实施并完成双平台定向自动化及 Windows 隔离生产服务性能对比；删除逐块缓存身份复查，保留入口互斥与真实文件操作边界，并启用 Windows 安装成功后自动缓存清理。已安装应用、真实游戏与设备验收未执行，详见[设计](generic-exe-installation/design.md)与[施工记录](generic-exe-installation/progress.md)。
