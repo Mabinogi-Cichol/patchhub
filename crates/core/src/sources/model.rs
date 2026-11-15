@@ -740,6 +740,9 @@ pub struct PageFact {
     pub aliases: Vec<String>,
     #[serde(default)]
     pub mirrors: Vec<Mirror>,
+    /// The links are alternative downloads for one patch target.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub single_download_group: bool,
     /// Body text, used by `identity::build_candidates`.
     #[serde(default)]
     pub text: String,

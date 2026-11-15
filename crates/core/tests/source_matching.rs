@@ -164,6 +164,7 @@ fn fact(page: &str, title: &str, appid: u32) -> PageFact {
             format: "zip".to_string(),
         }],
         text: "中文 补丁 v1.2.3 ZIP".to_string(),
+        single_download_group: false,
         published_at: None,
         body_links: Vec::new(),
         article_links: Vec::new(),

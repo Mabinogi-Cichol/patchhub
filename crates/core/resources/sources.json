@@ -1,5 +1,14 @@
 {
   "schema_version": 2,
+  "bundled_scripts": {
+    "patchmoe": ["patchmoe.lua"],
+    "table_html": ["table.lua"],
+    "table": ["table.lua"],
+    "kagura_wordpress": ["kagura.lua", "kagura-cn.lua"],
+    "kagura_woocommerce": ["kagura.lua", "kagura-en.lua"],
+    "yozakura_wordpress": ["yozakura.lua"],
+    "hgamer_html": ["hgamer.lua"]
+  },
   "sources": [
     {
       "id": "patchmoe",
@@ -35,6 +44,19 @@
       "pages": ["https://www.kaguragames.com/patch/", "https://www.kaguragames.com/product-category/patches/patch/"],
       "page_hosts": ["www.kaguragames.com"],
       "download_hosts": ["kaguraserver.com", "kaguragamespatch.com"],
+      "root_layout": null
+    },
+    {
+      "id": "yozakura",
+      "name": "YOZAKURA",
+      "adapter": "yozakura_wordpress",
+      "enabled": true,
+      "role": "publisher",
+      "discovery_only": true,
+      "priority": 30,
+      "pages": ["https://yozakuragames.com/index.php?rest_route=/wp/v2/posts&per_page=100&_fields=link,title,content"],
+      "page_hosts": ["yozakuragames.com"],
+      "download_hosts": ["www.zakuragames.com"],
       "root_layout": null
     },
     {

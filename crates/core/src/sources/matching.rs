@@ -1271,7 +1271,7 @@ fn candidates_from_fact(
     {
         related_query.name_hints.push(fact.title.clone());
     }
-    let mut found = identity::build_candidates(
+    let mut found = identity::build_candidates_with_download_group(
         rule,
         &fact.title,
         &fact.page,
@@ -1281,6 +1281,7 @@ fn candidates_from_fact(
         "unknown",
         &fact.mirrors,
         &related_query,
+        fact.single_download_group,
     );
     for candidate in &mut found {
         if candidate.game_appid.is_none() {
@@ -1767,6 +1768,9 @@ fn entry_relevant(
     query: &QueryContext,
     known: &[SourceCandidate],
 ) -> bool {
+    if let Some(appid) = entry.appid {
+        return appid == query.appid;
+    }
     upstream_identity(&entry.page, query.appid, known).is_some()
         || std::iter::once(&entry.title)
             .chain(entry.aliases.iter())

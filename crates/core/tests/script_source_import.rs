@@ -343,6 +343,7 @@ fn snapshot_and_edit_reads_capture_the_same_rule_and_code_without_writes() {
 fn digest_mismatch_and_missing_code_are_source_errors_without_fallback() {
     let state = tempfile::tempdir().unwrap();
     let mut sources = Sources::open(state.path()).unwrap();
+    let bundled_count = sources.registry().rules().len();
     sources
         .import_script_source(&rule("custom"), 1, CODE, false)
         .unwrap();
@@ -370,7 +371,7 @@ fn digest_mismatch_and_missing_code_are_source_errors_without_fallback() {
         );
         let reopened = Sources::open(state.path()).unwrap();
         assert!(reopened.get_script_source("custom").is_err());
-        assert_eq!(reopened.registry().rules().len(), 5); // Other sources remain available.
+        assert_eq!(reopened.registry().rules().len(), bundled_count + 1);
     }
 }
 

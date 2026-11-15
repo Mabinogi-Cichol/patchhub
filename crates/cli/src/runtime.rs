@@ -1325,6 +1325,10 @@ mod sources_tests {
     use super::*;
     use patchhub_core::sources::model::{SourceIndex, SourceIndexEntry};
 
+    fn bundled_rules() -> sources::RulesConfig {
+        serde_json::from_str(sources::DEFAULT_RULES_JSON).unwrap()
+    }
+
     fn fixture_root(temp: &Path) -> PathBuf {
         let root = temp.join("Steam");
         std::fs::create_dir_all(root.join("steamapps/common/Test/game")).unwrap();
@@ -1431,8 +1435,11 @@ mod sources_tests {
         )
         .unwrap();
         let array = result.as_array().unwrap();
-        assert_eq!(array.len(), 4);
-        assert!(array.iter().any(|source| source["id"] == "patchmoe"));
+        let config = bundled_rules();
+        assert_eq!(array.len(), config.sources.len());
+        for rule in config.sources {
+            assert!(array.iter().any(|source| source["id"] == rule.id));
+        }
         for source in array {
             assert_eq!(source["revision"], 0);
             assert_eq!(source["complete"], false);
@@ -1563,7 +1570,10 @@ mod sources_tests {
         .unwrap();
         assert_eq!(result["installs"][0]["discovery"]["status"], "no_match");
         assert!(result["installs"][0]["discovery"]["candidates"].is_array());
-        assert_eq!(result["sources"].as_array().unwrap().len(), 4);
+        assert_eq!(
+            result["sources"].as_array().unwrap().len(),
+            bundled_rules().sources.len()
+        );
     }
 
     #[test]

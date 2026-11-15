@@ -74,7 +74,7 @@ impl SourceAdapter<'_> {
         for page in facts.pages {
             let mut pending = vec![page.fact];
             while let Some(fact) = pending.pop() {
-                let mut found = identity::build_candidates(
+                let mut found = identity::build_candidates_with_download_group(
                     rule,
                     &fact.title,
                     &fact.page,
@@ -84,6 +84,7 @@ impl SourceAdapter<'_> {
                     &page.reported_format,
                     &fact.mirrors,
                     &identity_query,
+                    fact.single_download_group,
                 );
                 for candidate in &mut found {
                     candidate.published_at = fact.published_at.clone();

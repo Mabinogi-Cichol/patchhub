@@ -591,6 +591,24 @@ pub fn build_candidates(
     mirrors: &[Mirror],
     query: &QueryContext,
 ) -> Vec<SourceCandidate> {
+    build_candidates_with_download_group(
+        rule, title, page, text, ids, aliases, reported, mirrors, query, false,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn build_candidates_with_download_group(
+    rule: &SourceRule,
+    title: &str,
+    page: &str,
+    text: &str,
+    ids: &[u32],
+    aliases: &[String],
+    reported: &str,
+    mirrors: &[Mirror],
+    query: &QueryContext,
+    single_download_group: bool,
+) -> Vec<SourceCandidate> {
     let appid = query.appid;
     let has_ids = !ids.is_empty();
     if has_ids && !ids.contains(&appid) {
@@ -618,7 +636,15 @@ pub fn build_candidates(
 
     let mut groups: Vec<(GroupKey, Vec<Mirror>)> = Vec::new();
     for mirror in mirrors {
-        let key = mirror_key(mirror);
+        let key = if single_download_group {
+            GroupKey {
+                languages: Vec::new(),
+                version: None,
+                filename: None,
+            }
+        } else {
+            mirror_key(mirror)
+        };
         match groups.iter().position(|entry| entry.0 == key) {
             Some(position) => groups[position].1.push(mirror.clone()),
             None => groups.push((key, vec![mirror.clone()])),
@@ -650,7 +676,11 @@ pub fn build_candidates(
     }
     if groups.is_empty() {
         let key = GroupKey {
-            languages: language(text),
+            languages: if single_download_group {
+                Vec::new()
+            } else {
+                language(text)
+            },
             version: if all_versions.len() == 1 {
                 Some(all_versions[0].clone())
             } else {
@@ -668,7 +698,7 @@ pub fn build_candidates(
             version = Some(all_versions[0].clone());
         }
         let mut group_languages = key.languages.clone();
-        if group_languages.is_empty() {
+        if group_languages.is_empty() && !single_download_group {
             group_languages = language(text);
         }
         let observed = observed_format(&entries);

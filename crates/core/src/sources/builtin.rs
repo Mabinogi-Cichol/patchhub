@@ -2,38 +2,7 @@
 use super::{model::ScriptDescriptor, script::SCRIPT_API_VERSION, SourceRule};
 use sha2::{Digest, Sha256};
 
-pub fn code(adapter: &str) -> Option<&'static str> {
-    match adapter {
-        "patchmoe" => Some(concat!(
-            include_str!("../../resources/source-scripts/common.lua"),
-            "\n",
-            include_str!("../../resources/source-scripts/patchmoe.lua")
-        )),
-        "table_html" | "table" => Some(concat!(
-            include_str!("../../resources/source-scripts/common.lua"),
-            "\n",
-            include_str!("../../resources/source-scripts/table.lua")
-        )),
-        "kagura_wordpress" => Some(concat!(
-            include_str!("../../resources/source-scripts/common.lua"),
-            "\n",
-            include_str!("../../resources/source-scripts/kagura.lua"),
-            "\nreturn kagura(false)\n"
-        )),
-        "kagura_woocommerce" => Some(concat!(
-            include_str!("../../resources/source-scripts/common.lua"),
-            "\n",
-            include_str!("../../resources/source-scripts/kagura.lua"),
-            "\nreturn kagura(true)\n"
-        )),
-        "hgamer_html" => Some(concat!(
-            include_str!("../../resources/source-scripts/common.lua"),
-            "\n",
-            include_str!("../../resources/source-scripts/hgamer.lua")
-        )),
-        _ => None,
-    }
-}
+include!(concat!(env!("OUT_DIR"), "/bundled_sources.rs"));
 
 /// Bind the bundled revision without executing, writing, or networking.
 /// User code uses adapter=lua and is never rebound to a bundled revision.

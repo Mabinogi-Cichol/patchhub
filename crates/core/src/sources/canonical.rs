@@ -122,20 +122,26 @@ fn write_string(out: &mut Vec<u8>, text: &str) {
     out.push(b'"');
 }
 
-/// `canonical_url(u) = urlunsplit(scheme, netloc.lower(), path, "", "")`
-/// (design §5.1): drop query/fragment, lowercase host, preserve the port as-is
-/// (current behavior; folding port 443 would require an encoding version bump),
-/// and keep the path raw (percent-encoding normalization is not part of the
-/// frozen contract).
+/// Lowercase the authority, preserve the port and raw path, and remove fragments.
+/// Query parameters are dropped except where they identify a known article.
 pub fn canonical_url(url: &str) -> String {
     let parsed = split_url(url);
-    urlunsplit(
-        &parsed.scheme,
-        &parsed.netloc.to_lowercase(),
-        &parsed.path,
-        "",
-        "",
-    )
+    let host = parsed.netloc.to_lowercase();
+    // The publisher uses WordPress plain permalinks, where p identifies the article.
+    let query = if host == "yozakuragames.com" && parsed.path == "/" {
+        parsed
+            .query
+            .split('&')
+            .find(|part| {
+                part.strip_prefix("p=").is_some_and(|id| {
+                    !id.is_empty() && id.bytes().all(|byte| byte.is_ascii_digit())
+                })
+            })
+            .unwrap_or("")
+    } else {
+        ""
+    };
+    urlunsplit(&parsed.scheme, &host, &parsed.path, query, "")
 }
 
 fn urlunsplit(scheme: &str, netloc: &str, path: &str, query: &str, fragment: &str) -> String {
@@ -261,6 +267,22 @@ mod tests {
         assert_eq!(
             canonical_url("https://Example.COM/Game/?q=1#frag"),
             "https://example.com/Game/"
+        );
+    }
+
+    #[test]
+    fn canonical_url_keeps_yozakura_wordpress_post_id() {
+        assert_eq!(
+            canonical_url("https://YOZAKURAGAMES.COM/?utm_source=steam&p=161#patch"),
+            "https://yozakuragames.com/?p=161"
+        );
+        assert_ne!(
+            canonical_url("https://yozakuragames.com/?p=150"),
+            canonical_url("https://yozakuragames.com/?p=161")
+        );
+        assert_eq!(
+            canonical_url("https://example.com/?p=161"),
+            "https://example.com/"
         );
     }
 

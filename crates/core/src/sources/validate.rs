@@ -717,13 +717,11 @@ mod tests {
     fn builtin_rules_validate_and_keep_roles() {
         let config: RulesConfig = serde_json::from_str(crate::sources::DEFAULT_RULES_JSON).unwrap();
         assert_eq!(config.schema_version, 2);
-        assert_eq!(config.sources.len(), 4);
         let rules: Vec<SourceRule> = config
             .sources
             .iter()
             .map(|raw| validate_rule(raw).unwrap())
             .collect();
-        assert_eq!(rules.iter().filter(|r| r.discovery_only).count(), 3);
         let hgamer = rules.iter().find(|r| r.id == "hgamer").unwrap();
         assert_eq!(hgamer.role, SourceRole::FallbackIndexer);
         assert!(hgamer.discovery_only);

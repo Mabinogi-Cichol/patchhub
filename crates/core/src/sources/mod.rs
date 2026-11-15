@@ -52,14 +52,11 @@ pub const SOURCE_DETAIL_SCHEMA_VERSION: u32 = 1;
 /// On-disk schema of `matches/<appid>.json` (p1-contract §1, §7.1).
 pub const GAME_MATCH_SCHEMA_VERSION: u32 = 1;
 
-/// discovery.py internal adapter set; not a valid rule `adapter` value on its own.
-pub const DISCOVERY_ADAPTERS: &[&str] = &["kagura_wordpress", "kagura_woocommerce", "hgamer_html"];
+/// Bundled adapters registered for discovery by the default source configuration.
+pub use builtin::DISCOVERY_ADAPTERS;
 
-/// Default rules resource, inlined at compile time (design §3).
-///
-/// Relative to `crates/core/src/sources/` this resolves to
-/// `crates/core/resources/sources.json`.
-pub const DEFAULT_RULES_JSON: &str = include_str!("../../resources/sources.json");
+/// Default runtime rules generated from `crates/core/resources/sources.json`.
+pub use builtin::DEFAULT_RULES_JSON;
 
 pub type Result<T> = std::io::Result<T>;
 
