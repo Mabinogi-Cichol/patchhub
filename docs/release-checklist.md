@@ -2,6 +2,21 @@
 
 本清单区分已构建产物与已验收发行版。当前版本仍为开发 Alpha，完整开发计划的样本数量及双端 UI 门槛尚未达到。
 
+## v0.6.2 发布记录（2026-11-15）
+
+- [发行说明](releases/v0.6.2.md)与[发布前 CI 逐步记录](releases/v0.6.2-validation.md)。
+- [标签构建 43701501955](https://github.com/Mabinogi-Cichol/patchhub/actions/runs/43701501955) 对应提交 `cfed3f8398cd8d49c3a4adce8198cdf34bffaf97`，7 个 job 全部通过。
+- [GitHub Release v0.6.2](https://github.com/Mabinogi-Cichol/patchhub/releases/tag/v0.6.2) 于北京时间 2026-11-15 18:04:43 公开，标题与 Tag 均为 `v0.6.2`，中文发行说明已读回核对。
+- 四个公开附件的名称、大小、GitHub SHA-256 和发布清单已核对。Windows 与 Decky ZIP 的 CRC、内容清单、架构、版本、SBOM 和标签资源已核对。Windows EXE 版本为 `0.6.2+1`，公开 Windows 核心内置的 YOZAKURA Lua 摘要与标签源码一致。
+- 实机安装、真实游戏补丁安装和正式跨版本更新整链待验证。公开附件及核验证据位于 `.artifacts/release-v0.6.2/`，本地逐步检查和产物位于 `.artifacts/ci-local-062/`。
+
+| 附件 | 字节 | SHA-256 |
+| --- | --- | --- |
+| patchhub-decky.zip | 7618495 | `4085a8a43f3af2868b1757e260723990d2182db43b46750724f696e53b6008c3` |
+| patchhub-windows-portable.zip | 19566897 | `f30f5279f15ef2402824a8dd593911226c1559a6aa96be9d17b5746bfa22f4bf` |
+| patchhub-windows-x64-setup.exe | 14727508 | `de503c3ad2847ca302579ac893b46d2150485b1ff6af6cb36e0edb984e465a59` |
+| SHA256SUMS.txt | 278 | `180061c55e8fc80b6695e77a4b46adde6eb22c5395e96b141086e2a553aa5bdf` |
+
 ## v0.6.1 发布记录（2026-11-09）
 
 - 用户授权发布 v0.6.1，包含 v0.6.0 后的提取性能优化、Windows 设置与缓存管理、操作记录灰块修复及安装弹层窗口拖动修复。版本同步提交 `5709a06`，应用版本统一为 0.6.1，Flutter / Windows EXE 版本为 0.6.1+1；第三方依赖未更新。
