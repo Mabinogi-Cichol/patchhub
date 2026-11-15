@@ -41,7 +41,7 @@ return {
 | 入口 | 输入与输出合同 |
 | --- | --- |
 | `collect_index` | `previous` 为已有索引/进度中的 `entries/pending/complete/etag/modified`，无记录时为空值；返回 `{entries, pending, complete, etag?, modified?, not_modified?, diagnostics?}`。条目复用 `SourceIndexEntry`；时间、修订和源 ID 由核心生成。`not_modified=true` 必须已有同解析身份的正式索引。 |
-| `resolve_page` | 输入绝对页面 URL；返回既有 `PageFact` 字段：`title/page/kind/steam_ids/aliases/mirrors/text/published_at/body_links/article_links/article_facts/next_page`。不得返回候选授权或安装对象。 |
+| `resolve_page` | 输入绝对页面 URL；返回 `PageFact` 字段 `title/page/kind/steam_ids/aliases/mirrors/text/published_at/body_links/article_links/article_facts/next_page`，以及可选的 `single_download_group`。同一个补丁目标有多条下载链接时可设置为 `true`，在同一候选内保留链接和标签供玩家选择。默认沿用已有候选归并。不得返回候选授权或安装对象。 |
 | `discover` | `query` 提供 `appid/name/name_hints/terms/force`；`terms` 由公共身份算法生成。`previous` 提供已有候选的事实副本。返回 `{pages, identities, complete, diagnostics}`；`pages` 每项为 `{fact: PageFact, reported_format?, upstream_page?}`，`identities` 每项为 `{appid, page, aliases}`。核心仍调用公共身份、格式、候选生成和校验逻辑，不接受脚本直接返回 `SourceCandidate`。P4 已完成此核心入口的自动化验证；HGamer 在 P6 已迁入相同入口，候选权限仍由核心生成。 |
 
 `diagnostics` 每项只含 `code/detail?`；宿主绑定 `source_id`。空数组、缺省可选项按字段合同处理。脚本异常没有返回输出时不保存虚构的新续跑状态，保留既有正式索引和进度。返回明确的部分结果时才使用 `pending`；不保存 Lua 栈或局部变量。
@@ -100,7 +100,7 @@ P0 时内置生产迁移尚未实施；P6 已完成四个来源及 `table_html` 
 
 ## P6 随包来源与修订
 
-[builtin.rs](../../../crates/core/src/sources/builtin.rs) 以 `include_str!/concat!` 内嵌公共 Lua 文本和站点脚本；旧适配器名只定位文本，生产分派只有同一 Lua 执行器。每份完整代码按 UTF-8 原始字节计算 SHA-256；`.gitattributes` 固定随包 `*.lua` 为 LF，避免平台检出改变修订。自定义源码仍逐字保存。
+[sources.json](../../../crates/core/resources/sources.json) 的 `bundled_scripts` 按适配器名声明 Lua 文件列表。[构建脚本](../../../crates/core/build.rs) 将 `common.lua` 和所列文件依次用 LF 连接，并随程序嵌入。在同一配置添加默认来源规则即可注册新内置源。完整代码按 UTF-8 原始字节计算 SHA-256，`.gitattributes` 固定随包 Lua 使用 LF。自定义源码继续逐字保存。
 
 读取内置脚本不编译、不执行、不联网、不初始化状态；文档规则输出 `adapter=lua`，只供查看，内置来源不可被导入覆盖或删除。发行更新绑定随包定义，不读取也不覆盖任何用户 `adapter=lua` 源码；早期版本保存的同 ID 覆盖仍按 `settings.added` 中的用户规则加载，可编辑、可删除，删除后恢复随包定义。旧无解析指纹缓存保留文件但不授权新解析器。`ctx.get` 条件字段同时接受缺省和 `ctx.null`，支持已有索引序列化的可选值。
 
