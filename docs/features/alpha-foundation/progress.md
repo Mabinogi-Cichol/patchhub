@@ -1,58 +1,62 @@
-# 开发进度
+# 早期 Alpha 施工记录与开发摘要
+
+历史归档。[设计](design.md) · [调研与样本证据](research-sources.md)
+
+本文件保存早期实现、实机测试和当时的全项目进度摘要。各功能后续状态见[功能索引](../README.md)，发行核验见[发行检查](../../releases/release-checklist.md)。
 
 ## 2026-11-01：v0.5.1 已发布并核验四个附件
 
-Decky 自更新阻断修复、原生进度界面及完成后重开提示已合并推送 main，Tag v0.5.1 固定指向 `f66d0dd`。标签 CI 全部通过，三个安装包与校验清单已公开；下载哈希、包内容/版本/来源及 Windows 便携包隔离启动通过。正式 v0.5.1 包的设备部署、实体手柄与 Windows 安装矩阵未执行。详见[发行记录](release-checklist.md#v051-发布记录2026-11-01)和[发行说明](releases/v0.5.1.md)。
+Decky 自更新阻断修复、原生进度界面及完成后重开提示已合并推送 main，Tag v0.5.1 固定指向 `f66d0dd`。标签 CI 全部通过，三个安装包与校验清单已公开；下载哈希、包内容/版本/来源及 Windows 便携包隔离启动通过。正式 v0.5.1 包的设备部署、实体手柄与 Windows 安装矩阵未执行。详见[发行记录](../../releases/release-checklist.md#v051-发布记录2026-11-01)和[发行说明](../../releases/v0.5.1.md)。
 
 ## 2026-11-01：v0.5.0 已发布并核验四个附件
 
-Lua 来源迁移、双端脚本管理、Shiravune 后台访问与来源名称功能已合并并推送 main，标签 `v0.5.0` 指向 `a20356b`。标签 CI 全部成功，三个安装包与校验清单已公开，下载核验、包内容/版本/来源与 Windows 便携包隔离启动通过。依赖审计仍有既有 RustSec 与 npm 公告命中，尚未修复；最终包的 Deck 部署、实体输入及真实游戏等验收仍待执行。详见[发行记录](release-checklist.md#v050-发布记录2026-11-01)及[发行说明](releases/v0.5.0.md)。
+Lua 来源迁移、双端脚本管理、Shiravune 后台访问与来源名称功能已合并并推送 main，标签 `v0.5.0` 指向 `a20356b`。标签 CI 全部成功，三个安装包与校验清单已公开，下载核验、包内容/版本/来源与 Windows 便携包隔离启动通过。依赖审计仍有既有 RustSec 与 npm 公告命中，尚未修复；最终包的 Deck 部署、实体输入及真实游戏等验收仍待执行。详见[发行记录](../../releases/release-checklist.md#v050-发布记录2026-11-01)及[发行说明](../../releases/v0.5.0.md)。
 
 ## 2026-10-20：v0.2.1 已发布并核验全部附件
 
-修复代码与参考基线分项提交后合并 main，注解 Tag `v0.2.1` 指向 `cc7dbc4`。GitHub Actions 实际于 00:02 发布全部 9 个附件，已下载核对哈希、清单、ZIP 内容、平台、程序版本、SBOM 与 Tag 来源，并补全中文正文。Actions 状态接口仍返回旧 queued 值；实际完整日志和公开发行结果已交叉确认，不再据该旧值判断构建尚未启动。用户确认修复，既有验证边界保持。详见[发行说明](releases/v0.2.1.md)和[发行核验记录](release-checklist.md#v021-发布记录2026-10-20)。
+修复代码与参考基线分项提交后合并 main，注解 Tag `v0.2.1` 指向 `cc7dbc4`。GitHub Actions 实际于 00:02 发布全部 9 个附件，已下载核对哈希、清单、ZIP 内容、平台、程序版本、SBOM 与 Tag 来源，并补全中文正文。Actions 状态接口仍返回旧 queued 值；实际完整日志和公开发行结果已交叉确认，不再据该旧值判断构建尚未启动。用户确认修复，既有验证边界保持。详见[发行说明](../../releases/v0.2.1.md)和[发行核验记录](../../releases/release-checklist.md#v021-发布记录2026-10-20)。
 
 ## 2026-10-19：准备 v0.2.1 显示文本解码修复版
 
-跳过无业务用途的 EXE 显示文本解码，内部报告与参考链路同步为 v3；用户确认修复，要求提交并发布 v0.2.1。沿用本 session 的 Rust 604 项、Python 40 项、fmt/clippy 和 Deck 真实样本/插件部署证据，版本字段已统一为 0.2.1。Tag 对应 CI 和发行附件在线核验结果完成后补记；不扩大 Windows、缺失样本及实际游戏矩阵的验收结论。详见[发行说明](releases/v0.2.1.md)及[功能施工记录](features/generic-exe-installation/progress.md)。
+跳过无业务用途的 EXE 显示文本解码，内部报告与参考链路同步为 v3；用户确认修复，要求提交并发布 v0.2.1。沿用本 session 的 Rust 604 项、Python 40 项、fmt/clippy 和 Deck 真实样本/插件部署证据，版本字段已统一为 0.2.1。Tag 对应 CI 和发行附件在线核验结果完成后补记；不扩大 Windows、缺失样本及实际游戏矩阵的验收结论。详见[发行说明](../../releases/v0.2.1.md)及[功能施工记录](../generic-exe-installation/progress.md)。
 
 ## 2026-10-19：v0.2.0 已发布，补全发行说明并核验附件
 
-来源索引/增量匹配重构、可折叠来源卡片、缓存占用与 VenusBlood 修复完成分项提交和已有验证复核；程序内版本统一 0.2.0，Tag `v0.2.0` 指向 `4d10591`。Tag 对应 CI `39245207148` 全部成功并创建含 9 个附件的 Release；中断后补全中文发行说明正文，并下载核验全部附件的 SHA-256、校验清单、ZIP 内容、SBOM、平台与执行权限。随后按用户要求把公开 v0.2.0 Decky ZIP 部署到 Steam Deck，文件/RPC/游戏模式界面验证通过。Windows 实机、手柄、休眠调度、终端安装器实机入口及新版安装链完整中断矩阵仍待验证，未改记通过。详见[发行说明](releases/v0.2.0.md)和[发行检查](release-checklist.md#v020-发布记录2026-10-19)。
+来源索引/增量匹配重构、可折叠来源卡片、缓存占用与 VenusBlood 修复完成分项提交和已有验证复核；程序内版本统一 0.2.0，Tag `v0.2.0` 指向 `4d10591`。Tag 对应 CI `39245207148` 全部成功并创建含 9 个附件的 Release；中断后补全中文发行说明正文，并下载核验全部附件的 SHA-256、校验清单、ZIP 内容、SBOM、平台与执行权限。随后按用户要求把公开 v0.2.0 Decky ZIP 部署到 Steam Deck，文件/RPC/游戏模式界面验证通过。Windows 实机、手柄、休眠调度、终端安装器实机入口及新版安装链完整中断矩阵仍待验证，未改记通过。详见[发行说明](../../releases/v0.2.0.md)和[发行检查](../../releases/release-checklist.md#v020-发布记录2026-10-19)。
 
 ## 2026-10-15：v0.1.0 首个公开版本已发布
 
-基于最新插件代码完成首发，Tag 固定于 `a4e1056`。双平台 CI 全部成功，Windows 安装版、便携版与 Decky 插件共 8 个发行附件已公开并下载核验。根 README 改为用户介绍与使用指南，补充用户操作的 Steam Deck 实机截图；《夏日狂想曲+》覆盖安装任务 completed/committed，自动清理成功，未核验游戏内效果。发布记录与校验范围见[发行检查](release-checklist.md#v010-首发记录2026-10-15)。
+基于最新插件代码完成首发，Tag 固定于 `a4e1056`。双平台 CI 全部成功，Windows 安装版、便携版与 Decky 插件共 8 个发行附件已公开并下载核验。根 README 改为用户介绍与使用指南，补充用户操作的 Steam Deck 实机截图；《夏日狂想曲+》覆盖安装任务 completed/committed，自动清理成功，未核验游戏内效果。发布记录与校验范围见[发行检查](../../releases/release-checklist.md#v010-首发记录2026-10-15)。
 
 ## 2026-10-13：Rust 核心收敛 P6 完成，最终 gate 通过
 
-最终取消标准化修复完成，Windows604/Linux576、Decky Python78与fmt/Clippy/release、计数基准、双端最终包和同包冒烟通过。Deck本机WSL构建的新包已正式部署，ZIP/EXE覆盖、实际写入取消回滚、恢复/清理、真实界面和用户两款游戏/手柄确认均完成；远端暂存清理，本地备份核验保留。Windows真实UI/直链EXE按用户决定跳过；最终只读gate findings=[]，D1–D10已关闭、P6完成；本轮未提交/推送/发布。详见 [P6验证](features/rust-core-consolidation/p6-validation.md)、[复核](features/rust-core-consolidation/p6-review.md)与[施工记录](features/rust-core-consolidation/progress.md)。
+最终取消标准化修复完成，Windows604/Linux576、Decky Python78与fmt/Clippy/release、计数基准、双端最终包和同包冒烟通过。Deck本机WSL构建的新包已正式部署，ZIP/EXE覆盖、实际写入取消回滚、恢复/清理、真实界面和用户两款游戏/手柄确认均完成；远端暂存清理，本地备份核验保留。Windows真实UI/直链EXE按用户决定跳过；最终只读gate findings=[]，D1–D10已关闭、P6完成；本轮未提交/推送/发布。详见 [P6验证](../rust-core-consolidation/p6-validation.md)、[复核](../rust-core-consolidation/p6-review.md)与[施工记录](../rust-core-consolidation/progress.md)。
 
 ## 2026-10-13：Rust核心收敛P6恢复，双端最终包与Deck v4正式部署通过
 
-本机WSL Ubuntu22.04非root构建Linux CLI/worker，Linux575项Rust及78项Python通过，双端fmt/Clippy、release计数基准、最终包/许可证/SBOM及NSIS内容核验通过。Deck正式v4包24文件/实际HTTP字节一致，Loader active、插件实例1、真实scan27游戏，夜勤ZIP安装/覆盖和写入取消终态已通过；剩余EXE、前后哈希/游戏/控制器及最终gate继续执行。Windows夜勤覆盖/取消回滚71文件一致与用户确认生效通过；真实UI/直链EXE按用户决定跳过。没有P6提交/推送/发布。详细证据见[P6验证](features/rust-core-consolidation/p6-validation.md)与[施工记录](features/rust-core-consolidation/progress.md)。
+本机WSL Ubuntu22.04非root构建Linux CLI/worker，Linux575项Rust及78项Python通过，双端fmt/Clippy、release计数基准、最终包/许可证/SBOM及NSIS内容核验通过。Deck正式v4包24文件/实际HTTP字节一致，Loader active、插件实例1、真实scan27游戏，夜勤ZIP安装/覆盖和写入取消终态已通过；剩余EXE、前后哈希/游戏/控制器及最终gate继续执行。Windows夜勤覆盖/取消回滚71文件一致与用户确认生效通过；真实UI/直链EXE按用户决定跳过。没有P6提交/推送/发布。详细证据见[P6验证](../rust-core-consolidation/p6-validation.md)与[施工记录](../rust-core-consolidation/progress.md)。
 
 
 
 ## 2026-10-13：Rust 核心收敛 P6 清理完成后暂停，等待本机 WSL
 
-P6 v4 基准/URL边界/许可证与SBOM清理、Windows自动化及最终便携包/NSIS核验已完成；Windows《夜勤病栋》使用已核验官方ZIP真实安装达 `completed/committed`。Deck正式状态/游戏备份已回传核验，构建残留和相关进程已清理，临时SSH隧道关闭；正式插件仍v3，未部署或修改Deck游戏。按用户要求暂停等待本机WSL，后续从本机构建Linux产物；Linux完整矩阵、Deck v4部署、剩余双端实机和最终独立gate待完成。Windows直链fake-IP环节沿用用户允许跳过的决定，P6未提交/推送/发布。详见 [P6验证](features/rust-core-consolidation/p6-validation.md)、[复核](features/rust-core-consolidation/p6-review.md)与[施工记录](features/rust-core-consolidation/progress.md)。
+P6 v4 基准/URL边界/许可证与SBOM清理、Windows自动化及最终便携包/NSIS核验已完成；Windows《夜勤病栋》使用已核验官方ZIP真实安装达 `completed/committed`。Deck正式状态/游戏备份已回传核验，构建残留和相关进程已清理，临时SSH隧道关闭；正式插件仍v3，未部署或修改Deck游戏。按用户要求暂停等待本机WSL，后续从本机构建Linux产物；Linux完整矩阵、Deck v4部署、剩余双端实机和最终独立gate待完成。Windows直链fake-IP环节沿用用户允许跳过的决定，P6未提交/推送/发布。详见 [P6验证](../rust-core-consolidation/p6-validation.md)、[复核](../rust-core-consolidation/p6-review.md)与[施工记录](../rust-core-consolidation/progress.md)。
 
 ## 2026-10-13：Rust 核心收敛 P5 阶段完成，P6 待验收
 
-正式 v4/生成契约/共享 UI helper 与双端终态消费已实现，Windows/Linux及宿主自动化、生成无漂移、同包CLI/worker隔离冒烟与专项独立复核通过。P5代码已本地提交 `9b5c4f8`，文档独立提交；未部署；P6最终双端安装包、真实UI/游戏/设备与全范围清理gate待执行。完整记录见 [P5验证](features/rust-core-consolidation/p5-validation.md)与[施工记录](features/rust-core-consolidation/progress.md)。
+正式 v4/生成契约/共享 UI helper 与双端终态消费已实现，Windows/Linux及宿主自动化、生成无漂移、同包CLI/worker隔离冒烟与专项独立复核通过。P5代码已本地提交 `9b5c4f8`，文档独立提交；未部署；P6最终双端安装包、真实UI/游戏/设备与全范围清理gate待执行。完整记录见 [P5验证](../rust-core-consolidation/p5-validation.md)与[施工记录](../rust-core-consolidation/progress.md)。
 
 ## 2026-10-12：Rust 核心服务收敛重构 P1–P4 已本地提交、P3/P4 阶段自动化通过（P5–P6 待实现）
 
 - 建立独立 feature，按扫描投影、签名安装编排/信任存储、缓存清理、动作 DTO、公共契约顺序推进，P6 逐项关闭本次识别的技术债。
-- P0 契约/动作与终态/数据/债项已冻结，Windows隔离基准和只读36实例清单、拟v4体积核对、独立静态复核通过；P1核心扫描/取证/预览已实现并接入CLI，Windows417/Linux422、只读子进程、Clippy与独立复核通过；哈希次数一致，取证耗时增加约45%–61%，详见 [P1 验证](features/rust-core-consolidation/p1-validation.md)。P2签名/信任/统一安装与终态已核心化，Windows465/Linux472、Clippy、实际root拒绝与独立复核通过；清理诊断/恢复边界/账本失败重放闭环，详见 [P2 验证](features/rust-core-consolidation/p2-validation.md)。P1/P2 代码已本地提交 `e77d0a8`，文档独立提交，未推送/部署；P3核心CacheService/shared-exclusive锁、AfterCommit与双端偏好适配已实现，Windows487/Linux494、Windows宿主23、Decky后端69/TS63与fmt/Clippy、独立复核通过，详见 [P3 验证](features/rust-core-consolidation/p3-validation.md)。P4必需actions/双端消费、strict Reinstall与过期快照重核已实现，Windows502/Linux509、Tauri24、Decky71/TS65、双端类型与fmt/Clippy通过；两项独立审阅意见已修复，最终全范围独立gate待P6，详见 [P4验证](features/rust-core-consolidation/p4-validation.md)。P3/P4 代码已本地提交 `19ffc8a`，文档独立提交，未推送/部署；P5–P6、双端最终产物和实机均待实施。详见 [设计](features/rust-core-consolidation/design.md)与[施工记录](features/rust-core-consolidation/progress.md)。
+- P0 契约/动作与终态/数据/债项已冻结，Windows隔离基准和只读36实例清单、拟v4体积核对、独立静态复核通过；P1核心扫描/取证/预览已实现并接入CLI，Windows417/Linux422、只读子进程、Clippy与独立复核通过；哈希次数一致，取证耗时增加约45%–61%，详见 [P1 验证](../rust-core-consolidation/p1-validation.md)。P2签名/信任/统一安装与终态已核心化，Windows465/Linux472、Clippy、实际root拒绝与独立复核通过；清理诊断/恢复边界/账本失败重放闭环，详见 [P2 验证](../rust-core-consolidation/p2-validation.md)。P1/P2 代码已本地提交 `e77d0a8`，文档独立提交，未推送/部署；P3核心CacheService/shared-exclusive锁、AfterCommit与双端偏好适配已实现，Windows487/Linux494、Windows宿主23、Decky后端69/TS63与fmt/Clippy、独立复核通过，详见 [P3 验证](../rust-core-consolidation/p3-validation.md)。P4必需actions/双端消费、strict Reinstall与过期快照重核已实现，Windows502/Linux509、Tauri24、Decky71/TS65、双端类型与fmt/Clippy通过；两项独立审阅意见已修复，最终全范围独立gate待P6，详见 [P4验证](../rust-core-consolidation/p4-validation.md)。P3/P4 代码已本地提交 `19ffc8a`，文档独立提交，未推送/部署；P5–P6、双端最终产物和实机均待实施。详见 [设计](../rust-core-consolidation/design.md)与[施工记录](../rust-core-consolidation/progress.md)。
 
 ## 2026-10-11：跨平台安装器迁移 P6 收口
 
 - 删除已迁入 Rust 的 Decky Python 安装器/来源遗留 20 个文件（publisher、exe_generic/exe_profiles/exe_facts/exe_installation/exe_worker、acquisition、caches、source_primitives、exe_profiles.json 及 10 个测试），以及 Rust 死接口（EngineSwitch 双引擎模型、旧来源策略 API、旧 RPC `migrate_state`、无用途 `--record-id`、Windows 旧核心降级 UI）；§7.3 六项来源兼容遗留逐项核对完成。
 - 双端完整矩阵：Windows 389 passed / 6 ignored（另宿主 23、Decky 70、脚本 CI 套件全绿）；WSL2 393 passed / 6 ignored、worker 17；SBOM 744 组件。
 - 两端产物重建：Windows 便携包 8,528,236 B `d9674384…`；Decky 包 6,838,259 B `b65b55ea…`（backend 恰为 6 模块 allowlist，ELF/runtime 哈希一致）。
-- 独立 oracle 门禁复核：有条件通过，必修/建议已闭环。Deck 正式部署复验通过（正式包 `eeda0201…`，21 文件哈希一致、实例 1、HTTP bundle 与 scan 正常，游戏无写入）。详见 [功能施工记录](features/cross-platform-installer-migration/progress.md) 与 [P6 复核](features/cross-platform-installer-migration/p6-gate-review.md)。
+- 独立 oracle 门禁复核：有条件通过，必修/建议已闭环。Deck 正式部署复验通过（正式包 `eeda0201…`，21 文件哈希一致、实例 1、HTTP bundle 与 scan 正常，游戏无写入）。详见 [功能施工记录](../cross-platform-installer-migration/progress.md) 与 [P6 复核](../cross-platform-installer-migration/p6-gate-review.md)。
 - Deck 正式重部署未重做（生产行为无变化）；未创建 Git 提交。
 
 ## 2026-10-04：安装后下载缓存清理
@@ -61,7 +65,7 @@ P6 v4 基准/URL边界/许可证与SBOM清理、Windows自动化及最终便携�
 - 新增后端自动清理开关（`settings.json`，默认开启）与手动“清理下载缓存”入口（“管理订阅源 > 下载缓存”，显示占用并可确认清理）。
 - 后端新增 `plugin_settings.py`（原 `settings.py`，因 Decky 运行时 `decky_loader.settings` 同名冲突改名）、`caches.py` 与 `publisher.clear_cache/caches`；`main.py` 在 `start_install` 提交后按开关清理。前端新增 `cache.ts` 纯逻辑与全局设置分区。
 - 测试：后端新增 `test_settings` 4 项、`test_caches` 5 项、`test_cache_cleanup` 6 项、publisher 缓存 2 项通过；前端 `cache.test.ts` 3 项通过；类型检查与 Rollup 构建通过。
-- 部署并实机验收：备份后按哈希部署到 Deck 并重载；经 Steam CEF 连接 Decky 路由实时调用 `get_settings` / `cache_status` / `clear_cache` / `set_auto_cleanup` / `clear_transaction_backups` 通过（构造 319B / 5 文件缓存，清理后清零且保留用户文件）。真实安装后自动删除与手柄 UI 渲染待办。设计与进度见 [cache-cleanup](features/cache-cleanup/design.md)。
+- 部署并实机验收：备份后按哈希部署到 Deck 并重载；经 Steam CEF 连接 Decky 路由实时调用 `get_settings` / `cache_status` / `clear_cache` / `set_auto_cleanup` / `clear_transaction_backups` 通过（构造 319B / 5 文件缓存，清理后清零且保留用户文件）。真实安装后自动删除与手柄 UI 渲染待办。设计与进度见 [cache-cleanup](../cache-cleanup/design.md)。
 - 用户反馈事务 `.stage`/`.backup`（设备上 7.7G）未清理且找不到缓存面板。澄清它们是核心事务文件非下载缓存；新增提交后自动删除该事务 `.stage`、`jobs` 占用统计与手动“清理事务备份与暂存”（清理备份后无法卸载、只能重新安装），并把入口改为全局设置的独立侧栏页“下载缓存”。实机 `get_settings` 显示 stage/backup 各约 3.85G，部署后的 `caches.py` 在 Deck Python 3.13 上仅删目标文件并保留无关文件。
 - 按用户确认立即执行真实清理：状态目录从 7.7G 降到 344K。新增**备份保留开关 `keep_backups`，默认关闭**：关闭时安装提交后同时删除 `.backup`（默认无法卸载、只能重新安装），开启时保留以支持卸载；`list_transactions` 增加 `backups` 字段，无备份事务界面隐藏卸载，后端 `uninstall` 以 `uninstall_backups_missing` 拒绝。重新部署并实机验证 `get_settings`（`keep_backups:false`）、`set_keep_backups` 往返、事务 `backups:false` 与卸载拒绝均正确。
 - 修复“无备份时无法重新安装”：核心 `ensure_no_active` 会因旧 `committed` 事务拒绝新准备。因无 Rust 工具链，decky 侧让 `scan` 不再因无 `.backup` 的 committed 事务阻止（有备份仍阻止），并在准备前对无备份状态目录删除核心 `journal.sqlite`/`jobs`（保留配方/签名/密钥）。实机扫描该补丁 `blockers` 为空、检测 `installed_external`、可进入重新安装。后端 72 项测试通过。

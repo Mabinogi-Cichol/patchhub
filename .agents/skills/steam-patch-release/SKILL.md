@@ -56,4 +56,4 @@ gh release view v0.1.0 --repo OWNER/REPO --json name,tagName,url
 - GitHub 上传会规范化文件名，例如把 NSIS 名称中的空格改为点号；在暂存附件时先统一公开名称，再生成校验清单。核对清单中的名称与实际公开下载名一致，不能只核对哈希值。
 - 发布后从 Release 下载并验证附件 SHA-256、ZIP 内容白名单与 CRC、程序平台/架构、Decky 执行权限与 runtime 哈希、SBOM 锁文件摘要及资源/契约来源。Windows runner 的 CRLF 检出与 Git LF blob 应按实际规则区分。
 - 读回 Release 的标题、Tag、公开/预发行状态、附件数量与下载链接。只改标题时无需重新下载并校验未变化的所有附件。
-- 证据及下载文件保存在忽略目录 `.artifacts/`；报告实际发布 URL、Tag 对应提交和未验证项。发布记录见 [发行检查](../../../docs/release-checklist.md)，不能把历史实机验证当作本次安装包的部署证明。
+- 证据及下载文件保存在忽略目录 `.artifacts/`；报告实际发布 URL、Tag 对应提交和未验证项。发布记录见 [发行检查](../../../docs/releases/release-checklist.md)，不能把历史实机验证当作本次安装包的部署证明。

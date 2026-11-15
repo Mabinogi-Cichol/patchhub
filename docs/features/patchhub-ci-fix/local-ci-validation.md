@@ -1,6 +1,6 @@
 # 本地 CI 验证
 
-以当前 [workflow](../.github/workflows/ci.yml) 的实际 `run`、`if`、`env`、工作目录和工具版本为准。本指南提供执行入口与逐步骤核对方法，不维护另一套替代 CI 的命令清单。
+以当前 [workflow](../../../.github/workflows/ci.yml) 的实际 `run`、`if`、`env`、工作目录和工具版本为准。本指南提供执行入口与逐步骤核对方法，不维护另一套替代 CI 的命令清单。
 
 ## 触发范围
 
@@ -12,7 +12,7 @@
 ## 确定范围
 
 1. 用 `git diff --name-only <base>` 和 `git ls-files --others --exclude-standard` 收集本次发布范围的完整改动；base 取上一版本 tag 或待合并范围的起点，不能只检查最后一个提交。
-2. 依据 [select_jobs.py](../.github/ci/select_jobs.py) 的 `select_jobs(paths)` 确定 Core、Windows、Decky；三个 job 的选择相互独立。版本标签和 workflow_dispatch 按 CI 执行全部 job。
+2. 依据 [select_jobs.py](../../../.github/ci/select_jobs.py) 的 `select_jobs(paths)` 确定 Core、Windows、Decky；三个 job 的选择相互独立。版本标签和 workflow_dispatch 按 CI 执行全部 job。
 3. 完整对齐时先执行 changes 的版本检查、版本单测、CI 选择器单测。`select_jobs.py` 的事件入口依赖 GitHub 事件环境，本地使用实际路径集合调用 `select_jobs`，不伪造线上成功结果。
 4. 为选中的每个 job 建立步骤记录，逐项复制当前 workflow 命令执行；不能只写“Rust 测试通过”。新增/修改 workflow 后重新核对本地清单。
 

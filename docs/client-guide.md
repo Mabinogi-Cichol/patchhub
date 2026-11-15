@@ -1,104 +1,25 @@
-# Alpha 客户端与来源管理
+# PatchHub 客户端使用指南
 
-Windows 使用 Flutter / Material 3，Decky 使用 @decky/api 和 @decky/ui；两端调用同一个 Rust CLI。核心程序、Steam 根目录与状态路径由宿主配置。前端只传入实例、动态 selection 或手动下载选择、受限 operation 与 request ID，不能指定目标目录、核心程序或执行脚本。
+PatchHub 扫描本机 Steam 游戏库，通过订阅源查找补丁。Windows 提供安装版和便携版，Steam Deck 通过 Decky Loader 使用 PatchHub。安装入口见[项目 README](https://github.com/Mabinogi-Cichol/patchhub#安装)。
 
-## 使用流程
+## 查找补丁
 
-扫描游戏库 → 更新来源并匹配 → 选择补丁或来源下载项 → 点击“安装补丁”或“重新安装补丁”一次完成下载、读取成员及解压覆盖。安装后重新扫描文件指纹和持久事务。不提供产品级补丁卸载；新 ZIP/EXE 安装直接覆盖，不创建自动备份或回滚。写入后失败、取消或中断会保留已写内容，必要时重新安装；请自行备份重要文件和存档。历史事务只读展示，不会恢复其旧备份。
+1. 扫描 Steam 游戏库。找不到游戏时，切换到“全部”筛选并搜索名称。
+2. 在 Windows 的“全局来源”或 Decky 的“管理订阅源”启用所需来源。可在来源卡片手动更新；自定义来源见[使用指南](https://github.com/Mabinogi-Cichol/patchhub/blob/main/docs/custom-subscription-sources.md)。
+3. 打开游戏的补丁管理页。如果来源刚更新，或上次查询失败，使用“重新匹配”。查看候选的语言、本体或 DLC、格式和发布页，再选择下载项。若来源只提供网页或网盘引导，可打开来源并填写实际下载直链。
 
-新安装使用同一条纯解压流程：保留包内全部文件及顺序，普通文件同路径覆盖；不运行原 EXE 或安装器 Lua，不模拟其向导、组件选择或游戏适用性判断。完成提示“文件已解压到目标目录”只承诺文件输出，不表示复现了发行商安装器的所有行为或游戏内效果。支持范围与当前编码/目标入口边界见[单一纯解压设计](features/generic-exe-installation/design.md)，实际格式或压缩算法无法读取时会如实失败。
+Shiravune 更新在后台加载站点，Windows 需要 Microsoft Edge WebView2 Runtime，Decky 使用 Steam 自带浏览器。遇到站点要求本人声明或真人验证时，任务会显示更新失败。
 
-来源条目仅供引导时，“状态未知”表示没有可用的文件安装记录，不能当作未安装。程序仅内置来源规则与解析脚本，按用户本机游戏动态查询匹配，不随程序分发逐游戏静态目录。
+## 安装与重新安装
 
-Shiravune 的普通更新与到期更新会在后台运行网站 JavaScript、保留站点会话并读取语言列表，无需打开网页或手工采集。Windows 需要 Microsoft Edge WebView2 Runtime，Decky 使用 Steam 自带浏览器；网站真正要求本人声明或真人验证时会明确失败，不能视为更新完成。来源脚本改变后需重新更新索引与匹配，旧解析结果不迁移；内部 SHA-256 用于识别脚本内容，普通卡片只显示 Lua / API，完整摘要可在脚本编辑器查看。
+关闭游戏并暂停 Steam 对该游戏的更新。选定下载项后，点击“安装补丁”或“覆盖安装补丁”。PatchHub 将可读取的 ZIP 或 EXE 归档中的文件解压到选定 Steam 游戏目录，按包内路径覆盖同名普通文件。游戏可能还需要发行商说明中的其他操作。
 
-两端均使用动态来源选择；缺少下载项时可从来源网页补充下载直链。安装无需确认步骤，安装前应关闭游戏并暂停 Steam 更新；有平台、版本或来源阻止条件时禁用安装入口。安装结果按实际事务状态显示，失败或中断不当作成功。Windows 安装时显示实际阶段与字节、文件进度，并提供“取消安装”；Decky 安装保持前台，离开进度界面即请求取消。不要在提交文件时强制杀死宿主。
+安装前请自行备份重要文件与存档。直接解压没有自动备份、回滚或补丁卸载功能。失败、取消或中断后，已经写入的文件会留在游戏目录。“整理中断记录”只处理记录。需要恢复原文件时，请使用自己的备份；重新安装可以再次覆盖补丁包内的文件。
 
-Decky 点击“安装补丁 / 重新安装补丁”即开始自动获取、校验与安装；从已启用并订阅的来源解析下载项，校验下载内容，ZIP 补丁保留归档相对路径并解压至游戏根目录，内部按当前 build 和原文件哈希生成本地计划。安装为一次任务，成功后按缓存设置处理下载缓存；新链路不创建 `.stage` 暂存或安装备份。缓存与备份设置可清理下载缓存及历史安装备份，安装失败后的文件按上面的直接覆盖语义处理。下载缓存的前台进度、取消与结果见 [精简安装流程](features/simplified-install-flow/design.md) 与 [Decky UX](features/decky-ux/design.md)。
+Windows 可在进度窗口请求取消。Decky 安装期间请留在进度界面，离开会请求取消。请求取消后请等待任务返回结果。“文件已解压到目标目录”表示文件写入完成，补丁是否生效请在游戏中确认。
 
-订阅源的通用安装状态位于 `~/.local/share/patchhub/installer/rust-v1/`，使用统一 schema、内容存储、任务与收据，不再复用 `publisher/<release>/<instance-hash>/` 旧布局；官方获取缓存默认在安装成功后删除。每个 Steam 库实例隔离，重启插件后安装记录仍可路由。安装边界固定本机游戏实例、来源选择和文件内容；公开静态目录、其信任数据库准入和维护密钥已移除，历史本地计划与事务保持原有契约。插件保持默认非 root 运行；非 ZIP 和需要执行安装程序的来源需另行处理。
+## 更新 PatchHub
 
-## 构建
+在应用设置中选择“检查更新”。Windows 下载新版后按提示重启并更新。Decky 按提示更新，替换完成后插件会重新加载；期间可能暂时断开。近期版本及手动安装包见 [GitHub Releases](https://github.com/Mabinogi-Cichol/patchhub/releases)。
 
-仓库固定 Rust 1.94，使用 Cargo.lock 和 package-lock.json。共享 TS/Decky 使用 `npm ci`、`npm run typecheck` 与 `npm run build:decky`；Windows 使用固定 Flutter 3.47.7 和 `npm run build:windows`。Flutter 依赖由 `apps/windows-flutter/pubspec.lock` 固定。
-
-### 应用版本
-
-应用版本只人工修改根 `Cargo.toml` 的 `[workspace.package].version`。Windows / Decky 构建入口自动同步 Flutter、Decky、共享 UI 和两个锁文件中的项目版本；SBOM、NSIS 与更新元数据读取同一来源。派生清单仍需随版本变更一同提交，不再逐个手改。构建工具需要 Python 3.11+（Windows 可使用 `python` 或 `py`，Linux 使用 `python3`）。
-
-不构建而仅准备版本变更时，执行 `python scripts/project_version.py --sync`；`python scripts/project_version.py --check` 只读检查同步状态及当前 Tag。直接使用底层 `cargo build --locked`、`npm ci` 或 `flutter build windows` 前也先执行同步；标准 BAT、Flutter PS1、Linux 构建脚本和 Decky npm build / 暂存入口已自动接入。规则和验证边界见[版本方案](features/version-single-source/design.md)与[施工记录](features/version-single-source/progress.md)。
-
-普通版本 `0.4.0` 派生 Flutter 版本 `0.4.0+1`；预发行版同样保留 `+1`。主版本已有 `+metadata` 时原样传递，不重复追加；Flutter 保留完整字符串，Windows 数字资源中的第四段由 Flutter SDK 映射，复杂非数字 metadata 对应 `0`。协议、依赖、数据格式版本及历史测试中的版本不随应用升版修改。
-
-### Windows 一键构建
-
-准备 Flutter 3.47.7、PowerShell 7、NSIS 3、Node.js 22（共享检查）、Rust 1.94 MSVC 工具链、Python 3.11 或更新版本，以及 Visual Studio 2022 Build Tools 的“使用 C++ 的桌面开发”和 Windows SDK。将 node、npm、cargo、rustc、python（或 py）加入 PATH；已有仓库隔离工具链 `.tools/cargo` 和 `.tools/rustup` 时，脚本优先使用它。首次构建需要联网下载依赖和 NSIS 工具。
-
-双击仓库根目录 `build.bat`；脚本自动切换到仓库目录，执行依赖安装、类型检查、release CLI/worker、Flutter 分析/测试与 release 构建，再生成包含 Rust、Dart/Flutter 的依赖 SBOM、Windows 便携 ZIP 和 NSIS 安装包。失败时显示步骤和非零退出码，窗口保持打开。终端或自动化调用可关闭末尾暂停：
-
-```bat
-build.bat --no-pause
-```
-
-便携包为 `.artifacts/patchhub-windows-portable.zip`，SHA-256 清单为 `.artifacts/checksums-windows.json`，依赖清单为 `.artifacts/dependencies.cdx.json`。NSIS 安装包位于 `.artifacts/patchhub-windows-x64-setup.exe`。安装包使用 PatchHub 安装目录和卸载条目，卸载保留用户数据。旧品牌需先卸载，再安装 PatchHub，不迁移旧设置。此脚本构建 Windows 客户端；Decky 的 Linux CLI 在 Linux 环境构建。
-
-### GitHub Actions
-
-`.github/workflows/ci.yml` 在 push、Pull Request 和手动触发时运行 Rust 格式、Clippy、测试、桥接测试及打包测试，并在独立 Windows/Linux runner 上构建客户端。Node.js 使用 22，Rust 使用 1.94.0，依赖按仓库锁文件安装。
-
-在 GitHub 的 Actions 页面打开成功运行，下载 `windows-portable`、`windows-nsis` 或 `decky-plugin` Artifact。便携 ZIP 与插件 ZIP 附带对应 SHA-256 校验清单和依赖清单。这些 Alpha 构建仍需客户端与游戏实机验收。
-
-### Tag 发布
-
-推送以 `v` 开头的 Tag（例如 `v0.1.0`、`v0.1.0-alpha.1`）会触发构建；只有 core、windows、decky 三个任务全部成功后，才自动创建对应 Tag 的 GitHub Release。分支推送、PR 和手动运行仅构建，不发布。非 `v` 开头的 Tag 不触发此工作流。
-
-先确保要发布的提交包含最新工作流，只修改根 Cargo workspace 的主版本并执行同步，检查生成差异后一并提交。CI 在编译前检查派生字段和 `v<主版本>` Tag，一致性检查不会替提交自动修复版本。Tag 不会自动改写程序内版本。获得推送与发布授权后，再创建并推送 Tag，例如：
-
-```powershell
-git tag -a v0.1.0-alpha.1 -m "Release v0.1.0-alpha.1"
-git push origin v0.1.0-alpha.1
-```
-
-Tag 名含 `-` 时标记为预发行版，其余标记为正式发行版。Release 公开附件仅包含 Windows 便携 ZIP、NSIS 安装包、Decky ZIP，以及覆盖这三个安装包的 `SHA256SUMS.txt`，供自动更新和在线安装校验。依赖清单保留在安装包内，分平台校验 JSON 保留为 CI 产物；不再单独上传这些 JSON 或 `install-decky.py`。终端一键安装通过仓库 `install.sh` 下载仓库中的 Python 安装脚本。发布说明按“新增与优化”和“问题修复”分类，无变更的分类省略。
-
-发布使用 GitHub 自动提供的 `GITHUB_TOKEN`，仅发布任务授予 `contents: write`，无需配置个人访问令牌。同一 Tag 的发布任务串行执行；失败后可重新运行该次 Actions，若 Release 已存在则覆盖同名附件。已发布 Tag 应保持指向不变；新版本使用新 Tag。
-
-### 手动构建
-
-Windows：执行 `pwsh -NoProfile -File scripts/build-windows-flutter.ps1`，生成完整 `apps/windows-flutter/build/windows/x64/runner/Release/`；再用 `cargo metadata --locked --format-version 1` 生成元数据，执行 `python scripts/build-sbom.py .artifacts/cargo-metadata.json --flutter-deps .artifacts/windows-flutter/pub-deps.json --flutter-version .artifacts/windows-flutter/flutter-version.json`、`python scripts/package-artifacts.py --platform windows` 和 `pwsh -NoProfile -File scripts/build-windows-installer.ps1`。NSIS 可用 `-Makensis` 指定路径。完整解压便携包后运行 `patchhub.exe`，不可单独复制主程序。
-
-Linux：`sh scripts/build-linux.sh` 使用仓库内隔离工具链，测试核心与 CLI，并输出 `target/linux/release/patchhub-core`。然后 `npm run package:plugin -w apps/decky` 生成 plugin-output 目录。安装到 Decky 前应检查二进制可执行权限、文件所属用户、宿主版本和日志；root 宿主启动核心时按游戏用户降权并同步 HOME / XDG，状态存于用户 ~/.local/share/patchhub；商店审核另设门槛。
-
-## 来源与动态安装
-
-先扫描本机 Steam 游戏，再更新补丁来源和匹配候选。安装时重新解析选择并检查实例、来源启用与订阅、下载内容、路径和游戏事实，生成本地安装计划及事务。客户端没有公开目录有效期，也不加载旧安装包残留的目录资源。历史事务继续从本地 journal/plan 读取和恢复。
-
-现役 IPC v5 的 host 仅包含 roots、state_dir、platform；安装和预览使用 selection_id，手动直链安装使用 manual_download。release_id 保留为补丁及历史收据身份，不再作为公开安装输入；本地 archive 与目录维护命令已移除。详见 [共享契约](../packages/contracts/README.md) 与 [清理设计](features/remove-static-catalog/design.md)。
-
-## 验证边界
-
-旧 `scripts/smoke-transaction.py` 已在跨平台安装器迁移收口（2026-10-11）删除；其协议 v1 安装/卸载与强杀恢复结果仅为历史基线。现役 v5 子进程检查位于 [projection_smoke.rs](../crates/cli/tests/projection_smoke.rs)、[cache_smoke.rs](../crates/cli/tests/cache_smoke.rs) 与 [CLI 协议测试](../crates/cli/src/main.rs)及宿主测试，覆盖真实 JSONL、版本写前拒绝、无公开目录的动态来源查询/匹配/安装、长实例身份和首终态消费。
-
-`python scripts/benchmark-scan.py CORE_BINARY FIXTURE_PARENT` 使用 v5 测量两库 500 个 Steam 清单，完全不需要静态补丁目录。原签名目录投影基准已退役，历史结果保留在对应施工记录。基准不写用户游戏，不代表冷缓存或实机验收；真实样本检查继续使用自动化套件。两端游戏内生效与 Deck 实体手柄须单独确认。
-
-默认不上传游戏库，不设置遥测。诊断与状态保存在本机；分享日志前应删除用户名、库路径与下载 URL 参数。提取会拒绝链接逃逸、路径越界、特殊文件和实际数据校验错误；未知 build、语言/DLC 或原版文件摘要不构成新提取的阻断条件；同账户篡改完整 journal 与父目录 TOCTOU 的剩余风险见 install-design.md。
-
-
-补丁源订阅通过“管理订阅源”维护。默认扫描读取缓存；显式刷新更新 ZIP 来源，选择游戏后按需查找 Kagura 国内 / 海外及 HGamer。未查询的游戏可通过“全部游戏”进入；“有补丁”包含已核实身份的来源候选。详情展示语言、本体 / DLC、格式和发布页；有可用 ZIP/EXE 下载地址时可选择下载项直接解压；只有网页/网盘引导时可查看来源并填写实际下载地址。语言、本体/DLC 等继续作为来源说明展示，不按这些信息筛选包内载荷。查询失败保留成功缓存，部分完成可重新查找。新游戏只需网站发布符合规则的记录，无需更新固定游戏清单。添加网站及专用解析器的方法见 [源适配器与订阅](source-adapters.md)。停用源停止查询和匹配，既有安装收据仍保留。
-
-
-### Windows Flutter 界面
-
-默认显示“有补丁”的游戏；左侧保留搜索和筛选，游戏内容分为概览、补丁管理、操作记录、游戏订阅。全局来源独立管理，卡片默认收起。右上角“外观”可选择跟随系统、浅色、深色；手动选择仅保留在当前会话。
-
-### 应用更新
-
-Windows 底部和 Decky 全局设置提供“检查更新”；启动后的自动检查不阻塞游戏库加载。发现正式新版时显示版本、发布日期和说明，支持“稍后”和“跳过此版本”，手动检查仍可查看跳过的版本。确认后下载并核对官方 ZIP 的 SHA-256；活动补丁、来源等任务需先完成或自行取消。
-
-Windows 安装版与便携版使用同一 ZIP 更新助手；下载完成后点击“重启并更新”，应用退出、新程序验证后继续运行。安装版保留原路径和快捷方式并维护卸载信息，便携版不新增注册信息。首次接入该功能的安装版需手动安装包含新卸载清单契约的 NSIS，此后无需手动运行安装器。更新事务恢复期间请勿删除程序目录外的恢复材料。
-
-Decky 点击“更新并重载插件”后由独立进程通过 Loader 安装，插件断开和重新挂载属于正常过程。下载阶段可取消；替换或恢复阶段需等待实际结果。当前管理适配 Loader 3.2.9 / 3.3.0 和 Steam CEF 调试入口，接口不兼容或不可用会明确报错，不自动启用调试端口。当前实现与实机验收状态见[自更新施工记录](features/client-self-update/progress.md)。
-
-安装进度对话框的 Esc 和“取消安装”都只是请求取消，需等待核心终态。直接覆盖安装取消后可能留下不完整文件，界面显示失败原因，不能当成自动回滚成功。成功后的状态刷新失败会单独提示，并保留成功结果。关闭应用会先取消活动任务并等待清理；最小化不会取消。“整理中断记录”只处理全部游戏的中断解压状态，不会恢复或删除游戏文件；旧事务及其备份保持只读。
-
-本轮自动化与本地发行验证见 [Windows 重写施工记录](features/windows-ux-redesign/progress.md)；尚未完成的真实窗口和网络路线不视为通过。
+使用日志诊断问题前，请参阅[隐私与本地数据](privacy.md)。

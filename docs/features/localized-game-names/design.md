@@ -6,7 +6,7 @@
 
 让游戏显示名对齐 Steam 的界面语言：Windows 客户端不再显示 appmanifest 里的英文 `name`（例如 AppID 2303800 显示为 "My Life as a Cult Leader"），而是显示 Steam 当前语言下的本地化名（`schinese` 时为"妃神会秘史"）。
 
-按仓库既有架构原则（[总体计划](../../development-plan.md)："共享 Rust 核心负责 Steam 库解析、匹配"；[客户端指南](../../client-guide.md)："两端调用同一个 Rust CLI"），本地化名由**共享 Rust 核心**在扫描时产出，两个客户端共用一份口径。
+按仓库既有架构原则（[总体计划](../alpha-foundation/design.md)："共享 Rust 核心负责 Steam 库解析、匹配"；[客户端指南](../../client-guide.md)："两端调用同一个 Rust CLI"），本地化名由**共享 Rust 核心**在扫描时产出，两个客户端共用一份口径。
 
 范围：
 
@@ -199,4 +199,4 @@ P0 → P1 → P2 → P3 → P4。文档与代码分开提交。
 - 来源发现 / 刮削核心化：[来源发现与订阅迁入共享 Rust 后端](../shared-source-discovery/design.md)（迁移方案，待实现）；本 feature 为其提供本地化名字段。
 - Decky 展示：[Decky UX](../decky-ux/design.md)。
 - Windows 一站式安装：[补丁一站式安装与流程精简](../simplified-install-flow/design.md)。
-- 总体架构：[开发计划](../../development-plan.md)、[客户端指南](../../client-guide.md)。
+- 总体架构：[开发计划](../alpha-foundation/design.md)、[客户端指南](../../client-guide.md)。

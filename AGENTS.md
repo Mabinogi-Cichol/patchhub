@@ -35,7 +35,7 @@
 - 开始功能工作时创建或复用对应目录，并更新 `docs/features/README.md` 的索引；实施或验证后同步更新该功能的 `progress.md`。设计发生变化时同步修订 `design.md`，保留施工记录中的历史事实。
 - 功能索引同时链接设计与施工记录，状态以施工记录为准。区分待实现、已实现、自动化验证、实机验证和待验收，未执行的检查必须明确写为待验证。
 - 移动或重命名文档时保留已有内容和未提交修改，更新仓库内引用并检查相对链接。引用代码或跨功能文档时，以文档所在目录计算相对路径。
-- 跨功能的总体开发计划、公共架构、客户端指南、隐私和发布说明继续放在 `docs/`，通过链接关联具体功能文档；总体进度只写摘要，详细施工记录放在所属功能的 `progress.md`。
+- `docs/` 根目录只放面向使用者的指南和隐私说明；开发设计、架构、调研与验证指南归入 `docs/features/` 下相关功能目录，跨功能入口放在功能索引。发布说明及发布核验记录放在 `docs/releases/`；详细施工记录放在所属功能的 `progress.md`。
 
 标准结构：
 
@@ -64,7 +64,7 @@ docs/features/
 - 触发范围：完整的本地 CI 对齐只在发布版本前执行，即打 tag、创建或核验发行附件之前。日常功能开发、修复和文档改动不运行完整 job matrix，以免拖慢开发；用户明确要求完整对齐时按用户指示执行。
 - 日常开发按改动范围做定向验证：受影响包的单元/集成测试；改动 Rust 代码执行 `cargo fmt --all -- --check` 与受影响包的 Clippy（保留 `-D warnings`）；改动共享契约、锁文件或生成物时核对对应生成结果。不逐 job 复制 workflow 步骤。
 - 排查线上 CI 失败时只重跑失败 job 的失败步骤及其必要前置，不扩成三 job 全矩阵；失败原因确实需要跨平台确认时，再补对应平台验证并记录理由。
-- 发布前完整对齐时读取当前 `.github/workflows/ci.yml` 和 `.github/ci/select_jobs.py`，按本次完整改动范围（包含新增未跟踪文件）确定受影响 job，验证颗粒度到 job、平台、step、命令参数和环境变量，不能用“已跑测试”代替清单；操作指南见 [本地 CI 验证](docs/local-ci-validation.md)。
+- 发布前完整对齐时读取当前 `.github/workflows/ci.yml` 和 `.github/ci/select_jobs.py`，按本次完整改动范围（包含新增未跟踪文件）确定受影响 job，验证颗粒度到 job、平台、step、命令参数和环境变量，不能用“已跑测试”代替清单；操作指南见 [本地 CI 验证](docs/features/patchhub-ci-fix/local-ci-validation.md)。
 - 发布前完整对齐时，受影响 job 中可本地执行的检查全部执行：包括版本/生成物一致性、fmt、Clippy、测试、构建、打包及锁文件差异检查。保留 CI 的包集合、`--all-targets`、`--locked`、`-D warnings` 等参数；不能用 `cargo test --workspace` 或单个验收脚本替代整套步骤。
 - Core matrix 在完整对齐时分别于原生 Windows 和 WSL Linux 使用 Linux 原生工具链执行；Decky 的 Linux 构建与后端验证在 WSL 执行。Windows 通过不能替代 Linux，WSL 可用时不得仅以宿主是 Windows 为由标记 Linux 不可验证。Linux 输出目录与 Windows 分离，不共享编译产物或 node_modules。
 - 工具版本遵循当前 workflow 和仓库锁定版本。WSL 环境缺失时先检查现有工具链并补齐必要环境；记录实际阻塞，不跳过后声称完整通过。WSL 不等同于 GitHub runner 或 Steam Deck 实机。

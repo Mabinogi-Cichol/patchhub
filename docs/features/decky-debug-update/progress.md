@@ -6,7 +6,7 @@
 
 2026-11-03：已实现；定向自动化、构建和真实设备完整更新链通过，实体手柄待验收。基线 main@a83e0b7，分支 feature/decky-debug-update。未提交、合并、推送或创建 Release。工作区正式版本仍为 0.5.3。
 
-2026-11-04：已随 v0.5.4 发布。`main` 快进至 `48308f0`，注解 Tag `v0.5.4`（对象 `54c85f4e...`）与该提交一同推送；[标签 CI 41677043760](https://github.com/Mabinogi-Cichol/patchhub/actions/runs/41677043760) 七个任务全部成功，三个发行附件来自该 Tag 构建并经下载核验，详见[发行检查](../../release-checklist.md#v054-发布记录2026-11-04)。
+2026-11-04：已随 v0.5.4 发布。`main` 快进至 `48308f0`，注解 Tag `v0.5.4`（对象 `54c85f4e...`）与该提交一同推送；[标签 CI 41677043760](https://github.com/Mabinogi-Cichol/patchhub/actions/runs/41677043760) 七个任务全部成功，三个发行附件来自该 Tag 构建并经下载核验，详见[发行检查](../../releases/release-checklist.md#v054-发布记录2026-11-04)。
 
 ## 2026-11-04 用户纠正后的主动取消（当前结论）
 

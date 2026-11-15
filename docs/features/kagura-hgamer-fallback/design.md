@@ -383,6 +383,6 @@ Steam Deck 网络、三站解析与受限分页已验收；预算内不保证官
 
 初始调研阶段只读分析代码与公开 HTML，未下载补丁资产或执行安装器。当时 HTTP 样本保存在忽略目录 `.artifacts/*-research-*`，不随插件打包。后续实现已整理最小 fixture 并部署实机，阶段事实分别保留在[施工记录](progress.md)与[验收记录](acceptance.md)，不把最初调研结果当作部署证据。
 
-本方案承接现有 [源适配器说明](../../source-adapters.md) 的实时订阅、源隔离与失败缓存原则，并补上发现候选、双站语言 / 版本和fallback编排。实现时同步 source-adapters.md、privacy.md、client-guide.md、Decky README及progress.md，明确新功能已完成的范围与实际验证证据。
+本方案承接现有 [源适配器说明](../script-source-adapters/source-adapters.md) 的实时订阅、源隔离与失败缓存原则，并补上发现候选、双站语言 / 版本和fallback编排。实现时同步 source-adapters.md、privacy.md、client-guide.md、Decky README及progress.md，明确新功能已完成的范围与实际验证证据。
 
 可行性复核的独立HTTP与解析实验位于 `.artifacts/kagura-feasibility/`；概要、已修正问题和未验证边界见[可行性校验记录](feasibility.md)。

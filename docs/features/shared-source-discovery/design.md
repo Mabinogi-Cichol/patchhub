@@ -207,7 +207,7 @@ Python退场只删除已经迁入Rust的来源逻辑及HTML解析工作进程；
 
 ## 9. 关联、风险与后续
 
-- [来源适配器与订阅指南](../../source-adapters.md)、[总体架构](../../development-plan.md)：实施阶段更新为实际Rust入口；现在只添加迁移计划链接，不提前改写现状。
+- [来源适配器与订阅指南](../script-source-adapters/source-adapters.md)、[总体架构](../alpha-foundation/design.md)：实施阶段更新为实际Rust入口；现在只添加迁移计划链接，不提前改写现状。
 
 > 2026-10-11 P6 收口：上条已完成——来源指南与总体架构已更新为实际 Rust 入口，本节迁移计划链接已建立。
 

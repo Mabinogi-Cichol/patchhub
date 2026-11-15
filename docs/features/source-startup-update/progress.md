@@ -46,4 +46,4 @@
 ### v0.5.2 发布验证
 
 - 已合并推送 main，修复随 v0.5.2 发布；标签 CI 双平台 core 与两端打包全部通过，四个正式附件的哈希、来源和版本核验通过，Windows 便携包隔离启动 / 正常退出通过。
-- 发行提交 `3ac65f4`，详见[发行记录](../../release-checklist.md#v052-发布记录2026-11-02)。Windows / Steam Deck 功能实机验收仍待执行，本轮未部署设备。
+- 发行提交 `3ac65f4`，详见[发行记录](../../releases/release-checklist.md#v052-发布记录2026-11-02)。Windows / Steam Deck 功能实机验收仍待执行，本轮未部署设备。

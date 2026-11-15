@@ -88,7 +88,7 @@ P1、P1b、P2、P2b 是本轮施工顺序，完成前不生成供用户使用的
 
 - 以 Rust 为唯一权威，执行 `cargo run --locked -p patchhub-contract-gen -- generate` 更新 TS / Python / JSON Schema 和 v5 cases，随后同步 Flutter 内置 `assets/protocol-v5.schema.json`；不手改生成类型。
 - 删除字段会改变请求接受范围，`request_validation_version` 从 1 调整为 2；新增 scan 的 Steam 根语言输出，`projection_version` 从 1 调整为 2。同步 CLI capabilities、Flutter `validateCapabilities`、生成 CONTRACTS 与相关夹具；actions / outcome 仍为 1。沿用 v5 envelope 和生成路径。
-- 同步 `packages/contracts/README.md`、`docs/source-adapters.md` 的当前接口 / 缓存描述与相关当前设计。历史发布说明和施工记录保留事实，通过后续记录说明已移除。
+- 同步 `packages/contracts/README.md`、[当时的来源接口与缓存说明](../script-source-adapters/source-adapters.md)与相关当前设计。历史发布说明和施工记录保留事实，通过后续记录说明已移除。
 - 本次不支持新旧宿主混装，不引入接受后忽略字段的兼容分支。新客户端、Python 桥、core 和内置 schema 随同一候选交付；旧请求按已有未知字段规则拒绝，CLI 旧参数按已有非法参数路径处理。
 
 ### P4：缓存与验证

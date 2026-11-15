@@ -1,10 +1,10 @@
-# Alpha 发行检查
+# 发行检查与发布记录
 
-本清单区分已构建产物与已验收发行版。当前版本仍为开发 Alpha，完整开发计划的样本数量及双端 UI 门槛尚未达到。
+现行发布流程见[项目发布技能](../../.agents/skills/steam-patch-release/SKILL.md)和[本地 CI 验证](../features/patchhub-ci-fix/local-ci-validation.md)。本页保留各版本的发布和附件核验记录。
 
 ## v0.6.2 发布记录（2026-11-15）
 
-- [发行说明](releases/v0.6.2.md)与[发布前 CI 逐步记录](releases/v0.6.2-validation.md)。
+- [发行说明](v0.6.2.md)与[发布前 CI 逐步记录](v0.6.2-validation.md)。
 - [标签构建 43701501955](https://github.com/Mabinogi-Cichol/patchhub/actions/runs/43701501955) 对应提交 `cfed3f8398cd8d49c3a4adce8198cdf34bffaf97`，7 个 job 全部通过。
 - [GitHub Release v0.6.2](https://github.com/Mabinogi-Cichol/patchhub/releases/tag/v0.6.2) 于北京时间 2026-11-15 18:04:43 公开，标题与 Tag 均为 `v0.6.2`，中文发行说明已读回核对。
 - 四个公开附件的名称、大小、GitHub SHA-256 和发布清单已核对。Windows 与 Decky ZIP 的 CRC、内容清单、架构、版本、SBOM 和标签资源已核对。Windows EXE 版本为 `0.6.2+1`，公开 Windows 核心内置的 YOZAKURA Lua 摘要与标签源码一致。
@@ -20,7 +20,7 @@
 ## v0.6.1 发布记录（2026-11-09）
 
 - 用户授权发布 v0.6.1，包含 v0.6.0 后的提取性能优化、Windows 设置与缓存管理、操作记录灰块修复及安装弹层窗口拖动修复。版本同步提交 `5709a06`，应用版本统一为 0.6.1，Flutter / Windows EXE 版本为 0.6.1+1；第三方依赖未更新。
-- [发行说明](releases/v0.6.1.md)按“新增与优化 / 问题修复”描述用户可感知变化；[完整本地 CI 对齐](releases/v0.6.1-validation.md)逐平台、步骤记录实际命令和通过结果（Windows Flutter 314 项通过 / 1 项跳过；Decky 前端 113 项、桥接 14 项、真实核心后端 129 项通过）。本机已补齐官方 NSIS 3.11 并生成安装包，三个本地产物与锁文件检查通过；最终标签 CI 与公开附件核验结果如下。
+- [发行说明](v0.6.1.md)按“新增与优化 / 问题修复”描述用户可感知变化；[完整本地 CI 对齐](v0.6.1-validation.md)逐平台、步骤记录实际命令和通过结果（Windows Flutter 314 项通过 / 1 项跳过；Decky 前端 113 项、桥接 14 项、真实核心后端 129 项通过）。本机已补齐官方 NSIS 3.11 并生成安装包，三个本地产物与锁文件检查通过；最终标签 CI 与公开附件核验结果如下。
 - 本轮发布不执行正式缓存清理、真实游戏写入或 Steam Deck 部署；原生窗口位移、系统安装、设备及正式跨版本更新整链保持待验收。
 
 - 发行说明与完整验证记录提交 `f50391727c1b90f127078b9ab3b51cab812ca552`；`main` 与注解 Tag `v0.6.1`（Tag 对象 `1f72480bacc3dfa610a72640eb0308907b31a1c4`）原子推送，标签固定指向该提交，不移动已发布标签。
@@ -41,9 +41,9 @@
 ## v0.6.0 发布记录（2026-11-07）
 
 - 用户授权合并并发布；功能提交 `8c7afd0`（EXE/ZIP 安装切换为单一纯解压）、文档 `934f261`、`1155cbc`、版本同步 `72fbca0`、发行说明 `2bb9c65`，合并提交 `2138e78`。`main` 与注解 Tag v0.6.0（Tag 对象 `2db6712`）原子推送，均指向 `2138e78`。
-- 发布前完成[本地 CI 完整对齐](local-ci-validation.md)：changes 的版本检查、版本单测与 CI 选择器单测通过，按实际变更路径选出 core / windows / decky 三个 job；Windows core（protocol、fmt、clippy、core/cli 测试与 build、sf95 audit 18 项与 worker 5 项）通过；WSL Ubuntu 的 Linux core（含 contract-gen check）通过；windows job 的六组 Python 单测、npm ci、契约、release core/worker、Flutter 构建、metadata+SBOM 与便携包通过；decky job 的四组 Python 单测、npm ci、契约、typecheck、Decky 前端测试、bridge、Linux release core/worker、44 项后端测试、plugin 打包、SBOM 与发行 ZIP 通过。本机缺 NSIS `makensis`，安装包步骤由线上 CI 完成并核验。工具版本：Windows Rust 1.94.0、Node 22.23.4、Flutter 3.47.7、Python 3.12.10；WSL 使用 ext4 工作副本（HEAD `2138e78`）与仓库自带 Node 22.23.4、Python 3.12.16、Rust 1.94.0。
+- 发布前完成[本地 CI 完整对齐](../features/patchhub-ci-fix/local-ci-validation.md)：changes 的版本检查、版本单测与 CI 选择器单测通过，按实际变更路径选出 core / windows / decky 三个 job；Windows core（protocol、fmt、clippy、core/cli 测试与 build、sf95 audit 18 项与 worker 5 项）通过；WSL Ubuntu 的 Linux core（含 contract-gen check）通过；windows job 的六组 Python 单测、npm ci、契约、release core/worker、Flutter 构建、metadata+SBOM 与便携包通过；decky job 的四组 Python 单测、npm ci、契约、typecheck、Decky 前端测试、bridge、Linux release core/worker、44 项后端测试、plugin 打包、SBOM 与发行 ZIP 通过。本机缺 NSIS `makensis`，安装包步骤由线上 CI 完成并核验。工具版本：Windows Rust 1.94.0、Node 22.23.4、Flutter 3.47.7、Python 3.12.10；WSL 使用 ext4 工作副本（HEAD `2138e78`）与仓库自带 Node 22.23.4、Python 3.12.16、Rust 1.94.0。
 - [标签 CI 42381804320](https://github.com/Mabinogi-Cichol/patchhub/actions/runs/42381804320) 全部任务成功；同提交的 main 推送运行 42381804346 同样成功。三个安装包均来自本次 Tag 的新构建。
-- [正式 Release v0.6.0](https://github.com/Mabinogi-Cichol/patchhub/releases/tag/v0.6.0) 于北京时间 2026-11-07 22:41:16 发布，标题与 Tag 均为 v0.6.0，非草稿、非预发行。正文按「新增与优化 / 问题修复」中文格式替换了工作流自动生成的变更日志，与[发行说明](releases/v0.6.0.md)逐字符一致；公开附件严格为三个安装包及 SHA256SUMS.txt。
+- [正式 Release v0.6.0](https://github.com/Mabinogi-Cichol/patchhub/releases/tag/v0.6.0) 于北京时间 2026-11-07 22:41:16 发布，标题与 Tag 均为 v0.6.0，非草稿、非预发行。正文按「新增与优化 / 问题修复」中文格式替换了工作流自动生成的变更日志，与[发行说明](v0.6.0.md)逐字符一致；公开附件严格为三个安装包及 SHA256SUMS.txt。
 - 已下载全部四个附件：大小、GitHub digest、清单中的文件名与 SHA-256 全部一致。ZIP CRC 与内容白名单通过（Windows 43 文件、Decky 27 文件），Decky 条目全部位于 `patchhub/` 下，`package.json` 与两端 SBOM 应用版本均为 0.6.0，Core/worker 为 ELF64 x86-64 PIE 且 0755，`runtime.json` 摘要与二进制一致，SBOM 的 Cargo/npm/Dart 锁摘要与 Tag 内容一致（Windows 按实际 CRLF 检出规则）。
 - 资源核对：两端包内 `protocol-v5.schema.json`、`shiravune-browser.js` 与 Tag 内源文件逐字节一致；Windows 包内 `app-version.json` 为 0.6.0，`update-manifest.json` 的 43 个文件均存在；PE 架构为应用/核心 x64、NSIS 安装器 x86 引导桩。
 - 未执行：NSIS 安装、Decky 正式包部署到 Steam Deck、真实发行商下载与游戏安装、游戏内效果及实体手柄验收；不将源码阶段记录作为本次安装包的实机证明。
@@ -59,10 +59,10 @@
 ## v0.5.5 发布记录（2026-11-04）
 
 - 用户授权合并并发布；功能提交 `d1321fb`（更新完成改为重载 Steam 界面）、`69917a5`（更新入口重载文案与按钮布局）、文档 `82725c1`、版本同步 `9107fd1`，合并提交 `cdc6d38`。`main` 推送至 `cdc6d38`，注解 Tag v0.5.5（Tag 对象 `70f9d5b2507567b92ba467594de2c0b9febce9f1`）指向该提交。
-- 发布前完成[本地 CI 完整对齐](local-ci-validation.md)：changes 的版本检查、版本单测 12 项与 CI 选择器单测 9 项通过，实际变更路径选出 core / windows / decky 三个 job；Windows core 全部步骤（protocol、fmt、clippy、core/cli 测试与 build、sf95 audit 18 项与 worker 5 项）通过，WSL Ubuntu 的 Linux core（含 contract-gen check）与 decky 全步骤通过；windows job 的六组 Python 单测、npm ci、契约、release core/worker、Flutter 292 项测试与构建、metadata+SBOM、便携包通过。本机缺 NSIS `makensis`，安装包步骤由线上 CI 完成并核验。工具版本：Windows Rust 1.94.0、Node 22.23.4、Flutter 3.47.7、Python 3.12.10；WSL 使用 ext4 工作副本与仓库自带 Node 22.23.4、Python 3.12.16。
+- 发布前完成[本地 CI 完整对齐](../features/patchhub-ci-fix/local-ci-validation.md)：changes 的版本检查、版本单测 12 项与 CI 选择器单测 9 项通过，实际变更路径选出 core / windows / decky 三个 job；Windows core 全部步骤（protocol、fmt、clippy、core/cli 测试与 build、sf95 audit 18 项与 worker 5 项）通过，WSL Ubuntu 的 Linux core（含 contract-gen check）与 decky 全步骤通过；windows job 的六组 Python 单测、npm ci、契约、release core/worker、Flutter 292 项测试与构建、metadata+SBOM、便携包通过。本机缺 NSIS `makensis`，安装包步骤由线上 CI 完成并核验。工具版本：Windows Rust 1.94.0、Node 22.23.4、Flutter 3.47.7、Python 3.12.10；WSL 使用 ext4 工作副本与仓库自带 Node 22.23.4、Python 3.12.16。
 - decky job 首次在 WSL 因 `python3` 为 3.10（缺 `tomllib`）导致 `package:plugin` 的版本同步失败，改用仓库自带 Python 3.12 后重跑通过；该差异属本机环境，未改动 CI 命令。
 - [标签 CI 41689409243](https://github.com/Mabinogi-Cichol/patchhub/actions/runs/41689409243) 的 changes、双平台 core、windows、decky、ci 和 release 共 7 个任务全部成功；三个安装包均来自本次 Tag 的新构建。同提交的 `main` 推送运行 41689392521 同样成功。
-- [正式 Release v0.5.5](https://github.com/Mabinogi-Cichol/patchhub/releases/tag/v0.5.5) 于北京时间 2026-11-04 02:09:41 发布，标题与 Tag 均为 v0.5.5，非草稿、非预发行。正文按「新增与优化 / 问题修复」中文格式替换了工作流自动生成的变更日志，与[发行说明](releases/v0.5.5.md)一致；公开附件严格为三个安装包及 SHA256SUMS.txt。
+- [正式 Release v0.5.5](https://github.com/Mabinogi-Cichol/patchhub/releases/tag/v0.5.5) 于北京时间 2026-11-04 02:09:41 发布，标题与 Tag 均为 v0.5.5，非草稿、非预发行。正文按「新增与优化 / 问题修复」中文格式替换了工作流自动生成的变更日志，与[发行说明](v0.5.5.md)一致；公开附件严格为三个安装包及 SHA256SUMS.txt。
 - 已下载全部四个附件：大小、GitHub digest、清单中的文件名与 SHA-256 全部一致。ZIP CRC 与内容白名单通过（Windows 43 文件、Decky 27 文件），Decky 条目全部位于 `patchhub/` 下，`package.json` 为 0.5.5、`plugin.json` 名称 PatchHub，Core/worker 为 ELF，`runtime.json` 摘要与二进制一致，SBOM 应用版本 0.5.5。
 - Windows 便携包 `patchhub.exe` 为 PE，包内含 `client-guide.md`、`privacy.md`、`LICENSE`，无 PDB，SBOM 应用版本 0.5.5；NSIS 安装器为 PE。锁摘要核对：Decky SBOM 的 Cargo/npm 摘要与 Tag 的 LF blob 一致；Windows SBOM 的 Cargo/Dart 摘要与 Windows runner 的 CRLF 检出内容一致，属既有平台差异。
 - 未执行：NSIS 安装、Decky 正式包部署到 Steam Deck、真实发行商下载与游戏安装、正式来源跨版本自更新整链及实体手柄验收；本轮早前在设备上完成的候选 ZIP 部署与 WebHelper 重载实测不作为本次公开附件的实机证明。
@@ -78,9 +78,9 @@
 ## v0.5.4 发布记录（2026-11-04）
 
 - 用户授权发布；功能提交 `af1caaa`（更新时主动取消业务并等待恢复收尾）、`448edf2`（隔离本地更新源与一键真机测试）、文档 `e3467dd`、`93129c4`、版本同步 `e126cd9`、发行说明 `48308f0` 分别提交；`main` 快进至 `48308f0`，与注解 Tag v0.5.4 原子推送，Tag 对象 `54c85f4e15d166c97fe2798b3697a6f85993548a` 指向该提交。
-- 发布前完成[本地 CI 完整对齐](local-ci-validation.md)：Windows core 与 windows 打包步骤（含本机 `makensis` 生成 NSIS）、WSL Ubuntu 的 core 与 decky 全步骤逐条通过；本机工具版本 Node 22、Rust 1.94.0、Python 3.12。证据为 `.artifacts/release-v0.5.4/windows-steps.json`、`.artifacts/release-v0.5.4/*.log` 及 WSL `~/patchhub-release-v054-48308f0/logs/`（`linux-steps.json`）。
+- 发布前完成[本地 CI 完整对齐](../features/patchhub-ci-fix/local-ci-validation.md)：Windows core 与 windows 打包步骤（含本机 `makensis` 生成 NSIS）、WSL Ubuntu 的 core 与 decky 全步骤逐条通过；本机工具版本 Node 22、Rust 1.94.0、Python 3.12。证据为 `.artifacts/release-v0.5.4/windows-steps.json`、`.artifacts/release-v0.5.4/*.log` 及 WSL `~/patchhub-release-v054-48308f0/logs/`（`linux-steps.json`）。
 - [标签 CI 41677043760](https://github.com/Mabinogi-Cichol/patchhub/actions/runs/41677043760) 的 changes、双平台 core、windows、decky、ci 和 release 共 7 个任务全部成功；三个安装包均来自本次 Tag 的新构建。
-- [正式 Release v0.5.4](https://github.com/Mabinogi-Cichol/patchhub/releases/tag/v0.5.4) 于北京时间 2026-11-04 00:54:13 发布，标题与 Tag 均为 v0.5.4，非草稿、非预发行。正文按「新增与优化 / 问题修复」中文格式，与[发行说明](releases/v0.5.4.md)逐字符一致（工作流自动正文于 00:54:33 替换）；公开附件严格为三个安装包及 SHA256SUMS.txt。
+- [正式 Release v0.5.4](https://github.com/Mabinogi-Cichol/patchhub/releases/tag/v0.5.4) 于北京时间 2026-11-04 00:54:13 发布，标题与 Tag 均为 v0.5.4，非草稿、非预发行。正文按「新增与优化 / 问题修复」中文格式，与[发行说明](v0.5.4.md)逐字符一致（工作流自动正文于 00:54:33 替换）；公开附件严格为三个安装包及 SHA256SUMS.txt。
 - 已下载全部四个附件：大小、GitHub digest、清单中的文件名与 SHA-256 全部一致。ZIP CRC 与内容白名单通过（Windows 43 文件、Decky 27 文件），两端无 catalog/trust-keys 资源，包内资源、契约、脚本与 Tag 内文件逐字节相同（Windows 按实际 CRLF 检出规则）。Windows `update-manifest.json` 的 files 集合等于 ZIP 条目，`app-version.json` 为 0.5.4。
 - Windows EXE/DLL 与 NSIS 引导桩（x86）平台核对通过；Decky Core/worker 为 ELF64 x86-64 PIE，执行位 0755、`runtime.json` 摘要与二进制一致。两端 SBOM（CycloneDX 1.6）应用及 6 个 Rust 工作区组件版本为 0.5.4，Cargo/npm/Dart 锁摘要与 Tag 内容一致；组件数 Windows 495、Decky 438。
 - Windows 正式便携包在隔离 APPDATA 中启动并正常关闭：FileVersion / ProductVersion 均为 0.5.4+1，退出码 0，关闭耗时 576ms。NSIS 版本字符串位于压缩载荷内，未运行安装包，由 Tag 构建脚本与成功 CI 的一致性步骤佐证。
@@ -98,8 +98,8 @@
 
 - 用户授权发布；发布提交 `d41fa74447d7e7ea2c8bd828e030895b20a12b98`（版本同步 `d41fa74`，此前含 cache_smoke 请求头修复 `880518f`、本地 CI 文档 `a0d0128`、记录更新 `ce5f047` 及两个合并提交）。main 与注解 Tag v0.5.3 推送，Tag 对象 `ae0411308bdf19639cf6b06707acd99535a404a8` 指向该提交。
 - [标签 CI 41629719888](https://github.com/Mabinogi-Cichol/patchhub/actions/runs/41629719888) 的 changes、双平台 core、windows、decky、ci 和 release 共 7 个任务全部成功；三个安装包均来自本次 Tag 的新构建。
-- 发布前完成[本地 CI 完整对齐](local-ci-validation.md)：Windows core、WSL Linux core、windows 打包入口与 decky 全步骤通过；本机缺 NSIS `makensis`，安装包步骤由线上 CI 完成并核验。
-- [正式 Release v0.5.3](https://github.com/Mabinogi-Cichol/patchhub/releases/tag/v0.5.3) 于北京时间 2026-11-03 19:52:59 发布，标题与 Tag 均为 v0.5.3，非草稿、非预发行。正文按「新增与优化 / 问题修复」中文格式，与[发行说明](releases/v0.5.3.md)一致；公开附件严格为三个安装包及 SHA256SUMS.txt。
+- 发布前完成[本地 CI 完整对齐](../features/patchhub-ci-fix/local-ci-validation.md)：Windows core、WSL Linux core、windows 打包入口与 decky 全步骤通过；本机缺 NSIS `makensis`，安装包步骤由线上 CI 完成并核验。
+- [正式 Release v0.5.3](https://github.com/Mabinogi-Cichol/patchhub/releases/tag/v0.5.3) 于北京时间 2026-11-03 19:52:59 发布，标题与 Tag 均为 v0.5.3，非草稿、非预发行。正文按「新增与优化 / 问题修复」中文格式，与[发行说明](v0.5.3.md)一致；公开附件严格为三个安装包及 SHA256SUMS.txt。
 - 已下载全部四个附件：大小、GitHub digest、清单中的文件名与 SHA-256 全部一致。ZIP CRC 与内容白名单通过（Windows 43 文件、Decky 27 文件），两端均无 catalog/trust-keys 资源；Windows PE、NSIS x86 安装器、Decky ELF64 x86-64 PIE 与 0755 执行位、runtime.json 摘要与二进制一致。
 - 版本映射核对：`app-version.json`、`update-manifest.json`、两端 SBOM 与 Decky `package.json` 均为 0.5.3；SBOM 记录 Cargo/npm 锁摘要与 Tag 内容一致（Windows 按实际 CRLF 检出规则），组件数 Windows 495、Decky 438。`protocol-v5.schema.json` 与 `shiravune-browser.js` 与 Tag 内资源逐字节相同。
 - Windows 便携包在隔离状态目录启动后正常关闭：FileVersion / ProductVersion 均为 0.5.3+1，运行 10 秒后退出码 0，关闭耗时 1069ms。
@@ -119,11 +119,11 @@
 
 - 用户授权合并和发布；Decky 修复代码 `52f28b7`、功能文档 `d102957`、版本同步 `8e98e4f`、发行说明 `a747f14` 分别提交后合并至 main，合并提交 `f66d0dd704138fd75377fa922d9e552c5672044d`。main 与注解 Tag v0.5.1 原子推送，Tag 对象 `3a307ee77e28e31265bd3ba642fa4df088616c81` 固定指向该合并提交；后续核验文档不移动 Tag。
 - [标签 CI 41296277719](https://github.com/Mabinogi-Cichol/patchhub/actions/runs/41296277719) 的 changes、双平台 core、windows、decky、ci 和 release 共 7 个任务全部成功。正式三个安装包均来自本次 Tag 的新构建。
-- [正式 Release v0.5.1](https://github.com/Mabinogi-Cichol/patchhub/releases/tag/v0.5.1) 于北京时间 2026-11-01 18:18:29 发布，标题与 Tag 均为 v0.5.1，非草稿、非预发行，公开附件严格为三个安装包与 SHA256SUMS.txt；正文与[中文发行说明](releases/v0.5.1.md)读回一致。
+- [正式 Release v0.5.1](https://github.com/Mabinogi-Cichol/patchhub/releases/tag/v0.5.1) 于北京时间 2026-11-01 18:18:29 发布，标题与 Tag 均为 v0.5.1，非草稿、非预发行，公开附件严格为三个安装包与 SHA256SUMS.txt；正文与[中文发行说明](v0.5.1.md)读回一致。
 - 已下载全部 4 个附件，大小、GitHub digest、校验清单的 3 个文件名及 SHA-256 全部一致。两端 ZIP CRC、无重复/越界路径、内容白名单与 Tag 来源匹配；Windows 47 个文件，Decky 30 个文件。
 - Windows EXE/DLL 为 PE x86_64，NSIS 引导桩为 x86；Decky Core/worker 为 ELF64 x86_64，runtime 摘要、大小及执行权限通过。两端包内应用/工作区/SBOM 版本为 0.5.1，Cargo/npm/Dart 锁摘要、安装器与 Lua 许可来源和 Tag 一致；Windows 按实际 CRLF 检出规则核对。SBOM 组件数：Windows 519、Decky 450。
 - 正式 Windows 便携包在隔离 APPDATA 中启动并正常关闭，FileVersion `0.5.1+1`、ProductVersion `0.5.1+1`、退出码 0。未替换现有安装或操作游戏；NSIS 未运行，其版本由成功 Tag CI 中的显式构建版本与包内 app-version.json 一致性步骤佐证。
-- 本轮源码阶段的 148 项回归、完成提示 5 项回归及用户真实 0.4.0 测试候选 → v0.5.0 更新已记录在[自更新施工记录](features/client-self-update/progress.md)；不代表最终 v0.5.1 附件已部署至设备。最终包的 Deck 部署、实体手柄、Windows 安装版矩阵及正式版本之间自更新仍待验收。
+- 本轮源码阶段的 148 项回归、完成提示 5 项回归及用户真实 0.4.0 测试候选 → v0.5.0 更新已记录在[自更新施工记录](../features/client-self-update/progress.md)；不代表最终 v0.5.1 附件已部署至设备。最终包的 Deck 部署、实体手柄、Windows 安装版矩阵及正式版本之间自更新仍待验收。
 - 第三方依赖未更新，本轮未重新执行依赖审计，不声称 v0.5.0 已记录的既有公告命中已修复。证据保存在忽略目录 `.artifacts/release-v0.5.1/`，包含 CI/Release API、日志、下载附件、完整校验和便携包启动结果。
 
 | 附件 | 字节 | SHA-256 |
@@ -135,15 +135,15 @@
 
 ## v0.5.1 发布准备（2026-11-01）
 
-- 用户要求合并 Decky 自更新修复至 main 并发布 v0.5.1。沿用本 session 已验证的源码、真实更新及完成提示候选结果，详细证据与边界见[自更新施工记录](features/client-self-update/progress.md)。
+- 用户要求合并 Decky 自更新修复至 main 并发布 v0.5.1。沿用本 session 已验证的源码、真实更新及完成提示候选结果，详细证据与边界见[自更新施工记录](../features/client-self-update/progress.md)。
 - 根 Cargo workspace 版本源升级至 0.5.1，并同步 Cargo/npm 项目锁、Flutter、Decky 和共享 UI 派生元数据。正式发行必须来自 v0.5.1 Tag 对应 CI 新构建，不能上传旧测试候选。
-- Release 标题严格为 `v0.5.1`，正文使用[中文发行说明](releases/v0.5.1.md)，公开附件仅为三个安装包与 `SHA256SUMS.txt`。在线 CI 与附件核验待完成后补记；本轮不部署正式附件或操作游戏。
+- Release 标题严格为 `v0.5.1`，正文使用[中文发行说明](v0.5.1.md)，公开附件仅为三个安装包与 `SHA256SUMS.txt`。在线 CI 与附件核验待完成后补记；本轮不部署正式附件或操作游戏。
 
 ## v0.5.0 发布准备（2026-11-01）
 
 - 用户授权将 `feature/script-source-adapters` 合并至 `main` 并发布 v0.5.0，包含此前本地 `main` 的来源名称改动及当前分支的 Lua 来源迁移、后台 Shiravune 访问、双端脚本管理与相关修复。
-- 沿用[脚本来源施工记录](features/script-source-adapters/progress.md)及[来源名称施工记录](features/source-display-names/progress.md)中对应当前文件的验证；本轮补齐构建测试夹具并更新应用版本和发行文档，不重复执行已完成的产品回归。标签 CI 将重新执行双平台检查、构建与打包。
-- 应用版本从根 `Cargo.toml` 同步为 0.5.0，Windows 使用 0.5.0+1；正式发行必须来自 `v0.5.0` 标签构建，公开附件限定三个安装包与 `SHA256SUMS.txt`。中文正文见[发行说明](releases/v0.5.0.md)。
+- 沿用[脚本来源施工记录](../features/script-source-adapters/progress.md)及[来源名称施工记录](../features/source-display-names/progress.md)中对应当前文件的验证；本轮补齐构建测试夹具并更新应用版本和发行文档，不重复执行已完成的产品回归。标签 CI 将重新执行双平台检查、构建与打包。
+- 应用版本从根 `Cargo.toml` 同步为 0.5.0，Windows 使用 0.5.0+1；正式发行必须来自 `v0.5.0` 标签构建，公开附件限定三个安装包与 `SHA256SUMS.txt`。中文正文见[发行说明](v0.5.0.md)。
 - Breaking Change 保持已确认决策：旧解析索引与候选不复用，升级后重新更新来源与匹配；不新增缓存迁移。
 - 标签 CI、公开 Release 与附件核验待执行。未验收项继续保留：本次最终包的 Steam Deck 部署、实体手柄/软键盘、全新会话、真实游戏安装矩阵、Windows 安装包安装与系统 DPI 等；既有局部实机证据不代表本次最终包通过这些项目。
 
@@ -151,7 +151,7 @@
 
 - 当前功能分支的源码、构建夹具、版本与文档分别提交后合并至 `main`，合并提交 `a20356b7514b73f64cb0aebacb95a95ecae8b3db`；注解标签 `v0.5.0` 指向该提交，`main` 与标签已原子推送。标签固定，后续仅补充发行核验文档。
 - [标签 CI 41233605892](https://github.com/Mabinogi-Cichol/patchhub/actions/runs/41233605892) 的 changes、双平台 core、windows、decky、ci 与 release 共 7 个任务全部成功；标签构建重新执行了核心/协议/CLI、双端前端/桥接及打包检查，生成新的 Windows NSIS、便携包和 Decky 包；Windows Flutter 289 项通过、2 项跳过且静态分析无问题，Decky 前端 90 项通过。
-- [正式 Release v0.5.0](https://github.com/Mabinogi-Cichol/patchhub/releases/tag/v0.5.0) 于北京时间 2026-11-01 03:29:36 发布，标题与标签均为 `v0.5.0`，非草稿、非预发行，4 个公开附件；正文已替换为[中文发行说明](releases/v0.5.0.md)并读回一致。
+- [正式 Release v0.5.0](https://github.com/Mabinogi-Cichol/patchhub/releases/tag/v0.5.0) 于北京时间 2026-11-01 03:29:36 发布，标题与标签均为 `v0.5.0`，非草稿、非预发行，4 个公开附件；正文已替换为[中文发行说明](v0.5.0.md)并读回一致。
 - 下载全部 4 个公开附件，GitHub digest、文件大小与 `SHA256SUMS.txt` 的 3 个名称/哈希全部匹配；两端 ZIP CRC、无重复/越界路径、内容白名单、标签资源/契约/后端来源均通过。Windows 47 个文件，Decky 30 个文件；后台浏览器模块/共享脚本及 Lua 许可证均包含在包中。
 - Windows EXE/DLL 为 PE x86_64，NSIS 引导桩为 x86；Decky core/worker 为 ELF64 x86_64，运行时文件大小/哈希和 Unix 执行位通过。两端包内 CycloneDX 1.6 SBOM 应用及工作区版本均为 0.5.0，Cargo/npm/Dart 锁摘要、安装器及 Lua 许可来源与标签一致，Windows 按实际 CRLF 检出规则核对。SBOM 组件数：Windows 519，Decky 450。
 - 正式便携包在隔离 APPDATA 中启动并正常关闭，FileVersion `0.5.0+1`、ProductVersion `0.5.0+1`、退出码 0；未替换用户安装版或操作游戏。NSIS 未运行，版本由标签构建时的显式 VERSION 与 app-version.json 一致性检查及成功 CI 佐证。
@@ -166,7 +166,11 @@
 | patchhub-windows-x64-setup.exe | 15175672 | `b041b3769bcb3fccf84101c94f56f0e9c48757fc2c8e0fa53b31834e120f96cb` |
 | SHA256SUMS.txt | 278 | `84b30420d3d62ff80e04cb0ae92b4fbd1de241e66519de4132f70c51f474ac1f` |
 
-## 构建与来源
+## 早期 Alpha 发行流程（历史）
+
+以下构建、签名与发布前检查条目保留当时的流程和审计证据。早期 Alpha 的样本数量和双端 UI 验收当时尚未达到最初计划的门槛。
+
+### 构建与来源
 
 - Rust 依赖锁定于 Cargo.lock，前端依赖锁定于 package-lock.json；安装依赖使用 npm ci。
 - Windows 构建使用仓库隔离的 Rust 工具链；Linux 核心在 Ubuntu 构建，不修改 SteamOS 系统分区。
@@ -175,15 +179,15 @@
 - scripts/package-artifacts.py 为 ZIP 生成 SHA-256 清单。此清单检测传输变化，不能替代可信发布渠道或代码签名。
 - 依赖 SBOM 已通过 CycloneDX 官方仓库的 1.6 JSON Schema 验证；其锁文件哈希必须匹配当前 Cargo.lock 与 package-lock.json，否则打包拒绝使用过期清单。
 
-## 签名方案与维护
+### 签名方案与维护
 
 目录使用 Ed25519 签名，校验到期、密钥撤销、release 撤销及已观察 revision 的防回退。开发私钥仅保存在忽略目录，正式发布应使用离线或受保护的独立签名密钥，通过受控客户端更新分发可信公钥。
 
 Windows 当前未配置 Authenticode 证书，安装包没有发行者身份认证。正式发行前需配置签名与时间戳服务，并验证安装包、客户端及核心的签名；不得把目录签名称作 Windows 可执行文件签名。Decky 商店提交与成人内容相关规则仍需外部确认。
 
-## 每次发布前
+### 当时的发布前检查
 
-- 应用升版只修改根 `Cargo.toml` 的 `workspace.package.version`，运行 `python scripts/project_version.py --sync` 并提交派生清单与锁字段；`--check` 和 CI 在编译前核对同步状态及 Tag。核验最终 Windows EXE / `app-version.json` / 更新清单 / NSIS、Decky 包内 package.json / Loader / 后端读取值、SBOM 应用版本与 Release Tag 按既定格式一致（Flutter 默认额外构建号 `+1`，已有 metadata 按 SDK 规则投影）。详见[版本管理](features/version-single-source/design.md)。Windows ZIP 与 NSIS 使用相同受管理文件清单；验证更新多次后仍可正确卸载，且不删除用户额外文件。
+- 应用升版只修改根 `Cargo.toml` 的 `workspace.package.version`，运行 `python scripts/project_version.py --sync` 并提交派生清单与锁字段；`--check` 和 CI 在编译前核对同步状态及 Tag。核验最终 Windows EXE / `app-version.json` / 更新清单 / NSIS、Decky 包内 package.json / Loader / 后端读取值、SBOM 应用版本与 Release Tag 按既定格式一致（Flutter 默认额外构建号 `+1`，已有 metadata 按 SDK 规则投影）。详见[版本管理](../features/version-single-source/design.md)。Windows ZIP 与 NSIS 使用相同受管理文件清单；验证更新多次后仍可正确卸载，且不删除用户额外文件。
 - 先创建草稿 Release，仅上传双端 ZIP、NSIS 和覆盖三个安装包的 `SHA256SUMS.txt`，下载核对后再公开；不单独上传校验 JSON、SBOM 或 Python 脚本，不自动覆盖已有公开附件。自动检查不依赖 NSIS 附件。
 
 1. 核对公开目录的 AppID、来源链接、包哈希、游戏 build、语言、许可条件和平台验证证据。未知平台或版本保持禁用自动安装。
@@ -191,7 +195,7 @@ Windows 当前未配置 Authenticode 证书，安装包没有发行者身份认�
 3. 审查依赖变更、许可及已披露漏洞；保留工具版本和可复查报告。2026-10-01 npm 官方安全接口对当前锁定依赖返回 0 条已披露漏洞。cargo-audit 0.22.2 使用 RustSec 数据库 commit 9b3a3b73a7f42606494c943e95f8196e9994df46 检查当时的锁文件 528 个 Rust 依赖，无漏洞命中，另有下方两个提示；该记录早于后续依赖变更，当前 Cargo.lock 为 545 个包，正式发布前需重跑 cargo-audit 并更新记录。scripts/build-sbom.py 生成 744 个组件的 CycloneDX 依赖清单（2026-10-11 P6 重建实测），包括开发及其他平台依赖；清单与审计均不代表依赖没有未知漏洞，也不替代许可证法律审查。
 4. 重新构建核心、刷新客户端 sidecar / 目录资源，再打包；检查 ZIP 不含 .local、私钥、个人游戏库路径、备份或游戏资产。
 5. 在目标平台核对包哈希并测试首次运行、签名目录、安装与覆盖、下载取消、异常恢复；Decky 另测控制器导航、宿主重载和 SD 卡离线。
-6. 更新 docs/progress.md 中的已完成与未完成项目，将缺失验收及已知限制记录在发布检查记录中；公开说明按“新增与优化”和“问题修复”简要列出变更，无变更的分类省略。
+6. 更新当时的[总进度](../features/alpha-foundation/progress.md)中的已完成与未完成项目，将缺失验收及已知限制记录在发布检查记录中；公开说明按“新增与优化”和“问题修复”简要列出变更，无变更的分类省略。
 
 当前重要限制：不提供补丁卸载入口或同目标增量升级，覆盖安装不会删除上一版本多出的文件。从 v0.2.0 起，新 ZIP/EXE 直接安装不创建备份、暂存或授权文件，也不回滚；写入后取消、失败或中断保留已写内容，需要时重新安装。历史事务仍按其原有记录恢复，冲突报告 `needs_recovery`。下载取消可能留下 `.partial` 缓存。文件写入不构成整个游戏目录的原子替换；对同一用户恶意改变路径与日志的防御仍有限。UI 在已知总量时显示字节与文件进度，未知总量不伪造百分比。
 
@@ -216,7 +220,7 @@ RustSec 提示：RUSTSEC-2024-0429（glib 0.18.5，unsound）与 RUSTSEC-2024-03
 
 - 用户明确要求分项提交、合并功能分支至 main，并发布 v0.2.0；本地合并提交为 `70a1632`。应用、Cargo/npm 锁文件、Tauri 与 SBOM 应用版本均为 0.2.0。发行 Tag `v0.2.0` 为注解 Tag，对象 `8111abebc1b2de8d1934ccb620f0d0847e3a37f2`，指向提交 `4d1059143fef2af3e7e78e21f0f825eae8bd9f58`（与远端 main 一致）。
 - GitHub Actions [39245207148](https://github.com/Mabinogi-Cichol/steam-hentai-patch-searcher/actions/runs/39245207148)（Tag push，head `4d10591`）的 core（Windows/Linux）、windows、decky、release 任务全部成功。Release 由该运行创建：<https://github.com/Mabinogi-Cichol/steam-hentai-patch-searcher/releases/tag/v0.2.0>，标题与 Tag 均为 `v0.2.0`，非草稿、非预发行，发布时间 2026-10-19T11:41:14Z，附件 9 个。
-- 工作流以 `--generate-notes` 创建 Release，正文初始只有自动生成的 Full Changelog 链接（106 字符）。中断后本轮用[发行说明](releases/v0.2.0.md)（4,060 字符）经 GitHub API PATCH 补全中文正文；读回确认 `name == tagName == v0.2.0`、正文与仓库文件逐字符一致、`draft=false`、`prerelease=false`、附件仍为 9 个、发布时间与 Tag 未变，正文 `updated_at` 为 2026-10-19T12:05:49Z。标题只使用版本 Tag，未重建 Tag 或附件。
+- 工作流以 `--generate-notes` 创建 Release，正文初始只有自动生成的 Full Changelog 链接（106 字符）。中断后本轮用[发行说明](v0.2.0.md)（4,060 字符）经 GitHub API PATCH 补全中文正文；读回确认 `name == tagName == v0.2.0`、正文与仓库文件逐字符一致、`draft=false`、`prerelease=false`、附件仍为 9 个、发布时间与 Tag 未变，正文 `updated_at` 为 2026-10-19T12:05:49Z。标题只使用版本 Tag，未重建 Tag 或附件。
 - 附件在线核验（2026-10-19）：从公开 Release 下载全部 9 个附件（合计 26,407,945 字节）并逐项核对，全部通过：名称、大小与 GitHub API `sha256:` digest 一致；`SHA256SUMS.txt` 8 条与下载哈希及公开文件名一致；两端 checksums JSON 的 file/size/sha256 与对应 ZIP 一致；两端 ZIP `testzip` 无 CRC 错误、无重复条目，条目 allowlist（Decky 23 / Windows 11）与 Tag 内资源、契约、文档和源码一致（Windows 按 runner CRLF 检出规则）；两份 SBOM 均为 CycloneDX 1.6、版本 0.2.0、各 749 组件、Cargo/npm 锁摘要与 Tag 匹配、附件与 ZIP 内 SBOM 字节一致；Decky `bin/steam-patch` 与 `bin/sf-worker` 为 ELF64 x86_64，runtime 哈希、大小与执行位正确；Windows 三个 exe 为 PE x86_64，NSIS 引导桩 machine 为 0x14c；`install-decky.py` 与 Tag 内 `scripts/install-decky.py` 逐字节一致。下载与证据 JSON 保存在本次会话临时目录（当时 DSH 沙箱对 `.artifacts/` 不可写），关键结果记录如下。
 - 附件 SHA-256（下载实测，与 GitHub API digest 及 `SHA256SUMS.txt` 一致）：
 
@@ -242,7 +246,7 @@ RustSec 提示：RUSTSEC-2024-0429（glib 0.18.5，unsound）与 RUSTSEC-2024-03
 
 - 用户确认显示文本解码问题已修复，并明确要求提交 Git 和发布 v0.2.1。参考基线、修复代码、既有发行文档与本轮验收分别提交；程序、Cargo/npm 锁、Tauri 与 SBOM 应用版本为 0.2.1。
 - 沿用本 session 已通过的 Rust/Python/格式/clippy/Deck 样本及部署验证。版本修改仅补锁文件、npm 工作区版本一致性和 SBOM 测试。修复源码部署不代替最终 CI 发行包的部署验收。
-- 正式版以 Tag 对应 CI 产物为准；标题严格为 v0.2.1，中文正文来自 [v0.2.1 发行说明](releases/v0.2.1.md)。CI 运行与附件核验将在实际完成后记录；不移动或覆盖已有 v0.2.0 Tag。
+- 正式版以 Tag 对应 CI 产物为准；标题严格为 v0.2.1，中文正文来自 [v0.2.1 发行说明](v0.2.1.md)。CI 运行与附件核验将在实际完成后记录；不移动或覆盖已有 v0.2.0 Tag。
 
 
 ## v0.2.1 发布记录（2026-10-20）
@@ -251,7 +255,7 @@ RustSec 提示：RUSTSEC-2024-0429（glib 0.18.5，unsound）与 RUSTSEC-2024-03
 - [Tag 对应运行 39280868529](https://github.com/Mabinogi-Cichol/steam-hentai-patch-searcher/actions/runs/39280868529) 的实际完整日志已取回：两端 core、Windows、Decky 和 release 共 5 个任务，日志均无 error annotation；release 日志确认发布 URL 与 9 个附件来自本次 Tag。正式 [Release v0.2.1](https://github.com/Mabinogi-Cichol/steam-hentai-patch-searcher/releases/tag/v0.2.1) 由 github-actions[bot] 于 2026-10-19T16:02:46Z（北京时间 10-20 00:02:46）发布。
 - 状态接口异常：REST 与连接器持续返回早期 queued/null，和完整任务日志、已公开附件不一致；最初据此判断仍在排队，随后以 Release 及真实日志纠正。尝试取消时 API 返回 409（not in progress），空运行移除也被拒绝，未成功取消/删除任何运行。未伪造接口结论为 success。此前 GitHub 状态页未报告 Actions 故障，不能据此确定状态异常的根因。
 - 用户在排队表象下选择本地构建。Windows 核心、worker、Tauri 与 NSIS 已成功本机构建，程序版本 0.2.1，另有完整便携包/SBOM/校验文件，保存在 `.artifacts/release-v0.2.1/release-assets/` 作为备用。设备旧编译缓存已不存在；本轮独立 Linux 源码目录创建后 SSH 中断，Linux 本地重建尚未完成。发现正式 CI 包已发布后未覆盖附件，当前公开附件保持原始 CI 构建。后续是否替换以用户选择为准；设备本轮源码目录 `/home/deck/steam-patch-validation/release-v021-local-20261020` 的清理需待连接恢复。
-- 中文发行正文已由 [docs/releases/v0.2.1.md](releases/v0.2.1.md) PATCH 并逐字符读回；`name == tagName == v0.2.1`、draft=false、prerelease=false，9 个附件 ID/digest 和发布时间未变。
+- 中文发行正文已由 [docs/releases/v0.2.1.md](v0.2.1.md) PATCH 并逐字符读回；`name == tagName == v0.2.1`、draft=false、prerelease=false，9 个附件 ID/digest 和发布时间未变。
 - 下载全部 9 个公开附件（26,022,010 字节）：公开文件名、大小、GitHub API digest、SHA256SUMS.txt 的 8 条内容附件及两端 checksums JSON 全部一致。ZIP CRC 与条目白名单通过（Decky 23 / Windows 11）；资源、文档、生成契约和许可与 Tag 匹配，Windows 按实际 LF/CRLF 检出规则核验。两份 CycloneDX SBOM 为 0.2.1、749 组件，内外 SBOM 字节一致、锁与安装器清单摘要匹配 Tag。Decky CLI/worker 为 ELF64 x86_64，runtime 配对摘要/大小/执行位正确；Windows 三个 exe 为 PE x86_64，Tauri FileVersion/ProductVersion 为 0.2.1，NSIS 引导桩为 x86。
 - 校验与完整日志保存在忽略目录 `.artifacts/release-v0.2.1/`。沿用前一轮已验证源码的 Deck 部署，不宣称本次公开发行包已经重新部署或游戏矩阵全通过。Windows 实样本 ACL、三个缺失样本及既有遗留验收范围继续保留。
 
@@ -271,7 +275,7 @@ RustSec 提示：RUSTSEC-2024-0429（glib 0.18.5，unsound）与 RUSTSEC-2024-03
 
 - 用户授权将 Windows Modern UI 分支合并至 main 并发布 v0.3.0。沿用已完成的功能回归、原生截图及候选启动/退出记录；版本变更补充 Cargo 锁文件、npm 工作区和 SBOM 检查，均通过。
 - Cargo workspace、Flutter、Decky、共享 UI、安装器与 SBOM 应用版本统一为 0.3.0。正式发行以 Tag 对应 CI 新构建为准，不上传本地旧版本候选。
-- 发行标题严格为 v0.3.0，中文正文来自 [发行说明](releases/v0.3.0.md)。CI 与公开附件核验尚待执行；本次不执行设备部署或真实游戏补丁安装。
+- 发行标题严格为 v0.3.0，中文正文来自 [发行说明](v0.3.0.md)。CI 与公开附件核验尚待执行；本次不执行设备部署或真实游戏补丁安装。
 
 ### 首轮 CI 阻断与修复
 
@@ -294,7 +298,7 @@ RustSec 提示：RUSTSEC-2024-0429（glib 0.18.5，unsound）与 RUSTSEC-2024-03
 - 用户授权合并至主线并发布 v0.3.0，后又明确允许更新尚未生成 Release 的同名 Tag。依赖修复、Flutter 冷初始化修复和 NSIS 附件上传修复分别提交、合并；未降低测试门槛。此前失败运行及未发行 Tag 更新历史保留在上文，所有日志已存入忽略目录。
 - 最终发行提交：`48c9de68745ad59a6019ac3a165a8e7d0c03dab8`；注解 Tag 对象：`121bd2a3ea1ecf6dab0776ba0ed063edb14ce059`。公开 Release 生成后不再移动 Tag。
 - [Tag 运行 40001266403](https://github.com/Mabinogi-Cichol/steam-hentai-patch/actions/runs/40001266403) 的 Windows/Linux core、Windows、Decky、release 共 5 个任务全部成功。Flutter 210 项测试、静态分析和原生 release 构建通过；此前信任库并发测试在本轮完整 CI 再次通过，未修改该测试或生产逻辑，早期单次失败不宣称已定位根因。
-- [正式 Release v0.3.0](https://github.com/Mabinogi-Cichol/steam-hentai-patch/releases/tag/v0.3.0) 于 UTC 2026-10-23 18:23:52（北京时间 2026-10-24 02:23:52）发布。标题与 Tag 均为 `v0.3.0`，非草稿、非预发行，共 9 个附件；中文正文与 [发行说明](releases/v0.3.0.md)逐字符读回一致。
+- [正式 Release v0.3.0](https://github.com/Mabinogi-Cichol/steam-hentai-patch/releases/tag/v0.3.0) 于 UTC 2026-10-23 18:23:52（北京时间 2026-10-24 02:23:52）发布。标题与 Tag 均为 `v0.3.0`，非草稿、非预发行，共 9 个附件；中文正文与 [发行说明](v0.3.0.md)逐字符读回一致。
 - 从公开 Release 下载全部 9 个附件，名称、大小、GitHub digest、SHA256SUMS 的 8 个内容文件及两端 checksums JSON 全部一致。ZIP CRC、无重复/越界条目及内容白名单通过（Windows 39 文件 / Decky 23 文件）；两端源码、目录、契约、品牌及许可与 Tag 一致，Windows 按 runner 实际 CRLF/LF 规则核对。
 - 两份 CycloneDX 1.6 SBOM 的应用及全部 6 个 Rust 工作区组件版本为 0.3.0，内外 SBOM 字节一致，Cargo/npm/Dart 锁及安装器清单来源摘要匹配；Windows 505 组件、Decky 437 组件。Windows 程序与 DLL 为 PE x86_64，NSIS 引导桩为 x86；Decky CLI/worker 为 ELF64 x86_64，runtime 哈希、大小和执行位正确。独立 install-decky.py 与 Tag 源码字节一致。
 - 正式 Windows 便携包在独立 APPDATA 中启动并正常关闭，FileVersion/ProductVersion 为 `0.3.0+1`，退出码 0、关闭 1001ms；未操作用户原配置或真实游戏安装，没有强制结束正常程序。证据：`.artifacts/release-v0.3.0/` 中的 release.json、tag-run.json、tag-jobs.json、tag-ci-logs.zip、verification.json、ci-validation-summary.json、portable-smoke-result.json 及 downloads/。
@@ -316,14 +320,14 @@ RustSec 提示：RUSTSEC-2024-0429（glib 0.18.5，unsound）与 RUSTSEC-2024-03
 
 - 用户要求以 v0.4.0 发布。本地 `main` 已包含 v0.3.0 之后的 PatchHub 品牌统一、双端客户端自更新、Windows 来源布局/主题/下拉选择修复、补丁候选交互修复与分平台构建入口等改动。
 - Cargo workspace 与 Cargo.lock、Flutter pubspec、Decky 与共享 UI 的 npm 版本、package-lock、SBOM 应用版本及 NSIS 默认版本已统一为 0.4.0。更新清单版本一致性、`cargo metadata --locked` 与 npm 锁文件检查通过，SBOM、Windows 更新与打包脚本共 18 项测试通过。
-- 正式发行以 Tag 对应 CI 新构建为准，不上传本地旧版本候选。标题严格为 v0.4.0，中文正文来自 [发行说明](releases/v0.4.0.md)。
+- 正式发行以 Tag 对应 CI 新构建为准，不上传本地旧版本候选。标题严格为 v0.4.0，中文正文来自 [发行说明](v0.4.0.md)。
 - CI 运行与公开附件核验尚待执行；本次不执行设备部署或真实游戏补丁安装。
 
 ## v0.4.0 发布记录（2026-10-27）
 
 - 版本更新 `16a1143`、发行说明与准备 `4cee264` 分别提交，合并提交 `c3bcc00`；注解 Tag `v0.4.0` 对象 `08637a4b5b595c66d1019fb3a4f3546577722349` 指向该提交。本地 `main` 与 Tag 一并推送，未改写其他分支。
 - [Tag 运行 40388618121](https://github.com/Mabinogi-Cichol/patchhub/actions/runs/40388618121) 的 changes、core（Windows/Linux）、windows、decky、release 与 ci 共 8 个任务全部成功。Windows 任务 Flutter 238 项通过、1 项跳过，`flutter analyze` 无问题，Release 构建与 NSIS 生成通过；Decky 前端 68 项与安装器桥接 9 项通过；两端 core 全部 cargo 测试套件 0 失败。
-- [正式 Release v0.4.0](https://github.com/Mabinogi-Cichol/patchhub/releases/tag/v0.4.0) 由工作流于 UTC 2026-10-26 19:51:19（北京时间 2026-10-27 03:51:19）发布。标题与 Tag 均为 `v0.4.0`，非草稿、非预发行，共 9 个附件；正文已替换为[发行说明](releases/v0.4.0.md)并逐字符读回一致。
+- [正式 Release v0.4.0](https://github.com/Mabinogi-Cichol/patchhub/releases/tag/v0.4.0) 由工作流于 UTC 2026-10-26 19:51:19（北京时间 2026-10-27 03:51:19）发布。标题与 Tag 均为 `v0.4.0`，非草稿、非预发行，共 9 个附件；正文已替换为[发行说明](v0.4.0.md)并逐字符读回一致。
 - 从公开 Release 下载全部 9 个附件（合计 43,516,700 字节）并核对：名称、大小与 GitHub digest 一致；`SHA256SUMS.txt` 的 8 个内容文件及两端 checksums JSON 与下载文件一致。ZIP CRC、无重复及越界条目、条目白名单通过（Windows 42 文件 / Decky 26 文件）；Windows `update-manifest.json` 的 files 集合等于 ZIP 条目且版本 0.4.0。
 - 来源一致性：ZIP 内目录、协议 schema、品牌图、客户指南、隐私说明、许可、`windows-update.ps1` 及 Decky 生产后端模块与 `install-decky.py` 均与 Tag 字节一致。Windows 程序与 DLL 为 PE x86_64，NSIS 引导桩为 x86；Decky `bin/patchhub-core` 与 `bin/patchhub-worker` 为 ELF64 x86_64，runtime 哈希、大小与执行位正确。
 - 两份 CycloneDX 1.6 SBOM 为 0.4.0；Windows 505 组件、Decky 437 组件；Cargo/npm/Dart 锁摘要与 Tag 匹配，ZIP 内外 SBOM 字节一致，`patchhub-rust-installer` 组件源文件摘要匹配。
@@ -344,7 +348,7 @@ RustSec 提示：RUSTSEC-2024-0429（glib 0.18.5，unsound）与 RUSTSEC-2024-03
 
 ### 2026-10-27：精简 v0.4.0 发布说明
 
-- 将[仓库说明](releases/v0.4.0.md)与 [GitHub Release](https://github.com/Mabinogi-Cichol/patchhub/releases/tag/v0.4.0) 正文统一为“新增与优化”和“问题修复”，保留旧版本需手动升级的提示。
+- 将[仓库说明](v0.4.0.md)与 [GitHub Release](https://github.com/Mabinogi-Cichol/patchhub/releases/tag/v0.4.0) 正文统一为“新增与优化”和“问题修复”，保留旧版本需手动升级的提示。
 - API 读回确认正文与仓库文件逐字符一致；标题、Tag、目标分支、公开/预发行状态及发布时间保持不变，9 个附件的 ID、名称、大小和摘要保持不变；正文更新时间为 `2026-10-27T15:22:07Z`。
 - 本次仅修改说明，未重新构建或执行实机验证；原说明及更新前后 API 记录保存在 `.artifacts/release-v0.4.0/description-rewrite-20261027/`。
 
@@ -359,7 +363,7 @@ RustSec 提示：RUSTSEC-2024-0429（glib 0.18.5，unsound）与 RUSTSEC-2024-03
 
 - 按用户授权合并至 main 并发布；CLI 默认更新周期断言修复 `3bbcf70`、功能记录 `3fa8d7f`、版本同步 `00790fb`、发行说明 `3385d38` 分别提交，合并提交为 `3ac65f44ebfa2176716a645608c803689605cd78`。main 与注解 Tag v0.5.2 原子推送，Tag 对象 `9501cf3f20224e66c12077f587604bdaddc30e9b` 固定指向该合并提交。
 - [标签 CI 41458274856](https://github.com/Mabinogi-Cichol/patchhub/actions/runs/41458274856) 共 7 个任务全部成功，包含双平台 core、Windows / Decky 打包与 release。此前 Ubuntu 的默认周期断言失败已在本次完整 CI 通过；三个安装包均来自标签新构建。
-- [正式 Release v0.5.2](https://github.com/Mabinogi-Cichol/patchhub/releases/tag/v0.5.2) 于北京时间 2026-11-02 22:11:29 发布，标题与 Tag 均为 v0.5.2，非草稿、非预发行。中文正文与[发行说明](releases/v0.5.2.md)读回一致；公开附件严格为三个安装包及 SHA256SUMS.txt。
+- [正式 Release v0.5.2](https://github.com/Mabinogi-Cichol/patchhub/releases/tag/v0.5.2) 于北京时间 2026-11-02 22:11:29 发布，标题与 Tag 均为 v0.5.2，非草稿、非预发行。中文正文与[发行说明](v0.5.2.md)读回一致；公开附件严格为三个安装包及 SHA256SUMS.txt。
 - 已下载全部四个附件，大小、GitHub digest、清单的三个文件名与 SHA-256 全部一致。ZIP CRC、内容白名单与 Tag 来源通过（Windows 47 文件、Decky 30 文件）；Windows PE x86_64 / NSIS x86、Decky ELF64 x86_64、runtime 摘要和执行位通过。
 - 两端应用与 Rust 工作区 / SBOM 版本为 0.5.2；Cargo/npm/Dart 锁、安装器与 Lua 许可摘要和 Tag 一致，Windows 按实际 CRLF 检出规则核对。SBOM 组件数为 Windows 519、Decky 450。
 - Windows 正式便携包在隔离 APPDATA 中启动并正常关闭，FileVersion / ProductVersion 均为 0.5.2+1，退出码 0，关闭 647ms。未执行 NSIS 安装、最终 Decky 包部署、实体手柄、真实游戏安装或正式跨版本自更新验收，不将源码阶段记录作为本次安装包实机证明。

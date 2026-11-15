@@ -1,6 +1,8 @@
-# 源适配器与订阅
+# 早期源适配器与订阅实现
 
-来源能力已迁入共享 Rust 核心并作为单一来源引擎（P0–P5 已在 Windows 与 Decky 实机验证，P6 收口）：[设计](features/shared-source-discovery/design.md)、[施工记录](features/shared-source-discovery/progress.md)、[P0 基线](features/shared-source-discovery/p0-baseline.md)、[P5 契约](features/shared-source-discovery/p5-decky-design.md)。下文描述现行共享核心入口与用户可见行为。自定义 Lua 来源现已提供双端导入、编辑与删除，见[脚本适配器设计](features/script-source-adapters/design.md)与[施工记录](features/script-source-adapters/progress.md)；四个内置来源已全部使用随核心内嵌的 Lua 脚本。
+历史归档。[设计](design.md) · [施工记录](progress.md)。本页记录来源引擎迁移后的实现快照。当前导入及编写方法见[自定义订阅源使用指南](../../custom-subscription-sources.md)，后续自动更新行为见[启动与更新设计](../source-startup-update/design.md)，安装行为见[单一纯解压设计](../generic-exe-installation/design.md)。
+
+来源能力已迁入共享 Rust 核心并作为单一来源引擎（P0–P5 已在 Windows 与 Decky 实机验证，P6 收口）：[设计](../shared-source-discovery/design.md)、[施工记录](../shared-source-discovery/progress.md)、[P0 基线](../shared-source-discovery/p0-baseline.md)、[P5 契约](../shared-source-discovery/p5-decky-design.md)。下文描述当时的共享核心入口与用户可见行为。自定义 Lua 来源现已提供双端导入、编辑与删除，见[脚本适配器设计](design.md)与[施工记录](progress.md)；四个内置来源已全部使用随核心内嵌的 Lua 脚本。
 
 工具订阅网站，不订阅固定的游戏清单。工作单位是“来源”而不是“游戏”：每次来源更新只遍历该来源自己的列表/目录页并发布共享索引；游戏匹配先读本地索引，命中后才按需获取相关详情。普通源索引不会因为新增游戏、重启或手动重匹配而重新遍历。只有具备 ZIP/EXE 安装能力的匹配结果进入安装流程；仅相似标题的候选仍需人工选择。
 
@@ -62,7 +64,7 @@ sources/rust-v1/
 
 ## 导入与编辑 Lua 来源
 
-在 Windows“全局来源”或 Decky“管理订阅源”点击“导入脚本来源”，分别粘贴规则 JSON 和 Lua 源码；脚本 API 版本由客户端固定提交（当前为 **1**），不需要用户填写。“查看脚本示例”只展示可复制模板，不会替换草稿或自动添加来源。可下载/维护[规则示例](features/script-source-adapters/examples/publisher/source.json)和[源码示例](features/script-source-adapters/examples/publisher/adapter.lua)，具体字段与示例网页见[示例说明](features/script-source-adapters/examples/README.md)。Windows 文件选择和 Decky 远程文件浏览不属于当前入口；两端均可粘贴完整文本。
+在 Windows“全局来源”或 Decky“管理订阅源”点击“导入脚本来源”，分别粘贴规则 JSON 和 Lua 源码；脚本 API 版本由客户端固定提交（当前为 **1**），不需要用户填写。“查看脚本示例”只展示可复制模板，不会替换草稿或自动添加来源。可下载/维护[规则示例](examples/publisher/source.json)和[源码示例](examples/publisher/adapter.lua)，具体字段与示例网页见[示例说明](examples/README.md)。Windows 文件选择和 Decky 远程文件浏览不属于当前入口；两端均可粘贴完整文本。
 
 - 规则写 `id`、`name`、`enabled`、`role`（`publisher` 列表索引，`fallback_indexer` 按游戏补查）与 `pages/page_hosts/download_hosts/root_layout`；不需要 `adapter`（缺省即自定义 Lua）。域名不是由脚本自行扩大权限。
 - 只导入你信任的脚本。脚本在后续更新/匹配任务中运行，可按规则访问网站；核心不向它开放文件系统、进程、环境变量或安装器。脚本仍可报告错误网页事实，允许的宿主能力不代表作者可信或已经完成恶意代码资源隔离。
@@ -76,7 +78,7 @@ sources/rust-v1/
 
 ### 编写与调试
 
-脚本返回一个入口表，详见 [Lua API 与错误合同](features/script-source-adapters/p0-contract.md)：
+脚本返回一个入口表，详见 [Lua API 与错误合同](p0-contract.md)：
 
 | 入口 | 何时需要 | 返回事实 |
 | --- | --- | --- |

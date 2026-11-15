@@ -1,6 +1,10 @@
-# Steam 游戏补丁管理工具：调研与开发计划
+# 早期 Alpha 基础设计
 
-调研日期：2026-09-30。此文档保留开发前方案；制定时仓库没有应用代码或提交历史。本计划中的技术选型、规模和工期均为建议，不表示已完成实现。2026-10-01 已开始 P0 首批实现，实际交付与未完成事项见 [进度记录](progress.md)。2026-10-08 来源发现与订阅已迁入共享 Rust 核心（[shared-source-discovery](features/shared-source-discovery/design.md)，P0–P5）。
+历史归档。[施工记录](progress.md) · [调研与样本证据](research-sources.md) · [旧 ZIP 事务设计](legacy-zip-installation.md)
+
+本方案记录早期 Steam 扫描、来源发现和安装器的设计。现行安装流程与适用边界见[单一纯解压设计](../generic-exe-installation/design.md)，来源架构见[脚本来源设计](../script-source-adapters/design.md)。
+
+调研日期：2026-09-30。此文档保留开发前方案；制定时仓库没有应用代码或提交历史。本计划中的技术选型、规模和工期均为建议，不表示已完成实现。2026-10-01 已开始 P0 首批实现，实际交付与未完成事项见 [进度记录](progress.md)。2026-10-08 来源发现与订阅已迁入共享 Rust 核心（[shared-source-discovery](../shared-source-discovery/design.md)，P0–P5）。
 
 ## 1. 产品目标与边界
 
@@ -57,9 +61,9 @@ Decky 首版以插件内部列表为稳定入口；游戏详情页快捷入口�
 
 ## 5. 技术架构与选择
 
-来源能力已迁入共享 Rust 核心并完成双端切换与实机验证（P0–P5）：[独立设计](features/shared-source-discovery/design.md)与[施工记录](features/shared-source-discovery/progress.md)。安装器逻辑（publisher ZIP / EXE）已迁入共享 Rust 核心（P5 完成），成为单一生产引擎。
+来源能力已迁入共享 Rust 核心并完成双端切换与实机验证（P0–P5）：[独立设计](../shared-source-discovery/design.md)与[施工记录](../shared-source-discovery/progress.md)。安装器逻辑（publisher ZIP / EXE）已迁入共享 Rust 核心（P5 完成），成为单一生产引擎。
 
-后续 [跨平台安装器迁移](features/cross-platform-installer-migration/design.md) 已建立独立设计与[施工记录](features/cross-platform-installer-migration/progress.md)：共享动态 ZIP/EXE 安装策略、原生隔离 worker、新状态 schema 与 Windows 动态安装能力已实现并通过 P5 双端验收；开发阶段允许旧缓存格式 breaking change，不承担旧版本兼容，切换前先处理未完成事务。P6 收口重复的 Python 安装逻辑，只保留薄 Python 桥接。
+后续 [跨平台安装器迁移](../cross-platform-installer-migration/design.md) 已建立独立设计与[施工记录](../cross-platform-installer-migration/progress.md)：共享动态 ZIP/EXE 安装策略、原生隔离 worker、新状态 schema 与 Windows 动态安装能力已实现并通过 P5 双端验收；开发阶段允许旧缓存格式 breaking change，不承担旧版本兼容，切换前先处理未完成事务。P6 收口重复的 Python 安装逻辑，只保留薄 Python 桥接。
 
 建议采用共享 Rust 核心，负责 Steam 库解析、匹配、指纹、下载验证、文件事务、恢复和 SQLite 存储。Windows 使用 Flutter / Dart + Material 3；SteamOS 使用 Decky React / TypeScript 前端 + Python 桥接后端，再调用随插件打包的 Linux 核心进程。
 
@@ -76,7 +80,7 @@ Decky UI → Python bridge → CLI ┘       ↓
 
 这一路线增加 Rust 与 Python 的打包工作，但能保持跨平台安装规则和安全检查一致。备选方案是 Python 共享核心配 Windows 桌面壳，初始开发更快，代价是运行时分发与双端权限管理复杂。P0 已用同一个配方完成双端验证并正式锁定 Rust 路线。
 
-Windows 宿主通过 JSONL 调用共享 Rust CLI；核心保留自己的路径检查。远程网页在外部浏览器打开。Flutter 重写状态见 [Windows 施工记录](features/windows-ux-redesign/progress.md)。
+Windows 宿主通过 JSONL 调用共享 Rust CLI；核心保留自己的路径检查。远程网页在外部浏览器打开。Flutter 重写状态见 [Windows 施工记录](../windows-ux-redesign/progress.md)。
 
 建议仓库结构：
 

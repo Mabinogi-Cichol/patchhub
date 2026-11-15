@@ -42,6 +42,8 @@ curl -fsSL https://raw.githubusercontent.com/Mabinogi-Cichol/patchhub/main/insta
 2. 打开 Decky 设置，通过本地 ZIP 安装入口选择该文件。
 3. 返回游戏模式，按 **“…” → Decky → PatchHub** 打开插件。
 
+更多操作见[客户端使用指南](docs/client-guide.md)，本机数据处理见[隐私说明](docs/privacy.md)。
+
 ## 客户端截图
 
 ### Windows 桌面客户端
@@ -70,4 +72,4 @@ PatchHub 支持在 Windows 和 Steam Deck 上导入 Lua 来源。[自定义订�
 > [!IMPORTANT]
 > 请依次运行发行构建。共用的 SBOM 和总校验表由最近一次发行构建生成。
 
-应用升版只修改根 `Cargo.toml` 的 `workspace.package.version`，构建入口自动同步其他清单；不构建时运行 `python scripts/project_version.py --sync`。生成的清单与锁文件需一并提交，详情见[版本管理](docs/client-guide.md#应用版本)。
+应用升版只修改根 `Cargo.toml` 的 `workspace.package.version`，构建入口自动同步其他清单；不构建时运行 `python scripts/project_version.py --sync`。生成的清单与锁文件需一并提交，详情见[版本管理](docs/features/platform-build-entrypoints/build-guide.md#应用版本)。

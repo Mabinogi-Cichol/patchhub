@@ -257,7 +257,7 @@ P4 代码已提交为 `20f921d`，文档按本轮用户要求独立提交。两�
 - 沿用现有名称、启用、订阅、间隔及更新/匹配入口。只在保存回执成功后清理 UI 的旧来源候选和动态补丁，再读取核心投影；签名目录结果保留，避免原“查询失败时保留结果”恢复已失效脚本选择。刷新来源/投影与保存分开，保存后刷新失败显示“已保存，但刷新失败”，不误报成未保存、不要求盲目重试导入。
 - Decky Python 只传输文本与结果，不执行 Lua；新 RPC 保留 CoreError 的完整 Lua 诊断，避免插件异常字符串仅剩错误码。Windows 卡片脚本元数据增加独立 PageStorage key，修复新错误提示插入/卡片重建后，内部文本滚动恢复误读 ExpansionTile 布尔展开状态的实际异常。
 - 保存只编译，不运行顶层和入口；保存成功不代表网站或执行通过。界面提示仅导入可信脚本、请求受规则域名约束，后续需更新来源或重新匹配。当前四个内置来源尚未脚本化，因此不显示脚本编辑按钮；P6 迁移后复用同一读取/显式用户覆盖路径，不在 P5 额外实现内置脚本版本层。
-- 更新[来源指南](../../source-adapters.md)与[作者示例](examples/README.md)。示例采用占位域名/合成 HTML，核心实际执行验证直接条目，双端测试核对文档/界面内容一致；不冒充真实站点抓取或内置迁移验收。
+- 更新[来源指南](source-adapters.md)与[作者示例](examples/README.md)。示例采用占位域名/合成 HTML，核心实际执行验证直接条目，双端测试核对文档/界面内容一致；不冒充真实站点抓取或内置迁移验收。
 
 ### P5 已执行验证
 
@@ -566,7 +566,7 @@ P7 保持施工中：Windows 原生桌面界面的实际导入/取消/重启，D
 - 存量兼容：随包 `table.lua`、`columns/table_id` 字段与既有校验保留，只因为有用户可能已经保存过这类规则——删字段会让 `deny_unknown_fields` 直接读不出旧设置。这类规则仍然加载和执行，但**没有任何新建入口**，可在来源卡片里删除后改用 Lua。没有自动改写或迁移用户规则。
 - 两端：Windows [source_pages.dart](../../../apps/windows-flutter/lib/pages/source_pages.dart) 与 Decky [index.tsx](../../../apps/decky/src/index.tsx) 删除“高级：添加来源规则 / 添加源”的 JSON 输入、示例与复制，`import_script_source`（导入脚本来源）成为唯一入口；两侧编辑器去掉不再使用的 `draftRule` 预填参数，Decky 同时删除 `source-rule.ts` 与其测试。
 - 作者示例：`examples/publisher/source.json` 与 `examples/product-pages/source.json` 去掉 `adapter`，两端示例常量同步（仍由测试逐字对照）。
-- 文档：[source-adapters.md](../../source-adapters.md) 删除“添加表格网站”章节，改为“自定义来源（只有 Lua）/内置站点脚本”；[design.md](design.md)、[p0-contract.md](p0-contract.md)、[implementation-plan.md](implementation-plan.md)、[migration-matrix.md](migration-matrix.md) 与功能索引同步；[source-display-names](../source-display-names/progress.md) 记录规则示例入口随之移除。
+- 文档：[source-adapters.md](source-adapters.md) 删除“添加表格网站”章节，改为“自定义来源（只有 Lua）/内置站点脚本”；[design.md](design.md)、[p0-contract.md](p0-contract.md)、[implementation-plan.md](implementation-plan.md)、[migration-matrix.md](migration-matrix.md) 与功能索引同步；[source-display-names](../source-display-names/progress.md) 记录规则示例入口随之移除。
 
 #### 已执行验证
 
@@ -592,7 +592,7 @@ P7 保持施工中：Windows 原生桌面界面的实际导入/取消/重启，D
 用户询问“Lua API 版本是什么”。核对后确认 `SCRIPT_API_VERSION = 1`（[script.rs](../../../crates/core/src/sources/script.rs)），它标识脚本与宿主的入口/能力合同版本（入口 `collect_index/resolve_page/discover`、`ctx.get/post/html/...`），既不是 Lua 语言版本（运行时为内嵌 Lua 5.4），也不是客户端 JSONL 协议版本（v5）；导入与读取都只接受 1，否则报 `unsupported_script_api_version`。该字段与 `adapter` 一样属于内部合同细节，界面上没有可选项。
 
 - Windows [script_source_editor.dart](../../../apps/windows-flutter/lib/pages/script_source_editor.dart) 与 Decky [script-source-editor.tsx](../../../apps/decky/src/script-source-editor.tsx) 删除“Lua API 版本”输入与整数校验，保存时固定提交 `api_version: 1`；已有脚本仍显示“当前 API 1 · SHA-256”供核对，只读查看保持只读。
-- 协议不变：`import_script_source` 仍要求 `api_version`，两端固定传 1；[source-adapters.md](../../source-adapters.md)、[design.md](design.md)、[p0-contract.md](p0-contract.md) 同步说明“无需用户填写”。
+- 协议不变：`import_script_source` 仍要求 `api_version`，两端固定传 1；[source-adapters.md](source-adapters.md)、[design.md](design.md)、[p0-contract.md](p0-contract.md) 同步说明“无需用户填写”。
 
 验证：Decky `npm run typecheck` 与 `npm test`（**90 passed**）；Windows `flutter analyze --no-pub lib test` 无问题、脚本导入/编辑器/来源页相关 **11 项通过**。本轮未改 Rust 与协议，未重复运行核心回归；未做实机与真实网站验证。
 
@@ -602,7 +602,7 @@ P7 保持施工中：Windows 原生桌面界面的实际导入/取消/重启，D
 
 - Windows [source_pages.dart](../../../apps/windows-flutter/lib/pages/source_pages.dart) 与 Decky [index.tsx](../../../apps/decky/src/index.tsx) 删除卡片里的“Lua 脚本 · API”行，只保留“查看脚本/编辑脚本/删除来源”与只读提示。
 - 两端编辑器（[script_source_editor.dart](../../../apps/windows-flutter/lib/pages/script_source_editor.dart)、[script-source-editor.tsx](../../../apps/decky/src/script-source-editor.tsx)）删除“当前 API · SHA-256”元数据行；编辑模式保留“替换同 ID 来源…”提示，只读查看只显示只读说明。协议与存储不变，摘要仍由核心计算并用于解析身份校验。
-- 文档：[source-adapters.md](../../source-adapters.md) 与 [design.md](design.md) 同步为“卡片不展示脚本元数据”。
+- 文档：[source-adapters.md](source-adapters.md) 与 [design.md](design.md) 同步为“卡片不展示脚本元数据”。
 
 验证：Decky `npm run typecheck`、`npm test`（**90 passed**，原“显示完整元数据”用例改为断言不显示摘要与 API）、`npm run build`；Windows `flutter analyze --no-pub lib test` 无问题，脚本编辑器与来源页相关 **10 项通过**。本轮未改 Rust 与协议；未做实机验证。
 
@@ -610,11 +610,11 @@ P7 保持施工中：Windows 原生桌面界面的实际导入/取消/重启，D
 
 - 用户授权提交当前功能分支、合并到 main 并发布 v0.5.0；沿用上文对应当前源码的核心/协议/CLI、双端及实机证据，不把未执行验收改记为通过。
 - 发布前版本同步测试发现旧夹具漏建 Lua 许可证、Decky source_browser.py 与共享 shiravune-browser.js；只补齐夹具所需文件，不修改生产打包行为。修正后版本同步 **12 项通过**，打包回归 **11 项通过**，`project_version.py --check` 与 `git diff --check` 通过。
-- 本轮新增修改仅为上述夹具及应用版本/发行文档。按精简原则核对：未增加限制、重试、超时、状态或兼容路径。双平台完整回归、正式构建与最终包以 v0.5.0 标签 CI 和发行附件核验为准，发布结果记录在[发行检查](../../release-checklist.md)。
+- 本轮新增修改仅为上述夹具及应用版本/发行文档。按精简原则核对：未增加限制、重试、超时、状态或兼容路径。双平台完整回归、正式构建与最终包以 v0.5.0 标签 CI 和发行附件核验为准，发布结果记录在[发行检查](../../releases/release-checklist.md)。
 - P7 原生交互、实体手柄/软键盘、全新会话及真实游戏安装等原有待验收项仍保留；本轮没有额外部署或操作游戏。
 
 ### 2026-11-01：v0.5.0 已正式发布并核验最终附件
 
 - 功能分支已合并、推送 main，注解标签 v0.5.0 固定于合并提交 a20356b7514b73f64cb0aebacb95a95ecae8b3db；标签 CI 41233605892 的 7 个任务全部成功，正式 Release 已公开，中文说明已读回一致。
-- 公开四附件的 SHA-256/清单全部匹配；Windows 47 文件、Decky 30 文件的 CRC、白名单、版本、架构、契约/浏览器模块/资源来源、SBOM 和许可核验通过。正式 Windows 便携包隔离启动/正常退出通过，版本 0.5.0+1。详见[发行记录](../../release-checklist.md#v050-发布记录2026-11-01)，证据在 .artifacts/release-v0.5.0/。
+- 公开四附件的 SHA-256/清单全部匹配；Windows 47 文件、Decky 30 文件的 CRC、白名单、版本、架构、契约/浏览器模块/资源来源、SBOM 和许可核验通过。正式 Windows 便携包隔离启动/正常退出通过，版本 0.5.0+1。详见[发行记录](../../releases/release-checklist.md#v050-发布记录2026-11-01)，证据在 .artifacts/release-v0.5.0/。
 - 本轮没有部署最终 Decky 包或操作真实游戏；P7 其余实机/实体输入验收继续保留。重跑依赖审计存在既有 RustSec/npm 公告命中，未修复，详见发行记录，不将构建或包核验通过表述为安全审计通过。

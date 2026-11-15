@@ -397,7 +397,7 @@ flutter test integration_test/windows_acceptance_test.dart -d windows "--dart-de
 
 - Modern UI 与布局、选择器标题修订已合并 main，发行提交为 48c9de68745ad59a6019ac3a165a8e7d0c03dab8；用户明确允许例外更新尚未发行的 v0.3.0 Tag，正式 Release 生成后 Tag 保持不变。
 - Tag CI 40001266403 全部成功，Flutter 210 项完整回归及静态检查通过；9 个公开附件的哈希、ZIP 内容/CRC、SBOM、平台架构与来源核验通过。正式 Windows 便携包版本 0.3.0+1，隔离 APPDATA 启动和正常关闭通过，退出码 0、1001ms。
-- 发行详情、前序 CI 问题与修复、公开附件校验及未验证边界见[发行检查](../../release-checklist.md#v030-发布记录2026-10-24)及[发行说明](../../releases/v0.3.0.md)。此前“尚未提交/发布/待决定”的表述保留为施工历史，以本节为最新结果；未增加设备部署、真实游戏安装或系统 DPI 验收结论。
+- 发行详情、前序 CI 问题与修复、公开附件校验及未验证边界见[发行检查](../../releases/release-checklist.md#v030-发布记录2026-10-24)及[发行说明](../../releases/v0.3.0.md)。此前“尚未提交/发布/待决定”的表述保留为施工历史，以本节为最新结果；未增加设备部署、真实游戏安装或系统 DPI 验收结论。
 
 ### 2026-10-24 Windows 底栏、折叠区与更新布局修复
 
@@ -424,4 +424,4 @@ flutter test integration_test/windows_acceptance_test.dart -d windows "--dart-de
 
 - 来源布局、主题图标与下拉选择修复随 `chore/release-v0-4-0` 合并入 `main`（发行提交 `c3bcc00`），注解 Tag `v0.4.0` 指向该提交；正式 [Release v0.4.0](https://github.com/Mabinogi-Cichol/patchhub/releases/tag/v0.4.0) 由 Tag CI 40388618121 生成，8 个任务全部成功。
 - Windows 任务 Flutter 238 项通过、1 项跳过，`flutter analyze` 无问题；Decky 前端 68 项与安装器桥接 9 项通过。9 个公开附件的哈希、ZIP 内容/CRC/白名单、SBOM、PE/ELF 平台与 Tag 来源一致性核验通过；Windows 便携包 `0.4.0+1` 隔离启动与正常关闭通过（退出码 0、关闭 1151ms）。
-- 附件表、CI 证据与未验证边界见[发行检查](../../release-checklist.md#v040-发布记录2026-10-27)及[发行说明](../../releases/v0.4.0.md)。本次未新增设备部署、真实游戏安装、实体手柄或系统 DPI 验收结论。
+- 附件表、CI 证据与未验证边界见[发行检查](../../releases/release-checklist.md#v040-发布记录2026-10-27)及[发行说明](../../releases/v0.4.0.md)。本次未新增设备部署、真实游戏安装、实体手柄或系统 DPI 验收结论。

@@ -1,6 +1,6 @@
 # Lua 来源示例
 
-[来源使用指南](../../../source-adapters.md) · [设计](../design.md) · [施工记录](../progress.md) · [API 合同](../p0-contract.md)
+[自定义订阅源使用指南](../../../custom-subscription-sources.md) · [设计](../design.md) · [施工记录](../progress.md) · [API 合同](../p0-contract.md)
 
 ## 发行商列表与直接下载
 

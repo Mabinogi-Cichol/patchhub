@@ -272,7 +272,7 @@ P0 → P1 → P2 → P3 → **P4 Windows 真实验收** → P5 Decky 切换 → 
 
 P0 待冻结：Windows 支持版本/隔离配置、Rust 解析/解压依赖与许可、worker schema/等价内存限额、来源与安装 ID/确定性编码/版本、新规则必填项与合法默认值、可丢弃来源/安装缓存与受保护设置/恢复材料边界、新状态 schema、锁顺序、取消租约/关闭细节。未冻结不能先以“全部可安装”开放入口。
 
-实施时更新 [契约](../../../packages/contracts/README.md)、[公共安装设计](../../install-design.md)、[来源指南](../../source-adapters.md)、[客户端指南](../../client-guide.md)、[总体架构](../../development-plan.md)、[发布清单](../../release-checklist.md)；按实际阶段修订分工，不提前写成已迁移。设计/功能代码分别提交，本轮仅文档，无 Git 提交；前序未提交改动和历史事实保留。
+实施时更新 [契约](../../../packages/contracts/README.md)、[公共安装设计](../alpha-foundation/legacy-zip-installation.md)、[来源指南](../script-source-adapters/source-adapters.md)、[客户端指南](../../client-guide.md)、[总体架构](../alpha-foundation/design.md)、[发布清单](../../releases/release-checklist.md)；按实际阶段修订分工，不提前写成已迁移。设计/功能代码分别提交，本轮仅文档，无 Git 提交；前序未提交改动和历史事实保留。
 
 
 ### P3 生产接线细化

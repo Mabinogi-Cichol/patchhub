@@ -1,5 +1,12 @@
 # 功能开发文档
 
+[客户端构建与打包](platform-build-entrypoints/build-guide.md) · [本地 CI 验证](patchhub-ci-fix/local-ci-validation.md) · [发行检查与发布记录](../releases/release-checklist.md)
+
+| 历史归档 | 设计 | 施工记录 | 附加文档 |
+| --- | --- | --- | --- |
+| 早期 Alpha 基础 | [设计](alpha-foundation/design.md) | [施工记录](alpha-foundation/progress.md) | [调研与样本证据](alpha-foundation/research-sources.md) · [旧 ZIP 安装事务](alpha-foundation/legacy-zip-installation.md) |
+| 早期源适配器与订阅实现 | [设计](script-source-adapters/design.md) | [施工记录](script-source-adapters/progress.md) | [实现快照](script-source-adapters/source-adapters.md) |
+
 | 功能 | 状态 | 设计 | 施工记录 |
 | --- | --- | --- | --- |
 | YOZAKURA 内置订阅源 | 已实现，官网查询和下载项投影通过，实机待验收 | [设计](yozakura-source/design.md) | [施工记录](yozakura-source/progress.md) |
@@ -13,7 +20,7 @@
 
 2026-10-29：Windows 安装进度弹窗已按用户图例重设计，13 项相关回归与深浅主题 / 大字体 12 张原生夹具截图通过，用户视觉验收待完成。详见[设计](windows-install-progress/design.md)与[施工记录](windows-install-progress/progress.md)。
 
-2026-10-27：v0.4.0 已发布，包含 PatchHub 品牌统一、Windows 与 Decky 客户端自更新、Windows 全局来源布局与主题/下拉选择修复、补丁候选交互修复及分平台构建入口。Tag 运行 8 个任务全部成功，Flutter 238 项通过/1 项跳过；9 个公开附件完成哈希、ZIP 内容、SBOM、平台架构与 Tag 来源核验。详见[发行检查](../release-checklist.md#v040-发布记录2026-10-27)与[发行说明](../releases/v0.4.0.md)。
+2026-10-27：v0.4.0 已发布，包含 PatchHub 品牌统一、Windows 与 Decky 客户端自更新、Windows 全局来源布局与主题/下拉选择修复、补丁候选交互修复及分平台构建入口。Tag 运行 8 个任务全部成功，Flutter 238 项通过/1 项跳过；9 个公开附件完成哈希、ZIP 内容、SBOM、平台架构与 Tag 来源核验。详见[发行检查](../releases/release-checklist.md#v040-发布记录2026-10-27)与[发行说明](../releases/v0.4.0.md)。
 
 2026-10-27：Windows 下拉选择框统一为保留原框的锚定式菜单，补丁/镜像/语言三处及展开收起动效已实现，47 项相关回归通过，深浅主题渲染已检查，原生窗口待验收。详见 [设计](windows-ux-redesign/design.md) 与 [施工记录](windows-ux-redesign/progress.md)。
 

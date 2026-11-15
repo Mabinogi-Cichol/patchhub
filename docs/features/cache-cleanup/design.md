@@ -178,7 +178,7 @@ return self._wrap_publisher(result, *owner) if owner else result
 
 - **路径约束**：删除前统一 `resolve().is_relative_to(允许根)`，并使用 `no_links` 拒绝链接与 junction；与仓库既有状态路径校验风格一致。
 - **不可整目录删除**：`state_dir/downloads` 含用户文件；仅按摘要命名/临时扩展名精确匹配。
-- **坚持本地信任边界**：`state` 目录权限 0700，属于当前账户信任边界；本设计不承诺抵御同账户篡改（沿用 `install-design.md` 的威胁模型）。
+- **坚持本地信任边界**：`state` 目录权限 0700，属于当前账户信任边界；本设计不承诺抵御同账户篡改（沿用[旧 ZIP 事务设计](../alpha-foundation/legacy-zip-installation.md)的威胁模型）。
 - **失败可观测**：清理失败写诊断而非使安装失败；手动清理返回实际剩余量与失败项计数。
 - **幂等**：文件不存在时 `missing_ok=True` 静默成功。
 
@@ -213,10 +213,10 @@ return self._wrap_publisher(result, *owner) if owner else result
 
 - `docs/privacy.md`：改为“安装成功后会删除已下载 ZIP 缓存（可通过开关关闭）；事务历史与备份仍保留”，修正“卸载成功不等于自动删除全部下载和暂存”的表述。
 - `docs/client-guide.md`：补充安装成功后清理下载缓存、自动清理开关（默认开启）以及全局设置中的手动清理入口。
-- `docs/install-design.md`：在“卸载与恢复”末尾区分“下载缓存已清理”与“事务/备份暂无自动清理”。
+- [旧 ZIP 事务设计](../alpha-foundation/legacy-zip-installation.md)：在“卸载与恢复”末尾区分“下载缓存已清理”与“事务/备份暂无自动清理”。
 - `apps/decky/README.md`：一句话说明缓存生命周期与开关。
 - `docs/features/decky-ux/design.md`：在进度/取消相关条目附近注明“安装成功后清理本次下载缓存”。
-- `docs/progress.md` / `docs/features/decky-ux/progress.md`：记录本轮施工与实机验收结果。
+- [当时的总进度](../alpha-foundation/progress.md) / [Decky UX 施工记录](../decky-ux/progress.md)：记录本轮施工与实机验收结果。
 
 ## 实施拆分
 

@@ -6,7 +6,7 @@
 
 CI #98 暴露本地功能测试未覆盖 CI Clippy 的缺口。用户要求 Linux 使用 WSL 验证，且本地验证与 CI 对齐到实际检查颗粒度。
 
-采用仓库规则和[本地 CI 指南](../../local-ci-validation.md)约束执行：读取当前 workflow 和选择器，按实际变更选择 job，再逐平台、逐 run step 核对命令、参数、工具版本、环境、构建和产物。Core 在原生 Windows 与 WSL Linux 执行；Decky Linux 构建与后端测试在 WSL 使用本轮 ELF 核心。记录每一步结果和未验证项。
+采用仓库规则和[本地 CI 指南](local-ci-validation.md)约束执行：读取当前 workflow 和选择器，按实际变更选择 job，再逐平台、逐 run step 核对命令、参数、工具版本、环境、构建和产物。Core 在原生 Windows 与 WSL Linux 执行；Decky Linux 构建与后端测试在 WSL 使用本轮 ELF 核心。记录每一步结果和未验证项。
 
 触发范围按用户要求收敛：完整对齐只在发布版本前执行，包括打 tag、创建或核验发行附件之前；日常功能开发、修复和文档改动只做与改动相关的定向验证，即受影响包测试、`cargo fmt --all -- --check`、受影响包 Clippy 和生成物核对。排查线上 CI 失败时只重跑失败 job 的失败步骤及其必要前置，需要跨平台确认时才补对应平台。
 

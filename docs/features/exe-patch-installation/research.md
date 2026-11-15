@@ -66,7 +66,7 @@
 
 - [发现模块](../../../apps/decky/backend/discovery.py)固定产生 `discover_only`，[`_installable_release`](../../../apps/decky/main.py)拒绝 candidate ID；已有 [Kagura 功能](../kagura-hgamer-fallback/progress.md)仅完成发现/引导。EXE 功能需要新的受审核 release 关联，不应移除这个守卫。
 - [publisher.py](../../../apps/decky/backend/publisher.py)通过本地临时签名 catalog 调用 [CoreBridge](../../../apps/decky/backend/bridge.py)，实际游戏写入/恢复在 [Rust](../../../crates/core/src/install.rs)。现有文件事务是可复用基础，不需要 Python 再写一套备份/覆盖器。
-- [安装设计](../../install-design.md)限制 ZIP 4,096 条目、8 GiB 归档、单文件 4 GiB、总展开 16 GiB，并包含路径、链接、摘要和事务校验。本轮两份游戏载荷均小于条目上限，但不能因此保证所有 Kagura 包都满足；超限样本应明确拒绝。
+- [安装设计](../alpha-foundation/legacy-zip-installation.md)限制 ZIP 4,096 条目、8 GiB 归档、单文件 4 GiB、总展开 16 GiB，并包含路径、链接、摘要和事务校验。本轮两份游戏载荷均小于条目上限，但不能因此保证所有 Kagura 包都满足；超限样本应明确拒绝。
 - 当前 publisher ZIP 的本地配方生成会绑定当前 build/平台；新 EXE 流不能把这个行为当成“当前 build 已验证”的依据，必须明确 profile 的平台和版本验收证据。
 - [缓存功能](../cache-cleanup/design.md)默认不保留备份；首批 EXE 受控安装需显式保留，才有实际恢复闭环。下载缓存清理不得清理有效 plan、转换材料或所需备份。
 
