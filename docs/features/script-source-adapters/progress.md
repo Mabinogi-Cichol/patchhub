@@ -640,3 +640,20 @@ P7 保持施工中：Windows 原生桌面界面的实际导入/取消/重启，D
 ### 同日补记：确认 YOZAKURA 详情地址方案
 
 - 已写入用户确认的[详情地址方案](standalone-lua-form-plan.md#yozakura-的详情地址)。静态核对了现有规范化在索引、详情调用、缓存读写和候选生成的调用点。`/?p=150` 和 `/?p=161` 的索引、请求、缓存及候选独立性，以及其它来源的去重与缓存回归均待实施验证。
+
+### 同日施工：单文件嵌入与 YOZAKURA 文章地址
+
+- 五份内置 Lua 从旧构建产物机械落盘，五份的字节数和 SHA-256 均与计划基线一致。构建直接读取映射中的完整 Lua，删除共同片段和 Kagura 拼接片段。旧表格脚本暂按同一方式嵌入，等待退役及通用测试夹具迁移。
+- YOZAKURA 随后的有意修改由 Lua 从文章地址选择 `p`，其摘要随之改变。通用页面 URL 规范化保留脚本给出的查询串，历史 v1 索引转换继续使用原有去查询参数语义。回归覆盖文章 150/161 的实际请求、缓存键和候选以及文章 150 的已知错链。
+- 此阶段尚未完成旧表格来源退役、双端具名表单、Steam 本体/DLC 关系、网页 AppID 匹配职责调整、Shiravune 通用浏览器传输或双端空内置构建和实机验收。
+
+| 本轮验证范围 | 命令 | 结果 |
+| --- | --- | --- |
+| WSL Linux 格式与静态分析 | `cargo fmt --all -- --check`；`cargo clippy --locked -p patchhub-core --all-targets -- -D warnings` | 通过 |
+| WSL Linux 来源单测 | `cargo test --locked -p patchhub-core --lib sources::` | 115 通过，2 忽略 |
+| WSL Linux 来源集成 | `cargo test --locked -p patchhub-core --test builtin_scripts --test builtin_script_migration --test builtin_script_regression --test source_acceptance --test source_matching --test source_update` | 76 通过 |
+| 差异检查 | `git diff --check` | 通过 |
+
+首次 WSL 整包单测遇到 root 环境下的安装器失败及两项历史索引转换失败。已修正转换路径并通过来源模块回归，安装器整包测试未在非 root 环境重跑。原生 Windows 未找到 Cargo，未执行 Windows Rust 测试。未触发线上 CI。
+
+过度设计复核沿构建、脚本读取、索引、详情缓存和候选投影检查。直接读取单文件沿用既有摘要与默认规则生成。URL 改动仅区分仍需去除查询串的历史转换和来源页面，不增加规则字段、站点分支或缓存结构。来源续跑地址一并保留原有查询串，例如 Shiravune 的 `?flag=1`。旧表格适配器和 Shiravune 专用 JS 仍待清理。

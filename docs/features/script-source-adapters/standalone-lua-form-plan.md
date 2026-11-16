@@ -1,12 +1,12 @@
 # 内置 Lua 单文件与订阅源表单重构计划
 
-状态 **待实现**。对应[功能设计](design.md)与[施工记录](progress.md)。2026-11-16 静态调研基线为 `main@6c83576`。
+状态见[施工记录](progress.md#同日施工单文件嵌入与-yozakura-文章地址)。对应[功能设计](design.md)与[施工记录](progress.md)。2026-11-16 静态调研基线为 `main@6c83576`。
 
 ## 交付与当前链路
 
 每个内置来源在仓库有一份完整的 Lua。客户端查看和复制的是随包执行的同一份文本。Windows 和 Decky 使用相同字段进行导入、编辑和只读查看，规则 JSON 继续用于仓库配置及应用内部传输。清空内置规则和脚本映射后，两端仍可用普通导入入口，从仓库 Lua 原文和对应规则恢复五个来源。脚本也能换来源 ID 运行。
 
-| 路径 | 当前行为 |
+| 路径 | 调研基线行为 |
 | --- | --- |
 | [构建](../../../crates/core/build.rs)与[规则](../../../crates/core/resources/sources.json) | `bundled_scripts` 按历史 adapter 声明文件数组。构建先读 `common.lua`，再给每个片段加一个 LF 后拼接。两个 Kagura 入口分别只有 `return kagura(false)` 与 `return kagura(true)`，运行所需代码来自 `common.lua` 和 `kagura.lua`。 |
 | [绑定](../../../crates/core/src/sources/builtin.rs)、[注册表](../../../crates/core/src/sources/registry.rs)与[执行](../../../crates/core/src/sources/adapters/mod.rs) | `validate_rule` 与设置合并按 adapter 绑定 API 1 和源码摘要。注册表加载有效规则及源码，索引更新、详情解析和补查通过统一的 Lua 执行器取用用户源码或随包源码。匹配独立合并规则时也会绑定摘要。 |

@@ -100,7 +100,7 @@ P0 时内置生产迁移尚未实施；P6 已完成四个来源及 `table_html` 
 
 ## P6 随包来源与修订
 
-[sources.json](../../../crates/core/resources/sources.json) 的 `bundled_scripts` 按适配器名声明 Lua 文件列表。[构建脚本](../../../crates/core/build.rs) 将 `common.lua` 和所列文件依次用 LF 连接，并随程序嵌入。在同一配置添加默认来源规则即可注册新内置源。完整代码按 UTF-8 原始字节计算 SHA-256，`.gitattributes` 固定随包 Lua 使用 LF。自定义源码继续逐字保存。
+[sources.json](../../../crates/core/resources/sources.json) 的 `bundled_scripts` 将适配器名映射到单个 Lua 文件。[构建脚本](../../../crates/core/build.rs) 直接读取并嵌入该文件。在同一配置添加默认来源规则即可注册新内置源。完整代码按 UTF-8 原始字节计算 SHA-256，`.gitattributes` 固定随包 Lua 使用 LF。自定义源码继续逐字保存。
 
 读取内置脚本不编译、不执行、不联网、不初始化状态；文档规则输出 `adapter=lua`，只供查看，内置来源不可被导入覆盖或删除。发行更新绑定随包定义，不读取也不覆盖任何用户 `adapter=lua` 源码；早期版本保存的同 ID 覆盖仍按 `settings.added` 中的用户规则加载，可编辑、可删除，删除后恢复随包定义。旧无解析指纹缓存保留文件但不授权新解析器。`ctx.get` 条件字段同时接受缺省和 `ctx.null`，支持已有索引序列化的可选值。
 
