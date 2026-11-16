@@ -35,41 +35,6 @@
     "page": null
   },
   {
-    "name": "table-index",
-    "rule": {
-      "id": "custom-table",
-      "name": "Table",
-      "adapter": "table_html",
-      "enabled": true,
-      "pages": [
-        "https://example.com/list"
-      ],
-      "page_hosts": [
-        "example.com"
-      ],
-      "download_hosts": [
-        "download.example.com"
-      ],
-      "root_layout": "game_root",
-      "columns": {
-        "title": 0,
-        "download": 1,
-        "date": 2,
-        "language": 3,
-        "appid": 4
-      },
-      "table_id": "patches"
-    },
-    "kind": "index",
-    "responses": [
-      {
-        "url": "https://example.com/list",
-        "body": "<table id=\"patches\"><tr><th>Title</th><th>ZIP</th></tr><tr><td>Game</td><td><a href=\"https://download.example.com/game.zip\">Patch</a></td><td>2026/10/31</td><td>zh-CN</td><td>42</td></tr></table>"
-      }
-    ],
-    "page": null
-  },
-  {
     "name": "kagura-cn-index",
     "rule": {
       "id": "kagura-cn",

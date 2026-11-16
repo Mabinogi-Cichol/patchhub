@@ -521,33 +521,5 @@
       "not_modified": false,
       "pending": []
     }
-  },
-  "table-index": {
-    "requests": [
-      {
-        "body": null,
-        "method": "GET",
-        "url": "https://example.com/list"
-      }
-    ],
-    "result": {
-      "complete": true,
-      "entries": [
-        {
-          "aliases": [],
-          "appid": 42,
-          "date": "2026/10/31",
-          "kind": "entry",
-          "language": "zh-CN",
-          "page": "https://example.com/list",
-          "title": "Game",
-          "url": "https://download.example.com/game.zip"
-        }
-      ],
-      "etag": null,
-      "modified": null,
-      "not_modified": false,
-      "pending": []
-    }
   }
 }
