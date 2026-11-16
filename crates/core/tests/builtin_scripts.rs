@@ -282,3 +282,53 @@ fn old_unbound_builtin_index_is_preserved_but_cannot_authorize_results() {
         bytes
     );
 }
+#[test]
+fn retired_table_rules_are_filtered_until_the_next_settings_write() {
+    let state = tempfile::tempdir().unwrap();
+    let mut sources = Sources::open(state.path()).unwrap();
+    let mut rule = sources.get_script_source("patchmoe").unwrap().rule;
+    rule.id = "user-lua".into();
+    sources
+        .import_script_source(&rule, 1, "return {}", false)
+        .unwrap();
+
+    let path = sources.store().paths().settings();
+    let mut settings: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    for (id, adapter) in [("old-table", "table"), ("old-html", "table_html")] {
+        let mut retired = settings["added"][0].clone();
+        retired["id"] = json!(id);
+        retired["adapter"] = json!(adapter);
+        settings["added"].as_array_mut().unwrap().push(retired);
+        settings["names"][id] = json!("Retired source");
+        settings["enabled"][id] = json!(false);
+        settings["intervals"][id] = json!(0);
+    }
+    let bytes = serde_json::to_vec(&settings).unwrap();
+    fs::write(&path, &bytes).unwrap();
+    drop(sources);
+
+    let snapshot = SourceSnapshot::load(state.path(), &[], 0).unwrap().unwrap();
+    assert!(snapshot.get_script_source("user-lua").is_ok());
+    assert!(snapshot.get_script_source("old-table").is_err());
+    assert!(snapshot.get_script_source("old-html").is_err());
+    assert_eq!(fs::read(&path).unwrap(), bytes);
+
+    let sources = Sources::open(state.path()).unwrap();
+    let loaded = sources.store().load_settings().unwrap();
+    assert_eq!(loaded.added.len(), 1);
+    assert_eq!(loaded.added[0].id, "user-lua");
+    assert!(sources.get_script_source("patchmoe").is_ok());
+    assert!(sources.get_script_source("old-table").is_err());
+    assert!(sources.get_script_source("old-html").is_err());
+    assert_eq!(fs::read(&path).unwrap(), bytes);
+
+    sources.store().update_settings(|_| Ok(())).unwrap();
+    let saved: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    assert_eq!(saved["added"].as_array().unwrap().len(), 1);
+    for field in ["names", "enabled", "intervals"] {
+        for id in ["old-table", "old-html"] {
+            assert!(saved[field].get(id).is_none());
+        }
+    }
+    assert_eq!(saved["script_sources"]["user-lua"], "return {}");
+}

@@ -72,12 +72,21 @@ fn kagura_rule() -> SourceRule {
     }
 }
 
+const ENTRY_SCRIPT: &str = include_str!("fixtures/script-sources/list-entries.lua");
+
 fn table_rule() -> SourceRule {
     SourceRule {
-        script: patchhub_core::sources::builtin::descriptor("table_html"),
+        script: Some(
+            patchhub_core::sources::script::validate_code(
+                "table-source",
+                1,
+                ENTRY_SCRIPT.as_bytes(),
+            )
+            .unwrap(),
+        ),
         id: "table-source".to_string(),
         name: "Table".to_string(),
-        adapter: "table_html".to_string(),
+        adapter: "lua".to_string(),
         role: SourceRole::Publisher,
         discovery_only: false,
         priority: 20,
@@ -327,6 +336,7 @@ fn game(appid: u32, name: &str) -> GameQuery {
         appid,
         name: name.to_string(),
         localized_name: None,
+        related_dlc: Vec::new(),
         instance_id: None,
     }
 }
@@ -366,6 +376,14 @@ fn run_update(
     force: bool,
     fake: &Arc<FakeFetcher>,
 ) -> std::io::Result<patchhub_core::sources::update::SourceUpdateOutcome> {
+    if rule.id == "table-source" && !store.load_settings()?.script_sources.contains_key(&rule.id) {
+        store.update_settings(|settings| {
+            settings
+                .script_sources
+                .insert(rule.id.clone(), ENTRY_SCRIPT.into());
+            Ok(())
+        })?;
+    }
     let mut ctx = context(fake);
     update_source(
         store,

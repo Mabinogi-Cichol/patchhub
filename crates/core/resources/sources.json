@@ -2,8 +2,6 @@
   "schema_version": 2,
   "bundled_scripts": {
     "patchmoe": "patchmoe.lua",
-    "table_html": "table.lua",
-    "table": "table.lua",
     "kagura_wordpress": "kagura-cn.lua",
     "kagura_woocommerce": "kagura-en.lua",
     "yozakura_wordpress": "yozakura.lua",

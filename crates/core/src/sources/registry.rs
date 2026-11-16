@@ -592,10 +592,7 @@ impl SourceRegistry {
                 }));
             };
             settings.added.remove(position);
-            settings.script_sources.remove(source_id);
-            settings.enabled.remove(source_id);
-            settings.names.remove(source_id);
-            settings.intervals.remove(source_id);
+            settings.clear_source_overrides(source_id);
             Ok(settings.revision)
         })?;
         self.reload()?;

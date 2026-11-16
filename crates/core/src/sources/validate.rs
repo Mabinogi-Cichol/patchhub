@@ -321,10 +321,6 @@ fn valid_adapter_id(value: &str) -> bool {
     value.len() <= 48 && bytes.all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
 }
 
-fn valid_table_id(value: &str) -> bool {
-    !value.is_empty() && !value.chars().any(|c| c.is_ascii_whitespace())
-}
-
 /// Port of `sources.py::_validate_rule`, preserving the Python check order and
 /// error codes.
 pub fn validate_rule(raw: &RawSourceRule) -> io::Result<SourceRule> {
@@ -378,16 +374,6 @@ pub fn validate_rule(raw: &RawSourceRule) -> io::Result<SourceRule> {
     }
     for page in &raw.pages {
         allowed_url(page, &raw.page_hosts, false)?;
-    }
-    if raw.adapter == "table_html" {
-        if raw.columns.is_none() {
-            return Err(invalid("invalid_source_columns"));
-        }
-        if let Some(table_id) = &raw.table_id {
-            if !valid_table_id(table_id) {
-                return Err(invalid("invalid_table_id"));
-            }
-        }
     }
     let mut rule = SourceRule {
         id: raw.id.clone(),
@@ -781,50 +767,6 @@ mod tests {
         assert_eq!(
             validate_rule(&bad).unwrap_err().to_string(),
             "invalid_source_hosts"
-        );
-    }
-
-    #[test]
-    fn rule_validation_table_columns_and_table_id() {
-        let mut table = raw_rule();
-        table.adapter = "table_html".into();
-        table.columns = Some(Columns {
-            title: 0,
-            download: 1,
-            date: None,
-            language: None,
-            appid: None,
-        });
-        assert!(validate_rule(&table).is_ok());
-
-        table.columns = None;
-        assert_eq!(
-            validate_rule(&table).unwrap_err().to_string(),
-            "invalid_source_columns"
-        );
-
-        table.columns = Some(Columns {
-            title: 21,
-            download: 1,
-            date: None,
-            language: None,
-            appid: None,
-        });
-        assert!(validate_rule(&table).is_ok());
-
-        table.columns = Some(Columns {
-            title: 0,
-            download: 1,
-            date: None,
-            language: None,
-            appid: None,
-        });
-        table.table_id = Some("p".repeat(65));
-        assert!(validate_rule(&table).is_ok());
-        table.table_id = Some("contains space".into());
-        assert_eq!(
-            validate_rule(&table).unwrap_err().to_string(),
-            "invalid_table_id"
         );
     }
 

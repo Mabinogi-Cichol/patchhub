@@ -225,6 +225,30 @@ pub struct SettingsFile {
     pub script_sources: BTreeMap<String, String>,
 }
 
+impl SettingsFile {
+    pub(crate) fn clear_source_overrides(&mut self, source_id: &str) {
+        self.script_sources.remove(source_id);
+        self.enabled.remove(source_id);
+        self.names.remove(source_id);
+        self.intervals.remove(source_id);
+    }
+
+    pub(crate) fn retire_table_sources(&mut self) {
+        let mut retired = Vec::new();
+        self.added.retain(|rule| {
+            if matches!(rule.adapter.as_str(), "table_html" | "table") {
+                retired.push(rule.id.clone());
+                false
+            } else {
+                true
+            }
+        });
+        for source_id in retired {
+            self.clear_source_overrides(&source_id);
+        }
+    }
+}
+
 /// Output-only summary; injected with a flattened [`SourceRule`].
 #[derive(Debug, Clone, Serialize, schemars::JsonSchema, ts_rs::TS, serde::Deserialize)]
 pub struct SourceSummary {

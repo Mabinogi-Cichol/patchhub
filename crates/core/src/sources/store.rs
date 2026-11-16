@@ -212,11 +212,12 @@ impl SourceStore {
                 return Err(invalid("invalid_source_schema"));
             }
         }
-        let settings = if let Some(bytes) = settings_bytes {
+        let mut settings: SettingsFile = if let Some(bytes) = settings_bytes {
             serde_json::from_slice(&bytes).map_err(|error| invalid(error.to_string()))?
         } else {
             default_settings()
         };
+        settings.retire_table_sources();
         // Missing `intervals` use registry defaults; explicit values are retained.
         if !(1..=SOURCE_SETTINGS_SCHEMA_VERSION).contains(&settings.schema_version)
             || settings.revision == 0
@@ -398,7 +399,10 @@ impl SourceStore {
     /// Reads `settings.json` from disk, falling back to the in-memory copy.
     pub fn load_settings(&self) -> Result<SettingsFile> {
         match read_json(&self.paths.settings())? {
-            Some(settings) => Ok(settings),
+            Some(mut settings) => {
+                SettingsFile::retire_table_sources(&mut settings);
+                Ok(settings)
+            }
             None => self.settings(),
         }
     }
@@ -432,6 +436,7 @@ impl SourceStore {
             {
                 return Err(invalid("invalid_source_schema"));
             }
+            next.retire_table_sources();
             next.schema_version = SOURCE_SETTINGS_SCHEMA_VERSION;
             next.revision = next.revision.saturating_add(1);
             let result = edit(&mut next)?;
