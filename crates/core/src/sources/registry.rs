@@ -7,7 +7,7 @@
 //! loaded lazily (or preloaded for an immutable snapshot); the legacy per-game
 //! cache/discovery trees are only read by the one-time v1 → v2 migration.
 
-use super::matching::{select_entry, EntrySelection};
+use super::matching::{match_entry_rows, select_entries};
 use super::model::*;
 use super::r#match::candidate_is_credible;
 use super::store::SourceStore;
@@ -413,13 +413,10 @@ impl SourceRegistry {
             let Some(index) = self.index(&rule.id) else {
                 continue;
             };
-            let EntrySelection::Selected(entry, url) = select_entry(&index, game) else {
-                continue;
-            };
-            if entry.date.as_deref() == Some("COMING SOON") {
-                continue;
-            }
-            result.push(source_match_from_entry(rule, entry, url, game.appid));
+            result.extend(
+                select_entries(&index, game)
+                    .map(|(url, entry)| source_match_from_entry(rule, entry, url, game.appid)),
+            );
         }
         result
     }
@@ -438,26 +435,10 @@ impl SourceRegistry {
             let Some(index) = self.index(&rule.id) else {
                 continue;
             };
-            let EntrySelection::Selected(entry, url) = select_entry(&index, game) else {
-                continue;
-            };
-            // A "COMING SOON" entry has no artifact yet: never project it.
-            if entry.date.as_deref() == Some("COMING SOON") {
-                continue;
+            for mut candidate in match_entry_rows(rule, &index, game) {
+                index::bind_candidate(rule, &mut candidate);
+                result.push(candidate);
             }
-            let mut candidate = candidate_from_index_match(
-                &rule.id,
-                game.appid,
-                entry.appid,
-                &entry.title,
-                &entry.aliases,
-                entry.language.as_deref().unwrap_or(""),
-                &entry.page,
-                url,
-                index.checked_at,
-            );
-            index::bind_candidate(rule, &mut candidate);
-            result.push(candidate);
         }
         result
     }
@@ -828,6 +809,7 @@ pub(crate) fn candidate_from_index_match(
         serde_json::Value::String("base".to_string()),
         serde_json::Value::Array(vec![serde_json::Value::String(language.clone())]),
         serde_json::Value::String(version_identity.clone()),
+        serde_json::Value::String(url.to_string()),
     ]);
     let candidate_id = canonical::candidate_id(&identity);
     let mut candidate = SourceCandidate {
@@ -866,7 +848,7 @@ pub(crate) fn candidate_from_index_match(
         match_basis: if entry_appid.is_some() {
             MatchBasis::Appid
         } else {
-            MatchBasis::Title
+            MatchBasis::OfficialTitle
         },
         observed_at: iso8601_utc(observed_at_unix),
         cache_status: CacheStatus::Cached,
@@ -1035,6 +1017,7 @@ mod tests {
             appid,
             name: "Game".to_string(),
             localized_name: None,
+            related_dlc: Vec::new(),
             instance_id: None,
         }
     }
@@ -1283,7 +1266,11 @@ mod tests {
         assert_eq!(matched.release_id, "patchmoe-42");
         assert_eq!(matched.url, "https://download.patch.moe/g.zip");
         assert_eq!(matched.language, "zh-CN");
-        assert!(registry.matches(&game(43), false).is_empty());
+        let other = GameQuery {
+            name: "Other".into(),
+            ..game(43)
+        };
+        assert!(registry.matches(&other, false).is_empty());
 
         // A persisted match record wins over the index fallback.
         save_match(
@@ -1382,7 +1369,11 @@ mod tests {
             "https://download.patch.moe/g.zip"
         );
         assert_eq!(candidates[0].game_appid, Some(42));
-        assert!(registry.index_candidates(&game(43)).is_empty());
+        let other = GameQuery {
+            name: "Other".into(),
+            ..game(43)
+        };
+        assert!(registry.index_candidates(&other).is_empty());
     }
 
     #[test]

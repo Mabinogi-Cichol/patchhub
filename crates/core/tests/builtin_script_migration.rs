@@ -11,6 +11,8 @@ fn query() -> QueryContext {
     QueryContext {
         appid: 42,
         name: "Game".into(),
+        localized_name: None,
+        related_dlc: Vec::new(),
         name_hints: vec![],
         force: false,
         legacy_match: false,

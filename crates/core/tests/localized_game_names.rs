@@ -31,25 +31,76 @@ fn object(payload: &mut Vec<u8>, key: &str) {
 }
 
 // Independently authored V28 container fixture, not a copy of the parser.
-fn appinfo(root: &Path, appid: u32, default: &str, localized: &str) {
+fn appinfo_entry(appid: u32, default: &str, localized: &str, dlc: Option<u32>) -> Vec<u8> {
     let mut payload = Vec::new();
     object(&mut payload, "appinfo");
     object(&mut payload, "common");
     string(&mut payload, "name", default);
     object(&mut payload, "name_localized");
     string(&mut payload, "schinese", localized);
-    payload.extend([8, 8, 8, 8]);
+    payload.extend([8, 8]);
+    if let Some(dlc) = dlc {
+        object(&mut payload, "extended");
+        payload.push(2);
+        payload.extend(b"listofdlc\0");
+        payload.extend(dlc.to_le_bytes());
+        payload.push(8);
+    }
+    payload.extend([8, 8]);
     let mut header = vec![0; 68];
     header[..4].copy_from_slice(&appid.to_le_bytes());
     header[4..8].copy_from_slice(&(payload.len() as u32 + 60).to_le_bytes());
+    header.extend(payload);
+    header
+}
+
+fn write_appinfo(root: &Path, entries: impl IntoIterator<Item = Vec<u8>>) {
     let mut file = Vec::new();
     file.extend(0x0756_4428u32.to_le_bytes());
     file.extend(1u32.to_le_bytes());
-    file.extend(header);
-    file.extend(payload);
+    file.extend(entries.into_iter().flatten());
     file.extend(0u32.to_le_bytes());
     fs::create_dir_all(root.join("appcache")).unwrap();
     fs::write(root.join("appcache/appinfo.vdf"), file).unwrap();
+}
+
+fn appinfo(root: &Path, appid: u32, default: &str, localized: &str) {
+    write_appinfo(root, [appinfo_entry(appid, default, localized, None)]);
+}
+
+#[test]
+fn scan_loads_a_dlc_name_without_a_dlc_manifest() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    write_manifest(root, 1227890);
+    language(root, "schinese");
+    write_appinfo(
+        root,
+        [
+            appinfo_entry(
+                1390150,
+                "Summer Memories+ - Expansion DLC",
+                "夏日狂想曲+",
+                None,
+            ),
+            appinfo_entry(
+                1227890,
+                "Summer Memories",
+                "夏日狂想曲：乡间的难忘回忆",
+                Some(1390150),
+            ),
+        ],
+    );
+    let report = scan(&[root.to_path_buf()]);
+    assert_eq!(report.installs.len(), 1);
+    let game = &report.installs[0];
+    assert_eq!(
+        game.related_dlc,
+        [patchhub_core::steam::SteamDlc {
+            appid: 1390150,
+            name: Some("夏日狂想曲+".into()),
+        }]
+    );
 }
 
 fn libraries(root: &Path, shared: &Path) {

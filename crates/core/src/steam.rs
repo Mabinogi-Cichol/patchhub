@@ -26,11 +26,20 @@ pub struct GameInstall {
     pub localized_name: Option<String>,
     /// Present only when the override matches a known interface language.
     pub name_language: Option<String>,
+    /// Matching input from Steam metadata. Kept on the host scan.
+    #[serde(skip)]
+    pub related_dlc: Vec<SteamDlc>,
     pub library_path: PathBuf,
     pub install_path: PathBuf,
     pub buildid: Option<String>,
     pub availability: String,
     pub kind: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct SteamDlc {
+    pub appid: u32,
+    pub name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
@@ -175,6 +184,16 @@ pub fn scan(roots: &[PathBuf]) -> ScanReport {
             if let Some(name) = names.get(&game.appid) {
                 game.localized_name = Some(name.name.clone());
                 game.name_language = name.language.clone();
+                game.related_dlc = name
+                    .dlc_appids
+                    .iter()
+                    .copied()
+                    .filter(|&appid| appid != game.appid)
+                    .map(|appid| SteamDlc {
+                        appid,
+                        name: names.get(&appid).map(|app| app.name.clone()),
+                    })
+                    .collect();
             }
         }
     }
@@ -302,6 +321,7 @@ fn parse_manifest(file: &Path, library: &Path, filename_appid: u32) -> Result<Ga
         name,
         localized_name: None,
         name_language: None,
+        related_dlc: Vec::new(),
         library_path: library.to_owned(),
         install_path,
         buildid,

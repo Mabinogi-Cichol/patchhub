@@ -208,7 +208,16 @@ pub(crate) fn names_for_root(
         return HashMap::new();
     }
     read_metadata(root, "appcache", "appinfo.vdf", MAX_APPINFO_BYTES, |file| {
-        appinfo::parse_names(file, targets, language)
+        let mut names = appinfo::parse_names(file, targets, language)?;
+        let dlc_targets: HashSet<_> = names
+            .values()
+            .flat_map(|app| app.dlc_appids.iter().copied())
+            .filter(|appid| !targets.contains(appid))
+            .collect();
+        if !dlc_targets.is_empty() {
+            names.extend(appinfo::parse_names(file, &dlc_targets, language)?);
+        }
+        Ok(names)
     })
     .unwrap_or_default()
 }

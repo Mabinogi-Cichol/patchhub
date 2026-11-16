@@ -11,6 +11,7 @@ fn game(root: &Path) -> GameInstall {
         name: "test".into(),
         localized_name: None,
         name_language: None,
+        related_dlc: Vec::new(),
         library_path: root.into(),
         install_path: root.into(),
         buildid: None,

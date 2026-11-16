@@ -189,6 +189,7 @@ fn publisher_download_cancel_is_standard_cancel_before_any_transaction() {
             appid: 42,
             name: "Fixture".into(),
             localized_name: None,
+            related_dlc: Vec::new(),
             instance_id: Some(id.clone()),
         };
         let candidate = sources.registry().index_candidates(&query).remove(0);
@@ -325,6 +326,7 @@ fn script_source_update_to_isolated_zip_and_exe_install() {
             appid: 42,
             name: "Fixture".into(),
             localized_name: None,
+            related_dlc: Vec::new(),
             instance_id: Some(game.instance_id.clone()),
         };
         let matched = matching::match_games(

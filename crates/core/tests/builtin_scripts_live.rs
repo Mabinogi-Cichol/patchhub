@@ -83,3 +83,81 @@ fn bundled_publisher_metadata_live() {
     println!("logical metadata requests={}", ctx.visited.len());
     assert!(errors.is_empty(), "{}", errors.join("\n"));
 }
+
+#[test]
+#[ignore = "live network: Summer Memories base and DLC publisher metadata"]
+fn kagura_summer_memories_base_and_dlc_live() {
+    use sources::{matching, model::GameQuery, update, Sources};
+
+    let state = tempfile::tempdir().unwrap();
+    let mut registry = Sources::open(state.path()).unwrap();
+    let document = registry.get_script_source("kagura-cn").unwrap();
+    let mut rule = document.rule;
+    rule.id = "summer-cn-copy".into();
+    rule.pages = ["夏日狂想曲：乡间的难忘回忆", "夏日狂想曲"]
+        .into_iter()
+        .map(|title| format!("https://kagurafan.com/category/补丁/{title}/"))
+        .collect();
+    let imported = registry
+        .import_script_source(&rule, 1, &document.code, false)
+        .unwrap()
+        .rule;
+    let cancel = Arc::new(AtomicBool::new(false));
+    let mut ctx = RequestContext::new().unwrap();
+    let update =
+        update::update_source(registry.store(), &imported, true, &mut ctx, &cancel, |_| {})
+            .unwrap();
+    assert!(update.complete, "{update:?}");
+
+    let game = GameQuery {
+        appid: 1227890,
+        name: "Summer Memories".into(),
+        localized_name: Some("夏日狂想曲：乡间的难忘回忆".into()),
+        related_dlc: vec![patchhub_core::steam::SteamDlc {
+            appid: 1390150,
+            name: Some("夏日狂想曲+".into()),
+        }],
+        instance_id: None,
+    };
+    let result = matching::match_games(
+        registry.store(),
+        &[imported],
+        registry.registry().overrides(),
+        &[game],
+        &[],
+        false,
+        &mut ctx,
+        &cancel,
+        1,
+        |_| {},
+        |_| {},
+    )
+    .unwrap();
+    let found = &result[0];
+    for candidate in &found.candidates {
+        println!(
+            "title={} variant={:?} mirrors={}",
+            candidate.patch_title,
+            candidate.variant,
+            candidate.mirrors.len()
+        );
+    }
+    assert!(
+        found
+            .candidates
+            .iter()
+            .any(|candidate| candidate.game_appid == Some(1227890)
+                && candidate.variant == sources::model::Variant::Base
+                && !candidate.mirrors.is_empty()),
+        "{found:?}"
+    );
+    assert!(
+        found
+            .candidates
+            .iter()
+            .any(|candidate| candidate.game_appid == Some(1227890)
+                && candidate.variant == sources::model::Variant::Dlc
+                && !candidate.mirrors.is_empty()),
+        "{found:?}"
+    );
+}

@@ -25,6 +25,8 @@ fn run(appid: u32, name: &str) {
     let query = QueryContext {
         appid,
         name: name.to_string(),
+        localized_name: None,
+        related_dlc: Vec::new(),
         name_hints: Vec::new(),
 
         legacy_match: false,

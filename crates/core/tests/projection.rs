@@ -103,6 +103,7 @@ fn load(state: &Path, steam: &steam::ScanReport, now: u64) -> SourceSnapshot {
             appid: g.appid,
             name: g.name.clone(),
             localized_name: g.localized_name.clone(),
+            related_dlc: Vec::new(),
             instance_id: Some(g.instance_id.clone()),
         })
         .collect();
@@ -789,6 +790,7 @@ fn manual_unknown_candidate_binds_download_and_instance_without_faking_metadata(
             appid: 42,
             name: "Test".into(),
             localized_name: None,
+            related_dlc: Vec::new(),
             instance_id: Some(steam.installs[0].instance_id.clone()),
         };
         let snapshot = load(&state, &steam, now + 30 * 24 * 3600);

@@ -662,6 +662,7 @@ pub(crate) mod tests {
             appid: APPID,
             name: "Test".to_string(),
             localized_name: None,
+            related_dlc: Vec::new(),
             instance_id: None,
         }
     }

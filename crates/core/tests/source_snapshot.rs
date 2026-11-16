@@ -5,6 +5,7 @@ fn game(appid: u32) -> GameQuery {
         appid,
         name: format!("Game {appid}"),
         localized_name: None,
+        related_dlc: Vec::new(),
         instance_id: None,
     }
 }

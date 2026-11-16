@@ -75,6 +75,7 @@ fn game() -> GameQuery {
         appid: 42,
         name: "Game".into(),
         localized_name: None,
+        related_dlc: Vec::new(),
         instance_id: Some("test".into()),
     }
 }

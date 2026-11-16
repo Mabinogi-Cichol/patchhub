@@ -313,6 +313,7 @@ fn snapshot_and_edit_reads_capture_the_same_rule_and_code_without_writes() {
             appid: 42,
             name: "Game".into(),
             localized_name: None,
+            related_dlc: Vec::new(),
             instance_id: None,
         }],
         1,

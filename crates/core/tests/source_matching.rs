@@ -40,12 +40,21 @@ fn kagura_rule() -> SourceRule {
     }
 }
 
+const ENTRY_SCRIPT: &str = include_str!("fixtures/script-sources/list-entries.lua");
+
 fn entry_rule() -> SourceRule {
     SourceRule {
-        script: patchhub_core::sources::builtin::descriptor("table_html"),
+        script: Some(
+            patchhub_core::sources::script::validate_code(
+                "table-source",
+                1,
+                ENTRY_SCRIPT.as_bytes(),
+            )
+            .unwrap(),
+        ),
         id: "table-source".to_string(),
         name: "Table".to_string(),
-        adapter: "table_html".to_string(),
+        adapter: "lua".to_string(),
         role: SourceRole::Publisher,
         discovery_only: false,
         priority: 20,
@@ -230,6 +239,7 @@ fn game(appid: u32, name: &str) -> GameQuery {
         appid,
         name: name.to_string(),
         localized_name: None,
+        related_dlc: Vec::new(),
         instance_id: None,
     }
 }
@@ -343,6 +353,61 @@ fn fallback_status(store: &SourceStore, appid: u32) -> FallbackMatchStatus {
 }
 
 // ---- 1. index hit: offline / only hit details ----------------------------
+
+#[test]
+fn kagura_exact_steam_base_and_dlc_titles_offer_both_zip_selections_without_store_links() {
+    let temp = tempfile::tempdir().unwrap();
+    let store = SourceStore::open(temp.path()).unwrap();
+    let rule = kagura_rule();
+    let base_title = "夏日狂想曲：乡间的难忘回忆";
+    let dlc_title = "夏日狂想曲+";
+    let base = "https://kagurafan.com/patches/summer/";
+    let dlc = "https://kagurafan.com/patches/summer-plus/";
+    store
+        .save_index(&index(
+            &rule.id,
+            1,
+            true,
+            vec![
+                entry(base_title, base, "article"),
+                entry(dlc_title, dlc, "article"),
+            ],
+        ))
+        .unwrap();
+    let fake = Arc::new(FakeFetcher::new());
+    for (title, page, slug) in [(base_title, base, "base"), (dlc_title, dlc, "plus")] {
+        let html = article(title, &[]).replace(
+            "</p>",
+            &format!("</p><a href='https://kaguraserver.com/{slug}.zip'>下载 Mirror 1</a>"),
+        );
+        fake.push(response(200, &html, page));
+    }
+    let query = GameQuery {
+        localized_name: Some(base_title.into()),
+        related_dlc: vec![patchhub_core::steam::SteamDlc {
+            appid: 1390150,
+            name: Some(dlc_title.into()),
+        }],
+        ..game(1227890, "Summer Memories")
+    };
+    let results = run(
+        &store,
+        &[rule],
+        &Overrides::default(),
+        &[query],
+        &fake,
+        false,
+        200,
+    )
+    .unwrap();
+    let candidates = &results[0].candidates;
+    assert_eq!(candidates.len(), 2, "{results:?}");
+    for candidate in candidates {
+        assert_eq!(candidate.game_appid, Some(1227890));
+        assert_eq!(candidate.match_basis, MatchBasis::OfficialTitle);
+        assert!(patchhub_core::installer::resolve::zip_selection_id(candidate).is_some());
+    }
+}
 
 #[test]
 fn index_hits_stay_offline_and_only_hit_detail_pages_are_fetched() {
@@ -1727,7 +1792,7 @@ fn entry_sources_match_offline_and_flag_conflicting_urls() {
         "https://download.example.com/game.zip"
     );
 
-    // One game, two different artifact URLs: never auto-select.
+    // DLC metadata arrives after the base game already matched the same index.
     store
         .save_index(&index(
             &rules[0].id,
@@ -1742,11 +1807,11 @@ fn entry_sources_match_offline_and_flag_conflicting_urls() {
                     "en",
                 ),
                 artifact_entry(
-                    "Game",
+                    "Bonus chapter",
                     "https://example.com/list",
                     "https://download.example.com/b.zip",
-                    Some(42),
-                    "zh-CN",
+                    None,
+                    "en",
                 ),
             ],
         ))
@@ -1761,15 +1826,42 @@ fn entry_sources_match_offline_and_flag_conflicting_urls() {
         300,
     )
     .unwrap();
-    assert_eq!(results[0].status, GameMatchStatus::NoMatch);
-    assert_eq!(
-        record(&store, 42).sources["table-source"].status,
-        SourceMatchStatus::NoCandidate
+    assert_eq!(results[0].status, GameMatchStatus::PublisherMatch);
+    assert_eq!(results[0].candidates.len(), 1);
+    let mut with_dlc = game(42, "Game");
+    with_dlc.related_dlc.push(patchhub_core::steam::SteamDlc {
+        appid: 43,
+        name: Some("Bonus chapter".into()),
+    });
+    let results = run(
+        &store,
+        &rules,
+        &Overrides::default(),
+        &[with_dlc],
+        &fake,
+        false,
+        301,
+    )
+    .unwrap();
+    assert_eq!(results[0].status, GameMatchStatus::PublisherMatch);
+    assert_eq!(results[0].candidates.len(), 2);
+    assert_ne!(
+        results[0].candidates[0].candidate_id,
+        results[0].candidates[1].candidate_id
     );
-    assert!(record(&store, 42).sources["table-source"]
-        .diagnostics
+    let mut urls: Vec<_> = results[0]
+        .candidates
         .iter()
-        .any(|diagnostic| diagnostic.code == "source_match_ambiguous"));
+        .map(|entry| entry.mirrors[0].url.as_str())
+        .collect();
+    urls.sort_unstable();
+    assert_eq!(
+        urls,
+        [
+            "https://download.example.com/a.zip",
+            "https://download.example.com/b.zip"
+        ]
+    );
 
     // Same URL in two languages: prefer zh-CN instead of declaring ambiguity.
     store
@@ -1959,6 +2051,8 @@ fn vbf_upstream(appid: u32, page: &str) -> SourceCandidate {
     let query = QueryContext {
         appid,
         name: "VenusBlood FRONTIER International".into(),
+        localized_name: None,
+        related_dlc: Vec::new(),
         name_hints: vec![],
 
         legacy_match: false,

@@ -582,6 +582,7 @@ mod tests {
             appid: 42,
             name: "Game".to_string(),
             localized_name: None,
+            related_dlc: Vec::new(),
             instance_id: None,
         };
         assert_eq!(
@@ -665,6 +666,7 @@ mod tests {
             appid: 42,
             name: "Game".to_string(),
             localized_name: None,
+            related_dlc: Vec::new(),
             instance_id: None,
         }
     }

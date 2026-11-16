@@ -610,10 +610,7 @@ pub(crate) fn build_candidates_with_download_group(
     single_download_group: bool,
 ) -> Vec<SourceCandidate> {
     let appid = query.appid;
-    let has_ids = !ids.is_empty();
-    if has_ids && !ids.contains(&appid) {
-        return Vec::new();
-    }
+    let has_ids = ids.contains(&appid);
     let mut alias_list: Vec<String> = if aliases.is_empty() {
         vec![game_title(title)]
     } else {
@@ -817,13 +814,6 @@ pub(crate) fn build_candidates_with_download_group(
             fingerprint: String::new(),
             related_index_pages: Vec::new(),
         };
-        if appid == 1227890 && rule.id == "kagura-cn" {
-            if variant == Variant::Base && excludes_dlc_condition(text) {
-                candidate.excludes_dlc = Some(vec![1390150]);
-            } else if variant == Variant::Dlc && requires_dlc_condition(text) {
-                candidate.requires_dlc = Some(vec![1390150]);
-            }
-        }
         if let Ok(value) = serde_json::to_value(&candidate) {
             candidate.fingerprint = canonical::fingerprint(&value);
         }
@@ -897,14 +887,6 @@ fn variant_str(variant: Variant) -> &'static str {
 
 fn dlc_conditions_unknown(text: &str) -> bool {
     dlc_line_condition(text, &["没", "沒", "未"])
-}
-
-fn excludes_dlc_condition(text: &str) -> bool {
-    dlc_line_condition(text, &["没", "沒"])
-}
-
-fn requires_dlc_condition(text: &str) -> bool {
-    dlc_line_condition(text, &["已经", "已經", "必须", "必須", "已", "有"])
 }
 
 /// Shared `(?:markers).*?(?:购买|購買).*?DLC` matcher (`.*?` stays on one line).
@@ -1297,6 +1279,8 @@ mod tests {
         QueryContext {
             appid,
             name: name.to_string(),
+            localized_name: None,
+            related_dlc: Vec::new(),
             name_hints: Vec::new(),
 
             legacy_match: false,
@@ -1538,7 +1522,7 @@ mod tests {
     }
 
     #[test]
-    fn build_candidates_dlc_and_kagura_special_case() {
+    fn build_candidates_exposes_dlc_advice_without_game_specific_constraints() {
         let rule = rule();
         let excludes = build_candidates(
             &rule,
@@ -1551,7 +1535,7 @@ mod tests {
             &[mirror("https://kagurafan.com/dl/game.zip", "zip")],
             &query(1227890, "Game"),
         );
-        assert_eq!(excludes[0].excludes_dlc, Some(vec![1390150]));
+        assert_eq!(excludes[0].excludes_dlc, None);
         assert!(excludes[0]
             .warnings
             .iter()
@@ -1569,13 +1553,13 @@ mod tests {
             &query(1227890, "Game"),
         );
         assert_eq!(requires[0].variant, Variant::Dlc);
-        assert_eq!(requires[0].requires_dlc, Some(vec![1390150]));
+        assert_eq!(requires[0].requires_dlc, None);
     }
 
     #[test]
-    fn build_candidates_rejects_mismatched_appid_and_demo() {
+    fn build_candidates_uses_title_when_appid_is_unconfirmed_and_rejects_demo() {
         let rule = rule();
-        assert!(build_candidates(
+        assert!(!build_candidates(
             &rule,
             "Game",
             "https://kagurafan.com/game/",

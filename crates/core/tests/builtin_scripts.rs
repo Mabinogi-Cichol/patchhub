@@ -125,12 +125,14 @@ fn yozakura_matches_english_steam_names_and_keeps_each_download() {
             appid: 4370020,
             name: "Stained Roses & Lilies".into(),
             localized_name: None,
+            related_dlc: Vec::new(),
             instance_id: None,
         },
         GameQuery {
             appid: 4376090,
             name: "Strong-Willed Wife".into(),
             localized_name: None,
+            related_dlc: Vec::new(),
             instance_id: None,
         },
     ];

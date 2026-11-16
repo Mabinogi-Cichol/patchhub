@@ -11,6 +11,7 @@ const V29: u32 = 0x0756_4429;
 pub(crate) struct ResolvedName {
     pub name: String,
     pub language: Option<String>,
+    pub dlc_appids: Vec<u32>,
 }
 
 #[derive(Clone, Copy)]
@@ -175,6 +176,7 @@ fn parse_with_limits<R: Read + Seek>(
 enum Value<'a> {
     Object(Vec<(&'a str, Value<'a>)>),
     Text(&'a str),
+    Integer(u32),
     Scalar,
 }
 
@@ -259,7 +261,8 @@ impl<'a> Decoder<'a> {
             let value = match tag {
                 0 => self.object(depth.checked_add(1).ok_or("VDF depth overflow")?)?,
                 1 => Value::Text(self.cstring()?),
-                2 | 3 | 4 | 6 => {
+                2 => Value::Integer(u32::from_le_bytes(self.take(4)?.try_into().unwrap())),
+                3 | 4 | 6 => {
                     self.take(4)?;
                     Value::Scalar
                 }
@@ -293,10 +296,26 @@ fn decode_name(
     if decoder.pos != source.len() {
         return Err("trailing binary VDF bytes".into());
     }
-    let common = match root.get("appinfo").and_then(|value| value.get("common")) {
-        Some(common) => common,
-        None => return Ok(None),
+    let Some(appinfo) = root.get("appinfo") else {
+        return Ok(None);
     };
+    let Some(common) = appinfo.get("common") else {
+        return Ok(None);
+    };
+    let mut dlc_appids: Vec<u32> = match appinfo
+        .get("extended")
+        .and_then(|value| value.get("listofdlc"))
+    {
+        Some(Value::Integer(id)) if *id != 0 => vec![*id],
+        Some(Value::Text(ids)) => ids
+            .split(',')
+            .filter_map(|id| id.trim().parse().ok())
+            .filter(|&id| id != 0)
+            .collect(),
+        _ => Vec::new(),
+    };
+    dlc_appids.sort_unstable();
+    dlc_appids.dedup();
     if let Some(language) = language.filter(|value| !value.is_empty()) {
         let localized = common
             .get("name_localized")
@@ -310,6 +329,7 @@ fn decode_name(
             return Ok(Some(ResolvedName {
                 name: name.into(),
                 language: Some(language.into()),
+                dlc_appids,
             }));
         }
     }
@@ -319,6 +339,7 @@ fn decode_name(
         .map(|name| ResolvedName {
             name: name.into(),
             language: None,
+            dlc_appids,
         }))
 }
 #[cfg(test)]
@@ -387,6 +408,7 @@ mod tests {
                     ResolvedName {
                         name: expected.into(),
                         language: Some(language.into()),
+                        dlc_appids: vec![],
                     }
                 );
             }
@@ -396,9 +418,37 @@ mod tests {
                     ResolvedName {
                         name: "My Life as a Cult Leader".into(),
                         language: None,
+                        dlc_appids: vec![],
                     }
                 );
             }
+        }
+    }
+
+    #[test]
+    fn app_product_metadata_reads_steam_dlc_relations() {
+        let mut single_id = vec![2];
+        single_id.extend_from_slice(b"listofdlc\0");
+        single_id.extend_from_slice(&43u32.to_le_bytes());
+        for (value, expected) in [
+            (single_id, vec![43]),
+            (text("listofdlc", "43, 17,43,0"), vec![17, 43]),
+        ] {
+            let mut game = object(
+                "appinfo",
+                vec![
+                    object("common", vec![text("name", "Base game")]),
+                    object("extended", vec![value]),
+                ],
+            );
+            game.push(8);
+            let names = parse_names(
+                &mut Cursor::new(container(vec![(42, game)])),
+                &HashSet::from([42]),
+                None,
+            )
+            .unwrap();
+            assert_eq!(names[&42].dlc_appids, expected);
         }
     }
 

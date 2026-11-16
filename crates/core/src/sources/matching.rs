@@ -360,12 +360,7 @@ fn match_one(
     let hints = merged_hints(game, name_hints);
     let query = query_context(game, &hints, options.force_details, publisher_ids);
     let subscriptions = subscriptions_snapshot(rules, overrides, game.appid);
-    let key = input_key(
-        &game.name,
-        game.localized_name.as_deref(),
-        &hints,
-        &subscriptions,
-    );
+    let key = game_input_key(game, &hints, &subscriptions);
     // The host writes settings from another process; `load_settings` reads the
     // persisted revision so a mid-task disable/unsubscribe is detected below.
     let settings = store.load_settings()?;
@@ -607,12 +602,7 @@ fn settings_binding_changed(
     };
     let hints = merged_hints(game, name_hints);
     let subscriptions = subscriptions_snapshot(&effective_rules, &overrides, game.appid);
-    Ok(input_key(
-        &game.name,
-        game.localized_name.as_deref(),
-        &hints,
-        &subscriptions,
-    ) != key)
+    Ok(game_input_key(game, &hints, &subscriptions) != key)
 }
 
 /// Record returned when a first match attempt is discarded by the commit-time
@@ -653,14 +643,7 @@ fn record_reusable(
     let publisher_ids: Vec<String> = publishers.iter().map(|rule| rule.id.clone()).collect();
     let hints = merged_hints(game, name_hints);
     let subscriptions = subscriptions_snapshot(rules, overrides, game.appid);
-    if record.input_key
-        != input_key(
-            &game.name,
-            game.localized_name.as_deref(),
-            &hints,
-            &subscriptions,
-        )
-    {
+    if record.input_key != game_input_key(game, &hints, &subscriptions) {
         return Ok(false);
     }
     let active: BTreeSet<&str> = publisher_ids.iter().map(String::as_str).collect();
@@ -752,11 +735,7 @@ fn match_publisher_source(
     let mut detail_failed = false;
 
     // List-page (patch.moe / table) rows are matched entirely offline.
-    if index.entries.iter().any(|entry| entry.kind == "entry") {
-        let (found, found_diagnostics) = match_entry_rows(rule, index, game);
-        candidates.extend(found);
-        diagnostics.extend(found_diagnostics);
-    }
+    candidates.extend(match_entry_rows(rule, index, game));
 
     // Kagura articles/products/categories need their hit pages.
     let needs_pages = index.entries.iter().any(|entry| entry.kind != "entry");
@@ -850,102 +829,66 @@ fn merge_and_validate(
 
 /// Deterministic result of matching one game against a source's `kind="entry"`
 /// index rows. Shared with the read-model `registry.matches` fallback.
-pub(crate) enum EntrySelection<'a> {
-    /// No entry carries the AppID or an exact title/alias.
-    None,
-    /// One artifact URL is selected; the entry is the language-preferred row.
-    Selected(&'a SourceIndexEntry, &'a str),
-    /// Several distinct artifact URLs: never auto-select.
-    Ambiguous,
-}
-
-/// Matches `kind = "entry"` index rows: AppID first, then title/alias equality
-/// over the manifest and localized names, then a deterministic ZIP/EXE URL.
-pub(crate) fn select_entry<'a>(index: &'a SourceIndex, game: &GameQuery) -> EntrySelection<'a> {
-    let mut targets: HashSet<String> = HashSet::new();
-    for name in std::iter::once(&game.name).chain(game.localized_name.as_ref()) {
-        let normal = validate::normal(name);
-        if !normal.is_empty() {
-            targets.insert(normal);
-        }
-    }
-    let mut matched: Vec<&SourceIndexEntry> = Vec::new();
+/// Return one language-preferred row per download URL.
+pub(crate) fn select_entries<'a>(
+    index: &'a SourceIndex,
+    game: &GameQuery,
+) -> impl Iterator<Item = (&'a str, &'a SourceIndexEntry)> {
+    let targets: HashSet<_> = std::iter::once(&game.name)
+        .chain(game.localized_name.as_ref())
+        .chain(game.related_dlc.iter().filter_map(|dlc| dlc.name.as_ref()))
+        .map(|name| validate::normal(name))
+        .filter(|name| !name.is_empty())
+        .collect();
+    let preferred = |entry: &SourceIndexEntry| {
+        entry.language.as_deref().is_some_and(|language| {
+            language.eq_ignore_ascii_case("zh-cn") || language.eq_ignore_ascii_case("zh_cn")
+        })
+    };
+    let mut artifacts = std::collections::BTreeMap::<&str, &SourceIndexEntry>::new();
     for entry in &index.entries {
-        if entry.kind != "entry" {
+        if entry.kind != "entry" || entry.date.as_deref() == Some("COMING SOON") {
             continue;
         }
+        let Some(url) = entry.url.as_deref() else {
+            continue;
+        };
         let by_appid = entry.appid == Some(game.appid);
-        let by_title = entry.appid.is_none()
-            && !targets.is_empty()
-            && entry_names(entry).iter().any(|name| targets.contains(name));
+        let by_title = entry_names(entry).iter().any(|name| targets.contains(name));
         if by_appid || by_title {
-            matched.push(entry);
+            artifacts
+                .entry(url)
+                .and_modify(|existing| {
+                    if preferred(entry) && !preferred(existing) {
+                        *existing = entry;
+                    }
+                })
+                .or_insert(entry);
         }
     }
-    if matched.is_empty() {
-        return EntrySelection::None;
-    }
-    let mut urls: Vec<&str> = matched
-        .iter()
-        .filter_map(|entry| entry.url.as_deref())
-        .collect();
-    urls.sort_unstable();
-    urls.dedup();
-    if urls.len() > 1 {
-        return EntrySelection::Ambiguous;
-    }
-    let Some(url) = urls.first().copied() else {
-        return EntrySelection::None;
-    };
-    let selected = matched
-        .iter()
-        .filter(|entry| entry.url.as_deref() == Some(url))
-        .find(|entry| {
-            entry.language.as_deref().is_some_and(|language| {
-                matches!(language.to_lowercase().as_str(), "zh-cn" | "zh_cn")
-            })
-        })
-        .or_else(|| {
-            matched
-                .iter()
-                .find(|entry| entry.url.as_deref() == Some(url))
-        });
-    match selected {
-        Some(selected) => EntrySelection::Selected(selected, url),
-        None => EntrySelection::None,
-    }
+    artifacts.into_iter()
 }
 
-fn match_entry_rows(
+pub(crate) fn match_entry_rows(
     rule: &SourceRule,
     index: &SourceIndex,
     game: &GameQuery,
-) -> (Vec<SourceCandidate>, Vec<Diagnostic>) {
-    match select_entry(index, game) {
-        EntrySelection::None => (Vec::new(), Vec::new()),
-        EntrySelection::Ambiguous => (
-            Vec::new(),
-            vec![Diagnostic {
-                source_id: Some(rule.id.clone()),
-                code: "source_match_ambiguous".to_string(),
-                detail: Some("multiple artifact urls; manual selection required".to_string()),
-            }],
-        ),
-        EntrySelection::Selected(selected, url) => {
-            let candidate = candidate_from_index_match(
+) -> Vec<SourceCandidate> {
+    select_entries(index, game)
+        .map(|(url, entry)| {
+            candidate_from_index_match(
                 &rule.id,
                 game.appid,
-                selected.appid,
-                &selected.title,
-                &selected.aliases,
-                selected.language.as_deref().unwrap_or(""),
-                &selected.page,
+                entry.appid.filter(|&appid| appid == game.appid),
+                &entry.title,
+                &entry.aliases,
+                entry.language.as_deref().unwrap_or(""),
+                &entry.page,
                 url,
                 index.checked_at,
-            );
-            (vec![candidate], Vec::new())
-        }
-    }
+            )
+        })
+        .collect()
 }
 
 fn entry_names(entry: &SourceIndexEntry) -> Vec<String> {
@@ -1004,7 +947,7 @@ fn match_page_entries(
             detail_pages,
         ) {
             Ok(fact) => {
-                let found = candidates_from_fact(rule, &fact, query, known);
+                let found = candidates_from_fact(rule, &fact, query, known, adapter, ctx, cancel)?;
                 known.extend(found.iter().cloned());
                 candidates.extend(found);
             }
@@ -1017,7 +960,7 @@ fn match_page_entries(
             }
         }
     }
-    if candidates.iter().any(candidate_is_credible) {
+    if query.related_dlc.is_empty() && candidates.iter().any(candidate_is_credible) {
         return Ok(candidates);
     }
 
@@ -1112,7 +1055,7 @@ fn process_category(
         inline.sort_by_key(|article| identity::variant(&article.title) == Variant::Dlc);
         for article in inline {
             save_inline_fact(store, rule, index_revision, &article, now)?;
-            let found = candidates_from_fact(rule, &article, query, known);
+            let found = candidates_from_fact(rule, &article, query, known, adapter, ctx, cancel)?;
             known.extend(found.iter().cloned());
             candidates.extend(found);
         }
@@ -1143,7 +1086,8 @@ fn process_category(
                 detail_pages,
             ) {
                 Ok(article) => {
-                    let found = candidates_from_fact(rule, &article, query, known);
+                    let found =
+                        candidates_from_fact(rule, &article, query, known, adapter, ctx, cancel)?;
                     known.extend(found.iter().cloned());
                     candidates.extend(found);
                 }
@@ -1245,7 +1189,15 @@ fn candidates_from_fact(
     fact: &PageFact,
     query: &QueryContext,
     known: &[SourceCandidate],
-) -> Vec<SourceCandidate> {
+    adapter: &adapters::SourceAdapter<'_>,
+    ctx: &mut RequestContext,
+    cancel: &Arc<AtomicBool>,
+) -> Result<Vec<SourceCandidate>> {
+    let confirmed_id = match adapter.match_appid(rule, &fact.steam_ids, query, ctx, cancel)? {
+        Some(false) => return Ok(Vec::new()),
+        Some(true) => Some(query.appid),
+        None => None,
+    };
     let mut related_query = query.clone();
     let title_relevant = identity::title_relevant(&fact.title, query);
     let upstream = upstream_identity(&fact.page, query.appid, known)
@@ -1276,16 +1228,29 @@ fn candidates_from_fact(
         &fact.title,
         &fact.page,
         &fact.text,
-        &fact.steam_ids,
+        confirmed_id.as_slice(),
         &fact.aliases,
         "unknown",
         &fact.mirrors,
         &related_query,
         fact.single_download_group,
     );
+    // A Steam relationship lets exact publisher titles select both archives
+    // even when their pages contain no store links.
+    let trusted_title = !query.related_dlc.is_empty() && {
+        let title = validate::discovery_normal(&identity::game_title(&fact.title));
+        !title.is_empty()
+            && std::iter::once(&query.name)
+                .chain(query.localized_name.as_ref())
+                .chain(query.related_dlc.iter().filter_map(|dlc| dlc.name.as_ref()))
+                .any(|name| validate::discovery_normal(name) == title)
+    };
     for candidate in &mut found {
         if candidate.game_appid.is_none() {
-            if let Some(upstream) = upstream {
+            if trusted_title {
+                candidate.game_appid = Some(query.appid);
+                candidate.match_basis = MatchBasis::OfficialTitle;
+            } else if let Some(upstream) = upstream {
                 candidate.game_appid = Some(query.appid);
                 candidate.match_basis = MatchBasis::VerifiedAlias;
                 candidate.identity_evidence.push(IdentityEvidence {
@@ -1305,7 +1270,7 @@ fn candidates_from_fact(
             candidate.fingerprint = canonical::fingerprint(&value);
         }
     }
-    found
+    Ok(found)
 }
 
 // ---- per-game fallback aggregation --------------------------------------
@@ -1713,9 +1678,26 @@ fn subscriptions_snapshot(
         .collect()
 }
 
+fn game_input_key(
+    game: &GameQuery,
+    hints: &[String],
+    subscriptions: &BTreeMap<String, bool>,
+) -> String {
+    let key = input_key(
+        &game.name,
+        game.localized_name.as_deref(),
+        hints,
+        subscriptions,
+    );
+    if game.related_dlc.is_empty() {
+        key
+    } else {
+        canonical::canonical_sha256(&(key, &game.related_dlc))
+    }
+}
+
 /// Merges the trusted localized name with the frontend hints exactly like the
-/// old `merged_name_hints`: trimmed, deduped, at most 3 entries, localized name
-/// first.
+/// old `merged_name_hints`, then adds Steam DLC names without truncation.
 fn merged_hints(game: &GameQuery, name_hints: &[String]) -> Vec<String> {
     let mut hints: Vec<String> = Vec::new();
     if let Some(localized) = &game.localized_name {
@@ -1723,6 +1705,11 @@ fn merged_hints(game: &GameQuery, name_hints: &[String]) -> Vec<String> {
     }
     for hint in name_hints {
         push_hint(&mut hints, hint);
+    }
+    for name in game.related_dlc.iter().filter_map(|dlc| dlc.name.as_ref()) {
+        if !hints.contains(name) {
+            hints.push(name.clone());
+        }
     }
     hints
 }
@@ -1751,6 +1738,8 @@ fn query_context(
     QueryContext {
         appid: game.appid,
         name: game.name.clone(),
+        localized_name: game.localized_name.clone(),
+        related_dlc: game.related_dlc.clone(),
         name_hints: name_hints.to_vec(),
 
         legacy_match: false,
@@ -1768,10 +1757,9 @@ fn entry_relevant(
     query: &QueryContext,
     known: &[SourceCandidate],
 ) -> bool {
-    if let Some(appid) = entry.appid {
-        return appid == query.appid;
-    }
-    upstream_identity(&entry.page, query.appid, known).is_some()
+    entry.appid.is_some_and(|appid| {
+        appid == query.appid || query.related_dlc.iter().any(|dlc| dlc.appid == appid)
+    }) || upstream_identity(&entry.page, query.appid, known).is_some()
         || std::iter::once(&entry.title)
             .chain(entry.aliases.iter())
             .any(|title| lead_relevant(title, query, known))

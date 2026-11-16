@@ -171,6 +171,7 @@ mod script_binding_tests {
             appid: 42,
             name: "Game".into(),
             localized_name: None,
+            related_dlc: Vec::new(),
             instance_id: Some("test".into()),
         };
         let update = |sources: &Sources| {

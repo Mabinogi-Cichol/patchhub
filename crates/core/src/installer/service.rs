@@ -199,6 +199,7 @@ fn query(game: &steam::GameInstall) -> sources::GameQuery {
         appid: game.appid,
         name: game.name.clone(),
         localized_name: game.localized_name.clone(),
+        related_dlc: game.related_dlc.clone(),
         instance_id: Some(game.instance_id.clone()),
     }
 }

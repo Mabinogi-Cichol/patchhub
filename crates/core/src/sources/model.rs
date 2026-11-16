@@ -452,7 +452,7 @@ pub struct SourceCandidate {
     /// `candidate-[0-9a-f]{24}`.
     pub candidate_id: String,
     pub source_id: String,
-    /// `canonical_page_url(source_page)`.
+    /// `canonical_url(source_page)`.
     pub source_record_id: String,
     /// Always present, may be `null`.
     pub game_appid: Option<u32>,
@@ -624,6 +624,8 @@ pub struct GameQuery {
     pub localized_name: Option<String>,
     #[serde(default)]
     pub instance_id: Option<String>,
+    #[serde(skip)]
+    pub related_dlc: Vec<crate::steam::SteamDlc>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -631,6 +633,10 @@ pub struct GameQuery {
 pub struct QueryContext {
     pub appid: u32,
     pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub localized_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub related_dlc: Vec<crate::steam::SteamDlc>,
     /// `<= 3` entries, each `<= 256`.
     #[serde(default)]
     pub name_hints: Vec<String>,

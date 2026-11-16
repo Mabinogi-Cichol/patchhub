@@ -175,6 +175,15 @@ local function downloads(ctx, u, body, page)
 end
 
 return {
+    match_appid = function(_, _, site_ids, steam)
+        for _, appid in ipairs(site_ids) do
+            if appid == steam.appid then return true end
+            for _, dlc in ipairs(steam.related_dlc or {}) do
+                if appid == dlc.appid then return true end
+            end
+        end
+        return false
+    end,
     collect_index = function(ctx, rule)
         local u, entries = library(ctx, rule), ctx.array()
         local offset, page_size = 0, 100

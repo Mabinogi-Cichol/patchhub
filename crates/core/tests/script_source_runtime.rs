@@ -241,6 +241,8 @@ fn discover_passes_query_and_previous_without_accepting_candidate_authority() {
     let query = QueryContext {
         appid: 42,
         name: "Game".into(),
+        localized_name: None,
+        related_dlc: Vec::new(),
         name_hints: vec![],
         legacy_match: false,
         force: true,

@@ -73,13 +73,20 @@ impl SourceAdapter<'_> {
         let mut candidates = Vec::new();
         for page in facts.pages {
             let mut pending = vec![page.fact];
-            while let Some(fact) = pending.pop() {
+            while let Some(mut fact) = pending.pop() {
+                let decision = self.match_appid(rule, &fact.steam_ids, query, ctx, cancel)?;
+                pending.extend(std::mem::take(&mut fact.article_facts).into_iter().rev());
+                let confirmed_id = match decision {
+                    Some(false) => continue,
+                    Some(true) => Some(query.appid),
+                    None => None,
+                };
                 let mut found = identity::build_candidates_with_download_group(
                     rule,
                     &fact.title,
                     &fact.page,
                     &fact.text,
-                    &fact.steam_ids,
+                    confirmed_id.as_slice(),
                     &fact.aliases,
                     &page.reported_format,
                     &fact.mirrors,
@@ -91,7 +98,6 @@ impl SourceAdapter<'_> {
                     candidate.upstream_page = page.upstream_page.clone();
                 }
                 candidates.extend(found);
-                pending.extend(fact.article_facts.into_iter().rev());
             }
         }
         let candidates = identity::enrich_candidates(&candidates, &identities);
@@ -121,6 +127,22 @@ impl SourceAdapter<'_> {
     ) -> Result<IndexOutcome> {
         script::collect_index(rule, self.code, previous, ctx, Arc::clone(cancel), |_| {})
     }
+    pub fn match_appid(
+        &self,
+        rule: &SourceRule,
+        ids: &[u32],
+        query: &QueryContext,
+        ctx: &mut RequestContext,
+        cancel: &Arc<AtomicBool>,
+    ) -> Result<Option<bool>> {
+        if ids.is_empty() {
+            return Ok(None);
+        }
+        let decision = script::match_appid(rule, self.code, ids, query, ctx, Arc::clone(cancel))?;
+        // Existing API v1 sources can still supply an exact AppID match.
+        Ok(decision.or_else(|| ids.contains(&query.appid).then_some(true)))
+    }
+
     pub fn resolve_page(
         &self,
         rule: &SourceRule,
