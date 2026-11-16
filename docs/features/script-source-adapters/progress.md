@@ -4,7 +4,7 @@
 
 ## 当前状态
 
-**施工中。P0–P7 的既有范围保持原记录；2026-11-16 的内置 Lua 单文件、双端具名字段表单、Steam 本体/DLC 匹配、YOZAKURA 文章地址与 Lua 驱动浏览器传输重构已实现，并在 Windows/Linux 双平台与 Deck 实机完成自动化、真实网站、部署与界面验证（166 条完整索引、26 个正式文件哈希一致、新表单界面截图）。实体手柄/软键盘与剪贴板粘贴、空内置发行形态的界面粘贴导入、Windows 原生界面导入、真实游戏补丁安装仍等待实际验收，不代表重构全部验收完成。同日新增确认的“关联 DLC 匹配归类（`variant = dlc`、`requires_dlc` 绑定）与本地 `appmanifest` 已安装 DLC 状态检测及前端适用条件展示”方案已写入设计计划，待实现。**
+**施工中。P0–P7 的既有范围保持原记录；2026-11-16 的内置 Lua 单文件、双端具名字段表单、Steam 本体/DLC 匹配、YOZAKURA 文章地址与 Lua 驱动浏览器传输重构已实现，并在 Windows/Linux 双平台与 Deck 实机完成自动化、真实网站、部署与界面验证（166 条完整索引、26 个正式文件哈希一致、新表单界面截图）。实体手柄/软键盘与剪贴板粘贴、空内置发行形态的界面粘贴导入、Windows 原生界面导入、真实游戏补丁安装仍等待实际验收，不代表重构全部验收完成。同日新增的“关联 DLC 匹配归类（`variant = dlc`、`requires_dlc` 绑定）与本地 `appmanifest` 已安装 DLC 状态检测及前端适用条件展示”已完成代码实现与双端定向自动化验证，实机与真实 Steam 库展示待验收。**
 
 - 调研基线：`main@cb06188`，2026-10-30。
 - 文档开发分支：`feature/script-source-adapters`。
@@ -840,3 +840,22 @@ P7 保持施工中：Windows 原生桌面界面的实际导入/取消/重启，D
   2. **新增从 `appmanifest_<appid>.acf` 检测本地已安装 DLC 状态的能力与适用条件展示更新**：在 `steam::scan` 解析游戏本体的 `steamapps/appmanifest_<appid>.acf` 时，顺带读取 `AppState.InstalledDepots` 下各 depot 的 `dlcappid`（及 `InstalledDLC`）以识别本地已实际勾选安装的关联 DLC。本地安装状态仅用于双端前端“适用条件”展示，不筛除候选或阻断安装：已检测到安装时展示 `需要 DLC <名称> (<appid>)（已安装）`（如 `需要 DLC 夏日狂想曲+ (1390150)（已安装）` 或无名称时 `需要 DLC 1390150（已安装）`），不再显示“（拥有及安装状态待确认）”；未检测到安装时保留候选展示，并明确标注 `需要 DLC <名称> (<appid>)（未检测到安装）` 提醒用户核对。
 - **静态过度设计审阅结论**：方案复用既有 `appinfo.vdf` 与 `steam::scan` 已解析的 `appmanifest_<appid>.acf` 路径，无额外磁盘 I/O 或外部接口；`variant = dlc` 与 `requires_dlc` 直接由命中关联 DLC 名称/AppID 的事实派生，替代硬编码特判与纯关键词猜测；未安装状态仅作前端提示而不改变匹配筛选与安装许可边界，未发现过度设计项。
 - **当前状态**：本轮仅更新设计与计划文档，**未修改任何产品或测试代码**；相关 Rust 核心解析/匹配改造、双端前端适配及定向验证均**待执行**。
+
+### 2026-11-16：完成关联 DLC 匹配归类、本地已安装 DLC 检测与双端适用条件展示实现
+
+- **Core（Steam 扫描与契约）**：
+  - [steam.rs](../../../crates/core/src/steam.rs)：`GameInstall` 取消 `related_dlc` 的 `#[serde(skip)]` 并改为 `#[serde(default)]`，新增 `#[serde(default)] pub installed_dlc: Vec<u32>`；`SteamDlc` 增加 `ts_rs::TS` 派生。`parse_manifest` 新增 `parse_installed_dlc`，在解析本体 `appmanifest_<appid>.acf` 时顺带提取 `AppState.InstalledDepots.*.dlcappid` 与 `AppState.InstalledDLC` 中的有效 DLC AppID（排序去重并排除 `0` 与本体 `appid`）。
+  - 重新运行 `patchhub-contract-gen generate` 同步生成 [v5.schema.json](../../../packages/contracts/generated/v5.schema.json)、[protocol.ts](../../../packages/contracts/generated/protocol.ts)、[protocol.py](../../../packages/contracts/generated/protocol.py) 与 [protocol-v5.schema.json](../../../apps/windows-flutter/assets/protocol-v5.schema.json)，并在 [packages/ui/src/index.ts](../../../packages/ui/src/index.ts) 导出 `GameInstall`。
+- **Core（DLC 归类与绑定）**：
+  - [identity.rs](../../../crates/core/src/sources/identity.rs)：`build_candidates_with_download_group` 新增 `matched_dlc_for_candidate`，优先按关联 DLC 的 AppID 或名称匹配（且排除已命中本体名称的情况）判定 `variant = Variant::Dlc` 与 `requires_dlc = Some(vec![matched_dlc.appid])`，未命中已知关联 DLC 时回退到 `identity::variant` 关键词判断；已绑定 `requires_dlc` 时不再仅因 `variant == Dlc` 触发 `dlc_conditions_unknown`。
+  - [matching.rs](../../../crates/core/src/sources/matching.rs)、[adapters/mod.rs](../../../crates/core/src/sources/adapters/mod.rs) 与 [registry.rs](../../../crates/core/src/sources/registry.rs)：`select_entries`、`match_entry_rows`、`candidate_from_index_match` 与详情/补查路径同步传递并识别关联 DLC AppID/名称，生成对应 `variant = Dlc`、`requires_dlc` 与 `candidate_id`。
+- **双端前端（适用条件展示）**：
+  - Decky（[discovery.ts](../../../apps/decky/src/discovery.ts)、[index.tsx](../../../apps/decky/src/index.tsx)）与 Windows（[library_presentation.dart](../../../apps/windows-flutter/lib/presentation/library_presentation.dart)、[patch_management_page.dart](../../../apps/windows-flutter/lib/pages/patch_management_page.dart)）的 `candidateConditions` 结合 `game.related_dlc` 与 `game.installed_dlc`，将 `requires_dlc` 格式化为 `需要 DLC <名称> (<appid>)（已安装）` 或 `需要 DLC <名称> (<appid>)（未检测到安装）`（未知名称时退化为 `<appid>`），不筛除候选或阻断安装。
+- **已执行定向验证**：
+  - `./scripts/cargo.ps1 fmt --all -- --check` 与 `./scripts/cargo.ps1 clippy --locked -p patchhub-core -p patchhub-protocol -p patchhub-contract-gen --all-targets '--' '-D' 'warnings'`：通过。
+  - `./scripts/cargo.ps1 test --locked -p patchhub-core --test source_matching`：**26 passed**（含新增 `matched_related_dlc_binds_variant_dlc_and_requires_dlc_with_keyword_fallback`）。
+  - `./scripts/cargo.ps1 test --locked -p patchhub-core --test localized_game_names scan_extracts_installed_dlc_from_installed_depots_and_installed_dlc_sections`：**1 passed**。
+  - `./scripts/cargo.ps1 run --locked -p patchhub-contract-gen -- check` 与 `npm run test:contracts`：通过。
+  - `npm run typecheck` 与 `npm test -w apps/decky`：**112 passed**（含 `discovery.test.ts` 新增用例）。
+  - `flutter test --no-pub test/library_presentation_test.dart`：**10 passed**（含 `candidateConditions` 名称与已安装/未检测到安装用例）。
+  - 实机与真实 Steam 库界面展示：待验收。
