@@ -255,12 +255,18 @@ fn schema2_records_round_trip_and_failed_writes_keep_the_last_snapshot() {
         diagnostics: Vec::new(),
     };
     store.save_detail(&detail).unwrap();
-    // The key is derived from the canonical page: query/fragment are dropped.
+    // The key keeps the page query chosen by the script and drops the fragment.
     assert_eq!(
         store
-            .load_detail("patchmoe", "https://www.patch.moe/?utm=x#top")
+            .load_detail("patchmoe", "https://www.patch.moe/#top")
             .unwrap(),
         Some(detail.clone())
+    );
+    assert_eq!(
+        store
+            .load_detail("patchmoe", "https://www.patch.moe/?p=150")
+            .unwrap(),
+        None
     );
     assert!(store
         .paths()
@@ -1168,6 +1174,7 @@ fn legacy_files_migrate_once_and_new_snapshots_win() {
         appid: 42,
         name: "Game 42".to_string(),
         localized_name: None,
+        related_dlc: Vec::new(),
         instance_id: None,
     };
     let matches = sources.registry().matches(&game, false);
@@ -1207,6 +1214,7 @@ fn installer_resolve_works_from_a_published_index_before_any_match_task() {
         appid: 42,
         name: "Game 42".to_string(),
         localized_name: None,
+        related_dlc: Vec::new(),
         instance_id: None,
     };
     // No `matches/<appid>.json` exists yet: the entry-index fallback keeps
