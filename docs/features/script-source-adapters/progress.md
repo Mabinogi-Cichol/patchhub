@@ -4,7 +4,7 @@
 
 ## 当前状态
 
-**施工中。P0–P7 的既有范围保持原记录；2026-11-16 的内置 Lua 单文件、双端具名字段表单、Steam 本体/DLC 匹配、YOZAKURA 文章地址与 Lua 驱动浏览器传输重构已实现，并在 Windows/Linux 双平台与 Deck 实机完成自动化、真实网站、部署与界面验证（166 条完整索引、26 个正式文件哈希一致、新表单界面截图）。实体手柄/软键盘与剪贴板粘贴、空内置发行形态的界面粘贴导入、Windows 原生界面导入、真实游戏补丁安装仍等待实际验收，不代表重构全部验收完成。**
+**施工中。P0–P7 的既有范围保持原记录；2026-11-16 的内置 Lua 单文件、双端具名字段表单、Steam 本体/DLC 匹配、YOZAKURA 文章地址与 Lua 驱动浏览器传输重构已实现，并在 Windows/Linux 双平台与 Deck 实机完成自动化、真实网站、部署与界面验证（166 条完整索引、26 个正式文件哈希一致、新表单界面截图）。实体手柄/软键盘与剪贴板粘贴、空内置发行形态的界面粘贴导入、Windows 原生界面导入、真实游戏补丁安装仍等待实际验收，不代表重构全部验收完成。同日新增确认的“关联 DLC 匹配归类（`variant = dlc`、`requires_dlc` 绑定）与本地 `appmanifest` 已安装 DLC 状态检测及前端适用条件展示”方案已写入设计计划，待实现。**
 
 - 调研基线：`main@cb06188`，2026-10-30。
 - 文档开发分支：`feature/script-source-adapters`。
@@ -832,3 +832,11 @@ P7 保持施工中：Windows 原生桌面界面的实际导入/取消/重启，D
 - Deck 上 `kagura-en` 刷新返回 `source_offline_cached`（站点 403/网络错误），因此“发行商覆盖完整”这一既有补查门控未满足，HGamer 按游戏补查在空内置状态下没有产生候选；同一网络下 Windows 侧 `kagura-en` 刷新成功（230 条）。该补查路径此前已在完整刷新状态与离线回归中通过，本轮不把它记为空内置验收通过项。
 
 验证汇总：Windows Flutter 全量 **313 passed / 4 skipped**（两条新用例在未提供环境变量时跳过；提供后 `empty_builtin_import_test.dart` 2 项 1 分 35 秒通过），`flutter analyze lib test integration_test` 无问题；原生集成用例 1 项通过。Rust 与 Decky 代码本轮未改动，沿用前一轮 577/586 与 112/52 的记录。
+
+### 2026-11-16：确认关联 DLC 匹配归类与本地已安装 DLC 状态检测方案（待实现）
+
+- 按用户在侧会话确认的设计方案，更新[重构计划](standalone-lua-form-plan.md)与[功能设计](design.md)，明确以下两项核心设计决策：
+  1. **保留 `appinfo.vdf` 的全量关联 DLC 发现能力，并用匹配结果代替标题关键词臆测**：继续从 `appcache/appinfo.vdf` 的 `extended.listofdlc` 获取本体关联的所有 DLC（不论本地是否已安装）及其 `appid` 与多语言名称（如 `1390150` → `夏日狂想曲+`），未安装的关联 DLC 依然参与补丁搜索并展示在候选列表中。当补丁候选通过匹配关联 DLC 的名称或 AppID 命中时，直接判定为 `variant = dlc`，并自动绑定对应 DLC 的 AppID（`requires_dlc = [matched_dlc.appid]`）；原先基于 `+`、`dlc`、`plus` 等标题关键词的 `variant` 推断仅在未命中已知 DLC 时作为兜底。
+  2. **新增从 `appmanifest_<appid>.acf` 检测本地已安装 DLC 状态的能力与适用条件展示更新**：在 `steam::scan` 解析游戏本体的 `steamapps/appmanifest_<appid>.acf` 时，顺带读取 `AppState.InstalledDepots` 下各 depot 的 `dlcappid`（及 `InstalledDLC`）以识别本地已实际勾选安装的关联 DLC。本地安装状态仅用于双端前端“适用条件”展示，不筛除候选或阻断安装：已检测到安装时展示 `需要 DLC <名称> (<appid>)（已安装）`（如 `需要 DLC 夏日狂想曲+ (1390150)（已安装）` 或无名称时 `需要 DLC 1390150（已安装）`），不再显示“（拥有及安装状态待确认）”；未检测到安装时保留候选展示，并明确标注 `需要 DLC <名称> (<appid>)（未检测到安装）` 提醒用户核对。
+- **静态过度设计审阅结论**：方案复用既有 `appinfo.vdf` 与 `steam::scan` 已解析的 `appmanifest_<appid>.acf` 路径，无额外磁盘 I/O 或外部接口；`variant = dlc` 与 `requires_dlc` 直接由命中关联 DLC 名称/AppID 的事实派生，替代硬编码特判与纯关键词猜测；未安装状态仅作前端提示而不改变匹配筛选与安装许可边界，未发现过度设计项。
+- **当前状态**：本轮仅更新设计与计划文档，**未修改任何产品或测试代码**；相关 Rust 核心解析/匹配改造、双端前端适配及定向验证均**待执行**。

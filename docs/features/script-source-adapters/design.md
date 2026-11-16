@@ -1,12 +1,12 @@
 # 可导入脚本来源适配器设计
 
-状态：**施工中，P0–P6 已实现并完成本地自动化，四个内置来源及通用表格全部脚本化；P7 本地发行与 Deck 部署/界面抽样通过，Windows 原生与实体手柄验收待执行；当前 Shiravune 访问验证阻断在线采集，待解决**。施工拆分见 [implementation-plan.md](implementation-plan.md)，实际进度与验证见 [progress.md](progress.md)。已验证的运行时决策与接入合同见 [p0-contract.md](p0-contract.md)，全部来源的迁移清单见 [migration-matrix.md](migration-matrix.md)，当前问题与修复方案见 [fix-plan.md](fix-plan.md)。
+状态：**施工中，P0–P6 已实现并完成本地自动化，四个内置来源及通用表格全部脚本化；P7 本地发行与 Deck 部署/界面抽样通过；2026-11-16 单文件 Lua、具名字段表单、Steam 本体/DLC 匹配、YOZAKURA 文章地址与 Lua 驱动浏览器传输重构已实现并通过双平台自动化、真实网站、Deck 实机、空内置恢复与 Windows 原生导入验收；同日新增确认的“关联 DLC 匹配归类与本地已安装 DLC 状态检测及适用条件展示”方案待实现**。施工拆分见 [implementation-plan.md](implementation-plan.md)，实际进度与验证见 [progress.md](progress.md)。已验证的运行时决策与接入合同见 [p0-contract.md](p0-contract.md)，全部来源的迁移清单见 [migration-matrix.md](migration-matrix.md)，当前问题与修复方案见 [fix-plan.md](fix-plan.md)。
 
 ## 1. 目标与范围
 
-2026-11-16 新增[内置 Lua 单文件与订阅源表单重构计划](standalone-lua-form-plan.md)，状态为**待实现**。计划将 Windows 与 Decky 的规则输入及内置查看改为同一组具名字段，退役旧声明式表格来源，并验收空内置构建通过普通入口导入仓库中的五份 Lua。本文下方保留此前实现的设计与历史基线。
+2026-11-16 新增[内置 Lua 单文件与订阅源表单重构计划](standalone-lua-form-plan.md)，其中单文件 Lua、具名字段表单、浏览器传输与基础本体/DLC 匹配已实现并验收，关联 DLC 匹配归类与本地已安装 DLC 状态检测方案状态为**待实现**。计划将 Windows 与 Decky 的规则输入及内置查看改为同一组具名字段，退役旧声明式表格来源，并验收空内置构建通过普通入口导入仓库中的五份 Lua。本文下方保留此前实现的设计与历史基线。
 
-此次重构的匹配决策详见[本体与 DLC 匹配](standalone-lua-form-plan.md#本体与-dlc-匹配)。Core 提供 Steam 侧本体和关联 DLC 的名称、AppID 与关系，并汇总候选。Lua 决定是否提取网页 AppID、取哪个链接及是否采信。用户在本体的「补丁选择」中同时看到各名称命中的本体与 DLC 补丁，自行选择。DLC 的拥有与安装状态不参与匹配筛选。Steam 数据入口及双端可用性待核实。
+此次重构的匹配决策详见[本体与 DLC 匹配](standalone-lua-form-plan.md#本体与-dlc-匹配)。Core 继续从 `appcache/appinfo.vdf`（`extended.listofdlc`）保留全量关联 DLC 发现能力，获取本体及关联 DLC 的名称（多语言）、AppID 与关系（不论本地是否已安装）并汇总候选；当补丁候选通过匹配关联 DLC 的名称或 AppID 命中时，直接判定 `variant = dlc` 并自动绑定 `requires_dlc = [matched_dlc.appid]`，替代原先依赖标题关键词猜测的做法（关键词仅在未命中已知 DLC 时兜底）。同时，Core 在 `steam::scan` 解析游戏本体的 `appmanifest_<appid>.acf` 时顺带读取 `AppState.InstalledDepots` 下各 depot 的 `dlcappid`（及 `InstalledDLC`）以识别本地已实际勾选安装的关联 DLC；未安装的关联 DLC 依然参与搜索与候选展示，不参与匹配筛选或阻断安装，仅用于双端前端“适用条件”展示已检测到安装（如 `需要 DLC 夏日狂想曲+ (1390150)（已安装）`）或未检测到安装（如 `需要 DLC 夏日狂想曲+ (1390150)（未检测到安装）`）。Lua 决定是否提取网页 AppID、取哪个链接及是否采信。用户在本体的「补丁选择」中同时看到各名称命中的本体与 DLC 补丁，自行选择。
 
 此次重构将 Shiravune 的验证状态识别、浏览器触发判断和语言表单请求收回 `patchmoe.lua`。双端宿主在同一浏览器会话执行 Lua 指定的请求并回传实时字段与响应。删除 `shiravune-browser.js`、宿主按 ID 的分支及打包引用，作为[浏览器传输重构](standalone-lua-form-plan.md#shiravune-的浏览器传输)的交付条件。
 

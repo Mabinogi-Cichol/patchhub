@@ -1,6 +1,6 @@
 # 内置 Lua 单文件与订阅源表单重构计划
 
-状态见[施工记录](progress.md)：五份单文件 Lua、双端具名字段表单、Steam 本体/DLC 匹配、YOZAKURA 文章地址与 Lua 驱动浏览器传输均已实现，并通过双平台自动化、真实网站、Deck 实机、空内置发行形态恢复与 Windows 原生窗口导入验证；实体手柄/软键盘/剪贴板与真实补丁安装按用户指示不列入本轮验收。对应[功能设计](design.md)。2026-11-16 静态调研基线为 `main@6c83576`。
+状态见[施工记录](progress.md)：五份单文件 Lua、双端具名字段表单、Steam 本体/DLC 匹配、YOZAKURA 文章地址与 Lua 驱动浏览器传输均已实现，并通过双平台自动化、真实网站、Deck 实机、空内置发行形态恢复与 Windows 原生窗口导入验证；实体手柄/软键盘/剪贴板与真实补丁安装按用户指示不列入本轮验收。同日新增确认的“关联 DLC 匹配归类（`variant = dlc` 与 `requires_dlc` 自动绑定）及本地 `appmanifest` 已安装 DLC 状态检测与适用条件展示”方案**待实现**。对应[功能设计](design.md)。2026-11-16 静态调研基线为 `main@6c83576`。
 
 ## 交付与当前链路
 
@@ -60,16 +60,20 @@
 
 ### 用户可见结果与职责
 
-- 动态读取 Steam 侧的本体/DLC 关系、对应名称和 AppID。把本体名及其关联 DLC 名都作为同一游戏的候选匹配名。用《夏日狂想曲：乡间的难忘回忆》和《夏日狂想曲+》验收，本体和 DLC 补丁同时列在本体游戏的「补丁选择」，由用户选定。匹配流程不读取 DLC 的拥有或安装状态来筛掉候选或自动决定补丁。
-- Core 提供 Steam 名称、AppID 和关系，统一汇总与校验候选。来源 Lua 决定是否从网页提取 AppID、选哪个链接、是否采信、如何与 Steam 侧 AppID 比较。名称匹配可复用 core 的通用比较能力，网页 AppID 的取舍和纠错由单个来源负责。用于匹配的 Steam 元数据来源、接口及 Windows / Decky 的可用性是首个施工核实项，当前未选定接口。
+- **保留 `appinfo.vdf` 全量关联 DLC 发现**：继续从 `appcache/appinfo.vdf` 的 `extended.listofdlc` 获取本体关联的所有 DLC（不论本地是否已安装）及其 `appid` 与多语言名称（如 `1390150` → `夏日狂想曲+`），将本体名及其全部关联 DLC 名都作为同一游戏的候选匹配名；未安装的关联 DLC 依然参与补丁搜索并展示在本体游戏的「补丁选择」列表中，由用户自行选定。
+- **DLC 补丁归类与绑定（待实现）**：当补丁候选是通过匹配关联 DLC 的名称或关联 DLC 的 AppID 命中时，直接将该候选判定为 `variant = dlc`，并自动绑定对应 DLC 的 AppID（`requires_dlc = [matched_dlc.appid]`），替代原先依赖标题是否包含 `+`、`dlc`、`plus` 等关键词猜测 `variant` 的做法；标题关键词仅在未命中已知 DLC 名称/AppID 时作为兜底。
+- **本地已安装 DLC 状态检测与前端“适用条件”展示（待实现）**：在 `steam::scan` 解析游戏本体的 `steamapps/appmanifest_<appid>.acf` 时，顺带读取 `AppState.InstalledDepots` 下各 depot 的 `dlcappid`（及 `InstalledDLC`），识别哪些关联 DLC 在本地已实际勾选安装。本地安装状态仅用于前端适用条件提示，不筛除候选或阻断安装：
+  - 若 `requires_dlc` 对应的 DLC 在本地 `appmanifest` 中已检测到安装：前端“适用条件”展示为已安装状态（例如 `适用条件：扩展 / DLC · 需要 DLC 夏日狂想曲+ (1390150)（已安装）`，无名称时为 `需要 DLC 1390150（已安装）`），不再显示“（拥有及安装状态待确认）”。
+  - 若通过 `appinfo.vdf` 匹配到但本地 `appmanifest` 未检测到安装：保留候选展示，并明确标注未检测到安装（例如 `需要 DLC 夏日狂想曲+ (1390150)（未检测到安装）`），提醒用户核对后再安装。
+- Core 提供 Steam 名称、AppID、关联 DLC 关系与本地已安装 DLC 状态，统一汇总与校验候选。来源 Lua 决定是否从网页提取 AppID、选哪个链接、是否采信、如何与 Steam 侧 AppID 比较。名称匹配可复用 core 的通用比较能力，网页 AppID 的取舍和纠错由单个来源负责。
 - Kagura 和 Patchmoe 的目标路径可用名称匹配。侧会话抽查的 Kagura 国内本体与 DLC 补丁正文通过作品名和站内链接互指，样本中未见 Steam 商店链接。Patchmoe 的[生产解析](../../../crates/core/resources/source-scripts/patchmoe.lua)只读取标题、日期与下载列。当前没有仅标注 DLC AppID 的补丁页样本，该情形不列为本次必需交付。
 - YOZAKURA 提供了网页 AppID 证据的实样。文章 161 的商店链接正确指向 `4370020`，另一作品的文章 150 也错指至 `4370020`，现有 Lua 会在来源端纠正为 `4376090`。继续由这里决定如何采信并与 Steam 侧 AppID 比较。两篇文章的 URL 处理见[详情地址方案](#yozakura-的详情地址)。
 
 ### 实现边界与既有路径
 
-1. 将 Steam 本体/DLC 名称作为可信查询输入传给直接索引匹配、详情匹配及需要按名称查询的 Lua。现有 `merged_hints` 会截断前端名称提示，关联 DLC 名不复用该截断。沿用匹配缓存的输入绑定，关系或候选名称变化时重算匹配。详情缓存仍存与游戏无关的页面事实，本次查询对站点证据的取舍在匹配时完成。[现有匹配输入](../../../crates/core/src/sources/matching.rs)
-2. 在来源匹配阶段把 Steam 事实交给 Lua，保留 API v1 现有脚本入口的读取兼容，施工时以 YOZAKURA 的正常链接和错链样本确定最小的可选输入及匹配结果。删除 `identity.rs` 对原始网页 AppID 不包含当前 AppID 的全局硬拒绝，以及绑定 `kagura-cn`、`1227890`、`1390150` 的 DLC 特判和只为它服务的分支。同步核对 `matching.rs` 的 `select_entry` / `entry_relevant`，这两处会在详情匹配前按索引 AppID 筛选；只有来源明确采信并比对的证据才参与 AppID 判断。保留最终候选的游戏身份、来源归属及 URL 校验。[候选生成与站点特判](../../../crates/core/src/sources/identity.rs) · [Lua 执行入口](../../../crates/core/src/sources/adapters/script.rs)
-3. 将名称命中的不同有效补丁全部投影到同一游戏。现有 `match_entry_rows` 把多个不同下载 URL 判为 `Ambiguous` 后返回空候选，会掩盖本体与 DLC 分别命中的情况。更新列表投影以保留各命中项，复用现有「补丁选择」及安装时针对已选候选的验证。已存在的相同下载归并逻辑照常使用。[列表匹配](../../../crates/core/src/sources/matching.rs) · [安装解析](../../../crates/core/src/installer/resolve.rs)
+1. **Steam 关联 DLC 名称与本地已安装状态输入**：[appinfo.rs](../../../crates/core/src/appinfo.rs) 与 [steam_metadata.rs](../../../crates/core/src/steam_metadata.rs) 继续从 `appinfo.vdf` 读取本体 `extended.listofdlc` 的全量关联 DLC `appid` 与多语言名称并传入直接索引匹配、详情匹配及需要按名称查询的 Lua（`merged_hints` 不截断关联 DLC 名称；关系或名称变化时重算匹配缓存）。新增的本地安装状态检测在 [steam.rs](../../../crates/core/src/steam.rs) 的 `parse_manifest` 中顺带完成：解析本体 `steamapps/appmanifest_<appid>.acf` 时提取 `AppState.InstalledDepots` 下各 depot 的 `dlcappid`（及 `InstalledDLC`），随 `GameInstall` 扫描结果传递给双端前端。[现有匹配输入](../../../crates/core/src/sources/matching.rs)
+2. **网页 AppID 决策与 DLC 归类绑定**：在来源匹配阶段把 Steam 事实交给 Lua，保留 API v1 现有脚本入口的读取兼容，删除了 `identity.rs` 对原始网页 AppID 不包含当前 AppID 的全局硬拒绝以及绑定 `kagura-cn`、`1227890`、`1390150` 的 DLC 特判；只有来源明确采信并比对的证据才参与 AppID 判断，保留最终候选的游戏身份、来源归属及 URL 校验。待实现的归类与绑定规则落点在 [matching.rs](../../../crates/core/src/sources/matching.rs)、[identity.rs](../../../crates/core/src/sources/identity.rs) 与 [registry.rs](../../../crates/core/src/sources/registry.rs)：列表匹配（`select_entries` / `match_entry_rows` / `candidate_from_index_match`）与详情/补查匹配（`candidates_from_fact` / `build_candidates`）需识别候选是否由关联 DLC 名称或关联 DLC AppID 命中；若是，则直接设置 `variant = Variant::Dlc` 与 `requires_dlc = Some(vec![matched_dlc.appid])`，仅在未命中已知关联 DLC 时回退到 `identity::variant` 的标题关键词判断。[候选生成与站点特判](../../../crates/core/src/sources/identity.rs) · [Lua 执行入口](../../../crates/core/src/sources/adapters/script.rs)
+3. **多候选投影与双端“适用条件”展示**：将名称命中的不同有效补丁全部投影到同一游戏，复用现有「补丁选择」及安装时针对已选候选的验证（已存在的相同下载归并逻辑照常使用）。双端前端（Windows [library_presentation.dart](../../../apps/windows-flutter/lib/presentation/library_presentation.dart) 与 Decky [discovery.ts](../../../apps/decky/src/discovery.ts)）的 `candidateConditions` 结合当前游戏的关联 DLC 名称与本地 `appmanifest` 已安装状态，将 `requires_dlc` 格式化为 `需要 DLC <名称> (<appid>)（已安装）` 或 `需要 DLC <名称> (<appid>)（未检测到安装）`（未知名称时退化为 `<appid>`），取代“（拥有及安装状态待确认）”。[列表匹配](../../../crates/core/src/sources/matching.rs) · [安装解析](../../../crates/core/src/installer/resolve.rs)
 
 ## 双端字段与保存
 
@@ -97,7 +101,7 @@
 | --- | --- | --- |
 | 1 | 机械落盘完整 Lua，切换到单文件嵌入，沿用五源适配器绑定 | 扩充 `builtin_scripts` 遍历五源，比对仓库文件和两条 RPC 读取路径返回的原文与摘要，并核对执行使用的脚本描述和只读无写入。运行 `builtin_script_migration`、`builtin_script_regression`、`source_acceptance` 等既有夹具，覆盖 Shiravune 条件更新与表单请求、Kagura 国内列表/分类/详情和海外多入口/分页/详情、YOZAKURA 索引与镜像、HGamer 按游戏补查。删除只验证旧表格解析器的用例，仍验证通用索引、匹配和安装合同的用例改用现有 Lua 测试夹具。 |
 | 2 | 退役声明式表格来源，回归旧状态与导入，再接双端表单 | 用同时含旧表格来源、内置来源和 Lua 自定义来源的状态验证升级。确认旧表格条目在只读视图与可写流程均退出来源列表，旧缓存无法提供候选或安装选择，其余来源及设置可读写。回归早期同 ID Lua 覆盖、同 ID 替换、保存失败及真实脚本变更后的缓存失效。沿用 `script_source_import`、`script_source_pipeline`、`script_source_fallback` 与 CLI `script_sources_smoke`。Windows 在 `script_source_editor_test.dart` / `script_source_native_test.dart`、Decky 在 `script-source-editor.test.ts` / 桥接与来源服务用例检查具名字段、请求体、只读、错误后草稿、选填字段往返。 |
-| 3 | 核实 Steam 本体/DLC 数据入口，再实现名称、AppID 与候选汇总 | Windows 和 Decky 分别记录采用的 Steam 接口、可取回的关系、名称与 AppID。以《夏日狂想曲：乡间的难忘回忆》为本体，用实际 Kagura 国内录制页验证本体及《夏日狂想曲+》各自命中并同时出现在本体的「补丁选择」。另用 Patchmoe 表格夹具验证两个名称命中两条不同下载时都进入候选，不触发空列表或自动选择。切换 DLC 拥有或安装状态时，匹配及列表保持一致。 |
+| 3 | 核实 Steam 本体/DLC 数据入口，实现名称、AppID、DLC 归类绑定、本地安装状态检测与适用条件展示 | 覆盖 `appinfo.vdf` 多语言关联 DLC 名称与全量 `extended.listofdlc` 读取，以《夏日狂想曲：乡间的难忘回忆》与《夏日狂想曲+》等验证本体及关联 DLC 各自命中并同时出现在本体的「补丁选择」，以及 Patchmoe 列表两个名称命中两条不同下载均进入候选。进一步验收（待实现）：通过关联 DLC 名称或 AppID 命中的候选自动归类为 `variant = dlc` 并绑定 `requires_dlc = [matched_dlc.appid]`（关键词仅在未命中已知 DLC 时兜底）；`steam::scan` 从 `appmanifest_<appid>.acf` 的 `AppState.InstalledDepots.*.dlcappid`（及 `InstalledDLC`）检测本地已安装 DLC；双端前端在关联 DLC 已安装与未安装两种状态下分别展示“（已安装）”与“（未检测到安装）”，且均保留完整候选列表。 |
 | 4 | 将网页身份和详情地址的站点判断留在来源 Lua，接通 Shiravune 通用传输并删除旧 JS | YOZAKURA 用文章 161 的正确链接及文章 150 的已知错链作对照，分别匹配 `4370020` 和 `4376090`，验证索引、实际 GET、详情缓存与候选四处均保留各自的 `?p=`。用原 ID 和新 ID 比较同一 Lua 的候选与证据，来源 ID 及派生标识随副本变化。双端使用受控页面动态更新表单字段，验证 Lua 选择三个语言表单，POST 读取当前字段值，逐次请求复用同一浏览器会话并最终发布索引。分别确认不允许的域名被拒绝、取消会结束会话、需要本人确认时返回该状态。核对两端产物与加载路径均已移除旧 JS。 |
 | 5 | 以实际发行形态验证空内置构建及双端复制导入 | 用 `sources=[]`、`bundled_scripts={}` 构建 Windows 和 Decky，启动干净状态并确认初始来源为空。分别从仓库复制五份真实 Lua，参考仓库规则在普通导入表单填写原来源 ID 和规则，保存后重新打开核对源码与字段。四个发行商分别更新并验证候选和详情（按入口适用），HGamer 在没有发行商可信候选的游戏上验证按游戏补查，Shiravune 跑过受控浏览器路径。再以新 ID 导入两份 Kagura，核对同一规则与 Lua 得到相同匹配结果，包括本体与 DLC 的同屏选择。用含内置来源的普通构建另验只读复制与实际内嵌源码一致。记录 Windows 粘贴和 Deck 游戏模式剪贴板、软键盘及手柄焦点。 |
 
@@ -105,10 +109,10 @@ Rust 修改按仓库规则执行 `cargo fmt --all -- --check`、受影响包 Cli
 
 ## 过度设计审阅
 
-**方案静态审阅完成，Steam 数据入口待核实。** 按 `overengineering-review` 静态走查 `main@6c83576` 的构建 → 摘要与分派 → 双端表单与设置 → 索引、详情和候选投影。下列结论针对本轮方案。
+**方案静态审阅完成，已补充关联 DLC 归类绑定与本地安装状态检测审阅结论。** 按 `overengineering-review` 静态走查 `main@6c83576` 的构建 → 摘要与分派 → 双端表单与设置 → 索引、详情和候选投影。下列结论针对本轮方案。
 
 - 以 `sources.json` 的单文件映射复用现有分派，空内置验收直接清空现有配置。机械拆包阶段保留脚本原字节和 adapter 以维持规则哈希。后续脚本和匹配语义有意变化时重新验证缓存。旧表格解析器和两条映射一起删除，旧条目只在读取设置及既有写入事务中剔除。
 - 具名表单只转换现有 DTO，沿用原子写入和 core 校验。复制入口使用随包 Lua。组合 JSON 文件、额外模板副本、第二套规则 schema 或迁移服务均超出当前路径所需。
-- DLC 匹配需要 Steam 关系输入、站点证据判断和多候选投影。删除按内置 ID 的特判和原始网页 AppID 硬拒绝，复用现有候选校验和补丁选择。DLC 拥有或安装探测、仅有 DLC AppID 的补丁页处理均无本次需求。
+- DLC 匹配、归类与本地状态检测均基于已有真实数据边界：全量关联 DLC 发现继续复用 `appinfo.vdf`，本地已安装 DLC 状态顺带从 `steam::scan` 已读取的 `appmanifest_<appid>.acf` 提取，无额外磁盘 I/O 或外部接口；`variant = dlc` 与 `requires_dlc` 直接由命中关联 DLC 名称/AppID 的事实派生，替代按内置 ID 的硬编码特判与纯标题关键词臆测；未检测到安装仅用于前端“适用条件”提醒，不筛除候选、不自动选补丁也不阻断安装，仅有 DLC AppID 的补丁页处理无本次需求。
 - YOZAKURA 复用 `page` 表达文章地址。索引、详情访问、缓存键和候选身份需一并保持 Lua 选定的参数，这些环节目前都可能再次调用会删查询参数的规范化函数。现有规则、接口和缓存结构可承载该地址。
 - Shiravune 复用双端已有浏览器传输能力，站点判断和表单请求集中到 `patchmoe.lua`。逐次传输和实时字段读取直接服务于 Lua 根据当前页面状态构造下一次请求。沿用任务取消和来源域名约束，删除旧 JS 与宿主特判后再验收无内置注册的导入路径。待核实双端 Steam 关系读取、最小 Lua 匹配接口与浏览器请求回传方式，实施后的表单、空内置构建和实机均需验收。
