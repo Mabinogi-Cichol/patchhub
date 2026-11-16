@@ -1,14 +1,18 @@
 # 自定义订阅源使用指南
 
-PatchHub 的自定义订阅源由一份 JSON 规则和一份 Lua 脚本组成。规则声明来源名称、起始页面和允许访问的域名，脚本负责解析网站内容。导入时需要分别粘贴这两份文件的完整内容。请使用可信作者提供的脚本。
+PatchHub 的自定义订阅源由一份 JSON 规则和一份 Lua 脚本组成。规则声明来源名称、起始页面和允许访问的域名，脚本负责解析网站内容。导入时在表单填写规则字段，并粘贴完整 Lua 源码。请使用可信作者提供的脚本。
+
+旧版本保存的声明式表格来源已退役。需要继续使用原网站时，可以为它编写 Lua 并按下文导入。
 
 ## 导入来源
 
 1. 在 Windows 打开 **全局来源**，或在 Steam Deck 的 PatchHub 插件中打开 **管理订阅源**。
-2. 选择 **导入脚本来源**，将规则 JSON 和 Lua 源码粘贴到各自的输入框。
+2. 选择 **导入脚本来源**，参考规则 JSON 填写具名字段。起始页面和域名列表每行一项。将完整 Lua 粘贴到 **Lua 源码**。
 3. 选择 **保存并导入**。保存时会检查规则和脚本语法。卡片显示 **尚未执行** 时，可以按下一节验证实际运行结果。
 
-编辑器里的 **查看脚本示例** 可以单独复制规则和源码，查看和复制都不会覆盖当前草稿。
+要从内置来源复制，可打开来源卡片的 **查看脚本**，查看其规则字段并选择 **复制 Lua 源码**。在同一个包含该内置来源的应用中创建副本时，请使用新的来源 ID。
+
+[仓库默认规则](../crates/core/resources/sources.json)对应五份完整脚本：[Shiravune](../crates/core/resources/source-scripts/patchmoe.lua)、[Kagura 国内](../crates/core/resources/source-scripts/kagura-cn.lua)、[Kagura 海外](../crates/core/resources/source-scripts/kagura-en.lua)、[YOZAKURA](../crates/core/resources/source-scripts/yozakura.lua)和[HGamer](../crates/core/resources/source-scripts/hgamer.lua)。
 
 ## 更新来源并验证匹配
 
@@ -48,6 +52,7 @@ Lua 文件返回一个表，表中的函数按名称供 PatchHub 调用。每次
 | --- | --- |
 | `collect_index(ctx, rule, previous)` | 普通来源更新时调用。返回 `{entries, pending, complete, etag?, modified?, not_modified?, diagnostics?}`。`previous` 提供上一份可用索引或更新进度中的 `entries`、`pending`、`complete`、`etag`、`modified`，没有记录时为 `ctx.null`。 |
 | `resolve_page(ctx, rule, page)` | 索引包含 `product`、`article` 或 `category` 时实现。游戏匹配时接收详情页的绝对 URL，返回一个 `PageFact`。 |
+| `match_appid(ctx, rule, site_ids, steam)` | 可选。页面提供网页 AppID 时调用。可比对 `steam.appid` 和 `steam.related_dlc`。返回 `true` 确认，`false` 排除此页面，缺省沿用 v1 的同 AppID 正向匹配，否则交给名称匹配。 |
 | `discover(ctx, rule, query, previous)` | 补查来源匹配时调用。`query` 提供 `appid`、`name`、`name_hints`、`terms`、`force`，`previous.known_candidates` 提供已有候选。返回 `{pages, complete, identities?, diagnostics?}`。 |
 
 - **索引条目**需要 `title`、`page`、`kind`，可附 `appid`、`aliases`、`language`、`date`。`kind = "entry"` 的条目直接提供下载地址，必须填 `url`。其他类型的 `page` 指向待解析的页面。
@@ -66,6 +71,8 @@ Lua 文件返回一个表，表中的函数按名称供 PatchHub 调用。每次
 | GET 与条件请求 | `ctx.get(url, validators?)` | 可传 `{etag?, modified?}`，也可将已有索引传作条件字段来源。 |
 | POST 文本 | `ctx.post(url, content_type, body)` | 传入内容类型与文本正文，例如向 JSON 接口发送 `ctx.json_encode(data)`。 |
 | POST 表单 | `ctx.form(url, fields)` | 传入 `{{"name", "value"}, ...}`。宿主进行表单 URL 编码，保留字段顺序和重复字段。空表单用 `ctx.array()`。 |
+| 浏览器会话 | `ctx.browser_available`、`ctx.browser_get(url)`、`ctx.browser_snapshot(url)` | 更新任务提供浏览器时可导航或读取当前文档。快照保留页面当前的表单字段值，不发起导航。调用使用页面域名白名单。 |
+| 浏览器 POST | `ctx.browser_post(url, content_type, body)`、`ctx.browser_form(url, fields)` | 在当前浏览器会话发送同源请求。表单字段的格式与 `ctx.form` 相同。 |
 | 拼接 URL | `ctx.url_join(base, reference)` | 用绝对基址解析相对引用，返回完整 URL。无效参数会报错。 |
 | 规范化页面 URL | `ctx.canonical_url(url)` | 返回用于页面识别的字符串，通常会去掉查询参数和片段。请求需要查询参数或下载需要签名时，保留原始 URL。 |
 | 读取 URL 部件 | `ctx.url_parts(url)` | 返回 `{host, path}`。无效 URL 会报错。 |

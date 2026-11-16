@@ -4,7 +4,7 @@
 
 ## 当前状态
 
-**施工中。P0–P6 已完成；P7 本地候选包与 Deck 部署、RPC/界面抽样通过。Shiravune 后台访问修复已实现：Windows 原生普通按钮与受控到期入口、Deck 正式普通 RPC 与隔离受控到期入口均通过，完整索引 165 条，目标游戏标题候选恢复。实体手柄/软键盘、其余原生交互及真实游戏安装仍按下文待验收，不代表 P7 全部完成。**
+**施工中。P0–P7 的既有范围保持原记录；2026-11-16 的内置 Lua 单文件、双端具名字段表单、Steam 本体/DLC 匹配、YOZAKURA 文章地址与 Lua 驱动浏览器传输重构已实现，并在 Windows/Linux 双平台与 Deck 实机完成自动化、真实网站、部署与界面验证（166 条完整索引、26 个正式文件哈希一致、新表单界面截图）。实体手柄/软键盘与剪贴板粘贴、空内置发行形态的界面粘贴导入、Windows 原生界面导入、真实游戏补丁安装仍等待实际验收，不代表重构全部验收完成。**
 
 - 调研基线：`main@cb06188`，2026-10-30。
 - 文档开发分支：`feature/script-source-adapters`。
@@ -657,3 +657,178 @@ P7 保持施工中：Windows 原生桌面界面的实际导入/取消/重启，D
 首次 WSL 整包单测遇到 root 环境下的安装器失败及两项历史索引转换失败。已修正转换路径并通过来源模块回归，安装器整包测试未在非 root 环境重跑。原生 Windows 未找到 Cargo，未执行 Windows Rust 测试。未触发线上 CI。
 
 过度设计复核沿构建、脚本读取、索引、详情缓存和候选投影检查。直接读取单文件沿用既有摘要与默认规则生成。URL 改动仅区分仍需去除查询串的历史转换和来源页面，不增加规则字段、站点分支或缓存结构。来源续跑地址一并保留原有查询串，例如 Shiravune 的 `?flag=1`。旧表格适配器和 Shiravune 专用 JS 仍待清理。
+
+### 同日施工：退役声明式表格来源
+
+- 删除生产表格 Lua、`table_html` / `table` 构建映射及专用校验。保留 Lua 使用的列配置和表格 ID。普通加载、只读快照和设置写入事务统一过滤旧规则，沿用删除来源的覆盖值清理语义；正常只读访问保留磁盘设置字节，下一次设置写入持久化清理。安装解析仍要求来源存在于有效注册表。
+- 旧解析器专项用例随实现移除；通用索引发布、失败保留快照、匹配与验收改用测试专用 Lua。混合设置回归覆盖两个退役 adapter、内置来源与用户 Lua 共存，检查只读和可写打开以及下一次设置写入。
+- WSL Linux 上 `cargo test --locked -p patchhub-core --lib sources::` 通过 114 项，忽略 2 项。第一轮六个来源集成目标共 71 项通过。加入只读断言后，`builtin_scripts`、`script_source_import`、`script_source_pipeline`、`script_source_fallback` 共 36 项通过。CLI `cargo test --locked -p patchhub-cli --test script_sources_smoke` 通过 2 项。格式检查、Core Clippy（`--all-targets -- -D warnings`）及差异检查通过。
+- 过度设计复核沿设置解码、规则注册、候选展示和安装入口检查。退役沿用现有写入事务与来源覆盖值清理，无单独迁移服务和缓存清理任务。具名表单及其余计划工作仍待施工。
+
+### 同日施工：Windows 与 Decky 具名表单
+
+- 导入、编辑和只读查看共用具名字段。编辑锁定来源 ID，启用状态仍由来源卡片管理。支持多行页面与域名、选填字符串的未设置与显式空串、优先级和列索引的零值。沿用现有导入 RPC、规则校验及错误诊断，失败时保留表单与 Lua 草稿。
+- 内置查看提供复制完整 Lua，移除双端界面示例与重复常量。用户指南改为填写字段并从随包脚本或仓库复制源码。
+- Windows 原生环境 `flutter --no-version-check analyze --no-pub lib test` 通过，无诊断。脚本表单与 CoreClient 两个测试目标共 5 项通过，其中进程通信测试使用现有本地 Core 二进制。Decky `npm run typecheck`、`npm test`（112 项）、`npm run build` 通过。实体手柄、软键盘、实际发行形态复制导入和双端空内置验收待执行。
+- 过度设计复核沿字段回填、输入转换、保存错误和只读复制路径。表单只构造既有 DTO，并沿用现有核心校验和事务。Steam 本体/DLC、网页 AppID 职责和 Shiravune 浏览器改动仍待施工。
+
+### 同日施工：列表补丁保留多个下载项
+
+- 列表匹配按实际下载 URL 归并，同一 URL 仍优先中文行。不同下载 URL 均进入候选，即使共享同一页面和语言。候选身份纳入下载 URL，避免补丁选择列表按 ID 合并不同文件。首次匹配任务和无任务时的索引投影共用该逻辑。
+- WSL Linux 的来源单测通过 114 项、忽略 2 项，`source_matching`、`source_acceptance`、`builtin_scripts` 共通过 40 项。格式检查和 Core Clippy（`--all-targets -- -D warnings`）通过。
+- 过度设计复核沿索引选择、候选身份和只读投影检查。复用现有选择和安装入口，无额外自动选择机制。
+- Steam 元数据核对已定位双端共用的 Core Steam 扫描与 `appcache/appinfo.vdf` 读取，现有解析只请求已安装本体的名称。尚待核实实际缓存中本体到 DLC 的字段与名称覆盖情况，以及缺项时的数据来源。多下载回归使用合成列表，Steam 本体/DLC 同屏实样仍待施工和验收。
+
+### 同日施工：Steam 本体和 DLC 匹配输入
+
+- Windows 本机 Steam `appcache/appinfo.vdf` 实样包含本体 1227890、DLC 1390150 及双方英文名称。本体 `extended.listofdlc` 为整数 1390150。DLC 的 `common.parent` 与 `extended.dlcforappid` 都指向 1227890。[Steam 商店 DLC 页](https://store.steampowered.com/app/1390150/)也标记了本体依赖。
+- Windows 与 Decky 的 Core CLI 共用 Steam 扫描。复用已打开的 appinfo 文件读取本体的整数或列表关系，再读取相关 DLC 的显示名称。加入同一游戏的索引与详情查询名称，DLC 不受客户端提示条数限制。缓存输入包含关联 AppID 和名称。扫描不读取 DLC 的拥有或安装状态，也不需要 DLC manifest。
+- 本体有 AppID 命中时，可信 Steam 名称的精确列表命中同样进入候选。定向用例先匹配本体，然后在索引不变时加入 DLC 元数据，验证缓存重算及两个下载候选并存。另用独立 appinfo 夹具验证 DLC 记录位于本体之前且没有 DLC manifest 时仍能读取中文名。
+- WSL Linux 上 appinfo 单测 17 项、`steam_scan` 6 项、`source_matching` 24 项、`source_acceptance` 11 项以及最终 `localized_game_names` 6 项通过。格式、Core/CLI Clippy（`--all-targets -- -D warnings`）和生成契约检查通过。首次候选回归揭示可信标题命中会被 AppID 命中遮蔽，修正后通过。生成器识别出先前仅因 URL 函数名文档变化产生的漂移，最终 v5 生成物保持一致。
+- Steam Deck 上尚未读取实机 appinfo，也未验收真实 Kagura 页面和客户端同屏选择。若本地缓存缺少 DLC 名称，当前只保留关系 ID。Lua 对网页 AppID 的采信与历史 Kagura 特判清理仍待施工。
+
+### 同日施工：Lua 网页 AppID 判断与 Kagura 候选
+
+- API v1 增加可选 `match_appid`，接受网页 ID 和 Steam 查询事实。YOZAKURA 在 Lua 内纠正文章 150 的链接并决定本体或关联 DLC 的 AppID 是否匹配。缺少回调的旧脚本保留同 AppID 正向匹配。索引和候选生成路径允许按名称匹配网页 ID 未获采信的页面。
+- 删除 Core 的 Kagura 来源及游戏 AppID 特判。带 Steam DLC 关系时，精确命中的本体和 DLC 详情标题可绑定本体 AppID。使用合成 Kagura HTML 和实际游戏标题验证两个无商店链接的 ZIP 都可生成选择 ID。
+- WSL Linux 来源单测 114 项通过、2 项忽略。七个来源集成目标共 75 项通过，包含 YOZAKURA 正确与已知错链两个文章、Kagura 本体/DLC 双候选，以及 Lua 补查和自定义来源。格式、Core/CLI Clippy（`--all-targets -- -D warnings`）及 v5 契约检查通过。
+- 过度设计复核沿详情缓存到来源判断及候选验证检查。详情仍保存查询无关事实，AppID 决策每次匹配按需调用 Lua，沿用原任务和缓存。真实页面录制验收、双端实机选择、Shiravune 浏览器传输及独立导入发行形态仍待完成。
+
+### 同日施工：Lua 浏览器请求与 CLI 双向传输
+
+- Lua 运行时新增 `ctx.browser_get` / `ctx.browser_post`，在普通 HTTP 旁调用任务提供的浏览器传输。Core 校验请求与响应 URL，沿用任务取消。
+- `serve-task` 复用 stdin 控制流，逐次发送浏览器请求并接收匹配响应或错误。现有事件序列和最终响应保留。取消或 EOF 关闭正在等待的浏览器响应通道。
+- WSL Core 来源单测通过 115 项、忽略 2 项，新增测试覆盖 GET 到 POST 的实时字段反馈与域名校验。CLI `script_sources_smoke` 共 3 项通过，包含同一进程 GET 到 POST 再成功发布索引。格式、Core 和 CLI Clippy（`--all-targets -- -D warnings`）通过。
+- 目前浏览器传输骨架只有 Core 与 CLI 进程验证，Windows、Decky 与 Shiravune 正式请求均待接入，旧站点 JS 仍在使用。
+
+### 同日施工：Windows 任务内浏览器会话
+
+- Windows `CoreTask` 已接收 CLI 浏览器请求，为每个更新任务复用一个 WebView 会话，并经原进程 stdin 交回响应。取消结束等待，任务收尾释放会话。请求校验页面域名，GET 监控导航并在回传前复核 URL，POST 使用同源请求并拒绝重定向。GET 快照读取 input 的实时值。
+- Windows Flutter 静态分析通过，`core_task_test.dart` 20 项通过。新增进程夹具使用自定义来源 ID，验证 GET/POST 在同一任务和会话中往返。实际 WebView 的受控页面及首跳前拦截跨域跳转仍待验证。Shiravune 仍使用旧链路，待 Decky 和 Lua 一并切换后清理。
+
+### 同日施工：Decky 任务内浏览器会话
+
+- Decky 桥接识别 CLI 浏览器请求并经 stdin 回传响应或错误；更新任务按需创建一个不可见的 Steam BrowserView 并在收尾销毁。GET 使用 CDP 拦截文档请求，校验目标和重定向，回传 DOM 的实时 input 值。POST 在同一会话中发送同源请求。
+- Windows 宿主环境执行 Decky Python `test_source_service`、`test_bridge`、`test_v5_bridge`，51 项通过。测试覆盖既有服务和桥接回归，Steam BrowserView 实机与新链路的受控页面尚待验收。旧 Shiravune Lua 切换与旧 JS 清理仍待继续。
+
+### 同日施工：Shiravune 切换与旧资源删除
+
+- `patchmoe.lua` 检测请求验证后改用任务内浏览器 GET 与表单 POST。两条路径共享语言表单、字段、补丁行和镜像解析。要求本人确认的页面保留显式状态。
+- 删除旧 JS、双端按来源 ID 的浏览器分支、旧站点夹具和打包资源引用。Windows 现有浏览器集成测试换为观察通用会话入口。CLI 旧响应列表参数仍存在，应用更新已走逐次交换。
+- WSL Core 四个定向集成目标通过 34 项，包含请求验证到三语言提交、响应匹配和生成 ZIP 选择。CLI 冒烟 3 项通过。格式、Core/CLI Clippy 通过。Windows Flutter 静态分析和 17 项任务测试通过。Decky Python 49 项、打包与版本同步夹具 24 项通过。
+- 实际 WebView、Steam BrowserView、取消与本人确认的受控页面验收，以及空内置发行形态与 Steam Deck 实机均待执行。Windows 的导航监听可停止已观察到的跨域导航，跳转请求发出前的拦截仍需补齐。浏览器 GET 的状态当前按完成导航返回 200，真实状态验证仍待补齐。
+
+### 同日施工：Decky 浏览器导航响应状态
+
+- Decky GET 从 CDP 顶层文档响应读取 HTTP 状态，页面加载完成后分开读取实时 DOM。子框架响应不覆盖主文档状态。
+- Python 浏览器夹具 2 项通过，覆盖顶层 403 与子框架 200 并存，以及越过来源白名单的重定向在恢复请求前被拒绝。Steam BrowserView 实机与 Windows WebView 对应能力仍待验收。
+
+### 同日验收：WSL 空内置 Core 导入
+
+- 在隔离副本将 sources 和 bundled_scripts 清空，使用 WSL Linux 执行 cargo build --locked -p patchhub-cli。新状态的 list_sources 返回空列表。
+- 逐个通过 v5 import_script_source 恢复 patchmoe、kagura-cn、kagura-en、yozakura、hgamer。跨进程重读时五个来源均为 added，规则字段、源码原文和 SHA-256 全部吻合。
+- 此项验证覆盖空内置 Core 的构建及普通导入路径。空内置双端发行包、界面粘贴、来源更新与匹配、实际浏览器和 Steam Deck 操作继续待验收。
+
+### 同日施工：移除旧浏览器响应重放契约
+
+- 删除 update_source 的 browser_responses 参数及 CLI 批量重放入口，保留任务内逐次响应通道。重新生成 v5 共享契约并同步 Flutter 内嵌 schema。
+- WSL 生成契约检查、CLI 冒烟 3 项、CLI/Protocol Clippy 与格式检查通过。Windows 上 npm run test:contracts 通过，两份 schema 的 SHA-256 一致。
+- 冒烟首次运行复用了空内置验收的 Cargo 构建输出。刷新普通构建的 sources.json 输入时间后重新编译，内置脚本只读冒烟恢复通过。后续空内置构建应使用独立目标目录。
+
+### 同日施工：Windows 浏览器导航响应状态
+
+- Windows GET 从当前文档的 PerformanceNavigationTiming.responseStatus 读取状态。状态不可用或导航失败且仍显示成功文档时返回加载错误。
+- 已核对当前 WebView Flutter 插件的导航事件仅报告完成、URL 变更和错误。导航请求发出前的白名单拦截仍需原生导航接口，当前 URL 监听只能停止已观察到的跳转。
+- Windows 定向 Flutter 静态分析通过。真实 WebView HTTP 状态和跳转拦截还需运行验收。
+
+### 同日验收：Decky 浏览器取消
+
+- 增加浏览器会话取消回归。测试在请求实际进入等待后取消，验证调用只在请求的收尾逻辑结束后返回取消错误。
+- Windows 宿主上 Decky Python 浏览器与来源服务测试共 22 项通过。覆盖 Python 会话生命周期，Steam BrowserView 实机关闭仍待验收。
+- WSL browser_source_update 扩展覆盖同一 Shiravune 原文按 shiravune-copy 普通导入后的三语言浏览器更新、匹配和 ZIP 选择解析。3 项通过，定向 Clippy 与格式检查通过。传输响应使用夹具。
+
+### 同日验收：原生 Windows 空内置 Core 导入
+
+- 找到仓库隔离工具链 .tools/cargo 与 .tools/rustup。使用独立源码副本与独立 Cargo target，清空来源和脚本映射后在原生 Windows 执行 cargo build --locked -p patchhub-cli。
+- 新状态来源列表为空。通过 v5 普通导入恢复五源，逐个跨进程核对规则字段、Lua 字节和 SHA-256，全部一致。结果与 WSL 空内置 Core 相符。构建日志与验证脚本位于 .artifacts/empty-sources-windows。
+- Flutter 发行包和界面粘贴后的更新与匹配仍待验证。
+
+### 同日验收：Windows 空内置 Flutter 发行目录
+
+- 隔离副本通过 scripts/build-windows-flutter.ps1 的 Release 预览构建流程生成 Flutter 发行目录和更新清单。首次构建因副本带入现有插件生成目录失败，移走该隔离目录后复用已构建的 Release Core，重新生成 Flutter 插件链接及应用。
+- 随包 Core 与隔离 Release Core 的 SHA-256 相同，发行目录中无旧 Shiravune 资源。直接执行随包 Core 验证初始空列表和五源普通导入，跨进程规则、源码和摘要逐一一致。
+- 本项覆盖 Windows 发行目录与随包 Core。Flutter 界面粘贴、真实浏览器状态与跨域跳转、Windows 发行 ZIP 及 Steam Deck 仍待验收。
+
+### 同日验收：Decky 空内置发行目录
+
+- 在独立 WSL Cargo target 编译空内置 Release Core 和 Worker。隔离目录中的 Decky 前端通过 npm ci --offline 与 npm run build；补齐副本的品牌图片后打包脚本生成 plugin-output 和 runtime 清单。
+- WSL 直接运行 plugin-output/bin/patchhub-core，通过初始空列表、五源普通导入、跨进程规则和源码读回以及 SHA-256 检查。产物无旧 Shiravune JS。
+- 覆盖本地发行目录及随包 ELF。Steam Deck 加载、游戏模式剪贴板和控制器以及实际网站更新仍未执行。
+
+### 同日验收：Kagura 真实本体与 DLC 页面
+
+- 原生 Windows 运行忽略标记的定向 live 用例。将 Kagura 国内 Lua 用普通入口导入为 summer-cn-copy，索引入口只设本体与 DLC 两个公开分类。通过来源原文进行索引更新、详情请求和同一个 Steam 本体的匹配。
+- 《夏日狂想曲：乡间的难忘回忆》和《夏日狂想曲+》各生成一项绑定本体的候选，分别识别 Base 和 Dlc，均带 5 个镜像。未请求补丁文件。执行日志位于 .artifacts/kagura-summer-live.log。
+
+### 同日实测：Windows Shiravune 更新
+
+- 原生 Windows 使用当前 Release Core 执行 Flutter integration_test/source_browser_test.dart，隔离状态下从来源界面触发更新。应用进入正常任务并返回未完成结果，状态为 source_browser_verification_required。未达到后续定时更新与匹配断言。
+- 日志在 .artifacts/windows-browser-live-20261116-155703。测试已补充失败时输出浏览器会话计数和回执。当前浏览器 GET 只等一次加载完成，若验证页之后才导航或更新 DOM，Lua 会收到仍需验证的页面。需要继续验证页面变化与取消路径。
+
+### 同日施工：验证页延迟变化
+
+- Lua 识别浏览器仍显示请求验证时，使用 browser_snapshot 读取当前文档，避免重新导航。双端复用同一会话和实时表单快照。Core 每次读取前以可取消的等待节流。Lua 在验证文案消失后继续解析，年龄声明仍由 Lua 报告。
+- 原生 Windows 浏览器 Core 集成 3 项通过，三语言夹具覆盖首次浏览器 GET 返回验证页、下一次快照出现表单。Flutter 定向分析、Decky 浏览器和来源服务 22 项通过。真实站点回归尚待重跑。
+- Windows 真实 Shiravune 回归重跑（.artifacts/windows-browser-live-20261116-160044）已越过先前的请求验证状态，但站点返回的下一页没有可识别的语言表单，Lua 报 patchmoe_language_forms_missing。未建立索引，定时更新与匹配未执行。当前证据还无法确定该页是另一种验证状态还是页面结构变更。
+- 后续 Windows 实测记录了首次 GET 为 HTTP 200「请稍候…」，随后 SNAPSHOT 曾捕获标题为空且没有表单的中间文档（.artifacts/windows-browser-live-20261116-160258）。宿主现在只回传 document.readyState 为 complete 的快照，其他情况等待导航完成事件。再次实测（.artifacts/windows-browser-live-20261116-160407）确认创建一个浏览器会话，初始验证页后以 source_refresh_failed 结束，仍未发布索引。需要保留浏览器请求错误细节以区分导航切换和站点拒绝。
+- Windows 真站重跑通过（.artifacts/windows-browser-live-20261116-160529）。初始 GET 为「请稍候…」，同一会话快照随后出现 3 个语言表单。手动更新与定时更新均完成，共 2 个浏览器会话，索引 166 项。真实数据对 SACRIFICE VILLAINS 匹配得到 publisher_match。上一轮 source_refresh_failed 未复现。
+
+### 2026-11-16：核查重构进度、修正详情键回归并完成 Deck 部署验证
+
+按用户要求核查 `feature/script-source-adapters` 未提交改动与重构计划的对应关系，再补齐剩余验证。计划前四步（单文件 Lua、表格来源退役、双端具名表单、Steam 本体/DLC 与多候选、YOZAKURA 文章地址、Lua 驱动浏览器传输并删除 `shiravune-browser.js`）已在工作区实现；本轮未新增功能代码，只修正一处与合同冲突的旧断言并完成端到端验证。
+
+- **回归发现并修正**：`crates/core/tests/source_data_v2.rs` 的 `schema2_records_round_trip_and_failed_writes_keep_the_last_snapshot` 仍按旧语义断言详情缓存键会丢弃页面查询串。本次重构已改为保留脚本选定的查询串、仅丢片段（`canonical_page_url`），因此同一用例失败。现改为：`#top` 片段不影响键，`?p=150` 与服务页得到不同键。该断言只描述新合同，未改动产品代码。
+- **验证环境说明**：Linux 首次以 root 执行时 `installer_host_requires_non_root` 使 3 个目标失败（安装器相关）。这不是代码回归。改用 uid 1000 用户、独立 ext4 target 重跑完整套件后全部通过；未修改产品权限门槛，也未跳过这些用例。
+
+| 范围 | 命令 | 结果 |
+| --- | --- | --- |
+| Windows Rust 全范围 | `./scripts/cargo.ps1 test --locked -p patchhub-core -p patchhub-protocol -p patchhub-cli --no-fail-fast` | **577 passed / 9 ignored**，全部目标通过 |
+| Linux Rust 全范围（非 root，独立 target） | `cargo test --locked --offline -p patchhub-core -p patchhub-protocol -p patchhub-cli --no-fail-fast` | **586 passed / 9 ignored**，全部目标通过；之前 root 失败的 `installer_host_requires_non_root` 用例随身份修正通过 |
+| 静态分析与格式 | workspace `clippy --all-targets -- -D warnings`、`cargo fmt --all -- --check`、`git diff --check` | 通过；仅既有增量缓存硬链接提示 |
+| 生成契约 | `cargo run -p patchhub-contract-gen -- check` | v5 契约无漂移 |
+| Windows 客户端 | `flutter analyze --no-pub lib test`、`flutter test --no-pub` | 分析无问题；**313 passed / 2 skipped** |
+| Decky 前端 | `npm test`、`npm run typecheck`、`npm run build:decky`、`npm run package:plugin` | **112 passed**；类型检查、构建与插件打包通过 |
+| Decky Python | 真实 Core：`test_source_service test_bridge test_v5_bridge test_source_browser` | **52 passed**（含浏览器导航状态、跨域重定向与取消） |
+| 打包/版本/SBOM | `scripts/test_package_artifacts.py`、`scripts/test_project_version.py`、`scripts/build-sbom.py`、`package-artifacts.py --platform decky` | 各 12 项通过；SBOM 438 组件；Decky ZIP 生成成功 |
+
+#### Deck 部署与实机验证（按 decky-deploy-verify 技能）
+
+- 部署前核对 Devkit 当前配对（设备/登录/密钥路径）、本轮 `known_hosts`（ED25519 指纹 `SHA256:1eQWToCx6mKr5lz/YPXgwit390H7XTkWcpR56L0mJx8`，与本次配对连接一致）、`plugin_loader` active、插件实例 1、51 条任务全部终态、0 活动任务。插件目录为 root 所有，因此走 Loader 本地 ZIP 安装，未裸拷文件或结束进程。
+- 冻结并经 Loader 安装的 Decky ZIP：**7,648,052 字节**，SHA-256 `064bd160dd6652766f835dab97e2d076957304109c73a7f08e19290413e5203d`；Loader 事件回执的名称/版本/请求 ID/哈希/类型（REINSTALL）逐一核对。正式目录 **26 个文件**（插件 25 + SBOM）与本地清单逐文件哈希一致，core/worker 为可执行 ELF；`dist/index.js` **153,263 字节**、SHA-256 `34956845259e1a5f60f77b0d8a98032a28156f1ef25412ab5c23c69b62d188ab`，与本地构建、HTTP 字节一致；实例保持 1，`plugin_loader` active。
+- 真实 RPC：五个内置来源 `get_script_source` 的 SHA-256 与仓库 Lua 逐字一致，`adapter=lua`、API 1，`origin=builtin`；`list_sources` 只返回五源。
+- 真实网站更新：`update_source('patchmoe')` 经隐藏浏览器会话完成，**166 条**、`source_refreshed`、revision 5。第一次尝试返回 `source_refresh_failed` 且未发布空索引（进度文件 `pending=[首页]`、0 条目），随后重试成功；这与既有「失败不发布、保留旧索引」语义一致，未放宽任何门槛。调度同时触发的 YOZAKURA 更新以 `source_refreshed` revision 1 结束。
+- 浏览器传输诊断：用临时诊断来源（验证后 `remove_source` 删除）确认设备上 `ctx.browser_get` 返回 HTTP 200 / 30,854 字节 / 3 个语言表单，`ctx.browser_form` 返回 HTTP 200 / 30,079 字节 / 120 行补丁表，Lua 浏览器分支单独执行得到 166 条且 `complete=true`。据此确认首次失败来自站点侧的首次请求状态，而非传输或脚本回归。
+- 站点侧现状：`kagura-en` 更新得到 `source_offline_cached`，匹配诊断包含 `source_http_403` 与网络错误；沿用旧缓存而非清空，属真实站点条件。
+- 界面：真实 QAM 的 Decky 插件列表、全屏「管理订阅源」、来源卡片分组与新的具名字段导入表单（来源 ID、规则名称、角色、仅发现、安装布局、启用、起始页面、页面域名、下载域名、起始 URL 等，滚动高度 2,713 CSS px）均截图检查，无横向溢出。
+- 证据保存在忽略目录 `.artifacts/script-source-adapters-lua-20261116/`（baseline/sources/update/browser-probe/install JSON、QAM 与全屏截图、`known_hosts`）。远端唯一暂存目录已删除，SSH 隧道、侧栏与草稿已关闭，未下载或安装任何游戏补丁，未修改其他插件。
+
+#### 仍待实际验收
+
+空内置发行形态与 Windows 原生界面导入已在本轮补齐（见下节）；按用户明确指示，实体手柄/软键盘/剪贴板输入、真实游戏补丁安装与生效不再列入本轮验收。剩余仅 Windows 原生窗口的取消后重试等交互细节可在日常使用中顺带确认，不影响本轮结论。
+
+### 2026-11-16：空内置发行形态与 Windows 原生界面导入验收
+
+按用户“完成剩下的验收”并排除手柄/软键盘/剪贴板与真实补丁安装后，本轮只做两件事：空内置构建仅凭仓库 Lua 与规则恢复五个来源，以及 Windows 原生窗口中的真实导入/取消/重启。
+
+- 隔离副本 `.artifacts/empty-sources-current/` 把 `crates/core/resources/sources.json` 置为 `{"schema_version":2,"bundled_scripts":{},"sources":[]}`，分别构建 Windows debug 核心与 Linux Release core/worker；Windows 侧首次 `list_sources` 返回 `[]`，确认没有任何随包规则或脚本。
+- 新增 [empty_builtin_import_test.dart](../../../apps/windows-flutter/test/empty_builtin_import_test.dart)（`PATCHHUB_EMPTY_CORE` 指定空内置核心）：
+  - 表单用例把真实 `ScriptSourceEditor` 挂在对话框里，逐项填写来源 ID、名称、仅发现、优先级、起始页面、页面域名、下载域名与 Lua 后点“保存并导入”；五源全部保存成功，`get_script_source` 回读的每个已填字段与源码均与仓库一致；未设环境变量时跳过。
+  - 真实网络用例用同一空内置核心经普通导入入口恢复五源，然后 `kagura-cn` **474** 条、`kagura-en` **230** 条、`yozakura` **5** 条均 `source_refreshed`；把 `kagura-cn` 删除后以新 ID `kagura-cn-copy` 导入同一份规则与 Lua，索引条数同为 **474** 且状态码一致；`scan` + `match_games` 正常返回。
+- 新增 [script_import_acceptance_test.dart](../../../apps/windows-flutter/integration_test/script_import_acceptance_test.dart)：真实 Windows 窗口打开“全局来源”，点击“导入脚本来源”，填写字段与 Lua 后保存，界面出现新来源卡片，回读源码一致；随后用新客户端（等同重启）确认该来源与源码仍在。证据在忽略目录 `.artifacts/native-import-20261116/`。
+- Deck 侧把空内置插件（ZIP 7,637,909 字节，SHA-256 `4417d253…4f1af9`）经 Loader 安装，`list_sources` 为 0 条；通过普通导入 RPC 用仓库规则与 Lua 恢复五源（`origin=added`，五个 SHA-256 与仓库逐字一致），真实 `patchmoe` 更新走隐藏浏览器完成 **166 条**，`kagura-cn` 与原样副本各 **474 条**。完成后用 `remove_source` 清掉这六个用户来源，再用正式 ZIP（`064bd160…`）重装，五源恢复为 `origin=builtin`、SHA 不变，实例仍为 1；远端暂存目录与 SSH 隧道已清理。
+
+#### 本轮未通过/受限项（真实记录）
+
+- Deck 上 `kagura-en` 刷新返回 `source_offline_cached`（站点 403/网络错误），因此“发行商覆盖完整”这一既有补查门控未满足，HGamer 按游戏补查在空内置状态下没有产生候选；同一网络下 Windows 侧 `kagura-en` 刷新成功（230 条）。该补查路径此前已在完整刷新状态与离线回归中通过，本轮不把它记为空内置验收通过项。
+
+验证汇总：Windows Flutter 全量 **313 passed / 4 skipped**（两条新用例在未提供环境变量时跳过；提供后 `empty_builtin_import_test.dart` 2 项 1 分 35 秒通过），`flutter analyze lib test integration_test` 无问题；原生集成用例 1 项通过。Rust 与 Decky 代码本轮未改动，沿用前一轮 577/586 与 112/52 的记录。

@@ -10,7 +10,6 @@
 | `kagura-cn` | article/分类、多入口/分页、重复页；分类内文章事实/链接；详情 Steam ID、正文、镜像、日期；公共本体/DLC/上游关联与共享缓存 | [kagura-cn.lua](../../../crates/core/resources/source-scripts/kagura-cn.lua)、[匹配](../../../crates/core/tests/source_matching.rs)、[验收](../../../crates/core/tests/source_acceptance.rs) | 同输入索引/详情/分类对照，离线分页/DLC/更新/匹配；真实首页选取一个详情返回 4 镜像。不是全站实时目录验收 |
 | `kagura-en` | patch/产品分类多根列表；product 卡片排除 related/widget；next 分页；标题、tab-patch、Steam ID（有时）、正文/镜像及变体 | [kagura-en.lua](../../../crates/core/resources/source-scripts/kagura-en.lua)、[录制夹具](../../../crates/core/tests/fixtures/script-sources/README.md)、[匹配](../../../crates/core/tests/source_matching.rs) | 录制页面固定期望、合成多根/分页与变体；真实详情返回 4 镜像。未抓取全站目录；该真实页没有 Steam ID |
 | `hgamer` | 核心 query terms；真实结果数、games/patches/posts 分组；game/patch body、同列 Steam widget；别名、ZIP/EXE、镜像和 upstream；完整空/部分/失败；多补查聚合 | [hgamer.lua](../../../crates/core/resources/source-scripts/hgamer.lua)、[补查](../../../crates/core/tests/script_source_fallback.rs)、[网络](../../../crates/core/tests/hgamer_live.rs) | 两组同输入候选/请求对照与错误回归；真实 App1250180 完整空候选/1身份，App1227890 本体+DLC 两候选/1身份，无诊断 |
-| `table_html` / `table` | 原 columns/table_id/language 配置、相对 ZIP、可选日期/语言/appid、完整/部分/304；旧 JSON 示例保持 | [table.lua](../../../crates/core/resources/source-scripts/table.lua)、[迁移回归](../../../crates/core/tests/builtin_script_regression.rs) | 生产分派同输入对照及更新/安装回归；补验第 22 列与字面 Unicode/冒号 ID，不设旧 20 列/64 字节 ASCII 限制。通用配置没有单一真实网站可验收 |
 
 ## 资源与修订
 

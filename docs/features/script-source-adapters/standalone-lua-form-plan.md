@@ -1,6 +1,6 @@
 # 内置 Lua 单文件与订阅源表单重构计划
 
-状态见[施工记录](progress.md#同日施工单文件嵌入与-yozakura-文章地址)。对应[功能设计](design.md)与[施工记录](progress.md)。2026-11-16 静态调研基线为 `main@6c83576`。
+状态见[施工记录](progress.md)：五份单文件 Lua、双端具名字段表单、Steam 本体/DLC 匹配、YOZAKURA 文章地址与 Lua 驱动浏览器传输均已实现，并通过双平台自动化、真实网站、Deck 实机、空内置发行形态恢复与 Windows 原生窗口导入验证；实体手柄/软键盘/剪贴板与真实补丁安装按用户指示不列入本轮验收。对应[功能设计](design.md)。2026-11-16 静态调研基线为 `main@6c83576`。
 
 ## 交付与当前链路
 
@@ -17,7 +17,7 @@
 
 本次重构遵循 [AGENTS.md 的「订阅源脚本与应用宿主的职责」](../../../AGENTS.md#订阅源脚本与应用宿主的职责)。
 
-当前 `table.lua` 是旧声明式来源的解析入口。`common.lua` 中的 `rows`、`row_entry` 也被 Shiravune 调用，剔除旧来源后仍由 `patchmoe.lua` 的局部代码处理列号、ZIP 和待定日期等站点解析约定。[Shiravune](../../../crates/core/resources/source-scripts/patchmoe.lua)
+调研基线的 `table.lua` 是旧声明式来源的解析入口。`common.lua` 中的 `rows`、`row_entry` 也被 Shiravune 调用，剔除旧来源后仍由 `patchmoe.lua` 的局部代码处理列号、ZIP 和待定日期等站点解析约定。[Shiravune](../../../crates/core/resources/source-scripts/patchmoe.lua)
 
 1. 将五个内置来源的现有拼接成品按原 UTF-8/LF 字节分别落入 `patchmoe.lua`、`kagura-cn.lua`、`kagura-en.lua`、`yozakura.lua`、`hgamer.lua`。两份 Kagura 各自带完整局部函数和原有模式选择。机械落盘阶段以等字节和等行为为验收条件，后续有意调整解析或匹配时沿用已有缓存失效规则。
 2. 把 `sources.json` 的 `bundled_scripts` 改为 adapter 到**单一文件名**的映射。沿用 `build.rs` 的输入变更跟踪、默认配置生成、缺失映射或文件时报构建错误的路径，直接嵌入完整文本。移除拼接逻辑及失去引用的 `common.lua`、`kagura.lua`。运行时查找、摘要绑定以及有状态和无状态的文档读取继续使用同一份文本。更新仍引用旧文件的文档链接，把旧拼接描述标为调研基线或更新到新契约。
@@ -37,7 +37,7 @@
 
 ### Shiravune 的浏览器传输
 
-当前 [Windows](../../../apps/windows-flutter/lib/host/core_task.dart)与 [Decky](../../../apps/decky/backend/source_service.py) 只对 `patchmoe` ID 启动浏览器，[随包 JS](../../../apps/windows-flutter/assets/shiravune-browser.js)会识别页面状态、挑选语言表单并提交。
+调研基线中 [Windows](../../../apps/windows-flutter/lib/host/core_task.dart)与 [Decky](../../../apps/decky/backend/source_service.py) 只对 `patchmoe` ID 启动浏览器，随包 JS会识别页面状态、挑选语言表单并提交。
 
 1. `patchmoe.lua` 识别验证页并决定何时请求浏览器传输。普通 HTTP 和浏览器两条路径共用 Lua 现有的语言表单选择、字段读取、POST 构造和结果解析。页面要求用户本人确认时，由 Lua 识别并向用户报告该状态。
 2. Windows 和 Decky 只提供通用浏览器传输，在同一会话内逐次执行 Lua 指定的请求，每次把响应交回同一来源任务。页面脚本动态填写表单时，响应应向 Lua 提供页面实时的字段状态，供后续请求读取。导航前及后续请求、跳转和回传响应都按当前来源规则核对域名。取消沿用现有任务语义并结束浏览器会话。施工时结合现有浏览器路径核实所需最小请求与响应契约。
@@ -101,7 +101,7 @@
 | 4 | 将网页身份和详情地址的站点判断留在来源 Lua，接通 Shiravune 通用传输并删除旧 JS | YOZAKURA 用文章 161 的正确链接及文章 150 的已知错链作对照，分别匹配 `4370020` 和 `4376090`，验证索引、实际 GET、详情缓存与候选四处均保留各自的 `?p=`。用原 ID 和新 ID 比较同一 Lua 的候选与证据，来源 ID 及派生标识随副本变化。双端使用受控页面动态更新表单字段，验证 Lua 选择三个语言表单，POST 读取当前字段值，逐次请求复用同一浏览器会话并最终发布索引。分别确认不允许的域名被拒绝、取消会结束会话、需要本人确认时返回该状态。核对两端产物与加载路径均已移除旧 JS。 |
 | 5 | 以实际发行形态验证空内置构建及双端复制导入 | 用 `sources=[]`、`bundled_scripts={}` 构建 Windows 和 Decky，启动干净状态并确认初始来源为空。分别从仓库复制五份真实 Lua，参考仓库规则在普通导入表单填写原来源 ID 和规则，保存后重新打开核对源码与字段。四个发行商分别更新并验证候选和详情（按入口适用），HGamer 在没有发行商可信候选的游戏上验证按游戏补查，Shiravune 跑过受控浏览器路径。再以新 ID 导入两份 Kagura，核对同一规则与 Lua 得到相同匹配结果，包括本体与 DLC 的同屏选择。用含内置来源的普通构建另验只读复制与实际内嵌源码一致。记录 Windows 粘贴和 Deck 游戏模式剪贴板、软键盘及手柄焦点。 |
 
-Rust 修改按仓库规则执行 `cargo fmt --all -- --check`、受影响包 Clippy（`-D warnings`）和定向测试；Decky 执行类型检查与对应前后端测试，Windows 执行对应 Flutter 测试。真实站点受阻时记录具体诊断，并保留离线夹具结果作为确定性证据，实机项继续待验收。本文档阶段仅有静态路径核对与摘要复算。
+Rust 修改按仓库规则执行 `cargo fmt --all -- --check`、受影响包 Clippy（`-D warnings`）和定向测试；Decky 执行类型检查与对应前后端测试，Windows 执行对应 Flutter 测试。真实站点受阻时记录具体诊断，并保留离线夹具结果作为确定性证据，实机项继续待验收。本文保留调研基线与验收条件，实施与验证结果记录在[施工记录](progress.md)。
 
 ## 过度设计审阅
 

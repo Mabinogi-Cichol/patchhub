@@ -49,7 +49,7 @@ sources/rust-v1/
 
 ## 自定义来源
 
-自定义来源只有一种形态：**Lua 脚本**。两端“全局来源 / 管理订阅源 → 导入脚本来源”是唯一的新增入口，规则里不再选择适配器；旧的声明式表格来源（adapter=table_html + columns）入口已删除。早期版本保存的这类规则仍会加载，但不再能从界面或协议新增，可在来源卡片里删除后改用 Lua 重建。
+自定义来源只有一种形态：**Lua 脚本**。两端“全局来源 / 管理订阅源 → 导入脚本来源”是唯一的新增入口，规则里不再选择适配器；旧的声明式表格来源（adapter=table_html + columns）入口已删除。早期版本保存的这类规则已退役，可按 Lua 来源重新导入。
 
 ## 内置站点脚本
 
@@ -64,7 +64,7 @@ sources/rust-v1/
 
 ## 导入与编辑 Lua 来源
 
-在 Windows“全局来源”或 Decky“管理订阅源”点击“导入脚本来源”，分别粘贴规则 JSON 和 Lua 源码；脚本 API 版本由客户端固定提交（当前为 **1**），不需要用户填写。“查看脚本示例”只展示可复制模板，不会替换草稿或自动添加来源。可下载/维护[规则示例](examples/publisher/source.json)和[源码示例](examples/publisher/adapter.lua)，具体字段与示例网页见[示例说明](examples/README.md)。Windows 文件选择和 Decky 远程文件浏览不属于当前入口；两端均可粘贴完整文本。
+在 Windows“全局来源”或 Decky“管理订阅源”点击“导入脚本来源”，填写具名规则字段并粘贴 Lua 源码。脚本 API 版本由客户端提交（当前为 **1**）。内置来源的“查看脚本”提供规则字段和完整 Lua 复制。规则和操作说明见[自定义订阅源使用指南](../../custom-subscription-sources.md)。
 
 - 规则写 `id`、`name`、`enabled`、`role`（`publisher` 列表索引，`fallback_indexer` 按游戏补查）与 `pages/page_hosts/download_hosts/root_layout`；不需要 `adapter`（缺省即自定义 Lua）。域名不是由脚本自行扩大权限。
 - 只导入你信任的脚本。脚本在后续更新/匹配任务中运行，可按规则访问网站；核心不向它开放文件系统、进程、环境变量或安装器。脚本仍可报告错误网页事实，允许的宿主能力不代表作者可信或已经完成恶意代码资源隔离。
@@ -84,6 +84,7 @@ sources/rust-v1/
 | --- | --- | --- |
 | `collect_index(ctx, rule, previous)` | `publisher` 必须 | `{entries, pending, complete}`；直接下载条目用 `kind="entry"`，包含标题、来源页、AppID 或可核实名字、下载 URL；详情链接条目可用 `product/article/category` |
 | `resolve_page(ctx, rule, page)` | 列表产生非 `entry` 条目时 | `PageFact`，提供标题、页面、Steam ID、别名、镜像等；核心生成并验证候选 |
+| `match_appid(ctx, rule, site_ids, steam)` | 可选，页面有网页 AppID 时 | `true` 确认，`false` 排除页面。缺省沿用 API v1 的同 AppID 正向匹配。Steam 输入包括本体 AppID、本地化名称和关联 DLC。 |
 | `discover(ctx, rule, query, previous)` | `fallback_indexer` 必须 | `{pages, identities, complete, diagnostics}`，返回页面/身份事实，不能直接授权安装候选 |
 
 `ctx.get/post/form` 复用核心 HTTP、编码与取消；`ctx.html` 和 `node:select/text/attr/parent` 读取 DOM；`ctx.url_join` 处理相对链接；`ctx.array()` 表示空数组，`ctx.null` 表示 JSON null。分页/表单逻辑由脚本实现，完成后如实报告 `complete`；确有未完成页面时保留 `pending`。用户取消沿同一任务生效，不通过固定总时长停止正常工作。
