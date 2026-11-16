@@ -45,7 +45,6 @@ pub struct Params {
 
     pub force: bool,
     pub force_details: Option<bool>,
-    pub browser_responses: Option<Vec<sources::browser::BrowserResponse>>,
 }
 
 impl Params {
@@ -92,10 +91,6 @@ impl Params {
 
             force: v.get("force").and_then(Value::as_bool).unwrap_or(false),
             force_details: v.get("force_details").and_then(Value::as_bool),
-            browser_responses: v
-                .get("browser_responses")
-                .filter(|v| !v.is_null())
-                .map(|v| serde_json::from_value(v.clone()).expect("validated browser responses")),
         }
     }
 }
@@ -664,6 +659,7 @@ fn game_query(install: &steam::GameInstall) -> sources::GameQuery {
         appid: install.appid,
         name: install.name.clone(),
         localized_name: install.localized_name.clone(),
+        related_dlc: install.related_dlc.clone(),
         instance_id: Some(install.instance_id.clone()),
     }
 }
@@ -699,6 +695,7 @@ fn game_from_params(
             appid,
             name: String::new(),
             localized_name: None,
+            related_dlc: Vec::new(),
             instance_id: None,
         });
     }
@@ -945,8 +942,18 @@ pub fn execute_streaming(
     cancel: &Arc<AtomicBool>,
     emit: &mut dyn FnMut(Value),
 ) -> Result<Value, DomainError> {
+    execute_streaming_with_browser(method, params, cancel, None, emit)
+}
+
+pub(crate) fn execute_streaming_with_browser(
+    method: &str,
+    params: Params,
+    cancel: &Arc<AtomicBool>,
+    browser: Option<crate::BrowserReplies>,
+    emit: &mut dyn FnMut(Value),
+) -> Result<Value, DomainError> {
     match method {
-        "update_source" => update_source_impl(&params, cancel, emit),
+        "update_source" => update_source_impl(&params, cancel, browser, emit),
         "match_games" => match_games_impl(&params, cancel, emit),
         "rematch_game" => rematch_game_impl(&params, cancel, emit),
         _ => execute(method, params),
@@ -984,6 +991,7 @@ fn validate_match_query(games: &[sources::GameQuery], params: &Params) -> Result
 fn update_source_impl(
     params: &Params,
     cancel: &Arc<AtomicBool>,
+    browser: Option<crate::BrowserReplies>,
     emit: &mut dyn FnMut(Value),
 ) -> Result<Value, DomainError> {
     let state = state(params)?;
@@ -1008,20 +1016,14 @@ fn update_source_impl(
         .map_err(err)?
         .map(|index| index.revision)
         .unwrap_or(0);
-    let mut ctx = match &params.browser_responses {
-        Some(pages) => {
-            for page in pages {
-                sources::validate::allowed_url(&page.url, &rule.page_hosts, false).map_err(err)?;
-                sources::validate::allowed_url(&page.response_url, &rule.page_hosts, false)
-                    .map_err(err)?;
-            }
-            sources::http::RequestContext::with_settings(
-                Box::new(sources::browser::BrowserFetcher::new(pages.clone())),
-                std::time::Duration::ZERO,
-            )
-        }
-        None => source_http_context()?,
-    };
+    let mut ctx = source_http_context()?;
+
+    if let Some(replies) = browser {
+        ctx.set_browser_transport(Box::new(crate::TaskBrowser {
+            replies: std::sync::Mutex::new(replies),
+            hosts: rule.page_hosts.clone(),
+        }));
+    }
 
     emit(source_progress_value(
         source_id, "index", 0, 0, true, revision,

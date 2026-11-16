@@ -249,3 +249,73 @@ fn read_missing_state_is_read_only_and_builtin_scripts_are_read_only() {
         true
     );
 }
+
+#[test]
+fn update_task_roundtrips_browser_requests_without_restarting() {
+    use std::io::{BufRead, BufReader};
+
+    let state = tempfile::tempdir().unwrap();
+    let code = r#"return { collect_index = function(ctx, rule)
+        local page = rule.pages[1]
+        local token = ctx.browser_get(page).text
+        local response = ctx.browser_post(page, 'application/x-www-form-urlencoded', 'token=' .. token)
+        assert(response.text == 'done')
+        return {entries = ctx.array(), complete = true}
+    end }"#;
+    assert_eq!(
+        call(
+            state.path(),
+            "import_script_source",
+            json!({"rule":rule(),"api_version":1,"code":code})
+        )["ok"],
+        true
+    );
+    let mut child = Command::new(env!("CARGO_BIN_EXE_patchhub-core"))
+        .arg("serve-task")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut input = child.stdin.take().unwrap();
+    writeln!(
+        input,
+        "{}",
+        json!({
+            "protocol_version":5, "request_id":"browser-smoke", "method":"update_source",
+            "params":{"source_id":"custom","host":{"roots":[],"state_dir":state.path(),
+              "platform":if cfg!(windows) {"windows"} else {"steamos"}}}
+        })
+    )
+    .unwrap();
+
+    let mut methods = Vec::new();
+    for line in BufReader::new(child.stdout.take().unwrap()).lines() {
+        let message: Value = serde_json::from_str(&line.unwrap()).unwrap();
+        if let Some(request) = message.get("browser_request") {
+            let method = request["method"].as_str().unwrap();
+            assert_eq!(request["page_hosts"], json!(["example.com"]));
+            let text = if method == "GET" {
+                assert!(request["body"].is_null());
+                "live"
+            } else {
+                assert_eq!(request["body"], "token=live");
+                "done"
+            };
+            methods.push(method.to_string());
+            writeln!(
+                input,
+                "{}",
+                json!({"browser_response":{
+                    "url":request["url"],"response_url":request["url"],"method":method,
+                    "body":request["body"],"status":200,"text":text
+                }})
+            )
+            .unwrap();
+        } else if message.get("ok").is_some() {
+            assert_eq!(message["ok"], true, "{message}");
+            assert_eq!(message["result"]["complete"], true, "{message}");
+        }
+    }
+    assert!(child.wait().unwrap().success());
+    assert_eq!(methods, ["GET", "POST"]);
+}

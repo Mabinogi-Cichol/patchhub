@@ -109,8 +109,8 @@ fn serve_task() -> io::Result<()> {
         return Ok(());
     };
     let cancel = Arc::new(AtomicBool::new(false));
-    spawn_control_thread(Arc::clone(&cancel));
-    let response = run_task(&bytes, cancel, |value| {
+    let browser = spawn_control_thread(Arc::clone(&cancel));
+    let response = run_task_with_browser(&bytes, cancel, Some(browser), |value| {
         let mut output = io::stdout().lock();
         // A closed output pipe must not abort the rollback path.
         let _ = write_line(&mut output, &value);
@@ -119,34 +119,83 @@ fn serve_task() -> io::Result<()> {
     write_line(&mut output, &response)
 }
 
-/// Reads `cancel` control lines from the task stdin. EOF (`None` or a read
-/// error) is treated as `cancel`.
-fn spawn_control_thread(cancel: Arc<AtomicBool>) {
+type BrowserReply = Result<patchhub_core::sources::browser::BrowserResponse, String>;
+type BrowserReplies = std::sync::mpsc::Receiver<BrowserReply>;
+
+/// EOF cancels the task and disconnects any waiting browser request.
+fn spawn_control_thread(cancel: Arc<AtomicBool>) -> BrowserReplies {
+    let (send, replies) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         use std::io::BufRead;
         let stdin = io::stdin();
-        let mut lines = stdin.lock().lines();
-        while let Some(Ok(line)) = lines.next() {
+        for line in stdin.lock().lines().map_while(Result::ok) {
             if line.trim() == "cancel" {
-                cancel.store(true, Ordering::Relaxed);
-                return;
+                break;
+            }
+            if let Ok(message) = serde_json::from_str::<Value>(&line) {
+                if let Some(response) = message.get("browser_response") {
+                    let response = serde_json::from_value(response.clone())
+                        .map_err(|error| format!("invalid_browser_response: {error}"));
+                    let _ = send.send(response);
+                } else if let Some(error) = message.get("browser_error").and_then(Value::as_str) {
+                    let _ = send.send(Err(error.to_string()));
+                }
             }
         }
         cancel.store(true, Ordering::Relaxed);
     });
+    replies
+}
+
+pub(crate) struct TaskBrowser {
+    replies: std::sync::Mutex<BrowserReplies>,
+    hosts: Vec<String>,
+}
+
+impl patchhub_core::sources::http::Fetcher for TaskBrowser {
+    fn fetch(
+        &self,
+        request: &patchhub_core::sources::http::FetchRequest,
+    ) -> io::Result<patchhub_core::sources::http::FetchResponse> {
+        use patchhub_core::sources::browser::BrowserFetcher;
+        let body = request
+            .body
+            .as_deref()
+            .map(std::str::from_utf8)
+            .transpose()
+            .map_err(io::Error::other)?;
+        write_line(
+            &mut io::stdout().lock(),
+            &json!({
+                "browser_request": {
+                    "url": request.url, "method": request.method, "body": body,
+                    "content_type": request.content_type, "page_hosts": self.hosts,
+                }
+            }),
+        )?;
+        let page = self
+            .replies
+            .lock()
+            .map_err(|_| io::Error::other("browser_session_failed"))?
+            .recv()
+            .map_err(|_| io::Error::other("task_cancelled"))?
+            .map_err(io::Error::other)?;
+        BrowserFetcher::new(vec![page]).fetch(request)
+    }
 }
 
 /// Runs one `serve-task` request: stream methods emit their events, everything
 /// else runs under `operation::run` and emits flat `install_progress` events.
 /// Returns the single final response line value.
-pub(crate) fn run_task(
+fn run_task_with_browser(
     bytes: &[u8],
     cancel: Arc<AtomicBool>,
+    browser: Option<BrowserReplies>,
     mut emit: impl FnMut(Value) + 'static,
 ) -> Value {
     if let Ok(request) = parse_request(bytes, true) {
         if runtime::SOURCE_STREAM_METHODS.contains(&request.method.as_str()) {
-            return stream_sources_task(request, &cancel, emit);
+            return stream_sources_task(request, &cancel, browser, emit);
         }
         let mut cursor = runtime::ProgressCursor::new(
             PROTOCOL_VERSION,
@@ -173,6 +222,7 @@ pub(crate) fn run_task(
 fn stream_sources_task(
     request: Request,
     cancel: &Arc<AtomicBool>,
+    browser: Option<BrowserReplies>,
     mut emit: impl FnMut(Value),
 ) -> Value {
     let Request {
@@ -185,7 +235,7 @@ fn stream_sources_task(
     // Install the operation scope so `operation::check` inside the source
     // fetchers observes this stream task's cancel flag.
     let response = patchhub_core::operation::with_cancel(cancel.clone(), || {
-        runtime::execute_streaming(&method, params, cancel, &mut |payload| {
+        runtime::execute_streaming_with_browser(&method, params, cancel, browser, &mut |payload| {
             let mut object = match payload {
                 Value::Object(map) => map,
                 other => {

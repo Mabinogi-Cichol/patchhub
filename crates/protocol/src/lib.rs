@@ -1,5 +1,4 @@
 //! Authoritative version 5 JSONL wire contract. Core is deliberately independent.
-pub use patchhub_core::sources::browser::BrowserResponse;
 pub use patchhub_core::{
     catalog::{PatchMatch, Platform, SupportLevel},
     install::{InstallOperation, Transaction},
@@ -190,7 +189,7 @@ params!(SetGameSourceParams{pub source_id:String,pub subscribed:bool,#[ts(option
 params!(ImportScriptSourceParams{pub rule:RawSourceRule,pub api_version:u32,pub code:String,#[serde(default)]#[ts(as="Option<bool>", optional)]pub replace:bool,});
 params!(GetScriptSourceParams{pub source_id:String,});
 params!(SetSourceUpdateIntervalParams{pub source_id:String,#[ts(type="number")]pub interval_hours:u64,});
-params!(UpdateSourceParams{pub source_id:String,#[serde(default)]#[ts(as="Option<bool>", optional)]pub force:bool,#[serde(default,skip_serializing_if="Option::is_none")]#[ts(optional = nullable)]pub browser_responses:Option<Vec<BrowserResponse>>,});
+params!(UpdateSourceParams{pub source_id:String,#[serde(default)]#[ts(as="Option<bool>", optional)]pub force:bool,});
 params!(MatchGamesParams{#[serde(default)]#[ts(as="Option<Vec<String>>", optional)]pub instances:Vec<String>,#[serde(default)]#[ts(as="Option<Vec<String>>", optional)]pub name_hints:Vec<String>,#[serde(default)]#[ts(as="Option<bool>", optional)]pub force_details:bool,});
 params!(RematchGameParams{#[ts(optional = nullable)]pub instance_id:Option<String>,#[ts(optional = nullable)]pub appid:Option<u32>,#[serde(default)]#[ts(as="Option<Vec<String>>", optional)]pub name_hints:Vec<String>,});
 params!(RemoveSourceParams{pub source_id:String,});
