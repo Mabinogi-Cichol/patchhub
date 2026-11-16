@@ -291,7 +291,7 @@ fn request_path(url: &str) -> String {
 
 /// `application/x-www-form-urlencoded` encoding matching Python `urlencode`
 /// (`quote_plus` safe set `A-Za-z0-9_.-~`, space -> `+`).
-fn encode_form(fields: &[(String, String)]) -> String {
+pub(crate) fn encode_form(fields: &[(String, String)]) -> String {
     let mut encoded = String::new();
     for (index, (name, value)) in fields.iter().enumerate() {
         if index > 0 {
@@ -473,6 +473,7 @@ impl Fetcher for Arc<FakeFetcher> {
 /// `RequestContext`; design §6.2/§9).
 pub struct RequestContext {
     fetcher: Box<dyn Fetcher>,
+    browser: Option<Box<dyn Fetcher>>,
     pub interval: Duration,
     pub visited: HashSet<String>,
     pub responses: HashMap<String, FetchResponse>,
@@ -497,12 +498,73 @@ impl RequestContext {
     pub fn with_settings(fetcher: Box<dyn Fetcher>, interval: Duration) -> Self {
         Self {
             fetcher,
+            browser: None,
             interval,
             visited: HashSet::new(),
             responses: HashMap::new(),
             last_request: HashMap::new(),
             cookies: CookieJar::default(),
         }
+    }
+
+    /// Attach the task-owned browser transport alongside ordinary HTTP.
+    pub fn set_browser_transport(&mut self, browser: Box<dyn Fetcher>) {
+        self.browser = Some(browser);
+    }
+
+    pub fn has_browser_transport(&self) -> bool {
+        self.browser.is_some()
+    }
+
+    pub fn fetch_browser(
+        &self,
+        url: &str,
+        hosts: &[String],
+        form: Option<(String, String)>,
+    ) -> Result<FetchResponse> {
+        match form {
+            Some((content_type, body)) => self.browser_exchange(
+                url,
+                hosts,
+                "POST",
+                Some(content_type),
+                Some(body.into_bytes()),
+            ),
+            None => self.browser_exchange(url, hosts, "GET", None, None),
+        }
+    }
+
+    pub fn snapshot_browser(&self, url: &str, hosts: &[String]) -> Result<FetchResponse> {
+        // Avoid spinning while a browser document is still updating itself.
+        sleep_interruptible(Duration::from_millis(250))?;
+        self.browser_exchange(url, hosts, "SNAPSHOT", None, None)
+    }
+
+    fn browser_exchange(
+        &self,
+        url: &str,
+        hosts: &[String],
+        method: &str,
+        content_type: Option<String>,
+        body: Option<Vec<u8>>,
+    ) -> Result<FetchResponse> {
+        crate::operation::check()?;
+        discovery_safe_url(url, Some(hosts))?;
+        let browser = self
+            .browser
+            .as_ref()
+            .ok_or_else(|| invalid("source_browser_verification_required"))?;
+        let response = browser.fetch(&FetchRequest {
+            url: url.to_string(),
+            method: method.to_string(),
+            headers: Vec::new(),
+            body,
+            content_type,
+            timeout: REQUEST_TIMEOUT,
+        })?;
+        crate::operation::check()?;
+        discovery_safe_url(&response.final_url, Some(hosts))?;
+        Ok(response)
     }
 
     /// Fetches `url`, following validated redirect hops. Returns the final

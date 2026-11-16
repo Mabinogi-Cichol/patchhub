@@ -312,6 +312,25 @@ pub fn resolve_page(
     Ok(fact)
 }
 
+pub fn match_appid(
+    rule: &SourceRule,
+    code: &str,
+    ids: &[u32],
+    query: &QueryContext,
+    ctx: &mut RequestContext,
+    cancel: Arc<AtomicBool>,
+) -> Result<Option<bool>> {
+    run(
+        rule,
+        code,
+        "match_appid",
+        &[serde_json::json!(ids), serde_json::json!(query)],
+        ctx,
+        cancel,
+        |_| {},
+    )
+}
+
 pub fn discover(
     rule: &SourceRule,
     code: &str,
@@ -611,6 +630,10 @@ fn execute<T: DeserializeOwned>(
         lua.scope(|scope| {
             let host = lua.create_table()?;
             host.set(
+                "browser_available",
+                network.borrow().has_browser_transport(),
+            )?;
+            host.set(
                 "get",
                 scope.create_function(|lua, (url, validators): (String, Option<Table>)| {
                     let etag: Option<String> = validators
@@ -653,6 +676,54 @@ fn execute<T: DeserializeOwned>(
                                 Some(&content_type),
                                 body.into_bytes(),
                             )
+                            .map_err(mlua::Error::external)?;
+                        response(lua, fetched)
+                    },
+                )?,
+            )?;
+            host.set(
+                "browser_get",
+                scope.create_function(|lua, url: String| {
+                    let fetched = network
+                        .borrow()
+                        .fetch_browser(&url, &rule.page_hosts, None)
+                        .map_err(mlua::Error::external)?;
+                    response(lua, fetched)
+                })?,
+            )?;
+            host.set(
+                "browser_snapshot",
+                scope.create_function(|lua, url: String| {
+                    let fetched = network
+                        .borrow()
+                        .snapshot_browser(&url, &rule.page_hosts)
+                        .map_err(mlua::Error::external)?;
+                    response(lua, fetched)
+                })?,
+            )?;
+            host.set(
+                "browser_form",
+                scope.create_function(|lua, (url, fields): (String, Value)| {
+                    let fields: Vec<(String, String)> = from_value(lua, fields)?;
+                    let body = super::super::http::encode_form(&fields);
+                    let fetched = network
+                        .borrow()
+                        .fetch_browser(
+                            &url,
+                            &rule.page_hosts,
+                            Some(("application/x-www-form-urlencoded".into(), body)),
+                        )
+                        .map_err(mlua::Error::external)?;
+                    response(lua, fetched)
+                })?,
+            )?;
+            host.set(
+                "browser_post",
+                scope.create_function(
+                    |lua, (url, content_type, body): (String, String, String)| {
+                        let fetched = network
+                            .borrow()
+                            .fetch_browser(&url, &rule.page_hosts, Some((content_type, body)))
                             .map_err(mlua::Error::external)?;
                         response(lua, fetched)
                     },
@@ -807,7 +878,19 @@ fn execute<T: DeserializeOwned>(
             let Value::Table(exports) = exports else {
                 return Err(mlua::Error::runtime("script module must return a table"));
             };
-            let function: Function = exports.get(entry)?;
+            let export: Value = exports.get(entry)?;
+            if entry == "match_appid" && export.is_nil() {
+                return Ok(Invocation {
+                    value: from_value(&lua, Value::Nil)?,
+                    #[cfg(test)]
+                    lua_bytes: lua.used_memory(),
+                });
+            }
+            let Value::Function(function) = export else {
+                return Err(mlua::Error::runtime(format!(
+                    "missing or invalid {entry} function"
+                )));
+            };
             let mut args = MultiValue::from_vec(vec![Value::Table(host), lua.to_value(rule)?]);
             for input in inputs {
                 args.push_back(json_value(&lua, input)?);

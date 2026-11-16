@@ -35,6 +35,16 @@ fn table(title: &str) -> String {
 fn context(pages: Vec<BrowserResponse>) -> RequestContext {
     RequestContext::with_settings(Box::new(BrowserFetcher::new(pages)), Duration::ZERO)
 }
+fn browser_context(pages: Vec<BrowserResponse>) -> RequestContext {
+    let mut ctx = context(vec![response(
+        URL,
+        "GET",
+        None,
+        "Please wait while your request is being verified",
+    )]);
+    ctx.set_browser_transport(Box::new(BrowserFetcher::new(pages)));
+    ctx
+}
 fn rule(s: &Sources) -> SourceRule {
     s.registry()
         .rules()
@@ -49,63 +59,92 @@ fn cancel() -> Arc<AtomicBool> {
 
 #[test]
 fn captured_three_language_pages_use_real_lua_update_matching_and_zip_resolution() {
-    let dir = tempfile::tempdir().unwrap();
-    let s = Sources::open(dir.path()).unwrap();
-    let rule = rule(&s);
-    let mut pages = vec![response(URL, "GET", None, ROOT)];
-    for (lang, title) in [
-        ("en", "SACRIFICE VILLAINS"),
-        ("zh", "SACRIFICE VILLAINS：犧牲惡棍"),
-        ("cn", "SACRIFICE VILLAINS：牺牲恶棍"),
-    ] {
-        pages.push(response(
-            "https://www.patch.moe/",
-            "POST",
-            Some(&format!("lang={lang}")),
-            &table(title),
-        ));
-    }
-    let mut ctx = context(pages);
-    let result =
-        update::update_source(s.store(), &rule, true, &mut ctx, &cancel(), |_| {}).unwrap();
-    assert!(result.complete);
-    assert_eq!(result.status.entry_count, 1);
-    let game = GameQuery {
-        appid: 3137110,
-        name: "SACRIFICE VILLAINS".into(),
-        localized_name: Some("SACRIFICE VILLAINS：牺牲恶棍".into()),
-        instance_id: None,
-    };
-    let matches = matching::match_games(
-        s.store(),
-        &[rule],
-        s.registry().overrides(),
-        std::slice::from_ref(&game),
-        &[],
-        false,
-        &mut ctx,
-        &cancel(),
-        500,
-        |_| {},
-        |_| {},
-    )
-    .unwrap();
-    assert_eq!(matches[0].candidates.len(), 1);
-    assert_eq!(matches[0].status, GameMatchStatus::Incomplete);
-    assert_eq!(matches[0].candidates[0].match_basis, MatchBasis::Title);
-    let reopened = Sources::open(dir.path()).unwrap();
-    let candidate = reopened
-        .registry()
-        .dynamic_zip_candidates(&game)
-        .into_iter()
-        .next()
+    for custom in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let mut s = Sources::open(dir.path()).unwrap();
+        let rule = if custom {
+            let mut document = s.get_script_source("patchmoe").unwrap();
+            document.rule.id = "shiravune-copy".into();
+            s.import_script_source(&document.rule, 1, &document.code, false)
+                .unwrap();
+            s.registry()
+                .rules()
+                .iter()
+                .find(|rule| rule.id == "shiravune-copy")
+                .unwrap()
+                .clone()
+        } else {
+            rule(&s)
+        };
+        let source_id = rule.id.clone();
+        let mut pages = vec![
+            response(
+                URL,
+                "GET",
+                None,
+                "Please wait while your request is being verified",
+            ),
+            response(URL, "SNAPSHOT", None, ROOT),
+        ];
+        for (lang, title) in [
+            ("en", "SACRIFICE VILLAINS"),
+            ("zh", "SACRIFICE VILLAINS：犧牲惡棍"),
+            ("cn", "SACRIFICE VILLAINS：牺牲恶棍"),
+        ] {
+            pages.push(response(
+                "https://www.patch.moe/",
+                "POST",
+                Some(&format!("lang={lang}")),
+                &table(title),
+            ));
+        }
+        let mut ctx = browser_context(pages);
+        let result =
+            update::update_source(s.store(), &rule, true, &mut ctx, &cancel(), |_| {}).unwrap();
+        assert!(result.complete);
+        assert_eq!(result.status.entry_count, 1);
+        let game = GameQuery {
+            appid: 3137110,
+            name: "SACRIFICE VILLAINS".into(),
+            localized_name: Some("SACRIFICE VILLAINS：牺牲恶棍".into()),
+            related_dlc: Vec::new(),
+            instance_id: None,
+        };
+        let matches = matching::match_games(
+            s.store(),
+            &[rule],
+            s.registry().overrides(),
+            std::slice::from_ref(&game),
+            &[],
+            false,
+            &mut ctx,
+            &cancel(),
+            500,
+            |_| {},
+            |_| {},
+        )
         .unwrap();
-    let selection = resolve::zip_selection_id(&candidate).unwrap();
-    let resolved = resolve::resolve_zip(reopened.registry(), &game, &selection).unwrap();
-    assert_eq!(
-        resolved.download_url,
-        "https://download.patch.moe/SACRIFICE_VILLAINS_Patch.zip"
-    );
+        assert_eq!(matches[0].candidates.len(), 1);
+        assert_eq!(matches[0].status, GameMatchStatus::PublisherMatch);
+        assert_eq!(
+            matches[0].candidates[0].match_basis,
+            MatchBasis::OfficialTitle
+        );
+        let reopened = Sources::open(dir.path()).unwrap();
+        let candidate = reopened
+            .registry()
+            .dynamic_zip_candidates(&game)
+            .into_iter()
+            .next()
+            .unwrap();
+        assert_eq!(candidate.source_id, source_id);
+        let selection = resolve::zip_selection_id(&candidate).unwrap();
+        let resolved = resolve::resolve_zip(reopened.registry(), &game, &selection).unwrap();
+        assert_eq!(
+            resolved.download_url,
+            "https://download.patch.moe/SACRIFICE_VILLAINS_Patch.zip"
+        );
+    }
 }
 
 #[test]
@@ -140,7 +179,7 @@ fn browser_response_must_match_lua_request() {
         s.store(),
         &rule,
         true,
-        &mut context(pages),
+        &mut browser_context(pages),
         &cancel(),
         |_| {},
     )

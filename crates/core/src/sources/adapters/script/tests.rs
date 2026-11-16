@@ -588,3 +588,42 @@ fn measure_c_library_cancellation_boundary() {
             .len()
     );
 }
+
+#[test]
+fn source_can_chain_browser_requests_using_the_returned_form() {
+    let rule = rule();
+    let http = Arc::new(FakeFetcher::new());
+    let browser = Arc::new(FakeFetcher::new());
+    browser.push(response("<input name='token' value='live'>", DETAIL_URL));
+    browser.push(response("done", DETAIL_URL));
+    let mut ctx = context(&http);
+    ctx.set_browser_transport(Box::new(Arc::clone(&browser)));
+    let result = invoke::<String>(
+        r#"return { test = function(ctx, rule, url)
+            local document = ctx.html(ctx.browser_get(url).text)
+            local token = document:select("input")[1]:attr("value")
+            return ctx.browser_post(url, "application/x-www-form-urlencoded", "token=" .. token).text
+        end }"#,
+        "test",
+        &rule,
+        &json!(DETAIL_URL),
+        &mut ctx,
+        Arc::new(AtomicBool::new(false)),
+        &mut Vec::new(),
+    ).unwrap();
+    assert_eq!(result.value, "done");
+    assert_eq!(http.call_count(), 0);
+    let calls = browser.calls();
+    assert_eq!(calls.len(), 2);
+    assert_eq!(calls[0].method, "GET");
+    assert_eq!(calls[1].method, "POST");
+    assert_eq!(calls[1].body.as_deref(), Some(b"token=live".as_slice()));
+
+    let foreign = "https://outside.example/form";
+    assert!(ctx.fetch_browser(foreign, &rule.page_hosts, None).is_err());
+    assert_eq!(browser.call_count(), 2);
+    browser.push(response("outside", foreign));
+    assert!(ctx
+        .fetch_browser(DETAIL_URL, &rule.page_hosts, None)
+        .is_err());
+}
