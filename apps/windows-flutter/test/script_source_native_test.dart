@@ -4,7 +4,6 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:patchhub_windows/host/core_client.dart';
 import 'package:patchhub_windows/host/core_paths.dart';
-import 'package:patchhub_windows/pages/script_source_examples.dart';
 
 void main() {
   final binary = File(
@@ -52,7 +51,10 @@ void main() {
             as Map)['code'],
         contains('form_zh_cn'),
       );
-      final rule = jsonDecode(scriptRuleExample) as Map<String, dynamic>;
+      final rule = <String, dynamic>{
+        ...Map<String, dynamic>.from(bundled['rule'] as Map),
+        'id': 'copied-shiravune',
+      };
       final code = '-- ${'脚本源码' * 15000}\nwhile true do end\nreturn {}';
       final imported = await client.call('import_script_source', {
         'rule': rule,

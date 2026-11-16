@@ -28,17 +28,23 @@ Future<void> main(List<String> args) async {
     exit(0);
   }
   if (scenario == 'missing') exit(0);
-  if (scenario == 'auto_source') {
-    final value = response('update_source-success');
-    final browser = request['params']['browser_responses'] != null;
-    value['result']['source_id'] = 'patchmoe';
-    if (!browser) {
-      value['result']['complete'] = false;
-      value['result']['status']['code'] =
-          'source_browser_verification_required';
+  if (scenario == 'browser_stream') {
+    for (final verb in ['GET', 'POST']) {
+      stdout.writeln(
+        jsonEncode({
+          'browser_request': {
+            'method': verb,
+            'url': 'https://example.com/',
+            'page_hosts': ['example.com'],
+          },
+        }),
+      );
+      await stdout.flush();
+      if (!await input.moveNext()) exit(1);
+      final reply = jsonDecode(input.current)['browser_response'];
+      if (reply['text'] != verb) exit(2);
     }
-    stderr.writeln('wire:$id:${browser ? "browser" : "http"}');
-    stdout.writeln(jsonEncode(value));
+    stdout.writeln(jsonEncode(response('update_source-success')));
     await stdout.flush();
     exit(0);
   }
