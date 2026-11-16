@@ -487,6 +487,11 @@ class _LibraryPageState extends State<LibraryPage> {
                                                             ),
                                                             GameStatus(
                                                               row: item,
+                                                              querying: widget
+                                                                  .model
+                                                                  .queryRunning(
+                                                                    item,
+                                                                  ),
                                                             ),
                                                             if (multiple)
                                                               Text(
@@ -679,7 +684,11 @@ class _LibraryPageState extends State<LibraryPage> {
                                       ),
                                     ),
                                   ),
-                                  GameStatus(row: row, emphasized: true),
+                                  GameStatus(
+                                    row: row,
+                                    emphasized: true,
+                                    querying: widget.model.queryRunning(row),
+                                  ),
                                 ],
                               ),
                               if (entry != null) ...[
@@ -856,7 +865,25 @@ class _LibraryPageState extends State<LibraryPage> {
     key: PageStorageKey('${row.id}:management-empty'),
     padding: const EdgeInsets.all(20),
     children: [
-      if (!widget.model.queryRunning(row))
+      if (widget.model.queryRunning(row))
+        const Card(
+          key: ValueKey('empty-management-querying'),
+          child: Padding(
+            padding: EdgeInsets.all(24),
+            child: Column(
+              children: [
+                SizedBox(
+                  width: 28,
+                  height: 28,
+                  child: CircularProgressIndicator(strokeWidth: 2.5),
+                ),
+                SizedBox(height: 12),
+                Text('正在查询补丁与下载项…'),
+              ],
+            ),
+          ),
+        )
+      else
         Card(
           child: Padding(
             padding: const EdgeInsets.all(24),

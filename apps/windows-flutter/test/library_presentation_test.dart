@@ -72,4 +72,21 @@ void main() {
       '扩展 / DLC · 需要 DLC 1390150（已安装）',
     );
   });
+
+  test('rowSummary reports querying when game has no installed patch', () {
+    final row = GameRow({
+      'game': {
+        'instance_id': '1227890|root|dir',
+        'appid': 1227890,
+        'name': 'Summer Memories',
+        'availability': 'installed',
+        'install_path': r'C:\Games\Summer',
+        'library_path': r'C:\Games',
+      },
+      'patches': <Map<String, dynamic>>[],
+      'discovery': {'status': 'pending', 'candidates': <Map<String, dynamic>>[]},
+    });
+    expect(rowSummary(row), '暂无补丁结果');
+    expect(rowSummary(row, querying: true), '正在查询');
+  });
 }

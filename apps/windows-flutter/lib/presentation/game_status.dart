@@ -4,9 +4,20 @@ import '../models/library.dart';
 import 'library_presentation.dart';
 
 class GameStatus extends StatelessWidget {
-  const GameStatus({super.key, required this.row, this.emphasized = false});
+  const GameStatus({
+    super.key,
+    required this.row,
+    this.emphasized = false,
+    this.querying = false,
+  });
   final GameRow row;
   final bool emphasized;
+  final bool querying;
+
+  static Color queryingColor(Brightness brightness) =>
+      brightness == Brightness.dark
+      ? const Color(0xfff5c451)
+      : const Color(0xff9a6700);
 
   @override
   Widget build(BuildContext context) {
@@ -18,6 +29,8 @@ class GameStatus extends StatelessWidget {
         ? (Theme.of(context).brightness == Brightness.dark
               ? const Color(0xff70d7a7)
               : const Color(0xff17633e))
+        : querying
+        ? queryingColor(Theme.of(context).brightness)
         : row.matched
         ? scheme.secondary
         : scheme.onSurfaceVariant;
@@ -32,7 +45,7 @@ class GameStatus extends StatelessWidget {
         const SizedBox(width: 6),
         Flexible(
           child: Text(
-            rowSummary(row),
+            rowSummary(row, querying: querying),
             style: TextStyle(color: color, fontSize: emphasized ? 13 : 12),
           ),
         ),

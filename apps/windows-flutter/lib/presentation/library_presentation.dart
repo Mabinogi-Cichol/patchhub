@@ -53,11 +53,14 @@ List<GameRow> filterGames(List<GameRow> rows, GameFilter filter, String query) {
   }).toList();
 }
 
-String rowSummary(GameRow row) {
+String rowSummary(GameRow row, {bool querying = false}) {
   if (row.patches.any(
     (patch) => installedStatus(patch['detection']['status']),
   )) {
     return '已安装补丁';
+  }
+  if (querying) {
+    return '正在查询';
   }
   if (row.patches.any(
     (patch) =>

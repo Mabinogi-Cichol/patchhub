@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 
 import '../presentation/desktop_select.dart';
+import '../presentation/game_status.dart';
 
 import '../host/core_client.dart';
 import '../host/desktop_services.dart';
@@ -190,6 +191,7 @@ class _PatchManagementPageState extends State<PatchManagementPage> {
         widget.model.tasks.installation?.running == true ||
         widget.model.scanning ||
         widget.model.tasks.closing;
+    final querying = widget.model.queryRunning(widget.row);
     final technicalDetails = patch == null
         ? null
         : ExpansionTile(
@@ -322,6 +324,42 @@ class _PatchManagementPageState extends State<PatchManagementPage> {
           SelectableText(
             '${statusLabel(blocker['code'])}${blocker['detail'] == null ? '' : '\n${blocker['detail']}'}',
           ),
+      ] else if (querying) ...[
+        const SizedBox(height: 16),
+        Container(
+          key: const ValueKey('patch-download-querying'),
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(
+              color: Theme.of(context).colorScheme.outlineVariant,
+            ),
+          ),
+          child: const Row(
+            children: [
+              SizedBox(
+                width: 18,
+                height: 18,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+              SizedBox(width: 12),
+              Expanded(child: Text('正在查询可用下载项，请等待订阅源更新与匹配完成…')),
+            ],
+          ),
+        ),
+        if (candidate != null)
+          ExpansionTile(
+            key: PageStorageKey(
+              '${widget.row.id}:${widget.entry.selectionKey}:source-details',
+            ),
+            title: const Text('来源技术详情'),
+            children: [
+              SelectableText(
+                jsonEncode(candidate),
+                key: const PageStorageKey('source-json'),
+              ),
+            ],
+          ),
       ] else ...[
         const SizedBox(height: 16),
         const Text('未找到下载链接'),
@@ -355,25 +393,35 @@ class _PatchManagementPageState extends State<PatchManagementPage> {
       if (error != null) SelectableText('操作失败：$error'),
     ];
     final scheme = Theme.of(context).colorScheme;
-    final ready = patch == null ? manualReady : available(patch);
+    final ready = patch == null ? (!querying && manualReady) : available(patch);
     final installed =
         patch != null && installedStatus(patch['detection']['status']);
     final statusColor = !busy && ready
         ? (scheme.brightness == Brightness.dark
               ? const Color(0xff75ddb0)
               : const Color(0xff176b48))
+        : (patch == null && querying)
+        ? GameStatus.queryingColor(scheme.brightness)
         : scheme.onSurfaceVariant;
     final statusTitle = busy
         ? '操作进行中'
         : patch == null
-        ? (manualReady ? '已补充下载链接' : '未找到下载链接')
+        ? (querying
+              ? '正在查询'
+              : manualReady
+              ? '已补充下载链接'
+              : '未找到下载链接')
         : ready
         ? (installed ? '已安装补丁' : '可安装补丁')
         : '暂不可安装';
     final statusDescription = busy
         ? '请等待当前任务完成'
         : patch == null
-        ? (manualReady ? '安装时读取下载文件' : '可从来源网页补充下载直链')
+        ? (querying
+              ? '正在等待订阅源更新与补丁匹配完成'
+              : manualReady
+              ? '安装时读取下载文件'
+              : '可从来源网页补充下载直链')
         : ready
         ? (installed ? '可按当前安装路线覆盖安装' : '可按当前安装路线安装此补丁')
         : '当前没有可用的自动下载项，可查看其他输入方式';
