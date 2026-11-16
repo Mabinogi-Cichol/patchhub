@@ -160,7 +160,7 @@ class CoreBridge:
         return sequence
 
     async def _call(self, method: str, params: dict, on_event=None, cancel=None,
-                    controlled: bool | None = None, request_id=None):
+                    controlled: bool | None = None, request_id=None, browser_request=None):
         # Both reads briefly take the core journal's exclusive lock. Source
         # event projection and UI requests must not race each other for it.
         # Writers still use the core lock and report genuine installer_busy.
@@ -171,10 +171,10 @@ class CoreBridge:
                 lock = asyncio.Lock()
                 _journal_read_locks[key] = lock
             async with lock:
-                return await self._exchange_call(method, params, on_event, cancel, controlled, request_id)
-        return await self._exchange_call(method, params, on_event, cancel, controlled, request_id)
+                return await self._exchange_call(method, params, on_event, cancel, controlled, request_id, browser_request)
+        return await self._exchange_call(method, params, on_event, cancel, controlled, request_id, browser_request)
 
-    async def _exchange_call(self, method, params, on_event, cancel, controlled, request_id):
+    async def _exchange_call(self, method, params, on_event, cancel, controlled, request_id, browser_request):
         if method not in METHODS:
             raise ValueError("unsupported_method")
         request_id = str(uuid.uuid4()) if request_id is None else validate_id(request_id, 128, "invalid_request_id")
@@ -237,6 +237,17 @@ class CoreBridge:
                     raise RuntimeError("contract_mismatch") from exc
                 if not isinstance(row, dict):
                     raise RuntimeError("contract_mismatch")
+                if "browser_request" in row:
+                    if not controlled or method != "update_source" or browser_request is None:
+                        raise RuntimeError("contract_mismatch")
+                    try:
+                        reply = {"browser_response": await browser_request(row["browser_request"])}
+                    except Exception as error:
+                        reply = {"browser_error": getattr(error, "code", None) or str(error)}
+                    if cancel is None or not cancel.is_set():
+                        process.stdin.write((json.dumps(reply) + "\n").encode())
+                        await process.stdin.drain()
+                    continue
                 if "event" in row:
                     if not controlled or row.get("event") not in SOURCE_EVENTS | {"install_progress"}:
                         raise RuntimeError("contract_mismatch")

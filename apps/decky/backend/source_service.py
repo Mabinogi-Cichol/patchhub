@@ -6,12 +6,13 @@ task per source/match key so the frontend can poll progress without a scan.
 """
 import asyncio
 import copy
+import logging
 import re
 import time
 import uuid
 from pathlib import Path
 from threading import Event
-from source_browser import collect_source_pages
+from source_browser import SourceBrowserSession
 
 from protocol_validation import (MAX_INSTANCE_ID_BYTES, JS_MAX_INTEGER,
                                  validate_capabilities, validate_id)
@@ -55,7 +56,7 @@ def _name_hints(value):
 
 
 class SourceService:
-    def __init__(self, bridge, state_dir, browser_fetch=collect_source_pages):
+    def __init__(self, bridge, state_dir):
         self.bridge = bridge
         self._state_root = Path(state_dir).absolute()
         self.state_dir = self._state_root / "sources"
@@ -63,7 +64,6 @@ class SourceService:
         self._summaries = []
         self._tasks = {}
         self._closed = False
-        self._browser_fetch = browser_fetch
 
     # -- lifecycle ---------------------------------------------------------
     async def initialize(self):
@@ -318,23 +318,12 @@ class SourceService:
         task["state"] = "completed"
 
     async def _run(self, task, method, params):
+        browser = SourceBrowserSession(task["cancel"]) if method == "update_source" else None
+        browser_options = {"browser_request": browser.request} if browser else {}
         try:
             result = await self.bridge._call(method, params,
                                              on_event=lambda event: self._on_event(task, event),
-                                             cancel=task["cancel"])
-            if (method == "update_source" and params.get("source_id") == "patchmoe"
-                    and result.get("status", {}).get("code") in {
-                        "source_browser_verification_required", "source_age_verification_required"}):
-                source = next(source for source in self._summaries if source["id"] == "patchmoe")
-                def progress(phase):
-                    task["progress"] = {"phase": phase, "running": True, "completed": None, "total": None}
-                pages = await self._browser_fetch(source["pages"][0], task["cancel"], progress)
-                if task["cancel"].is_set():
-                    raise ValueError("task_cancelled")
-                result = await self.bridge._call(method, dict(params, force=True, browser_responses=pages),
-                                                 on_event=lambda event: self._on_event(task, event), cancel=task["cancel"])
-                if not result.get("complete"):
-                    raise ValueError(result["status"]["code"])
+                                             cancel=task["cancel"], **browser_options)
             self._finish_result(task, method, result)
         except asyncio.CancelledError:
             task["state"] = "cancelled"
@@ -347,3 +336,9 @@ class SourceService:
             task["state"] = "cancelled" if task["cancel"].is_set() or code in CANCELLED_CODES else "failed"
             task["error"] = code
             task["error_detail"] = detail
+        finally:
+            if browser is not None:
+                try:
+                    await browser.close()
+                except Exception:
+                    logging.getLogger(__name__).exception("source_browser_close_failed")

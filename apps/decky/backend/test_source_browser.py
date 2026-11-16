@@ -1,82 +1,86 @@
 import asyncio
 import json
-import types
 import unittest
 from threading import Event
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
-import source_browser
+
+from source_browser import SourceBrowserSession
 
 
-class Context:
-    def __init__(self, value): self.value = value
-    async def __aenter__(self): return self.value
-    async def __aexit__(self, *args): pass
+class Socket:
+    def __init__(self, packets):
+        self.packets = iter(packets)
+        self.sent = []
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_):
+        pass
+
+    async def send_json(self, value):
+        self.sent.append(value)
+
+    async def __aiter__(self):
+        for packet in self.packets:
+            yield SimpleNamespace(data=json.dumps(packet))
 
 
-class BrowserTests(unittest.IsolatedAsyncioTestCase):
-    def environment(self, payloads):
-        queue = asyncio.Queue()
-        expressions = []
-        shared = dict(title='SharedJSContext', webSocketDebuggerUrl='ws://127.0.0.1:8080/shared')
-        target = dict(url='about:blank#patchhub-owned', webSocketDebuggerUrl='ws://127.0.0.1:8080/owned')
-        class Socket:
-            async def send_json(self, value):
-                await queue.put(types.SimpleNamespace(data=json.dumps({'id':value['id'],'result':{}})))
-            async def packets(self):
-                while True: yield await queue.get()
-            def __aiter__(self): return self.packets()
-        class Session:
-            async def __aenter__(self): return self
-            async def __aexit__(self, *args): pass
-            def ws_connect(self, url): return Context(Socket())
-        async def evaluate(client, tab, expression):
-            expressions.append(expression)
-            if '].LoadURL(' in expression:
-                for payload in payloads:
-                    await queue.put(types.SimpleNamespace(type=1, data=json.dumps({
-                        'method':'Runtime.bindingCalled','params':{'name':'__patchhubSourceResult','payload':json.dumps(payload)}})))
-        module = types.SimpleNamespace(ClientSession=Session, WSMsgType=types.SimpleNamespace(TEXT=1, ERROR=2))
-        return [patch.dict('sys.modules',{'aiohttp':module}),
-                patch.object(source_browser,'uuid4',return_value=types.SimpleNamespace(hex='owned')),
-                patch.object(source_browser,'_targets',new=AsyncMock(side_effect=[[shared],[shared,target]])),
-                patch.object(source_browser,'_evaluate',side_effect=evaluate)], expressions
+class BrowserNavigationTest(unittest.IsolatedAsyncioTestCase):
+    def session(self, packets):
+        socket = Socket(packets)
+        session = SourceBrowserSession(None)
+        session.client = SimpleNamespace(ws_connect=lambda _: socket)
+        session.target = {'webSocketDebuggerUrl': 'ws://localhost:8080/devtools/page/fixture'}
+        return session, socket
 
-    async def run_with(self, payloads, cancel=None):
-        contexts, expressions = self.environment(payloads)
-        from contextlib import ExitStack
-        with ExitStack() as stack:
-            for context in contexts: stack.enter_context(context)
-            phases=[]
-            pages=await source_browser.collect_source_pages('https://www.patch.moe/?flag=1',cancel or Event(),phases.append)
-        return pages, phases, expressions
+    async def test_document_status_excludes_iframe_response(self):
+        url = 'https://example.com/'
+        session, _ = self.session([
+            {'method': 'Network.responseReceived', 'params': {
+                'type': 'Document', 'frameId': 'main',
+                'response': {'url': url, 'status': 403}}},
+            {'method': 'Network.responseReceived', 'params': {
+                'type': 'Document', 'frameId': 'child',
+                'response': {'url': url, 'status': 200}}},
+            {'method': 'Page.loadEventFired'},
+        ])
+        with patch('source_browser._command', new=AsyncMock(return_value={
+            'frameTree': {'frame': {'id': 'main'}},
+        })), patch('source_browser._evaluate', new=AsyncMock(return_value={
+            'response_url': url, 'text': '<html>verification</html>',
+        })):
+            self.assertEqual((await session._get(url, ['example.com']))['status'], 403)
 
-    async def test_waits_for_site_javascript_and_uses_a_hidden_owned_view(self):
-        pages, phases, expressions = await self.run_with([{'waiting':True},{'pages':['list']}])
-        self.assertEqual(pages,['list'])
-        self.assertIn('browser_verification',phases)
-        self.assertEqual(phases[-1],'browser_collect')
-        self.assertIn('SetVisible(false)',expressions[0])
-        self.assertNotIn('window.open',expressions[0])
-        self.assertNotIn('.click(',''.join(expressions))
-        self.assertIn('Destroy',expressions[-1])
+    async def test_redirect_outside_source_hosts_is_rejected_before_resume(self):
+        session, socket = self.session([{'method': 'Fetch.requestPaused', 'params': {
+            'requestId': 'redirect', 'request': {'url': 'https://outside.example/'},
+        }}])
+        with patch('source_browser._command', new=AsyncMock(return_value={
+            'frameTree': {'frame': {'id': 'main'}},
+        })):
+            with self.assertRaisesRegex(ValueError, 'source_browser_origin_changed'):
+                await session._get('https://example.com/', ['example.com'])
+        self.assertEqual(socket.sent[-1]['method'], 'Fetch.failRequest')
 
-    async def test_required_personal_declaration_fails_and_destroys_the_view(self):
-        contexts, expressions = self.environment([{'error':'source_age_verification_required'}])
-        from contextlib import ExitStack
-        with ExitStack() as stack:
-            for context in contexts: stack.enter_context(context)
-            with self.assertRaisesRegex(ValueError,'source_age_verification_required'):
-                await source_browser.collect_source_pages('https://www.patch.moe/?flag=1',Event(),lambda _:None)
-        self.assertIn('Destroy',expressions[-1])
+    async def test_cancellation_waits_for_browser_request_cleanup(self):
+        cancel = Event()
+        session = SourceBrowserSession(cancel)
+        entered = asyncio.Event()
+        released = asyncio.Event()
 
-    async def test_cancel_ends_waiting_and_cleans_up_without_a_result(self):
-        cancel=Event();cancel.set()
-        with self.assertRaisesRegex(ValueError,'task_cancelled'):
-            await self.run_with([{'waiting':True}],cancel)
+        async def request(_):
+            entered.set()
+            try:
+                await asyncio.Future()
+            finally:
+                released.set()
 
-    def test_debug_socket_stays_local(self):
-        for url in ['ws://other.example:8080/page','wss://127.0.0.1:8080/page','ws://127.0.0.1:9222/page']:
-            with self.assertRaisesRegex(ValueError,'invalid_source_browser_socket'):
-                source_browser._socket({'webSocketDebuggerUrl':url})
-
-if __name__ == '__main__': unittest.main()
+        with patch.object(session, '_request', new=request):
+            task = asyncio.create_task(session.request({}))
+            await entered.wait()
+            cancel.set()
+            with self.assertRaisesRegex(ValueError, 'task_cancelled'):
+                await task
+        self.assertTrue(released.is_set())

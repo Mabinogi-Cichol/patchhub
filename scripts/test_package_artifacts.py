@@ -91,7 +91,6 @@ class PackagingTests(unittest.TestCase):
                          'WebView2Loader.dll', 'data/icudtl.dat', 'data/app.so',
                          'data/flutter_assets/AssetManifest.bin', 'data/flutter_assets/NOTICES.Z',
                          'data/flutter_assets/assets/protocol-v5.schema.json',
-                         'data/flutter_assets/assets/shiravune-browser.js',
                          'resources/licenses/Flutter-LICENSE', 'resources/licenses/Dart-LICENSE'):
                 self.write(bundle, path)
             self.write(root, 'apps/windows-flutter/pubspec.lock', b'dart lock')

@@ -205,7 +205,6 @@ class ProjectVersionTests(unittest.TestCase):
             target.write_text('fixture', encoding='utf-8')
         for relative in ('LICENSE', 'scripts/install-decky.py', 'scripts/licenses/sfextract-MIT.txt',
                          'scripts/licenses/Lua-5.4-LICENSE.txt', 'scripts/licenses/mlua-MIT.txt',
-                         'apps/windows-flutter/assets/shiravune-browser.js',
                          'packages/contracts/generated/protocol.py', 'packages/contracts/generated/v5.schema.json',
                          ):
             target = self.root / relative

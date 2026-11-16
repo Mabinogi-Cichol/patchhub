@@ -27,7 +27,6 @@ for (const file of ["bridge.py", "source_service.py", "source_browser.py", "task
   copyFileSync(join(app, "backend", file), join(output, "backend", file));
 copyFileSync(join(root, 'scripts/install-decky.py'), join(output, 'backend/install-decky.py'));
 copyFileSync(join(root, "packages/contracts/generated/protocol.py"), join(output, "backend/protocol.py"));
-copyFileSync(join(root, "apps/windows-flutter/assets/shiravune-browser.js"), join(output, "backend/shiravune-browser.js"));
 copyFileSync(join(root, "packages/contracts/generated/v5.schema.json"), join(output, "backend/v5.schema.json"));
 cpSync(join(app, "dist"), join(output, "dist"), { recursive: true });
 mkdirSync(join(output, "licenses"), { recursive: true });

@@ -17,7 +17,7 @@ INSTALLER_FILES = (
 )
 SCRIPT_LICENSES = ('Lua-5.4-LICENSE.txt', 'mlua-MIT.txt')
 SFEXTRACT_COMMIT = '21f5c5595a70e9284fff83476c0e307d5b92f573'
-PRODUCTION_BACKEND = {'bridge.py', 'source_service.py', 'source_browser.py', 'shiravune-browser.js', 'tasks.py', 'plugin_settings.py', 'state_host.py', 'protocol.py', 'protocol_validation.py', 'v5.schema.json', 'app_update.py', 'install-decky.py'}
+PRODUCTION_BACKEND = {'bridge.py', 'source_service.py', 'source_browser.py', 'tasks.py', 'plugin_settings.py', 'state_host.py', 'protocol.py', 'protocol_validation.py', 'v5.schema.json', 'app_update.py', 'install-decky.py'}
 
 
 def validate_sbom(sbom, plugin, decky):
@@ -151,7 +151,6 @@ def main():
                      'WebView2Loader.dll', 'data/icudtl.dat', 'data/app.so',
                      'data/flutter_assets/AssetManifest.bin', 'data/flutter_assets/NOTICES.Z',
                      'data/flutter_assets/assets/protocol-v5.schema.json',
-                     'data/flutter_assets/assets/shiravune-browser.js',
                      'resources/licenses/Flutter-LICENSE', 'resources/licenses/Dart-LICENSE'):
             if not (bundle / name).is_file():
                 raise FileNotFoundError(f'Missing Flutter runtime input: {name}')
