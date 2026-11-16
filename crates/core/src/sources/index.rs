@@ -7,7 +7,10 @@
 //! after the one-time v1 → v2 upgrade.
 
 use super::canonical;
-use super::model::{DiscoveryIndexRecord, SourceCache, SourceIndex, SourceIndexEntry, SourceRule};
+use super::model::{
+    DiscoveryIndexRecord, Mirror, SourceCache, SourceDetail, SourceIndex, SourceIndexEntry,
+    SourceRule,
+};
 use super::SOURCE_INDEX_SCHEMA_VERSION;
 
 pub fn parser_fingerprint(rule: &SourceRule) -> Option<String> {
@@ -72,12 +75,20 @@ pub fn normalize_entries(
         left.page
             .cmp(&right.page)
             .then_with(|| left.title.cmp(&right.title))
-            .then_with(|| left.kind.cmp(&right.kind))
-            .then_with(|| left.url.cmp(&right.url))
-            .then_with(|| left.language.cmp(&right.language))
-            .then_with(|| left.date.cmp(&right.date))
             .then_with(|| left.appid.cmp(&right.appid))
+            .then_with(|| left.current_step.cmp(&right.current_step))
+            .then_with(|| left.total_steps.cmp(&right.total_steps))
             .then_with(|| left.aliases.cmp(&right.aliases))
+            .then_with(|| {
+                canonical::canonical_string(&left.step_data)
+                    .unwrap_or_default()
+                    .cmp(&canonical::canonical_string(&right.step_data).unwrap_or_default())
+            })
+            .then_with(|| {
+                canonical::canonical_string(&left.details)
+                    .unwrap_or_default()
+                    .cmp(&canonical::canonical_string(&right.details).unwrap_or_default())
+            })
     });
     entries.dedup();
     entries
@@ -87,6 +98,11 @@ fn normalize_entry(mut entry: SourceIndexEntry) -> SourceIndexEntry {
     entry.page = canonical::canonical_page_url(&entry.page);
     entry.aliases.sort();
     entry.aliases.dedup();
+    for detail in &mut entry.details {
+        detail.page = canonical::canonical_page_url(&detail.page);
+        detail.aliases.sort();
+        detail.aliases.dedup();
+    }
     entry
 }
 
@@ -99,17 +115,31 @@ fn pending_key(pending: &[String]) -> Vec<String> {
 
 /// Converts a v1 table-source cache into a complete or partial index snapshot.
 pub fn from_cache(source_id: &str, cache: &SourceCache) -> SourceIndex {
-    let entries = normalize_entries(cache.entries.iter().map(|entry| SourceIndexEntry {
-        title: entry.title.clone(),
-        aliases: entry.aliases.clone(),
-        // Table sources: the list page is all the index can point at; the
-        // artifact URL lives in `url`.
-        page: canonical::canonical_url(&entry.source_page),
-        kind: "entry".to_string(),
-        appid: entry.appid,
-        url: Some(entry.url.clone()),
-        language: Some(entry.language.clone()),
-        date: entry.date.clone(),
+    let entries = normalize_entries(cache.entries.iter().map(|entry| {
+        let page = canonical::canonical_url(&entry.source_page);
+        SourceIndexEntry {
+            title: entry.title.clone(),
+            aliases: entry.aliases.clone(),
+            page: page.clone(),
+            appid: entry.appid,
+            current_step: 1,
+            total_steps: 1,
+            step_data: None,
+            details: vec![SourceDetail {
+                title: entry.title.clone(),
+                page,
+                steam_ids: entry.appid.into_iter().collect(),
+                aliases: entry.aliases.clone(),
+                mirrors: vec![Mirror {
+                    url: entry.url.clone(),
+                    label: None,
+                    format: "zip".to_string(),
+                }],
+                languages: vec![entry.language.clone()],
+                published_at: entry.date.clone(),
+                ..SourceDetail::default()
+            }],
+        }
     }));
     let complete = cache.cached_at.is_some();
     SourceIndex {
@@ -142,11 +172,11 @@ pub fn from_discovery_index(source_id: &str, record: &DiscoveryIndexRecord) -> S
             title: item.title.clone(),
             aliases: Vec::new(),
             page,
-            kind: item.kind.clone(),
             appid: None,
-            url: None,
-            language: None,
-            date: None,
+            current_step: 1,
+            total_steps: 2,
+            step_data: (item.kind == "category").then(|| serde_json::json!({"kind": "category"})),
+            details: Vec::new(),
         });
     }
     let entries = normalize_entries(entries);
@@ -177,11 +207,11 @@ mod tests {
             title: title.to_string(),
             aliases: Vec::new(),
             page: page.to_string(),
-            kind: "entry".to_string(),
             appid: None,
-            url: None,
-            language: None,
-            date: None,
+            current_step: 1,
+            total_steps: 2,
+            step_data: None,
+            details: Vec::new(),
         }
     }
 
@@ -276,11 +306,24 @@ mod tests {
                 title: "Game".to_string(),
                 aliases: vec!["Alias".to_string()],
                 page: "https://www.patch.moe/".to_string(),
-                kind: "entry".to_string(),
                 appid: Some(42),
-                url: Some("https://download.patch.moe/g.zip".to_string()),
-                language: Some("en".to_string()),
-                date: Some("2024/1/2".to_string()),
+                current_step: 1,
+                total_steps: 1,
+                step_data: None,
+                details: vec![SourceDetail {
+                    title: "Game".to_string(),
+                    page: "https://www.patch.moe/".to_string(),
+                    steam_ids: vec![42],
+                    aliases: vec!["Alias".to_string()],
+                    mirrors: vec![Mirror {
+                        url: "https://download.patch.moe/g.zip".to_string(),
+                        label: None,
+                        format: "zip".to_string(),
+                    }],
+                    languages: vec!["en".to_string()],
+                    published_at: Some("2024/1/2".to_string()),
+                    ..SourceDetail::default()
+                }],
             }]
         );
         // No cached_at means the v1 cache never completed.
@@ -330,7 +373,8 @@ mod tests {
         // Duplicate pages collapse; the first record wins.
         assert_eq!(index.entries.len(), 1);
         assert_eq!(index.entries[0].title, "Patch A");
-        assert_eq!(index.entries[0].kind, "product");
+        assert_eq!(index.entries[0].current_step, 1);
+        assert_eq!(index.entries[0].total_steps, 2);
 
         let complete = from_discovery_index(
             "kagura-cn",

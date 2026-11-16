@@ -57,7 +57,7 @@ fn seed(state: &Path, candidate: SourceCandidate) -> u64 {
         .store()
         .save_index(&sources::SourceIndex {
             parser_fingerprint: sources::index::parser_fingerprint(&fixture_rule()),
-            schema_version: 1,
+            schema_version: sources::SOURCE_INDEX_SCHEMA_VERSION,
             source_id: source_id.clone(),
             revision: 1,
             complete: true,

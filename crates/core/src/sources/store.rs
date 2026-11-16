@@ -14,7 +14,8 @@ use super::model::{
 use super::r#match::{candidate_is_credible, derive_game_status};
 use super::{
     canonical, invalid, Result, DEFAULT_RULES_JSON, GAME_MATCH_SCHEMA_VERSION,
-    SOURCE_SETTINGS_SCHEMA_VERSION, STORE_SCHEMA_VERSION,
+    SOURCE_DETAIL_SCHEMA_VERSION, SOURCE_INDEX_SCHEMA_VERSION, SOURCE_SETTINGS_SCHEMA_VERSION,
+    STORE_SCHEMA_VERSION,
 };
 use fs2::FileExt;
 use serde::{de::DeserializeOwned, Serialize};
@@ -487,7 +488,11 @@ impl SourceStore {
     }
 
     pub fn load_index(&self, source_id: &str) -> Result<Option<SourceIndex>> {
-        read_json(&self.paths.index(source_id))
+        read_versioned_json(
+            &self.paths.index(source_id),
+            SOURCE_INDEX_SCHEMA_VERSION,
+            "invalid_source_index",
+        )
     }
 
     pub fn save_index(&self, index: &SourceIndex) -> Result<()> {
@@ -497,7 +502,11 @@ impl SourceStore {
     /// Reads the unpublished update progress for a source (if an earlier
     /// attempt failed or was cancelled before completing).
     pub fn load_index_progress(&self, source_id: &str) -> Result<Option<SourceIndex>> {
-        read_json(&self.paths.index_progress(source_id))
+        read_versioned_json(
+            &self.paths.index_progress(source_id),
+            SOURCE_INDEX_SCHEMA_VERSION,
+            "invalid_source_index",
+        )
     }
 
     /// Atomically saves partial update progress. The official `index/<source>.json`
@@ -520,7 +529,11 @@ impl SourceStore {
     /// `detail_key(canonical_page_url(page))` so every game reuses one file.
     pub fn load_detail(&self, source_id: &str, page: &str) -> Result<Option<DetailRecord>> {
         let key = detail_key(&canonical::canonical_page_url(page));
-        read_json(&self.paths.detail(source_id, &key))
+        read_versioned_json(
+            &self.paths.detail(source_id, &key),
+            SOURCE_DETAIL_SCHEMA_VERSION,
+            "invalid_source_detail",
+        )
     }
 
     pub fn save_detail(&self, record: &DetailRecord) -> Result<()> {
@@ -906,6 +919,34 @@ fn read_json<T: DeserializeOwned>(path: &Path) -> Result<Option<T>> {
             .map_err(|error| invalid(error.to_string())),
         None => Ok(None),
     }
+}
+
+fn read_versioned_json<T: DeserializeOwned>(
+    path: &Path,
+    current_version: u32,
+    invalid_code: &'static str,
+) -> Result<Option<T>> {
+    let Some(bytes) = read_bounded(path)? else {
+        return Ok(None);
+    };
+    let raw: serde_json::Value =
+        serde_json::from_slice(&bytes).map_err(|error| invalid(error.to_string()))?;
+    let Some(version) = raw
+        .get("schema_version")
+        .and_then(serde_json::Value::as_u64)
+    else {
+        return Err(invalid(invalid_code));
+    };
+    if version > u64::from(current_version) {
+        return Err(invalid(invalid_code));
+    }
+    if version < u64::from(current_version) {
+        // Older schema-1 caches remain on disk as stale and trigger refresh.
+        return Ok(None);
+    }
+    serde_json::from_value(raw)
+        .map(Some)
+        .map_err(|error| invalid(error.to_string()))
 }
 
 fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<()> {

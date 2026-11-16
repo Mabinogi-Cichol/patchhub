@@ -697,27 +697,70 @@ pub enum FallbackMatchStatus {
     NotNeeded,
 }
 
-/// One list-page entry of a [`SourceIndex`] (no detail-page scraping).
+fn default_step() -> u32 {
+    1
+}
+
+/// One resolved patch detail (replaces `PageFact`, `FactLink`, `DiscoveryPage`
+/// and `SourceIndexEntry` inline download fields).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SourceDetail {
+    pub title: String,
+    pub page: String,
+    #[serde(default)]
+    pub steam_ids: Vec<u32>,
+    #[serde(default)]
+    pub aliases: Vec<String>,
+    #[serde(default)]
+    pub mirrors: Vec<Mirror>,
+    /// The links are alternative downloads for one patch target.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub single_download_group: bool,
+    /// Body text, used by `identity::build_candidates`.
+    #[serde(default)]
+    pub text: String,
+    /// Explicit languages supplied by the source; when empty, inferred from mirror URLs or `text`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub languages: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub published_at: Option<String>,
+    /// Absolute URLs inside the body.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub body_links: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reported_format: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub upstream_page: Option<String>,
+}
+
+/// One entry of a [`SourceIndex`], optionally carrying completed [`SourceDetail`]s
+/// or Lua step-progression state.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SourceIndexEntry {
     pub title: String,
     #[serde(default)]
     pub aliases: Vec<String>,
-    /// Normalized detail/product/article/category URL; for table sources the
-    /// entry's source page.
     pub page: String,
-    /// `product|article|category|entry`; kept as a string so an adapter or a
-    /// migrated v1 record never loses an unrecognized kind.
-    pub kind: String,
     #[serde(default)]
     pub appid: Option<u32>,
-    #[serde(default)]
-    pub url: Option<String>,
-    #[serde(default)]
-    pub language: Option<String>,
-    #[serde(default)]
-    pub date: Option<String>,
+    #[serde(default = "default_step")]
+    pub current_step: u32,
+    #[serde(default = "default_step")]
+    pub total_steps: u32,
+    /// Opaque Lua context for the next step; untouched by the host.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub step_data: Option<serde_json::Value>,
+    /// Populated immediately when `current_step == total_steps` in Step 1.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub details: Vec<SourceDetail>,
+}
+
+impl SourceIndexEntry {
+    pub fn is_complete(&self) -> bool {
+        self.total_steps >= 1 && self.current_step >= self.total_steps
+    }
 }
 
 /// Published per-source index snapshot (`index/<source_id>.json`).
@@ -745,52 +788,6 @@ pub struct SourceIndex {
     pub pending: Vec<String>,
 }
 
-/// A link from a category listing to an article/detail page (P3 facts).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct FactLink {
-    pub title: String,
-    pub page: String,
-}
-
-/// Query-independent facts parsed from one source page (design §4.1, §9).
-///
-/// Built by [`super::adapters::SourceAdapter::resolve_page`] during a game match task,
-/// never during a source index update, and persisted inside [`DetailRecord`].
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct PageFact {
-    pub title: String,
-    pub page: String,
-    /// `article|product|category`.
-    pub kind: String,
-    #[serde(default)]
-    pub steam_ids: Vec<u32>,
-    #[serde(default)]
-    pub aliases: Vec<String>,
-    #[serde(default)]
-    pub mirrors: Vec<Mirror>,
-    /// The links are alternative downloads for one patch target.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub single_download_group: bool,
-    /// Body text, used by `identity::build_candidates`.
-    #[serde(default)]
-    pub text: String,
-    #[serde(default)]
-    pub published_at: Option<String>,
-    /// Absolute URLs inside the body.
-    #[serde(default)]
-    pub body_links: Vec<String>,
-    /// Category pages: inline article list.
-    #[serde(default)]
-    pub article_links: Vec<FactLink>,
-    /// Category pages whose articles are rendered in full.
-    #[serde(default)]
-    pub article_facts: Vec<PageFact>,
-    #[serde(default)]
-    pub next_page: Option<String>,
-}
-
 /// Detail cache for one source page, shared across games
 /// (`details/<source_id>/<key>.json`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -801,11 +798,20 @@ pub struct DetailRecord {
     pub page: String,
     pub index_revision: u64,
     pub checked_at: u64,
-    pub complete: bool,
+    pub current_step: u32,
+    pub total_steps: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub step_data: Option<serde_json::Value>,
     #[serde(default)]
-    pub fact: Option<PageFact>,
+    pub details: Vec<SourceDetail>,
     #[serde(default)]
     pub diagnostics: Vec<Diagnostic>,
+}
+
+impl DetailRecord {
+    pub fn is_complete(&self) -> bool {
+        self.total_steps >= 1 && self.current_step >= self.total_steps
+    }
 }
 
 /// Per-source match result inside [`GameMatchRecord`].

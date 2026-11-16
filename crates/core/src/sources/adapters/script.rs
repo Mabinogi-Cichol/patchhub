@@ -12,7 +12,7 @@ use std::{
 
 use crate::sources::{
     invalid,
-    model::{Diagnostic, PageFact, QueryContext, SourceIndex, SourceIndexEntry},
+    model::{Diagnostic, QueryContext, SourceDetail, SourceIndex, SourceIndexEntry},
     validate, Result,
 };
 use crate::{
@@ -28,7 +28,7 @@ use mlua::{
 };
 use scraper::{ElementRef, Html, Selector};
 use serde::de::DeserializeOwned;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// Host-bound progress; a script supplies only the message.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -65,17 +65,39 @@ struct ScriptIndex {
     diagnostics: Vec<ScriptDiagnostic>,
 }
 
+/// Input state passed to Lua `resolve_detail(ctx, rule, state)`.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct DetailStepState {
+    pub title: String,
+    pub aliases: Vec<String>,
+    pub page: String,
+    pub appid: Option<u32>,
+    pub current_step: u32,
+    pub total_steps: u32,
+    pub step_data: Option<serde_json::Value>,
+    pub details: Vec<SourceDetail>,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct DiscoveryPage {
-    pub fact: PageFact,
-    #[serde(default = "unknown_format")]
-    pub reported_format: String,
+struct ScriptDetailStep {
+    current_step: u32,
+    total_steps: u32,
     #[serde(default)]
-    pub upstream_page: Option<String>,
+    step_data: Option<serde_json::Value>,
+    #[serde(default)]
+    details: Vec<SourceDetail>,
+    #[serde(default)]
+    diagnostics: Vec<ScriptDiagnostic>,
 }
-fn unknown_format() -> String {
-    "unknown".into()
+
+#[derive(Debug, Clone)]
+pub struct DetailStepOutcome {
+    pub current_step: u32,
+    pub total_steps: u32,
+    pub step_data: Option<serde_json::Value>,
+    pub details: Vec<SourceDetail>,
+    pub diagnostics: Vec<Diagnostic>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -90,7 +112,8 @@ pub struct IdentityFact {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ScriptDiscovery {
-    pub pages: Vec<DiscoveryPage>,
+    #[serde(default)]
+    pub details: Vec<SourceDetail>,
     #[serde(default)]
     pub identities: Vec<IdentityFact>,
     pub complete: bool,
@@ -100,7 +123,7 @@ struct ScriptDiscovery {
 
 #[derive(Debug)]
 pub struct DiscoveryFacts {
-    pub pages: Vec<DiscoveryPage>,
+    pub details: Vec<SourceDetail>,
     pub identities: Vec<IdentityFact>,
     pub complete: bool,
     pub diagnostics: Vec<Diagnostic>,
@@ -221,23 +244,22 @@ pub fn collect_index(
             if output.complete && !output.pending.is_empty() {
                 return Err(invalid("complete_index_has_pending_pages"));
             }
-            for entry in &output.entries {
+            for entry in &mut output.entries {
                 if entry.title.trim().is_empty()
-                    || !matches!(
-                        entry.kind.as_str(),
-                        "entry" | "product" | "article" | "category"
-                    )
                     || entry.appid == Some(0)
+                    || entry.current_step == 0
+                    || entry.total_steps == 0
+                    || entry.current_step > entry.total_steps
                 {
                     return Err(invalid("invalid_source_entry"));
                 }
                 validate::allowed_url(&entry.page, &rule.page_hosts, false)?;
-                if entry.kind == "entry" {
-                    let url = entry
-                        .url
-                        .as_deref()
-                        .ok_or_else(|| invalid("invalid_source_entry"))?;
-                    validate::allowed_url(url, &rule.download_hosts, true)?;
+                if entry.is_complete() && entry.details.is_empty() {
+                    return Err(invalid("invalid_source_entry"));
+                }
+                let require_download_host = entry.is_complete() && !rule.discovery_only;
+                for detail in &mut entry.details {
+                    validate_detail(rule, detail, require_download_host)?;
                 }
             }
             for page in &output.pending {
@@ -261,55 +283,90 @@ pub fn collect_index(
     })
 }
 
-fn validate_fact(rule: &SourceRule, fact: &mut PageFact) -> Result<()> {
-    // Use an explicit worklist for category inline facts, without a page quota.
-    let mut pending = vec![fact];
-    while let Some(fact) = pending.pop() {
-        if fact.title.trim().is_empty()
-            || !matches!(fact.kind.as_str(), "product" | "article" | "category")
-            || fact.steam_ids.contains(&0)
-        {
-            return Err(invalid("invalid_page_fact"));
-        }
-        validate::allowed_url(&fact.page, &rule.page_hosts, false)?;
-        for mirror in &mut fact.mirrors {
+fn validate_detail(
+    rule: &SourceRule,
+    detail: &mut SourceDetail,
+    require_download_host: bool,
+) -> Result<()> {
+    if detail.title.trim().is_empty() || detail.steam_ids.contains(&0) {
+        return Err(invalid("invalid_source_detail"));
+    }
+    validate::allowed_url(&detail.page, &rule.page_hosts, false)?;
+    detail.page = crate::sources::canonical::canonical_page_url(&detail.page);
+    if require_download_host && detail.mirrors.is_empty() {
+        return Err(invalid("invalid_source_detail"));
+    }
+    for mirror in &mut detail.mirrors {
+        if require_download_host {
+            validate::allowed_url(&mirror.url, &rule.download_hosts, true)?;
+        } else {
             validate::navigation_url(&mirror.url)?;
-            mirror.format = crate::sources::identity::format(&mirror.url);
         }
-        for link in &fact.article_links {
-            validate::allowed_url(&link.page, &rule.page_hosts, false)?;
+        mirror.format = crate::sources::identity::format(&mirror.url);
+    }
+    if let Some(reported) = &detail.reported_format {
+        if !matches!(reported.as_str(), "unknown" | "zip" | "exe" | "web") {
+            return Err(invalid("invalid_reported_format"));
         }
-        if let Some(next) = &fact.next_page {
-            validate::allowed_url(next, &rule.page_hosts, false)?;
-        }
-        pending.extend(fact.article_facts.iter_mut());
+    }
+    if let Some(upstream) = &detail.upstream_page {
+        validate::navigation_url(upstream)?;
     }
     Ok(())
 }
 
-pub fn resolve_page(
+pub fn resolve_detail(
     rule: &SourceRule,
     code: &str,
-    page: &str,
+    state: &DetailStepState,
     ctx: &mut RequestContext,
     cancel: Arc<AtomicBool>,
     report: impl FnMut(ScriptProgress),
-) -> Result<PageFact> {
-    validate::allowed_url(page, &rule.page_hosts, false)?;
-    let mut fact: PageFact = run(
+) -> Result<DetailStepOutcome> {
+    validate::allowed_url(&state.page, &rule.page_hosts, false)?;
+    let state_json = serde_json::to_value(state).map_err(|error| {
+        failure(
+            rule,
+            "resolve_detail",
+            "script_source_contract_error",
+            error,
+        )
+    })?;
+    let mut output: ScriptDetailStep = run(
         rule,
         code,
-        "resolve_page",
-        &[serde_json::json!(page)],
+        "resolve_detail",
+        &[state_json],
         ctx,
         Arc::clone(&cancel),
         report,
     )?;
-    contract(rule, "resolve_page", validate_fact(rule, &mut fact))?;
+    contract(
+        rule,
+        "resolve_detail",
+        (|| {
+            if output.total_steps == 0 || output.current_step > output.total_steps {
+                return Err(invalid("invalid_detail_step"));
+            }
+            if output.current_step <= state.current_step && output.diagnostics.is_empty() {
+                return Err(invalid("invalid_detail_step"));
+            }
+            for detail in &mut output.details {
+                validate_detail(rule, detail, false)?;
+            }
+            Ok(())
+        })(),
+    )?;
     if cancel.load(Ordering::Relaxed) {
         return Err(invalid("task_cancelled"));
     }
-    Ok(fact)
+    Ok(DetailStepOutcome {
+        current_step: output.current_step,
+        total_steps: output.total_steps,
+        step_data: output.step_data,
+        details: output.details,
+        diagnostics: diagnostics(rule, output.diagnostics),
+    })
 }
 
 pub fn match_appid(
@@ -356,17 +413,8 @@ pub fn discover(
         rule,
         "discover",
         (|| {
-            for page in &mut output.pages {
-                validate_fact(rule, &mut page.fact)?;
-                if !matches!(
-                    page.reported_format.as_str(),
-                    "unknown" | "zip" | "exe" | "web"
-                ) {
-                    return Err(invalid("invalid_reported_format"));
-                }
-                if let Some(upstream) = &page.upstream_page {
-                    validate::navigation_url(upstream)?;
-                }
+            for detail in &mut output.details {
+                validate_detail(rule, detail, false)?;
             }
             for identity in &output.identities {
                 if identity.appid == 0 {
@@ -381,7 +429,7 @@ pub fn discover(
         return Err(invalid("task_cancelled"));
     }
     Ok(DiscoveryFacts {
-        pages: output.pages,
+        details: output.details,
         identities: output.identities,
         complete: output.complete,
         diagnostics: diagnostics(rule, output.diagnostics),

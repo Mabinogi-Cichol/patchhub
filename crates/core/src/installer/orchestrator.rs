@@ -524,7 +524,7 @@ pub(crate) mod tests {
     use crate::installer::zip_selection_id;
     use crate::sources::model::{
         ArtifactFormat, CacheStatus, Capability, GameMatchRecord, GameMatchStatus, MatchBasis,
-        Mirror, SourceCandidate, SourceIndex, SourceIndexEntry, SourceMatchRecord,
+        Mirror, SourceCandidate, SourceDetail, SourceIndex, SourceIndexEntry, SourceMatchRecord,
         SourceMatchStatus, SourceRole, SourceRule,
     };
     use crate::sources::{GameQuery, Sources};
@@ -727,7 +727,7 @@ pub(crate) mod tests {
                 parser_fingerprint: crate::sources::index::parser_fingerprint(
                     &crate::sources::test_fixtures::default_rule("patchmoe"),
                 ),
-                schema_version: 1,
+                schema_version: crate::sources::SOURCE_INDEX_SCHEMA_VERSION,
                 source_id: "patchmoe".to_string(),
                 revision: 1,
                 complete: true,
@@ -739,11 +739,24 @@ pub(crate) mod tests {
                     title: "Kudos Kuppa".to_string(),
                     aliases: Vec::new(),
                     page: "https://www.patch.moe/Kudos-Kuppa".to_string(),
-                    kind: "entry".to_string(),
                     appid: Some(APPID),
-                    url: Some("https://download.patch.moe/Kudos_Kuppa_patch.zip".to_string()),
-                    language: Some("zh-CN".to_string()),
-                    date: Some("2026/6/23".to_string()),
+                    current_step: 1,
+                    total_steps: 1,
+                    step_data: None,
+                    details: vec![SourceDetail {
+                        title: "Kudos Kuppa".to_string(),
+                        page: "https://www.patch.moe/Kudos-Kuppa".to_string(),
+                        steam_ids: vec![APPID],
+                        mirrors: vec![Mirror {
+                            url: "https://download.patch.moe/Kudos_Kuppa_patch.zip".to_string(),
+                            label: None,
+                            format: "zip".to_string(),
+                        }],
+                        languages: vec!["zh-CN".to_string()],
+                        published_at: Some("2026/6/23".to_string()),
+                        reported_format: Some("zip".to_string()),
+                        ..Default::default()
+                    }],
                 }],
                 pending: Vec::new(),
             })

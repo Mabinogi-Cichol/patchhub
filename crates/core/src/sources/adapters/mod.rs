@@ -71,42 +71,26 @@ impl SourceAdapter<'_> {
                 .flat_map(|identity| identity.aliases.iter().cloned()),
         );
         let mut candidates = Vec::new();
-        for page in facts.pages {
-            let mut pending = vec![page.fact];
-            while let Some(mut fact) = pending.pop() {
-                let decision = self.match_appid(rule, &fact.steam_ids, query, ctx, cancel)?;
-                pending.extend(std::mem::take(&mut fact.article_facts).into_iter().rev());
-                let mut confirmed_id: Vec<u32> = match decision {
-                    Some(false) => continue,
-                    Some(true) => vec![query.appid],
-                    None => Vec::new(),
-                };
-                if !confirmed_id.is_empty() {
-                    for dlc in &query.related_dlc {
-                        if fact.steam_ids.contains(&dlc.appid) && !confirmed_id.contains(&dlc.appid)
-                        {
-                            confirmed_id.push(dlc.appid);
-                        }
+        for detail in facts.details {
+            let decision = self.match_appid(rule, &detail.steam_ids, query, ctx, cancel)?;
+            let mut confirmed_id: Vec<u32> = match decision {
+                Some(false) => continue,
+                Some(true) => vec![query.appid],
+                None => Vec::new(),
+            };
+            if !confirmed_id.is_empty() {
+                for dlc in &query.related_dlc {
+                    if detail.steam_ids.contains(&dlc.appid) && !confirmed_id.contains(&dlc.appid) {
+                        confirmed_id.push(dlc.appid);
                     }
                 }
-                let mut found = identity::build_candidates_with_download_group(
-                    rule,
-                    &fact.title,
-                    &fact.page,
-                    &fact.text,
-                    confirmed_id.as_slice(),
-                    &fact.aliases,
-                    &page.reported_format,
-                    &fact.mirrors,
-                    &identity_query,
-                    fact.single_download_group,
-                );
-                for candidate in &mut found {
-                    candidate.published_at = fact.published_at.clone();
-                    candidate.upstream_page = page.upstream_page.clone();
-                }
-                candidates.extend(found);
             }
+            candidates.extend(identity::build_candidates_from_detail(
+                rule,
+                &detail,
+                confirmed_id.as_slice(),
+                &identity_query,
+            ));
         }
         let candidates = identity::enrich_candidates(&candidates, &identities);
         let mut candidates = identity::merge_candidates(&candidates);
@@ -151,14 +135,14 @@ impl SourceAdapter<'_> {
         Ok(decision.or_else(|| ids.contains(&query.appid).then_some(true)))
     }
 
-    pub fn resolve_page(
+    pub fn resolve_detail(
         &self,
         rule: &SourceRule,
-        page: &str,
+        state: &script::DetailStepState,
         ctx: &mut RequestContext,
         cancel: &Arc<AtomicBool>,
-    ) -> Result<super::model::PageFact> {
-        script::resolve_page(rule, self.code, page, ctx, Arc::clone(cancel), |_| {})
+    ) -> Result<script::DetailStepOutcome> {
+        script::resolve_detail(rule, self.code, state, ctx, Arc::clone(cancel), |_| {})
     }
 }
 pub(crate) fn now_unix() -> u64 {

@@ -8,7 +8,7 @@ use patchhub_core::{
     operation,
     sources::{
         http::{FakeFetcher, FetchRequest, FetchResponse, Fetcher, RequestContext},
-        model::{PageFact, SourceIndexEntry, SourceRule},
+        model::{SourceDetail, SourceIndexEntry, SourceRule},
         validate::validate_rule,
         RulesConfig, DEFAULT_RULES_JSON,
     },
@@ -138,31 +138,58 @@ fn recorded_non_table_list_matches_legacy_baseline() {
     );
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DetailStepOutput {
+    current_step: u32,
+    total_steps: u32,
+    #[serde(default)]
+    step_data: Option<Json>,
+    #[serde(default)]
+    details: Vec<SourceDetail>,
+}
+
+fn detail_step_state(page: &str) -> Json {
+    json!({
+        "title": "Sacrifice Sanctuary - The Ritual Maiden's Life With Monsters Patch",
+        "aliases": [],
+        "page": page,
+        "appid": null,
+        "current_step": 1,
+        "total_steps": 2,
+        "step_data": null,
+        "details": [],
+    })
+}
+
 #[test]
 fn recorded_detail_matches_baseline_with_no_invented_steam_id() {
     let rule = rule();
     let fake = Arc::new(FakeFetcher::new());
     fake.push(response(DETAIL, DETAIL_URL));
-    let actual = invoke::<PageFact>(
+    let actual = invoke::<DetailStepOutput>(
         CODE,
-        "resolve_page",
+        "resolve_detail",
         &rule,
-        &json!(DETAIL_URL),
+        &detail_step_state(DETAIL_URL),
         &mut context(&fake),
         Arc::new(AtomicBool::new(false)),
         &mut Vec::new(),
     )
     .unwrap()
     .value;
-    let expected: PageFact = serde_json::from_str(include_str!(
+    assert_eq!(actual.current_step, 2);
+    assert_eq!(actual.total_steps, 2);
+    assert!(actual.step_data.is_none());
+    let expected: SourceDetail = serde_json::from_str(include_str!(
         "../../../../tests/fixtures/script-sources/kagura-en-detail-baseline.json"
     ))
     .unwrap();
-    assert_eq!(actual, expected);
-    assert_eq!(actual.mirrors.len(), 4);
+    assert_eq!(actual.details, vec![expected]);
+    assert_eq!(actual.details[0].mirrors.len(), 4);
     // The recorded live patch page contains no Steam app link. Synthetic
     // identity coverage below is deliberately separate from that evidence.
-    assert!(actual.steam_ids.is_empty());
+    assert!(actual.details[0].steam_ids.is_empty());
 }
 
 #[test]
@@ -173,18 +200,19 @@ fn synthetic_steam_link_on_recorded_detail_is_extracted() {
     );
     let fake = Arc::new(FakeFetcher::new());
     fake.push(response(&html, DETAIL_URL));
-    let fact = invoke::<PageFact>(
+    let outcome = invoke::<DetailStepOutput>(
         CODE,
-        "resolve_page",
+        "resolve_detail",
         &rule(),
-        &json!(DETAIL_URL),
+        &detail_step_state(DETAIL_URL),
         &mut context(&fake),
         Arc::new(AtomicBool::new(false)),
         &mut Vec::new(),
     )
     .unwrap()
     .value;
-    assert_eq!(fact.steam_ids, [u32::MAX]);
+    assert_eq!(outcome.details.len(), 1);
+    assert_eq!(outcome.details[0].steam_ids, [u32::MAX]);
 }
 
 #[test]
@@ -373,11 +401,11 @@ fn malformed_values_css_and_script_errors_are_explicit() {
         );
     }
     let fake = Arc::new(FakeFetcher::new());
-    let error = invoke::<PageFact>(
-        "return {resolve_page=function() return {steam_ids={'not an ID'}} end}",
-        "resolve_page",
+    let error = invoke::<DetailStepOutput>(
+        "return {resolve_detail=function() return {current_step=2,total_steps=2,details={{title='X',page='https://www.kaguragames.com/x/',steam_ids={'not an ID'}}}} end}",
+        "resolve_detail",
         &rule(),
-        &Json::Null,
+        &detail_step_state(DETAIL_URL),
         &mut context(&fake),
         Arc::new(AtomicBool::new(false)),
         &mut Vec::new(),

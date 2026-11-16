@@ -1,22 +1,33 @@
 //! P2 per-source index update: official snapshot vs. progress file, adapter
-//! index collection, revision semantics, and P3 page facts (`resolve_page`).
+//! index collection, revision semantics, and Lua Step detail resolution (`resolve_detail`).
 //!
 //! Every request goes through `FakeFetcher`; no test touches the network.
 
+use serde_json::{json, Value};
 use std::fs;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::Duration;
 
-fn resolve_page(
+fn resolve_detail(
     rule: &SourceRule,
-    _legacy_name: &str,
     page: &str,
+    step_data: Option<Value>,
     ctx: &mut RequestContext,
-) -> std::io::Result<PageFact> {
-    patchhub_core::sources::adapters::source_adapter(rule, None)?.resolve_page(
+) -> std::io::Result<patchhub_core::sources::adapters::script::DetailStepOutcome> {
+    let state = patchhub_core::sources::adapters::script::DetailStepState {
+        title: String::new(),
+        aliases: Vec::new(),
+        page: page.to_string(),
+        appid: None,
+        current_step: 1,
+        total_steps: 2,
+        step_data,
+        details: Vec::new(),
+    };
+    patchhub_core::sources::adapters::source_adapter(rule, None)?.resolve_detail(
         rule,
-        page,
+        &state,
         ctx,
         &Arc::new(AtomicBool::new(false)),
     )
@@ -266,7 +277,10 @@ fn patchmoe_publishes_complete_index_with_entry_mapping() {
     let index = store.load_index("patchmoe").unwrap().unwrap();
     assert!(index.complete);
     assert_eq!(index.revision, 1);
-    assert_eq!(index.schema_version, 1);
+    assert_eq!(
+        index.schema_version,
+        patchhub_core::sources::SOURCE_INDEX_SCHEMA_VERSION
+    );
     assert_eq!(index.entries.len(), 6);
     assert_eq!(index.etag.as_deref(), Some("\"v1\""));
     assert!(
@@ -278,14 +292,21 @@ fn patchmoe_publishes_complete_index_with_entry_mapping() {
         .entries
         .iter()
         .find(|entry| {
-            entry.url.as_deref() == Some("https://download.patch.moe/Kudos_Kuppa_patch.zip")
+            entry.details.iter().any(|detail| {
+                detail
+                    .mirrors
+                    .iter()
+                    .any(|mirror| mirror.url == "https://download.patch.moe/Kudos_Kuppa_patch.zip")
+            })
         })
         .expect("Kudo's Kuppa is in the fixture");
     assert_eq!(kudo.title, "Kudo’s Kuppa");
-    assert_eq!(kudo.kind, "entry");
+    assert!(kudo.is_complete());
+    assert_eq!(kudo.current_step, 1);
+    assert_eq!(kudo.total_steps, 1);
     assert_eq!(kudo.page, "https://www.patch.moe/zh");
-    assert_eq!(kudo.language.as_deref(), Some("zh-CN"));
-    assert_eq!(kudo.date.as_deref(), Some("2026/6/23"));
+    assert_eq!(kudo.details[0].languages, vec!["zh-CN"]);
+    assert_eq!(kudo.details[0].published_at.as_deref(), Some("2026/6/23"));
     assert_eq!(kudo.appid, None);
 }
 
@@ -459,14 +480,14 @@ fn table_collects_every_page_and_maps_columns() {
         .iter()
         .find(|entry| entry.title == "Game A")
         .unwrap();
-    assert_eq!(game_a.kind, "entry");
+    assert!(game_a.is_complete());
     assert_eq!(game_a.page, "https://example.com/list1");
     assert_eq!(
-        game_a.url.as_deref(),
-        Some("https://download.example.com/a.zip")
+        game_a.details[0].mirrors[0].url,
+        "https://download.example.com/a.zip"
     );
-    assert_eq!(game_a.language.as_deref(), Some("en"));
-    assert_eq!(game_a.date.as_deref(), Some("2024/1/2"));
+    assert_eq!(game_a.details[0].languages, vec!["en"]);
+    assert_eq!(game_a.details[0].published_at.as_deref(), Some("2024/1/2"));
     assert_eq!(game_a.appid, Some(42));
     assert!(index.entries.iter().any(|entry| entry.title == "Game B"
         && entry.page == "https://example.com/list2"
@@ -556,17 +577,25 @@ fn kagura_cn_update_crawls_only_list_pages() {
     assert_eq!(index.entries.len(), 3);
     assert!(index.entries.iter().any(|entry| {
         entry.title == "Patch Category"
-            && entry.kind == "category"
+            && !entry.is_complete()
+            && entry
+                .step_data
+                .as_ref()
+                .and_then(|v| v.get("kind"))
+                .and_then(|v| v.as_str())
+                == Some("category")
             && entry.page == "https://kagurafan.com/category/patch/"
     }));
     assert!(index.entries.iter().any(|entry| {
         entry.title == "Article One"
-            && entry.kind == "article"
+            && !entry.is_complete()
+            && entry.step_data.is_none()
             && entry.page == "https://kagurafan.com/article/1/"
     }));
     assert!(index.entries.iter().any(|entry| {
         entry.title == "Article Two"
-            && entry.kind == "article"
+            && !entry.is_complete()
+            && entry.step_data.is_none()
             && entry.page == "https://kagurafan.com/article/2/"
     }));
 }
@@ -723,10 +752,15 @@ fn kagura_en_index_contains_product_cards_only() {
     assert_eq!(index.entries.len(), 2, "widget/related cards are excluded");
     assert!(index.entries.iter().any(|entry| {
         entry.title == "Game A"
-            && entry.kind == "product"
+            && !entry.is_complete()
+            && entry.current_step == 1
+            && entry.total_steps == 2
             && entry.page == "https://www.kaguragames.com/product/game-a/"
     }));
-    assert!(index.entries.iter().all(|entry| entry.kind == "product"));
+    assert!(index
+        .entries
+        .iter()
+        .all(|entry| !entry.is_complete() && entry.step_data.is_none()));
 }
 
 /// Second configured entry root (the WooCommerce product-category view), with
@@ -805,10 +839,13 @@ fn kagura_en_crawls_every_configured_entry_root() {
     for title in ["Game A", "Game B", "Game C", "Game D"] {
         assert!(titles.contains(&title), "missing {title}: {titles:?}");
     }
-    assert!(index.entries.iter().all(|entry| entry.kind == "product"));
+    assert!(index
+        .entries
+        .iter()
+        .all(|entry| !entry.is_complete() && entry.step_data.is_none()));
 }
 
-// ---- 5. resolve_page facts (P3 interface) --------------------------------
+// ---- 5. resolve_detail steps ----------------------------------------------
 
 const ARTICLE: &str = r#"<html><body><article>
 <h1 class="entry-title">Game</h1>
@@ -840,40 +877,37 @@ const PRODUCT: &str = r#"<html><body><div class="product">
 </div></body></html>"#;
 
 #[test]
-fn resolve_page_parses_article_facts() {
+fn resolve_detail_parses_article_details() {
     let rule = kagura_cn_rule();
     let fake = Arc::new(FakeFetcher::new());
     fake.push(response(200, ARTICLE, "https://kagurafan.com/game/"));
     let mut ctx = context(&fake);
-    let fact = resolve_page(
-        &rule,
-        "kagura_cn_html",
-        "https://kagurafan.com/game/?utm=x",
-        &mut ctx,
-    )
-    .unwrap();
+    let outcome =
+        resolve_detail(&rule, "https://kagurafan.com/game/?utm=x", None, &mut ctx).unwrap();
 
-    assert_eq!(fact.kind, "article");
-    assert_eq!(fact.title, "Game");
-    assert_eq!(fact.page, "https://kagurafan.com/game/");
-    assert_eq!(fact.steam_ids, vec![42]);
-    assert_eq!(fact.mirrors.len(), 1);
+    assert_eq!(outcome.current_step, 2);
+    assert_eq!(outcome.total_steps, 2);
+    assert!(outcome.step_data.is_none());
+    assert_eq!(outcome.details.len(), 1);
+    let detail = &outcome.details[0];
+    assert_eq!(detail.title, "Game");
+    assert_eq!(detail.page, "https://kagurafan.com/game/");
+    assert_eq!(detail.steam_ids, vec![42]);
+    assert_eq!(detail.mirrors.len(), 1);
     assert_eq!(
-        fact.mirrors[0].url,
+        detail.mirrors[0].url,
         "https://kaguraserver.com/game_v1.2.3.zip"
     );
-    assert!(fact.text.contains("v1.2.3"));
-    assert_eq!(fact.published_at.as_deref(), Some("2024-01-02"));
-    assert!(fact
+    assert!(detail.text.contains("v1.2.3"));
+    assert_eq!(detail.published_at.as_deref(), Some("2024-01-02"));
+    assert!(detail
         .body_links
         .contains(&"https://kagurafan.com/related/".to_string()));
-    assert!(fact.article_links.is_empty());
-    assert!(fact.article_facts.is_empty());
     assert_eq!(fake.call_count(), 1);
 }
 
 #[test]
-fn resolve_page_parses_category_with_inline_articles() {
+fn resolve_detail_parses_category_with_inline_articles() {
     let rule = kagura_cn_rule();
     let fake = Arc::new(FakeFetcher::new());
     fake.push(response(
@@ -882,31 +916,28 @@ fn resolve_page_parses_category_with_inline_articles() {
         "https://kagurafan.com/category/patch/",
     ));
     let mut ctx = context(&fake);
-    let fact = resolve_page(
+    let outcome = resolve_detail(
         &rule,
-        "kagura_cn_html",
         "https://kagurafan.com/category/patch/",
+        Some(json!({ "kind": "category" })),
         &mut ctx,
     )
     .unwrap();
 
-    assert_eq!(fact.kind, "category");
-    assert_eq!(fact.title, "Patch Category");
-    assert_eq!(fact.page, "https://kagurafan.com/category/patch/");
-    assert_eq!(fact.article_links.len(), 2);
-    assert_eq!(fact.article_links[0].title, "Article One");
+    assert_eq!(outcome.current_step, 2);
+    assert_eq!(outcome.total_steps, 3);
+    let step_data = outcome.step_data.as_ref().unwrap();
     assert_eq!(
-        fact.article_links[0].page,
-        "https://kagurafan.com/article/1/"
+        step_data["pending_links"],
+        json!([{ "title": "Article Two", "page": "https://kagurafan.com/article/2/" }])
     );
     assert_eq!(
-        fact.next_page.as_deref(),
-        Some("https://kagurafan.com/category/patch/page/2/")
+        step_data["pending_pages"],
+        json!(["https://kagurafan.com/category/patch/page/2/"])
     );
-    // Only the article rendered in full becomes an inline fact.
-    assert_eq!(fact.article_facts.len(), 1);
-    let inline = &fact.article_facts[0];
-    assert_eq!(inline.kind, "article");
+    // Only the article rendered in full becomes an inline detail in Step 2.
+    assert_eq!(outcome.details.len(), 1);
+    let inline = &outcome.details[0];
     assert_eq!(inline.title, "Article One");
     assert_eq!(inline.page, "https://kagurafan.com/article/1/");
     assert_eq!(inline.mirrors.len(), 1);
@@ -915,7 +946,7 @@ fn resolve_page_parses_category_with_inline_articles() {
 }
 
 #[test]
-fn resolve_page_parses_en_product_facts_and_reuses_the_page() {
+fn resolve_detail_parses_en_product_details_and_reuses_the_page() {
     let rule = kagura_en_rule();
     let fake = Arc::new(FakeFetcher::new());
     fake.push(response(
@@ -925,39 +956,40 @@ fn resolve_page_parses_en_product_facts_and_reuses_the_page() {
     ));
     let mut ctx = context(&fake);
     let page = "https://www.kaguragames.com/product/game-a/";
-    let fact = resolve_page(&rule, "kagura_en_html", page, &mut ctx).unwrap();
+    let outcome = resolve_detail(&rule, page, None, &mut ctx).unwrap();
 
-    assert_eq!(fact.kind, "product");
-    assert_eq!(fact.title, "Game A");
-    assert_eq!(fact.page, page);
-    assert_eq!(fact.steam_ids, vec![77]);
-    assert_eq!(fact.mirrors.len(), 1);
+    assert_eq!(outcome.current_step, 2);
+    assert_eq!(outcome.total_steps, 2);
+    let detail = &outcome.details[0];
+    assert_eq!(detail.title, "Game A");
+    assert_eq!(detail.page, page);
+    assert_eq!(detail.steam_ids, vec![77]);
+    assert_eq!(detail.mirrors.len(), 1);
     assert_eq!(
-        fact.mirrors[0].url,
+        detail.mirrors[0].url,
         "https://kaguragamespatch.com/game-a.zip"
     );
-    assert!(fact.text.contains("English Patch"));
+    assert!(detail.text.contains("English Patch"));
     assert_eq!(fake.call_count(), 1);
 
     // Query variants of the same canonical page share the task's response cache.
-    let again = resolve_page(
+    let again = resolve_detail(
         &rule,
-        "kagura_en_html",
         "https://www.kaguragames.com/product/game-a/?utm=1",
+        None,
         &mut ctx,
     )
     .unwrap();
-    assert_eq!(again, fact);
+    assert_eq!(again.details, outcome.details);
     assert_eq!(fake.call_count(), 1, "same canonical page -> one request");
 }
 
 #[test]
-fn resolve_page_rejects_pages_outside_the_rule_hosts() {
+fn resolve_detail_rejects_pages_outside_the_rule_hosts() {
     let rule = kagura_cn_rule();
     let fake = Arc::new(FakeFetcher::new());
     let mut ctx = context(&fake);
-    let error =
-        resolve_page(&rule, "kagura_cn_html", "https://evil.example/x/", &mut ctx).unwrap_err();
+    let error = resolve_detail(&rule, "https://evil.example/x/", None, &mut ctx).unwrap_err();
     assert_eq!(error.to_string(), "invalid_source_url");
     assert_eq!(fake.call_count(), 0);
 }
@@ -999,7 +1031,14 @@ fn update_source_is_source_scoped_and_dedupes_urls_within_one_task() {
     let categories: Vec<_> = index
         .entries
         .iter()
-        .filter(|entry| entry.kind == "category")
+        .filter(|entry| {
+            entry
+                .step_data
+                .as_ref()
+                .and_then(|v| v.get("kind"))
+                .and_then(|v| v.as_str())
+                == Some("category")
+        })
         .collect();
     assert_eq!(categories.len(), 1);
     assert_eq!(categories[0].title, "Patch", "first occurrence wins");

@@ -97,10 +97,10 @@ fn fake(bodies: &[Value]) -> Arc<FakeFetcher> {
     fake
 }
 fn found(id: &str) -> Value {
-    json!({"pages":[{"fact":{"title":"Game","page":format!("https://{id}.example.com/patch"),"kind":"article","steam_ids":[42],"text":"English patch","mirrors":[{"url":"https://download.example.com/a.zip","format":"unknown"},{"url":"https://download.example.com/a.exe","format":"unknown"}]}}],"complete":true})
+    json!({"details":[{"title":"Game","page":format!("https://{id}.example.com/patch"),"steam_ids":[42],"text":"English patch","mirrors":[{"url":"https://download.example.com/a.zip","format":"unknown"},{"url":"https://download.example.com/a.exe","format":"unknown"}]}],"complete":true})
 }
 fn empty() -> Value {
-    json!({"pages":[],"complete":true})
+    json!({"details":[],"complete":true})
 }
 fn run(s: &Sources, fake: &Arc<FakeFetcher>) -> Vec<GameMatch> {
     matching::match_games(
@@ -215,11 +215,15 @@ fn mixed_success_failure_partial_and_complete_empty_have_distinct_outcomes() {
     s.import_script_source(&raw("a"), 1, &format!("{CODE}\n-- partial attempt"), true)
         .unwrap();
     assert_eq!(
-        run(&s, &fake(&[json!({"pages":[],"complete":false}), empty()]))[0].status,
+        run(
+            &s,
+            &fake(&[json!({"details":[],"complete":false}), empty()])
+        )[0]
+        .status,
         GameMatchStatus::Incomplete
     );
     let mut lead = found("a");
-    lead["pages"][0]["fact"]["steam_ids"] = json!([]);
+    lead["details"][0]["steam_ids"] = json!([]);
     let result = run(&s, &fake(&[lead, empty()]));
     assert_eq!(result[0].status, GameMatchStatus::Incomplete);
     assert!(!result[0].candidates.is_empty());
@@ -355,12 +359,24 @@ fn publisher_hit_skips_all_fallbacks_and_incomplete_coverage_never_confirms_no_p
     index.entries.push(SourceIndexEntry {
         title: "Game".into(),
         page: "https://example.com/".into(),
-        kind: "entry".into(),
         appid: Some(42),
-        url: Some("https://download.example.com/game.zip".into()),
         aliases: vec![],
-        date: None,
-        language: Some("en".into()),
+        current_step: 1,
+        total_steps: 1,
+        step_data: None,
+        details: vec![SourceDetail {
+            title: "Game".into(),
+            page: "https://example.com/".into(),
+            steam_ids: vec![42],
+            mirrors: vec![Mirror {
+                url: "https://download.example.com/game.zip".into(),
+                label: None,
+                format: "zip".into(),
+            }],
+            languages: vec!["en".into()],
+            reported_format: Some("zip".into()),
+            ..Default::default()
+        }],
     });
     s.store().save_index(&index).unwrap();
     let network = fake(&[]);
@@ -380,8 +396,8 @@ fn query_identities_enrich_facts_but_foreign_appids_do_not_authorize_this_game()
     let (_temp, mut s) = setup();
     add(&mut s, "a", CODE);
     let mut response = found("a");
-    response["pages"][0]["fact"]["title"] = json!("Another official title");
-    response["pages"][0]["fact"]["steam_ids"] = json!([]);
+    response["details"][0]["title"] = json!("Another official title");
+    response["details"][0]["steam_ids"] = json!([]);
     response["identities"] = json!([{"appid":42,"page":"https://a.example.com/game","aliases":["Another official title"]}]);
     let result = run(&s, &fake(&[response.clone()]));
     assert_eq!(result[0].status, GameMatchStatus::FallbackMatch);

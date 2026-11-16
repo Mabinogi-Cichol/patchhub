@@ -163,30 +163,34 @@
       }
     ],
     "result": {
-      "aliases": [],
-      "article_facts": [],
-      "article_links": [],
-      "body_links": [
-        "https://kaguraserver.com/game_v1.2.3.zip",
-        "https://store.steampowered.com/app/42/Game/",
-        "https://kagurafan.com/related/"
-      ],
-      "kind": "article",
-      "mirrors": [
+      "current_step": 2,
+      "details": [
         {
-          "format": "zip",
-          "label": "下载 Mirror 1",
-          "url": "https://kaguraserver.com/game_v1.2.3.zip"
+          "aliases": [],
+          "body_links": [
+            "https://kaguraserver.com/game_v1.2.3.zip",
+            "https://store.steampowered.com/app/42/Game/",
+            "https://kagurafan.com/related/"
+          ],
+          "mirrors": [
+            {
+              "format": "zip",
+              "label": "下载 Mirror 1",
+              "url": "https://kaguraserver.com/game_v1.2.3.zip"
+            }
+          ],
+          "page": "https://kagurafan.com/article/1/",
+          "published_at": "2024-01-02",
+          "steam_ids": [
+            42
+          ],
+          "text": "中文 补丁 v1.2.3 ZIP 下载 Mirror 1 Steam Related",
+          "title": "Game"
         }
       ],
-      "next_page": null,
-      "page": "https://kagurafan.com/article/1/",
-      "published_at": "2024-01-02",
-      "steam_ids": [
-        42
-      ],
-      "text": "中文 补丁 v1.2.3 ZIP 下载 Mirror 1 Steam Related",
-      "title": "Game"
+      "diagnostics": [],
+      "step_data": null,
+      "total_steps": 2
     }
   },
   "kagura-cn-category": {
@@ -198,16 +202,13 @@
       }
     ],
     "result": {
-      "aliases": [],
-      "article_facts": [
+      "current_step": 2,
+      "details": [
         {
           "aliases": [],
-          "article_facts": [],
-          "article_links": [],
           "body_links": [
             "https://kaguraserver.com/one.zip"
           ],
-          "kind": "article",
           "mirrors": [
             {
               "format": "zip",
@@ -215,33 +216,29 @@
               "url": "https://kaguraserver.com/one.zip"
             }
           ],
-          "next_page": null,
           "page": "https://kagurafan.com/article/1/",
-          "published_at": null,
           "steam_ids": [],
           "text": "中文 v1.0 下载",
           "title": "Article One"
         }
       ],
-      "article_links": [
-        {
-          "page": "https://kagurafan.com/article/1/",
-          "title": "Article One"
-        },
-        {
-          "page": "https://kagurafan.com/article/2/",
-          "title": "Article Two"
-        }
-      ],
-      "body_links": [],
-      "kind": "category",
-      "mirrors": [],
-      "next_page": "https://kagurafan.com/category/patch/page/2/",
-      "page": "https://kagurafan.com/category/game/",
-      "published_at": null,
-      "steam_ids": [],
-      "text": "",
-      "title": "Patch Category"
+      "diagnostics": [],
+      "step_data": {
+        "kind": "category",
+        "pending_links": [
+          {
+            "page": "https://kagurafan.com/article/2/",
+            "title": "Article Two"
+          }
+        ],
+        "pending_pages": [
+          "https://kagurafan.com/category/patch/page/2/"
+        ],
+        "visited_pages": [
+          "https://kagurafan.com/category/game/"
+        ]
+      },
+      "total_steps": 3
     }
   },
   "kagura-cn-index": {
@@ -263,32 +260,29 @@
         {
           "aliases": [],
           "appid": null,
-          "date": null,
-          "kind": "article",
-          "language": null,
+          "current_step": 1,
           "page": "https://kagurafan.com/article/1/",
           "title": "Article One",
-          "url": null
+          "total_steps": 2
         },
         {
           "aliases": [],
           "appid": null,
-          "date": null,
-          "kind": "category",
-          "language": null,
+          "current_step": 1,
           "page": "https://kagurafan.com/category/patch/",
+          "step_data": {
+            "kind": "category"
+          },
           "title": "Patch Category",
-          "url": null
+          "total_steps": 2
         },
         {
           "aliases": [],
           "appid": null,
-          "date": null,
-          "kind": "article",
-          "language": null,
+          "current_step": 1,
           "page": "https://kagurafan.com/article/2/",
           "title": "Article Two",
-          "url": null
+          "total_steps": 2
         }
       ],
       "etag": null,
@@ -306,45 +300,48 @@
       }
     ],
     "result": {
-      "aliases": [],
-      "article_facts": [],
-      "article_links": [],
-      "body_links": [
-        "https://kaguraserver.com/KaguraGames/EN/patch/Sacrifice%20Sanctuary/Sacrifice%20Sanctuary%20EN%20Patch%20v1.01.exe",
-        "https://kagurachan.com/KaguraGames/EN/patch/Sacrifice%20Sanctuary/Sacrifice%20Sanctuary%20EN%20Patch%20v1.01.exe",
-        "https://kaguragamespatch.com/KaguraGames/EN/patch/Sacrifice%20Sanctuary/Sacrifice%20Sanctuary%20EN%20Patch%20v1.01.exe",
-        "https://drive.google.com/file/d/14d62hMlTWiNhfa9riSDZ3k96VLwoOhQC/view?usp=drive_link",
-        "https://www.kaguragames.com/patch-instructions/"
-      ],
-      "kind": "product",
-      "mirrors": [
+      "current_step": 2,
+      "details": [
         {
-          "format": "exe",
-          "label": "Mirror 1",
-          "url": "https://kaguraserver.com/KaguraGames/EN/patch/Sacrifice%20Sanctuary/Sacrifice%20Sanctuary%20EN%20Patch%20v1.01.exe"
-        },
-        {
-          "format": "exe",
-          "label": "Mirror 2",
-          "url": "https://kagurachan.com/KaguraGames/EN/patch/Sacrifice%20Sanctuary/Sacrifice%20Sanctuary%20EN%20Patch%20v1.01.exe"
-        },
-        {
-          "format": "exe",
-          "label": "Mirror 3",
-          "url": "https://kaguragamespatch.com/KaguraGames/EN/patch/Sacrifice%20Sanctuary/Sacrifice%20Sanctuary%20EN%20Patch%20v1.01.exe"
-        },
-        {
-          "format": "web",
-          "label": "Mirror 4",
-          "url": "https://drive.google.com/file/d/14d62hMlTWiNhfa9riSDZ3k96VLwoOhQC/view?usp=drive_link"
+          "aliases": [],
+          "body_links": [
+            "https://kaguraserver.com/KaguraGames/EN/patch/Sacrifice%20Sanctuary/Sacrifice%20Sanctuary%20EN%20Patch%20v1.01.exe",
+            "https://kagurachan.com/KaguraGames/EN/patch/Sacrifice%20Sanctuary/Sacrifice%20Sanctuary%20EN%20Patch%20v1.01.exe",
+            "https://kaguragamespatch.com/KaguraGames/EN/patch/Sacrifice%20Sanctuary/Sacrifice%20Sanctuary%20EN%20Patch%20v1.01.exe",
+            "https://drive.google.com/file/d/14d62hMlTWiNhfa9riSDZ3k96VLwoOhQC/view?usp=drive_link",
+            "https://www.kaguragames.com/patch-instructions/"
+          ],
+          "mirrors": [
+            {
+              "format": "exe",
+              "label": "Mirror 1",
+              "url": "https://kaguraserver.com/KaguraGames/EN/patch/Sacrifice%20Sanctuary/Sacrifice%20Sanctuary%20EN%20Patch%20v1.01.exe"
+            },
+            {
+              "format": "exe",
+              "label": "Mirror 2",
+              "url": "https://kagurachan.com/KaguraGames/EN/patch/Sacrifice%20Sanctuary/Sacrifice%20Sanctuary%20EN%20Patch%20v1.01.exe"
+            },
+            {
+              "format": "exe",
+              "label": "Mirror 3",
+              "url": "https://kaguragamespatch.com/KaguraGames/EN/patch/Sacrifice%20Sanctuary/Sacrifice%20Sanctuary%20EN%20Patch%20v1.01.exe"
+            },
+            {
+              "format": "web",
+              "label": "Mirror 4",
+              "url": "https://drive.google.com/file/d/14d62hMlTWiNhfa9riSDZ3k96VLwoOhQC/view?usp=drive_link"
+            }
+          ],
+          "page": "https://www.kaguragames.com/product/sacrifice-sanctuary-the-ritual-maidens-life-with-monsters-patch/",
+          "steam_ids": [],
+          "text": "<img decoding=\"async\" class=\"aligncenter size-full wp-image-1481\" src=\"https://www.kaguragames.com/wp-content/uploads/2020/08/Kagura-Games-Patch-Graphic.png\" alt=\"\" width=\"728\" height=\"90\" srcset=\"https://www.kaguragames.com/wp-content/uploads/2020/08/Kagura-Games-Patch-Graphic.png 728w, https://www.kaguragames.com/wp-content/uploads/2020/08/Kagura-Games-Patch-Graphic-510x63.png 510w\" sizes=\"(max-width: 728px) 100vw, 728px\" /> このパッチは、日本国外でのみ使用できます。 (This patch may only be used outside of Japan.) Sacrifice Sanctuary: The Ritual Maiden’s Life With Monsters Steam and GOG Patch v1.01 Mirror 1 Mirror 2 Mirror 3 Mirror 4 Patch Instructions can be found here.",
+          "title": "Sacrifice Sanctuary: The Ritual Maiden’s Life With Monsters Patch"
         }
       ],
-      "next_page": null,
-      "page": "https://www.kaguragames.com/product/sacrifice-sanctuary-the-ritual-maidens-life-with-monsters-patch/",
-      "published_at": null,
-      "steam_ids": [],
-      "text": "<img decoding=\"async\" class=\"aligncenter size-full wp-image-1481\" src=\"https://www.kaguragames.com/wp-content/uploads/2020/08/Kagura-Games-Patch-Graphic.png\" alt=\"\" width=\"728\" height=\"90\" srcset=\"https://www.kaguragames.com/wp-content/uploads/2020/08/Kagura-Games-Patch-Graphic.png 728w, https://www.kaguragames.com/wp-content/uploads/2020/08/Kagura-Games-Patch-Graphic-510x63.png 510w\" sizes=\"(max-width: 728px) 100vw, 728px\" /> このパッチは、日本国外でのみ使用できます。 (This patch may only be used outside of Japan.) Sacrifice Sanctuary: The Ritual Maiden’s Life With Monsters Steam and GOG Patch v1.01 Mirror 1 Mirror 2 Mirror 3 Mirror 4 Patch Instructions can be found here.",
-      "title": "Sacrifice Sanctuary: The Ritual Maiden’s Life With Monsters Patch"
+      "diagnostics": [],
+      "step_data": null,
+      "total_steps": 2
     }
   },
   "kagura-en-index": {
@@ -371,42 +368,34 @@
         {
           "aliases": [],
           "appid": null,
-          "date": null,
-          "kind": "product",
-          "language": null,
+          "current_step": 1,
           "page": "https://www.kaguragames.com/product/game-a/",
           "title": "Game A",
-          "url": null
+          "total_steps": 2
         },
         {
           "aliases": [],
           "appid": null,
-          "date": null,
-          "kind": "product",
-          "language": null,
+          "current_step": 1,
           "page": "https://www.kaguragames.com/product/game-b/",
           "title": "Game B",
-          "url": null
+          "total_steps": 2
         },
         {
           "aliases": [],
           "appid": null,
-          "date": null,
-          "kind": "product",
-          "language": null,
+          "current_step": 1,
           "page": "https://www.kaguragames.com/product/game-c/",
           "title": "Game C",
-          "url": null
+          "total_steps": 2
         },
         {
           "aliases": [],
           "appid": null,
-          "date": null,
-          "kind": "product",
-          "language": null,
+          "current_step": 1,
           "page": "https://www.kaguragames.com/product/game-d/",
           "title": "Game D",
-          "url": null
+          "total_steps": 2
         }
       ],
       "etag": null,
@@ -458,62 +447,176 @@
         {
           "aliases": [],
           "appid": null,
-          "date": "2026/10/13",
-          "kind": "entry",
-          "language": "zh-CN",
+          "current_step": 1,
+          "details": [
+            {
+              "aliases": [],
+              "languages": [
+                "zh-CN"
+              ],
+              "mirrors": [
+                {
+                  "format": "zip",
+                  "label": null,
+                  "url": "https://download.patch.moe/Modified_Girl_Eurie_patch.zip"
+                }
+              ],
+              "page": "https://www.patch.moe/zh",
+              "published_at": "2026/10/13",
+              "reported_format": "zip",
+              "steam_ids": [],
+              "text": "",
+              "title": "Modified Girl Eurie!"
+            }
+          ],
           "page": "https://www.patch.moe/zh",
           "title": "Modified Girl Eurie!",
-          "url": "https://download.patch.moe/Modified_Girl_Eurie_patch.zip"
+          "total_steps": 1
         },
         {
           "aliases": [],
           "appid": null,
-          "date": "2026/9/30",
-          "kind": "entry",
-          "language": "zh-CN",
+          "current_step": 1,
+          "details": [
+            {
+              "aliases": [],
+              "languages": [
+                "zh-CN"
+              ],
+              "mirrors": [
+                {
+                  "format": "zip",
+                  "label": null,
+                  "url": "https://download.patch.moe/Cicada_Communication_patch.zip"
+                }
+              ],
+              "page": "https://www.patch.moe/zh",
+              "published_at": "2026/9/30",
+              "reported_format": "zip",
+              "steam_ids": [],
+              "text": "",
+              "title": "Cicada Communication"
+            }
+          ],
           "page": "https://www.patch.moe/zh",
           "title": "Cicada Communication",
-          "url": "https://download.patch.moe/Cicada_Communication_patch.zip"
+          "total_steps": 1
         },
         {
           "aliases": [],
           "appid": null,
-          "date": "2026/9/24",
-          "kind": "entry",
-          "language": "zh-CN",
+          "current_step": 1,
+          "details": [
+            {
+              "aliases": [],
+              "languages": [
+                "zh-CN"
+              ],
+              "mirrors": [
+                {
+                  "format": "zip",
+                  "label": null,
+                  "url": "https://download.patch.moe/Fusty_Dungeon_patch.zip"
+                }
+              ],
+              "page": "https://www.patch.moe/zh",
+              "published_at": "2026/9/24",
+              "reported_format": "zip",
+              "steam_ids": [],
+              "text": "",
+              "title": "Fusty Dungeon"
+            }
+          ],
           "page": "https://www.patch.moe/zh",
           "title": "Fusty Dungeon",
-          "url": "https://download.patch.moe/Fusty_Dungeon_patch.zip"
+          "total_steps": 1
         },
         {
           "aliases": [],
           "appid": null,
-          "date": "COMING SOON",
-          "kind": "entry",
-          "language": "zh-CN",
+          "current_step": 1,
+          "details": [
+            {
+              "aliases": [],
+              "languages": [
+                "zh-CN"
+              ],
+              "mirrors": [
+                {
+                  "format": "zip",
+                  "label": null,
+                  "url": "https://download.patch.moe/Princessfall_EN_Patch.zip"
+                }
+              ],
+              "page": "https://www.patch.moe/zh",
+              "published_at": "COMING SOON",
+              "reported_format": "zip",
+              "steam_ids": [],
+              "text": "",
+              "title": "Princessfall"
+            }
+          ],
           "page": "https://www.patch.moe/zh",
           "title": "Princessfall",
-          "url": "https://download.patch.moe/Princessfall_EN_Patch.zip"
+          "total_steps": 1
         },
         {
           "aliases": [],
           "appid": null,
-          "date": "2026/6/23",
-          "kind": "entry",
-          "language": "zh-CN",
+          "current_step": 1,
+          "details": [
+            {
+              "aliases": [],
+              "languages": [
+                "zh-CN"
+              ],
+              "mirrors": [
+                {
+                  "format": "zip",
+                  "label": null,
+                  "url": "https://download.patch.moe/Kudos_Kuppa_patch.zip"
+                }
+              ],
+              "page": "https://www.patch.moe/zh",
+              "published_at": "2026/6/23",
+              "reported_format": "zip",
+              "steam_ids": [],
+              "text": "",
+              "title": "Kudo’s Kuppa"
+            }
+          ],
           "page": "https://www.patch.moe/zh",
           "title": "Kudo’s Kuppa",
-          "url": "https://download.patch.moe/Kudos_Kuppa_patch.zip"
+          "total_steps": 1
         },
         {
           "aliases": [],
           "appid": null,
-          "date": "2025/8/5",
-          "kind": "entry",
-          "language": "zh-CN",
+          "current_step": 1,
+          "details": [
+            {
+              "aliases": [],
+              "languages": [
+                "zh-CN"
+              ],
+              "mirrors": [
+                {
+                  "format": "zip",
+                  "label": null,
+                  "url": "https://download.patch.moe/yokaibusters_patch.zip"
+                }
+              ],
+              "page": "https://www.patch.moe/zh",
+              "published_at": "2025/8/5",
+              "reported_format": "zip",
+              "steam_ids": [],
+              "text": "",
+              "title": "Yokai Busters"
+            }
+          ],
           "page": "https://www.patch.moe/zh",
           "title": "Yokai Busters",
-          "url": "https://download.patch.moe/yokaibusters_patch.zip"
+          "total_steps": 1
         }
       ],
       "etag": null,

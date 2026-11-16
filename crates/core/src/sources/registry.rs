@@ -7,12 +7,12 @@
 //! loaded lazily (or preloaded for an immutable snapshot); the legacy per-game
 //! cache/discovery trees are only read by the one-time v1 → v2 migration.
 
-use super::matching::{match_entry_rows, select_entries};
+use super::index;
+use super::matching;
 use super::model::*;
 use super::r#match::candidate_is_credible;
 use super::store::SourceStore;
 use super::validate;
-use super::{canonical, index};
 use super::{
     invalid, Clock, Result, SystemClock, GAME_MATCH_SCHEMA_VERSION, SOURCE_INDEX_SCHEMA_VERSION,
 };
@@ -360,8 +360,9 @@ impl SourceRegistry {
     /// Publisher source matches for installation/display.
     ///
     /// Uses the persisted match record; before the first match task (no record)
-    /// it falls back to local `kind = "entry"` index matching so installer
-    /// resolution keeps working immediately after a source index update.
+    /// it falls back to local completed index matching (`entry.is_complete()`)
+    /// so installer resolution keeps working immediately after a source index
+    /// update.
     pub fn matches(&self, game: &GameQuery, include_disabled: bool) -> Vec<SourceMatch> {
         if game.appid == 0 {
             return Vec::new();
@@ -414,14 +415,17 @@ impl SourceRegistry {
                 continue;
             };
             result.extend(
-                select_entries(&index, game)
-                    .map(|(url, entry)| source_match_from_entry(rule, entry, url, game.appid)),
+                matching::match_completed_entries(rule, &index, game)
+                    .into_iter()
+                    .filter_map(|candidate| {
+                        source_match_from_candidate(rule, &candidate, game.appid)
+                    }),
             );
         }
         result
     }
 
-    /// Local `kind = "entry"` index matching projected as dynamic ZIP candidates
+    /// Local completed-entry index matching projected as candidates
     /// (`candidate_id`/`fingerprint` identical to the P3 matching engine).
     pub fn index_candidates(&self, game: &GameQuery) -> Vec<SourceCandidate> {
         let mut result = Vec::new();
@@ -435,7 +439,7 @@ impl SourceRegistry {
             let Some(index) = self.index(&rule.id) else {
                 continue;
             };
-            for mut candidate in match_entry_rows(rule, &index, game) {
+            for mut candidate in matching::match_completed_entries(rule, &index, game) {
                 index::bind_candidate(rule, &mut candidate);
                 result.push(candidate);
             }
@@ -444,7 +448,7 @@ impl SourceRegistry {
     }
 
     /// Dynamic ZIP candidate view: match-record publisher candidates first,
-    /// then deterministic `kind = "entry"` index projections, deduped by
+    /// then deterministic completed-entry index projections, deduped by
     /// `candidate_id`.
     pub fn dynamic_zip_candidates(&self, game: &GameQuery) -> Vec<SourceCandidate> {
         let mut candidates = self.cached_candidates(game);
@@ -757,26 +761,6 @@ fn source_match_from_candidate(
     })
 }
 
-fn source_match_from_entry(
-    rule: &SourceRule,
-    entry: &SourceIndexEntry,
-    url: &str,
-    appid: u32,
-) -> SourceMatch {
-    SourceMatch {
-        title: entry.title.clone(),
-        aliases: entry.aliases.clone(),
-        url: url.to_string(),
-        source_page: entry.page.clone(),
-        language: entry.language.clone().unwrap_or_default(),
-        date: entry.date.clone(),
-        appid: entry.appid,
-        source_id: rule.id.clone(),
-        release_id: release_id_for(&rule.id, appid),
-        root_layout: rule.root_layout,
-    }
-}
-
 /// Release identity shared with `installer::resolve::source_release_id`.
 fn release_id_for(source_id: &str, appid: u32) -> String {
     if source_id == "patchmoe" {
@@ -784,125 +768,6 @@ fn release_id_for(source_id: &str, appid: u32) -> String {
     } else {
         format!("source-{source_id}-{appid}")
     }
-}
-
-/// Projects one validated index match into the shared dynamic ZIP candidate
-/// shape (`P4 B2`). Extracted so the P3 matching engine derives identical
-/// `candidate_id`/`fingerprint` values from a `SourceIndexEntry`.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn candidate_from_index_match(
-    source_id: &str,
-    appid: u32,
-    entry_appid: Option<u32>,
-    matched_dlc: Option<u32>,
-    title: &str,
-    aliases: &[String],
-    language: &str,
-    source_page: &str,
-    url: &str,
-    observed_at_unix: u64,
-) -> SourceCandidate {
-    let language = language.to_string();
-    let version_identity = "page-unknown".to_string();
-    let variant = if matched_dlc.is_some() {
-        Variant::Dlc
-    } else {
-        super::identity::variant(title)
-    };
-    let requires_dlc = matched_dlc.map(|dlc| vec![dlc]);
-    let identity = serde_json::Value::Array(vec![
-        serde_json::Value::String(source_id.to_string()),
-        serde_json::Value::String(canonical::canonical_page_url(source_page)),
-        serde_json::Value::String(super::identity::variant_str(variant).to_string()),
-        serde_json::Value::Array(vec![serde_json::Value::String(language.clone())]),
-        serde_json::Value::String(version_identity.clone()),
-        serde_json::Value::String(url.to_string()),
-    ]);
-    let candidate_id = canonical::candidate_id(&identity);
-    let mut candidate = SourceCandidate {
-        parser_fingerprint: None,
-        candidate_id,
-        source_id: source_id.to_string(),
-        source_record_id: canonical::canonical_page_url(source_page),
-        game_appid: Some(appid),
-        parent_appid: if variant == Variant::Dlc {
-            Some(appid)
-        } else {
-            None
-        },
-        aliases: aliases.to_vec(),
-        game_title: title.to_string(),
-        patch_title: title.to_string(),
-        variant,
-        requires_dlc,
-        excludes_dlc: None,
-        platforms: vec!["steam".to_string()],
-        patch_kind: "adult_content".to_string(),
-        languages: vec![language],
-        version_raw: None,
-        version_evidence: Vec::new(),
-        version_identity,
-        published_at: None,
-        patch_updated_at: None,
-        source_page: source_page.to_string(),
-        upstream_page: None,
-        mirrors: vec![Mirror {
-            url: url.to_string(),
-            label: None,
-            format: "zip".to_string(),
-        }],
-        format_reported: ArtifactFormat::Zip,
-        format_observed: ArtifactFormat::Zip,
-        capability: Capability::DiscoverOnly,
-        identity_evidence: Vec::new(),
-        provenance: Vec::new(),
-        match_basis: if entry_appid.is_some() {
-            MatchBasis::Appid
-        } else {
-            MatchBasis::OfficialTitle
-        },
-        observed_at: iso8601_utc(observed_at_unix),
-        cache_status: CacheStatus::Cached,
-        warnings: Vec::new(),
-        fingerprint: String::new(),
-        related_index_pages: Vec::new(),
-    };
-    if let Ok(value) = serde_json::to_value(&candidate) {
-        candidate.fingerprint = canonical::fingerprint(&value);
-    }
-    candidate
-}
-
-/// ISO8601 UTC rendering of a Unix second count. Used only for
-/// `SourceCandidate::observed_at` on index projections, which the fingerprint
-/// deliberately excludes; determinism comes from the source index `checked_at`.
-fn iso8601_utc(seconds: u64) -> String {
-    let days = (seconds / 86_400) as i64;
-    let remainder = seconds % 86_400;
-    let (year, month, day) = civil_from_days(days);
-    format!(
-        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}+00:00",
-        year,
-        month,
-        day,
-        remainder / 3600,
-        (remainder % 3600) / 60,
-        remainder % 60
-    )
-}
-
-/// Howard Hinnant's `civil_from_days` (days since 1970-01-01).
-fn civil_from_days(days: i64) -> (i64, u32, u32) {
-    let z = days + 719_468;
-    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
-    let doe = z - era * 146_097;
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let year = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let day = (doy - (153 * mp + 2) / 5 + 1) as u32;
-    let month = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
-    (if month <= 2 { year + 1 } else { year }, month, day)
 }
 
 #[cfg(test)]
@@ -1038,11 +903,23 @@ mod tests {
             title: title.to_string(),
             aliases: Vec::new(),
             page: "https://www.patch.moe/".to_string(),
-            kind: "entry".to_string(),
             appid,
-            url: Some(url.to_string()),
-            language: Some("zh-CN".to_string()),
-            date: None,
+            current_step: 1,
+            total_steps: 1,
+            step_data: None,
+            details: vec![SourceDetail {
+                title: title.to_string(),
+                page: "https://www.patch.moe/".to_string(),
+                steam_ids: appid.into_iter().collect(),
+                mirrors: vec![Mirror {
+                    url: url.to_string(),
+                    label: None,
+                    format: "zip".to_string(),
+                }],
+                languages: vec!["zh-CN".to_string()],
+                reported_format: Some("zip".to_string()),
+                ..Default::default()
+            }],
         }
     }
 
@@ -1065,18 +942,45 @@ mod tests {
     }
 
     fn candidate(source_id: &str, appid: u32) -> SourceCandidate {
-        candidate_from_index_match(
-            source_id,
+        let rule = super::super::test_fixtures::default_rule(source_id);
+        let detail = SourceDetail {
+            title: "Game".to_string(),
+            page: "https://www.patch.moe/".to_string(),
+            steam_ids: vec![appid],
+            mirrors: vec![Mirror {
+                url: "https://download.patch.moe/g.zip".to_string(),
+                label: None,
+                format: "zip".to_string(),
+            }],
+            languages: vec!["zh-CN".to_string()],
+            reported_format: Some("zip".to_string()),
+            ..Default::default()
+        };
+        let query = QueryContext {
             appid,
-            Some(appid),
-            None,
-            "Game",
-            &[],
-            "zh-CN",
-            "https://www.patch.moe/",
-            "https://download.patch.moe/g.zip",
-            1_000,
+            name: "Game".to_string(),
+            localized_name: None,
+            related_dlc: Vec::new(),
+            name_hints: Vec::new(),
+            legacy_match: false,
+            force: false,
+            source_context: Vec::new(),
+            parser_version: super::super::PARSER_VERSION,
+            query_version: super::super::QUERY_VERSION,
+            settings_revision: 0,
+            generation: None,
+        };
+        super::super::identity::build_candidates_from_detail_with_options(
+            &rule,
+            &detail,
+            &[appid],
+            &query,
+            Some(super::super::identity::iso8601_utc(1_000)),
+            CacheStatus::Cached,
         )
+        .into_iter()
+        .next()
+        .unwrap()
     }
 
     fn save_match(
@@ -1355,7 +1259,7 @@ mod tests {
     }
 
     #[test]
-    fn index_candidates_project_entry_rows_only() {
+    fn index_candidates_project_completed_entries_only() {
         let temp = tempfile::tempdir().unwrap();
         let registry = registry_at(temp.path());
         registry
@@ -1366,11 +1270,11 @@ mod tests {
                     title: "Category".to_string(),
                     aliases: Vec::new(),
                     page: "https://www.patch.moe/category/".to_string(),
-                    kind: "category".to_string(),
                     appid: None,
-                    url: None,
-                    language: None,
-                    date: None,
+                    current_step: 1,
+                    total_steps: 2,
+                    step_data: Some(serde_json::json!({ "kind": "category" })),
+                    details: Vec::new(),
                 },
             ]))
             .unwrap();

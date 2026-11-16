@@ -123,7 +123,7 @@ fn publisher_download_cancel_is_standard_cancel_before_any_transaction() {
     use patchhub_core::{
         install,
         sources::{
-            model::{GameQuery, SourceIndex, SourceIndexEntry},
+            model::{GameQuery, Mirror, SourceDetail, SourceIndex, SourceIndexEntry},
             Sources,
         },
     };
@@ -162,7 +162,7 @@ fn publisher_download_cancel_is_standard_cancel_before_any_transaction() {
                         .find(|r| r.id == "patchmoe")
                         .unwrap(),
                 ),
-                schema_version: 1,
+                schema_version: patchhub_core::sources::SOURCE_INDEX_SCHEMA_VERSION,
                 source_id: "patchmoe".into(),
                 revision: 1,
                 complete: true,
@@ -174,11 +174,23 @@ fn publisher_download_cancel_is_standard_cancel_before_any_transaction() {
                     title: "Fixture".into(),
                     aliases: vec![],
                     page: "https://www.patch.moe/".into(),
-                    kind: "entry".into(),
                     appid: Some(42),
-                    url: Some("https://download.patch.moe/fixture.zip".into()),
-                    language: Some("zh-CN".into()),
-                    date: None,
+                    current_step: 1,
+                    total_steps: 1,
+                    step_data: None,
+                    details: vec![SourceDetail {
+                        title: "Fixture".into(),
+                        page: "https://www.patch.moe/".into(),
+                        steam_ids: vec![42],
+                        mirrors: vec![Mirror {
+                            url: "https://download.patch.moe/fixture.zip".into(),
+                            label: None,
+                            format: "zip".into(),
+                        }],
+                        languages: vec!["zh-CN".into()],
+                        reported_format: Some("zip".into()),
+                        ..Default::default()
+                    }],
                 }],
                 pending: Vec::new(),
             })
@@ -294,11 +306,11 @@ fn script_source_update_to_isolated_zip_and_exe_install() {
             r#"return {{
           collect_index=function(ctx,rule,previous)
             local title=ctx.html(ctx.get(rule.pages[1]).text):select('h1')[1]:text()
-            return {{entries={{{{title=title,page='https://script.example/game',kind='article'}}}},complete=true}}
+            return {{entries={{{{title=title,page='https://script.example/game',current_step=1,total_steps=2}}}},complete=true}}
           end,
-          resolve_page=function(ctx,rule,page)
-            local title=ctx.html(ctx.get(page).text):select('h1')[1]:text()
-            return {{title=title,page=page,kind='article',steam_ids={{42}},text='English patch {format}',mirrors={{{{url='https://kaguraserver.com/a.{format}'}}}}}}
+          resolve_detail=function(ctx,rule,state)
+            local title=ctx.html(ctx.get(state.page).text):select('h1')[1]:text()
+            return {{current_step=2,total_steps=2,details={{{{title=title,page=state.page,steam_ids={{42}},text='English patch {format}',mirrors={{{{url='https://kaguraserver.com/a.{format}'}}}}}}}}}}
           end
         }}"#
         );

@@ -162,8 +162,8 @@ fn clean_app_queries_matches_installs_and_replays_without_a_public_catalog() {
         assert_eq!(result["ok"], true, "{result}");
     }
     let code = r#"return {
-        collect_index=function() return {entries={{title='Game',page='https://example.com/game',kind='product'}},complete=true} end,
-        resolve_page=function(ctx,rule,page) return {title='Game',page=page,kind='product',steam_ids={42},text='English patch',mirrors={{url='https://download.example.com/fixture.zip',format='zip'}}} end
+        collect_index=function() return {entries={{title='Game',page='https://example.com/game',current_step=1,total_steps=2}},complete=true} end,
+        resolve_detail=function(ctx,rule,state) return {current_step=2,total_steps=2,details={{title='Game',page=state.page,steam_ids={42},text='English patch',mirrors={{url='https://download.example.com/fixture.zip',format='zip'}}}}} end
     }"#;
     let imported = call(
         &binary,

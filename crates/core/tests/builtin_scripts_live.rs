@@ -51,8 +51,22 @@ fn bundled_publisher_metadata_live() {
             .join(link)
             .unwrap()
             .to_string();
-        let fact =
-            adapters::source_adapter(&cn, None)?.resolve_page(&cn, &page, &mut ctx, &cancel)?;
+        let state = adapters::script::DetailStepState {
+            title: "live".into(),
+            aliases: Vec::new(),
+            page: page.clone(),
+            appid: None,
+            current_step: 1,
+            total_steps: 2,
+            step_data: None,
+            details: Vec::new(),
+        };
+        let outcome =
+            adapters::source_adapter(&cn, None)?.resolve_detail(&cn, &state, &mut ctx, &cancel)?;
+        let fact = outcome
+            .details
+            .first()
+            .ok_or_else(|| sources::invalid("live_detail_missing"))?;
         println!(
             "kagura-cn: page={} title={} steam_ids={:?} mirrors={}",
             fact.page,
@@ -67,17 +81,33 @@ fn bundled_publisher_metadata_live() {
     }
     let en = rule("kagura-en");
     let page = "https://www.kaguragames.com/product/sacrifice-sanctuary-the-ritual-maidens-life-with-monsters-patch/";
+    let en_state = adapters::script::DetailStepState {
+        title: "Sacrifice Sanctuary".into(),
+        aliases: Vec::new(),
+        page: page.into(),
+        appid: None,
+        current_step: 1,
+        total_steps: 2,
+        step_data: None,
+        details: Vec::new(),
+    };
     match adapters::source_adapter(&en, None)
         .unwrap()
-        .resolve_page(&en, page, &mut ctx, &cancel)
+        .resolve_detail(&en, &en_state, &mut ctx, &cancel)
     {
-        Ok(fact) => println!(
-            "kagura-en: page={} title={} steam_ids={:?} mirrors={}",
-            fact.page,
-            fact.title,
-            fact.steam_ids,
-            fact.mirrors.len()
-        ),
+        Ok(outcome) => {
+            if let Some(fact) = outcome.details.first() {
+                println!(
+                    "kagura-en: page={} title={} steam_ids={:?} mirrors={}",
+                    fact.page,
+                    fact.title,
+                    fact.steam_ids,
+                    fact.mirrors.len()
+                );
+            } else {
+                errors.push("kagura-en: empty details".to_string());
+            }
+        }
         Err(error) => errors.push(format!("kagura-en: {error}")),
     }
     println!("logical metadata requests={}", ctx.visited.len());

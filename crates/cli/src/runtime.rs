@@ -274,7 +274,7 @@ fn fixture_source_rule(id: &str) -> sources::SourceRule {
 #[cfg(test)]
 fn fixture_source_index(id: &str) -> sources::SourceIndex {
     sources::SourceIndex {
-        schema_version: 1,
+        schema_version: sources::SOURCE_INDEX_SCHEMA_VERSION,
         source_id: id.into(),
         parser_fingerprint: sources::index::parser_fingerprint(&fixture_source_rule(id)),
         revision: 1,
@@ -300,7 +300,7 @@ mod script_error_tests {
             "unsupported_script_api_version",
         ] {
             let detail = format!(
-                "source=custom, entry=resolve_page: source/custom.lua:7: {}",
+                "source=custom, entry=resolve_detail: source/custom.lua:7: {}",
                 "中文".repeat(1200)
             );
             let domain = super::err(format!("{code}: {detail}"));
@@ -1325,7 +1325,7 @@ fn install_patch(
 #[cfg(test)]
 mod sources_tests {
     use super::*;
-    use patchhub_core::sources::model::{SourceIndex, SourceIndexEntry};
+    use patchhub_core::sources::model::{Mirror, SourceDetail, SourceIndex, SourceIndexEntry};
 
     fn bundled_rules() -> sources::RulesConfig {
         serde_json::from_str(sources::DEFAULT_RULES_JSON).unwrap()
@@ -1716,7 +1716,7 @@ mod sources_tests {
                 parser_fingerprint: sources::index::parser_fingerprint(&fixture_source_rule(
                     "patchmoe",
                 )),
-                schema_version: 1,
+                schema_version: sources::SOURCE_INDEX_SCHEMA_VERSION,
                 source_id: "patchmoe".to_string(),
                 revision: 3,
                 complete: true,
@@ -1728,11 +1728,23 @@ mod sources_tests {
                     title: "Synthetic".to_string(),
                     aliases: Vec::new(),
                     page: "https://www.patch.moe/zh".to_string(),
-                    kind: "entry".to_string(),
                     appid: Some(42),
-                    url: Some("https://download.patch.moe/synthetic.zip".to_string()),
-                    language: Some("zh-CN".to_string()),
-                    date: None,
+                    current_step: 1,
+                    total_steps: 1,
+                    step_data: None,
+                    details: vec![SourceDetail {
+                        title: "Synthetic".to_string(),
+                        page: "https://www.patch.moe/zh".to_string(),
+                        steam_ids: vec![42],
+                        mirrors: vec![Mirror {
+                            url: "https://download.patch.moe/synthetic.zip".to_string(),
+                            label: None,
+                            format: "zip".to_string(),
+                        }],
+                        languages: vec!["zh-CN".to_string()],
+                        reported_format: Some("zip".to_string()),
+                        ..Default::default()
+                    }],
                 }],
                 pending: Vec::new(),
             })
@@ -2016,7 +2028,7 @@ mod sources_tests {
                 parser_fingerprint: sources::index::parser_fingerprint(&fixture_source_rule(
                     "patchmoe",
                 )),
-                schema_version: 1,
+                schema_version: sources::SOURCE_INDEX_SCHEMA_VERSION,
                 source_id: "patchmoe".to_string(),
                 revision: 1,
                 complete: true,
@@ -2028,11 +2040,23 @@ mod sources_tests {
                     title: "Synthetic".to_string(),
                     aliases: Vec::new(),
                     page: "https://www.patch.moe/synthetic".to_string(),
-                    kind: "entry".to_string(),
                     appid: Some(42),
-                    url: Some("https://download.patch.moe/synthetic.zip".to_string()),
-                    language: Some("en".to_string()),
-                    date: None,
+                    current_step: 1,
+                    total_steps: 1,
+                    step_data: None,
+                    details: vec![SourceDetail {
+                        title: "Synthetic".to_string(),
+                        page: "https://www.patch.moe/synthetic".to_string(),
+                        steam_ids: vec![42],
+                        mirrors: vec![Mirror {
+                            url: "https://download.patch.moe/synthetic.zip".to_string(),
+                            label: None,
+                            format: "zip".to_string(),
+                        }],
+                        languages: vec!["en".to_string()],
+                        reported_format: Some("zip".to_string()),
+                        ..Default::default()
+                    }],
                 }],
                 pending: Vec::new(),
             })

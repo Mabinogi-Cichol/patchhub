@@ -115,35 +115,49 @@ local function library(ctx, rule)
         if not title or title:text() == "" or not anchor or anchor:attr("href") == "" then return end
         local ok, url = pcall(ctx.url_join, page, anchor:attr("href"))
         if not ok or not ctx.url_parts(url).path:lower():match("%.zip$") then return end
-        local entry = {title = title:text(), aliases = ctx.array(), page = page,
-            kind = "entry", url = url, language = language}
+        local row_title = title:text()
+        local published_at
         if columns.date and columns.date ~= ctx.null and row[columns.date + 1] then
             local date = row[columns.date + 1]:text()
             if date == "待定" or date == "即将推出" or date == "即將推出" then date = "COMING SOON" end
-            if date ~= "" then entry.date = ctx.normalize_date(date) end
+            if date ~= "" then published_at = ctx.normalize_date(date) end
         end
+        local lang = language
         if columns.language and columns.language ~= ctx.null and row[columns.language + 1] then
             local value = row[columns.language + 1]:text()
-            if value ~= "" then entry.language = value end
+            if value ~= "" then lang = value end
         end
+        local appid
         if columns.appid and columns.appid ~= ctx.null and row[columns.appid + 1] then
             local value = row[columns.appid + 1]:text()
-            local appid = tonumber(value)
-            if not value:match("^[1-9]%d*$") or not appid or appid > 4294967295 then
+            local parsed = tonumber(value)
+            if not value:match("^[1-9]%d*$") or not parsed or parsed > 4294967295 then
                 error("invalid_source_appid", 0)
             end
-            entry.appid = appid
+            appid = parsed
         end
-        return entry
-    end
-    function u.next_page(root, page)
-        for _, anchor in ipairs(root:select("a")) do
-            local next_rel = false
-            for token in (anchor:attr("rel") or ""):gmatch("%S+") do if token == "next" then next_rel = true end end
-            if next_rel or u.has(anchor, "next") or u.has(anchor, "nextpostslink") then
-                return ctx.url_join(page, anchor:attr("href") or "")
-            end
-        end
+        return {
+            title = row_title,
+            aliases = ctx.array(),
+            page = page,
+            appid = appid,
+            current_step = 1,
+            total_steps = 1,
+            details = {
+                {
+                    title = row_title,
+                    page = page,
+                    steam_ids = appid and {appid} or ctx.array(),
+                    aliases = ctx.array(),
+                    mirrors = {{url = url, format = "zip"}},
+                    text = "",
+                    languages = lang and lang ~= "" and {lang} or ctx.array(),
+                    published_at = published_at,
+                    body_links = ctx.array(),
+                    reported_format = "zip",
+                }
+            },
+        }
     end
     return u
 end
@@ -226,20 +240,26 @@ local function collect_index(ctx, rule, previous, get, submit)
     if #entries == 0 then error("patchmoe_rows_missing", 0) end
     local groups, ordered = {}, {}
     for _, entry in ipairs(entries) do
-        if not groups[entry.url] then groups[entry.url] = {}; ordered[#ordered + 1] = entry.url end
-        local group = groups[entry.url]; group[#group + 1] = entry
+        local url = entry.details[1].mirrors[1].url
+        if not groups[url] then groups[url] = {}; ordered[#ordered + 1] = url end
+        local group = groups[url]; group[#group + 1] = entry
     end
     local merged = ctx.array()
     for _, url in ipairs(ordered) do
         local group, chosen = groups[url], groups[url][1]
-        for _, entry in ipairs(group) do if entry.language == "zh-CN" then chosen = entry; break end end
+        for _, entry in ipairs(group) do
+            if entry.details[1].languages[1] == "zh-CN" then chosen = entry; break end
+        end
         local aliases, seen = ctx.array(), {}
         for _, entry in ipairs(group) do
             if entry.title ~= chosen.title and not seen[entry.title] then
                 aliases[#aliases + 1] = entry.title; seen[entry.title] = true
             end
         end
-        table.sort(aliases); chosen.aliases = aliases; merged[#merged + 1] = chosen
+        table.sort(aliases)
+        chosen.aliases = aliases
+        chosen.details[1].aliases = aliases
+        merged[#merged + 1] = chosen
     end
     return {entries = merged, pending = ctx.array(), complete = true, etag = response.etag, modified = response.modified}
 end

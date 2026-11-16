@@ -59,10 +59,10 @@ fn documented_publisher_example_imports_and_collects_direct_entries() {
     assert!(result.complete);
     assert_eq!(result.entries.len(), 1);
     assert_eq!(result.entries[0].appid, Some(123));
-    assert_eq!(result.entries[0].kind, "entry");
+    assert!(result.entries[0].is_complete());
     assert_eq!(
-        result.entries[0].url.as_deref(),
-        Some("https://downloads.vendor.example/game.zip")
+        result.entries[0].details[0].mirrors[0].url,
+        "https://downloads.vendor.example/game.zip"
     );
 }
 fn index(
@@ -119,17 +119,28 @@ fn imported_non_table_source_executes_list_and_detail_with_host_bound_progress()
         final_url: page.clone(),
         ..FetchResponse::default()
     });
-    let fact = script::resolve_page(
+    let outcome = script::resolve_detail(
         rule,
         &document.code,
-        page,
+        &script::DetailStepState {
+            title: found.entries[0].title.clone(),
+            aliases: found.entries[0].aliases.clone(),
+            page: page.clone(),
+            appid: found.entries[0].appid,
+            current_step: found.entries[0].current_step,
+            total_steps: found.entries[0].total_steps,
+            step_data: found.entries[0].step_data.clone(),
+            details: Vec::new(),
+        },
         &mut ctx(&detail),
         flag(),
         |_| {},
     )
     .unwrap();
-    assert_eq!(fact.mirrors.len(), 4);
-    assert!(fact.mirrors.iter().any(|m| m.format == "exe"));
+    assert_eq!(outcome.current_step, 2);
+    assert_eq!(outcome.total_steps, 2);
+    assert_eq!(outcome.details[0].mirrors.len(), 4);
+    assert!(outcome.details[0].mirrors.iter().any(|m| m.format == "exe"));
 }
 
 #[test]
@@ -212,8 +223,8 @@ fn errors_keep_code_source_entry_and_lua_location() {
 fn source_facts_are_validated_and_script_rule_mutation_cannot_expand_network_access() {
     let fake = Arc::new(FakeFetcher::new());
     for code in [
-        "return {collect_index=function() return {complete=true,entries={{title='Game',page='https://evil.example/',kind='product'}}} end}",
-        "return {collect_index=function() return {complete=true,entries={{title='Game',page='https://example.com/',kind='entry',url='https://evil.example/a.zip'}}} end}",
+        "return {collect_index=function() return {complete=true,entries={{title='Game',page='https://evil.example/',current_step=1,total_steps=2}}} end}",
+        "return {collect_index=function() return {complete=true,entries={{title='Game',page='https://example.com/',current_step=1,total_steps=1,details={{title='Game',page='https://example.com/',mirrors={{url='https://evil.example/a.zip'}}}}}}} end}",
         "return {collect_index=function() return {complete=true,pending={'https://example.com/'}} end}",
     ] { assert!(index(code,&fake).unwrap_err().to_string().starts_with("script_source_contract_error")); }
     let code="return {collect_index=function(ctx,rule) rule.page_hosts={'evil.example'}; ctx.get('https://evil.example/') end}";
@@ -222,17 +233,26 @@ fn source_facts_are_validated_and_script_rule_mutation_cannot_expand_network_acc
         .to_string()
         .contains("invalid_discovery_url"));
     assert_eq!(fake.call_count(), 0);
-    let code="return {resolve_page=function() return {title='Game',page='https://example.com/game/',kind='product',mirrors={{url='https://download.example.com/a.zip',format='exe'}}} end}";
-    let fact = script::resolve_page(
+    let code="return {resolve_detail=function() return {current_step=2,total_steps=2,details={{title='Game',page='https://example.com/game/',mirrors={{url='https://download.example.com/a.zip',format='exe'}}}}} end}";
+    let outcome = script::resolve_detail(
         &rule(code),
         code,
-        "https://example.com/game/",
+        &script::DetailStepState {
+            title: "Game".into(),
+            aliases: Vec::new(),
+            page: "https://example.com/game/".into(),
+            appid: None,
+            current_step: 1,
+            total_steps: 2,
+            step_data: None,
+            details: Vec::new(),
+        },
         &mut ctx(&fake),
         flag(),
         |_| {},
     )
     .unwrap();
-    assert_eq!(fact.mirrors[0].format, "zip");
+    assert_eq!(outcome.details[0].mirrors[0].format, "zip");
 }
 
 #[test]
@@ -255,7 +275,7 @@ fn discover_passes_query_and_previous_without_accepting_candidate_authority() {
     let code = r#"return {discover=function(ctx,rule,query,previous)
         assert(query.appid==42 and query.force and #query.terms>0)
         assert(query.settings_revision==nil and previous.known_candidates~=nil)
-        return {pages={{fact={title='Game',page='https://example.com/game/',kind='article',steam_ids={42}},reported_format='zip'}},
+        return {details={{title='Game',page='https://example.com/game/',steam_ids={42},reported_format='zip'}},
             identities={{appid=42,page='https://example.com/game/',aliases={'Game'}}},complete=true}
     end}"#;
     let result = script::discover(
@@ -269,9 +289,9 @@ fn discover_passes_query_and_previous_without_accepting_candidate_authority() {
     )
     .unwrap();
     assert!(result.complete);
-    assert_eq!(result.pages[0].fact.steam_ids, [42]);
+    assert_eq!(result.details[0].steam_ids, [42]);
     assert_eq!(result.identities[0].appid, 42);
-    let code="return {discover=function() return {pages={{fact={title='Game',page='https://example.com/',kind='article',candidate_id='forged'}}},complete=true} end}";
+    let code="return {discover=function() return {details={{title='Game',page='https://example.com/',candidate_id='forged'}},complete=true} end}";
     assert!(script::discover(
         &rule(code),
         code,
@@ -305,7 +325,7 @@ fn conditional_requests_raw_post_and_legacy_chinese_encoding_use_existing_contex
     let code = r#"return {collect_index=function(ctx,rule)
         assert(ctx.get(rule.pages[1],{etag='v1',modified='yesterday'}).status==304)
         local response=ctx.post('https://example.com/post','application/json','{"q":"Game"}')
-        return {complete=true,entries={{title=response.text,page=rule.pages[1],kind='entry',url='https://download.example.com/a.zip'}}}
+        return {complete=true,entries={{title=response.text,page=rule.pages[1],current_step=1,total_steps=1,details={{title=response.text,page=rule.pages[1],mirrors={{url='https://download.example.com/a.zip'}}}}}}}
     end}"#;
     let result = index(code, &fake).unwrap();
     assert_eq!(result.entries[0].title, "中文");
@@ -321,7 +341,7 @@ fn conditional_requests_raw_post_and_legacy_chinese_encoding_use_existing_contex
     assert!(index(code, &Arc::new(FakeFetcher::new())).is_err());
     let previous = SourceIndex {
         parser_fingerprint: None,
-        schema_version: 1,
+        schema_version: patchhub_core::sources::SOURCE_INDEX_SCHEMA_VERSION,
         source_id: "custom".into(),
         revision: 1,
         complete: true,

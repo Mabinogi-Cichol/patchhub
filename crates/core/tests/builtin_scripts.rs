@@ -163,7 +163,7 @@ fn yozakura_matches_english_steam_names_and_keeps_each_download() {
             .load_detail(&rule.id, page)
             .unwrap()
             .unwrap();
-        assert_eq!(detail.fact.unwrap().page, page);
+        assert_eq!(detail.details[0].page, page);
     }
     let candidates = &matches[0].candidates;
     assert_eq!(candidates.len(), 1, "{candidates:?}");
@@ -333,4 +333,181 @@ fn retired_table_rules_are_filtered_until_the_next_settings_write() {
         }
     }
     assert_eq!(saved["script_sources"]["user-lua"], "return {}");
+}
+
+#[test]
+fn empty_builtin_registry_recovers_all_five_sources_via_ordinary_import() {
+    use sources::{
+        http::{FakeFetcher, FetchResponse, RequestContext},
+        matching::match_games,
+        model::{GameMatchStatus, GameQuery, Overrides, RulesConfig},
+        update::update_source,
+        DEFAULT_RULES_JSON,
+    };
+    use std::sync::{atomic::AtomicBool, Arc};
+    use std::time::Duration;
+
+    let state = tempfile::tempdir().unwrap();
+    let mut sources =
+        Sources::open_with_rules(state.path(), r#"{"schema_version":2,"sources":[]}"#).unwrap();
+    assert!(sources.registry().rules().is_empty());
+
+    let scripts = [
+        (
+            "patchmoe",
+            include_str!("../resources/source-scripts/patchmoe.lua"),
+        ),
+        (
+            "kagura-cn",
+            include_str!("../resources/source-scripts/kagura-cn.lua"),
+        ),
+        (
+            "kagura-en",
+            include_str!("../resources/source-scripts/kagura-en.lua"),
+        ),
+        (
+            "yozakura",
+            include_str!("../resources/source-scripts/yozakura.lua"),
+        ),
+        (
+            "hgamer",
+            include_str!("../resources/source-scripts/hgamer.lua"),
+        ),
+    ];
+    let config: RulesConfig = serde_json::from_str(DEFAULT_RULES_JSON).unwrap();
+
+    for (id, code) in scripts {
+        let mut raw = config
+            .sources
+            .iter()
+            .find(|rule| rule.id == id)
+            .unwrap()
+            .clone();
+        raw.adapter = "lua".to_string();
+        let imported = sources.import_script_source(&raw, 1, code, false).unwrap();
+        assert_eq!(imported.rule.id, id);
+        let summary = sources
+            .registry()
+            .list_sources()
+            .into_iter()
+            .find(|s| s.rule.id == id)
+            .unwrap();
+        assert_eq!(summary.origin, "added");
+    }
+    drop(sources);
+
+    let sources =
+        Sources::open_with_rules(state.path(), r#"{"schema_version":2,"sources":[]}"#).unwrap();
+    assert_eq!(sources.registry().rules().len(), 5);
+
+    // Exercise one-shot (`patchmoe`), multi-step category (`kagura-cn`), and `kagura-en` + `hgamer`.
+    let patchmoe_fake = Arc::new(FakeFetcher::new());
+    patchmoe_fake.push(FetchResponse {
+        status: 200,
+        final_url: "https://www.patch.moe/?flag=1".into(),
+        body: br#"<form name="form_zh_cn" method="post" action="/zh"><input type="hidden" name="lang" value="zh-CN"></form>"#.to_vec(),
+        ..FetchResponse::default()
+    });
+    patchmoe_fake.push(FetchResponse {
+        status: 200,
+        final_url: "https://www.patch.moe/zh".into(),
+        body: br#"<table><tr><td class="title">Recovered Game</td><td class="release">2026/1/2</td><td class="patch"><a href="https://download.patch.moe/recovered.zip">dl</a></td></tr></table>"#.to_vec(),
+        ..FetchResponse::default()
+    });
+    let patchmoe_rule = sources
+        .registry()
+        .rules()
+        .iter()
+        .find(|r| r.id == "patchmoe")
+        .unwrap()
+        .clone();
+    let mut ctx =
+        RequestContext::with_settings(Box::new(Arc::clone(&patchmoe_fake)), Duration::ZERO);
+    let cancel = Arc::new(AtomicBool::new(false));
+    let patchmoe_out = update_source(
+        sources.store(),
+        &patchmoe_rule,
+        true,
+        &mut ctx,
+        &cancel,
+        |_| {},
+    )
+    .unwrap();
+    assert!(patchmoe_out.complete);
+    let patchmoe_idx = sources.store().load_index("patchmoe").unwrap().unwrap();
+    assert!(patchmoe_idx.entries[0].is_complete());
+
+    let kagura_cn_rule = sources
+        .registry()
+        .rules()
+        .iter()
+        .find(|r| r.id == "kagura-cn")
+        .unwrap()
+        .clone();
+    let cn_fake = Arc::new(FakeFetcher::new());
+    cn_fake.push(FetchResponse {
+        status: 200,
+        final_url: "https://kagurafan.com/".into(),
+        body: br#"<html><body><a href="/category/recovered/">Recovered Game</a></body></html>"#
+            .to_vec(),
+        ..FetchResponse::default()
+    });
+    let mut cn_ctx = RequestContext::with_settings(Box::new(Arc::clone(&cn_fake)), Duration::ZERO);
+    let cn_out = update_source(
+        sources.store(),
+        &kagura_cn_rule,
+        true,
+        &mut cn_ctx,
+        &cancel,
+        |_| {},
+    )
+    .unwrap();
+    assert!(cn_out.complete);
+    let cn_idx = sources.store().load_index("kagura-cn").unwrap().unwrap();
+    assert!(!cn_idx.entries[0].is_complete());
+
+    let match_fake = Arc::new(FakeFetcher::new());
+    match_fake.push(FetchResponse {
+        status: 200,
+        final_url: "https://kagurafan.com/category/recovered/".into(),
+        body: br#"<html><body><h1>Recovered Category</h1><article><h2 class="entry-title"><a href="/article/recovered/">Recovered Game</a></h2></article></body></html>"#.to_vec(),
+        ..FetchResponse::default()
+    });
+    match_fake.push(FetchResponse {
+        status: 200,
+        final_url: "https://kagurafan.com/article/recovered/".into(),
+        body: br#"<html><body><article><h1 class="entry-title">Recovered Game</h1><div class="entry-content"><a href="https://store.steampowered.com/app/42/">Steam</a><a href="https://kaguraserver.com/r.zip">Mirror 1</a></div></article></body></html>"#.to_vec(),
+        ..FetchResponse::default()
+    });
+    let mut match_ctx =
+        RequestContext::with_settings(Box::new(Arc::clone(&match_fake)), Duration::ZERO);
+    let matches = match_games(
+        sources.store(),
+        sources.registry().rules(),
+        &Overrides::default(),
+        &[GameQuery {
+            appid: 42,
+            name: "Recovered Game".into(),
+            localized_name: None,
+            related_dlc: Vec::new(),
+            instance_id: None,
+        }],
+        &[],
+        false,
+        &mut match_ctx,
+        &cancel,
+        200,
+        |_| {},
+        |_| {},
+    )
+    .unwrap();
+    assert_eq!(matches[0].status, GameMatchStatus::PublisherMatch);
+    assert!(matches[0]
+        .candidates
+        .iter()
+        .any(|c| c.source_id == "patchmoe"
+            && c.mirrors[0].url == "https://download.patch.moe/recovered.zip"));
+    assert!(matches[0].candidates.iter().any(
+        |c| c.source_id == "kagura-cn" && c.mirrors[0].url == "https://kaguraserver.com/r.zip"
+    ));
 }

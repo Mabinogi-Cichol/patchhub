@@ -166,7 +166,7 @@ mod script_binding_tests {
         let mut sources = Sources::open(temp.path()).unwrap();
         let raw: RawSourceRule=serde_json::from_value(json!({"id":"custom", "name":"Custom", "adapter":"lua", "enabled":true,
             "pages":["https://example.com/list"], "page_hosts":["example.com"], "download_hosts":["download.example.com"], "root_layout":"game_root"})).unwrap();
-        let code="return {collect_index=function() return {entries={{title='Game',page='https://example.com/list',kind='entry',appid=42,url='https://download.example.com/a.zip'}},complete=true} end}";
+        let code="return {collect_index=function() return {entries={{title='Game',page='https://example.com/list',appid=42,current_step=1,total_steps=1,details={{title='Game',page='https://example.com/list',steam_ids={42},mirrors={{url='https://download.example.com/a.zip',format='zip'}},reported_format='zip'}}}},complete=true} end}";
         let game = GameQuery {
             appid: 42,
             name: "Game".into(),

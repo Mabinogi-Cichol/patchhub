@@ -91,60 +91,6 @@ local function library(ctx, rule)
     function u.failed_index(failure)
         return {entries = ctx.array(), pending = rule.pages, complete = false, diagnostics = {u.diagnostic(failure)}}
     end
-    function u.rows(root, table_id)
-        local tables, rows = {}, {}
-        for _, node in ipairs(root:select("table")) do
-            if table_id then
-                if node:attr("id") == table_id then tables[1] = node; break end
-            elseif not u.ancestor(node, function(parent) return parent:tag() == "table" end) then
-                tables[#tables + 1] = node
-            end
-        end
-        for _, node in ipairs(tables) do
-            for _, row in ipairs(node:select("tr")) do
-                local cells = row:select("td, th")
-                if #cells > 0 then rows[#rows + 1] = cells end
-            end
-        end
-        return rows
-    end
-    function u.row_entry(row, columns, page, language)
-        local title = row[columns.title + 1]
-        local download = row[columns.download + 1]
-        local anchor = download and download:select("a[href]")[1]
-        if not title or title:text() == "" or not anchor or anchor:attr("href") == "" then return end
-        local ok, url = pcall(ctx.url_join, page, anchor:attr("href"))
-        if not ok or not ctx.url_parts(url).path:lower():match("%.zip$") then return end
-        local entry = {title = title:text(), aliases = ctx.array(), page = page,
-            kind = "entry", url = url, language = language}
-        if columns.date and columns.date ~= ctx.null and row[columns.date + 1] then
-            local date = row[columns.date + 1]:text()
-            if date == "待定" or date == "即将推出" or date == "即將推出" then date = "COMING SOON" end
-            if date ~= "" then entry.date = ctx.normalize_date(date) end
-        end
-        if columns.language and columns.language ~= ctx.null and row[columns.language + 1] then
-            local value = row[columns.language + 1]:text()
-            if value ~= "" then entry.language = value end
-        end
-        if columns.appid and columns.appid ~= ctx.null and row[columns.appid + 1] then
-            local value = row[columns.appid + 1]:text()
-            local appid = tonumber(value)
-            if not value:match("^[1-9]%d*$") or not appid or appid > 4294967295 then
-                error("invalid_source_appid", 0)
-            end
-            entry.appid = appid
-        end
-        return entry
-    end
-    function u.next_page(root, page)
-        for _, anchor in ipairs(root:select("a")) do
-            local next_rel = false
-            for token in (anchor:attr("rel") or ""):gmatch("%S+") do if token == "next" then next_rel = true end end
-            if next_rel or u.has(anchor, "next") or u.has(anchor, "nextpostslink") then
-                return ctx.url_join(page, anchor:attr("href") or "")
-            end
-        end
-    end
     return u
 end
 
@@ -200,8 +146,13 @@ return {
                 local body = ctx.html(post.content.rendered)
                 if #downloads(ctx, u, body, page) > 0 then
                     local ids = steam_ids(ctx, u, body, page)
-                    entries[#entries + 1] = {title = ctx.html(post.title.rendered):text(),
-                        page = page, kind = "article", appid = #ids == 1 and ids[1] or nil}
+                    entries[#entries + 1] = {
+                        title = ctx.html(post.title.rendered):text(),
+                        page = page,
+                        appid = #ids == 1 and ids[1] or nil,
+                        current_step = 1,
+                        total_steps = 2,
+                    }
                 end
             end
             if #posts < page_size then break end
@@ -209,15 +160,26 @@ return {
         end
         return {entries = entries, pending = ctx.array(), complete = true}
     end,
-    resolve_page = function(ctx, rule, page)
+    resolve_detail = function(ctx, rule, state)
         local u = library(ctx, rule)
-        local root, final_url = u.fetch(page)
+        local root, final_url = u.fetch(state.page)
         local heading = root:select(".h-page-title__outer h1")[1]
         local body = root:select(".colibri-post-content")[1]
         if not heading or not body then error("discovery_structure_changed", 0) end
-        page = article_page(ctx, final_url)
-        return {title = heading:text(), page = page, kind = "article", text = body:text(),
-            steam_ids = steam_ids(ctx, u, body, page), mirrors = downloads(ctx, u, body, page),
-            single_download_group = true}
+        local page = article_page(ctx, final_url)
+        return {
+            current_step = 2,
+            total_steps = 2,
+            details = {
+                {
+                    title = heading:text(),
+                    page = page,
+                    text = body:text(),
+                    steam_ids = steam_ids(ctx, u, body, page),
+                    mirrors = downloads(ctx, u, body, page),
+                    single_download_group = true,
+                }
+            },
+        }
     end
 }

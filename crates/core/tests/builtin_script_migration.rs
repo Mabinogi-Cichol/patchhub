@@ -67,13 +67,29 @@ fn run(case: &Value) -> sources::Result<Value> {
             json!({"entries":result.entries,"pending":result.pending,"complete":result.complete,"etag":result.etag,"modified":result.modified,"not_modified":result.not_modified})
         }
         "detail" => {
-            let result = adapters::source_adapter(&rule, None)?.resolve_page(
-                &rule,
-                case["page"].as_str().unwrap(),
-                &mut ctx,
-                &cancel,
-            )?;
-            serde_json::to_value(result).unwrap()
+            let page = case["page"].as_str().unwrap();
+            let name = case["name"].as_str().unwrap();
+            let state = adapters::script::DetailStepState {
+                title: name.to_string(),
+                aliases: Vec::new(),
+                page: page.to_string(),
+                appid: None,
+                current_step: 1,
+                total_steps: 2,
+                step_data: name
+                    .contains("category")
+                    .then(|| json!({ "kind": "category" })),
+                details: Vec::new(),
+            };
+            let result = adapters::source_adapter(&rule, None)?
+                .resolve_detail(&rule, &state, &mut ctx, &cancel)?;
+            json!({
+                "current_step": result.current_step,
+                "total_steps": result.total_steps,
+                "step_data": result.step_data,
+                "details": result.details,
+                "diagnostics": result.diagnostics,
+            })
         }
         "discover" => {
             let result = adapters::source_adapter(&rule, None)?.discover(

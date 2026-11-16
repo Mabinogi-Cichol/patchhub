@@ -46,9 +46,9 @@ pub const STORE_SCHEMA_VERSION: u32 = 2;
 /// Settings only: the index/detail/match namespace remains schema 2.
 pub const SOURCE_SETTINGS_SCHEMA_VERSION: u32 = 3;
 /// On-disk schema of `index/<source_id>.json` (p1-contract §1, §5).
-pub const SOURCE_INDEX_SCHEMA_VERSION: u32 = 1;
+pub const SOURCE_INDEX_SCHEMA_VERSION: u32 = 2;
 /// On-disk schema of `details/<source_id>/<key>.json` (p1-contract §1, §6).
-pub const SOURCE_DETAIL_SCHEMA_VERSION: u32 = 1;
+pub const SOURCE_DETAIL_SCHEMA_VERSION: u32 = 2;
 /// On-disk schema of `matches/<appid>.json` (p1-contract §1, §7.1).
 pub const GAME_MATCH_SCHEMA_VERSION: u32 = 1;
 

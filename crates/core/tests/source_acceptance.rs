@@ -155,11 +155,11 @@ fn entry(title: &str, page: &str, kind: &str) -> SourceIndexEntry {
         title: title.to_string(),
         aliases: Vec::new(),
         page: page.to_string(),
-        kind: kind.to_string(),
         appid: None,
-        url: None,
-        language: None,
-        date: None,
+        current_step: 1,
+        total_steps: 2,
+        step_data: (kind == "category").then(|| serde_json::json!({ "kind": "category" })),
+        details: Vec::new(),
     }
 }
 
@@ -174,11 +174,23 @@ fn artifact_entry(
         title: title.to_string(),
         aliases: Vec::new(),
         page: page.to_string(),
-        kind: "entry".to_string(),
         appid,
-        url: Some(url.to_string()),
-        language: Some(language.to_string()),
-        date: None,
+        current_step: 1,
+        total_steps: 1,
+        step_data: None,
+        details: vec![SourceDetail {
+            title: title.to_string(),
+            page: page.to_string(),
+            steam_ids: appid.into_iter().collect(),
+            mirrors: vec![Mirror {
+                url: url.to_string(),
+                label: None,
+                format: "zip".to_string(),
+            }],
+            languages: vec![language.to_string()],
+            reported_format: Some("zip".to_string()),
+            ..SourceDetail::default()
+        }],
     }
 }
 
@@ -207,7 +219,7 @@ fn index_at(
                 _ => panic!("unknown test source: {source_id}"),
             }),
         ),
-        schema_version: 1,
+        schema_version: patchhub_core::sources::SOURCE_INDEX_SCHEMA_VERSION,
         source_id: source_id.to_string(),
         revision,
         complete,
@@ -224,11 +236,10 @@ fn index_at(
     }
 }
 
-fn fact(page: &str, title: &str, appid: u32) -> PageFact {
-    PageFact {
+fn fact(page: &str, title: &str, appid: u32) -> SourceDetail {
+    SourceDetail {
         title: title.to_string(),
         page: page.to_string(),
-        kind: "article".to_string(),
         steam_ids: vec![appid],
         aliases: vec![title.to_string()],
         mirrors: vec![Mirror {
@@ -240,22 +251,22 @@ fn fact(page: &str, title: &str, appid: u32) -> PageFact {
         single_download_group: false,
         published_at: None,
         body_links: Vec::new(),
-        article_links: Vec::new(),
-        article_facts: Vec::new(),
-        next_page: None,
+        ..SourceDetail::default()
     }
 }
 
-fn seed_detail(store: &SourceStore, rule: &SourceRule, revision: u64, fact: PageFact) {
+fn seed_detail(store: &SourceStore, rule: &SourceRule, revision: u64, detail: SourceDetail) {
     store
         .save_detail(&DetailRecord {
             schema_version: SOURCE_DETAIL_SCHEMA_VERSION,
             source_id: rule.id.clone(),
-            page: fact.page.clone(),
+            page: detail.page.clone(),
             index_revision: revision,
             checked_at: 100,
-            complete: true,
-            fact: Some(fact),
+            current_step: 2,
+            total_steps: 2,
+            step_data: None,
+            details: vec![detail],
             diagnostics: Vec::new(),
         })
         .unwrap();

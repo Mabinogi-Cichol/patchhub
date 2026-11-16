@@ -44,11 +44,22 @@ fn index_entry(title: &str, page: &str, url: &str) -> SourceIndexEntry {
         title: title.to_string(),
         aliases: Vec::new(),
         page: page.to_string(),
-        kind: "entry".to_string(),
         appid: None,
-        url: Some(url.to_string()),
-        language: Some("en".to_string()),
-        date: None,
+        current_step: 1,
+        total_steps: 1,
+        step_data: None,
+        details: vec![SourceDetail {
+            title: title.to_string(),
+            page: page.to_string(),
+            mirrors: vec![Mirror {
+                url: url.to_string(),
+                label: None,
+                format: "zip".to_string(),
+            }],
+            languages: vec!["en".to_string()],
+            reported_format: Some("zip".to_string()),
+            ..SourceDetail::default()
+        }],
     }
 }
 
@@ -236,7 +247,7 @@ fn schema2_records_round_trip_and_failed_writes_keep_the_last_snapshot() {
     assert!(store.paths().index("patchmoe").is_file());
     assert_eq!(
         read_json(&store.paths().index("patchmoe"))["schema_version"],
-        json!(1)
+        json!(SOURCE_INDEX_SCHEMA_VERSION)
     );
 
     let detail = DetailRecord {
@@ -245,13 +256,14 @@ fn schema2_records_round_trip_and_failed_writes_keep_the_last_snapshot() {
         page: "https://www.patch.moe/".to_string(),
         index_revision: 3,
         checked_at: 11,
-        complete: true,
-        fact: Some(PageFact {
+        current_step: 1,
+        total_steps: 1,
+        step_data: None,
+        details: vec![SourceDetail {
             title: "Game".to_string(),
             page: "https://www.patch.moe/".to_string(),
-            kind: "entry".to_string(),
-            ..PageFact::default()
-        }),
+            ..SourceDetail::default()
+        }],
         diagnostics: Vec::new(),
     };
     store.save_detail(&detail).unwrap();
@@ -620,20 +632,30 @@ fn schema1_state_migrates_to_schema2_without_losing_old_files() {
     let cache_row = patchmoe
         .entries
         .iter()
-        .find(|entry| entry.url.as_deref() == Some("https://download.patch.moe/42.zip"))
+        .find(|entry| {
+            entry.details.iter().any(|detail| {
+                detail
+                    .mirrors
+                    .iter()
+                    .any(|mirror| mirror.url == "https://download.patch.moe/42.zip")
+            })
+        })
         .unwrap();
-    assert_eq!(cache_row.kind, "entry");
+    assert!(cache_row.is_complete());
     assert_eq!(cache_row.page, "https://www.patch.moe/");
     assert_eq!(cache_row.appid, Some(42));
-    assert_eq!(cache_row.language.as_deref(), Some("en"));
-    assert_eq!(cache_row.date.as_deref(), Some("2024/1/2"));
+    assert_eq!(cache_row.details[0].languages, vec!["en".to_string()]);
+    assert_eq!(
+        cache_row.details[0].published_at.as_deref(),
+        Some("2024/1/2")
+    );
     assert_eq!(
         patchmoe
             .entries
             .iter()
             .find(|entry| entry.page == "https://www.patch.moe/p/7/")
-            .map(|entry| entry.kind.as_str()),
-        Some("product")
+            .map(|entry| entry.is_complete()),
+        Some(false)
     );
     assert!(
         store
@@ -653,7 +675,7 @@ fn schema1_state_migrates_to_schema2_without_losing_old_files() {
     assert_eq!(kagura_cn.revision, 1);
     assert_eq!(kagura_cn.entries.len(), 1);
     assert_eq!(kagura_cn.entries[0].page, "https://kagurafan.com/p/1/");
-    assert_eq!(kagura_cn.entries[0].kind, "product");
+    assert!(!kagura_cn.entries[0].is_complete());
     let kagura_en = store.load_index("kagura-en").unwrap().unwrap();
     assert!(!kagura_en.complete);
     assert_eq!(
@@ -1044,13 +1066,14 @@ fn detail_keys_are_stable_per_canonical_page_and_shared() {
         page: page.to_string(),
         index_revision: 1,
         checked_at: 10,
-        complete: true,
-        fact: Some(PageFact {
+        current_step: 2,
+        total_steps: 2,
+        step_data: None,
+        details: vec![SourceDetail {
             title: "Game".to_string(),
             page: page.to_string(),
-            kind: "article".to_string(),
-            ..PageFact::default()
-        }),
+            ..SourceDetail::default()
+        }],
         diagnostics: Vec::new(),
     };
     store.save_detail(&detail).unwrap();
@@ -1227,4 +1250,90 @@ fn installer_resolve_works_from_a_published_index_before_any_match_task() {
     let matches = sources.registry().matches(&game, false);
     assert_eq!(matches.len(), 1);
     assert_eq!(matches[0].release_id, "patchmoe-42");
+}
+
+#[test]
+fn schema_version_1_index_and_detail_caches_are_treated_as_stale_without_error() {
+    let temp = tempfile::tempdir().unwrap();
+    let store = SourceStore::open(temp.path()).unwrap();
+
+    fs::create_dir_all(store.paths().index("patchmoe").parent().unwrap()).unwrap();
+    fs::write(
+        store.paths().index("patchmoe"),
+        serde_json::to_vec(&json!({
+            "schema_version": 1,
+            "source_id": "patchmoe",
+            "revision": 3,
+            "complete": true,
+            "checked_at": 100,
+            "updated_at": 100,
+            "entries": [{
+                "title": "Legacy Game",
+                "page": "https://www.patch.moe/",
+                "kind": "entry",
+                "url": "https://download.patch.moe/legacy.zip"
+            }]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    fs::create_dir_all(store.paths().index_progress("kagura-cn").parent().unwrap()).unwrap();
+    fs::write(
+        store.paths().index_progress("kagura-cn"),
+        serde_json::to_vec(&json!({
+            "schema_version": 1,
+            "source_id": "kagura-cn",
+            "checked_at": 100,
+            "records": [],
+            "pending": []
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let detail_path = store
+        .paths()
+        .detail("kagura-cn", &detail_key("https://kagurafan.com/p/1/"));
+    fs::create_dir_all(detail_path.parent().unwrap()).unwrap();
+    fs::write(
+        &detail_path,
+        serde_json::to_vec(&json!({
+            "schema_version": 1,
+            "source_id": "kagura-cn",
+            "page": "https://kagurafan.com/p/1/",
+            "index_revision": 1,
+            "checked_at": 100,
+            "complete": true,
+            "fact": {
+                "title": "Legacy",
+                "page": "https://kagurafan.com/p/1/",
+                "kind": "article"
+            }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    assert_eq!(store.load_index("patchmoe").unwrap(), None);
+    assert_eq!(store.load_index_progress("kagura-cn").unwrap(), None);
+    assert_eq!(
+        store
+            .load_detail("kagura-cn", "https://kagurafan.com/p/1/")
+            .unwrap(),
+        None
+    );
+
+    // Future schema versions still error explicitly rather than silently dropping data.
+    fs::write(
+        store.paths().index("patchmoe"),
+        serde_json::to_vec(&json!({
+            "schema_version": SOURCE_INDEX_SCHEMA_VERSION + 1,
+            "source_id": "patchmoe"
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        store.load_index("patchmoe").unwrap_err().to_string(),
+        "invalid_source_index"
+    );
 }

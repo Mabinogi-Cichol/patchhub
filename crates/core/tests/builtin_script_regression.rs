@@ -27,7 +27,7 @@ impl CompatAdapter {
         let mut rule = rule.clone();
         sources::builtin::bind(&mut rule);
         let index = SourceIndex {
-            schema_version: 1,
+            schema_version: sources::SOURCE_INDEX_SCHEMA_VERSION,
             source_id: rule.id.clone(),
             parser_fingerprint: sources::index::parser_fingerprint(&rule),
             revision: 1,
@@ -44,11 +44,25 @@ impl CompatAdapter {
                     title: e.title.clone(),
                     aliases: e.aliases.clone(),
                     page: e.source_page.clone(),
-                    kind: "entry".into(),
                     appid: e.appid,
-                    url: Some(e.url.clone()),
-                    language: Some(e.language.clone()),
-                    date: e.date.clone(),
+                    current_step: 1,
+                    total_steps: 1,
+                    step_data: None,
+                    details: vec![SourceDetail {
+                        title: e.title.clone(),
+                        page: e.source_page.clone(),
+                        steam_ids: e.appid.into_iter().collect(),
+                        aliases: e.aliases.clone(),
+                        mirrors: vec![Mirror {
+                            url: e.url.clone(),
+                            label: None,
+                            format: "zip".into(),
+                        }],
+                        languages: vec![e.language.clone()],
+                        published_at: e.date.clone(),
+                        reported_format: Some("zip".into()),
+                        ..Default::default()
+                    }],
                 })
                 .collect(),
         };
@@ -62,14 +76,17 @@ impl CompatAdapter {
             entries: result
                 .entries
                 .into_iter()
-                .map(|e| SourceEntry {
-                    title: e.title,
-                    aliases: e.aliases,
-                    source_page: e.page,
-                    url: e.url.unwrap(),
-                    language: e.language.unwrap(),
-                    date: e.date,
-                    appid: e.appid,
+                .map(|e| {
+                    let detail = e.details.into_iter().next().unwrap();
+                    SourceEntry {
+                        title: e.title,
+                        aliases: e.aliases,
+                        source_page: e.page,
+                        url: detail.mirrors.into_iter().next().unwrap().url,
+                        language: detail.languages.into_iter().next().unwrap_or_default(),
+                        date: detail.published_at,
+                        appid: e.appid,
+                    }
                 })
                 .collect(),
             etag: result.etag,

@@ -9,17 +9,17 @@
 //! the number of index hits, not by a global crawler. Progress is reported
 //! through explicit phases so the host never claims a network task is offline.
 
+use super::adapters::script::DetailStepState;
 use super::adapters::{self, DiscoverPrevious};
 use super::http::RequestContext;
 use super::identity;
 use super::model::{
-    DetailRecord, Diagnostic, FactLink, FallbackMatchRecord, FallbackMatchStatus, GameMatch,
-    GameMatchRecord, GameMatchStatus, GameQuery, IdentityEvidence, MatchBasis, Overrides, PageFact,
-    QueryContext, SourceCandidate, SourceIndex, SourceIndexEntry, SourceMatchRecord,
+    CacheStatus, DetailRecord, Diagnostic, FallbackMatchRecord, FallbackMatchStatus, GameMatch,
+    GameMatchRecord, GameMatchStatus, GameQuery, IdentityEvidence, MatchBasis, Overrides,
+    QueryContext, SourceCandidate, SourceDetail, SourceIndex, SourceIndexEntry, SourceMatchRecord,
     SourceMatchStatus, SourceRole, SourceRule, Variant,
 };
 use super::r#match::{candidate_is_credible, derive_game_status, input_key};
-use super::registry::candidate_from_index_match;
 use super::store::SourceStore;
 use super::validate;
 use super::{canonical, index};
@@ -27,7 +27,7 @@ use super::{
     invalid, rule_fingerprint, Result, GAME_MATCH_SCHEMA_VERSION, PARSER_VERSION, QUERY_VERSION,
     SOURCES_ENCODING_VERSION, SOURCE_DETAIL_SCHEMA_VERSION,
 };
-use std::collections::{BTreeMap, BTreeSet, HashSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::Path;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -501,8 +501,8 @@ fn match_one(
                     let index = indexes.get(&rule.id).and_then(Option::as_ref);
                     if !index.is_some_and(|index| {
                         index.entries.iter().any(|entry| {
-                            entry.kind != "entry"
-                                && entry.kind != "category"
+                            !entry.is_complete()
+                                && entry.step_data.is_none()
                                 && upstream_identity(&entry.page, query.appid, &known).is_some()
                                 && upstream_identity(
                                     &entry.page,
@@ -734,14 +734,16 @@ fn match_publisher_source(
     let mut diagnostics: Vec<Diagnostic> = Vec::new();
     let mut detail_failed = false;
 
-    // List-page (patch.moe / table) rows are matched entirely offline.
-    candidates.extend(match_entry_rows(rule, index, game));
+    // Completed Step-1 entries (e.g. single-shot tables) project purely offline.
+    let completed = match_completed_entries(rule, index, game);
+    known.extend(completed.iter().cloned());
+    candidates.extend(completed);
 
-    // Kagura articles/products/categories need their hit pages.
-    let needs_pages = index.entries.iter().any(|entry| entry.kind != "entry");
-    if needs_pages && !candidates.iter().any(candidate_is_credible) {
+    // Incomplete entries step forward through Lua `resolve_detail` on demand.
+    let has_incomplete = index.entries.iter().any(|entry| !entry.is_complete());
+    if has_incomplete && !candidates.iter().any(candidate_is_credible) {
         let adapter = adapters::source_adapter(rule, code)?;
-        let found = match_page_entries(
+        let found = match_incomplete_entries(
             store,
             rule,
             &adapter,
@@ -825,118 +827,104 @@ fn merge_and_validate(
     validated
 }
 
-// ---- list-page (kind = entry) matching ---------------------------------
+// ---- completed-entry offline matching -----------------------------------
 
-/// Deterministic result of matching one game against a source's `kind="entry"`
-/// index rows. Shared with the read-model `registry.matches` fallback.
-/// Return one language-preferred row per download URL.
-pub(crate) fn select_entries<'a>(
-    index: &'a SourceIndex,
-    game: &GameQuery,
-) -> impl Iterator<Item = (&'a str, &'a SourceIndexEntry)> {
-    let targets: HashSet<_> = std::iter::once(&game.name)
-        .chain(game.localized_name.as_ref())
-        .chain(game.related_dlc.iter().filter_map(|dlc| dlc.name.as_ref()))
-        .map(|name| validate::normal(name))
-        .filter(|name| !name.is_empty())
-        .collect();
-    let preferred = |entry: &SourceIndexEntry| {
-        entry.language.as_deref().is_some_and(|language| {
-            language.eq_ignore_ascii_case("zh-cn") || language.eq_ignore_ascii_case("zh_cn")
-        })
-    };
-    let mut artifacts = std::collections::BTreeMap::<&str, &SourceIndexEntry>::new();
-    for entry in &index.entries {
-        if entry.kind != "entry" || entry.date.as_deref() == Some("COMING SOON") {
-            continue;
-        }
-        let Some(url) = entry.url.as_deref() else {
-            continue;
-        };
-        let by_appid = entry.appid.is_some_and(|id| {
-            id == game.appid || game.related_dlc.iter().any(|dlc| dlc.appid == id)
-        });
-        let by_title = entry_names(entry).iter().any(|name| targets.contains(name));
-        if by_appid || by_title {
-            artifacts
-                .entry(url)
-                .and_modify(|existing| {
-                    if preferred(entry) && !preferred(existing) {
-                        *existing = entry;
-                    }
-                })
-                .or_insert(entry);
-        }
-    }
-    artifacts.into_iter()
+fn prefers_zh_cn(candidate: &SourceCandidate) -> bool {
+    candidate.languages.iter().any(|language| {
+        language.eq_ignore_ascii_case("zh-cn") || language.eq_ignore_ascii_case("zh_cn")
+    })
 }
 
-fn matched_dlc_for_entry(entry: &SourceIndexEntry, game: &GameQuery) -> Option<u32> {
-    if let Some(appid) = entry.appid {
-        if let Some(dlc) = game.related_dlc.iter().find(|dlc| dlc.appid == appid) {
-            return Some(dlc.appid);
+fn effective_detail_for_entry(entry: &SourceIndexEntry, detail: &SourceDetail) -> SourceDetail {
+    if entry.aliases.is_empty()
+        || entry
+            .aliases
+            .iter()
+            .all(|alias| detail.aliases.contains(alias))
+    {
+        return detail.clone();
+    }
+    let mut merged = detail.clone();
+    for alias in &entry.aliases {
+        if !merged.aliases.contains(alias) {
+            merged.aliases.push(alias.clone());
         }
     }
-    let names = entry_names(entry);
-    let base_targets: HashSet<_> = std::iter::once(&game.name)
-        .chain(game.localized_name.as_ref())
-        .map(|name| validate::normal(name))
-        .filter(|name| !name.is_empty())
-        .collect();
-    if names.iter().any(|name| base_targets.contains(name)) {
-        return None;
-    }
-    for dlc in &game.related_dlc {
-        if let Some(dlc_name) = dlc.name.as_deref() {
-            let norm = validate::normal(dlc_name);
-            if !norm.is_empty() && names.iter().any(|name| name == &norm) {
-                return Some(dlc.appid);
-            }
-        }
-    }
-    None
+    merged
 }
 
-pub(crate) fn match_entry_rows(
+fn confirmed_ids_for_game(
+    entry_appid: Option<u32>,
+    detail_ids: &[u32],
+    appid: u32,
+    related_dlc: &[crate::steam::SteamDlc],
+) -> Vec<u32> {
+    let mut confirmed = Vec::new();
+    for id in entry_appid.into_iter().chain(detail_ids.iter().copied()) {
+        let relevant = id == appid || related_dlc.iter().any(|dlc| dlc.appid == id);
+        if relevant && !confirmed.contains(&id) {
+            confirmed.push(id);
+        }
+    }
+    confirmed
+}
+
+/// Deterministic offline match against index entries whose `details` were
+/// already completed in Step 1 (`entry.is_complete()`). Shared with the
+/// read-model `registry.matches` fallback.
+pub(crate) fn match_completed_entries(
     rule: &SourceRule,
     index: &SourceIndex,
     game: &GameQuery,
 ) -> Vec<SourceCandidate> {
-    select_entries(index, game)
-        .map(|(url, entry)| {
-            let matched_dlc = matched_dlc_for_entry(entry, game);
-            let entry_appid = entry
-                .appid
-                .filter(|&appid| appid == game.appid || matched_dlc == Some(appid));
-            candidate_from_index_match(
-                &rule.id,
+    let hints = merged_hints(game, &[]);
+    let query = query_context(game, &hints, false, vec![rule.id.clone()]);
+    let observed_at = Some(identity::iso8601_utc(index.checked_at));
+    let mut candidates = Vec::new();
+
+    for entry in index.entries.iter().filter(|entry| entry.is_complete()) {
+        for detail in &entry.details {
+            let effective = effective_detail_for_entry(entry, detail);
+            let ids = confirmed_ids_for_game(
+                entry.appid,
+                &effective.steam_ids,
                 game.appid,
-                entry_appid,
-                matched_dlc,
-                &entry.title,
-                &entry.aliases,
-                entry.language.as_deref().unwrap_or(""),
-                &entry.page,
-                url,
-                index.checked_at,
-            )
-        })
-        .collect()
+                &game.related_dlc,
+            );
+            candidates.extend(identity::build_candidates_from_detail_with_options(
+                rule,
+                &effective,
+                &ids,
+                &query,
+                observed_at.clone(),
+                CacheStatus::Cached,
+            ));
+        }
+    }
+
+    // Deduplicate single-mirror rows sharing an identical download URL, preferring `zh-CN`.
+    let mut deduped: Vec<SourceCandidate> = Vec::with_capacity(candidates.len());
+    let mut single_mirror_pos: HashMap<String, usize> = HashMap::new();
+    for candidate in candidates {
+        if candidate.mirrors.len() == 1 {
+            let url = candidate.mirrors[0].url.clone();
+            if let Some(&pos) = single_mirror_pos.get(&url) {
+                if !prefers_zh_cn(&deduped[pos]) && prefers_zh_cn(&candidate) {
+                    deduped[pos] = candidate;
+                }
+                continue;
+            }
+            single_mirror_pos.insert(url, deduped.len());
+        }
+        deduped.push(candidate);
+    }
+    deduped
 }
 
-fn entry_names(entry: &SourceIndexEntry) -> Vec<String> {
-    std::iter::once(&entry.title)
-        .chain(entry.aliases.iter())
-        .flat_map(|name| validate::split_names(name))
-        .map(|name| validate::normal(&name))
-        .filter(|name| !name.is_empty())
-        .collect()
-}
-
-// ---- Kagura detail-page matching ---------------------------------------
+// ---- incomplete-entry Lua Step progression -------------------------------
 
 #[allow(clippy::too_many_arguments)]
-fn match_page_entries(
+fn match_incomplete_entries(
     store: &SourceStore,
     rule: &SourceRule,
     adapter: &adapters::SourceAdapter<'_>,
@@ -951,90 +939,72 @@ fn match_page_entries(
     diagnostics: &mut Vec<Diagnostic>,
     detail_failed: &mut bool,
 ) -> Result<Vec<SourceCandidate>> {
-    let mut candidates: Vec<SourceCandidate> = Vec::new();
-
-    // Non-DLC titles first so a base candidate exists before a short DLC title
-    // is judged against it.
     let mut direct: Vec<&SourceIndexEntry> = index
         .entries
         .iter()
         .filter(|entry| {
-            entry.kind != "entry" && entry.kind != "category" && entry_relevant(entry, query, known)
+            !entry.is_complete() && entry.step_data.is_none() && entry_relevant(entry, query, known)
         })
         .collect();
     direct.sort_by_key(|entry| identity::variant(&entry.title) == Variant::Dlc);
-    for entry in direct {
-        if cancelled(cancel) {
-            return Err(cancelled_error());
-        }
-        match resolve_fact(
-            store,
-            rule,
-            adapter,
-            index.revision,
-            &entry.page,
-            force_details,
-            ctx,
-            cancel,
-            now,
-            detail_pages,
-        ) {
-            Ok(fact) => {
-                let found = candidates_from_fact(rule, &fact, query, known, adapter, ctx, cancel)?;
-                known.extend(found.iter().cloned());
-                candidates.extend(found);
-            }
-            Err(error) => {
-                if cancelled(cancel) || error.to_string() == "task_cancelled" {
-                    return Err(cancelled_error());
-                }
-                *detail_failed = true;
-                diagnostics.push(error_diagnostic(rule, error));
-            }
-        }
-    }
+
+    let mut candidates = resolve_entry_batch(
+        store,
+        rule,
+        adapter,
+        index.revision,
+        &direct,
+        query,
+        force_details,
+        ctx,
+        cancel,
+        now,
+        known,
+        detail_pages,
+        diagnostics,
+        detail_failed,
+    )?;
+
     if query.related_dlc.is_empty() && candidates.iter().any(candidate_is_credible) {
         return Ok(candidates);
     }
 
-    let mut categories: Vec<&SourceIndexEntry> = index
+    let mut deferred: Vec<&SourceIndexEntry> = index
         .entries
         .iter()
-        .filter(|entry| entry.kind == "category" && entry_relevant(entry, query, known))
+        .filter(|entry| {
+            !entry.is_complete() && entry.step_data.is_some() && entry_relevant(entry, query, known)
+        })
         .collect();
-    categories.sort_by_key(|entry| identity::variant(&entry.title) == Variant::Dlc);
-    for entry in categories {
-        process_category(
-            store,
-            rule,
-            adapter,
-            index.revision,
-            &entry.page,
-            query,
-            force_details,
-            ctx,
-            cancel,
-            now,
-            known,
-            detail_pages,
-            diagnostics,
-            detail_failed,
-            &mut candidates,
-        )?;
-    }
+    deferred.sort_by_key(|entry| identity::variant(&entry.title) == Variant::Dlc);
+
+    let more = resolve_entry_batch(
+        store,
+        rule,
+        adapter,
+        index.revision,
+        &deferred,
+        query,
+        force_details,
+        ctx,
+        cancel,
+        now,
+        known,
+        detail_pages,
+        diagnostics,
+        detail_failed,
+    )?;
+    candidates.extend(more);
     Ok(candidates)
 }
 
-/// Resolves a category page and every article it points at, following its
-/// `next_page` pagination. Inline article bodies become candidates directly;
-/// linked articles are resolved on demand.
 #[allow(clippy::too_many_arguments)]
-fn process_category(
+fn resolve_entry_batch(
     store: &SourceStore,
     rule: &SourceRule,
     adapter: &adapters::SourceAdapter<'_>,
     index_revision: u64,
-    page: &str,
+    entries: &[&SourceIndexEntry],
     query: &QueryContext,
     force_details: bool,
     ctx: &mut RequestContext,
@@ -1044,213 +1014,225 @@ fn process_category(
     detail_pages: &mut Vec<String>,
     diagnostics: &mut Vec<Diagnostic>,
     detail_failed: &mut bool,
-    candidates: &mut Vec<SourceCandidate>,
-) -> Result<()> {
-    let mut queue: VecDeque<String> = VecDeque::from([canonical::canonical_page_url(page)]);
-    let mut visited: HashSet<String> = HashSet::new();
-    while let Some(page) = queue.pop_front() {
-        if !visited.insert(page.clone()) {
-            diagnostics.push(diagnostic(rule, "discovery_pagination_cycle"));
-            continue;
-        }
+) -> Result<Vec<SourceCandidate>> {
+    let mut candidates = Vec::new();
+    for entry in entries {
         if cancelled(cancel) {
             return Err(cancelled_error());
         }
-        let fact = match resolve_fact(
+        let mut details = resolve_entry_details(
             store,
             rule,
             adapter,
             index_revision,
-            &page,
+            entry,
             force_details,
             ctx,
             cancel,
             now,
             detail_pages,
-        ) {
-            Ok(fact) => fact,
+            diagnostics,
+            detail_failed,
+        )?;
+        details.sort_by_key(|detail| identity::variant(&detail.title) == Variant::Dlc);
+        for detail in details {
+            let effective = effective_detail_for_entry(entry, &detail);
+            let found = candidates_from_detail(
+                rule,
+                &effective,
+                entry.appid,
+                query,
+                known,
+                adapter,
+                ctx,
+                cancel,
+            )?;
+            known.extend(found.iter().cloned());
+            candidates.extend(found);
+        }
+    }
+    Ok(candidates)
+}
+
+fn push_detail_page(detail_pages: &mut Vec<String>, page: &str) {
+    let canonical = canonical::canonical_page_url(page);
+    if !detail_pages.contains(&canonical) {
+        detail_pages.push(canonical);
+    }
+}
+
+/// Loads cached step progress / completed details for `entry`, or steps Lua
+/// `resolve_detail(ctx, rule, state)` forward until `current_step >= total_steps`.
+#[allow(clippy::too_many_arguments)]
+fn resolve_entry_details(
+    store: &SourceStore,
+    rule: &SourceRule,
+    adapter: &adapters::SourceAdapter<'_>,
+    index_revision: u64,
+    entry: &SourceIndexEntry,
+    force_details: bool,
+    ctx: &mut RequestContext,
+    cancel: &Arc<AtomicBool>,
+    now: u64,
+    detail_pages: &mut Vec<String>,
+    diagnostics: &mut Vec<Diagnostic>,
+    detail_failed: &mut bool,
+) -> Result<Vec<SourceDetail>> {
+    let page = canonical::canonical_page_url(&entry.page);
+    push_detail_page(detail_pages, &page);
+
+    let mut state = None;
+    if !force_details {
+        if let Some(cached) = store.load_detail(&rule.id, &page)? {
+            if cached.index_revision == index_revision && cached.current_step >= entry.current_step
+            {
+                if cached.is_complete() {
+                    diagnostics.extend(cached.diagnostics);
+                    for detail in &cached.details {
+                        push_detail_page(detail_pages, &detail.page);
+                    }
+                    return Ok(cached.details);
+                }
+                state = Some(DetailStepState {
+                    title: entry.title.clone(),
+                    aliases: entry.aliases.clone(),
+                    page: page.clone(),
+                    appid: entry.appid,
+                    current_step: cached.current_step,
+                    total_steps: cached.total_steps,
+                    step_data: cached.step_data,
+                    details: cached.details,
+                });
+            }
+        }
+    }
+
+    let mut state = state.unwrap_or_else(|| DetailStepState {
+        title: entry.title.clone(),
+        aliases: entry.aliases.clone(),
+        page: page.clone(),
+        appid: entry.appid,
+        current_step: entry.current_step,
+        total_steps: entry.total_steps,
+        step_data: entry.step_data.clone(),
+        details: entry.details.clone(),
+    });
+
+    while state.current_step < state.total_steps {
+        if cancelled(cancel) {
+            return Err(cancelled_error());
+        }
+        let outcome = match adapter.resolve_detail(rule, &state, ctx, cancel) {
+            Ok(outcome) => outcome,
             Err(error) => {
                 if cancelled(cancel) || error.to_string() == "task_cancelled" {
                     return Err(cancelled_error());
                 }
                 *detail_failed = true;
                 diagnostics.push(error_diagnostic(rule, error));
-                continue;
+                return Ok(state.details);
             }
         };
-
-        let inline_pages: HashSet<String> = fact
-            .article_facts
-            .iter()
-            .map(|article| canonical::canonical_page_url(&article.page))
-            .collect();
-        let mut inline = fact.article_facts.clone();
-        inline.sort_by_key(|article| identity::variant(&article.title) == Variant::Dlc);
-        for article in inline {
-            save_inline_fact(store, rule, index_revision, &article, now)?;
-            let found = candidates_from_fact(rule, &article, query, known, adapter, ctx, cancel)?;
-            known.extend(found.iter().cloned());
-            candidates.extend(found);
+        if cancelled(cancel) {
+            return Err(cancelled_error());
         }
-
-        let mut links: Vec<&FactLink> = fact
-            .article_links
-            .iter()
-            .filter(|link| !inline_pages.contains(&canonical::canonical_page_url(&link.page)))
-            .collect();
-        links.sort_by_key(|link| identity::variant(&link.title) == Variant::Dlc);
-        for link in links {
-            if !lead_relevant(&link.title, query, known) {
-                continue;
-            }
-            if cancelled(cancel) {
-                return Err(cancelled_error());
-            }
-            match resolve_fact(
-                store,
-                rule,
-                adapter,
-                index_revision,
-                &link.page,
-                force_details,
-                ctx,
-                cancel,
-                now,
-                detail_pages,
-            ) {
-                Ok(article) => {
-                    let found =
-                        candidates_from_fact(rule, &article, query, known, adapter, ctx, cancel)?;
-                    known.extend(found.iter().cloned());
-                    candidates.extend(found);
-                }
-                Err(error) => {
-                    if cancelled(cancel) || error.to_string() == "task_cancelled" {
-                        return Err(cancelled_error());
-                    }
-                    *detail_failed = true;
-                    diagnostics.push(error_diagnostic(rule, error));
-                }
-            }
+        diagnostics.extend(outcome.diagnostics.iter().cloned());
+        let advanced = outcome.current_step > state.current_step;
+        if advanced {
+            state.current_step = outcome.current_step;
         }
-
-        if let Some(next) = &fact.next_page {
-            let next = canonical::canonical_page_url(next);
-            if !visited.contains(&next) {
-                queue.push_back(next);
-            } else {
-                diagnostics.push(diagnostic(rule, "discovery_pagination_cycle"));
-            }
+        state.total_steps = outcome.total_steps;
+        state.step_data = outcome.step_data;
+        state.details = outcome.details;
+        store.save_detail(&DetailRecord {
+            schema_version: SOURCE_DETAIL_SCHEMA_VERSION,
+            source_id: rule.id.clone(),
+            page: page.clone(),
+            index_revision,
+            checked_at: now,
+            current_step: state.current_step,
+            total_steps: state.total_steps,
+            step_data: state.step_data.clone(),
+            details: state.details.clone(),
+            diagnostics: outcome.diagnostics,
+        })?;
+        if !advanced {
+            *detail_failed = true;
+            break;
         }
     }
-    Ok(())
+
+    // Cache resolved sub-article pages (e.g. expanded inside a category step)
+    // under their own canonical page key so direct hits reuse them offline.
+    let mut sub_pages: BTreeMap<String, Vec<SourceDetail>> = BTreeMap::new();
+    for detail in &state.details {
+        let sub_page = canonical::canonical_page_url(&detail.page);
+        push_detail_page(detail_pages, &sub_page);
+        if sub_page != page {
+            sub_pages.entry(sub_page).or_default().push(detail.clone());
+        }
+    }
+    for (sub_page, sub_details) in sub_pages {
+        store.save_detail(&DetailRecord {
+            schema_version: SOURCE_DETAIL_SCHEMA_VERSION,
+            source_id: rule.id.clone(),
+            page: sub_page,
+            index_revision,
+            checked_at: now,
+            current_step: 1,
+            total_steps: 1,
+            step_data: None,
+            details: sub_details,
+            diagnostics: Vec::new(),
+        })?;
+    }
+
+    Ok(state.details)
 }
 
-/// Loads a query-independent page fact from the shared detail cache, or resolves
-/// and persists it. Cancellation is checked before every network request.
 #[allow(clippy::too_many_arguments)]
-fn resolve_fact(
-    store: &SourceStore,
+fn candidates_from_detail(
     rule: &SourceRule,
-    adapter: &adapters::SourceAdapter<'_>,
-    index_revision: u64,
-    page: &str,
-    force_details: bool,
-    ctx: &mut RequestContext,
-    cancel: &Arc<AtomicBool>,
-    now: u64,
-    detail_pages: &mut Vec<String>,
-) -> Result<PageFact> {
-    let page = canonical::canonical_page_url(page);
-    if !detail_pages.contains(&page) {
-        detail_pages.push(page.clone());
-    }
-    if !force_details {
-        if let Some(detail) = store.load_detail(&rule.id, &page)? {
-            if detail.index_revision == index_revision && detail.complete {
-                if let Some(fact) = detail.fact {
-                    return Ok(fact);
-                }
-            }
-        }
-    }
-    if cancelled(cancel) {
-        return Err(cancelled_error());
-    }
-    let fact = adapter.resolve_page(rule, &page, ctx, cancel)?;
-    if cancelled(cancel) {
-        return Err(cancelled_error());
-    }
-    store.save_detail(&DetailRecord {
-        schema_version: SOURCE_DETAIL_SCHEMA_VERSION,
-        source_id: rule.id.clone(),
-        page: page.clone(),
-        index_revision,
-        checked_at: now,
-        complete: true,
-        fact: Some(fact.clone()),
-        diagnostics: Vec::new(),
-    })?;
-    Ok(fact)
-}
-
-/// Persists an inline article body rendered inside a category page, so the next
-/// game (or run) reuses it without a request.
-fn save_inline_fact(
-    store: &SourceStore,
-    rule: &SourceRule,
-    index_revision: u64,
-    fact: &PageFact,
-    now: u64,
-) -> Result<()> {
-    store.save_detail(&DetailRecord {
-        schema_version: SOURCE_DETAIL_SCHEMA_VERSION,
-        source_id: rule.id.clone(),
-        page: canonical::canonical_page_url(&fact.page),
-        index_revision,
-        checked_at: now,
-        complete: true,
-        fact: Some(fact.clone()),
-        diagnostics: Vec::new(),
-    })
-}
-
-/// Builds candidates from one resolved page fact, porting `lead_relevant` /
-/// `candidates_from_fact` without changing the old `discover()` behavior.
-fn candidates_from_fact(
-    rule: &SourceRule,
-    fact: &PageFact,
+    detail: &SourceDetail,
+    entry_appid: Option<u32>,
     query: &QueryContext,
     known: &[SourceCandidate],
     adapter: &adapters::SourceAdapter<'_>,
     ctx: &mut RequestContext,
     cancel: &Arc<AtomicBool>,
 ) -> Result<Vec<SourceCandidate>> {
-    let mut confirmed_id: Vec<u32> =
-        match adapter.match_appid(rule, &fact.steam_ids, query, ctx, cancel)? {
-            Some(false) => return Ok(Vec::new()),
-            Some(true) => vec![query.appid],
-            None => Vec::new(),
-        };
-    if !confirmed_id.is_empty() {
-        for dlc in &query.related_dlc {
-            if fact.steam_ids.contains(&dlc.appid) && !confirmed_id.contains(&dlc.appid) {
-                confirmed_id.push(dlc.appid);
-            }
+    let mut check_ids = detail.steam_ids.clone();
+    if let Some(id) = entry_appid {
+        if !check_ids.contains(&id) {
+            check_ids.push(id);
         }
     }
+    let confirmed_id: Vec<u32> = match adapter.match_appid(rule, &check_ids, query, ctx, cancel)? {
+        Some(false) => return Ok(Vec::new()),
+        Some(true) => {
+            let mut ids = vec![query.appid];
+            for dlc in &query.related_dlc {
+                if check_ids.contains(&dlc.appid) && !ids.contains(&dlc.appid) {
+                    ids.push(dlc.appid);
+                }
+            }
+            ids
+        }
+        None => Vec::new(),
+    };
+
     let mut related_query = query.clone();
-    let title_relevant = identity::title_relevant(&fact.title, query);
-    let upstream = upstream_identity(&fact.page, query.appid, known)
-        .filter(|candidate| candidate.variant == identity::variant(&fact.title));
+    let title_relevant = identity::title_relevant(&detail.title, query);
+    let upstream = upstream_identity(&detail.page, query.appid, known)
+        .filter(|candidate| candidate.variant == identity::variant(&detail.title));
     let known_association = known.iter().any(|candidate| {
-        candidate.source_page == fact.page
-            && candidate.patch_title == fact.title
+        candidate.source_page == detail.page
+            && candidate.patch_title == detail.title
             && candidate
                 .game_appid
                 .is_none_or(|appid| appid == query.appid)
     });
-    let base_link = fact.body_links.iter().any(|url| {
+    let base_link = detail.body_links.iter().any(|url| {
         let url = canonical::canonical_page_url(url);
         known
             .iter()
@@ -1260,38 +1242,20 @@ fn candidates_from_fact(
     // title lead itself or explicitly links to a confirmed base page.
     if upstream.is_some()
         || known_association
-        || (lead_relevant(&fact.title, query, known) && (title_relevant || base_link))
+        || (lead_relevant(&detail.title, query, known) && (title_relevant || base_link))
     {
-        related_query.name_hints.push(fact.title.clone());
+        related_query.name_hints.push(detail.title.clone());
     }
-    let mut found = identity::build_candidates_with_download_group(
+
+    let mut found = identity::build_candidates_from_detail(
         rule,
-        &fact.title,
-        &fact.page,
-        &fact.text,
+        detail,
         confirmed_id.as_slice(),
-        &fact.aliases,
-        "unknown",
-        &fact.mirrors,
         &related_query,
-        fact.single_download_group,
     );
-    // A Steam relationship lets exact publisher titles select both archives
-    // even when their pages contain no store links.
-    let trusted_title = !query.related_dlc.is_empty() && {
-        let title = validate::discovery_normal(&identity::game_title(&fact.title));
-        !title.is_empty()
-            && std::iter::once(&query.name)
-                .chain(query.localized_name.as_ref())
-                .chain(query.related_dlc.iter().filter_map(|dlc| dlc.name.as_ref()))
-                .any(|name| validate::discovery_normal(name) == title)
-    };
     for candidate in &mut found {
         if candidate.game_appid.is_none() {
-            if trusted_title {
-                candidate.game_appid = Some(query.appid);
-                candidate.match_basis = MatchBasis::OfficialTitle;
-            } else if let Some(upstream) = upstream {
+            if let Some(upstream) = upstream {
                 candidate.game_appid = Some(query.appid);
                 candidate.match_basis = MatchBasis::VerifiedAlias;
                 candidate.identity_evidence.push(IdentityEvidence {
@@ -1302,13 +1266,10 @@ fn candidates_from_fact(
                 candidate
                     .provenance
                     .extend(upstream.provenance.iter().cloned());
+                if let Ok(value) = serde_json::to_value(&*candidate) {
+                    candidate.fingerprint = canonical::fingerprint(&value);
+                }
             }
-        }
-        if let Some(published_at) = &fact.published_at {
-            candidate.published_at = Some(published_at.clone());
-        }
-        if let Ok(value) = serde_json::to_value(&*candidate) {
-            candidate.fingerprint = canonical::fingerprint(&value);
         }
     }
     Ok(found)
@@ -1851,14 +1812,6 @@ fn error_diagnostic(rule: &SourceRule, error: std::io::Error) -> Diagnostic {
         source_id: Some(rule.id.clone()),
         code: error.code,
         detail: error.detail,
-    }
-}
-
-fn diagnostic(rule: &SourceRule, code: impl Into<String>) -> Diagnostic {
-    Diagnostic {
-        source_id: Some(rule.id.clone()),
-        code: code.into(),
-        detail: None,
     }
 }
 

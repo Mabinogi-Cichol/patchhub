@@ -29,17 +29,17 @@ local M = {}
 function M.collect_index(ctx, rule, previous)
   local entries = {}
   for _, node in ipairs(ctx.html(ctx.get(rule.pages[1]).text):select('article')) do
-    entries[#entries+1] = {title=node:text(), page=ctx.url_join(rule.pages[1], node:attr('data-page')), kind='product'}
+    entries[#entries+1] = {title=node:text(), page=ctx.url_join(rule.pages[1], node:attr('data-page')), current_step=1, total_steps=2}
   end
   return {entries=entries, complete=true}
 end
-function M.resolve_page(ctx, rule, page)
-  local doc = ctx.html(ctx.get(page).text)
+function M.resolve_detail(ctx, rule, state)
+  local doc = ctx.html(ctx.get(state.page).text)
   local mirrors = {}
   for _, link in ipairs(doc:select('a')) do
     mirrors[#mirrors+1] = {url=link:attr('href'), format='unknown'}
   end
-  return {title=doc:select('h1')[1]:text(), page=page, kind='product', steam_ids={42,43}, mirrors=mirrors, text='English patch'}
+  return {current_step=2, total_steps=2, details={{title=doc:select('h1')[1]:text(), page=state.page, steam_ids={42,43}, mirrors=mirrors, text='English patch'}}}
 end
 return M
 "#;
@@ -406,7 +406,7 @@ fn readonly_projection_and_preview_reject_retired_selection_without_running_lua(
 fn partial_and_failed_script_attempts_preserve_official_index_and_old_parser_is_not_resumed() {
     let (_temp, mut s, _) = seeded();
     let old = s.store().load_index("custom").unwrap().unwrap();
-    let partial = r#"return {collect_index=function(ctx,rule,previous) assert(previous==ctx.null); return {entries={{title='Partial',kind='product',page='https://example.com/p'}},pending={'https://example.com/next'},complete=false} end}"#;
+    let partial = r#"return {collect_index=function(ctx,rule,previous) assert(previous==ctx.null); return {entries={{title='Partial',page='https://example.com/p',current_step=1,total_steps=2}},pending={'https://example.com/next'},complete=false} end}"#;
     s.import_script_source(&raw(), 1, partial, true).unwrap();
     let out = update(&s, &transport(&[])).unwrap();
     assert_eq!(out.status.code, "source_partial");
@@ -461,7 +461,7 @@ fn cancelled_update_and_detail_cannot_publish_success_even_if_script_catches_it(
     thread.join().unwrap();
     assert_eq!(err.to_string(), "task_cancelled");
     assert_eq!(s.store().load_index("custom").unwrap().unwrap(), old);
-    let detail_loop=CODE.replace("local doc = ctx.html(ctx.get(page).text)","while true do pcall(function() while true do end end) end\nlocal doc = ctx.html(ctx.get(page).text)");
+    let detail_loop=CODE.replace("local doc = ctx.html(ctx.get(state.page).text)","while true do pcall(function() while true do end end) end\nlocal doc = ctx.html(ctx.get(state.page).text)");
     s.import_script_source(&raw(), 1, &detail_loop, true)
         .unwrap();
     update(&s, &transport(&[LIST])).unwrap();
@@ -497,15 +497,28 @@ fn category_inline_linked_details_and_pagination_use_the_same_script_dispatch() 
     let temp = tempfile::tempdir().unwrap();
     let mut s = open(temp.path());
     let code = r#"return {
-        collect_index=function() return {entries={{title='Test Game',page='https://example.com/category',kind='category'}},complete=true} end,
-        resolve_page=function(ctx,rule,page) return ctx.json_decode(ctx.get(page).text) end
+        collect_index=function() return {entries={{title='Test Game',page='https://example.com/category',current_step=1,total_steps=2,step_data={kind='category'}}},complete=true} end,
+        resolve_detail=function(ctx,rule,state)
+            local details = state.details or {}
+            if state.current_step == 1 then
+                local data = ctx.json_decode(ctx.get(state.page).text)
+                for _, item in ipairs(data.inline or {}) do details[#details + 1] = item end
+                return {current_step=2,total_steps=3,step_data={next_page=data.next_page},details=details}
+            end
+            local page2 = ctx.json_decode(ctx.get(state.step_data.next_page).text)
+            for _, link in ipairs(page2.links or {}) do
+                details[#details + 1] = ctx.json_decode(ctx.get(link.page).text)
+            end
+            return {current_step=3,total_steps=3,details=details}
+        end
     }"#;
     s.import_script_source(&raw(), 1, code, false).unwrap();
     update(&s, &transport(&[])).unwrap();
-    let inline = json!({"title":"Test Game", "page":"https://example.com/inline", "kind":"article", "steam_ids":[42], "mirrors":[{"url":"https://download.example.com/a.zip","format":"zip"}]});
-    let category=json!({"title":"Test Game", "page":"https://example.com/category", "kind":"category", "article_facts":[inline], "next_page":"https://example.com/page2"}).to_string();
-    let category2=json!({"title":"Test Game", "page":"https://example.com/page2", "kind":"category", "article_links":[{"title":"Test Game","page":"https://example.com/linked"}]}).to_string();
-    let linked=json!({"title":"Test Game", "page":"https://example.com/linked", "kind":"article", "steam_ids":[42], "mirrors":[{"url":"https://download.example.com/b.exe","format":"exe"}]}).to_string();
+    let inline = json!({"title":"Test Game", "page":"https://example.com/inline", "steam_ids":[42], "mirrors":[{"url":"https://download.example.com/a.zip","format":"zip"}]});
+    let category = json!({"inline":[inline], "next_page":"https://example.com/page2"}).to_string();
+    let category2 =
+        json!({"links":[{"title":"Test Game","page":"https://example.com/linked"}]}).to_string();
+    let linked = json!({"title":"Test Game", "page":"https://example.com/linked", "steam_ids":[42], "mirrors":[{"url":"https://download.example.com/b.exe","format":"exe"}]}).to_string();
     let network = transport(&[&category, &category2, &linked]);
     let result = matches(&s, &network, &[game(42)]).unwrap();
     assert_eq!(result[0].status, GameMatchStatus::PublisherMatch);
@@ -631,7 +644,7 @@ fn unchanged_script_failures_keep_last_success_without_publishing_false_completi
         .any(|d| d.code == "script_source_runtime_error"
             && d.detail
                 .as_ref()
-                .is_some_and(|s| s.contains("entry=resolve_page"))));
+                .is_some_and(|s| s.contains("entry=resolve_detail"))));
     assert_eq!(
         s.store()
             .load_detail("custom", "https://example.com/game")

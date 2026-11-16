@@ -91,60 +91,6 @@ local function library(ctx, rule)
     function u.failed_index(failure)
         return {entries = ctx.array(), pending = rule.pages, complete = false, diagnostics = {u.diagnostic(failure)}}
     end
-    function u.rows(root, table_id)
-        local tables, rows = {}, {}
-        for _, node in ipairs(root:select("table")) do
-            if table_id then
-                if node:attr("id") == table_id then tables[1] = node; break end
-            elseif not u.ancestor(node, function(parent) return parent:tag() == "table" end) then
-                tables[#tables + 1] = node
-            end
-        end
-        for _, node in ipairs(tables) do
-            for _, row in ipairs(node:select("tr")) do
-                local cells = row:select("td, th")
-                if #cells > 0 then rows[#rows + 1] = cells end
-            end
-        end
-        return rows
-    end
-    function u.row_entry(row, columns, page, language)
-        local title = row[columns.title + 1]
-        local download = row[columns.download + 1]
-        local anchor = download and download:select("a[href]")[1]
-        if not title or title:text() == "" or not anchor or anchor:attr("href") == "" then return end
-        local ok, url = pcall(ctx.url_join, page, anchor:attr("href"))
-        if not ok or not ctx.url_parts(url).path:lower():match("%.zip$") then return end
-        local entry = {title = title:text(), aliases = ctx.array(), page = page,
-            kind = "entry", url = url, language = language}
-        if columns.date and columns.date ~= ctx.null and row[columns.date + 1] then
-            local date = row[columns.date + 1]:text()
-            if date == "待定" or date == "即将推出" or date == "即將推出" then date = "COMING SOON" end
-            if date ~= "" then entry.date = ctx.normalize_date(date) end
-        end
-        if columns.language and columns.language ~= ctx.null and row[columns.language + 1] then
-            local value = row[columns.language + 1]:text()
-            if value ~= "" then entry.language = value end
-        end
-        if columns.appid and columns.appid ~= ctx.null and row[columns.appid + 1] then
-            local value = row[columns.appid + 1]:text()
-            local appid = tonumber(value)
-            if not value:match("^[1-9]%d*$") or not appid or appid > 4294967295 then
-                error("invalid_source_appid", 0)
-            end
-            entry.appid = appid
-        end
-        return entry
-    end
-    function u.next_page(root, page)
-        for _, anchor in ipairs(root:select("a")) do
-            local next_rel = false
-            for token in (anchor:attr("rel") or ""):gmatch("%S+") do if token == "next" then next_rel = true end end
-            if next_rel or u.has(anchor, "next") or u.has(anchor, "nextpostslink") then
-                return ctx.url_join(page, anchor:attr("href") or "")
-            end
-        end
-    end
     return u
 end
 
@@ -242,7 +188,7 @@ return {
                 end
             end
         end
-        local pages = ctx.array()
+        local details = ctx.array()
         for _, patch in ipairs(patches) do
             local root, page = fetch(patch.url)
             if root then
@@ -285,13 +231,20 @@ return {
                     local reported = ctx.word_contains(text, "ZIP") and "zip" or ctx.word_contains(text, "EXE") and "exe" or "unknown"
                     local upstream
                     for _, mirror in ipairs(mirrors) do if not u.internal(mirror.url) then upstream = mirror.url; break end end
-                    pages[#pages + 1] = {fact = {title = heading:text(), page = page, kind = "article",
-                        text = text, steam_ids = ids, aliases = aliases, mirrors = mirrors},
-                        reported_format = reported, upstream_page = upstream}
+                    details[#details + 1] = {
+                        title = heading:text(),
+                        page = page,
+                        text = text,
+                        steam_ids = ids,
+                        aliases = aliases,
+                        mirrors = mirrors,
+                        reported_format = reported,
+                        upstream_page = upstream,
+                    }
                 end
             end
         end
-        if #pages == 0 and #diagnostics > 0 then error(ctx.json_encode(diagnostics), 0) end
-        return {pages = pages, identities = identities, diagnostics = diagnostics, complete = #diagnostics == 0}
+        if #details == 0 and #diagnostics > 0 then error(ctx.json_encode(diagnostics), 0) end
+        return {details = details, identities = identities, diagnostics = diagnostics, complete = #diagnostics == 0}
     end
 }

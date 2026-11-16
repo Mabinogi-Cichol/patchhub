@@ -17,7 +17,7 @@ pub(crate) fn save_match(registry: &SourceRegistry, mut record: GameMatchRecord)
         if fingerprint.is_some() && registry.store().load_index(id)?.is_none() {
             registry.store().save_index(&SourceIndex {
                 parser_fingerprint: fingerprint,
-                schema_version: 1,
+                schema_version: super::SOURCE_INDEX_SCHEMA_VERSION,
                 source_id: id.clone(),
                 revision: source.index_revision,
                 complete: true,

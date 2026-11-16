@@ -596,7 +596,119 @@ pub fn build_candidates(
     )
 }
 
+pub(crate) fn build_candidates_from_detail(
+    rule: &SourceRule,
+    detail: &SourceDetail,
+    ids: &[u32],
+    query: &QueryContext,
+) -> Vec<SourceCandidate> {
+    build_candidates_from_detail_with_options(rule, detail, ids, query, None, CacheStatus::Fresh)
+}
+
+pub(crate) fn build_candidates_from_detail_with_options(
+    rule: &SourceRule,
+    detail: &SourceDetail,
+    ids: &[u32],
+    query: &QueryContext,
+    observed_at: Option<String>,
+    cache_status: CacheStatus,
+) -> Vec<SourceCandidate> {
+    if detail.published_at.as_deref() == Some("COMING SOON") {
+        return Vec::new();
+    }
+    build_candidates_inner(
+        rule,
+        &detail.title,
+        &detail.page,
+        &detail.text,
+        ids,
+        &detail.aliases,
+        detail.reported_format.as_deref().unwrap_or("unknown"),
+        &detail.mirrors,
+        query,
+        detail.single_download_group,
+        &detail.languages,
+        detail.published_at.as_deref(),
+        detail.upstream_page.as_deref(),
+        observed_at.as_deref(),
+        cache_status,
+    )
+}
+
+fn collect_match_targets<'a>(
+    names: impl Iterator<Item = &'a str>,
+    split_mode: bool,
+) -> HashSet<String> {
+    let mut targets = HashSet::new();
+    for name in names {
+        let disc = validate::discovery_normal(name);
+        if !disc.is_empty() {
+            targets.insert(disc);
+        }
+        if split_mode {
+            let norm = validate::normal(name);
+            if !norm.is_empty() {
+                targets.insert(norm);
+            }
+        }
+    }
+    targets
+}
+
+fn candidate_matches_targets(
+    title: &str,
+    alias_list: &[String],
+    targets: &HashSet<String>,
+    split_mode: bool,
+) -> bool {
+    if targets.is_empty() {
+        return false;
+    }
+    std::iter::once(title)
+        .chain(alias_list.iter().map(String::as_str))
+        .any(|value| {
+            let stripped = game_title(value);
+            let matched = [value, stripped.as_str()].into_iter().any(|variant| {
+                targets.contains(&validate::discovery_normal(variant))
+                    || (split_mode
+                        && validate::split_names(variant).into_iter().any(|part| {
+                            targets.contains(&validate::normal(&part))
+                                || targets.contains(&validate::discovery_normal(&part))
+                        }))
+            });
+            matched
+        })
+}
+
+/// Exact normalized base/DLC title match used to upgrade trusted publisher
+/// candidates (`!rule.discovery_only` or queries carrying Steam DLC context)
+/// from `MatchBasis::Title` to `MatchBasis::OfficialTitle`.
+fn matches_trusted_title(
+    rule: &SourceRule,
+    title: &str,
+    alias_list: &[String],
+    query: &QueryContext,
+) -> bool {
+    if rule.discovery_only && query.related_dlc.is_empty() {
+        return false;
+    }
+    let split_mode = !rule.discovery_only;
+    let targets = collect_match_targets(
+        std::iter::once(query.name.as_str())
+            .chain(query.localized_name.as_deref())
+            .chain(
+                query
+                    .related_dlc
+                    .iter()
+                    .filter_map(|dlc| dlc.name.as_deref()),
+            ),
+        split_mode,
+    );
+    candidate_matches_targets(title, alias_list, &targets, split_mode)
+}
+
 fn matched_dlc_for_candidate(
+    rule: &SourceRule,
     ids: &[u32],
     title: &str,
     alias_list: &[String],
@@ -609,29 +721,18 @@ fn matched_dlc_for_candidate(
     {
         return Some(dlc.appid);
     }
-    let mut base_targets = HashSet::new();
-    for name in std::iter::once(&query.name).chain(query.localized_name.as_ref()) {
-        let norm = validate::discovery_normal(name);
-        if !norm.is_empty() {
-            base_targets.insert(norm);
-        }
-    }
-    let candidate_matches = |target_norm: &str| {
-        std::iter::once(title)
-            .chain(alias_list.iter().map(String::as_str))
-            .any(|value| {
-                let raw = validate::discovery_normal(value);
-                let game = validate::discovery_normal(&game_title(value));
-                raw == target_norm || game == target_norm
-            })
-    };
-    if base_targets.iter().any(|norm| candidate_matches(norm)) {
+    let split_mode = !rule.discovery_only;
+    let base_targets = collect_match_targets(
+        std::iter::once(query.name.as_str()).chain(query.localized_name.as_deref()),
+        split_mode,
+    );
+    if candidate_matches_targets(title, alias_list, &base_targets, split_mode) {
         return None;
     }
     for dlc in &query.related_dlc {
         if let Some(name) = dlc.name.as_deref() {
-            let norm = validate::discovery_normal(name);
-            if !norm.is_empty() && candidate_matches(&norm) {
+            let dlc_targets = collect_match_targets(std::iter::once(name), split_mode);
+            if candidate_matches_targets(title, alias_list, &dlc_targets, split_mode) {
                 return Some(dlc.appid);
             }
         }
@@ -652,6 +753,43 @@ pub(crate) fn build_candidates_with_download_group(
     query: &QueryContext,
     single_download_group: bool,
 ) -> Vec<SourceCandidate> {
+    build_candidates_inner(
+        rule,
+        title,
+        page,
+        text,
+        ids,
+        aliases,
+        reported,
+        mirrors,
+        query,
+        single_download_group,
+        &[],
+        None,
+        None,
+        None,
+        CacheStatus::Fresh,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_candidates_inner(
+    rule: &SourceRule,
+    title: &str,
+    page: &str,
+    text: &str,
+    ids: &[u32],
+    aliases: &[String],
+    reported: &str,
+    mirrors: &[Mirror],
+    query: &QueryContext,
+    single_download_group: bool,
+    explicit_languages: &[String],
+    published_at: Option<&str>,
+    explicit_upstream_page: Option<&str>,
+    observed_at: Option<&str>,
+    cache_status: CacheStatus,
+) -> Vec<SourceCandidate> {
     let appid = query.appid;
     let mut alias_list: Vec<String> = if aliases.is_empty() {
         vec![game_title(title)]
@@ -659,10 +797,12 @@ pub(crate) fn build_candidates_with_download_group(
         aliases.to_vec()
     };
     alias_list.retain(|alias| !alias.is_empty());
-    let matched_dlc = matched_dlc_for_candidate(ids, title, &alias_list, query);
+    let matched_dlc = matched_dlc_for_candidate(rule, ids, title, &alias_list, query);
     let has_ids = ids.contains(&appid) || matched_dlc.is_some_and(|dlc| ids.contains(&dlc));
+    let trusted_title = matches_trusted_title(rule, title, &alias_list, query);
     if !has_ids
         && matched_dlc.is_none()
+        && !trusted_title
         && !alias_list.iter().any(|alias| title_relevant(alias, query))
     {
         return Vec::new();
@@ -676,11 +816,12 @@ pub(crate) fn build_candidates_with_download_group(
     if variant == Variant::Demo || (!has_ids && gog_only(text)) {
         return Vec::new();
     }
-    let platforms: Vec<String> = if has_ids || word_bounded_ci(text, "steam") {
-        vec!["steam".to_string()]
-    } else {
-        Vec::new()
-    };
+    let platforms: Vec<String> =
+        if has_ids || (!rule.discovery_only && trusted_title) || word_bounded_ci(text, "steam") {
+            vec!["steam".to_string()]
+        } else {
+            Vec::new()
+        };
     let all_versions = versions(text);
 
     let mut groups: Vec<(GroupKey, Vec<Mirror>)> = Vec::new();
@@ -724,20 +865,14 @@ pub(crate) fn build_candidates_with_download_group(
         }
     }
     if groups.is_empty() {
-        let key = GroupKey {
-            languages: if single_download_group {
-                Vec::new()
-            } else {
-                language(text)
+        groups.push((
+            GroupKey {
+                languages: Vec::new(),
+                version: (all_versions.len() == 1).then(|| all_versions[0].clone()),
+                filename: None,
             },
-            version: if all_versions.len() == 1 {
-                Some(all_versions[0].clone())
-            } else {
-                None
-            },
-            filename: None,
-        };
-        groups.push((key, Vec::new()));
+            Vec::new(),
+        ));
     }
 
     let mut result = Vec::new();
@@ -747,8 +882,12 @@ pub(crate) fn build_candidates_with_download_group(
             version = Some(all_versions[0].clone());
         }
         let mut group_languages = key.languages.clone();
-        if group_languages.is_empty() && !single_download_group {
-            group_languages = language(text);
+        if group_languages.is_empty() {
+            if !explicit_languages.is_empty() {
+                group_languages = explicit_languages.to_vec();
+            } else if !single_download_group {
+                group_languages = language(text);
+            }
         }
         let observed = observed_format(&entries);
         let mut warnings = Vec::new();
@@ -803,17 +942,28 @@ pub(crate) fn build_candidates_with_download_group(
                 title.to_string()
             }
         };
+        let (game_appid, parent_appid, match_basis) = if has_ids {
+            (
+                Some(appid),
+                (variant == Variant::Dlc).then_some(appid),
+                MatchBasis::Appid,
+            )
+        } else if trusted_title {
+            (
+                Some(appid),
+                (variant == Variant::Dlc).then_some(appid),
+                MatchBasis::OfficialTitle,
+            )
+        } else {
+            (None, None, MatchBasis::Title)
+        };
         let mut candidate = SourceCandidate {
             parser_fingerprint: None,
             candidate_id,
             source_id: rule.id.clone(),
             source_record_id: canonical::canonical_page_url(page),
-            game_appid: if has_ids { Some(appid) } else { None },
-            parent_appid: if has_ids && variant == Variant::Dlc {
-                Some(appid)
-            } else {
-                None
-            },
+            game_appid,
+            parent_appid,
             aliases: alias_list.clone(),
             game_title: game_title_value,
             patch_title: title.to_string(),
@@ -826,18 +976,16 @@ pub(crate) fn build_candidates_with_download_group(
             version_raw: version.clone(),
             version_evidence: all_versions.clone(),
             version_identity,
-            published_at: None,
+            published_at: published_at.map(str::to_string),
             patch_updated_at: if find_ci(text, "updated").is_some() || text.contains("更新") {
                 date(text)
             } else {
                 None
             },
             source_page: page.to_string(),
-            upstream_page: if rule.role != SourceRole::FallbackIndexer {
-                Some(page.to_string())
-            } else {
-                None
-            },
+            upstream_page: explicit_upstream_page
+                .map(str::to_string)
+                .or_else(|| (rule.role != SourceRole::FallbackIndexer).then(|| page.to_string())),
             mirrors: entries.clone(),
             format_reported: parse_format(reported),
             format_observed: parse_format(&observed),
@@ -855,13 +1003,9 @@ pub(crate) fn build_candidates_with_download_group(
                 source_id: rule.id.clone(),
                 page: page.to_string(),
             }],
-            match_basis: if has_ids {
-                MatchBasis::Appid
-            } else {
-                MatchBasis::Title
-            },
-            observed_at: now_iso8601(),
-            cache_status: CacheStatus::Fresh,
+            match_basis,
+            observed_at: observed_at.map(str::to_string).unwrap_or_else(now_iso8601),
+            cache_status,
             warnings,
             fingerprint: String::new(),
             related_index_pages: Vec::new(),
@@ -1273,7 +1417,7 @@ fn now_iso8601() -> String {
     iso8601_utc(seconds)
 }
 
-fn iso8601_utc(seconds: u64) -> String {
+pub(crate) fn iso8601_utc(seconds: u64) -> String {
     let days = seconds / 86_400;
     let remainder = seconds % 86_400;
     let (year, month, day) = civil_from_days(days as i64);

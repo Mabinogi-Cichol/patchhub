@@ -51,7 +51,7 @@ local function collect_index(ctx, rule, previous)
                     if url:find("/product/", 1, true) then page_url = url; break end
                 end
                 if #titles > 0 and page_url and not pages[page_url] then
-                    entries[#entries + 1] = { title = titles[1]:text(), page = page_url, kind = "product" }
+                    entries[#entries + 1] = { title = titles[1]:text(), page = page_url, current_step = 1, total_steps = 2 }
                     pages[page_url] = true
                 end
             end
@@ -64,8 +64,8 @@ local function collect_index(ctx, rule, previous)
     return { entries = entries, pending = pending, complete = true }
 end
 
-local function resolve_page(ctx, rule, page)
-    local root, final_url = fetch(ctx, page)
+local function resolve_detail(ctx, rule, state)
+    local root, final_url = fetch(ctx, state.page)
     local headings = root:select("h1, h2")
     local bodies = root:select("#tab-patch")
     assert(#headings > 0 and #bodies > 0, "discovery_structure_changed")
@@ -89,8 +89,20 @@ local function resolve_page(ctx, rule, page)
             seen_mirrors[url] = true
         end
     end
-    return { title = headings[1]:text(), page = final_url, kind = "product", text = body:text(),
-        mirrors = mirrors, steam_ids = steam_ids, body_links = links }
+    return {
+        current_step = 2,
+        total_steps = 2,
+        details = {
+            {
+                title = headings[1]:text(),
+                page = final_url,
+                text = body:text(),
+                mirrors = mirrors,
+                steam_ids = steam_ids,
+                body_links = links,
+            }
+        }
+    }
 end
 
-return { collect_index = collect_index, resolve_page = resolve_page }
+return { collect_index = collect_index, resolve_detail = resolve_detail }

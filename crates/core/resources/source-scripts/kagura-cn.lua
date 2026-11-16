@@ -85,56 +85,13 @@ local function library(ctx, rule)
     end
     function u.diagnostic(failure)
         local detail = tostring(failure)
-        local code = detail:match("(source_http_%d+)") or "source_refresh_failed"
+        local code = detail:match("(source_http_%d+)")
+            or detail:match("(discovery_structure_changed)")
+            or "source_refresh_failed"
         return {code = code, detail = detail}
     end
     function u.failed_index(failure)
         return {entries = ctx.array(), pending = rule.pages, complete = false, diagnostics = {u.diagnostic(failure)}}
-    end
-    function u.rows(root, table_id)
-        local tables, rows = {}, {}
-        for _, node in ipairs(root:select("table")) do
-            if table_id then
-                if node:attr("id") == table_id then tables[1] = node; break end
-            elseif not u.ancestor(node, function(parent) return parent:tag() == "table" end) then
-                tables[#tables + 1] = node
-            end
-        end
-        for _, node in ipairs(tables) do
-            for _, row in ipairs(node:select("tr")) do
-                local cells = row:select("td, th")
-                if #cells > 0 then rows[#rows + 1] = cells end
-            end
-        end
-        return rows
-    end
-    function u.row_entry(row, columns, page, language)
-        local title = row[columns.title + 1]
-        local download = row[columns.download + 1]
-        local anchor = download and download:select("a[href]")[1]
-        if not title or title:text() == "" or not anchor or anchor:attr("href") == "" then return end
-        local ok, url = pcall(ctx.url_join, page, anchor:attr("href"))
-        if not ok or not ctx.url_parts(url).path:lower():match("%.zip$") then return end
-        local entry = {title = title:text(), aliases = ctx.array(), page = page,
-            kind = "entry", url = url, language = language}
-        if columns.date and columns.date ~= ctx.null and row[columns.date + 1] then
-            local date = row[columns.date + 1]:text()
-            if date == "待定" or date == "即将推出" or date == "即將推出" then date = "COMING SOON" end
-            if date ~= "" then entry.date = ctx.normalize_date(date) end
-        end
-        if columns.language and columns.language ~= ctx.null and row[columns.language + 1] then
-            local value = row[columns.language + 1]:text()
-            if value ~= "" then entry.language = value end
-        end
-        if columns.appid and columns.appid ~= ctx.null and row[columns.appid + 1] then
-            local value = row[columns.appid + 1]:text()
-            local appid = tonumber(value)
-            if not value:match("^[1-9]%d*$") or not appid or appid > 4294967295 then
-                error("invalid_source_appid", 0)
-            end
-            entry.appid = appid
-        end
-        return entry
     end
     function u.next_page(root, page)
         for _, anchor in ipairs(root:select("a")) do
@@ -148,148 +105,261 @@ local function library(ctx, rule)
     return u
 end
 
--- WordPress and WooCommerce share pagination and PageFact construction.
-local function kagura(overseas)
-    local function parse_fact(ctx, u, root, page, fallback)
-        local heading = u.first(root, function(node)
-            return (node:tag() == "h1" or node:tag() == "h2") and (overseas or u.has(node, "entry-title"))
-        end)
-        local title = heading and heading:text() or fallback or ""
-        local body = u.first(root, function(node)
-            if overseas then return node:attr("id") == "tab-patch" end
-            return u.has(node, "entry-content") and u.ancestor(node, function(parent) return parent:tag() == "article" end)
-        end)
-        if title == "" or not body then error("discovery_structure_changed", 0) end
-        local body_links = ctx.array()
-        for _, href in ipairs(u.link_urls(body)) do
-            local ok, url = pcall(ctx.url_join, page, href)
-            if ok then body_links[#body_links + 1] = url end
-        end
-        local published
-        local article = u.ancestor(body, function(node) return node:tag() == "article" end)
-        if article then
-            local time = u.first(article, function(node)
-                return node:tag() == "time" and (u.has(node, "published") or u.has(node, "entry-date"))
-            end)
-            if time then published = ctx.date(time:attr("datetime") or "") end
-        end
-        local next_page = u.next_page(root, page)
-        return {title = title, page = ctx.canonical_url(page), kind = overseas and "product" or "article",
-            steam_ids = ctx.steam_ids(u.link_urls(body)), aliases = ctx.array(),
-            mirrors = u.mirrors(body, page), text = body:text(), published_at = published,
-            body_links = body_links, article_links = ctx.array(), article_facts = ctx.array(),
-            next_page = next_page and ctx.canonical_url(next_page)}
+local function parse_detail(ctx, u, root, page, fallback)
+    local heading = u.first(root, function(node)
+        return (node:tag() == "h1" or node:tag() == "h2") and u.has(node, "entry-title")
+    end)
+    local title = heading and heading:text() or fallback or ""
+    local body = u.first(root, function(node)
+        return u.has(node, "entry-content") and u.ancestor(node, function(parent) return parent:tag() == "article" end)
+    end)
+    if title == "" or not body then error("discovery_structure_changed", 0) end
+    local body_links = ctx.array()
+    for _, href in ipairs(u.link_urls(body)) do
+        local ok, url = pcall(ctx.url_join, page, href)
+        if ok then body_links[#body_links + 1] = url end
     end
-    local function parse_index(ctx, rule, u, root, page)
-        local found = ctx.array()
-        local function add(title, url, kind)
-            found[#found + 1] = {title = title, page = ctx.canonical_url(url), kind = kind}
-        end
-        if overseas then
-            for _, card in ipairs(u.walk(root)) do
-                if u.has(card, "product") and u.has(card, "type-product")
-                    and not u.ancestor(card, function(node) return u.has(node, "widget") or u.has(node, "related") end) then
-                    local title_node = u.first(card, function(node)
-                        return u.has(node, "woocommerce-loop-product__title") or u.has(node, "name")
-                    end)
-                    local links = u.links(card, page, function(_, url)
-                        return ctx.url_parts(url).path:find("/product/", 1, true)
-                    end)
-                    if #links > 0 then
-                        local title = title_node and title_node:text() or ""
-                        if title == "" then
-                            for _, link in ipairs(links) do if link.label ~= "" then title = link.label; break end end
-                        end
-                        if title ~= "" then add(title, links[1].url, "product") end
-                    end
-                end
-            end
-        else
-            for _, article in ipairs(root:select("article")) do
-                local title = u.first(article, function(node) return u.has(node, "entry-title") end)
-                if title and title:text() ~= "" then
-                    local links = u.links(title, page, function(_, url) return u.internal(url) end)
-                    if #links > 0 then add(title:text(), links[1].url, "article") end
-                end
-            end
-            for _, link in ipairs(u.links(root, page, function(_, url)
-                return ctx.url_parts(url).path:find("/category/", 1, true)
-            end)) do
-                if link.label ~= "" then add(link.label, link.url, "category") end
-            end
-        end
-        return found, u.next_page(root, page)
+    local published
+    local article = u.ancestor(body, function(node) return node:tag() == "article" end)
+    if article then
+        local time = u.first(article, function(node)
+            return node:tag() == "time" and (u.has(node, "published") or u.has(node, "entry-date"))
+        end)
+        if time then published = ctx.date(time:attr("datetime") or "") end
     end
     return {
-        collect_index = function(ctx, rule, previous)
-            local u = library(ctx, rule)
-            local entries, pending, diagnostics = ctx.array(), ctx.array(), ctx.array()
-            local seen, incomplete = {}, false
-            local function enqueue(page)
-                page = ctx.canonical_url(page)
-                if not seen[page] then pending[#pending + 1] = page; seen[page] = true; return true end
-                return false
-            end
-            if previous and previous ~= ctx.null and #previous.pending > 0 then
-                entries = previous.entries
-                for _, page in ipairs(previous.pending) do enqueue(page) end
-            else
-                if rule.url and rule.url ~= ctx.null then enqueue(rule.url) end
-                for _, page in ipairs(rule.pages) do enqueue(page) end
-            end
-            while #pending > 0 do
-                ctx.check_cancel()
-                local page = pending[1]
-                ctx.progress(page)
-                local ok, root, final_url = pcall(u.fetch, page)
-                if not ok then diagnostics[#diagnostics + 1] = u.diagnostic(root); incomplete = true; break end
-                table.remove(pending, 1); seen[ctx.canonical_url(final_url)] = true
-                local found, next_page = parse_index(ctx, rule, u, root, final_url)
-                if #found == 0 then
-                    diagnostics[#diagnostics + 1] = {code = "discovery_structure_changed"}; incomplete = true
-                end
-                for _, entry in ipairs(found) do entries[#entries + 1] = entry end
-                if next_page and not enqueue(next_page) then
-                    diagnostics[#diagnostics + 1] = {code = "discovery_pagination_cycle"}
-                end
-            end
-            local unique, pages = ctx.array(), {}
-            for _, entry in ipairs(entries) do
-                if not pages[entry.page] then unique[#unique + 1] = entry; pages[entry.page] = true end
-            end
-            return {entries = unique, pending = pending, complete = #pending == 0 and not incomplete, diagnostics = diagnostics}
-        end,
-        resolve_page = function(ctx, rule, page)
-            local u = library(ctx, rule)
-            page = ctx.canonical_url(page)
-            local root, final_url = u.fetch(page)
-            if overseas or not ctx.url_parts(final_url).path:find("/category/", 1, true) then
-                return parse_fact(ctx, u, root, final_url)
-            end
-            local heading = u.first(root, function(node) return node:tag() == "h1" end)
-                or u.first(root, function(node) return node:tag() == "title" end)
-            local links, facts = ctx.array(), ctx.array()
-            for _, article in ipairs(root:select("article")) do
-                local title = u.first(article, function(node) return u.has(node, "entry-title") end)
-                if title then
-                    local urls = u.links(title, final_url, function(_, url) return u.internal(url) end)
-                    if #urls > 0 then
-                        local url = ctx.canonical_url(urls[1].url)
-                        links[#links + 1] = {title = title:text(), page = url}
-                        -- Listings without full bodies are links, not failed details.
-                        if u.first(article, function(node) return u.has(node, "entry-content") end) then
-                            facts[#facts + 1] = parse_fact(ctx, u, article, url, title:text())
-                        end
-                    end
-                end
-            end
-            local next_page = u.next_page(root, final_url)
-            return {title = heading and heading:text() or "", page = ctx.canonical_url(final_url), kind = "category",
-                steam_ids = ctx.array(), aliases = ctx.array(), mirrors = ctx.array(), text = "",
-                body_links = ctx.array(), article_links = links, article_facts = facts,
-                next_page = next_page and ctx.canonical_url(next_page)}
-        end
+        title = title,
+        page = ctx.canonical_url(page),
+        steam_ids = ctx.steam_ids(u.link_urls(body)),
+        aliases = ctx.array(),
+        mirrors = u.mirrors(body, page),
+        text = body:text(),
+        published_at = published,
+        body_links = body_links,
     }
 end
 
-return kagura(false)
+local function parse_index(ctx, u, root, page)
+    local found = ctx.array()
+    local function add(title, url, step_data)
+        found[#found + 1] = {
+            title = title,
+            page = ctx.canonical_url(url),
+            current_step = 1,
+            total_steps = 2,
+            step_data = step_data,
+        }
+    end
+    for _, article in ipairs(root:select("article")) do
+        local title = u.first(article, function(node) return u.has(node, "entry-title") end)
+        if title and title:text() ~= "" then
+            local links = u.links(title, page, function(_, url) return u.internal(url) end)
+            if #links > 0 then add(title:text(), links[1].url, nil) end
+        end
+    end
+    for _, link in ipairs(u.links(root, page, function(_, url)
+        return ctx.url_parts(url).path:find("/category/", 1, true)
+    end)) do
+        if link.label ~= "" then add(link.label, link.url, {kind = "category"}) end
+    end
+    return found, u.next_page(root, page)
+end
+
+local function parse_category_page(ctx, u, root, page, details, seen_pages, pending_links, seen_links)
+    for _, article in ipairs(root:select("article")) do
+        local title = u.first(article, function(node) return u.has(node, "entry-title") end)
+        if title then
+            local urls = u.links(title, page, function(_, url) return u.internal(url) end)
+            if #urls > 0 then
+                local url = ctx.canonical_url(urls[1].url)
+                if u.first(article, function(node) return u.has(node, "entry-content") end) then
+                    if not seen_pages[url] then
+                        seen_pages[url] = true
+                        details[#details + 1] = parse_detail(ctx, u, article, url, title:text())
+                    end
+                elseif not seen_pages[url] and not seen_links[url] then
+                    seen_links[url] = true
+                    pending_links[#pending_links + 1] = {title = title:text(), page = url}
+                end
+            end
+        end
+    end
+end
+
+return {
+    collect_index = function(ctx, rule, previous)
+        local u = library(ctx, rule)
+        local entries, pending, diagnostics = ctx.array(), ctx.array(), ctx.array()
+        local seen, incomplete = {}, false
+        local function enqueue(page)
+            page = ctx.canonical_url(page)
+            if not seen[page] then pending[#pending + 1] = page; seen[page] = true; return true end
+            return false
+        end
+        if previous and previous ~= ctx.null and #previous.pending > 0 then
+            entries = previous.entries
+            for _, page in ipairs(previous.pending) do enqueue(page) end
+        else
+            if rule.url and rule.url ~= ctx.null then enqueue(rule.url) end
+            for _, page in ipairs(rule.pages) do enqueue(page) end
+        end
+        while #pending > 0 do
+            ctx.check_cancel()
+            local page = pending[1]
+            ctx.progress(page)
+            local ok, root, final_url = pcall(u.fetch, page)
+            if not ok then diagnostics[#diagnostics + 1] = u.diagnostic(root); incomplete = true; break end
+            table.remove(pending, 1); seen[ctx.canonical_url(final_url)] = true
+            local found, next_page = parse_index(ctx, u, root, final_url)
+            if #found == 0 then
+                diagnostics[#diagnostics + 1] = {code = "discovery_structure_changed"}; incomplete = true
+            end
+            for _, entry in ipairs(found) do entries[#entries + 1] = entry end
+            if next_page and not enqueue(next_page) then
+                diagnostics[#diagnostics + 1] = {code = "discovery_pagination_cycle"}
+            end
+        end
+        local unique, pages = ctx.array(), {}
+        for _, entry in ipairs(entries) do
+            if not pages[entry.page] then unique[#unique + 1] = entry; pages[entry.page] = true end
+        end
+        return {entries = unique, pending = pending, complete = #pending == 0 and not incomplete, diagnostics = diagnostics}
+    end,
+    resolve_detail = function(ctx, rule, state)
+        local u = library(ctx, rule)
+        local details = state.details or ctx.array()
+        local diagnostics = ctx.array()
+        local seen_pages = {}
+        for _, detail in ipairs(details) do seen_pages[ctx.canonical_url(detail.page)] = true end
+
+        if state.current_step == 1 then
+            local page = ctx.canonical_url(state.page)
+            local root, final_url = u.fetch(page)
+            local step_kind = state.step_data and state.step_data ~= ctx.null and state.step_data.kind
+            local is_category = step_kind == "category" or ctx.url_parts(final_url).path:find("/category/", 1, true)
+            if not is_category then
+                return {
+                    current_step = 2,
+                    total_steps = 2,
+                    details = {parse_detail(ctx, u, root, final_url, state.title)},
+                }
+            end
+            local pending_links, seen_links = ctx.array(), {}
+            parse_category_page(ctx, u, root, final_url, details, seen_pages, pending_links, seen_links)
+            local canon_final = ctx.canonical_url(final_url)
+            local visited_pages = {canon_final}
+            local pending_pages = ctx.array()
+            local next_page = u.next_page(root, final_url)
+            if next_page then
+                local canon_next = ctx.canonical_url(next_page)
+                if canon_next == canon_final then
+                    diagnostics[#diagnostics + 1] = {code = "discovery_pagination_cycle"}
+                else
+                    pending_pages[#pending_pages + 1] = canon_next
+                end
+            end
+            if #pending_links == 0 and #pending_pages == 0 then
+                return {
+                    current_step = 2,
+                    total_steps = 2,
+                    details = details,
+                    diagnostics = diagnostics,
+                }
+            end
+            return {
+                current_step = 2,
+                total_steps = 3,
+                step_data = {
+                    kind = "category",
+                    pending_pages = pending_pages,
+                    visited_pages = visited_pages,
+                    pending_links = pending_links,
+                },
+                details = details,
+                diagnostics = diagnostics,
+            }
+        end
+
+        local data = state.step_data and state.step_data ~= ctx.null and state.step_data or {}
+        local pending_pages = data.pending_pages or ctx.array()
+        local visited_pages = data.visited_pages or ctx.array()
+        local pending_links = data.pending_links or ctx.array()
+        local visited, seen_links = {}, {}
+        for _, page in ipairs(visited_pages) do visited[ctx.canonical_url(page)] = true end
+        for _, link in ipairs(pending_links) do seen_links[ctx.canonical_url(link.page)] = true end
+
+        local function incomplete_step(failure)
+            diagnostics[#diagnostics + 1] = u.diagnostic(failure)
+            return {
+                current_step = state.current_step,
+                total_steps = 3,
+                step_data = {
+                    kind = "category",
+                    pending_pages = pending_pages,
+                    visited_pages = visited_pages,
+                    pending_links = pending_links,
+                },
+                details = details,
+                diagnostics = diagnostics,
+            }
+        end
+
+        while #pending_pages > 0 do
+            local cat_page = ctx.canonical_url(pending_pages[1])
+            if visited[cat_page] then
+                table.remove(pending_pages, 1)
+                diagnostics[#diagnostics + 1] = {code = "discovery_pagination_cycle"}
+            else
+                ctx.check_cancel()
+                local ok, err = pcall(function()
+                    local root, final_url = u.fetch(cat_page)
+                    visited[cat_page] = true
+                    visited_pages[#visited_pages + 1] = cat_page
+                    local canon_final = ctx.canonical_url(final_url)
+                    visited[canon_final] = true
+                    parse_category_page(ctx, u, root, final_url, details, seen_pages, pending_links, seen_links)
+                    local next_page = u.next_page(root, final_url)
+                    table.remove(pending_pages, 1)
+                    if next_page then
+                        local canon_next = ctx.canonical_url(next_page)
+                        if visited[canon_next] then
+                            diagnostics[#diagnostics + 1] = {code = "discovery_pagination_cycle"}
+                        else
+                            local queued = false
+                            for _, queued_page in ipairs(pending_pages) do
+                                if ctx.canonical_url(queued_page) == canon_next then queued = true; break end
+                            end
+                            if not queued then pending_pages[#pending_pages + 1] = canon_next end
+                        end
+                    end
+                end)
+                if not ok then return incomplete_step(err) end
+            end
+        end
+
+        while #pending_links > 0 do
+            local link = pending_links[1]
+            local link_page = ctx.canonical_url(link.page)
+            if seen_pages[link_page] then
+                table.remove(pending_links, 1)
+            else
+                ctx.check_cancel()
+                local ok, err = pcall(function()
+                    local root, final_url = u.fetch(link_page)
+                    local detail = parse_detail(ctx, u, root, final_url, link.title)
+                    table.remove(pending_links, 1)
+                    seen_pages[detail.page] = true
+                    details[#details + 1] = detail
+                end)
+                if not ok then return incomplete_step(err) end
+            end
+        end
+
+        return {
+            current_step = 3,
+            total_steps = 3,
+            details = details,
+            diagnostics = diagnostics,
+        }
+    end
+}
