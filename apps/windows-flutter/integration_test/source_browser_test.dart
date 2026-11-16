@@ -8,6 +8,7 @@ import 'package:integration_test/integration_test.dart';
 import 'package:patchhub_windows/app.dart';
 import 'package:patchhub_windows/host/core_client.dart';
 import 'package:patchhub_windows/host/core_paths.dart';
+import 'package:patchhub_windows/host/source_browser.dart';
 import 'package:patchhub_windows/models/app_model.dart';
 import 'package:patchhub_windows/pages/source_pages.dart';
 
@@ -29,14 +30,45 @@ class ObservedClient extends CoreClient {
   ObservedClient(super.paths, super.protocol);
   int browserCalls = 0;
   @override
-  Future<List<Map<String, dynamic>>> collectSourcePages(
-    String id,
-    Future<void> cancelled,
-    void Function(String) progress,
-  ) {
+  SourceBrowserSession openSourceBrowser(Future<void> cancelled) {
     browserCalls++;
-    return super.collectSourcePages(id, cancelled, progress);
+    return ObservedBrowser(super.openSourceBrowser(cancelled));
   }
+}
+
+class ObservedBrowser implements SourceBrowserSession {
+  ObservedBrowser(this.inner);
+  final SourceBrowserSession inner;
+  String? previous;
+
+  @override
+  Future<Map<String, dynamic>> request(Map<String, dynamic> request) async {
+    final response = await inner.request(request);
+    final uri = Uri.parse(response['response_url'] as String);
+    final html = response['text'] as String;
+    final title = RegExp(
+      r'<title[^>]*>([^<]*)',
+      caseSensitive: false,
+    ).firstMatch(html)?.group(1)?.trim();
+    final forms = RegExp(
+      r'<form\b',
+      caseSensitive: false,
+    ).allMatches(html).length;
+    final languageForms = RegExp(r'form_(en|zh_cn|zh_tw)')
+        .allMatches(html)
+        .length;
+    final line =
+        '${uri.origin}${uri.path} status=${response['status']} '
+        'title=$title forms=$forms languageForms=$languageForms';
+    if (line != previous) {
+      debugPrint('browser ${request['method']} $line');
+      previous = line;
+    }
+    return response;
+  }
+
+  @override
+  Future<void> close() => inner.close();
 }
 
 void main() {
@@ -86,7 +118,12 @@ void main() {
           isNull,
           reason: '${ordinary.error}\n${ordinary.diagnostics}',
         );
-        expect(ordinary.result['complete'], true);
+        expect(
+          ordinary.result['complete'],
+          true,
+          reason:
+              'browser sessions: ${client.browserCalls}; result: ${ordinary.result}',
+        );
         expect(find.text('在网页验证并更新'), findsNothing);
 
         await tester.runAsync(() async {
@@ -131,8 +168,8 @@ void main() {
             candidate['mirrors'][0]['url'],
             'https://download.patch.moe/SACRIFICE_VILLAINS_Patch.zip',
           );
-          expect(candidate['match_basis'], 'title');
-          expect(match['status'], 'incomplete');
+          expect(candidate['match_basis'], 'official_title');
+          expect(match['status'], 'publisher_match');
           await File('$evidence/result.json').writeAsString(
             jsonEncode({
               'ordinary_complete': ordinary.result['complete'],

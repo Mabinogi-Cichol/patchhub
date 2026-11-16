@@ -8,77 +8,51 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:patchhub_windows/host/core_client.dart';
 import 'package:patchhub_windows/host/core_task.dart';
 import 'package:patchhub_windows/host/source_tasks.dart';
+import 'package:patchhub_windows/host/source_browser.dart';
 
-class BrowserFixtureClient extends ProcessFixtureClient {
-  BrowserFixtureClient({this.blocked = false, this.waitForCancel = false})
-    : super('auto_source');
-  final bool blocked, waitForCancel;
-  final entered = Completer<void>();
-  int browserCalls = 0;
+class StreamingBrowserClient extends ProcessFixtureClient
+    implements SourceBrowserSession {
+  StreamingBrowserClient() : super('browser_stream');
+
+  final methods = <String>[];
+  int sessions = 0;
+  bool closed = false;
+
   @override
-  Future<List<Map<String, dynamic>>> collectSourcePages(
-    String id,
-    Future<void> cancelled,
-    void Function(String) progress,
-  ) {
-    browserCalls++;
-    entered.complete();
-    progress('等待站点验证');
-    if (blocked) {
-      return Future.error(const CoreError('source_age_verification_required'));
-    }
-    if (waitForCancel) {
-      return cancelled.then((_) => throw const CoreError('task_cancelled'));
-    }
-    return Future.value([]);
+  SourceBrowserSession openSourceBrowser(Future<void> cancelled) {
+    sessions++;
+    return this;
+  }
+
+  @override
+  Future<Map<String, dynamic>> request(Map<String, dynamic> request) async {
+    final method = request['method'] as String;
+    methods.add(method);
+    return {'text': method};
+  }
+
+  @override
+  Future<void> close() async {
+    closed = true;
   }
 }
 
 void main() {
-  test('a source update automatically changes transport with a fresh wire id in one task', () async {
-    final client = BrowserFixtureClient();
-    final task = CoreTask.start(client, 'update_source', {
-      'source_id': 'patchmoe',
-    });
-    await task.done;
-    expect(task.error, isNull);
-    expect(task.result['complete'], true);
-    expect(client.browserCalls, 1);
-    final wires = task.diagnostics
-        .split('\n')
-        .where((line) => line.startsWith('wire:'))
-        .toList();
-    expect(wires, hasLength(2));
-    expect(wires[0].split(':')[1], isNot(wires[1].split(':')[1]));
-    expect(task.running, false);
-  });
-  test('cancelling background verification ends the original task without a second core call', () async {
-    final client = BrowserFixtureClient(waitForCancel: true);
-    final task = CoreTask.start(client, 'update_source', {
-      'source_id': 'patchmoe',
-    });
-    await client.entered.future;
-    await task.cancel();
-    await task.done;
-    expect(task.error?.code, 'task_cancelled');
-    expect(task.controlError, isNull);
-    expect(
-      task.diagnostics.split('\n').where((line) => line.startsWith('wire:')),
-      hasLength(1),
-    );
-  });
   test(
-    'a required personal declaration stays a failed automatic update',
+    'a custom source exchanges two requests in one browser session',
     () async {
-      final client = BrowserFixtureClient(blocked: true);
+      final client = StreamingBrowserClient();
       final task = CoreTask.start(client, 'update_source', {
-        'source_id': 'patchmoe',
+        'source_id': 'custom',
       });
       await task.done;
-      expect(task.error?.code, 'source_age_verification_required');
-      expect(task.result['complete'], false);
+      expect(task.error, isNull);
+      expect(client.methods, ['GET', 'POST']);
+      expect(client.sessions, 1);
+      expect(client.closed, isTrue);
     },
   );
+
   final protocol = ProcessFixtureClient('chunked').protocol;
   final corpus = jsonDecode(
     File('../../packages/contracts/fixtures/v5/cases.json').readAsStringSync(),

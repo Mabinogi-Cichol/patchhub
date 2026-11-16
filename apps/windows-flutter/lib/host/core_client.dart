@@ -14,22 +14,8 @@ class CoreClient {
   final WireProtocol protocol;
   Future<Process> startProcess(String channel) =>
       Process.start(paths.binary, [channel]);
-  Future<List<Map<String, dynamic>>> collectSourcePages(
-    String sourceId,
-    Future<void> cancelled,
-    void Function(String) progress,
-  ) async {
-    final sources = await call('list_sources') as List;
-    final source = sources.cast<Map>().firstWhere(
-      (source) => source['id'] == sourceId,
-    );
-    return collectSourceInBackground(
-      paths.stateDirectory,
-      (source['pages'] as List).first as String,
-      cancelled,
-      progress,
-    );
-  }
+  SourceBrowserSession openSourceBrowser(Future<void> cancelled) =>
+      WebViewSourceBrowser(paths.stateDirectory, cancelled);
 
   final _calls = <Future<void>>{};
   final _reads = <CoreTask>{};

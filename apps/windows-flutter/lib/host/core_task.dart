@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'core_client.dart';
 import 'download_rate.dart';
+import 'source_browser.dart';
 
 class EventSequence {
   EventSequence(this.protocol, this.requestId);
@@ -44,6 +45,7 @@ class CoreTask {
   bool running = true;
   bool cancelRequested = false;
   final _browserCancelled = Completer<void>();
+  SourceBrowserSession? _browser;
   bool _cancelSent = false;
   bool _requestWritten = false;
   bool _controlClosed = false;
@@ -114,33 +116,6 @@ class CoreTask {
   Future<void> _run() async {
     try {
       await _invoke(arguments, requestId);
-      if (!cancelRequested &&
-          error == null &&
-          method == 'update_source' &&
-          arguments['source_id'] == 'patchmoe' &&
-          result is Map &&
-          [
-            'source_browser_verification_required',
-            'source_age_verification_required',
-          ].contains(result['status']?['code'])) {
-        final pages = await client.collectSourcePages(
-          'patchmoe',
-          _browserCancelled.future,
-          (phase) {
-            progress = {'phase': phase, 'running': true};
-            _notify();
-          },
-        );
-        if (cancelRequested) throw const CoreError('task_cancelled');
-        await _invoke({
-          ...arguments,
-          'force': true,
-          'browser_responses': pages,
-        }, client.requestId());
-        if (error == null && result is Map && result['complete'] != true) {
-          error = CoreError(result['status']['code'] as String);
-        }
-      }
     } catch (failure) {
       error = failure is CoreError
           ? failure
@@ -148,11 +123,38 @@ class CoreTask {
     } finally {
       await _closeControl();
       if (!_browserCancelled.isCompleted) _browserCancelled.complete();
+      try {
+        await _browser?.close();
+      } catch (failure) {
+        diagnostics += '\nsource_browser_close_failed: $failure';
+      }
       running = false;
       _notify();
       _finished.complete();
       await _changes.close();
       await _events.close();
+    }
+  }
+
+  Future<void> _handleBrowserRequest(Map<String, dynamic> request) async {
+    if (method != 'update_source') {
+      throw const CoreError('invalid_core_response');
+    }
+    Map<String, dynamic> reply;
+    try {
+      final browser = _browser ??= client.openSourceBrowser(
+        _browserCancelled.future,
+      );
+      reply = {'browser_response': await browser.request(request)};
+    } catch (failure) {
+      diagnostics += '\nsource_browser ${request['method']}: $failure';
+      reply = {
+        'browser_error': failure is CoreError ? failure.code : '$failure',
+      };
+    }
+    if (!cancelRequested && !_controlClosed) {
+      _process!.stdin.writeln(jsonEncode(reply));
+      await _process!.stdin.flush();
     }
   }
 
@@ -208,6 +210,11 @@ class CoreTask {
                 }
                 final value = jsonDecode(line);
                 if (value is Map<String, dynamic> &&
+                    value.containsKey('browser_request')) {
+                  await _handleBrowserRequest(
+                    Map<String, dynamic>.from(value['browser_request'] as Map),
+                  );
+                } else if (value is Map<String, dynamic> &&
                     value.containsKey('event')) {
                   if (!sequence.accept(value)) continue;
                   if (!_allowed(value['event'] as String)) {

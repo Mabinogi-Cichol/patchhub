@@ -24,4 +24,3 @@ flutter:
   assets:
     - assets/protocol-v5.schema.json
     - assets/branding/logo.png
-    - assets/shiravune-browser.js
