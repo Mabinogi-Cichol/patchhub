@@ -2,7 +2,7 @@
 use crate::keyvalues::{self, Value};
 use crate::steam_metadata;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs;
 use std::io::Read;
 use std::path::{Component, Path, PathBuf};
@@ -27,8 +27,11 @@ pub struct GameInstall {
     /// Present only when the override matches a known interface language.
     pub name_language: Option<String>,
     /// Matching input from Steam metadata. Kept on the host scan.
-    #[serde(skip)]
+    #[serde(default)]
     pub related_dlc: Vec<SteamDlc>,
+    /// DLC AppIDs detected as installed in the game's `appmanifest_<appid>.acf`.
+    #[serde(default)]
+    pub installed_dlc: Vec<u32>,
     pub library_path: PathBuf,
     pub install_path: PathBuf,
     pub buildid: Option<String>,
@@ -36,7 +39,7 @@ pub struct GameInstall {
     pub kind: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema, ts_rs::TS)]
 pub struct SteamDlc {
     pub appid: u32,
     pub name: Option<String>,
@@ -314,6 +317,7 @@ fn parse_manifest(file: &Path, library: &Path, filename_appid: u32) -> Result<Ga
     let buildid = field(state, "buildid")
         .and_then(Value::text)
         .map(str::to_owned);
+    let installed_dlc = parse_installed_dlc(state, appid);
     let instance_id = format!("{appid}|{}|{}", library.display(), install_path.display());
     Ok(GameInstall {
         instance_id,
@@ -322,12 +326,40 @@ fn parse_manifest(file: &Path, library: &Path, filename_appid: u32) -> Result<Ga
         localized_name: None,
         name_language: None,
         related_dlc: Vec::new(),
+        installed_dlc,
         library_path: library.to_owned(),
         install_path,
         buildid,
         availability: availability.into(),
         kind: "unknown".into(),
     })
+}
+
+fn parse_installed_dlc(state: &BTreeMap<String, Value>, base_appid: u32) -> Vec<u32> {
+    let mut dlcs = BTreeSet::new();
+    if let Some(depots) = field(state, "InstalledDepots").and_then(Value::object) {
+        for depot in depots.values() {
+            if let Some(id) = depot
+                .object()
+                .and_then(|obj| field(obj, "dlcappid"))
+                .and_then(Value::text)
+                .and_then(|text| text.trim().parse::<u32>().ok())
+                .filter(|&id| id > 0 && id != base_appid)
+            {
+                dlcs.insert(id);
+            }
+        }
+    }
+    if let Some(installed) = field(state, "InstalledDLC").and_then(Value::object) {
+        for key in installed.keys() {
+            if let Ok(id) = key.trim().parse::<u32>() {
+                if id > 0 && id != base_appid {
+                    dlcs.insert(id);
+                }
+            }
+        }
+    }
+    dlcs.into_iter().collect()
 }
 
 fn valid_install_dir(name: &str) -> bool {

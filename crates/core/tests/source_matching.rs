@@ -2281,3 +2281,139 @@ fn vbf_new_fallback_resolves_indexed_upstream_in_same_task() {
         SourceMatchStatus::DetailIncomplete
     );
 }
+
+#[test]
+fn matched_related_dlc_binds_variant_dlc_and_requires_dlc_with_keyword_fallback() {
+    use patchhub_core::sources::identity;
+    use patchhub_core::sources::registry::SourceRegistry;
+    use patchhub_core::steam::SteamDlc;
+
+    let temp = tempfile::tempdir().unwrap();
+    let store = SourceStore::open(temp.path()).unwrap();
+    let rule = kagura_rule();
+    let index_data = index(
+        &rule.id,
+        1,
+        true,
+        vec![
+            artifact_entry(
+                "Summer Memories",
+                "https://www.patch.moe/",
+                "https://download.patch.moe/base.zip",
+                None,
+                "en",
+            ),
+            artifact_entry(
+                "夏日狂想曲+",
+                "https://www.patch.moe/",
+                "https://download.patch.moe/dlc-by-name.zip",
+                None,
+                "zh-CN",
+            ),
+            artifact_entry(
+                "Untitled Expansion",
+                "https://www.patch.moe/",
+                "https://download.patch.moe/dlc-by-appid.zip",
+                Some(1390150),
+                "en",
+            ),
+        ],
+    );
+    store.save_index(&index_data).unwrap();
+
+    let registry = SourceRegistry::load(store, vec![rule]).unwrap();
+    let mut query = game(1227890, "Summer Memories");
+    query.related_dlc = vec![SteamDlc {
+        appid: 1390150,
+        name: Some("夏日狂想曲+".into()),
+    }];
+    let candidates = registry.index_candidates(&query);
+    assert_eq!(candidates.len(), 3);
+
+    let base = candidates
+        .iter()
+        .find(|c| c.mirrors[0].url.ends_with("base.zip"))
+        .unwrap();
+    assert_eq!(base.variant, Variant::Base);
+    assert_eq!(base.requires_dlc, None);
+
+    let dlc_by_name = candidates
+        .iter()
+        .find(|c| c.mirrors[0].url.ends_with("dlc-by-name.zip"))
+        .unwrap();
+    assert_eq!(dlc_by_name.variant, Variant::Dlc);
+    assert_eq!(dlc_by_name.requires_dlc, Some(vec![1390150]));
+    assert_eq!(dlc_by_name.game_appid, Some(1227890));
+
+    let dlc_by_appid = candidates
+        .iter()
+        .find(|c| c.mirrors[0].url.ends_with("dlc-by-appid.zip"))
+        .unwrap();
+    assert_eq!(dlc_by_appid.variant, Variant::Dlc);
+    assert_eq!(dlc_by_appid.requires_dlc, Some(vec![1390150]));
+    assert_eq!(dlc_by_appid.game_appid, Some(1227890));
+
+    // Detail matching: known DLC name binds requires_dlc without dlc_conditions_unknown;
+    // keyword-only DLC falls back to Variant::Dlc with requires_dlc = None.
+    let detail_rule = kagura_rule();
+    let detail_query = QueryContext {
+        appid: 1227890,
+        name: "Summer Memories".into(),
+        localized_name: Some("夏日狂想曲：乡间的难忘回忆".into()),
+        related_dlc: vec![SteamDlc {
+            appid: 1390150,
+            name: Some("夏日狂想曲+".into()),
+        }],
+        name_hints: vec!["夏日狂想曲+".into()],
+        legacy_match: false,
+        force: false,
+        source_context: Vec::new(),
+        parser_version: 2,
+        query_version: 1,
+        settings_revision: 0,
+        generation: None,
+    };
+    let known_dlc = identity::build_candidates(
+        &detail_rule,
+        "夏日狂想曲+ 补丁",
+        "https://kagurafan.com/patches/summer-plus/",
+        "中文 补丁",
+        &[1227890],
+        &["夏日狂想曲+".into()],
+        "zip",
+        &[Mirror {
+            url: "https://kagurafan.com/dl/plus.zip".into(),
+            label: None,
+            format: "zip".into(),
+        }],
+        &detail_query,
+    );
+    assert_eq!(known_dlc.len(), 1);
+    assert_eq!(known_dlc[0].variant, Variant::Dlc);
+    assert_eq!(known_dlc[0].requires_dlc, Some(vec![1390150]));
+    assert!(!known_dlc[0]
+        .warnings
+        .contains(&"dlc_conditions_unknown".to_string()));
+
+    let keyword_fallback = identity::build_candidates(
+        &detail_rule,
+        "Summer Memories + DLC",
+        "https://kagurafan.com/patches/summer-keyword/",
+        "中文 补丁",
+        &[1227890],
+        &["Summer Memories".into()],
+        "zip",
+        &[Mirror {
+            url: "https://kagurafan.com/dl/keyword.zip".into(),
+            label: None,
+            format: "zip".into(),
+        }],
+        &detail_query,
+    );
+    assert_eq!(keyword_fallback.len(), 1);
+    assert_eq!(keyword_fallback[0].variant, Variant::Dlc);
+    assert_eq!(keyword_fallback[0].requires_dlc, None);
+    assert!(keyword_fallback[0]
+        .warnings
+        .contains(&"dlc_conditions_unknown".to_string()));
+}

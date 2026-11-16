@@ -40,4 +40,36 @@ void main() {
       expect(filterGames([row], GameFilter.all, 'not-in-library'), isEmpty);
     });
   }
+
+  test('candidateConditions formats related DLC names and local install status', () {
+    final dlcCandidate = {
+      'variant': 'dlc',
+      'requires_dlc': [1390150],
+    };
+    expect(
+      candidateConditions(dlcCandidate, game: {
+        'related_dlc': [
+          {'appid': 1390150, 'name': '夏日狂想曲+'},
+        ],
+        'installed_dlc': [1390150],
+      }),
+      '扩展 / DLC · 需要 DLC 夏日狂想曲+ (1390150)（已安装）',
+    );
+    expect(
+      candidateConditions(dlcCandidate, game: {
+        'related_dlc': [
+          {'appid': 1390150, 'name': '夏日狂想曲+'},
+        ],
+        'installed_dlc': <int>[],
+      }),
+      '扩展 / DLC · 需要 DLC 夏日狂想曲+ (1390150)（未检测到安装）',
+    );
+    expect(
+      candidateConditions(dlcCandidate, game: {
+        'related_dlc': <Map<String, dynamic>>[],
+        'installed_dlc': [1390150],
+      }),
+      '扩展 / DLC · 需要 DLC 1390150（已安装）',
+    );
+  });
 }

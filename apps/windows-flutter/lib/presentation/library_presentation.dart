@@ -205,8 +205,30 @@ String languageLabel(List<dynamic>? languages) =>
           )
           .join('、');
 
-String candidateConditions(Map<String, dynamic>? candidate) {
+String _formatRequiredDlc(dynamic id, Map<String, dynamic> game) {
+  final related = (game['related_dlc'] as List?) ?? const [];
+  final installed = ((game['installed_dlc'] as List?) ?? const []).toSet();
+  String? name;
+  for (final item in related) {
+    if (item is Map && item['appid'] == id) {
+      final raw = item['name'] as String?;
+      if (raw != null && raw.trim().isNotEmpty) {
+        name = raw.trim();
+      }
+      break;
+    }
+  }
+  final label = name != null ? '$name ($id)' : '$id';
+  final status = installed.contains(id) ? '（已安装）' : '（未检测到安装）';
+  return '$label$status';
+}
+
+String candidateConditions(
+  Map<String, dynamic>? candidate, {
+  Map<String, dynamic>? game,
+}) {
   if (candidate == null) return '适用版本与 DLC 条件待确认';
+  final requiresDlc = candidate['requires_dlc'] as List?;
   return [
     const {
           'base': '游戏本体',
@@ -215,8 +237,10 @@ String candidateConditions(Map<String, dynamic>? candidate) {
           'unknown': '版本类型待确认',
         }[candidate['variant']] ??
         '版本类型待确认',
-    if ((candidate['requires_dlc'] as List?)?.isNotEmpty == true)
-      '需要 DLC ${(candidate['requires_dlc'] as List).join('、')}（拥有及安装状态待确认）',
+    if (requiresDlc != null && requiresDlc.isNotEmpty)
+      game != null
+          ? '需要 DLC ${requiresDlc.map((id) => _formatRequiredDlc(id, game)).join('、')}'
+          : '需要 DLC ${requiresDlc.join('、')}（拥有及安装状态待确认）',
     if ((candidate['excludes_dlc'] as List?)?.isNotEmpty == true)
       '仅适用于未使用 DLC ${(candidate['excludes_dlc'] as List).join('、')} 的版本',
     if (candidate['requires_dlc'] == null && candidate['excludes_dlc'] == null)

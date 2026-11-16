@@ -794,6 +794,7 @@ pub(crate) fn candidate_from_index_match(
     source_id: &str,
     appid: u32,
     entry_appid: Option<u32>,
+    matched_dlc: Option<u32>,
     title: &str,
     aliases: &[String],
     language: &str,
@@ -803,10 +804,16 @@ pub(crate) fn candidate_from_index_match(
 ) -> SourceCandidate {
     let language = language.to_string();
     let version_identity = "page-unknown".to_string();
+    let variant = if matched_dlc.is_some() {
+        Variant::Dlc
+    } else {
+        super::identity::variant(title)
+    };
+    let requires_dlc = matched_dlc.map(|dlc| vec![dlc]);
     let identity = serde_json::Value::Array(vec![
         serde_json::Value::String(source_id.to_string()),
         serde_json::Value::String(canonical::canonical_page_url(source_page)),
-        serde_json::Value::String("base".to_string()),
+        serde_json::Value::String(super::identity::variant_str(variant).to_string()),
         serde_json::Value::Array(vec![serde_json::Value::String(language.clone())]),
         serde_json::Value::String(version_identity.clone()),
         serde_json::Value::String(url.to_string()),
@@ -817,13 +824,17 @@ pub(crate) fn candidate_from_index_match(
         candidate_id,
         source_id: source_id.to_string(),
         source_record_id: canonical::canonical_page_url(source_page),
-        game_appid: Some(entry_appid.unwrap_or(appid)),
-        parent_appid: None,
+        game_appid: Some(appid),
+        parent_appid: if variant == Variant::Dlc {
+            Some(appid)
+        } else {
+            None
+        },
         aliases: aliases.to_vec(),
         game_title: title.to_string(),
         patch_title: title.to_string(),
-        variant: Variant::Base,
-        requires_dlc: None,
+        variant,
+        requires_dlc,
         excludes_dlc: None,
         platforms: vec!["steam".to_string()],
         patch_kind: "adult_content".to_string(),
@@ -1058,6 +1069,7 @@ mod tests {
             source_id,
             appid,
             Some(appid),
+            None,
             "Game",
             &[],
             "zh-CN",

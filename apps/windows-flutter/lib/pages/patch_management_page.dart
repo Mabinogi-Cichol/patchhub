@@ -281,7 +281,9 @@ class _PatchManagementPageState extends State<PatchManagementPage> {
             ),
         ],
       ),
-      SelectableText('适用条件：${candidateConditions(candidate)}'),
+      SelectableText(
+        '适用条件：${candidateConditions(candidate, game: widget.row.game)}',
+      ),
       if (candidate != null)
         for (final warning in candidate['warnings'] as List)
           Text(statusLabel(warning)),

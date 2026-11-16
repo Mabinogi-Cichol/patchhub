@@ -501,6 +501,7 @@ mod tests {
             localized_name: None,
             name_language: None,
             related_dlc: Vec::new(),
+            installed_dlc: Vec::new(),
             library_path: root.into(),
             install_path: root.into(),
             buildid: None,

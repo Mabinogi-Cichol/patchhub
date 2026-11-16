@@ -278,3 +278,32 @@ fn interface_language_survives_missing_localized_names_and_changes_on_rescan() {
         Some("english")
     );
 }
+
+#[test]
+fn scan_extracts_installed_dlc_from_installed_depots_and_installed_dlc_sections() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("Steam");
+    fs::create_dir_all(root.join("steamapps/common/Game")).unwrap();
+    fs::write(
+        root.join("steamapps/appmanifest_1227890.acf"),
+        r#""AppState" {
+            "appid" "1227890"
+            "name" "Summer Memories"
+            "installdir" "Game"
+            "StateFlags" "4"
+            "InstalledDepots" {
+                "1227891" { "manifest" "111" }
+                "1390151" { "dlcappid" "1390150" }
+                "1390152" { "dlcappid" "1227890" }
+            }
+            "InstalledDLC" {
+                "1400000" { "StateFlags" "4" }
+                "1390150" "1"
+            }
+        }"#,
+    )
+    .unwrap();
+    let report = scan(&[root]);
+    assert_eq!(report.installs.len(), 1);
+    assert_eq!(report.installs[0].installed_dlc, vec![1390150, 1400000]);
+}

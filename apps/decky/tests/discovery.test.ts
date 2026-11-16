@@ -31,6 +31,28 @@ test("display union keeps candidate identities out of installation IDs and order
 test("DLC conditions remain visible as source facts", () => {
   assert.match(candidateConditions(candidate({ variant: "dlc", requires_dlc: [1390150] })), /1390150.*待确认/);
   assert.match(candidateConditions(candidate({ variant: "base", excludes_dlc: [1390150] })), /未使用 DLC 1390150/);
+  const gameBase = row().game;
+  assert.equal(
+    candidateConditions(
+      candidate({ variant: "dlc", requires_dlc: [1390150] }),
+      { ...gameBase, related_dlc: [{ appid: 1390150, name: "夏日狂想曲+" }], installed_dlc: [1390150] },
+    ),
+    "扩展 / DLC · 需要 DLC 夏日狂想曲+ (1390150)（已安装）",
+  );
+  assert.equal(
+    candidateConditions(
+      candidate({ variant: "dlc", requires_dlc: [1390150] }),
+      { ...gameBase, related_dlc: [{ appid: 1390150, name: "夏日狂想曲+" }], installed_dlc: [] },
+    ),
+    "扩展 / DLC · 需要 DLC 夏日狂想曲+ (1390150)（未检测到安装）",
+  );
+  assert.equal(
+    candidateConditions(
+      candidate({ variant: "dlc", requires_dlc: [1390150] }),
+      { ...gameBase, related_dlc: [], installed_dlc: [1390150] },
+    ),
+    "扩展 / DLC · 需要 DLC 1390150（已安装）",
+  );
 });
 
 test("an automatic EXE entry replaces its own duplicate source guidance", () => {

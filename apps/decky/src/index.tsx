@@ -7,7 +7,7 @@ import { Button, ButtonItem, DialogButton, DropdownItem, Field, Focusable, Navig
 import { FaGamepad } from "react-icons/fa";
 import brandLogo from "../../../docs/images/branding/logo.png";
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ComponentProps, type ReactNode } from "react";
-import { downloadFileName, candidateMatched, displayPatches, filterInstalls, gameDisplayName, installSummary, patchState, reason, sourceCoverageText, sourceIntervalOptions, sourceLastAttemptText, sourceLastSuccessText, sourceNextDueText, workflowState, type Filter, type Install, type Patch, type Preview, type ProjectInstancesResult, type ScanResult, type SourceCandidate, type SourceSubscription, type Transaction } from "@patchhub/ui";
+import { downloadFileName, candidateMatched, displayPatches, filterInstalls, gameDisplayName, installSummary, patchState, reason, sourceCoverageText, sourceIntervalOptions, sourceLastAttemptText, sourceLastSuccessText, sourceNextDueText, workflowState, type Filter, type GameInstall, type Install, type Patch, type Preview, type ProjectInstancesResult, type ScanResult, type SourceCandidate, type SourceSubscription, type Transaction } from "@patchhub/ui";
 import { getListPreferences, setListPreferences, subscribeListPreferences } from "./preferences";
 import { gamePresentation, matchesGameQuery, transactionGameName } from "./steam";
 import { GameArtwork } from "./game-artwork";
@@ -179,7 +179,7 @@ function matchSummary(item: Install): string {
     task.state === "running" && sourceTaskTargets(task, item.game.instance_id, item.game.appid));
   return installSummary(item, matching);
 }
-function CandidateDetails({ candidate }: { candidate: SourceCandidate }) {
+function CandidateDetails({ candidate, game }: { candidate: SourceCandidate; game?: GameInstall }) {
   const format = candidate.format_observed && candidate.format_observed !== "unknown" ? candidate.format_observed : candidate.format_reported && candidate.format_reported !== "unknown" ? candidate.format_reported : "待确认";
   const conflict = !!candidate.format_reported && candidate.format_reported !== "unknown" && !!candidate.format_observed && candidate.format_observed !== "unknown" && candidate.format_reported !== candidate.format_observed;
   return <>
@@ -187,7 +187,7 @@ function CandidateDetails({ candidate }: { candidate: SourceCandidate }) {
     <InfoRow label="来源">{candidateSource(candidate)}</InfoRow>
     <InfoRow label="补丁语言">{candidateLanguage(candidate)}</InfoRow>
     <InfoRow label="补丁版本">{candidate.version_raw || "版本待确认"}</InfoRow>
-    <InfoRow label="适用条件" below>{candidateConditions(candidate)}</InfoRow>
+    <InfoRow label="适用条件" below>{candidateConditions(candidate, game)}</InfoRow>
     <InfoRow label="文件格式">{format}{conflict ? `（页面标示 ${candidate.format_reported}，上游为 ${candidate.format_observed}）` : ""}</InfoRow>
     {!!candidate.version_evidence?.length && candidate.warnings?.includes("version_conflict") && <InfoRow label="页面版本描述" below>{candidate.version_evidence.filter(value => typeof value === "string").join("、")}</InfoRow>}
     <Row><Action onClick={() => openSource(candidate.source_page)}>{candidate.source_id === "hgamer" ? "打开补丁详情 ↗" : "打开补丁来源页 ↗"}</Action></Row>
@@ -480,7 +480,7 @@ function GameManager({ item, seg, panel }: { item: Install; seg: string; panel?:
       </PanelSection>
     </>}
     {entries.length > 0 && <PatchDetails key={item.game.instance_id}>
-      {candidate ? <CandidateDetails candidate={candidate} /> : patch && <>
+      {candidate ? <CandidateDetails candidate={candidate} game={item.game} /> : patch && <>
         <InfoRow label="补丁">{patch.name}</InfoRow>
         <InfoRow label="匹配源">{sourceInfo(patch, report?.sources)}</InfoRow>
         <InfoRow label="当前状态">{patchState(patch.detection.status)}</InfoRow>
@@ -489,7 +489,7 @@ function GameManager({ item, seg, panel }: { item: Install; seg: string; panel?:
         {(patch.support_level === "publisher_exe" || patch.compatibility === "manual_selection_required") && patchCandidate && <>
           <InfoRow label="补丁语言">{candidateLanguage(patchCandidate)}</InfoRow>
           <InfoRow label="补丁版本">{patchCandidate.version_raw || "请核对来源说明"}</InfoRow>
-          <InfoRow label="适用条件" below>{candidateConditions(patchCandidate)}</InfoRow>
+          <InfoRow label="适用条件" below>{candidateConditions(patchCandidate, item.game)}</InfoRow>
         </>}
         {patch.download_url && <>
           <InfoRow label="下载文件" below>{downloadFileName(patch.download_url)}</InfoRow>

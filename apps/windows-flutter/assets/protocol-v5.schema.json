@@ -656,6 +656,16 @@
         "install_path": {
           "type": "string"
         },
+        "installed_dlc": {
+          "default": [],
+          "description": "DLC AppIDs detected as installed in the game's `appmanifest_<appid>.acf`.",
+          "items": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": "array"
+        },
         "instance_id": {
           "type": "string",
           "x-max-utf8-bytes": 16384
@@ -682,6 +692,14 @@
             "string",
             "null"
           ]
+        },
+        "related_dlc": {
+          "default": [],
+          "description": "Matching input from Steam metadata. Kept on the host scan.",
+          "items": {
+            "$ref": "#/$defs/SteamDlc"
+          },
+          "type": "array"
         }
       },
       "required": [
@@ -4305,6 +4323,25 @@
         "$ref": "#/$defs/SourceSummary"
       },
       "type": "array"
+    },
+    "SteamDlc": {
+      "properties": {
+        "appid": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "appid"
+      ],
+      "type": "object"
     },
     "SuccessResponse": {
       "additionalProperties": false,

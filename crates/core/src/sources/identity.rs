@@ -596,6 +596,49 @@ pub fn build_candidates(
     )
 }
 
+fn matched_dlc_for_candidate(
+    ids: &[u32],
+    title: &str,
+    alias_list: &[String],
+    query: &QueryContext,
+) -> Option<u32> {
+    if let Some(dlc) = query
+        .related_dlc
+        .iter()
+        .find(|dlc| ids.contains(&dlc.appid))
+    {
+        return Some(dlc.appid);
+    }
+    let mut base_targets = HashSet::new();
+    for name in std::iter::once(&query.name).chain(query.localized_name.as_ref()) {
+        let norm = validate::discovery_normal(name);
+        if !norm.is_empty() {
+            base_targets.insert(norm);
+        }
+    }
+    let candidate_matches = |target_norm: &str| {
+        std::iter::once(title)
+            .chain(alias_list.iter().map(String::as_str))
+            .any(|value| {
+                let raw = validate::discovery_normal(value);
+                let game = validate::discovery_normal(&game_title(value));
+                raw == target_norm || game == target_norm
+            })
+    };
+    if base_targets.iter().any(|norm| candidate_matches(norm)) {
+        return None;
+    }
+    for dlc in &query.related_dlc {
+        if let Some(name) = dlc.name.as_deref() {
+            let norm = validate::discovery_normal(name);
+            if !norm.is_empty() && candidate_matches(&norm) {
+                return Some(dlc.appid);
+            }
+        }
+    }
+    None
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn build_candidates_with_download_group(
     rule: &SourceRule,
@@ -610,17 +653,26 @@ pub(crate) fn build_candidates_with_download_group(
     single_download_group: bool,
 ) -> Vec<SourceCandidate> {
     let appid = query.appid;
-    let has_ids = ids.contains(&appid);
     let mut alias_list: Vec<String> = if aliases.is_empty() {
         vec![game_title(title)]
     } else {
         aliases.to_vec()
     };
     alias_list.retain(|alias| !alias.is_empty());
-    if !has_ids && !alias_list.iter().any(|alias| title_relevant(alias, query)) {
+    let matched_dlc = matched_dlc_for_candidate(ids, title, &alias_list, query);
+    let has_ids = ids.contains(&appid) || matched_dlc.is_some_and(|dlc| ids.contains(&dlc));
+    if !has_ids
+        && matched_dlc.is_none()
+        && !alias_list.iter().any(|alias| title_relevant(alias, query))
+    {
         return Vec::new();
     }
-    let variant = variant(title);
+    let variant = if matched_dlc.is_some() {
+        Variant::Dlc
+    } else {
+        variant(title)
+    };
+    let requires_dlc = matched_dlc.map(|dlc| vec![dlc]);
     if variant == Variant::Demo || (!has_ids && gog_only(text)) {
         return Vec::new();
     }
@@ -709,7 +761,7 @@ pub(crate) fn build_candidates_with_download_group(
         if all_versions.len() > 1 && versioned_count <= 1 {
             warnings.push("version_conflict".to_string());
         }
-        if variant == Variant::Dlc || dlc_conditions_unknown(text) {
+        if (variant == Variant::Dlc && requires_dlc.is_none()) || dlc_conditions_unknown(text) {
             warnings.push("dlc_conditions_unknown".to_string());
         }
         if find_ci(text, "outside of japan").is_some() {
@@ -766,7 +818,7 @@ pub(crate) fn build_candidates_with_download_group(
             game_title: game_title_value,
             patch_title: title.to_string(),
             variant,
-            requires_dlc: None,
+            requires_dlc: requires_dlc.clone(),
             excludes_dlc: None,
             platforms: platforms.clone(),
             patch_kind: "adult_content".to_string(),
@@ -876,7 +928,7 @@ fn parse_format(value: &str) -> ArtifactFormat {
     }
 }
 
-fn variant_str(variant: Variant) -> &'static str {
+pub(crate) fn variant_str(variant: Variant) -> &'static str {
     match variant {
         Variant::Base => "base",
         Variant::Dlc => "dlc",

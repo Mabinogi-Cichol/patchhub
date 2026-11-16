@@ -76,11 +76,19 @@ impl SourceAdapter<'_> {
             while let Some(mut fact) = pending.pop() {
                 let decision = self.match_appid(rule, &fact.steam_ids, query, ctx, cancel)?;
                 pending.extend(std::mem::take(&mut fact.article_facts).into_iter().rev());
-                let confirmed_id = match decision {
+                let mut confirmed_id: Vec<u32> = match decision {
                     Some(false) => continue,
-                    Some(true) => Some(query.appid),
-                    None => None,
+                    Some(true) => vec![query.appid],
+                    None => Vec::new(),
                 };
+                if !confirmed_id.is_empty() {
+                    for dlc in &query.related_dlc {
+                        if fact.steam_ids.contains(&dlc.appid) && !confirmed_id.contains(&dlc.appid)
+                        {
+                            confirmed_id.push(dlc.appid);
+                        }
+                    }
+                }
                 let mut found = identity::build_candidates_with_download_group(
                     rule,
                     &fact.title,

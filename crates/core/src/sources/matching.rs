@@ -853,7 +853,9 @@ pub(crate) fn select_entries<'a>(
         let Some(url) = entry.url.as_deref() else {
             continue;
         };
-        let by_appid = entry.appid == Some(game.appid);
+        let by_appid = entry.appid.is_some_and(|id| {
+            id == game.appid || game.related_dlc.iter().any(|dlc| dlc.appid == id)
+        });
         let by_title = entry_names(entry).iter().any(|name| targets.contains(name));
         if by_appid || by_title {
             artifacts
@@ -869,6 +871,32 @@ pub(crate) fn select_entries<'a>(
     artifacts.into_iter()
 }
 
+fn matched_dlc_for_entry(entry: &SourceIndexEntry, game: &GameQuery) -> Option<u32> {
+    if let Some(appid) = entry.appid {
+        if let Some(dlc) = game.related_dlc.iter().find(|dlc| dlc.appid == appid) {
+            return Some(dlc.appid);
+        }
+    }
+    let names = entry_names(entry);
+    let base_targets: HashSet<_> = std::iter::once(&game.name)
+        .chain(game.localized_name.as_ref())
+        .map(|name| validate::normal(name))
+        .filter(|name| !name.is_empty())
+        .collect();
+    if names.iter().any(|name| base_targets.contains(name)) {
+        return None;
+    }
+    for dlc in &game.related_dlc {
+        if let Some(dlc_name) = dlc.name.as_deref() {
+            let norm = validate::normal(dlc_name);
+            if !norm.is_empty() && names.iter().any(|name| name == &norm) {
+                return Some(dlc.appid);
+            }
+        }
+    }
+    None
+}
+
 pub(crate) fn match_entry_rows(
     rule: &SourceRule,
     index: &SourceIndex,
@@ -876,10 +904,15 @@ pub(crate) fn match_entry_rows(
 ) -> Vec<SourceCandidate> {
     select_entries(index, game)
         .map(|(url, entry)| {
+            let matched_dlc = matched_dlc_for_entry(entry, game);
+            let entry_appid = entry
+                .appid
+                .filter(|&appid| appid == game.appid || matched_dlc == Some(appid));
             candidate_from_index_match(
                 &rule.id,
                 game.appid,
-                entry.appid.filter(|&appid| appid == game.appid),
+                entry_appid,
+                matched_dlc,
                 &entry.title,
                 &entry.aliases,
                 entry.language.as_deref().unwrap_or(""),
@@ -1193,11 +1226,19 @@ fn candidates_from_fact(
     ctx: &mut RequestContext,
     cancel: &Arc<AtomicBool>,
 ) -> Result<Vec<SourceCandidate>> {
-    let confirmed_id = match adapter.match_appid(rule, &fact.steam_ids, query, ctx, cancel)? {
-        Some(false) => return Ok(Vec::new()),
-        Some(true) => Some(query.appid),
-        None => None,
-    };
+    let mut confirmed_id: Vec<u32> =
+        match adapter.match_appid(rule, &fact.steam_ids, query, ctx, cancel)? {
+            Some(false) => return Ok(Vec::new()),
+            Some(true) => vec![query.appid],
+            None => Vec::new(),
+        };
+    if !confirmed_id.is_empty() {
+        for dlc in &query.related_dlc {
+            if fact.steam_ids.contains(&dlc.appid) && !confirmed_id.contains(&dlc.appid) {
+                confirmed_id.push(dlc.appid);
+            }
+        }
+    }
     let mut related_query = query.clone();
     let title_relevant = identity::title_relevant(&fact.title, query);
     let upstream = upstream_identity(&fact.page, query.appid, known)
