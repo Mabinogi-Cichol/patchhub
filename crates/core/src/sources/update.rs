@@ -258,7 +258,7 @@ fn save_progress(
     let mut pending: Vec<String> = outcome
         .pending
         .iter()
-        .map(|page| canonical::canonical_url(page))
+        .map(|page| canonical::canonical_page_url(page))
         .collect();
     pending.sort();
     pending.dedup();
@@ -292,7 +292,7 @@ fn finish_failure(
         let mut pending: Vec<String> = rule
             .pages
             .iter()
-            .map(|page| canonical::canonical_url(page))
+            .map(|page| canonical::canonical_page_url(page))
             .collect();
         pending.sort();
         pending.dedup();

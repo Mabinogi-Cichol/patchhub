@@ -1070,7 +1070,7 @@ fn process_category(
     detail_failed: &mut bool,
     candidates: &mut Vec<SourceCandidate>,
 ) -> Result<()> {
-    let mut queue: VecDeque<String> = VecDeque::from([canonical::canonical_url(page)]);
+    let mut queue: VecDeque<String> = VecDeque::from([canonical::canonical_page_url(page)]);
     let mut visited: HashSet<String> = HashSet::new();
     while let Some(page) = queue.pop_front() {
         if !visited.insert(page.clone()) {
@@ -1106,7 +1106,7 @@ fn process_category(
         let inline_pages: HashSet<String> = fact
             .article_facts
             .iter()
-            .map(|article| canonical::canonical_url(&article.page))
+            .map(|article| canonical::canonical_page_url(&article.page))
             .collect();
         let mut inline = fact.article_facts.clone();
         inline.sort_by_key(|article| identity::variant(&article.title) == Variant::Dlc);
@@ -1120,7 +1120,7 @@ fn process_category(
         let mut links: Vec<&FactLink> = fact
             .article_links
             .iter()
-            .filter(|link| !inline_pages.contains(&canonical::canonical_url(&link.page)))
+            .filter(|link| !inline_pages.contains(&canonical::canonical_page_url(&link.page)))
             .collect();
         links.sort_by_key(|link| identity::variant(&link.title) == Variant::Dlc);
         for link in links {
@@ -1158,7 +1158,7 @@ fn process_category(
         }
 
         if let Some(next) = &fact.next_page {
-            let next = canonical::canonical_url(next);
+            let next = canonical::canonical_page_url(next);
             if !visited.contains(&next) {
                 queue.push_back(next);
             } else {
@@ -1184,7 +1184,7 @@ fn resolve_fact(
     now: u64,
     detail_pages: &mut Vec<String>,
 ) -> Result<PageFact> {
-    let page = canonical::canonical_url(page);
+    let page = canonical::canonical_page_url(page);
     if !detail_pages.contains(&page) {
         detail_pages.push(page.clone());
     }
@@ -1229,7 +1229,7 @@ fn save_inline_fact(
     store.save_detail(&DetailRecord {
         schema_version: SOURCE_DETAIL_SCHEMA_VERSION,
         source_id: rule.id.clone(),
-        page: canonical::canonical_url(&fact.page),
+        page: canonical::canonical_page_url(&fact.page),
         index_revision,
         checked_at: now,
         complete: true,
@@ -1258,7 +1258,7 @@ fn candidates_from_fact(
                 .is_none_or(|appid| appid == query.appid)
     });
     let base_link = fact.body_links.iter().any(|url| {
-        let url = canonical::canonical_url(url);
+        let url = canonical::canonical_page_url(url);
         known
             .iter()
             .any(|candidate| candidate.variant == Variant::Base && candidate.source_page == url)
@@ -1784,14 +1784,14 @@ fn upstream_identity<'a>(
     appid: u32,
     known: &'a [SourceCandidate],
 ) -> Option<&'a SourceCandidate> {
-    let page = canonical::canonical_url(page);
+    let page = canonical::canonical_page_url(page);
     known.iter().find(|candidate| {
         candidate_is_credible(candidate)
             && candidate.game_appid == Some(appid)
             && candidate
                 .upstream_page
                 .as_ref()
-                .is_some_and(|upstream| canonical::canonical_url(upstream) == page)
+                .is_some_and(|upstream| canonical::canonical_page_url(upstream) == page)
     })
 }
 

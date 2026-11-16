@@ -10,6 +10,16 @@ fn bundled_sources_are_readable_and_read_only() {
     let bytes = fs::read(sources.store().paths().settings()).unwrap();
     for id in sources.registry().rules().iter().map(|rule| &rule.id) {
         let document = sources.get_script_source(id).unwrap();
+        let bundled_file = match id.as_str() {
+            "patchmoe" => include_str!("../resources/source-scripts/patchmoe.lua"),
+            "kagura-cn" => include_str!("../resources/source-scripts/kagura-cn.lua"),
+            "kagura-en" => include_str!("../resources/source-scripts/kagura-en.lua"),
+            "yozakura" => include_str!("../resources/source-scripts/yozakura.lua"),
+            "hgamer" => include_str!("../resources/source-scripts/hgamer.lua"),
+            _ => panic!("unexpected bundled source {id}"),
+        };
+        assert_eq!(document.code, bundled_file);
+        assert_eq!(builtin::document(id).unwrap().code, bundled_file);
         assert_eq!(document.rule.adapter, "lua");
         assert_eq!(document.api_version, 1);
         assert_eq!(
@@ -78,7 +88,7 @@ fn yozakura_matches_english_steam_names_and_keeps_each_download() {
     let wife_body =
         format!(r#"{steam}<a href="https://www.zakuragames.com/wife.exe">补丁下载</a>"#);
     let posts = json!([
-        {"link": roses, "title": {"rendered": "《被黑手浸染的玫瑰与百合》"}, "content": {"rendered": roses_body}},
+        {"link": format!("{roses}&utm_source=steam#patch"), "title": {"rendered": "《被黑手浸染的玫瑰与百合》"}, "content": {"rendered": roses_body}},
         {"link": wife, "title": {"rendered": "《被击垮而堕落的强气人妻》"}, "content": {"rendered": wife_body}},
         {"link": "https://yozakuragames.com/?p=123", "title": {"rendered": "无补丁作品"}, "content": {"rendered": steam}},
     ]);
@@ -138,7 +148,21 @@ fn yozakura_matches_english_steam_names_and_keeps_each_download() {
         |_| {},
     )
     .unwrap();
-    assert_eq!(fake.call_count(), 3);
+    assert_eq!(
+        fake.calls()[1..]
+            .iter()
+            .map(|request| request.url.as_str())
+            .collect::<Vec<_>>(),
+        [roses, wife]
+    );
+    for page in [roses, wife] {
+        let detail = sources
+            .store()
+            .load_detail(&rule.id, page)
+            .unwrap()
+            .unwrap();
+        assert_eq!(detail.fact.unwrap().page, page);
+    }
     let candidates = &matches[0].candidates;
     assert_eq!(candidates.len(), 1, "{candidates:?}");
     let candidate = &candidates[0];

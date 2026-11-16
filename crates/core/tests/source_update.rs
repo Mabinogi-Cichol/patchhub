@@ -343,7 +343,10 @@ fn patchmoe_transport_failure_preserves_the_old_snapshot() {
         .expect("a failed attempt leaves the list page queued");
     assert!(!progress.complete);
     assert!(progress.entries.is_empty(), "nothing was collected");
-    assert_eq!(progress.pending, vec!["https://www.patch.moe/".to_string()]);
+    assert_eq!(
+        progress.pending,
+        vec!["https://www.patch.moe/?flag=1".to_string()]
+    );
 
     // The next successful attempt publishes and clears the queued progress.
     let recovered = Arc::new(FakeFetcher::new());

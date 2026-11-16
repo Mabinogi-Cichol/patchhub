@@ -84,7 +84,7 @@ pub fn normalize_entries(
 }
 
 fn normalize_entry(mut entry: SourceIndexEntry) -> SourceIndexEntry {
-    entry.page = canonical::canonical_url(&entry.page);
+    entry.page = canonical::canonical_page_url(&entry.page);
     entry.aliases.sort();
     entry.aliases.dedup();
     entry
@@ -104,7 +104,7 @@ pub fn from_cache(source_id: &str, cache: &SourceCache) -> SourceIndex {
         aliases: entry.aliases.clone(),
         // Table sources: the list page is all the index can point at; the
         // artifact URL lives in `url`.
-        page: entry.source_page.clone(),
+        page: canonical::canonical_url(&entry.source_page),
         kind: "entry".to_string(),
         appid: entry.appid,
         url: Some(entry.url.clone()),

@@ -123,25 +123,28 @@ fn write_string(out: &mut Vec<u8>, text: &str) {
 }
 
 /// Lowercase the authority, preserve the port and raw path, and remove fragments.
-/// Query parameters are dropped except where they identify a known article.
+/// Query parameters are dropped for callers that only need the path.
 pub fn canonical_url(url: &str) -> String {
     let parsed = split_url(url);
-    let host = parsed.netloc.to_lowercase();
-    // The publisher uses WordPress plain permalinks, where p identifies the article.
-    let query = if host == "yozakuragames.com" && parsed.path == "/" {
-        parsed
-            .query
-            .split('&')
-            .find(|part| {
-                part.strip_prefix("p=").is_some_and(|id| {
-                    !id.is_empty() && id.bytes().all(|byte| byte.is_ascii_digit())
-                })
-            })
-            .unwrap_or("")
-    } else {
-        ""
-    };
-    urlunsplit(&parsed.scheme, &host, &parsed.path, query, "")
+    urlunsplit(
+        &parsed.scheme,
+        &parsed.netloc.to_lowercase(),
+        &parsed.path,
+        "",
+        "",
+    )
+}
+
+/// Normalize a source page while retaining the query selected by the script.
+pub fn canonical_page_url(url: &str) -> String {
+    let parsed = split_url(url);
+    urlunsplit(
+        &parsed.scheme,
+        &parsed.netloc.to_lowercase(),
+        &parsed.path,
+        &parsed.query,
+        "",
+    )
 }
 
 fn urlunsplit(scheme: &str, netloc: &str, path: &str, query: &str, fragment: &str) -> String {
@@ -203,7 +206,7 @@ fn scheme_uses_netloc(scheme: &str) -> bool {
 /// `"candidate-" + sha256(canonical_bytes(identity))[:24]` (contract §1.2).
 ///
 /// `identity` is the ordered array
-/// `[source_id, canonical_url(source_page), variant, languages, version_identity]`.
+/// `[source_id, canonical_page_url(source_page), variant, languages, version_identity]`.
 ///
 /// The input must not contain floats (guaranteed by the fixed identity shape);
 /// float input is rejected with `invalid_canonical_value` at [`canonical_bytes`].
@@ -271,18 +274,14 @@ mod tests {
     }
 
     #[test]
-    fn canonical_url_keeps_yozakura_wordpress_post_id() {
+    fn canonical_page_url_keeps_article_query() {
         assert_eq!(
-            canonical_url("https://YOZAKURAGAMES.COM/?utm_source=steam&p=161#patch"),
-            "https://yozakuragames.com/?p=161"
+            canonical_page_url("https://Example.COM/?p=161#patch"),
+            "https://example.com/?p=161"
         );
         assert_ne!(
-            canonical_url("https://yozakuragames.com/?p=150"),
-            canonical_url("https://yozakuragames.com/?p=161")
-        );
-        assert_eq!(
-            canonical_url("https://example.com/?p=161"),
-            "https://example.com/"
+            canonical_page_url("https://example.com/?p=150"),
+            canonical_page_url("https://example.com/?p=161")
         );
     }
 

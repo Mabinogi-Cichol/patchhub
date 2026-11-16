@@ -731,7 +731,7 @@ pub(crate) fn build_candidates_with_download_group(
         };
         let identity = serde_json::Value::Array(vec![
             serde_json::Value::String(rule.id.clone()),
-            serde_json::Value::String(canonical::canonical_url(page)),
+            serde_json::Value::String(canonical::canonical_page_url(page)),
             serde_json::Value::String(variant_str(variant).to_string()),
             serde_json::Value::Array(
                 group_languages
@@ -758,7 +758,7 @@ pub(crate) fn build_candidates_with_download_group(
             parser_fingerprint: None,
             candidate_id,
             source_id: rule.id.clone(),
-            source_record_id: canonical::canonical_url(page),
+            source_record_id: canonical::canonical_page_url(page),
             game_appid: if has_ids { Some(appid) } else { None },
             parent_appid: if has_ids && variant == Variant::Dlc {
                 Some(appid)

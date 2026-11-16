@@ -827,7 +827,7 @@ pub(crate) fn candidate_from_index_match(
     let version_identity = "page-unknown".to_string();
     let identity = serde_json::Value::Array(vec![
         serde_json::Value::String(source_id.to_string()),
-        serde_json::Value::String(canonical::canonical_url(source_page)),
+        serde_json::Value::String(canonical::canonical_page_url(source_page)),
         serde_json::Value::String("base".to_string()),
         serde_json::Value::Array(vec![serde_json::Value::String(language.clone())]),
         serde_json::Value::String(version_identity.clone()),
@@ -837,7 +837,7 @@ pub(crate) fn candidate_from_index_match(
         parser_fingerprint: None,
         candidate_id,
         source_id: source_id.to_string(),
-        source_record_id: canonical::canonical_url(source_page),
+        source_record_id: canonical::canonical_page_url(source_page),
         game_appid: Some(entry_appid.unwrap_or(appid)),
         parent_appid: None,
         aliases: aliases.to_vec(),

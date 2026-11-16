@@ -701,6 +701,7 @@ fn execute<T: DeserializeOwned>(
                     let parts = lua.create_table()?;
                     parts.set("host", url.host_str().unwrap_or(""))?;
                     parts.set("path", url.path())?;
+                    parts.set("query", url.query())?;
                     Ok(parts)
                 })?,
             )?;

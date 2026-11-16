@@ -428,7 +428,7 @@ pub struct SourceCandidate {
     /// `candidate-[0-9a-f]{24}`.
     pub candidate_id: String,
     pub source_id: String,
-    /// `canonical_url(source_page)`.
+    /// `canonical_page_url(source_page)`.
     pub source_record_id: String,
     /// Always present, may be `null`.
     pub game_appid: Option<u32>,

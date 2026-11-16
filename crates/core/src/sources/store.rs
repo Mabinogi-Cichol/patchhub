@@ -110,7 +110,7 @@ impl StorePaths {
 }
 
 /// `sha256(canonical_page)` truncated to 32 lowercase hex characters
-/// (p1-contract §2). The page is expected to already be `canonical_url()`.
+/// (p1-contract §2). The page is expected to already be `canonical_page_url()`.
 pub fn detail_key(canonical_page: &str) -> String {
     let digest = format!("{:x}", Sha256::digest(canonical_page.as_bytes()));
     digest[..32].to_string()
@@ -512,14 +512,14 @@ impl SourceStore {
     }
 
     /// Reads the shared detail record for a source page, keyed by
-    /// `detail_key(canonical_url(page))` so every game reuses one file.
+    /// `detail_key(canonical_page_url(page))` so every game reuses one file.
     pub fn load_detail(&self, source_id: &str, page: &str) -> Result<Option<DetailRecord>> {
-        let key = detail_key(&canonical::canonical_url(page));
+        let key = detail_key(&canonical::canonical_page_url(page));
         read_json(&self.paths.detail(source_id, &key))
     }
 
     pub fn save_detail(&self, record: &DetailRecord) -> Result<()> {
-        let key = detail_key(&canonical::canonical_url(&record.page));
+        let key = detail_key(&canonical::canonical_page_url(&record.page));
         write_json(&self.paths.detail(&record.source_id, &key), record)
     }
 
@@ -745,7 +745,7 @@ fn migrated_source_match(
     let detail_pages = if success.is_some() {
         let mut pages: Vec<String> = Vec::new();
         for candidate in &candidates {
-            let page = canonical::canonical_url(&candidate.source_page);
+            let page = canonical::canonical_page_url(&candidate.source_page);
             if !pages.contains(&page) {
                 pages.push(page);
             }

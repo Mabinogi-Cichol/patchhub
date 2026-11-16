@@ -21,16 +21,11 @@ fn main() {
         assert!(scripts.contains_key(adapter), "no script for {adapter}");
     }
 
-    let common = read_input("resources/source-scripts/common.lua");
     let mut generated =
         String::from("pub fn code(adapter: &str) -> Option<&'static str> {\n    match adapter {\n");
-    for (adapter, files) in scripts {
-        let mut code = common.clone();
-        for file in files.as_array().expect("bundled script files") {
-            let file = file.as_str().expect("Lua filename");
-            code.push('\n');
-            code.push_str(&read_input(&format!("resources/source-scripts/{file}")));
-        }
+    for (adapter, file) in scripts {
+        let file = file.as_str().expect("Lua filename");
+        let code = read_input(&format!("resources/source-scripts/{file}"));
         writeln!(generated, "        {adapter:?} => Some({code:?}),").unwrap();
     }
     generated.push_str("        _ => None,\n    }\n}\n");
