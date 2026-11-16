@@ -14,12 +14,12 @@ return {
         local entries = ctx.array()
         for _, page in ipairs(rule.pages) do
             local url, title = load(ctx, page)
-            entries[#entries + 1] = {title = title, page = url, kind = "product"}
+            entries[#entries + 1] = {title = title, page = url, current_step = 1, total_steps = 2}
         end
         return {entries = entries, pending = ctx.array(), complete = true}
     end,
-    resolve_page = function(ctx, rule, page)
-        local url, title, body = load(ctx, page)
+    resolve_detail = function(ctx, rule, state)
+        local url, title, body = load(ctx, state.page)
         local mirrors, links = ctx.array(), ctx.array()
         for _, anchor in ipairs(body:select("a[href]")) do
             local href = ctx.url_join(url, anchor:attr("href"))
@@ -31,7 +31,11 @@ return {
                 end
             end
         end
-        return {title = title, page = url, kind = "product", text = body:text(),
-            steam_ids = ctx.steam_ids(links), mirrors = mirrors}
+        return {
+            current_step = 2,
+            total_steps = 2,
+            details = {{title = title, page = url, text = body:text(),
+                steam_ids = ctx.steam_ids(links), mirrors = mirrors}},
+        }
     end
 }

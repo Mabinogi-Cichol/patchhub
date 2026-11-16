@@ -1,6 +1,6 @@
 # 订阅源缓存与抓取模型统一重构（Index -> Detail + Lua Step 推进）
 
-状态：**待实现（仅完成架构调研、方案设计与过度设计审阅）**。施工与验证记录见 [progress.md](progress.md)。当前开发分支：`feature/unified-source-index-detail`（基于 `feature/script-source-adapters@c0e94d1` 创建）。
+状态：**已实现（本地定向自动化与过度设计审阅通过，沙箱隔离项与实机待验收）**。施工与验证记录见 [progress.md](progress.md)。当前开发分支：`feature/unified-source-index-detail`（基于 `feature/script-source-adapters@c0e94d1` 创建）。
 
 ## 1. 背景与核心问题
 

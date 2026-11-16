@@ -9,7 +9,7 @@
 
 | 功能 | 状态 | 设计 | 施工记录 |
 | --- | --- | --- | --- |
-| 订阅源缓存与抓取模型统一重构 | 待实现；已完成 Index -> Detail + Lua Step 推进方案设计与过度设计审阅，代码修改与验证待执行 | [设计](unified-source-index-detail/design.md) | [施工记录](unified-source-index-detail/progress.md) |
+| 订阅源缓存与抓取模型统一重构 | 已实现，本地定向自动化（核心订阅源单测、14 项核心集成套件、5 源空内置恢复、CLI 单测/冒烟及 Clippy/fmt）与过度设计审阅通过；沙箱限制项、发布前全矩阵与实机待验收 | [设计](unified-source-index-detail/design.md) | [施工记录](unified-source-index-detail/progress.md) |
 | YOZAKURA 内置订阅源 | 已实现，官网查询和下载项投影通过，实机待验收 | [设计](yozakura-source/design.md) | [施工记录](yozakura-source/progress.md) |
 | Windows 设置入口与缓存管理 | 已实现；定向自动化/真实字体渲染通过，原生窗口与用户验收待完成 | [设计](windows-settings/design.md) | [施工记录](windows-settings/progress.md) |
 

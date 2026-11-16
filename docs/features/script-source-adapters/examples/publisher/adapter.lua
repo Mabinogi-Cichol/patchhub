@@ -13,10 +13,18 @@ return {
                 if not title or not link then error("missing_title_or_download") end
                 local appid = tonumber(row:attr("data-appid"))
                 if not appid then error("invalid_appid") end
+                local href = ctx.url_join(response.url, link:attr("href"))
                 entries[#entries + 1] = {
                     title = title:text(), appid = appid,
-                    page = response.url, kind = "entry",
-                    url = ctx.url_join(response.url, link:attr("href"))
+                    page = response.url,
+                    current_step = 1, total_steps = 1,
+                    details = {{
+                        title = title:text(),
+                        page = response.url,
+                        steam_ids = {appid},
+                        mirrors = {{url = href}},
+                        reported_format = "zip",
+                    }},
                 }
             end
         end

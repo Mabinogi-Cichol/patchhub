@@ -24,6 +24,6 @@
 
 ## 自选产品详情页（可运行的真实网络示例）
 
-[规则](product-pages/source.json)与[源码](product-pages/adapter.lua)是独立作者脚本：来源范围严格为规则 `pages` 明确列出的产品详情页，不声称完整覆盖该发行商目录。示例用公开 Kagura 海外产品页演示 `collect_index/resolve_page`、正文镜像与公共 Steam ID 提取；可添加其他符合相同 DOM 的产品 URL。网站变化会明确报结构错误。
+[规则](product-pages/source.json)与[源码](product-pages/adapter.lua)是独立作者脚本：来源范围严格为规则 `pages` 明确列出的产品详情页，不声称完整覆盖该发行商目录。示例用公开 Kagura 海外产品页演示 `collect_index/resolve_detail`、正文镜像与公共 Steam ID 提取；可添加其他符合相同 DOM 的产品 URL。网站变化会明确报结构错误。
 
 P7 已通过真实 Release 核心执行导入、更新和重启读取，发布 1 条完整索引。该证据仅覆盖所配置页面，不代表匹配到某个真实 AppID、下载或安装通过。前面的表格示例仍是占位域名配合合成 HTML 的离线说明，不能冒充真实网站验证。验证详情见[施工记录](../progress.md)。
