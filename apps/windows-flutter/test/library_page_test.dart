@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:ui' as ui;
@@ -242,4 +243,135 @@ void main() {
       model.dispose();
     },
   );
+
+  testWidgets('settings entry shows circular progress during source update', (
+    tester,
+  ) async {
+    final client = _ControllableSourceClient();
+    final model = AppModel(client);
+    await tester.pumpWidget(PatchHubApp(home: LibraryPage(model: model)));
+    await tester.pumpAndSettle();
+
+    expect(find.text('设置'), findsOneWidget);
+    expect(find.byIcon(Icons.settings_outlined), findsOneWidget);
+    expect(find.byType(CircularProgressIndicator), findsNothing);
+
+    final task = model.startSource('update_source', {'source_id': 'fixture'});
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 250));
+    await tester.pump();
+
+    expect(model.sourceUpdating, isTrue);
+    expect(find.text('订阅更新中'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('settings-entry-updating')),
+      findsOneWidget,
+    );
+    expect(find.byType(CircularProgressIndicator), findsOneWidget);
+    expect(find.byTooltip('订阅源正在后台更新，点击打开设置'), findsOneWidget);
+
+    await tester.tap(find.text('订阅更新中'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 250));
+    await tester.pump();
+    expect(find.text('返回游戏'), findsOneWidget);
+    expect(find.byIcon(Icons.arrow_back), findsOneWidget);
+    expect(find.text('订阅更新中'), findsNothing);
+
+    await tester.tap(find.text('返回游戏'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 250));
+    await tester.pump();
+    expect(find.text('订阅更新中'), findsOneWidget);
+
+    client.completeUpdate('fixture');
+    await tester.runAsync(() => task.done);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 250));
+    await tester.pump();
+
+    expect(model.sourceUpdating, isFalse);
+    expect(find.text('设置'), findsOneWidget);
+    expect(find.byIcon(Icons.settings_outlined), findsOneWidget);
+    expect(find.byType(CircularProgressIndicator), findsNothing);
+    expect(tester.takeException(), isNull);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    model.dispose();
+  });
+}
+
+class _ControllableSourceClient extends FixtureClient {
+  final _pending = <_FakeTaskProcess>[];
+
+  @override
+  Future<Process> startProcess(String channel) async {
+    final process = _FakeTaskProcess();
+    _pending.add(process);
+    return process;
+  }
+
+  void completeUpdate(String sourceId) {
+    final process = _pending.removeAt(0);
+    process.complete({
+      'protocol_version': 5,
+      'request_id': process.requestId ?? '1',
+      'ok': true,
+      'result': {
+        'source_id': sourceId,
+        'settings_revision': 1,
+        'status': 'cached',
+        'revision': 1,
+        'complete': true,
+        'affected_appids': <int>[],
+      },
+    });
+  }
+}
+
+class _FakeTaskProcess implements Process {
+  _FakeTaskProcess() {
+    _stdinController.stream.transform(utf8.decoder).listen((chunk) {
+      for (final line in chunk.split('\n')) {
+        final trimmed = line.trim();
+        if (!trimmed.startsWith('{')) continue;
+        final decoded = jsonDecode(trimmed);
+        if (decoded is Map<String, dynamic> &&
+            decoded['request_id'] is String) {
+          requestId ??= decoded['request_id'] as String;
+        }
+      }
+    });
+  }
+
+  final _stdout = StreamController<List<int>>();
+  final _stderr = StreamController<List<int>>();
+  final _stdinController = StreamController<List<int>>();
+  final _exitCode = Completer<int>();
+  String? requestId;
+
+  @override
+  Future<int> get exitCode => _exitCode.future;
+
+  @override
+  Stream<List<int>> get stdout => _stdout.stream;
+
+  @override
+  Stream<List<int>> get stderr => _stderr.stream;
+
+  @override
+  late final IOSink stdin = IOSink(_stdinController.sink);
+
+  void complete(Map<String, Object?> response) {
+    _stdout.add(utf8.encode('${jsonEncode(response)}\n'));
+    _stdout.close();
+    _stderr.close();
+    _exitCode.complete(0);
+  }
+
+  @override
+  int get pid => 1;
+
+  @override
+  bool kill([ProcessSignal signal = ProcessSignal.sigterm]) => true;
 }

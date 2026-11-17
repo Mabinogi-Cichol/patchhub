@@ -48,6 +48,10 @@ class AppModel extends ChangeNotifier {
   Timer? _scheduler;
   final _watched = <CoreTask>{};
 
+  bool get sourceUpdating => tasks.sources.values.any(
+    (task) => task.method == 'update_source' && task.running,
+  );
+
   bool queryRunning(GameRow row) => tasks.sources.values.any((task) {
     if (!task.running) return false;
     return switch (task.method) {

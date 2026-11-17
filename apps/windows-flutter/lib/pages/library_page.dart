@@ -180,16 +180,10 @@ class _LibraryPageState extends State<LibraryPage> {
         children: [
           DesktopToolbar(
             actions: [
-              Tooltip(
-                message: settingsOpen ? '返回游戏' : '设置',
-                child: TextButton.icon(
-                  onPressed: () => setState(() => settingsOpen = !settingsOpen),
-                  icon: Icon(
-                    settingsOpen ? Icons.arrow_back : Icons.settings_outlined,
-                    size: 20,
-                  ),
-                  label: Text(settingsOpen ? '返回游戏' : '设置'),
-                ),
+              _SettingsEntryButton(
+                settingsOpen: settingsOpen,
+                sourceUpdating: model.sourceUpdating,
+                onPressed: () => setState(() => settingsOpen = !settingsOpen),
               ),
               PopupMenuButton<ThemeMode>(
                 tooltip: '外观',
@@ -918,4 +912,134 @@ class _LibraryPageState extends State<LibraryPage> {
       ),
     ],
   );
+}
+
+class _SettingsEntryButton extends StatelessWidget {
+  const _SettingsEntryButton({
+    required this.settingsOpen,
+    required this.sourceUpdating,
+    required this.onPressed,
+  });
+
+  final bool settingsOpen;
+  final bool sourceUpdating;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    final updating = !settingsOpen && sourceUpdating;
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    final dark = theme.brightness == Brightness.dark;
+    final accent = dark ? scheme.secondary : scheme.primary;
+    final backgroundColor = updating
+        ? (dark ? scheme.surfaceContainer : scheme.primaryContainer)
+        : Colors.transparent;
+    final borderColor = updating
+        ? accent.withValues(alpha: dark ? 0.32 : 0.28)
+        : Colors.transparent;
+    final foregroundColor = updating
+        ? (dark ? scheme.secondary : scheme.onPrimaryContainer)
+        : scheme.primary;
+    final tooltip = settingsOpen
+        ? '返回游戏'
+        : updating
+        ? '订阅源正在后台更新，点击打开设置'
+        : '设置';
+    final labelText = settingsOpen
+        ? '返回游戏'
+        : updating
+        ? '订阅更新中'
+        : '设置';
+
+    return Tooltip(
+      message: tooltip,
+      child: TextButton(
+        onPressed: onPressed,
+        style: TextButton.styleFrom(
+          padding: EdgeInsets.zero,
+          minimumSize: Size.zero,
+          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          shape: const StadiumBorder(),
+          foregroundColor: foregroundColor,
+        ),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 220),
+          curve: Curves.easeOutCubic,
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          decoration: BoxDecoration(
+            color: backgroundColor,
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(color: borderColor),
+          ),
+          child: AnimatedSize(
+            duration: const Duration(milliseconds: 220),
+            curve: Curves.easeOutCubic,
+            alignment: Alignment.centerRight,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                AnimatedSwitcher(
+                  duration: const Duration(milliseconds: 200),
+                  switchInCurve: Curves.easeOutCubic,
+                  switchOutCurve: Curves.easeInCubic,
+                  transitionBuilder: (child, animation) => FadeTransition(
+                    opacity: animation,
+                    child: ScaleTransition(
+                      scale: Tween<double>(
+                        begin: 0.82,
+                        end: 1,
+                      ).animate(animation),
+                      child: child,
+                    ),
+                  ),
+                  child: settingsOpen
+                      ? Icon(
+                          Icons.arrow_back,
+                          key: const ValueKey('settings-entry-back'),
+                          size: 18,
+                          color: foregroundColor,
+                        )
+                      : updating
+                      ? SizedBox(
+                          key: const ValueKey('settings-entry-updating'),
+                          width: 15,
+                          height: 15,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2.2,
+                            strokeCap: StrokeCap.round,
+                            color: accent,
+                            backgroundColor: accent.withValues(alpha: 0.18),
+                          ),
+                        )
+                      : Icon(
+                          Icons.settings_outlined,
+                          key: const ValueKey('settings-entry-idle'),
+                          size: 18,
+                          color: foregroundColor,
+                        ),
+                ),
+                const SizedBox(width: 8),
+                AnimatedSwitcher(
+                  duration: const Duration(milliseconds: 200),
+                  switchInCurve: Curves.easeOutCubic,
+                  switchOutCurve: Curves.easeInCubic,
+                  child: Text(
+                    labelText,
+                    key: ValueKey(labelText),
+                    maxLines: 1,
+                    softWrap: false,
+                    style: theme.textTheme.labelLarge?.copyWith(
+                      color: foregroundColor,
+                      fontWeight: updating ? FontWeight.w600 : FontWeight.w500,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }
