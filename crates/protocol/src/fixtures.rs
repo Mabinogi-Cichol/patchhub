@@ -78,12 +78,14 @@ pub fn success_result(method: Method) -> Value {
         Method::InstallPatch => outcome("committed", "completed"),
         Method::ListTransactions | Method::Recover => json!([transaction("committed")]),
         Method::DiscardPlan => transaction("rolled_back"),
-        Method::CacheStatus => json!({"total_bytes":0,"entries":0,"diagnostics":[]}),
+        Method::CacheStatus | Method::GameCacheStatus => {
+            json!({"total_bytes":0,"entries":0,"diagnostics":[]})
+        }
         Method::BackupStatus => json!({"total_bytes":0,"files":0,"failures":[]}),
         Method::CleanupBackups => {
             json!({"status":"completed","removed_bytes":0,"removed_files":0,"failures":[]})
         }
-        Method::CleanupCache => {
+        Method::CleanupCache | Method::CleanupGameCache => {
             json!(patchhub_core::installer::outcome::CleanupResult::default())
         }
         Method::ListSources => json!([source_summary()]),

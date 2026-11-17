@@ -1929,6 +1929,8 @@
         "discard_plan",
         "cleanup_cache",
         "cache_status",
+        "game_cache_status",
+        "cleanup_game_cache",
         "backup_status",
         "cleanup_backups",
         "list_sources",
@@ -2824,6 +2826,54 @@
           "properties": {
             "method": {
               "const": "cache_status"
+            },
+            "params": {
+              "$ref": "#/$defs/HostParams"
+            },
+            "protocol_version": {
+              "const": 5
+            },
+            "request_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "protocol_version",
+            "request_id",
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "method": {
+              "const": "game_cache_status"
+            },
+            "params": {
+              "$ref": "#/$defs/HostParams"
+            },
+            "protocol_version": {
+              "const": 5
+            },
+            "request_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "protocol_version",
+            "request_id",
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "method": {
+              "const": "cleanup_game_cache"
             },
             "params": {
               "$ref": "#/$defs/HostParams"

@@ -850,6 +850,38 @@
       "task_channel": false
     },
     {
+      "name": "game_cache_status-request",
+      "request": {
+        "method": "game_cache_status",
+        "params": {
+          "host": {
+            "platform": "windows",
+            "roots": [],
+            "state_dir": null
+          }
+        },
+        "protocol_version": 5,
+        "request_id": "fixture"
+      },
+      "task_channel": false
+    },
+    {
+      "name": "cleanup_game_cache-request",
+      "request": {
+        "method": "cleanup_game_cache",
+        "params": {
+          "host": {
+            "platform": "windows",
+            "roots": [],
+            "state_dir": null
+          }
+        },
+        "protocol_version": 5,
+        "request_id": "fixture"
+      },
+      "task_channel": false
+    },
+    {
       "name": "backup_status-request",
       "request": {
         "method": "backup_status",
@@ -2170,6 +2202,8 @@
             "discard_plan",
             "cleanup_cache",
             "cache_status",
+            "game_cache_status",
+            "cleanup_game_cache",
             "backup_status",
             "cleanup_backups",
             "list_sources",
@@ -2653,6 +2687,61 @@
     {
       "method": "cache_status",
       "name": "cache_status-failure",
+      "response": {
+        "error": {
+          "code": "io_error",
+          "detail": "固定诊断"
+        },
+        "ok": false,
+        "protocol_version": 5,
+        "request_id": "fixture"
+      }
+    },
+    {
+      "method": "game_cache_status",
+      "name": "game_cache_status-success",
+      "response": {
+        "ok": true,
+        "protocol_version": 5,
+        "request_id": "fixture",
+        "result": {
+          "diagnostics": [],
+          "entries": 0,
+          "total_bytes": 0
+        }
+      }
+    },
+    {
+      "method": "game_cache_status",
+      "name": "game_cache_status-failure",
+      "response": {
+        "error": {
+          "code": "io_error",
+          "detail": "固定诊断"
+        },
+        "ok": false,
+        "protocol_version": 5,
+        "request_id": "fixture"
+      }
+    },
+    {
+      "method": "cleanup_game_cache",
+      "name": "cleanup_game_cache-success",
+      "response": {
+        "ok": true,
+        "protocol_version": 5,
+        "request_id": "fixture",
+        "result": {
+          "failures": [],
+          "performed": false,
+          "removed_bytes": 0,
+          "status": "not_requested"
+        }
+      }
+    },
+    {
+      "method": "cleanup_game_cache",
+      "name": "cleanup_game_cache-failure",
       "response": {
         "error": {
           "code": "io_error",
@@ -3370,6 +3459,8 @@
             "discard_plan",
             "cleanup_cache",
             "cache_status",
+            "game_cache_status",
+            "cleanup_game_cache",
             "backup_status",
             "cleanup_backups",
             "list_sources",
@@ -3464,6 +3555,8 @@
             "discard_plan",
             "cleanup_cache",
             "cache_status",
+            "game_cache_status",
+            "cleanup_game_cache",
             "backup_status",
             "cleanup_backups",
             "list_sources",
@@ -4887,6 +4980,8 @@
             "discard_plan",
             "cleanup_cache",
             "cache_status",
+            "game_cache_status",
+            "cleanup_game_cache",
             "backup_status",
             "cleanup_backups",
             "list_sources",
@@ -5051,6 +5146,8 @@
             "discard_plan",
             "cleanup_cache",
             "cache_status",
+            "game_cache_status",
+            "cleanup_game_cache",
             "backup_status",
             "cleanup_backups",
             "list_sources",
@@ -5146,6 +5243,8 @@
             "discard_plan",
             "cleanup_cache",
             "cache_status",
+            "game_cache_status",
+            "cleanup_game_cache",
             "backup_status",
             "cleanup_backups",
             "list_sources",
@@ -5241,6 +5340,8 @@
             "discard_plan",
             "cleanup_cache",
             "cache_status",
+            "game_cache_status",
+            "cleanup_game_cache",
             "backup_status",
             "cleanup_backups",
             "list_sources",
@@ -5336,6 +5437,8 @@
             "discard_plan",
             "cleanup_cache",
             "cache_status",
+            "game_cache_status",
+            "cleanup_game_cache",
             "backup_status",
             "cleanup_backups",
             "list_sources",
@@ -5427,6 +5530,8 @@
             "discard_plan",
             "cleanup_cache",
             "cache_status",
+            "game_cache_status",
+            "cleanup_game_cache",
             "backup_status",
             "cleanup_backups",
             "list_sources",
@@ -5519,6 +5624,8 @@
             "discard_plan",
             "cleanup_cache",
             "cache_status",
+            "game_cache_status",
+            "cleanup_game_cache",
             "backup_status",
             "cleanup_backups",
             "list_sources",
@@ -5618,6 +5725,8 @@
             "discard_plan",
             "cleanup_cache",
             "cache_status",
+            "game_cache_status",
+            "cleanup_game_cache",
             "backup_status",
             "cleanup_backups",
             "list_sources",

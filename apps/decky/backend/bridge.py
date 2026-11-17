@@ -136,6 +136,9 @@ class CoreBridge:
     async def cache_status(self):
         return await self._call("cache_status", {})
 
+    async def game_cache_status(self):
+        return await self._call("game_cache_status", {})
+
     async def backup_status(self):
         return await self._call("backup_status", {})
 
@@ -144,6 +147,9 @@ class CoreBridge:
 
     async def cleanup_cache(self):
         return await self._call("cleanup_cache", {})
+
+    async def cleanup_game_cache(self):
+        return await self._call("cleanup_game_cache", {})
 
     @staticmethod
     def _source_event(row, request_id, last_sequence):

@@ -20,13 +20,25 @@ class CacheClient extends FixtureClient {
     'entries': 2,
     'diagnostics': [],
   };
+  Map<String, dynamic> gameInventory = {
+    'total_bytes': 4096,
+    'entries': 4,
+    'diagnostics': [],
+  };
   Object? statError, cleanError;
   Completer<Object?>? pending;
-  int cleans = 0, stats = 0;
+  int cleans = 0, stats = 0, gameCleans = 0, gameStats = 0;
+  final List<String> methods = [];
   Map<String, dynamic> cleanupResult = {
     'status': 'completed',
     'performed': true,
     'removed_bytes': 1024,
+    'failures': [],
+  };
+  Map<String, dynamic> gameCleanupResult = {
+    'status': 'completed',
+    'performed': true,
+    'removed_bytes': 4096,
     'failures': [],
   };
   @override
@@ -34,6 +46,7 @@ class CacheClient extends FixtureClient {
     String method, [
     Map<String, Object?> args = const {},
   ]) async {
+    methods.add(method);
     if (method == 'cache_status') {
       stats++;
       if (statError != null) throw statError!;
@@ -43,6 +56,14 @@ class CacheClient extends FixtureClient {
       cleans++;
       if (cleanError != null) throw cleanError!;
       return pending == null ? cleanupResult : await pending!.future;
+    }
+    if (method == 'game_cache_status') {
+      gameStats++;
+      return gameInventory;
+    }
+    if (method == 'cleanup_game_cache') {
+      gameCleans++;
+      return gameCleanupResult;
     }
     return super.call(method, args);
   }
@@ -272,4 +293,89 @@ void main() {
       model.dispose();
     },
   );
+
+  testWidgets('game cache cleanup updates inventory and refreshes app model', (
+    tester,
+  ) async {
+    final client = CacheClient();
+    final model = AppModel(client);
+    await model.refresh();
+    final callsBeforeCleanup = client.methods.length;
+    final update = PanelUpdate();
+    await tester.pumpWidget(
+      PatchHubApp(
+        home: AppUpdatePanel(
+          update: update,
+          lifecycle: AppLifecycle(),
+          child: LibraryPage(model: model),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(TextButton, '设置'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(ListTile, '缓存管理'));
+    await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(
+      find.text('4.00 KB'),
+      200,
+      scrollable: find.descendant(
+        of: find.byKey(const PageStorageKey('settings-cache')),
+        matching: find.byType(Scrollable),
+      ),
+    );
+    expect(find.text('本地游戏数据缓存'), findsOneWidget);
+    expect(find.text('4.00 KB'), findsOneWidget);
+
+    client.gameInventory = {'total_bytes': 0, 'entries': 0, 'diagnostics': []};
+    await tester.scrollUntilVisible(
+      find.widgetWithText(FilledButton, '清理游戏缓存'),
+      200,
+      scrollable: find.descendant(
+        of: find.byKey(const PageStorageKey('settings-cache')),
+        matching: find.byType(Scrollable),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(FilledButton, '清理游戏缓存'));
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.descendant(
+        of: find.byType(AlertDialog),
+        matching: find.widgetWithText(FilledButton, '清理游戏缓存'),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(client.gameCleans, 1);
+    expect(find.text('清理完成，已释放 4.00 KB'), findsOneWidget);
+    expect(
+      client.methods.skip(callsBeforeCleanup),
+      containsAll(['scan', 'list_sources']),
+    );
+    await tester.pumpWidget(const SizedBox.shrink());
+    model.dispose();
+    update.dispose();
+  });
+
+  testWidgets('game cache cleanup button disables while source task runs', (
+    tester,
+  ) async {
+    final client = CacheClient();
+    final model = AppModel(client);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: CachePage(model: model.cache, sourceTaskRunning: true),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final button = tester.widget<FilledButton>(
+      find.widgetWithText(FilledButton, '清理游戏缓存'),
+    );
+    expect(button.onPressed, isNull);
+    expect(find.textContaining('有订阅源更新或游戏匹配任务正在进行'), findsOneWidget);
+    model.dispose();
+  });
 }

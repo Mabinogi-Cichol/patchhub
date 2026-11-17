@@ -16,17 +16,21 @@ export function cacheSummary(value: CacheInventory) {
   return `${formatSize(value.total_bytes)}${value.diagnostics.length ? "（部分路径无法统计）" : ""}`;
 }
 
-export function cacheClearNote(result: CleanupResult) {
+export function cacheClearNote(result: CleanupResult, label = "下载缓存") {
   const removed = formatSize(result.removed_bytes);
   const failures = result.failures?.map(failure => failure.detail || failure.code).filter(Boolean) ?? [];
   const retry = failures.length ? `失败原因：${failures.join("；")}。可重试清理。` : "可重试清理。";
   switch (result.status) {
-    case "completed": return result.performed ? `已清理 ${removed} 下载缓存。` : "当前没有可清理的下载缓存。";
-    case "partial": return `已清理 ${removed} 下载缓存，但部分清理失败。${retry}`;
+    case "completed": return result.performed ? `已清理 ${removed} ${label}。` : `当前没有可清理的${label}。`;
+    case "partial": return `已清理 ${removed} ${label}，但部分清理失败。${retry}`;
     case "failed": return `清理失败，已清理 ${removed}。${retry}`;
     case "busy": return "缓存当前正被安装或恢复任务使用，请稍后重试。";
     case "not_requested": return "本次未执行缓存清理。";
   }
+}
+
+export function gameCacheClearNote(result: CleanupResult) {
+  return cacheClearNote(result, "本地游戏数据缓存");
 }
 
 export function autoCleanupNote(enabled: boolean) {

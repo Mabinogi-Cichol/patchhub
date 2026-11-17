@@ -16,7 +16,7 @@ import { installInput, manualDownloadInput, manualDownloadRequestKey, primaryAct
 import { createManagerSession, feedbackFor, needsRecovery } from "./session";
 import { sourceCardSummary, sourceTaskStatusText, sourceTaskTargets, sourceTaskTerminal, type SourceTaskApi, type SourceTaskSnapshot } from "./source-tasks";
 import { decodeInstance, encodeInstance, settingsPage, settingsRoutes } from "./route";
-import { backupSummary, backupClearNote, type BackupInventory, type BackupCleanupResult, autoCleanupNote, cacheClearNote, cacheSummary, type CacheInventory, type CacheStatus, type CleanupResult, type Settings } from "./cache";
+import { backupSummary, backupClearNote, type BackupInventory, type BackupCleanupResult, autoCleanupNote, cacheClearNote, cacheSummary, gameCacheClearNote, type CacheInventory, type CacheStatus, type CleanupResult, type Settings } from "./cache";
 import { tasks, taskIsTerminal, type TaskSnapshot } from "./tasks";
 import { TaskProgressView, TaskResultView } from "./task-progress-view";
 import { candidateConditions, candidateLanguage, candidateSource, safeSourceUrl } from "./discovery";
@@ -53,6 +53,8 @@ const backupStatus = callable<[], BackupInventory>("backup_status");
 const cleanupBackups = callable<[], BackupCleanupResult>("cleanup_backups");
 const cacheStatus = callable<[], CacheInventory>("cache_status");
 const clearCache = callable<[], CacheStatus>("clear_cache");
+const gameCacheStatus = callable<[], CacheInventory>("game_cache_status");
+const cleanupGameCache = callable<[], CacheStatus>("cleanup_game_cache");
 const getSettings = callable<[], Settings>("get_settings");
 const setAutoCleanup = callable<[boolean], Settings>("set_auto_cleanup");
 
@@ -648,6 +650,8 @@ function SourcesPage({ report, busy, tasks, expandedSources, onToggleSource, cha
       <Status>{sourceTaskStatusText(task)}</Status><Action onClick={() => onCancelTask(task.task_id)}>取消</Action>
     </Row>)}</PanelSection>}
     <PanelSection title="发行商补丁源">
+      {!!publishers.length && <Row><Action disabled={busy || !pendingPublisherIds.length}
+        onClick={() => pendingPublisherIds.forEach(id => onUpdateSource(id, false))}>全部更新</Action></Row>}
       {publishers.map(source => <SourceCard key={source.id} source={source} busy={busy}
         expanded={expandedSources[source.id] === true} onToggle={() => onToggleSource(source.id)} task={taskFor(source.id)}
         changeSources={changeSources} onUpdateSource={onUpdateSource} onCancelTask={onCancelTask} onInterval={onInterval} onEditScript={onEditScript} onRemoveSource={onRemoveSource} />)}
@@ -670,13 +674,17 @@ function GlobalCache() {
   const [settings, setSettings] = useState<Settings | null>(null);
   const [cache, setCache] = useState<CacheInventory | null>(null);
   const [cacheError, setCacheError] = useState("");
+  const [gameCache, setGameCache] = useState<CacheInventory | null>(null);
+  const [gameCacheError, setGameCacheError] = useState("");
   const [backups, setBackups] = useState<BackupInventory | null>(null);
   const [backupError, setBackupError] = useState("");
   const [failed, setFailed] = useState(false);
+  const sourceBusy = Object.values(state.sourceTasks).some(task => !sourceTaskTerminal(task.state));
   useEffect(() => {
     let live = true;
     getSettings().then(value => { if (live) setSettings(value); }).catch(() => { if (live) setFailed(true); });
     cacheStatus().then(value => { if (live) setCache(value); }).catch(() => { if (live) setCacheError("读取下载缓存占用失败。"); });
+    gameCacheStatus().then(value => { if (live) setGameCache(value); }).catch(() => { if (live) setGameCacheError("读取本地游戏数据缓存占用失败。"); });
     backupStatus().then(value => { if (live) setBackups(value); }).catch(() => { if (live) setBackupError("读取安装备份占用失败。"); });
     return () => { live = false; };
   }, []);
@@ -692,6 +700,18 @@ function GlobalCache() {
     }, value => {
         session.update({ note: cacheClearNote(value) });
       });
+  };
+  const cleanGameCache = () => {
+    void session.work("正在清理本地游戏数据缓存…", async () => {
+      const result = await cleanupGameCache();
+      try { setGameCache(await gameCacheStatus()); setGameCacheError(""); }
+      catch { setGameCache(null); setGameCacheError("清理已返回，但刷新本地游戏数据缓存占用失败，请重开页面查看。"); }
+      try { await session.refreshSources(); } catch { /* 刷新失败不覆盖清理结果 */ }
+      try { await session.refresh(); } catch { /* 刷新失败不覆盖清理结果 */ }
+      return result;
+    }, value => {
+      session.update({ note: gameCacheClearNote(value) });
+    });
   };
   const cleanBackups = () => void session.work("正在清理全部安装备份…", async () => {
     const result = await cleanupBackups();
@@ -710,6 +730,13 @@ function GlobalCache() {
         {cache?.diagnostics.map((failure, index) => <Row key={index}><Status warning>{failure.detail || failure.code}</Status></Row>)}
         <Row><Action disabled={!!busy} onClick={clean}>清理下载缓存</Action></Row>
       </> : <Row><Status warning={failed}>{failed ? "读取缓存设置失败。" : "正在读取缓存设置…"}</Status></Row>}
+    </PanelSection>
+    <PanelSection title="本地游戏数据缓存">
+      <InfoRow label="当前占用">{gameCache ? cacheSummary(gameCache) : gameCacheError || "正在统计本地游戏数据缓存…"}</InfoRow>
+      <Row><Status>清理本地缓存的订阅源索引、游戏详情、匹配结果和更新状态记录；清理后需要重新刷新订阅源或匹配游戏。游戏文件、已安装补丁、订阅配置及自定义导入脚本会保留。</Status></Row>
+      {sourceBusy && <Row><Status warning>有订阅源更新或游戏匹配任务正在进行，请任务结束后重试。</Status></Row>}
+      {gameCache?.diagnostics.map((failure, index) => <Row key={index}><Status warning>{failure.detail || failure.code}</Status></Row>)}
+      <Row><Action disabled={!!busy || sourceBusy} onClick={cleanGameCache}>清理游戏缓存</Action></Row>
     </PanelSection>
     <PanelSection title="安装备份">
       <InfoRow label="当前占用">{backups ? backupSummary(backups) : backupError || "正在统计安装备份…"}</InfoRow>

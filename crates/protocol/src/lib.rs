@@ -77,6 +77,8 @@ pub enum Method {
     DiscardPlan,
     CleanupCache,
     CacheStatus,
+    GameCacheStatus,
+    CleanupGameCache,
     BackupStatus,
     CleanupBackups,
     ListSources,
@@ -92,7 +94,7 @@ pub enum Method {
     RematchGame,
     RemoveSource,
 }
-pub const ALL_METHODS: [Method; 24] = [
+pub const ALL_METHODS: [Method; 26] = [
     Method::GetCapabilities,
     Method::Scan,
     Method::ProjectInstances,
@@ -103,6 +105,8 @@ pub const ALL_METHODS: [Method; 24] = [
     Method::DiscardPlan,
     Method::CleanupCache,
     Method::CacheStatus,
+    Method::GameCacheStatus,
+    Method::CleanupGameCache,
     Method::BackupStatus,
     Method::CleanupBackups,
     Method::ListSources,
@@ -118,7 +122,7 @@ pub const ALL_METHODS: [Method; 24] = [
     Method::RematchGame,
     Method::RemoveSource,
 ];
-pub const METHODS: [&str; 24] = [
+pub const METHODS: [&str; 26] = [
     "get_capabilities",
     "scan",
     "project_instances",
@@ -129,6 +133,8 @@ pub const METHODS: [&str; 24] = [
     "discard_plan",
     "cleanup_cache",
     "cache_status",
+    "game_cache_status",
+    "cleanup_game_cache",
     "backup_status",
     "cleanup_backups",
     "list_sources",
@@ -206,6 +212,8 @@ pub enum RequestParams {
     DiscardPlan(DiscardPlanParams),
     CleanupCache(HostParams),
     CacheStatus(HostParams),
+    GameCacheStatus(HostParams),
+    CleanupGameCache(HostParams),
     BackupStatus(HostParams),
     CleanupBackups(HostParams),
     ListSources(HostParams),
@@ -230,6 +238,8 @@ impl RequestParams {
             | Self::Recover(p)
             | Self::CleanupCache(p)
             | Self::CacheStatus(p)
+            | Self::GameCacheStatus(p)
+            | Self::CleanupGameCache(p)
             | Self::BackupStatus(p)
             | Self::CleanupBackups(p)
             | Self::ListSources(p) => &p.host,
@@ -797,7 +807,7 @@ pub fn validate_response(
             check!(Transaction);
             validate_transaction(r)?;
         }
-        Some(Method::CacheStatus) => {
+        Some(Method::CacheStatus | Method::GameCacheStatus) => {
             check!(CacheInventory);
         }
         Some(Method::BackupStatus) => {
@@ -806,7 +816,7 @@ pub fn validate_response(
         Some(Method::CleanupBackups) => {
             check!(BackupCleanupResult);
         }
-        Some(Method::CleanupCache) => {
+        Some(Method::CleanupCache | Method::CleanupGameCache) => {
             check!(CleanupResult);
         }
         Some(Method::ListSources) => {
@@ -1391,7 +1401,7 @@ pub fn schema() -> Value {
     let variants: Vec<Value> = ALL_METHODS.iter().map(|method| {
         let name = match method {
             Method::GetCapabilities | Method::Scan | Method::ListTransactions | Method::Recover
-                | Method::CleanupCache | Method::CacheStatus | Method::BackupStatus | Method::CleanupBackups | Method::ListSources => "HostParams",
+                | Method::CleanupCache | Method::CacheStatus | Method::GameCacheStatus | Method::CleanupGameCache | Method::BackupStatus | Method::CleanupBackups | Method::ListSources => "HostParams",
             Method::Preview => "PreviewParams",
             Method::InstallPatch => "InstallPatchParams",
             Method::DiscardPlan => "DiscardPlanParams",
@@ -1577,8 +1587,8 @@ pub fn result_schema_name(method: Method) -> &'static str {
         Method::InstallPatch => "InstallerOutcome",
         Method::ListTransactions | Method::Recover => "Transactions",
         Method::DiscardPlan => "Transaction",
-        Method::CleanupCache => "CleanupResult",
-        Method::CacheStatus => "CacheInventory",
+        Method::CleanupCache | Method::CleanupGameCache => "CleanupResult",
+        Method::CacheStatus | Method::GameCacheStatus => "CacheInventory",
         Method::BackupStatus => "BackupInventory",
         Method::CleanupBackups => "BackupCleanupResult",
         Method::ListSources => "Sources",

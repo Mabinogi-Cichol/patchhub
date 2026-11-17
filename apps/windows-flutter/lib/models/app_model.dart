@@ -28,12 +28,13 @@ List<String> dueSources(
     .toList();
 
 class AppModel extends ChangeNotifier {
-  AppModel(this.client) : tasks = AppTasks(client), cache = CacheModel(client) {
+  AppModel(this.client) : tasks = AppTasks(client) {
+    cache = CacheModel(client, onGameCacheCleaned: () => unawaited(refresh()));
     tasks.addListener(_taskChanged);
   }
   final CoreClient client;
   final AppTasks tasks;
-  final CacheModel cache;
+  late final CacheModel cache;
   ScanSnapshot? snapshot;
   List<Map<String, dynamic>> sources = [];
   List<Map<String, dynamic>> transactions = [];
@@ -51,6 +52,9 @@ class AppModel extends ChangeNotifier {
   bool get sourceUpdating => tasks.sources.values.any(
     (task) => task.method == 'update_source' && task.running,
   );
+
+  bool get sourceTaskRunning =>
+      tasks.sources.values.any((task) => task.running);
 
   bool queryRunning(GameRow row) => tasks.sources.values.any((task) {
     if (!task.running) return false;

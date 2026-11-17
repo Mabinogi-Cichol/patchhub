@@ -90,3 +90,26 @@ class CacheCleanupTests(unittest.IsolatedAsyncioTestCase):
         plugin.bridge.cache_status = AsyncMock(side_effect=RuntimeError("disk_unavailable"))
         with self.assertRaisesRegex(RuntimeError, "disk_unavailable"):
             await plugin.cache_status()
+
+    async def test_game_cache_status_and_cleanup_forward_to_bridge_and_guard_busy(self):
+        plugin = self.make_plugin()
+        inventory = {"total_bytes": 4096, "entries": 4, "diagnostics": []}
+        cleanup = {"status": "completed", "performed": True, "removed_bytes": 4096, "failures": []}
+        plugin.bridge.game_cache_status = AsyncMock(return_value=inventory)
+        plugin.bridge.cleanup_game_cache = AsyncMock(return_value=cleanup)
+        self.assertEqual(await plugin.game_cache_status(), inventory)
+        self.assertEqual(await plugin.cleanup_game_cache(), cleanup)
+        plugin.bridge.game_cache_status.assert_awaited_once()
+        plugin.bridge.cleanup_game_cache.assert_awaited_once()
+
+        bridge = object.__new__(module.CoreBridge)
+        bridge._call = AsyncMock(side_effect=[inventory, cleanup])
+        self.assertEqual(await bridge.game_cache_status(), inventory)
+        self.assertEqual(await bridge.cleanup_game_cache(), cleanup)
+        bridge._call.assert_any_await("game_cache_status", {})
+        bridge._call.assert_any_await("cleanup_game_cache", {})
+
+        running = type("Task", (), {"snapshot": lambda self: {"state": "running"}})()
+        plugin.sources = type("Sources", (), {"tasks": {"t1": running}})()
+        with self.assertRaisesRegex(RuntimeError, "source_task_running"):
+            await plugin.cleanup_game_cache()

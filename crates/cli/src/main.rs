@@ -267,7 +267,7 @@ Usage: patchhub-core scan [--steam-root PATH]... [--platform windows|steamos]\n\
        patchhub-core preview --instance ID --selection ID [scan options]\n\
        patchhub-core serve  (versioned JSON-lines on stdin/stdout)\n\
 Installation resolves a locally matched source selection. Close the game and pause Steam updates before installing.
-Methods: get_capabilities scan project_instances preview install_patch list_transactions recover discard_plan cleanup_cache cache_status backup_status cleanup_backups.
+Methods: get_capabilities scan project_instances preview install_patch list_transactions recover discard_plan cleanup_cache cache_status game_cache_status cleanup_game_cache backup_status cleanup_backups.
 Sources: list_sources list_game_sources set_source_enabled set_source_name set_game_source remove_source set_source_update_interval update_source match_games rematch_game.
 Options: --state-dir --selection --operation install|reinstall --request-id ID.
 Source options: --source-id ID --name TEXT --appid N --enabled true|false --subscribed true|false --rule JSON --interval-hours N --name-hint TEXT --force --force-details --instance-id ID --match-instance ID.
@@ -469,6 +469,8 @@ mod tests {
         "discard_plan",
         "cleanup_cache",
         "cache_status",
+        "game_cache_status",
+        "cleanup_game_cache",
         "backup_status",
         "cleanup_backups",
         "list_sources",
@@ -491,7 +493,7 @@ mod tests {
         expected.sort_unstable();
         let mut actual = runtime::METHODS.to_vec();
         actual.sort_unstable();
-        assert_eq!(runtime::METHODS.len(), 24);
+        assert_eq!(runtime::METHODS.len(), 26);
         assert_eq!(actual, expected);
 
         let capabilities = respond(
@@ -503,7 +505,7 @@ mod tests {
             .iter()
             .map(|method| method.as_str().unwrap())
             .collect();
-        assert_eq!(methods.len(), 24);
+        assert_eq!(methods.len(), 26);
         let mut sorted = methods.clone();
         sorted.sort_unstable();
         assert_eq!(sorted, expected);
@@ -796,6 +798,53 @@ mod tests {
         assert_eq!(inventory["ok"], true, "{inventory}");
         assert_eq!(inventory["result"]["total_bytes"], 0);
         assert_eq!(inventory["result"]["entries"], 0);
+    }
+
+    #[test]
+    fn cleanup_game_cache_sweeps_source_cache_and_preserves_settings() {
+        let temp = tempfile::tempdir().unwrap();
+        let state = temp.path().join("state");
+        let store = patchhub_core::sources::store::SourceStore::open(&state).unwrap();
+        store
+            .update_settings(|settings| {
+                settings
+                    .script_sources
+                    .insert("custom".into(), "return {}".into());
+                Ok(())
+            })
+            .unwrap();
+        let paths = store.paths().clone();
+        std::fs::create_dir_all(paths.details("patchmoe")).unwrap();
+        std::fs::write(paths.detail("patchmoe", "abc"), b"detail-bytes").unwrap();
+        std::fs::create_dir_all(paths.matches(100).parent().unwrap()).unwrap();
+        std::fs::write(paths.matches(100), b"match").unwrap();
+        let host = json!({"roots": [], "state_dir": state, "platform": if cfg!(windows) {"windows"} else {"steamos"}});
+        let request = |method: &str| {
+            respond(serde_json::to_vec(&json!({"protocol_version":5,"request_id":"game-cache-rpc","method":method,"params":{"host":host}})).unwrap().as_slice())
+        };
+        let inventory = request("game_cache_status");
+        assert_eq!(inventory["ok"], true, "{inventory}");
+        assert_eq!(inventory["result"]["total_bytes"], 17);
+        assert_eq!(inventory["result"]["entries"], 2);
+        let cleanup = request("cleanup_game_cache");
+        assert_eq!(cleanup["ok"], true, "{cleanup}");
+        assert_eq!(cleanup["result"]["status"], "completed");
+        assert_eq!(cleanup["result"]["removed_bytes"], 17);
+        let after = request("game_cache_status");
+        assert_eq!(after["ok"], true, "{after}");
+        assert_eq!(after["result"]["total_bytes"], 0);
+        assert_eq!(after["result"]["entries"], 0);
+        assert!(paths.settings().exists());
+        assert!(paths.schema().exists());
+        assert_eq!(
+            store
+                .load_settings()
+                .unwrap()
+                .script_sources
+                .get("custom")
+                .map(String::as_str),
+            Some("return {}")
+        );
     }
 
     #[test]

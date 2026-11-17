@@ -442,6 +442,9 @@ pub fn execute_controlled(
     if method == "cache_status" || method == "cleanup_cache" {
         return cache(&params, method == "cleanup_cache");
     }
+    if method == "game_cache_status" || method == "cleanup_game_cache" {
+        return game_cache(&params, method == "cleanup_game_cache");
+    }
     // Source tasks stream progress; direct CLI invocations run the same
     // implementation with no event sink.
     if SOURCE_STREAM_METHODS.contains(&method) {
@@ -651,6 +654,15 @@ fn cache(params: &Params, delete: bool) -> Result<Value, DomainError> {
         value(service.cleanup().map_err(projection_error)?)
     } else {
         value(service.inspect().map_err(projection_error)?)
+    }
+}
+
+fn game_cache(params: &Params, delete: bool) -> Result<Value, DomainError> {
+    let state = state(params)?;
+    if delete {
+        value(sources::store::cleanup_game_cache(&state).map_err(err)?)
+    } else {
+        value(sources::store::inspect_game_cache(&state))
     }
 }
 
@@ -1381,7 +1393,7 @@ mod sources_tests {
             .iter()
             .map(|method| method.as_str().unwrap())
             .collect();
-        assert_eq!(methods.len(), 24);
+        assert_eq!(methods.len(), 26);
         assert!(methods.contains(&"match_games"));
         assert!(methods.contains(&"project_instances"));
         assert_eq!(capabilities["sources"]["index_schema_version"], 1);

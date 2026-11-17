@@ -300,7 +300,7 @@ class Plugin:
         calls = dict(getattr(self, '_business_calls', {}))
         background = [getattr(self, name, None) for name in ('_startup_check', '_scheduler')]
         reads = {'scan', 'preview', 'project_instances', 'list_sources', 'list_transactions',
-                 'get_script_source', 'cache_status', 'backup_status', 'get_settings'}
+                 'get_script_source', 'cache_status', 'game_cache_status', 'backup_status', 'get_settings'}
         for task, method in calls.items():
             if method in reads:
                 task.cancel()
@@ -357,6 +357,17 @@ class Plugin:
 
     async def cache_status(self):
         return await self.bridge.cache_status()
+
+    async def game_cache_status(self):
+        return await self.bridge.game_cache_status()
+
+    async def cleanup_game_cache(self):
+        self._require_idle()
+        sources = getattr(self, "sources", None)
+        tasks = getattr(sources, "tasks", None) or {}
+        if any(t.snapshot().get("state") in ("queued", "running") for t in tasks.values()):
+            raise RuntimeError("source_task_running")
+        return await self.bridge.cleanup_game_cache()
 
     async def backup_status(self):
         return await self.bridge.backup_status()

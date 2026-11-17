@@ -108,7 +108,26 @@ impl StorePaths {
     pub fn matches(&self, appid: u32) -> PathBuf {
         self.root.join("matches").join(format!("{appid}.json"))
     }
+
+    /// Subdirectories under `sources/rust-v1/` that hold rebuildable game/source cache data.
+    pub fn cleanable_cache_dirs(&self) -> Vec<PathBuf> {
+        GAME_CACHE_DIRS
+            .iter()
+            .map(|name| self.root.join(name))
+            .collect()
+    }
 }
+
+pub const GAME_CACHE_DIRS: [&str; 8] = [
+    "index",
+    "index-progress",
+    "details",
+    "matches",
+    "discovery",
+    "discovery-index",
+    "status",
+    "cache",
+];
 
 /// `sha256(canonical_page)` truncated to 32 lowercase hex characters
 /// (p1-contract §2). The page is expected to already be `canonical_page_url()`.
@@ -576,6 +595,237 @@ impl SourceStore {
             }
         }
     }
+}
+
+#[derive(Default)]
+struct GameCacheWalk {
+    bytes: u64,
+    entries: u64,
+    deleted: u64,
+    failures: Vec<crate::installer::outcome::CleanupFailure>,
+}
+
+impl GameCacheWalk {
+    fn fail(
+        &mut self,
+        code: crate::installer::outcome::CleanupErrorCode,
+        detail: impl Into<String>,
+    ) {
+        self.failures
+            .push(crate::installer::outcome::CleanupFailure {
+                code,
+                detail: Some(detail.into()),
+            });
+    }
+
+    fn add_bytes(&mut self, len: u64, path: &Path) {
+        match self.bytes.checked_add(len) {
+            Some(total) => self.bytes = total,
+            None => self.fail(
+                crate::installer::outcome::CleanupErrorCode::CleanupSizeOverflow,
+                path.display().to_string(),
+            ),
+        }
+    }
+}
+
+fn game_cache_io_code(error: &std::io::Error) -> crate::installer::outcome::CleanupErrorCode {
+    if error.kind() == std::io::ErrorKind::InvalidInput {
+        crate::installer::outcome::CleanupErrorCode::CleanupUnknownPath
+    } else {
+        crate::installer::outcome::CleanupErrorCode::CleanupFailed
+    }
+}
+
+fn walk_game_cache(path: &Path, delete: bool, state: &mut GameCacheWalk) {
+    let entries = match fs::read_dir(path) {
+        Ok(entries) => entries,
+        Err(error) => {
+            state.fail(
+                game_cache_io_code(&error),
+                format!("{}: {error}", path.display()),
+            );
+            return;
+        }
+    };
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(error) => {
+                state.fail(
+                    game_cache_io_code(&error),
+                    format!("{}: {error}", path.display()),
+                );
+                continue;
+            }
+        };
+        let child = entry.path();
+        let meta = match fs::symlink_metadata(&child) {
+            Ok(meta) => meta,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                state.fail(
+                    game_cache_io_code(&error),
+                    format!("{}: {error}", child.display()),
+                );
+                continue;
+            }
+        };
+        if meta.file_type().is_symlink() {
+            state.fail(
+                crate::installer::outcome::CleanupErrorCode::CleanupLinkedPath,
+                child.display().to_string(),
+            );
+            continue;
+        }
+        if meta.is_dir() {
+            walk_game_cache(&child, delete, state);
+            if delete {
+                match fs::remove_dir(&child) {
+                    Ok(()) => {}
+                    Err(error)
+                        if matches!(
+                            error.kind(),
+                            std::io::ErrorKind::NotFound | std::io::ErrorKind::DirectoryNotEmpty
+                        ) => {}
+                    Err(error) => state.fail(
+                        game_cache_io_code(&error),
+                        format!("{}: {error}", child.display()),
+                    ),
+                }
+            }
+        } else if meta.is_file() {
+            let len = meta.len();
+            if delete {
+                match fs::remove_file(&child) {
+                    Ok(()) => {
+                        state.deleted += 1;
+                        state.add_bytes(len, &child);
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(error) => state.fail(
+                        game_cache_io_code(&error),
+                        format!("{}: {error}", child.display()),
+                    ),
+                }
+            } else {
+                state.entries += 1;
+                state.add_bytes(len, &child);
+            }
+        } else {
+            state.fail(
+                crate::installer::outcome::CleanupErrorCode::CleanupUnknownPath,
+                child.display().to_string(),
+            );
+        }
+    }
+}
+
+fn validate_cache_root(root: &Path, state: &mut GameCacheWalk) -> bool {
+    match fs::symlink_metadata(root) {
+        Ok(meta) if meta.file_type().is_symlink() => {
+            state.fail(
+                crate::installer::outcome::CleanupErrorCode::CleanupLinkedPath,
+                root.display().to_string(),
+            );
+            false
+        }
+        Ok(meta) if !meta.is_dir() => {
+            state.fail(
+                crate::installer::outcome::CleanupErrorCode::CleanupUnknownPath,
+                root.display().to_string(),
+            );
+            false
+        }
+        Ok(_) => true,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+        Err(error) => {
+            state.fail(
+                game_cache_io_code(&error),
+                format!("{}: {error}", root.display()),
+            );
+            false
+        }
+    }
+}
+
+/// Inspects rebuildable local game/source cache files under `<state_dir>/sources/rust-v1/`
+/// without creating directories or modifying state.
+pub fn inspect_game_cache(state_dir: &Path) -> crate::installer::cache::CacheInventory {
+    let paths = StorePaths::new(state_dir);
+    let mut state = GameCacheWalk::default();
+    if validate_cache_root(paths.root(), &mut state) {
+        for dir in paths.cleanable_cache_dirs() {
+            if validate_cache_root(&dir, &mut state) {
+                walk_game_cache(&dir, false, &mut state);
+            }
+        }
+    }
+    crate::installer::cache::CacheInventory {
+        total_bytes: state.bytes,
+        entries: state.entries,
+        diagnostics: state.failures,
+    }
+}
+
+/// Cleans rebuildable local game/source cache files under `<state_dir>/sources/rust-v1/`
+/// while preserving `settings.json`, `settings.lock`, and `schema.json`.
+pub fn cleanup_game_cache(state_dir: &Path) -> Result<crate::installer::outcome::CleanupResult> {
+    use crate::installer::outcome::{CleanupResult, CleanupStatus};
+
+    let paths = StorePaths::new(state_dir);
+    let mut state = GameCacheWalk::default();
+    match fs::symlink_metadata(paths.root()) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(CleanupResult {
+                status: CleanupStatus::Completed,
+                performed: true,
+                removed_bytes: 0,
+                failures: Vec::new(),
+            });
+        }
+        _ => {}
+    }
+    if !validate_cache_root(paths.root(), &mut state) {
+        return Ok(CleanupResult {
+            status: CleanupStatus::Failed,
+            performed: true,
+            removed_bytes: 0,
+            failures: state.failures,
+        });
+    }
+    let store = SourceStore::open(state_dir)?;
+    let _lock = store.acquire_file_lock()?;
+    for dir in paths.cleanable_cache_dirs() {
+        if validate_cache_root(&dir, &mut state) {
+            walk_game_cache(&dir, true, &mut state);
+            match fs::remove_dir(&dir) {
+                Ok(()) => {}
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::NotFound | std::io::ErrorKind::DirectoryNotEmpty
+                    ) => {}
+                Err(error) => state.fail(
+                    game_cache_io_code(&error),
+                    format!("{}: {error}", dir.display()),
+                ),
+            }
+        }
+    }
+    let status = if state.failures.is_empty() {
+        CleanupStatus::Completed
+    } else if state.deleted > 0 {
+        CleanupStatus::Partial
+    } else {
+        CleanupStatus::Failed
+    };
+    Ok(CleanupResult {
+        status,
+        performed: true,
+        removed_bytes: state.bytes,
+        failures: state.failures,
+    })
 }
 
 fn default_settings() -> SettingsFile {
@@ -1316,5 +1566,64 @@ mod tests {
         assert_eq!(error.to_string(), "injected_settings_write_failure");
         assert_eq!(store.settings().unwrap(), before);
         assert_eq!(fs::read(store.paths().settings()).unwrap(), bytes);
+    }
+
+    #[test]
+    fn game_cache_inspect_and_cleanup_preserve_settings_and_schema() {
+        let temp = tempfile::tempdir().unwrap();
+        let empty = inspect_game_cache(temp.path());
+        assert_eq!(empty.total_bytes, 0);
+        assert_eq!(empty.entries, 0);
+        assert!(empty.diagnostics.is_empty());
+        assert!(!StorePaths::new(temp.path()).root().exists());
+
+        let store = SourceStore::open(temp.path()).unwrap();
+        store
+            .update_settings(|settings| {
+                settings
+                    .script_sources
+                    .insert("custom".into(), "return {}".into());
+                Ok(())
+            })
+            .unwrap();
+        let paths = store.paths().clone();
+        let mut expected_bytes = 0u64;
+        for (idx, dir) in paths.cleanable_cache_dirs().into_iter().enumerate() {
+            let nested = dir.join("nested");
+            fs::create_dir_all(&nested).unwrap();
+            let file = nested.join(format!("item-{idx}.json"));
+            let payload = format!("{{\"item\":{idx}}}");
+            fs::write(&file, &payload).unwrap();
+            expected_bytes += payload.len() as u64;
+        }
+
+        let before = inspect_game_cache(temp.path());
+        assert_eq!(before.entries, GAME_CACHE_DIRS.len() as u64);
+        assert_eq!(before.total_bytes, expected_bytes);
+        assert!(before.diagnostics.is_empty());
+
+        let result = cleanup_game_cache(temp.path()).unwrap();
+        assert_eq!(
+            result.status,
+            crate::installer::outcome::CleanupStatus::Completed
+        );
+        assert!(result.performed);
+        assert_eq!(result.removed_bytes, expected_bytes);
+        assert!(result.failures.is_empty());
+
+        let after = inspect_game_cache(temp.path());
+        assert_eq!(after.entries, 0);
+        assert_eq!(after.total_bytes, 0);
+        assert!(paths.settings().exists());
+        assert!(paths.schema().exists());
+        assert_eq!(
+            store
+                .load_settings()
+                .unwrap()
+                .script_sources
+                .get("custom")
+                .map(String::as_str),
+            Some("return {}")
+        );
     }
 }

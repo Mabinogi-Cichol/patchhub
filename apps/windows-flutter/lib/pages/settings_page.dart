@@ -72,7 +72,13 @@ class _SettingsPageState extends State<SettingsPage> {
             children: [
               GlobalSourcesPage(model: widget.model),
               cacheVisited
-                  ? CachePage(model: widget.model.cache)
+                  ? ListenableBuilder(
+                      listenable: widget.model,
+                      builder: (context, _) => CachePage(
+                        model: widget.model.cache,
+                        sourceTaskRunning: widget.model.sourceTaskRunning,
+                      ),
+                    )
                   : const SizedBox.shrink(),
               const AboutPage(),
             ],

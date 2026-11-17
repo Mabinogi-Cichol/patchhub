@@ -19,6 +19,8 @@ const coreMethods = [
   'discard_plan',
   'cleanup_cache',
   'cache_status',
+  'game_cache_status',
+  'cleanup_game_cache',
   'backup_status',
   'cleanup_backups',
   'list_sources',
@@ -54,7 +56,10 @@ void _validateCapabilities(Map<String, dynamic> value) {
   bool equal(Object? left, Object? right) =>
       jsonEncode(left) == jsonEncode(right);
   if (!equal(value['methods'], coreMethods) ||
-      !equal(value['sources']['methods'], coreMethods.sublist(12))) {
+      !equal(
+        value['sources']['methods'],
+        coreMethods.sublist(coreMethods.indexOf('list_sources')),
+      )) {
     throw const CoreError('capability_mismatch');
   }
   final contracts = value['contracts'] as Map<String, dynamic>;
@@ -161,6 +166,8 @@ class WireProtocol {
     'discard_plan': 'Transaction',
     'cleanup_cache': 'CleanupResult',
     'cache_status': 'CacheInventory',
+    'game_cache_status': 'CacheInventory',
+    'cleanup_game_cache': 'CleanupResult',
     'backup_status': 'BackupInventory',
     'cleanup_backups': 'BackupCleanupResult',
     'list_sources': 'Sources',

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { backupSummary, backupClearNote, autoCleanupNote, cacheClearNote, cacheSummary, formatSize } from "../src/cache.ts";
+import { backupSummary, backupClearNote, autoCleanupNote, cacheClearNote, cacheSummary, formatSize, gameCacheClearNote } from "../src/cache.ts";
 
 test("formatSize renders binary units and guards non-finite input", () => {
   assert.equal(formatSize(0), "0 B");
@@ -27,6 +27,8 @@ test("cleanup and toggle notes describe the resulting state", () => {
   assert.match(cacheClearNote(result("busy")), /稍后重试/);
   assert.match(cacheClearNote({ ...result("partial", 1536), failures: [{ code: "disk_unavailable", detail: "磁盘不可用" }] }), /1\.5 KiB.*磁盘不可用.*重试/);
   assert.match(cacheClearNote(result("failed", 512)), /清理失败.*512 B.*重试/);
+  assert.match(gameCacheClearNote(result("completed", 2048)), /2\.0 KiB 本地游戏数据缓存/);
+  assert.equal(gameCacheClearNote({ status: "completed", performed: false, removed_bytes: 0, failures: [] }), "当前没有可清理的本地游戏数据缓存。");
   assert.match(autoCleanupNote(true), /已开启/);
   assert.match(autoCleanupNote(false), /已关闭/);
 });
