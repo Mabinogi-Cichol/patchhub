@@ -3,7 +3,6 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 
 import '../presentation/desktop_select.dart';
-import '../presentation/game_status.dart';
 
 import '../host/core_client.dart';
 import '../host/desktop_services.dart';
@@ -12,6 +11,7 @@ import '../presentation/game_artwork.dart';
 import '../models/app_model.dart';
 import '../models/library.dart';
 import '../presentation/library_presentation.dart';
+import '../presentation/patch_status_tone.dart';
 import 'install_dialog.dart';
 
 Map<String, Object?> selectionArguments(Map<String, dynamic> patch) => {
@@ -396,13 +396,14 @@ class _PatchManagementPageState extends State<PatchManagementPage> {
     final ready = patch == null ? (!querying && manualReady) : available(patch);
     final installed =
         patch != null && installedStatus(patch['detection']['status']);
-    final statusColor = !busy && ready
-        ? (scheme.brightness == Brightness.dark
-              ? const Color(0xff75ddb0)
-              : const Color(0xff176b48))
-        : (patch == null && querying)
-        ? GameStatus.queryingColor(scheme.brightness)
-        : scheme.onSurfaceVariant;
+    final statusTone = !busy && ready
+        ? (patch == null || installed
+              ? PatchStatusTone.success
+              : PatchStatusTone.accent)
+        : patch == null && querying
+        ? PatchStatusTone.querying
+        : PatchStatusTone.neutral;
+    final statusColor = statusTone.color(scheme);
     final statusTitle = busy
         ? '操作进行中'
         : patch == null

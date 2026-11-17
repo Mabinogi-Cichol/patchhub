@@ -1,4 +1,5 @@
 import '../models/library.dart';
+import 'patch_status_tone.dart';
 
 /// Formats filesystem paths for display and copying without changing model data.
 String displayGamePath(String path) {
@@ -53,32 +54,38 @@ List<GameRow> filterGames(List<GameRow> rows, GameFilter filter, String query) {
   }).toList();
 }
 
-String rowSummary(GameRow row, {bool querying = false}) {
+({String label, PatchStatusTone tone}) rowStatus(
+  GameRow row, {
+  bool querying = false,
+}) {
   if (row.patches.any(
     (patch) => installedStatus(patch['detection']['status']),
   )) {
-    return '已安装补丁';
+    return (label: '已安装补丁', tone: PatchStatusTone.success);
   }
   if (querying) {
-    return '正在查询';
+    return (label: '正在查询', tone: PatchStatusTone.querying);
   }
   if (row.patches.any(
     (patch) =>
         patch['actions']['overwrite']['available'] == true &&
         patch['detection']['status'] == 'partial_or_conflict',
   )) {
-    return '补丁文件不完整，可覆盖安装';
+    return (label: '补丁文件不完整，可覆盖安装', tone: PatchStatusTone.accent);
   }
   if (row.patches.any(
     (patch) => patch['actions']['automatic']['available'] == true,
   )) {
-    return '有可用补丁';
+    return (label: '有可用补丁', tone: PatchStatusTone.accent);
   }
   if (row.patches.isNotEmpty ||
       (row.discovery?['candidates'] as List? ?? []).isNotEmpty) {
-    return '找到补丁来源';
+    return (
+      label: '找到补丁来源',
+      tone: row.matched ? PatchStatusTone.accent : PatchStatusTone.neutral,
+    );
   }
-  return '暂无补丁结果';
+  return (label: '暂无补丁结果', tone: PatchStatusTone.neutral);
 }
 
 class DisplayEntry {
