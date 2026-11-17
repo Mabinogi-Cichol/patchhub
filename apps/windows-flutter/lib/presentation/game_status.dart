@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../models/library.dart';
 import 'library_presentation.dart';
+import 'patch_status_tone.dart';
 
 class GameStatus extends StatelessWidget {
   const GameStatus({
@@ -14,26 +15,12 @@ class GameStatus extends StatelessWidget {
   final bool emphasized;
   final bool querying;
 
-  static Color queryingColor(Brightness brightness) =>
-      brightness == Brightness.dark
-      ? const Color(0xfff5c451)
-      : const Color(0xff9a6700);
-
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final installed = row.patches.any(
-      (p) => installedStatus(p['detection']['status']),
-    );
-    final color = installed
-        ? (Theme.of(context).brightness == Brightness.dark
-              ? const Color(0xff70d7a7)
-              : const Color(0xff17633e))
-        : querying
-        ? queryingColor(Theme.of(context).brightness)
-        : row.matched
-        ? scheme.secondary
-        : scheme.onSurfaceVariant;
+    final presentation = rowStatus(row, querying: querying);
+    final color = presentation.tone.color(scheme);
+    final installed = presentation.tone == PatchStatusTone.success;
     final status = Row(
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -45,7 +32,7 @@ class GameStatus extends StatelessWidget {
         const SizedBox(width: 6),
         Flexible(
           child: Text(
-            rowSummary(row, querying: querying),
+            presentation.label,
             style: TextStyle(color: color, fontSize: emphasized ? 13 : 12),
           ),
         ),

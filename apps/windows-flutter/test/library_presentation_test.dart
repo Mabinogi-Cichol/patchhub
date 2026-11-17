@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:patchhub_windows/models/library.dart';
 import 'package:patchhub_windows/presentation/library_presentation.dart';
+import 'package:patchhub_windows/presentation/patch_status_tone.dart';
 
 void main() {
   final cases = jsonDecode(
@@ -26,7 +27,7 @@ void main() {
       ], item['entries']);
       expect(row.matched, item['matched']);
       expect(needsAttention(row), item['attention']);
-      expect(rowSummary(row), item['summary']);
+      expect(rowStatus(row).label, item['summary']);
       for (final filter in GameFilter.values) {
         expect(
           filterGames([row], filter, '').map((row) => row.id).toList(),
@@ -73,7 +74,7 @@ void main() {
     );
   });
 
-  test('rowSummary reports querying when game has no installed patch', () {
+  test('rowStatus reports querying when game has no installed patch', () {
     final row = GameRow({
       'game': {
         'instance_id': '1227890|root|dir',
@@ -84,9 +85,15 @@ void main() {
         'library_path': r'C:\Games',
       },
       'patches': <Map<String, dynamic>>[],
-      'discovery': {'status': 'pending', 'candidates': <Map<String, dynamic>>[]},
+      'discovery': {
+        'status': 'pending',
+        'candidates': <Map<String, dynamic>>[],
+      },
     });
-    expect(rowSummary(row), '暂无补丁结果');
-    expect(rowSummary(row, querying: true), '正在查询');
+    expect(rowStatus(row), (label: '暂无补丁结果', tone: PatchStatusTone.neutral));
+    expect(rowStatus(row, querying: true), (
+      label: '正在查询',
+      tone: PatchStatusTone.querying,
+    ));
   });
 }

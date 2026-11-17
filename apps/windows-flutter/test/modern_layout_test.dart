@@ -84,9 +84,17 @@ void main() {
               of: status,
               matching: find.text('可安装补丁'),
             );
+            final installableColor = tester
+                .widget<Text>(installable)
+                .style
+                ?.color;
             expect(
-              tester.widget<Text>(installable).style?.color,
+              installableColor,
               Theme.of(tester.element(installable)).colorScheme.secondary,
+            );
+            expect(
+              tester.widget<Text>(find.text('有可用补丁').first).style?.color,
+              installableColor,
             );
             expect(
               find.descendant(of: status, matching: find.text('游戏信息')),
