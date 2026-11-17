@@ -6,7 +6,7 @@ PatchHub 的自定义订阅源由一份 JSON 规则和一份 Lua 脚本组成。
 
 ## 导入来源
 
-1. 在 Windows 打开 **全局来源**，或在 Steam Deck 的 PatchHub 插件中打开 **管理订阅源**。
+1. 在 Windows 或 Steam Deck 的 PatchHub 中打开 **全局来源**。
 2. 选择 **导入脚本来源**，参考规则 JSON 填写具名字段。起始页面和域名列表每行一项。将完整 Lua 粘贴到 **Lua 源码**。
 3. 选择 **保存并导入**。保存时会检查规则和脚本语法。卡片显示 **尚未执行** 时，可以按下一节验证实际运行结果。
 
@@ -18,14 +18,14 @@ PatchHub 的自定义订阅源由一份 JSON 规则和一份 Lua 脚本组成。
 
 | 来源类型 | 导入后的验证方式 |
 | --- | --- |
-| 普通来源（`publisher`） | 在来源卡片上启用来源并执行 **手动更新**。更新成功后，对适用的游戏重新匹配并查看补丁候选。 |
-| 补查来源（`fallback_indexer`） | 启用来源，确认目标游戏已订阅该来源，再重新匹配。只有普通来源覆盖完整且没有可信命中时，才会按游戏触发补查。 |
+| 索引源（`publisher`） | 在来源卡片上启用来源并执行更新（点击卡片快捷刷新、“全部更新”或“更新来源索引”）。更新成功后，对适用的游戏重新匹配并查看补丁候选。 |
+| 补查源（`fallback_indexer`） | 启用来源，确认目标游戏已订阅该来源，再重新匹配。只有索引源覆盖完整且没有可信命中时，才会按游戏触发补查。 |
 
 遇到错误时，先查看更新或匹配任务的诊断。语法错误通常可按 Lua 行号定位。运行错误需要检查请求结果和网页结构。返回格式错误时，先检查入口返回的字段、字段类型，以及空列表是否使用了 `ctx.array()`。
 
 ## 编辑或删除来源
 
-- 选择 **编辑脚本**，修改后用 **保存并替换** 更新同一个来源。替换后，普通来源需要重新更新索引，再验证游戏匹配。
+- 选择 **编辑脚本**，修改后用 **保存并替换** 更新同一个来源。替换后，索引源需要重新更新索引，再验证游戏匹配。
 - 如需用另一个来源 ID，使用 **导入脚本来源**。新导入的 ID 必须唯一。
 - 选择 **删除来源**可移除自定义来源。内置来源可通过 **查看脚本** 阅读实现。
 
@@ -36,12 +36,12 @@ PatchHub 的自定义订阅源由一份 JSON 规则和一份 Lua 脚本组成。
 | `id` | 来源唯一标识，以小写英文字母开头，后续可用小写字母、数字和连字符，最多 48 个字符。 |
 | `name` | 来源在界面上的显示名称。 |
 | `enabled` | 布尔值，填 `true` 启用来源，填 `false` 禁用。 |
-| `role` | 默认 `publisher`，更新时建立索引。`fallback_indexer` 在匹配游戏时按需补查。 |
+| `role` | 默认 `publisher`（索引源），更新时抓取目录并建立本地索引；`fallback_indexer`（补查源）在匹配游戏时按需实时补查。 |
 | `pages` | 起始网页的完整 HTTPS 地址列表。站点首页也要保留路径斜杠，例如 `https://patches.vendor.example/`。 |
 | `page_hosts` | 允许访问的页面域名列表。填写小写域名，每个子域名分别列出。 |
-| `download_hosts` | 直接下载来源至少填写一个下载域名。补查来源填写 `[]` 或省略。 |
+| `download_hosts` | 直接下载来源至少填写一个下载域名。补查源填写 `[]` 或省略。 |
 | `root_layout` | 直接下载来源填 `game_root`，表示安装以游戏根目录为基准。仅发现来源省略该字段。 |
-| `discovery_only` | 默认为 `false`。仅提供发现结果时设为 `true`，补查来源必填 `true`。 |
+| `discovery_only` | 默认为 `false`。仅提供发现结果时设为 `true`，补查源必填 `true`。 |
 | `adapter` | 自定义脚本填 `lua` 或省略。 |
 
 ## Lua 模块入口
@@ -50,15 +50,17 @@ Lua 文件返回一个表，表中的函数按名称供 PatchHub 调用。每次
 
 | 入口 | 参数和返回值 |
 | --- | --- |
-| `collect_index(ctx, rule, previous)` | 普通来源更新时调用。返回 `{entries, pending, complete, etag?, modified?, not_modified?, diagnostics?}`。`previous` 提供上一份可用索引或更新进度中的 `entries`、`pending`、`complete`、`etag`、`modified`，没有记录时为 `ctx.null`。 |
-| `resolve_page(ctx, rule, page)` | 索引包含 `product`、`article` 或 `category` 时实现。游戏匹配时接收详情页的绝对 URL，返回一个 `PageFact`。 |
-| `match_appid(ctx, rule, site_ids, steam)` | 可选。页面提供网页 AppID 时调用。可比对 `steam.appid` 和 `steam.related_dlc`。返回 `true` 确认，`false` 排除此页面，缺省沿用 v1 的同 AppID 正向匹配，否则交给名称匹配。 |
-| `discover(ctx, rule, query, previous)` | 补查来源匹配时调用。`query` 提供 `appid`、`name`、`name_hints`、`terms`、`force`，`previous.known_candidates` 提供已有候选。返回 `{pages, complete, identities?, diagnostics?}`。 |
+| `collect_index(ctx, rule, previous)` | 索引源更新时调用。返回 `{entries, pending, complete, etag?, modified?, not_modified?, diagnostics?}`。`previous` 提供上一份可用索引或更新进度中的 `entries`、`pending`、`complete`、`etag`、`modified`，没有记录时为 `ctx.null`。 |
+| `resolve_detail(ctx, rule, state)` | 索引包含 `current_step < total_steps` 的条目时实现。游戏匹配时接收 `state`（`{title, aliases, page, appid, current_step, total_steps, step_data, details}`），推进下一步抓取并返回 `{current_step, total_steps, step_data?, details, diagnostics?}`。 |
+| `match_appid(ctx, rule, site_ids, steam)` | 可选。页面提供网页 AppID 时调用。可比对 `steam.appid` 和 `steam.related_dlc`。返回 `true` 确认，`false` 排除此页面，缺省按同 AppID 正向匹配，否则交给名称匹配。 |
+| `discover(ctx, rule, query, previous)` | 补查源匹配时调用。`query` 提供 `appid`、`name`、`name_hints`、`terms`、`force`，`previous.known_candidates` 提供已有候选。返回 `{details, complete, identities?, diagnostics?}`。 |
 
-- **索引条目**需要 `title`、`page`、`kind`，可附 `appid`、`aliases`、`language`、`date`。`kind = "entry"` 的条目直接提供下载地址，必须填 `url`。其他类型的 `page` 指向待解析的页面。
-- **页面事实 `PageFact`** 需要 `title`、`page`、`kind`。类型可为 `product`、`article` 或 `category`。可提供 `steam_ids`、`aliases`、`text`、`published_at`、`body_links` 和 `mirrors`。镜像项填写 `{url, label?}`，格式由宿主从 URL 判断。同一补丁的替代下载链接可用 `single_download_group = true` 保留在一个候选中。分类页还可提供 `article_links`（每项为 `{title, page}`）、`article_facts`（内嵌页面事实）和 `next_page`。
-- **补查结果**的 `pages` 每项为 `{fact, reported_format?, upstream_page?}`。`reported_format` 接受 `unknown`、`zip`、`exe`、`web`。身份项为 `{appid, page, aliases?}`，AppID 和别名应有网页证据。PatchHub 根据这些事实生成候选。
-- **完成状态**由 `complete` 表示。索引还有待抓取的绝对页面 URL 时，放入 `pending` 并返回 `complete = false`。收到 HTTP 304 且已有完整索引时，可返回 `not_modified = true` 并保留原有条件请求字段。补查确认无结果时，返回 `pages = ctx.array(), complete = true`。请求失败或查询尚未完成时，抛出错误或返回 `complete = false`。诊断项为 `{code, detail?}`。
+- **索引条目 `SourceIndexEntry`**：需要 `title`、`page`，可附 `appid`、`aliases`、`current_step`（默认 `1`）、`total_steps`（默认 `1`）、`step_data` 与 `details`。
+  - **一步到位型来源**（如 `patchmoe`）：在 `collect_index` 中设 `current_step = 1, total_steps = 1`，直接填好 `details` 列表，无需实现 `resolve_detail`。
+  - **多步按需型来源**（如 `kagura-cn`、`kagura-en`、`yozakura`）：在 `collect_index` 中设 `current_step = 1, total_steps >= 2`、留空 `details` 并按需存入 `step_data`；匹配命中后由宿主循环调用 `resolve_detail(ctx, rule, state)` 推进至 `current_step == total_steps`（支持动态调大 `total_steps`，例如发现子文章链接时从 `2` 扩为 `3`）。
+- **补丁详情 `SourceDetail`**：统一表达具体补丁业务事实，需要 `title`、`page`，可提供 `steam_ids`、`aliases`、`mirrors`、`single_download_group`、`text`、`languages`、`published_at`、`body_links`、`reported_format`（`unknown`、`zip`、`exe`、`web`）和 `upstream_page`。镜像项填写 `{url, label?}`，格式由宿主从 URL 判断；同一补丁的替代下载链接可用 `single_download_group = true` 保留在一个候选中。
+- **补查结果（`discover`）**：直接返回 `details`（每项为 `SourceDetail`，按需填写 `reported_format` 与 `upstream_page`）以及 `identities`（每项为 `{appid, page, aliases?}`，AppID 和别名应有网页证据）。PatchHub 根据这些详情统一生成候选。
+- **完成状态**由 `complete` 表示。索引还有待抓取的绝对页面 URL 时，放入 `pending` 并返回 `complete = false`。收到 HTTP 304 且已有完整索引时，可返回 `not_modified = true` 并保留原有条件请求字段。补查确认无结果时，返回 `details = ctx.array(), complete = true`。请求失败或查询尚未完成时，抛出错误或返回 `complete = false`。诊断项为 `{code, detail?}`。
 
 ## Lua API 能力一览
 
@@ -104,7 +106,7 @@ Lua 文件返回一个表，表中的函数按名称供 PatchHub 调用。每次
 | 报告进度 | `ctx.progress(message)` | 向当前任务发送一条进度消息。 |
 | 检查取消 | `ctx.check_cancel()` | 任务已取消时抛出错误，可在分页循环中显式调用。 |
 
-索引、页面事实和 JSON 转换共用值规则。数组从索引 `1` 开始且连续，对象使用字符串键。同一张表混用两种键、循环引用或使用非有限数值会报错。Lua 整数为有符号 64 位，网站标识超出该范围时应使用字符串。DOM 节点用来读取页面，返回结果时应先提取所需字段。
+索引、补丁详情和 JSON 转换共用值规则。数组从索引 `1` 开始且连续，对象使用字符串键。同一张表混用两种键、循环引用或使用非有限数值会报错。Lua 整数为有符号 64 位，网站标识超出该范围时应使用字符串。DOM 节点用来读取页面，返回结果时应先提取所需字段。
 
 脚本运行在 Lua 5.4 环境中，可用 `string`（除 `string.dump`）、`table`、`math`、`utf8`，以及 `assert`、`error`、`ipairs`、`next`、`pairs`、`select`、`tonumber`、`tostring`、`type`、`pcall`、`xpcall`、`_VERSION` 和 `_G`。HTTP 走上述宿主 API，HTML 按响应文本解析。运行时没有浏览器 JavaScript、文件或进程访问、外部模块加载及补丁安装 API。
 
@@ -164,12 +166,22 @@ return {
                     error("invalid_appid")
                 end
 
+                local item_title = title:text()
+                local download_url = ctx.url_join(response.url, link:attr("href"))
                 entries[#entries + 1] = {
-                    title = title:text(),
+                    title = item_title,
                     appid = appid,
                     page = response.url,
-                    kind = "entry",
-                    url = ctx.url_join(response.url, link:attr("href"))
+                    current_step = 1,
+                    total_steps = 1,
+                    details = {
+                        {
+                            title = item_title,
+                            page = response.url,
+                            steam_ids = {appid},
+                            mirrors = {{url = download_url}}
+                        }
+                    }
                 }
             end
         end
