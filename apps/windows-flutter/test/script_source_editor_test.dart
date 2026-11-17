@@ -207,7 +207,7 @@ void main() {
         await tester.ensureVisible(roles);
         await tester.tap(roles);
         await tester.pumpAndSettle();
-        await tester.tap(find.text('补查来源').last);
+        await tester.tap(find.text('补查源').last);
         await tester.pumpAndSettle();
       } else if (rule['discovery_only'] == true) {
         final discovery = find.widgetWithText(SwitchListTile, '仅发现');

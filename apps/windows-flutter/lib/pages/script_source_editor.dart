@@ -191,10 +191,10 @@ class _ScriptSourceEditorState extends State<ScriptSourceEditor> {
                 initialValue: role,
                 decoration: const InputDecoration(labelText: '角色'),
                 items: const [
-                  DropdownMenuItem(value: 'publisher', child: Text('发行商')),
+                  DropdownMenuItem(value: 'publisher', child: Text('索引源')),
                   DropdownMenuItem(
                     value: 'fallback_indexer',
-                    child: Text('补查来源'),
+                    child: Text('补查源'),
                   ),
                 ],
                 onChanged: disabled

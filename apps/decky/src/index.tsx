@@ -536,7 +536,7 @@ function GameManager({ item, seg, panel }: { item: Install; seg: string; panel?:
   const sources = <div className="patch-page" ref={activePanel === "sources" ? contentRef : undefined} onScroll={e => { panelScroll.current.sources = e.currentTarget.scrollTop; }}>
     {common}
     <Status>选择用于此游戏的订阅源。关闭后不再从该源匹配补丁；选择按游戏编号保存。</Status>
-    {matchStatus === "fallback_match" && <Row><Status>普通来源未命中，补丁由 HGamer 补查得到。</Status></Row>}
+    {matchStatus === "fallback_match" && <Row><Status>索引源未命中，补丁由 HGamer 补查得到。</Status></Row>}
     {matchStatus === "no_match" && <Row><Status>已启用来源中未找到补丁。</Status></Row>}
     {item.sources?.length ? item.sources.map(source => <PanelSection key={source.id} title={report?.sources?.find(current => current.id === source.id)?.name ?? source.name}>
       <Row><ToggleField label="用于此游戏" checked={source.subscribed} disabled={!!busy}
@@ -544,7 +544,7 @@ function GameManager({ item, seg, panel }: { item: Install; seg: string; panel?:
       <InfoRow label="游戏匹配">{source.matched || item.discovery?.candidates.some(candidate => candidate.source_id === source.id && candidateMatched(candidate))
         ? "已找到此游戏的补丁"
         : source.role === "fallback_indexer" ? "本次未在此来源找到候选" : "未在此来源找到候选"}</InfoRow>
-      {source.role === "fallback_indexer" && <Row><Status>补查来源：仅在重新匹配时按游戏查询，不参与自动更新。</Status></Row>}
+      {source.role === "fallback_indexer" && <Row><Status>补查源：仅在重新匹配时按游戏查询，不参与自动更新。</Status></Row>}
       {!source.enabled && <Row><Status warning>此源已在全局设置中停用，当前不会参与匹配。</Status></Row>}
       <Row><Action onClick={() => openSource(source.pages[0])}>打开来源网页 ↗</Action></Row>
     </PanelSection>) : <PanelSection><Row><Status>尚未配置订阅源，请从主面板的全局设置添加。</Status></Row></PanelSection>}
@@ -631,7 +631,7 @@ function SourceCard({ source, busy, expanded, onToggle, task, changeSources, onU
         {task && !sourceTaskTerminal(task.state)
           ? <Row><Status>{sourceTaskStatusText(task)}</Status><Action onClick={() => onCancelTask(task.task_id)}>取消更新</Action></Row>
           : <Row><Action disabled={busy} onClick={() => onUpdateSource(source.id, false)}>手动更新</Action></Row>}
-      </> : <Row><Status>补查来源：仅对单个游戏查询，不参与定时更新，也没有更新间隔。</Status></Row>}
+      </> : <Row><Status>补查源：仅对单个游戏查询，不参与定时更新，也没有更新间隔。</Status></Row>}
     </div>}
   </div>;
 }
@@ -653,25 +653,25 @@ function SourcesPage({ report, busy, tasks, expandedSources, onToggleSource, cha
   const taskFor = (sourceId: string) => tasks.find(task => task.kind === "update_source" && task.key === sourceId);
   const pendingPublisherIds = publishers.filter(source => source.enabled && !taskFor(source.id)).map(source => source.id);
   return <div className="patch-page">
-    <Status>全局设置，对所有游戏生效。普通来源按间隔自动更新；补查来源（包括 HGamer 与脚本来源）按游戏查询，不参与索引定时更新。</Status>
+    <Status>全局设置，对所有游戏生效。索引源按间隔抓取目录并建立本地索引；补查源（包括 HGamer 与脚本来源）按游戏实时查询，不参与索引定时更新。</Status>
     <PanelSection title="匹配游戏"><Row><Action disabled={busy} onClick={onMatchGames}>匹配全部游戏</Action></Row>
       <Row><Status>来源更新后使用已更新的索引增量匹配当前游戏库；单个游戏可在游戏详情重新匹配。</Status></Row></PanelSection>
     {!!tasks.length && <PanelSection title="来源任务">{tasks.map(task => <Row key={task.task_id}>
       <Status>{sourceTaskStatusText(task)}</Status><Action onClick={() => onCancelTask(task.task_id)}>取消</Action>
     </Row>)}</PanelSection>}
-    <PanelSection title="发行商补丁源">
+    <PanelSection title="索引源">
       {!!publishers.length && <Row><Action disabled={busy || !pendingPublisherIds.length}
         onClick={() => pendingPublisherIds.forEach(id => onUpdateSource(id, false))}>全部更新</Action></Row>}
       {publishers.map(source => <SourceCard key={source.id} source={source} busy={busy}
         expanded={expandedSources[source.id] === true} onToggle={() => onToggleSource(source.id)} task={taskFor(source.id)}
         changeSources={changeSources} onUpdateSource={onUpdateSource} onCancelTask={onCancelTask} onInterval={onInterval} onEditScript={onEditScript} onRemoveSource={onRemoveSource} />)}
-      {!publishers.length && <Row><Status>尚未配置发行商补丁源。</Status></Row>}
+      {!publishers.length && <Row><Status>尚未配置索引源。</Status></Row>}
     </PanelSection>
-    <PanelSection title="补丁索引（补查来源）">
+    <PanelSection title="补查源">
       {fallbacks.map(source => <SourceCard key={source.id} source={source} busy={busy}
         expanded={expandedSources[source.id] === true} onToggle={() => onToggleSource(source.id)}
         changeSources={changeSources} onUpdateSource={onUpdateSource} onCancelTask={onCancelTask} onInterval={onInterval} onEditScript={onEditScript} onRemoveSource={onRemoveSource} />)}
-      {!fallbacks.length && <Row><Status>尚未配置补查来源。</Status></Row>}
+      {!fallbacks.length && <Row><Status>尚未配置补查源。</Status></Row>}
     </PanelSection>
     <PanelSection title="脚本来源"><Row><Action disabled={busy} onClick={() => onEditScript()}>导入脚本来源</Action></Row></PanelSection>
   </div>;

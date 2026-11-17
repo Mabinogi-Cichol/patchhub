@@ -24,7 +24,7 @@ test("display union keeps candidate identities out of installation IDs and order
   const entries = displayPatches(game);
   assert.deepEqual(entries.map(entry => [entry.kind, entry.key]), [["installable", "source-patchmoe-1227890"], ["discovery", "official"], ["discovery", "index"]]);
   assert.equal("patch" in entries[1], false);
-  assert.match(candidateSource(game.discovery!.candidates[0]), /HGamer.*索引/);
+  assert.match(candidateSource(game.discovery!.candidates[0]), /HGamer.*补查源/);
   game.discovery!.candidates.push(candidate({ candidate_id: "english", languages: ["en"] }), candidate({ candidate_id: "chinese", languages: ["zh-CN"] }));
 });
 

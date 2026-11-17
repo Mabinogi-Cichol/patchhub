@@ -123,7 +123,7 @@ export function ScriptSourceEditor({ document, readOnly = false, onSave, onClose
     <PanelSectionRow><TextField label="规则名称（必填）" value={rule.name} disabled={disabled}
       onChange={e => update("name", e.target.value)} /></PanelSectionRow>
     <PanelSectionRow><DropdownItem label="角色" layout="below" selectedOption={rule.role ?? "publisher"}
-      disabled={disabled} rgOptions={[{ data: "publisher", label: "发行商" }, { data: "fallback_indexer", label: "补查来源" }]}
+      disabled={disabled} rgOptions={[{ data: "publisher", label: "索引源" }, { data: "fallback_indexer", label: "补查源" }]}
       onChange={option => update("role", option.data)} /></PanelSectionRow>
     <PanelSectionRow><ToggleField label="仅发现" checked={discoveryOnly}
       disabled={disabled || rule.role === "fallback_indexer"} onChange={value => update("discovery_only", value)} /></PanelSectionRow>

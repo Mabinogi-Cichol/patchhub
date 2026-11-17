@@ -125,9 +125,9 @@ void main() {
           await tester.pump();
         }
         if (rule['role'] == 'fallback_indexer') {
-          await tester.tap(find.text('发行商'));
+          await tester.tap(find.text('索引源'));
           await tester.pumpAndSettle();
-          await tester.tap(find.text('补查来源').last);
+          await tester.tap(find.text('补查源').last);
           await tester.pumpAndSettle();
         }
         final priority = rule['priority'];

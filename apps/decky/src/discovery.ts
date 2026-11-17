@@ -3,7 +3,7 @@ import { type GameInstall, type SourceCandidate } from "@patchhub/ui";
 export function candidateSource(candidate: SourceCandidate): string {
   const labels: Record<string, string> = { "kagura-cn": "Kagura Games 国内", "kagura-en": "Kagura Games 海外", hgamer: "HGamer" };
   const name = labels[candidate.source_id] || candidate.source_id;
-  return `${name}${candidate.source_id === "hgamer" ? " · 补丁索引" : " · 发行商补丁源"}`;
+  return `${name}${candidate.source_id === "hgamer" ? " · 补查源" : " · 索引源"}`;
 }
 export function candidateLanguage(candidate: SourceCandidate): string {
   const labels: Record<string, string> = { "zh-CN": "简体中文", "zh-TW": "繁体中文", zh: "中文", en: "英文", ja: "日文" };

@@ -206,8 +206,8 @@ class _GlobalSourcesPageState extends State<GlobalSourcesPage> {
       for (final fallback in [false, true]) ...[
         const SizedBox(height: 16),
         if (fallback) ...[
-          Text('补查来源', style: Theme.of(context).textTheme.titleMedium),
-          const Text('补查来源按游戏查询，不参与定时索引更新。'),
+          Text('补查源', style: Theme.of(context).textTheme.titleMedium),
+          const Text('按游戏实时查询，不建全量索引，也不参与定时更新。'),
         ] else
           _publisherHeader(context),
         const SizedBox(height: 12),
@@ -238,7 +238,7 @@ class _GlobalSourcesPageState extends State<GlobalSourcesPage> {
     return Row(
       children: [
         Expanded(
-          child: Text('发行商来源', style: Theme.of(context).textTheme.titleMedium),
+          child: Text('索引源', style: Theme.of(context).textTheme.titleMedium),
         ),
         OutlinedButton.icon(
           key: const PageStorageKey('sources:update-all'),
