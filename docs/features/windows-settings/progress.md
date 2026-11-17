@@ -87,3 +87,22 @@
   - `flutter analyze --no-pub`（改动 3 个 Dart 文件）：`No issues found`。
   - `flutter test --no-pub test/library_page_test.dart test/settings_page_test.dart test/scaled_layout_test.dart test/source_model_test.dart --reporter expanded`：**24 项通过**（沙箱外执行）。
   - 未执行项：原生 Windows 窗口实机动画与深浅主题视觉验收待完成。
+
+
+## 2026-11-18：缓存管理“本地游戏数据缓存”清理实现与定向验证
+
+- 方案文档：[game-cache-cleanup-plan.md](game-cache-cleanup-plan.md)。
+- 状态：**已实现**，Rust Core / Protocol / CLI、Windows Flutter 与 Decky 前后端定向自动化测试及静态检查通过；Windows 原生窗口与 Steam Deck 游戏模式实机待验收。
+- **实际修改**：
+  - [store.rs](../../../crates/core/src/sources/store.rs)：定义 `GAME_CACHE_DIRS`（`index`、`index-progress`、`details`、`matches`、`discovery`、`discovery-index`、`status`、`cache`），实现 `inspect_game_cache` 与带 `settings.lock` 的 `cleanup_game_cache`（保留 `settings.json`、`settings.lock`、`schema.json` 并防护符号链接）。
+  - [crates/protocol/src/lib.rs](../../../crates/protocol/src/lib.rs)、[fixtures.rs](../../../crates/protocol/src/fixtures.rs)、[runtime.rs](../../../crates/cli/src/runtime.rs)、[main.rs](../../../crates/cli/src/main.rs)、`packages/contracts/generated/` 与 [protocol-v5.schema.json](../../../apps/windows-flutter/assets/protocol-v5.schema.json)：新增 `game_cache_status` 与 `cleanup_game_cache`（复用 `CacheInventory` 与 `CleanupResult`）并补齐 CLI 调度与契约生成物。
+  - [protocol_models.dart](../../../apps/windows-flutter/lib/host/protocol_models.dart)、[cache_model.dart](../../../apps/windows-flutter/lib/models/cache_model.dart)、[app_model.dart](../../../apps/windows-flutter/lib/models/app_model.dart)、[settings_page.dart](../../../apps/windows-flutter/lib/pages/settings_page.dart)、[cache_page.dart](../../../apps/windows-flutter/lib/pages/cache_page.dart)：将 `CacheModel` 抽象为 `download` / `game` 双桶并在 `CachePage` 新增“本地游戏数据缓存”卡片，来源/匹配任务运行中禁用清理，清理后自动触发 `AppModel.refresh()` 同步游戏与来源状态。
+  - [bridge.py](../../../apps/decky/backend/bridge.py)、[main.py](../../../apps/decky/main.py)、[cache.ts](../../../apps/decky/src/cache.ts)、[index.tsx](../../../apps/decky/src/index.tsx)：在 Decky 全局设置“缓存、备份与更新”页签同步新增“本地游戏数据缓存”统计与清理，校验空闲与来源任务状态并在清理后刷新 `session`。
+- **定向验证**：
+  - `cargo test -p patchhub-core --lib sources::store::tests`：12 项通过。
+  - `cargo run -p patchhub-contract-gen -- generate` & `cargo test -p patchhub-protocol`：生成通过，5 项通过。
+  - `cargo test -p patchhub-cli --bin patchhub-core`：51 项通过。
+  - `cargo fmt --all -- --check` & `cargo clippy -p patchhub-core -p patchhub-protocol -p patchhub-cli --all-targets -- -D warnings`：0 警告通过。
+  - Windows Flutter（沙箱外）：`dart format --output=none --set-exit-if-changed`、`flutter analyze --no-pub`（6 项文件 0 issues）、`flutter test --no-pub test/settings_page_test.dart --reporter expanded`（12 项通过）。
+  - Decky 后端与前端：`python -u -m unittest test_cache_cleanup.py -v`（沙箱外 8 项通过）、`npm run typecheck`、`npm test`（112 项通过）。
+  - 未执行项：Windows 原生窗口与 Steam Deck 游戏模式实机隔离状态目录验证待完成。
