@@ -80,9 +80,13 @@ void main() {
             expect(tester.getSize(status).width, greaterThanOrEqualTo(320));
             await tester.ensureVisible(find.text('补丁状态'));
             await tester.pumpAndSettle();
+            final installable = find.descendant(
+              of: status,
+              matching: find.text('可安装补丁'),
+            );
             expect(
-              find.descendant(of: status, matching: find.text('可安装补丁')),
-              findsOneWidget,
+              tester.widget<Text>(installable).style?.color,
+              Theme.of(tester.element(installable)).colorScheme.secondary,
             );
             expect(
               find.descendant(of: status, matching: find.text('游戏信息')),

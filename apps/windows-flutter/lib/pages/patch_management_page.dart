@@ -396,10 +396,13 @@ class _PatchManagementPageState extends State<PatchManagementPage> {
     final ready = patch == null ? (!querying && manualReady) : available(patch);
     final installed =
         patch != null && installedStatus(patch['detection']['status']);
+    final readyColor = patch != null && !installed
+        ? scheme.secondary
+        : scheme.brightness == Brightness.dark
+        ? const Color(0xff75ddb0)
+        : const Color(0xff176b48);
     final statusColor = !busy && ready
-        ? (scheme.brightness == Brightness.dark
-              ? const Color(0xff75ddb0)
-              : const Color(0xff176b48))
+        ? readyColor
         : (patch == null && querying)
         ? GameStatus.queryingColor(scheme.brightness)
         : scheme.onSurfaceVariant;
