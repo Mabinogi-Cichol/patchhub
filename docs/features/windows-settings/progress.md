@@ -72,3 +72,18 @@
 - 功能及必要测试单独提交：`86066c4 feat(windows): 新增设置页签与缓存管理并调整更新入口`；方案、交互示意、功能索引与验证记录另作文档提交。
 - 合并前核对本地 main 与功能分支原始基线均为 `b967fb6`，采用快进方式将功能提交纳入本地 main；不改写历史，保留功能分支。
 - 原生窗口/真实使用待验收结论不因本地合并而改变；未推送、发布或部署。
+
+
+## 2026-11-17 / 2026-11-18：设置入口“订阅更新中”状态实现与定向验证
+
+- 方案文档：[source-updating-indicator-plan.md](source-updating-indicator-plan.md)。
+- 状态：**已实现**，定向 Flutter 测试、静态分析与格式检查通过；原生窗口视觉与动画效果待实机验收。
+- **实际修改**：
+  - [app_model.dart](../../../apps/windows-flutter/lib/models/app_model.dart)：在 `AppModel` 新增只读 getter `sourceUpdating`，直接读取 `tasks.sources` 中运行中的 `update_source` 任务，不新增定时器或重复状态。
+  - [library_page.dart](../../../apps/windows-flutter/lib/pages/library_page.dart)：将右上角设置入口封装为 `_SettingsEntryButton`，保留 `TextButton` 外层以兼容键盘焦点与既有测试，内部通过 `AnimatedContainer`、`AnimatedSize` 与 `AnimatedSwitcher` 实现浅/深色胶囊样式、15×15 `CircularProgressIndicator` 与“设置 / 订阅更新中 / 返回游戏”三态平滑切换；更新态保持可点击进入设置页。
+  - [library_page_test.dart](../../../apps/windows-flutter/test/library_page_test.dart)：新增 `settings entry shows circular progress during source update` 测试，覆盖空闲态、更新态、点击进入设置页切回“返回游戏”、返回游戏列表恢复“订阅更新中”以及任务完成后自动恢复“设置”。
+- **定向验证**：
+  - `dart format --output=none --set-exit-if-changed`（改动 3 个 Dart 文件）：通过。
+  - `flutter analyze --no-pub`（改动 3 个 Dart 文件）：`No issues found`。
+  - `flutter test --no-pub test/library_page_test.dart test/settings_page_test.dart test/scaled_layout_test.dart test/source_model_test.dart --reporter expanded`：**24 项通过**（沙箱外执行）。
+  - 未执行项：原生 Windows 窗口实机动画与深浅主题视觉验收待完成。
