@@ -754,6 +754,12 @@ function GlobalCache() {
       {backups?.failures.map((failure, index) => <Row key={index}><Status warning>{failure.detail || failure.code}</Status></Row>)}
       <Row><Action disabled={!!busy} onClick={cleanBackups}>清理全部安装备份</Action></Row>
     </PanelSection>
+  </div>;
+}
+
+function GlobalAbout() {
+  return <div className="patch-page">
+    <Status>全局设置，对所有游戏生效。</Status>
     <AppUpdatePanel />
   </div>;
 }
@@ -769,9 +775,10 @@ function Manager() {
   const item = report?.installs.find(i => i.game.instance_id === target);
   return <Focusable className="patch-full" onCancel={() => Navigation.NavigateBack()}><style>{css}</style>
     {instance === sourceRoute ? <SidebarNavigation showTitle disableRouteReporting title={<div className="patch-nav-header"><span className="patch-nav-tool">PatchHub</span><span className="patch-nav-game">全局设置</span></div>} page={settingsPage(panel)} pages={[
-      { identifier: settingsRoutes.sources, route: settingsRoutes.sources, title: "管理订阅源", hideTitle: true, visible: true, content: <GlobalSources /> },
+      { identifier: settingsRoutes.sources, route: settingsRoutes.sources, title: "全局来源", hideTitle: true, visible: true, content: <GlobalSources /> },
       "separator",
-      { identifier: settingsRoutes.cache, route: settingsRoutes.cache, title: "缓存、备份与更新", hideTitle: true, visible: true, content: <GlobalCache /> },
+      { identifier: settingsRoutes.cache, route: settingsRoutes.cache, title: "缓存管理", hideTitle: true, visible: true, content: <GlobalCache /> },
+      { identifier: settingsRoutes.about, route: settingsRoutes.about, title: "关于", hideTitle: true, visible: true, content: <GlobalAbout /> },
     ]} />
       : item ? <GameManager key={instance} item={item} seg={instance!} panel={panel} />
         : <div className="patch-page"><h2>PatchHub</h2><Status>{report ? "游戏已不在当前扫描结果中。" : "正在加载游戏列表…"}</Status><Action onClick={() => Navigation.NavigateBack()}>返回游戏列表</Action></div>}

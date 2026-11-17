@@ -53,7 +53,7 @@ export function startAppUpdateNotifications() {
       const value = await claimNotice();
       if (!active || !value) return;
       toaster.toast({ title: `发现新版 ${value.tag}`, body: 'PatchHub · 点击查看更新', onClick: () => {
-        Navigation.Navigate(settingsRoutes.cache); Navigation.CloseSideMenus();
+        Navigation.Navigate(settingsRoutes.about); Navigation.CloseSideMenus();
       } });
     } catch (error) { console.warn('app_update_notice_failed', error); }
     finally { if (active) timer = setTimeout(() => void inspect(), 60000); }

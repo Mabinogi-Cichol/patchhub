@@ -151,7 +151,7 @@ test("all native sidebar pages hide duplicate content titles and retain sidebar 
   const settingsNav = page.controls.find(control => control.name === "SidebarNavigation")!.props;
   assert.equal(settingsNav.showTitle, true);
   assert.deepEqual(Array.from(settingsNav.pages.filter((p: any) => typeof p === "object"), (p: any) => [p.title, p.hideTitle]),
-    [["管理订阅源", true], ["缓存、备份与更新", true]]);
+    [["全局来源", true], ["缓存管理", true], ["关于", true]]);
 });
 
 test("source page imports and reads script documents through RPC, refreshes and preserves failed edits", async () => {

@@ -27,7 +27,7 @@ function mount() {
   const exports: Record<string, any> = {};
   const modules: Record<string, any> = {
     '@decky/api': { callable: (method: string) => (...args: any[]) => new Promise((resolve, reject) => requests.push({ method, args, resolve, reject })), toaster: { toast(value: any) { toasts.push(value); } } },
-    '@decky/ui': native, './route': { settingsRoutes: { cache: '/settings' } },
+    '@decky/ui': native, './route': { settingsRoutes: { about: '/settings' } },
     './app-update-view': { updateExecuting: (e: any) => ['preparing', 'applying'].includes(e?.state),
       updateProgressLabel: (e: any) => `${e.percent ?? 0}% · 准备更新` },
     react: { ...React,

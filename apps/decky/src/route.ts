@@ -2,10 +2,13 @@
 export const settingsRoutes = {
   sources: "/patchhub/sources/subscriptions",
   cache: "/patchhub/sources/cache",
+  about: "/patchhub/sources/about",
 } as const;
 
 export function settingsPage(panel?: string): string {
-  return panel === "cache" ? settingsRoutes.cache : settingsRoutes.sources;
+  if (panel === "cache") return settingsRoutes.cache;
+  if (panel === "about") return settingsRoutes.about;
+  return settingsRoutes.sources;
 }
 
 // instance_id contains '/', and the Steam router only partially decodes a
