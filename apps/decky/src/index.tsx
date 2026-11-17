@@ -163,9 +163,13 @@ const css = `
   .patch-game-artwork { height:clamp(120px,20vh,180px); margin:16px 0; }
   .patch-game-artwork-image, .patch-game-artwork-content { width:100%; height:100%; object-fit:cover; }
   .patch-source-card { margin:0 0 16px; border:1px solid #627387; border-radius:8px; background:#202c39; min-width:0; }
-  .patch-source-card .patch-source-heading { box-sizing:border-box; width:100%; min-width:0; height:auto; margin:0; padding:14px 16px; border-radius:7px; border:0; background:#2b3b4d; color:#f3f6f8; box-shadow:none; font-size:16px; line-height:1.35; text-align:left; white-space:normal; }
+  .patch-source-header { display:flex; align-items:stretch; min-width:0; }
+  .patch-source-card .patch-source-heading { box-sizing:border-box; flex:1; min-width:0; height:auto; margin:0; padding:14px 16px; border-radius:7px; border:0; background:#2b3b4d; color:#f3f6f8; box-shadow:none; font-size:16px; line-height:1.35; text-align:left; white-space:normal; }
+  .patch-source-card .patch-source-refresh { box-sizing:border-box; flex:none; width:48px; height:auto; margin:0; padding:0; border-radius:0 7px 7px 0; border:0; border-left:1px solid #627387; background:#2b3b4d; color:#f3f6f8; box-shadow:none; display:flex; align-items:center; justify-content:center; }
+  .patch-source-card .patch-source-refresh:hover:not(:disabled) { background:#344a60; }
+  .patch-source-card .patch-source-refresh:disabled { opacity:.45; }
   .patch-source-card .patch-source-heading:hover { background:#344a60; }
-  .patch-source-card .patch-source-heading:focus-visible, .patch-source-card .patch-source-heading.gpfocus { background:#3b536b; outline:3px solid #fff; outline-offset:2px; }
+  .patch-source-card .patch-source-heading:focus-visible, .patch-source-card .patch-source-heading.gpfocus, .patch-source-card .patch-source-refresh:focus-visible, .patch-source-card .patch-source-refresh.gpfocus { background:#3b536b; outline:3px solid #fff; outline-offset:2px; }
   .patch-source-heading-main { display:flex; align-items:center; gap:12px; min-width:0; }
   .patch-source-heading-name { flex:1; min-width:0; font-weight:700; overflow-wrap:anywhere; }
   .patch-source-heading-arrow { flex:none; }
@@ -578,13 +582,18 @@ function SourceCard({ source, busy, expanded, onToggle, task, changeSources, onU
   useEffect(() => setName(source.name), [source.name]);
   const summary = sourceCardSummary(source, task);
   const contentId = `patch-source-${encodeURIComponent(source.id)}`;
+  const updating = !!(task && !sourceTaskTerminal(task.state));
   return <div className="patch-source-card">
-    <Button className="patch-source-heading" aria-expanded={expanded} aria-controls={contentId} onClick={onToggle}>
-      <span className="patch-source-heading-main"><span className="patch-source-heading-name">{source.name}</span>
-        <span className="patch-source-heading-arrow" aria-hidden="true">{expanded ? "▾" : "▸"}</span></span>
-      <span className="patch-source-heading-state">{source.enabled ? "已启用" : "已停用"}</span>
-      {summary && <span className={`patch-source-heading-task${summary.warning ? " patch-warning" : ""}`}>{summary.text}</span>}
-    </Button>
+    <Focusable className="patch-source-header">
+      <Button className="patch-source-heading" aria-expanded={expanded} aria-controls={contentId} onClick={onToggle}>
+        <span className="patch-source-heading-main"><span className="patch-source-heading-name">{source.name}</span>
+          <span className="patch-source-heading-arrow" aria-hidden="true">{expanded ? "▾" : "▸"}</span></span>
+        <span className="patch-source-heading-state">{source.enabled ? "已启用" : "已停用"}</span>
+        {summary && <span className={`patch-source-heading-task${summary.warning ? " patch-warning" : ""}`}>{summary.text}</span>}
+      </Button>
+      {publisher && <Button className="patch-source-refresh" aria-label={`更新 ${source.name}`} disabled={busy || updating}
+        onClick={() => onUpdateSource(source.id, false)}><span aria-hidden="true">↻</span></Button>}
+    </Focusable>
     {expanded && <div id={contentId} className="patch-source-body" role="group" aria-label={source.name}>
       <Row><TextField label="来源名称" value={name} disabled={busy} onChange={e => setName(e.target.value)} /></Row>
       <Row><Action disabled={busy || !name.trim() || name.trim() === source.name}
@@ -642,6 +651,7 @@ function SourcesPage({ report, busy, tasks, expandedSources, onToggleSource, cha
   const publishers = sources.filter(source => source.role !== "fallback_indexer");
   const fallbacks = sources.filter(source => source.role === "fallback_indexer");
   const taskFor = (sourceId: string) => tasks.find(task => task.kind === "update_source" && task.key === sourceId);
+  const pendingPublisherIds = publishers.filter(source => source.enabled && !taskFor(source.id)).map(source => source.id);
   return <div className="patch-page">
     <Status>全局设置，对所有游戏生效。普通来源按间隔自动更新；补查来源（包括 HGamer 与脚本来源）按游戏查询，不参与索引定时更新。</Status>
     <PanelSection title="匹配游戏"><Row><Action disabled={busy} onClick={onMatchGames}>匹配全部游戏</Action></Row>

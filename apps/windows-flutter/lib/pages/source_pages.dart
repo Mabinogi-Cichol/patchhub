@@ -205,22 +205,59 @@ class _GlobalSourcesPageState extends State<GlobalSourcesPage> {
         ),
       for (final fallback in [false, true]) ...[
         const SizedBox(height: 16),
-        Text(
-          fallback ? '补查来源' : '发行商来源',
-          style: Theme.of(context).textTheme.titleMedium,
-        ),
-        if (fallback) const Text('补查来源按游戏查询，不参与定时索引更新。'),
+        if (fallback) ...[
+          Text('补查来源', style: Theme.of(context).textTheme.titleMedium),
+          const Text('补查来源按游戏查询，不参与定时索引更新。'),
+        ] else
+          _publisherHeader(context),
         const SizedBox(height: 12),
         for (final source in widget.model.sources.where(
-          (source) =>
-              (source['role'] == 'fallback_indexer' ||
-                  source['id'] == 'hgamer') ==
-              fallback,
+          (source) => _isFallback(source) == fallback,
         ))
           sourceCard(source, fallback),
       ],
     ],
   );
+
+  bool _isFallback(Map<String, dynamic> source) =>
+      source['role'] == 'fallback_indexer' || source['id'] == 'hgamer';
+
+  Widget _publisherHeader(BuildContext context) {
+    final pendingIds = [
+      for (final source in widget.model.sources)
+        if (!_isFallback(source) &&
+            source['enabled'] == true &&
+            widget
+                    .model
+                    .tasks
+                    .sources['update_source:${source['id']}']
+                    ?.running !=
+                true)
+          source['id'] as String,
+    ];
+    return Row(
+      children: [
+        Expanded(
+          child: Text('发行商来源', style: Theme.of(context).textTheme.titleMedium),
+        ),
+        OutlinedButton.icon(
+          key: const PageStorageKey('sources:update-all'),
+          onPressed: saving || widget.model.tasks.closing || pendingIds.isEmpty
+              ? null
+              : () {
+                  for (final id in pendingIds) {
+                    widget.model.startSource('update_source', {
+                      'source_id': id,
+                      'force': false,
+                    });
+                  }
+                },
+          icon: const Icon(Icons.refresh, size: 18),
+          label: const Text('全部更新'),
+        ),
+      ],
+    );
+  }
 
   Widget sourceCard(Map<String, dynamic> source, bool fallback) {
     final id = source['id'] as String;
@@ -245,6 +282,26 @@ class _GlobalSourcesPageState extends State<GlobalSourcesPage> {
         trailing: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
+            if (!fallback) ...[
+              IconButton(
+                key: PageStorageKey('source:$id:quick-refresh'),
+                tooltip: '更新来源索引',
+                onPressed: running || saving || widget.model.tasks.closing
+                    ? null
+                    : () => widget.model.startSource('update_source', {
+                        'source_id': id,
+                        'force': false,
+                      }),
+                icon: running
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.refresh),
+              ),
+              const SizedBox(width: 4),
+            ],
             Tooltip(
               message: '启用此来源',
               child: Switch(
@@ -300,7 +357,8 @@ class _GlobalSourcesPageState extends State<GlobalSourcesPage> {
                           key: PageStorageKey('source:$id:remove'),
                           onPressed: saving || running
                               ? null
-                              : () => removeSource(id, source['name'] as String),
+                              : () =>
+                                    removeSource(id, source['name'] as String),
                           child: const Text('删除来源'),
                         ),
                       ],

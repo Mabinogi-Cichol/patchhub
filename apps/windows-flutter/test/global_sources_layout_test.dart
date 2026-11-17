@@ -168,4 +168,76 @@ void main() {
       );
     }
   }
+
+  testWidgets(
+    'collapsed source shows quick refresh icon and header updates all enabled publishers',
+    (tester) async {
+      final client = NameClient();
+      final model = AppModel(client)
+        ..sources = [
+          {
+            ...client.source,
+            'id': 'patchmoe',
+            'name': 'PatchMoe',
+            'enabled': true,
+          },
+          {...client.source, 'id': 'kagura', 'name': 'Kagura', 'enabled': true},
+          {
+            ...client.source,
+            'id': 'disabled_src',
+            'name': 'Disabled',
+            'enabled': false,
+          },
+          {
+            ...client.source,
+            'id': 'hgamer',
+            'name': 'HGamer',
+            'role': 'fallback_indexer',
+            'enabled': true,
+          },
+        ];
+      await tester.pumpWidget(
+        PatchHubApp(
+          home: Scaffold(body: GlobalSourcesPage(model: model)),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // Collapsed publisher has quick refresh icon; fallback does not.
+      expect(
+        find.byKey(const PageStorageKey('source:patchmoe:quick-refresh')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const PageStorageKey('source:hgamer:quick-refresh')),
+        findsNothing,
+      );
+
+      // Tapping quick refresh triggers update without expanding the card.
+      await tester.tap(
+        find.byKey(const PageStorageKey('source:patchmoe:quick-refresh')),
+      );
+      await tester.pump();
+      expect(model.tasks.sources.keys, contains('update_source:patchmoe'));
+      expect(model.tasks.sources.keys, isNot(contains('update_source:kagura')));
+      expect(find.text('自动更新'), findsNothing);
+
+      // Tapping "全部更新" updates all enabled publisher sources.
+      await tester.tap(find.byKey(const PageStorageKey('sources:update-all')));
+      await tester.pump();
+      expect(
+        model.tasks.sources.keys,
+        containsAll(['update_source:patchmoe', 'update_source:kagura']),
+      );
+      expect(
+        model.tasks.sources.keys,
+        isNot(contains('update_source:disabled_src')),
+      );
+      expect(model.tasks.sources.keys, isNot(contains('update_source:hgamer')));
+      await tester.pumpAndSettle();
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      model.dispose();
+    },
+  );
 }
