@@ -26,6 +26,12 @@ PUBLISHER = {"id": "patchmoe", "name": "patch.moe", "adapter": "patchmoe", "enab
              "download_hosts": [], "priority": 100, "discovery_only": False, "root_layout": None}
 
 
+async def until(condition):
+    # Fail with the caller's timeout instead of hanging if the awaited work failed.
+    while not condition():
+        await asyncio.sleep(0)
+
+
 def installed(instance, appid, status):
     return {"game": {"instance_id": instance, "appid": appid, "availability": "installed"},
             "patches": [], "discovery": {"status": status, "candidates": [], "diagnostics": []}}
@@ -247,8 +253,7 @@ class SourceTasksRpcTests(unittest.IsolatedAsyncioTestCase):
         plugin.bridge = types.SimpleNamespace(scan=AsyncMock(return_value=pending_report()))
         try:
             await plugin.scan()
-            while not bridge.stream_calls:
-                await asyncio.sleep(0)
+            await asyncio.wait_for(until(lambda: bridge.stream_calls), 5)
             await plugin.scan()
             self.assertEqual([call[0] for call in bridge.stream_calls], ["match_games"])
             self.assertEqual(len(service.task_status()), 1)
@@ -256,8 +261,7 @@ class SourceTasksRpcTests(unittest.IsolatedAsyncioTestCase):
             await service._tasks[service.task_status()[0]["task_id"]]["worker"]
             # A terminal task no longer deduplicates the next scan.
             await plugin.scan()
-            while len(bridge.stream_calls) < 2:
-                await asyncio.sleep(0)
+            await asyncio.wait_for(until(lambda: len(bridge.stream_calls) >= 2), 5)
             self.assertEqual(len(bridge.stream_calls), 2)
         finally:
             await service.shutdown()
