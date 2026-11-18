@@ -46,12 +46,43 @@
 
 不按“看着死板”批量改动，每处清理在 `progress.md` 写明失败证据或无契约意义的理由。
 
+## CI 测试项必要性审查（2026-11-18 初审）
+
+耗时取自成功运行 #43720562222；规模为仓库当前测试数量。判定：保留＝能发现真实问题或守护发布产物；复核＝需先取得证据再决定；建议移出＝与发布产物和运行时行为无关。
+
+| 测试项 | 所在 job | 规模/耗时 | 判定 | 理由 |
+| --- | --- | --- | --- | --- |
+| `project_version.py --check` | changes | 1s | 保留 | 版本一致性，发布产物直接依赖。 |
+| `test_project_version.py` | changes **与** windows | 229 行/各 1–3s | 保留，去掉 windows 中的重复 | 纯 Python、与平台无关，changes 已跑一次，windows 重复执行无新增信息。 |
+| `.github/ci/test_select_jobs.py` | changes | 151 行/1s | 复核 | 守护选择规则，但规则一变测试就要同步改；只保留“漏选会导致构建被跳过”的核心用例，不为每条白名单写断言。 |
+| `cargo test -p patchhub-protocol`、`contract-gen check`、`npm run test:contracts` | core / windows / decky | 2s 级 | 保留 | 协议契约与生成物一致性，跨 Rust/Flutter/TS 的真实边界；`test:contracts` 在 windows、decky 各跑一次属于各自消费者校验，可保留。 |
+| `cargo test -p patchhub-core -p patchhub-cli` | core ×2 平台 | core 545、cli 57 项 | 保留，抽查 | 业务核心，是最主要的真实问题探测器；脆性断言按设计第 4 节抽查，不整体缩减。 |
+| `test_sf95_audit.py`、`test_sf95_worker.py` | core ×2 平台 | 438 行 | **建议移出** | 这是迁移期的 Python 参考实现，仓库代码中没有任何运行路径引用，只在 docs 中出现；Rust 实现有自己的测试和冻结夹具。该脚本不进入任何发布包，却在 Windows 和 Linux 各跑一遍。移出前先确认 Rust 侧已覆盖其夹具。 |
+| `test_sf9_behavior.py`、`test_sf9_metadata.py` | **不在 CI** | 269 行 | 清理 | 既不在 CI 中运行，又依赖 `sf95` 模块，已无人执行；应随参考实现一并处理（移出或删除），避免孤儿测试过期。 |
+| `test_decky_debug_update.py` | **不在 CI** | 52 行 | 复核 | 孤儿测试，需要确认是否仍有效；有效则加入 decky，无效则删除。 |
+| `test_package_artifacts.py`、`test_build_sbom.py` | windows **与** decky | 各 0–3s | 保留 | 决定发行附件内容与 SBOM，两平台的打包路径不同，各自执行合理。 |
+| `test_flutter_sbom.py` | windows | 1s | 保留 | Flutter 依赖清单进入发行包。 |
+| `test_windows_update.py`、`test_windows_single_instance.py` | windows | 15s + 12s | 保留 | 对应真实 PowerShell 更新脚本，曾暴露短路径缺陷（#82–#85），是少数真正探测运行时问题的脚本测试。 |
+| Flutter 单测（约 100 项，位于构建脚本内，约 260s 含分析与构建） | windows | 占 job 最大头 | 保留，抽查 | 客户端行为；耗时主要来自构建而非测试，不是优化重点。 |
+| `test_install_decky.py`、`test_decky_bootstrap.py`、`test-install-decky-bridge.mjs` | decky | 703/142/227 行 | 保留，抽查 | 覆盖安装脚本，曾因 FakeLoader 引用已删除常量失败，属于“夹具过期”重点抽查对象。 |
+| `npm run typecheck` | decky | 秒级 | 保留 | 编译期检查，成本低、结果确定。 |
+| `npm run test -w apps/decky`（约 15 个 TS 文件） | decky | — | 保留，抽查 | 前端逻辑；`session.test.ts` 502 行、`game-manager.test.ts` 439 行体量大，列入脆性断言抽查。 |
+| Decky 后端 `unittest`（127 项，17 个文件） | decky | 本地 3.6s | 保留，优先改造 | 真实 core 桥接用例有价值；这里是此次挂起的来源，等待写法与手写替身是第 2、3 节的主要对象。 |
+
+初步结论：
+
+1. **没有发现需要整体砍掉的测试层**；core、契约、打包校验、Windows 更新脚本、Decky 桥接都对应真实发布风险。
+2. **确定无必要或重复**：`sf95` 两个 Python 测试（迁移期参考实现，无运行路径）、windows 重复的 `test_project_version.py`，以及不在 CI 中的 `sf9_*`、`decky_debug_update` 孤儿测试。
+3. **过期风险集中在夹具层**：Decky 后端、`test_install_decky.py`、Decky TS 大文件测试，以及 `test_select_jobs.py`。需要按设计第 4 节用失败记录逐条取证后处理，而不是按文件大小推断。
+4. 这些判断来自静态审阅和耗时数据，尚未逐个用例核对 Rust 侧是否覆盖了 `sf95` 夹具，也未统计各测试的历史失败次数；这两项在施工中完成，并以结果修订本表。
+
 ## 实施拆分
 
 1. 超时：读取近期成功运行耗时，设定并写入 `ci.yml`，更新 `.github/ci/README.md`。
-2. 盘点：列出含等待写法与手写替身的测试清单，标注是否有失败历史。
-3. 改造：按清单修改，每批以定向测试验证。
-4. 回归：故意让一个被模拟接口变化，确认测试以清晰错误快速失败而非挂起（在本地临时验证，不提交）。
+2. 必要性处置：确认 Rust 已覆盖 `sf95` 夹具后移出其 CI 步骤并处理孤儿测试；删除 windows 中重复的 `test_project_version.py`；按失败记录取证修订上表。
+3. 盘点：列出含等待写法与手写替身的测试清单，标注是否有失败历史。
+4. 改造：按清单修改，每批以定向测试验证。
+5. 回归：故意让一个被模拟接口变化，确认测试以清晰错误快速失败而非挂起（在本地临时验证，不提交）。
 
 ## 验收标准
 
