@@ -123,7 +123,7 @@ class MaintenanceTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.Event().wait()
         self.plugin.bridge.scan = scan
         scan_call = asyncio.create_task(self.plugin.scan())
-        await started.wait()
+        await asyncio.wait_for(started.wait(), 5)
         await self.plugin.start_app_update('v0.5.4')
         self.assertTrue((await self.plugin.prepare_app_update())['ready'])
         with self.assertRaisesRegex(RuntimeError, 'app_update_cancelled'):
@@ -140,7 +140,7 @@ class MaintenanceTests(unittest.IsolatedAsyncioTestCase):
             raise CoreError('source_disk_failed', 'write did not finish')
         self.plugin.bridge._call = call
         self.plugin.sources.start_update_source('patchmoe')
-        await started.wait()
+        await asyncio.wait_for(started.wait(), 5)
         await self.plugin.start_app_update('v0.5.4')
         with self.assertRaisesRegex(RuntimeError, '取消收尾失败'):
             await self.plugin.prepare_app_update()

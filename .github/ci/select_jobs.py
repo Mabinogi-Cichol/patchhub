@@ -39,10 +39,6 @@ RULES = (
         "scripts/test_decky_bootstrap.py", "scripts/test-install-decky-bridge.mjs",
         "scripts/fixtures/app-update.json",
     )),
-    (("core",), (
-        "scripts/sf*.py", "scripts/test_sf*.py", "scripts/fixtures/**",
-        "scripts/freeze_sf*.py", "scripts/verify_sf*.py",
-    )),
 )
 
 

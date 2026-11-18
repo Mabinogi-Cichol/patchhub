@@ -10,7 +10,7 @@
 | Windows Flutter 与其构建、安装、SBOM 脚本 | Windows |
 | Decky 前后端、安装入口与专用脚本 | Decky |
 | 共享 UI、npm 配置、公共打包、SBOM、许可证、目录数据 | Windows、Decky |
-| SF Python 参考实现、测试和夹具 | Core |
+| SF Python 开发参考工具（黄金夹具生成用，不进入发布，CI 不运行） | 不运行模块构建 |
 | 普通文档与项目技能 | 不运行模块构建 |
 
 `docs/client-guide.md` 和 `docs/privacy.md` 会装入 Windows 发行包，修改它们运行
@@ -21,8 +21,8 @@ push 比较事件的 before 与 after，包含一次 push 中的所有提交；P
 checkout 获取完整历史，Git 差异计算失败直接失败，不返回空变更。
 首次 main push、`v*` 标签和手动运行选择全部模块。发布仍只由 `v*` 标签触发。
 
-`core` 保留 Rust 和 SF 参考实现检查；Decky 后端和安装测试移到 `decky`；
-Flutter SBOM 测试移到 `windows`；公共打包和 SBOM 测试在两个平台分别执行。
+`core` 保留 Rust 检查（SF Python 参考实现仅用于开发期生成冻结夹具，其测试不在 CI 运行）；Decky 后端和安装测试移到 `decky`；
+Flutter SBOM 测试移到 `windows`；公共打包和 SBOM 测试在两个平台分别执行；与平台无关的版本测试只在 `changes` 执行一次。各 job 设置 `timeout-minutes`（changes 5、core 20、windows 30、decky 20、release 15，取近期成功运行最长耗时的约 2.5 倍以上），仅作挂起兜底。
 
 Rust 契约生成物一致性只在 `core` 的 Linux matrix 中检查一次；生成器、协议、
 Core 与生成物输入变更均会选择 `core`。Windows/Decky 继续执行消费者契约测试，

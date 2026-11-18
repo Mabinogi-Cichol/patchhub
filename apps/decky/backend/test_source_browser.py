@@ -79,7 +79,7 @@ class BrowserNavigationTest(unittest.IsolatedAsyncioTestCase):
 
         with patch.object(session, '_request', new=request):
             task = asyncio.create_task(session.request({}))
-            await entered.wait()
+            await asyncio.wait_for(entered.wait(), 5)
             cancel.set()
             with self.assertRaisesRegex(ValueError, 'task_cancelled'):
                 await task
