@@ -133,7 +133,7 @@ class MaintenanceTests(unittest.IsolatedAsyncioTestCase):
     async def test_failed_source_cancellation_blocks_replacement(self):
         from bridge import CoreError
         started = asyncio.Event()
-        async def call(method, params, on_event=None, cancel=None):
+        async def call(method, params, on_event=None, cancel=None, **options):
             started.set()
             while not cancel.is_set():
                 await asyncio.sleep(0)
