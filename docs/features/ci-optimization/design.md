@@ -2,7 +2,7 @@
 
 [施工记录](progress.md) · [本地 CI 验证指南](../patchhub-ci-fix/local-ci-validation.md)
 
-状态：方案，待实现。
+状态：已实现，线上 CI 待验证；实施结果见施工记录。
 
 ## 背景与证据
 
@@ -53,13 +53,13 @@
 | 测试项 | 所在 job | 规模/耗时 | 判定 | 理由 |
 | --- | --- | --- | --- | --- |
 | `project_version.py --check` | changes | 1s | 保留 | 版本一致性，发布产物直接依赖。 |
-| `test_project_version.py` | changes **与** windows | 229 行/各 1–3s | 保留，去掉 windows 中的重复 | 纯 Python、与平台无关，changes 已跑一次，windows 重复执行无新增信息。 |
+| `test_project_version.py` | changes **与** windows | 229 行/各 1–3s | 已去掉 windows 中的重复 | 纯 Python、与平台无关，changes 已跑一次，windows 重复执行无新增信息。 |
 | `.github/ci/test_select_jobs.py` | changes | 151 行/1s | 复核 | 守护选择规则，但规则一变测试就要同步改；只保留“漏选会导致构建被跳过”的核心用例，不为每条白名单写断言。 |
 | `cargo test -p patchhub-protocol`、`contract-gen check`、`npm run test:contracts` | core / windows / decky | 2s 级 | 保留 | 协议契约与生成物一致性，跨 Rust/Flutter/TS 的真实边界；`test:contracts` 在 windows、decky 各跑一次属于各自消费者校验，可保留。 |
 | `cargo test -p patchhub-core -p patchhub-cli` | core ×2 平台 | core 545、cli 57 项 | 保留，抽查 | 业务核心，是最主要的真实问题探测器；脆性断言按设计第 4 节抽查，不整体缩减。 |
-| `test_sf95_audit.py`、`test_sf95_worker.py` | core ×2 平台 | 438 行 | **建议移出** | 这是迁移期的 Python 参考实现，仓库代码中没有任何运行路径引用，只在 docs 中出现；Rust 实现有自己的测试和冻结夹具。该脚本不进入任何发布包，却在 Windows 和 Linux 各跑一遍。移出前先确认 Rust 侧已覆盖其夹具。 |
-| `test_sf9_behavior.py`、`test_sf9_metadata.py` | **不在 CI** | 269 行 | 清理 | 既不在 CI 中运行，又依赖 `sf95` 模块，已无人执行；应随参考实现一并处理（移出或删除），避免孤儿测试过期。 |
-| `test_decky_debug_update.py` | **不在 CI** | 52 行 | 复核 | 孤儿测试，需要确认是否仍有效；有效则加入 decky，无效则删除。 |
+| `test_sf95_audit.py`、`test_sf95_worker.py` | core ×2 平台 | 438 行 | **已移出 CI** | 迁移期 Python 参考实现，仅用于开发期生成 Rust 冻结夹具（`freeze_sf_rust_fixtures.py`）；Rust 测试独立读取冻结 JSON，无 Python 依赖，不进入发布包。文件保留，因夹具生成脚本引用 `test_sf95_audit`/`test_sf9_behavior` 中的辅助代码。 |
+| `test_sf9_behavior.py`、`test_sf9_metadata.py` | **不在 CI** | 269 行 | 保留文件，不入 CI | 不在 CI 运行，但被夹具生成脚本引用其辅助代码，不能删除。 |
+| `test_decky_debug_update.py` | **不在 CI** | 52 行 | 保留文件，不入 CI | 本地运行通过（1 项）；测试的是真机部署开发工具，不属于发布产物，不加入 CI。 |
 | `test_package_artifacts.py`、`test_build_sbom.py` | windows **与** decky | 各 0–3s | 保留 | 决定发行附件内容与 SBOM，两平台的打包路径不同，各自执行合理。 |
 | `test_flutter_sbom.py` | windows | 1s | 保留 | Flutter 依赖清单进入发行包。 |
 | `test_windows_update.py`、`test_windows_single_instance.py` | windows | 15s + 12s | 保留 | 对应真实 PowerShell 更新脚本，曾暴露短路径缺陷（#82–#85），是少数真正探测运行时问题的脚本测试。 |
