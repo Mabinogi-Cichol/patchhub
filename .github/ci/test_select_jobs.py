@@ -49,8 +49,6 @@ class SelectionTests(unittest.TestCase):
             ("docs/client-guide.md", ("windows",)),
             ("docs/privacy.md", ("windows",)),
             ("docs/images/branding/logo.png", ("windows", "decky")),
-            ("scripts/sf95_worker.py", ("core",)),
-            ("scripts/test_sf9_metadata.py", ("core",)),
         )
         for path, jobs in cases:
             with self.subTest(path=path):
@@ -59,7 +57,7 @@ class SelectionTests(unittest.TestCase):
     def test_non_build_inputs(self):
         self.assert_jobs([
             "README.md", "docs/features/example/design.md", "docs/example.png",
-            "apps/decky/README.md", ".github/ci/README.md",
+            "apps/decky/README.md", ".github/ci/README.md", "scripts/sf95_worker.py",
             ".agents/skills/example/agents/openai.yaml", ".gitignore",
         ], ())
 

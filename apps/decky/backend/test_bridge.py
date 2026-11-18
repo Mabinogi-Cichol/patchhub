@@ -383,7 +383,7 @@ class BridgeJournalReadTests(unittest.IsolatedAsyncioTestCase):
             second._exchange_call = AsyncMock(return_value=[])
             other._exchange_call = AsyncMock(return_value=[])
             running = asyncio.create_task(first.scan())
-            await entered.wait()
+            await asyncio.wait_for(entered.wait(), 5)
             queued = asyncio.create_task(second.list_transactions())
             try:
                 await asyncio.sleep(0)
