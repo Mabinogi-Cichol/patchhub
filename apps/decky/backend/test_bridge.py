@@ -266,7 +266,7 @@ class BridgeStreamTests(unittest.IsolatedAsyncioTestCase):
     async def test_large_request_is_sent_without_a_fixed_line_limit(self):
         self.bridge._preflight_done = True
         params = copy.deepcopy(next(case["request"]["params"] for case in CASES["requests"]
-                                    if case["name"] == "script-import-large-replace"))
+                                    if case["name"] == "script-import-large-new"))
         params.pop("host", None)
         peer = _FakeProcess(lambda rid, req: ([], response("import_script_source", rid)))
         with patch("bridge.asyncio.create_subprocess_exec", return_value=peer):
@@ -322,31 +322,56 @@ class BridgeIntegrationTests(unittest.IsolatedAsyncioTestCase):
             bridge = CoreBridge(binary, state_dir=Path(temporary) / "state")
             await bridge.preflight()
             service = SourceService(bridge, Path(temporary) / "state")
+            prompt = await service.get_script_source_prompt()
+            self.assertIn("docs/custom-subscription-sources.md", prompt["prompt"])
             bundled = await service.get_script_source("patchmoe")
             self.assertEqual(bundled["rule"]["adapter"], "lua")
             self.assertIn("form_zh_cn", bundled["code"])
             self.assertFalse((Path(temporary) / "state").exists())
             await service.initialize()
+            code = (
+                "-- " + "脚本源码" * 15000 + "\n"
+                "return {\n"
+                "  meta = {\n"
+                "    name = 'Fixture Publisher',\n"
+                "    pages = {'https://example.com/list'},\n"
+                "    page_hosts = {'example.com'},\n"
+                "    download_hosts = {'download.example.com'}\n"
+                "  },\n"
+                "  collect_index = function() while true do end end\n"
+                "}"
+            )
             # Bundled sources are read-only: importing over one is refused.
             with self.assertRaises(CoreError) as bundled_failure:
-                await service.import_script_source(bundled["rule"], 1, "return {}", True)
+                await service.import_script_source(code, "patchmoe", 1)
             self.assertEqual(bundled_failure.exception.code, "source_builtin_readonly")
             self.assertIn("form_zh_cn", (await service.get_script_source("patchmoe"))["code"])
-            rule = json.loads((root / "docs/features/script-source-adapters/examples/publisher/source.json").read_text(encoding="utf-8"))
-            code = "-- " + "脚本源码" * 15000 + "\nwhile true do end\nreturn {}"
-            await service.import_script_source(rule, 1, code)
-            self.assertEqual((await service.get_script_source(rule["id"]))["code"], code)
-            await service.import_script_source(rule, 1, "error('not executed on save')", True)
-            with self.assertRaises(CoreError) as failure:
-                await service.import_script_source(rule, 1, "return {", True)
-            self.assertEqual(failure.exception.code, "script_source_syntax_error")
-            self.assertIn(rule["id"], failure.exception.detail)
+            imported = await service.import_script_source(code)
+            source_id = imported["rule"]["id"]
+            self.assertEqual(source_id, "example-com")
+            self.assertEqual((await service.get_script_source(source_id))["code"], code)
+            updated_code = (
+                "return {\n"
+                "  meta = { name = 'Fixture Publisher', pages = {'https://example.com/list'} },\n"
+                "  collect_index = function() error('not executed on save') end\n"
+                "}"
+            )
+            await service.import_script_source(updated_code, source_id, 1)
+            for bad_code, expected_code in (
+                ("return {", "script_source_syntax_error"),
+                ("return {}", "invalid_source_meta"),
+                ("while true do end\nreturn { meta = { pages = {'https://example.com/list'} } }",
+                 "script_source_init_limit_exceeded"),
+            ):
+                with self.assertRaises(CoreError) as failure:
+                    await service.import_script_source(bad_code, source_id, 1)
+                self.assertEqual(failure.exception.code, expected_code)
             restarted = SourceService(bridge, Path(temporary) / "state")
-            self.assertEqual((await restarted.get_script_source(rule["id"]))["code"], "error('not executed on save')")
-            await restarted.remove_source(rule["id"])
-            self.assertNotIn(rule["id"], [source["id"] for source in restarted.list_sources()])
+            self.assertEqual((await restarted.get_script_source(source_id))["code"], updated_code)
+            await restarted.remove_source(source_id)
+            self.assertNotIn(source_id, [source["id"] for source in restarted.list_sources()])
             with self.assertRaises(CoreError) as missing:
-                await restarted.remove_source(rule["id"])
+                await restarted.remove_source(source_id)
             self.assertEqual(missing.exception.code, "unknown_source")
 
     async def test_real_core_v5_scan_and_error(self):

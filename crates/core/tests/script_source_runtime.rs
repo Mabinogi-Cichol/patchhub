@@ -4,11 +4,10 @@ use patchhub_core::{
     sources::{
         adapters::{script, DiscoverPrevious},
         http::{FakeFetcher, FetchRequest, FetchResponse, Fetcher, RequestContext},
-        model::{QueryContext, RawSourceRule, SourceIndex, SourceRule},
+        model::{QueryContext, SourceIndex, SourceRole, SourceRule},
         Sources,
     },
 };
-use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::{
     sync::{
@@ -19,17 +18,21 @@ use std::{
 };
 
 fn rule(code: &str) -> SourceRule {
-    let raw: RawSourceRule = serde_json::from_value(json!({"id":"custom","name":"Script",
-        "adapter":"lua","enabled":true,"pages":["https://example.com/"],
-        "page_hosts":["example.com"],"download_hosts":["download.example.com"],"root_layout":"game_root"})).unwrap();
-    let mut rule = patchhub_core::sources::validate::validate_rule(&raw).unwrap();
-    // Runtime syntax-failure coverage needs a digest-valid but invalid source;
-    // normal import rejects that source earlier.
-    rule.script = Some(patchhub_core::sources::ScriptDescriptor {
-        api_version: 1,
-        sha256: format!("{:x}", Sha256::digest(code.as_bytes())),
-    });
-    rule
+    SourceRule {
+        id: "custom".into(),
+        adapter: "lua".into(),
+        role: SourceRole::Publisher,
+        official_title_match: false,
+        priority: 100,
+        enabled: true,
+        pages: vec!["https://example.com/".into()],
+        page_hosts: vec!["example.com".into()],
+        download_hosts: vec!["download.example.com".into()],
+        script: Some(patchhub_core::sources::ScriptDescriptor {
+            api_version: 1,
+            sha256: format!("{:x}", Sha256::digest(code.as_bytes())),
+        }),
+    }
 }
 fn ctx(fake: &Arc<FakeFetcher>) -> RequestContext {
     RequestContext::with_settings(Box::new(Arc::clone(fake)), Duration::ZERO)
@@ -40,18 +43,42 @@ fn flag() -> Arc<AtomicBool> {
 
 #[test]
 fn documented_publisher_example_imports_and_collects_direct_entries() {
-    let code = include_str!(
-        "../../../docs/features/script-source-adapters/examples/publisher/adapter.lua"
-    );
-    let raw: RawSourceRule = serde_json::from_str(include_str!(
-        "../../../docs/features/script-source-adapters/examples/publisher/source.json"
-    ))
-    .unwrap();
+    let code = r#"return {
+        meta = {
+            name = "Vendor Publisher",
+            pages = { "https://vendor.example/list" },
+            download_hosts = { "downloads.vendor.example" },
+        },
+        collect_index = function(ctx, rule)
+            local res = ctx.get(rule.pages[1])
+            local entries = ctx.array()
+            for _, row in ipairs(ctx.html(res.text):select("tr")) do
+                local appid = tonumber(row:attr("data-appid"))
+                local title = row:select(".title")[1]:text()
+                local url = ctx.url_join(res.url, row:select("a[href]")[1]:attr("href"))
+                entries[#entries + 1] = {
+                    title = title,
+                    page = res.url,
+                    appid = appid,
+                    current_step = 1,
+                    total_steps = 1,
+                    details = {{
+                        title = title,
+                        page = res.url,
+                        steam_ids = appid and { appid } or ctx.array(),
+                        mirrors = {{ url = url, format = "zip" }},
+                        reported_format = "zip",
+                    }},
+                }
+            end
+            return { entries = entries, complete = true }
+        end,
+    }"#;
     let temp = tempfile::tempdir().unwrap();
     let mut sources = Sources::open(temp.path()).unwrap();
-    let imported = sources.import_script_source(&raw, 1, code, false).unwrap();
+    let imported = sources.import_script_source(None, 1, code).unwrap();
     let fake = Arc::new(FakeFetcher::new());
-    fake.push(FetchResponse { status: 200, final_url: raw.pages[0].clone(),
+    fake.push(FetchResponse { status: 200, final_url: imported.rule.pages[0].clone(),
         body: br#"<table><tr data-appid="123"><td class="title">Game</td><td><a href="https://downloads.vendor.example/game.zip">Patch</a></td></tr></table>"#.to_vec(),
         ..FetchResponse::default() });
     let result =
@@ -77,16 +104,14 @@ fn imported_non_table_source_executes_list_and_detail_with_host_bound_progress()
     let state = tempfile::tempdir().unwrap();
     let mut sources = Sources::open(state.path()).unwrap();
     let code = include_str!("fixtures/script-sources/kagura-en-prototype.lua");
-    let mut raw = patchhub_core::sources::RawSourceRule::from(&rule(code));
-    raw.pages = vec!["https://www.kaguragames.com/patch/".into()];
-    raw.page_hosts = vec!["www.kaguragames.com".into()];
-    sources.import_script_source(&raw, 1, code, false).unwrap();
-    let document = sources.get_script_source("custom").unwrap();
+    let imported = sources.import_script_source(None, 1, code).unwrap();
+    let source_id = imported.rule.id;
+    let document = sources.get_script_source(&source_id).unwrap();
     let rule = sources
         .registry()
         .rules()
         .iter()
-        .find(|r| r.id == "custom")
+        .find(|r| r.id == source_id)
         .unwrap();
     let fake = Arc::new(FakeFetcher::new());
     fake.push(FetchResponse {
@@ -110,7 +135,7 @@ fn imported_non_table_source_executes_list_and_detail_with_host_bound_progress()
     assert!(found.checked_at > 0);
     assert!(progress
         .iter()
-        .all(|p| p.source_id == "custom" && p.entry == "collect_index"));
+        .all(|p| p.source_id == source_id && p.entry == "collect_index"));
     let page = &found.entries[0].page;
     let detail = Arc::new(FakeFetcher::new());
     detail.push(FetchResponse {

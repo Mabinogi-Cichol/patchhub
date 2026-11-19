@@ -8,8 +8,9 @@
 use super::index::{from_cache, from_discovery_index, normalize_entries};
 use super::model::{
     DetailRecord, Diagnostic, DiscoveryIndexRecord, DiscoveryRecord, FallbackMatchRecord,
-    FallbackMatchStatus, GameMatchRecord, GameMatchStatus, RulesConfig, SettingsFile, SourceCache,
-    SourceIndex, SourceMatchRecord, SourceMatchStatus, SourceRole, SourceStatus,
+    FallbackMatchStatus, GameMatchRecord, GameMatchStatus, ScriptDescriptor, SettingsFile,
+    SourceCache, SourceIndex, SourceMatchRecord, SourceMatchStatus, SourceRole, SourceRule,
+    SourceStatus,
 };
 use super::r#match::{candidate_is_credible, derive_game_status};
 use super::{
@@ -18,7 +19,7 @@ use super::{
     STORE_SCHEMA_VERSION,
 };
 use fs2::FileExt;
-use serde::{de::DeserializeOwned, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File, OpenOptions};
@@ -232,12 +233,11 @@ impl SourceStore {
                 return Err(invalid("invalid_source_schema"));
             }
         }
-        let mut settings: SettingsFile = if let Some(bytes) = settings_bytes {
-            serde_json::from_slice(&bytes).map_err(|error| invalid(error.to_string()))?
+        let settings: SettingsFile = if let Some(bytes) = settings_bytes {
+            decode_settings(&bytes)?
         } else {
             default_settings()
         };
-        settings.retire_table_sources();
         // Missing `intervals` use registry defaults; explicit values are retained.
         if !(1..=SOURCE_SETTINGS_SCHEMA_VERSION).contains(&settings.schema_version)
             || settings.revision == 0
@@ -418,11 +418,8 @@ impl SourceStore {
 
     /// Reads `settings.json` from disk, falling back to the in-memory copy.
     pub fn load_settings(&self) -> Result<SettingsFile> {
-        match read_json(&self.paths.settings())? {
-            Some(mut settings) => {
-                SettingsFile::retire_table_sources(&mut settings);
-                Ok(settings)
-            }
+        match read_bounded(&self.paths.settings())? {
+            Some(bytes) => decode_settings(&bytes),
             None => self.settings(),
         }
     }
@@ -449,8 +446,10 @@ impl SourceStore {
     ) -> Result<T> {
         self.with_short_lock(|| {
             let mut memory = self.settings_guard()?;
-            let mut next: SettingsFile =
-                read_json(&self.paths.settings())?.unwrap_or_else(|| memory.clone());
+            let mut next: SettingsFile = match read_bounded(&self.paths.settings())? {
+                Some(bytes) => decode_settings(&bytes)?,
+                None => memory.clone(),
+            };
             if !(1..=SOURCE_SETTINGS_SCHEMA_VERSION).contains(&next.schema_version)
                 || next.revision == 0
             {
@@ -925,10 +924,10 @@ fn combine_indexes(mut cache: SourceIndex, discovered: SourceIndex) -> SourceInd
 /// Source ids whose configured rule is a fallback indexer (builtin + user added).
 fn fallback_source_ids(settings: &SettingsFile) -> BTreeSet<String> {
     let mut ids = BTreeSet::new();
-    if let Ok(config) = serde_json::from_str::<RulesConfig>(DEFAULT_RULES_JSON) {
-        for rule in config.sources {
-            if rule.role.as_deref() == Some("fallback_indexer") {
-                ids.insert(rule.id);
+    if let Ok(builtins) = super::builtin::load_rules(DEFAULT_RULES_JSON) {
+        for entry in builtins {
+            if entry.rule.role == SourceRole::FallbackIndexer {
+                ids.insert(entry.rule.id);
             }
         }
     }
@@ -1241,19 +1240,147 @@ fn sync_dir(dir: &Path) {
     }
 }
 
+fn default_legacy_adapter() -> String {
+    "lua".to_string()
+}
+
+fn default_legacy_role() -> SourceRole {
+    SourceRole::Publisher
+}
+
+fn default_legacy_priority() -> u16 {
+    100
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LegacySourceRule {
+    id: String,
+    #[serde(default)]
+    name: String,
+    #[serde(default = "default_legacy_adapter")]
+    adapter: String,
+    #[serde(default = "default_legacy_role")]
+    role: SourceRole,
+    #[serde(default)]
+    discovery_only: Option<bool>,
+    #[serde(default)]
+    official_title_match: Option<bool>,
+    #[serde(default = "default_legacy_priority")]
+    priority: u16,
+    enabled: bool,
+    pages: Vec<String>,
+    page_hosts: Vec<String>,
+    #[serde(default)]
+    download_hosts: Vec<String>,
+    #[serde(default)]
+    #[allow(dead_code)]
+    root_layout: Option<serde_json::Value>,
+    #[serde(default)]
+    #[allow(dead_code)]
+    columns: Option<serde_json::Value>,
+    #[serde(default)]
+    #[allow(dead_code)]
+    table_id: Option<String>,
+    #[serde(default)]
+    #[allow(dead_code)]
+    language: Option<String>,
+    #[serde(default)]
+    #[allow(dead_code)]
+    url: Option<String>,
+    #[serde(default)]
+    script: Option<ScriptDescriptor>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LegacySettingsFile {
+    schema_version: u32,
+    revision: u64,
+    enabled: BTreeMap<String, bool>,
+    added: Vec<LegacySourceRule>,
+    games: BTreeMap<String, BTreeMap<String, bool>>,
+    #[serde(default)]
+    intervals: BTreeMap<String, u64>,
+    #[serde(default)]
+    names: BTreeMap<String, String>,
+    #[serde(default)]
+    script_sources: BTreeMap<String, String>,
+}
+
+pub(crate) fn decode_settings(bytes: &[u8]) -> Result<SettingsFile> {
+    let raw: serde_json::Value =
+        serde_json::from_slice(bytes).map_err(|error| invalid(error.to_string()))?;
+    let version = raw
+        .get("schema_version")
+        .and_then(serde_json::Value::as_u64);
+    let Some(version) =
+        version.filter(|v| (1..=u64::from(SOURCE_SETTINGS_SCHEMA_VERSION)).contains(v))
+    else {
+        return Err(invalid("invalid_source_schema"));
+    };
+    if version == u64::from(SOURCE_SETTINGS_SCHEMA_VERSION) {
+        let mut settings: SettingsFile =
+            serde_json::from_value(raw).map_err(|error| invalid(error.to_string()))?;
+        settings.retire_table_sources();
+        return Ok(settings);
+    }
+    let legacy: LegacySettingsFile =
+        serde_json::from_value(raw).map_err(|error| invalid(error.to_string()))?;
+    let mut names = legacy.names;
+    let mut added = Vec::with_capacity(legacy.added.len());
+    let mut retired = Vec::new();
+    for old in legacy.added {
+        if matches!(old.adapter.as_str(), "table_html" | "table") {
+            retired.push(old.id);
+            continue;
+        }
+        let official_title_match = old
+            .official_title_match
+            .unwrap_or(!old.discovery_only.unwrap_or(false) && old.role == SourceRole::Publisher);
+        let trimmed_name = old.name.trim();
+        if !trimmed_name.is_empty() && !names.contains_key(&old.id) {
+            names.insert(old.id.clone(), trimmed_name.to_string());
+        }
+        added.push(SourceRule {
+            id: old.id,
+            adapter: old.adapter,
+            role: old.role,
+            official_title_match,
+            priority: old.priority,
+            enabled: old.enabled,
+            pages: old.pages,
+            page_hosts: old.page_hosts,
+            download_hosts: old.download_hosts,
+            script: old.script,
+        });
+    }
+    let mut settings = SettingsFile {
+        schema_version: legacy.schema_version,
+        revision: legacy.revision,
+        enabled: legacy.enabled,
+        added,
+        games: legacy.games,
+        intervals: legacy.intervals,
+        names,
+        script_sources: legacy.script_sources,
+    };
+    for source_id in retired {
+        settings.clear_source_overrides(&source_id);
+    }
+    Ok(settings)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sources::model::RulesConfig;
     use crate::sources::validate;
     use std::sync::Arc;
 
     fn builtins() -> Vec<crate::sources::model::SourceRule> {
-        let config: RulesConfig = serde_json::from_str(crate::sources::DEFAULT_RULES_JSON).unwrap();
-        config
-            .sources
-            .iter()
-            .map(|raw| validate::validate_rule(raw).unwrap())
+        crate::sources::builtin::default_builtins()
+            .into_iter()
+            .map(|entry| entry.rule)
             .collect()
     }
 

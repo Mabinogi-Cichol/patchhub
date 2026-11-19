@@ -37,10 +37,8 @@ pub struct Params {
     pub instances: Vec<String>,
     /// `project_instances` requested instance ids.
     pub instance_ids: Vec<String>,
-    pub rule: Option<Value>,
     pub api_version: Option<u32>,
     pub code: Option<String>,
-    pub replace: bool,
     pub name_hints: Vec<String>,
 
     pub force: bool,
@@ -80,13 +78,11 @@ impl Params {
             interval_hours: v.get("interval_hours").and_then(Value::as_u64),
             instances: string_list(&v, "instances"),
             instance_ids: string_list(&v, "instance_ids"),
-            rule: v.get("rule").cloned(),
             api_version: v
                 .get("api_version")
                 .and_then(Value::as_u64)
                 .map(|n| n as u32),
             code: text("code"),
-            replace: v.get("replace").and_then(Value::as_bool).unwrap_or(false),
             name_hints: string_list(&v, "name_hints"),
 
             force: v.get("force").and_then(Value::as_bool).unwrap_or(false),
@@ -244,6 +240,7 @@ fn err(error: impl std::fmt::Display) -> DomainError {
         return DomainError::code(text);
     }
     for prefix in [
+        "invalid_source_meta",
         "script_source_syntax_error",
         "script_source_runtime_error",
         "script_source_contract_error",
@@ -268,8 +265,11 @@ fn value(data: impl Serialize) -> Result<Value, DomainError> {
 
 #[cfg(test)]
 fn fixture_source_rule(id: &str) -> sources::SourceRule {
-    let config: sources::RulesConfig = serde_json::from_str(sources::DEFAULT_RULES_JSON).unwrap();
-    sources::validate::validate_rule(config.sources.iter().find(|r| r.id == id).unwrap()).unwrap()
+    sources::builtin::default_builtins()
+        .into_iter()
+        .find(|entry| entry.rule.id == id)
+        .unwrap()
+        .rule
 }
 #[cfg(test)]
 fn fixture_source_index(id: &str) -> sources::SourceIndex {
@@ -293,6 +293,7 @@ mod script_error_tests {
     #[test]
     fn script_error_codes_keep_the_complete_lua_detail() {
         for code in [
+            "invalid_source_meta",
             "script_source_syntax_error",
             "script_source_runtime_error",
             "script_source_contract_error",
@@ -307,6 +308,9 @@ mod script_error_tests {
             assert_eq!(domain.code, code);
             assert!(domain.detail.unwrap().contains(&detail));
         }
+        let init_limit = super::err("script_source_init_limit_exceeded");
+        assert_eq!(init_limit.code, "script_source_init_limit_exceeded");
+        assert!(init_limit.detail.is_none());
     }
 }
 fn projection_error(error: DomainError) -> DomainError {
@@ -435,6 +439,9 @@ pub fn execute_controlled(
     }
     if method == "get_capabilities" {
         return Ok(capabilities(&params));
+    }
+    if method == "get_script_source_prompt" {
+        return Ok(json!({ "prompt": sources::script::AI_SOURCE_PROMPT }));
     }
     if method == "backup_status" || method == "cleanup_backups" {
         return backups(&params, method == "cleanup_backups");
@@ -884,26 +891,18 @@ fn execute_source_method(
             }
         }
         "import_script_source" => {
-            let raw: sources::RawSourceRule = serde_json::from_value(
-                params
-                    .rule
-                    .clone()
-                    .ok_or_else(|| DomainError::code("rule_required"))?,
-            )
-            .map_err(err)?;
             let mut handle = open_sources(params)?;
             value(
                 handle
                     .import_script_source(
-                        &raw,
+                        params.source_id.as_deref(),
                         params
                             .api_version
-                            .ok_or_else(|| DomainError::code("api_version_required"))?,
+                            .unwrap_or(sources::script::SCRIPT_API_VERSION),
                         params
                             .code
                             .as_deref()
                             .ok_or_else(|| DomainError::code("code_required"))?,
-                        params.replace,
                     )
                     .map_err(err)?,
             )
@@ -1393,9 +1392,10 @@ mod sources_tests {
             .iter()
             .map(|method| method.as_str().unwrap())
             .collect();
-        assert_eq!(methods.len(), 26);
+        assert_eq!(methods.len(), 27);
         assert!(methods.contains(&"match_games"));
         assert!(methods.contains(&"project_instances"));
+        assert!(methods.contains(&"get_script_source_prompt"));
         assert_eq!(capabilities["sources"]["index_schema_version"], 1);
         assert_eq!(capabilities["sources"]["detail_schema_version"], 1);
         assert_eq!(capabilities["sources"]["match_schema_version"], 1);
@@ -1404,7 +1404,7 @@ mod sources_tests {
         assert_eq!(capabilities["sources"]["encoding_version"], 1);
         assert_eq!(
             capabilities["sources"]["methods"].as_array().unwrap().len(),
-            12
+            13
         );
         assert_eq!(capabilities["installer"]["schema_version"], 1);
         assert_eq!(

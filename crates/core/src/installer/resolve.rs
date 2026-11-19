@@ -183,7 +183,7 @@ pub fn source_admission_blocker(
         .next()
 }
 
-fn choose_language(candidate: &SourceCandidate, rule: &SourceRule) -> String {
+fn choose_language(candidate: &SourceCandidate) -> String {
     if let Some(chinese) = candidate
         .languages
         .iter()
@@ -191,12 +191,7 @@ fn choose_language(candidate: &SourceCandidate, rule: &SourceRule) -> String {
     {
         return chinese.clone();
     }
-    candidate
-        .languages
-        .first()
-        .cloned()
-        .or_else(|| rule.language.clone())
-        .unwrap_or_default()
+    candidate.languages.first().cloned().unwrap_or_default()
 }
 
 fn normalized_url(url: &str) -> Option<String> {
@@ -413,7 +408,7 @@ pub fn resolve_zip(
     // evidence field exists.
     let release_id = source_release_id(&rule, appid);
 
-    let language = choose_language(&candidate, &rule);
+    let language = choose_language(&candidate);
     Ok(ResolvedZipCandidate {
         selection_id: selection_id.to_string(),
         release_id,

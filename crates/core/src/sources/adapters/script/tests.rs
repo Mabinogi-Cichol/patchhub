@@ -7,10 +7,9 @@ use mlua::{chunk::ChunkMode, HookTriggers, VmState};
 use patchhub_core::{
     operation,
     sources::{
+        builtin::default_builtins,
         http::{FakeFetcher, FetchRequest, FetchResponse, Fetcher, RequestContext},
         model::{SourceDetail, SourceIndexEntry, SourceRule},
-        validate::validate_rule,
-        RulesConfig, DEFAULT_RULES_JSON,
     },
 };
 use serde::Deserialize;
@@ -60,15 +59,11 @@ fn syntax_check(code: &[u8]) -> mlua::Result<()> {
 }
 
 fn rule() -> SourceRule {
-    let config: RulesConfig = serde_json::from_str(DEFAULT_RULES_JSON).unwrap();
-    validate_rule(
-        config
-            .sources
-            .iter()
-            .find(|rule| rule.id == "kagura-en")
-            .unwrap(),
-    )
-    .unwrap()
+    default_builtins()
+        .into_iter()
+        .find(|entry| entry.rule.id == "kagura-en")
+        .unwrap()
+        .rule
 }
 
 fn response(html: &str, url: &str) -> FetchResponse {

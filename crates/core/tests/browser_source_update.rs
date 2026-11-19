@@ -63,16 +63,10 @@ fn captured_three_language_pages_use_real_lua_update_matching_and_zip_resolution
         let dir = tempfile::tempdir().unwrap();
         let mut s = Sources::open(dir.path()).unwrap();
         let rule = if custom {
-            let mut document = s.get_script_source("patchmoe").unwrap();
-            document.rule.id = "shiravune-copy".into();
-            s.import_script_source(&document.rule, 1, &document.code, false)
-                .unwrap();
-            s.registry()
-                .rules()
-                .iter()
-                .find(|rule| rule.id == "shiravune-copy")
+            let document = s.get_script_source("patchmoe").unwrap();
+            s.import_script_source(None, 1, &document.code)
                 .unwrap()
-                .clone()
+                .rule
         } else {
             rule(&s)
         };

@@ -95,6 +95,12 @@ local function library(ctx, rule)
 end
 
 return {
+    meta = {
+        name = "HGamer 补丁索引",
+        role = "fallback_indexer",
+        pages = {"https://hgamer.tw/zh-CN/patches"},
+        page_hosts = {"hgamer.tw"},
+    },
     discover = function(ctx, rule, query, previous)
         local u = library(ctx, rule)
         local diagnostics, games, patches = ctx.array(), {}, {}
@@ -137,7 +143,7 @@ return {
             if not ok then diagnostics[#diagnostics + 1] = u.diagnostic(root); return end
             return root, final_url
         end
-        local base = rule.url and rule.url ~= ctx.null and rule.url or rule.pages[1]
+        local base = rule.pages[1]
         for _, term in ipairs(query.terms) do
             local encoded = term:gsub("([^%w%*%.%-%_ ])", function(c) return string.format("%%%02X", c:byte()) end):gsub(" ", "+")
             local root, final_url = fetch(ctx.url_join(base, "/zh-CN/search") .. "?q=" .. encoded)

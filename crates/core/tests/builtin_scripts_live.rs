@@ -6,10 +6,14 @@ use std::sync::{atomic::AtomicBool, Arc};
 #[test]
 #[ignore = "live network: patch.moe index and one current detail for each Kagura site"]
 fn bundled_publisher_metadata_live() {
-    let config: sources::RulesConfig = serde_json::from_str(sources::DEFAULT_RULES_JSON).unwrap();
+    let builtins = sources::builtin::default_builtins();
     let rule = |id: &str| -> SourceRule {
-        sources::validate::validate_rule(config.sources.iter().find(|r| r.id == id).unwrap())
+        builtins
+            .iter()
+            .find(|entry| entry.rule.id == id)
             .unwrap()
+            .rule
+            .clone()
     };
     let cancel = Arc::new(AtomicBool::new(false));
     let mut errors = Vec::new();
@@ -122,14 +126,13 @@ fn kagura_summer_memories_base_and_dlc_live() {
     let state = tempfile::tempdir().unwrap();
     let mut registry = Sources::open(state.path()).unwrap();
     let document = registry.get_script_source("kagura-cn").unwrap();
-    let mut rule = document.rule;
-    rule.id = "summer-cn-copy".into();
-    rule.pages = ["夏日狂想曲：乡间的难忘回忆", "夏日狂想曲"]
-        .into_iter()
-        .map(|title| format!("https://kagurafan.com/category/补丁/{title}/"))
-        .collect();
+    let modified_code = document.code.replacen(
+        r#"pages = {"https://kagurafan.com/"}"#,
+        r#"pages = { "https://kagurafan.com/category/补丁/夏日狂想曲：乡间的难忘回忆/", "https://kagurafan.com/category/补丁/夏日狂想曲/" }"#,
+        1,
+    );
     let imported = registry
-        .import_script_source(&rule, 1, &document.code, false)
+        .import_script_source(None, 1, &modified_code)
         .unwrap()
         .rule;
     let cancel = Arc::new(AtomicBool::new(false));

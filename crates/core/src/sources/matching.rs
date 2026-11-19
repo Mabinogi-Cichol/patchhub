@@ -268,14 +268,10 @@ pub fn game_match_summary(store: &SourceStore, appid: u32) -> GameMatch {
                     };
                 }
             };
-            let builtins: super::model::RulesConfig =
-                serde_json::from_str(super::DEFAULT_RULES_JSON).expect("embedded rules");
-            let builtins = builtins
-                .sources
-                .iter()
-                .map(validate::validate_rule)
-                .collect::<Result<Vec<_>>>()
-                .expect("embedded valid rules");
+            let builtins: Vec<SourceRule> = super::builtin::default_builtins()
+                .into_iter()
+                .map(|entry| entry.rule)
+                .collect();
             let rules = merged_rules(&builtins, &settings.added);
             let overrides = Overrides {
                 enabled: settings.enabled,

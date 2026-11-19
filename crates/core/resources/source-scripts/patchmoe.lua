@@ -265,6 +265,13 @@ local function collect_index(ctx, rule, previous, get, submit)
 end
 
 return {
+    meta = {
+        name = "Shiravune",
+        pages = {"https://www.patch.moe/?flag=1"},
+        page_hosts = {"www.patch.moe"},
+        download_hosts = {"download.patch.moe"},
+        official_title_match = true,
+    },
     collect_index = function(ctx, rule, previous)
         local result = collect_index(ctx, rule, previous, ctx.get, ctx.form)
         local diagnostic = result.diagnostics and result.diagnostics[1]

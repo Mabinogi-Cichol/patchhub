@@ -78,6 +78,9 @@ function mount(item: Install, task?: sourceTasks.SourceTaskSnapshot) {
         if (state.rejectRefresh) throw Error("列表读取失败");
         return state.savedSources ?? [];
       }
+      if (method === "get_script_source_prompt") {
+        return { prompt: "https://raw.githubusercontent.com/Mabinogi-Cichol/patchhub/main/docs/custom-subscription-sources.md" };
+      }
       if (method === "get_script_source") {
         if (state.rejectRead) throw Error("读取被拒绝");
         return state.script;
@@ -85,9 +88,16 @@ function mount(item: Install, task?: sourceTasks.SourceTaskSnapshot) {
       if (method === "import_script_source") {
         scriptWrites.push(args);
         if (state.rejectScript) throw Error("script_source_syntax_error: 保留诊断");
-        state.script = { rule: JSON.parse(args[0] as string), api_version: args[1], code: args[2], sha256: "a".repeat(64) };
-        state.savedSources = [{ ...state.script.rule, script: { api_version: 1, sha256: state.script.sha256 } }];
-        return { rule: state.script.rule, settings_revision: 3 };
+        const [code, sourceId, apiVersion] = args as [string, string | null, number];
+        const id = sourceId ?? "example-com";
+        const rule = {
+          id, adapter: "lua", enabled: true, role: "publisher",
+          official_title_match: false, priority: 100,
+          pages: ["https://example.com/"], page_hosts: ["example.com"], download_hosts: ["dl.example.com"],
+        };
+        state.script = { source_id: id, name: "脚本来源", rule, api_version: apiVersion, code, sha256: "a".repeat(64) };
+        state.savedSources = [{ ...rule, name: "脚本来源", origin: "added", status: "not_refreshed", entry_count: 0, revision: 0, complete: false, interval_hours: 0, next_due_at: null, cached_at: null, checked_at: null, script: { api_version: apiVersion, sha256: state.script.sha256 } }];
+        return { rule, name: "脚本来源", settings_revision: 3 };
       }
       if (method === "remove_source") {
         removals.push(args);
@@ -158,25 +168,29 @@ test("source page imports and reads script documents through RPC, refreshes and 
   const page = mount(game()); page.renderSources();
   page.button("导入脚本来源").onClick(); page.renderSources();
   const editor = () => page.controls.find(control => control.name === "ScriptSourceEditor")!.props;
-  const rule = JSON.stringify({ id: "custom", name: "脚本来源", adapter: "lua", pages: [] });
-  await editor().onSave(rule, 1, "return {}", false);
-  editor().onClose(); page.state.expandedSources = { custom: true }; page.renderSources();
+  assert.match(await editor().onLoadPrompt(), /docs\/custom-subscription-sources\.md/);
+  await editor().onSave("return {}", null, 1);
+  editor().onClose(); page.state.expandedSources = { "example-com": true };
+  const sourcesHtml = page.renderSources();
+  assert.match(sourcesHtml, /访问域名.*example\.com/);
+  assert.match(sourcesHtml, /下载域名.*dl\.example\.com/);
   assert.match(page.state.note, /脚本已保存，尚未执行/);
   assert.deepEqual(page.projections[0], ["game"]);
   page.button("编辑脚本").onClick(); await new Promise<void>(resolve => setImmediate(resolve)); page.renderSources();
   assert.equal(editor().document.code, "return {}");
+  assert.equal(editor().onLoadPrompt, undefined);
   page.state.rejectScript = true;
-  await assert.rejects(editor().onSave(rule, 1, "return {", true), /script_source_syntax_error/);
+  await assert.rejects(editor().onSave("return {", "example-com", 1), /script_source_syntax_error/);
   page.renderSources();
   assert.equal(editor().document.code, "return {}");
   assert.equal(page.state.busy, null);
   page.state.rejectScript = false;
-  await editor().onSave(rule, 1, "return { updated = true }", true); editor().onClose(); page.renderSources();
-  assert.equal(page.scriptWrites.at(-1)?.[3], true);
+  await editor().onSave("return { updated = true }", "example-com", 1); editor().onClose(); page.renderSources();
+  assert.deepEqual(page.scriptWrites.at(-1), ["return { updated = true }", "example-com", 1]);
   page.button("编辑脚本").onClick(); await new Promise<void>(resolve => setImmediate(resolve)); page.renderSources();
   assert.equal(editor().document.code, "return { updated = true }");
   page.state.rejectRefresh = true;
-  await editor().onSave(rule, 1, "return { saved = true }", true);
+  await editor().onSave("return { saved = true }", "example-com", 1);
   assert.match(page.state.error, /脚本已保存，但刷新来源或游戏状态失败/);
   assert.equal(page.state.script.code, "return { saved = true }");
   editor().onClose(); page.renderSources(); page.state.rejectRead = true;
@@ -189,10 +203,10 @@ test("builtin sources are viewed read-only and user sources can be deleted", asy
   const page = mount(game());
   const script = { api_version: 1, sha256: "a".repeat(64) };
   page.state.report.sources = [
-    { id: "patchmoe", name: "Shiravune", enabled: true, role: "publisher", origin: "builtin", pages: [], interval_hours: 0, entry_count: 0, revision: 0, script },
-    { id: "mine", name: "我的脚本", enabled: true, role: "publisher", origin: "added", pages: [], interval_hours: 0, entry_count: 0, revision: 0, script },
+    { id: "patchmoe", name: "Shiravune", enabled: true, role: "publisher", official_title_match: true, origin: "builtin", pages: [], page_hosts: [], download_hosts: [], interval_hours: 0, entry_count: 0, revision: 0, script },
+    { id: "mine", name: "我的脚本", enabled: true, role: "publisher", official_title_match: false, origin: "added", pages: [], page_hosts: [], download_hosts: [], interval_hours: 0, entry_count: 0, revision: 0, script },
   ];
-  page.state.script = { rule: { id: "patchmoe", name: "Shiravune", adapter: "lua", pages: [] }, api_version: 1, code: "return {}", sha256: script.sha256 };
+  page.state.script = { source_id: "patchmoe", name: "Shiravune", rule: { id: "patchmoe", adapter: "lua", pages: [], page_hosts: [], download_hosts: [] }, api_version: 1, code: "return {}", sha256: script.sha256 };
   page.state.expandedSources = { patchmoe: true };
   page.renderSources();
   assert.match(page.renderSources(), /内置来源随版本更新/);

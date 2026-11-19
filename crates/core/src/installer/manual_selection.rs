@@ -153,7 +153,7 @@ mod script_binding_tests {
     use crate::sources::{
         self,
         http::{FakeFetcher, RequestContext},
-        RawSourceRule, Sources,
+        Sources,
     };
     use std::{
         sync::{atomic::AtomicBool, Arc},
@@ -164,9 +164,17 @@ mod script_binding_tests {
     fn explicit_url_binds_script_candidate_before_and_after_replacement() {
         let temp = tempfile::tempdir().unwrap();
         let mut sources = Sources::open(temp.path()).unwrap();
-        let raw: RawSourceRule=serde_json::from_value(json!({"id":"custom", "name":"Custom", "adapter":"lua", "enabled":true,
-            "pages":["https://example.com/list"], "page_hosts":["example.com"], "download_hosts":["download.example.com"], "root_layout":"game_root"})).unwrap();
-        let code="return {collect_index=function() return {entries={{title='Game',page='https://example.com/list',appid=42,current_step=1,total_steps=1,details={{title='Game',page='https://example.com/list',steam_ids={42},mirrors={{url='https://download.example.com/a.zip',format='zip'}},reported_format='zip'}}}},complete=true} end}";
+        let code = r#"return {
+            meta = {
+                name = "Custom",
+                pages = {"https://example.com/list"},
+                page_hosts = {"example.com"},
+                download_hosts = {"download.example.com"},
+            },
+            collect_index = function()
+                return {entries={{title='Game',page='https://example.com/list',appid=42,current_step=1,total_steps=1,details={{title='Game',page='https://example.com/list',steam_ids={42},mirrors={{url='https://download.example.com/a.zip',format='zip'}},reported_format='zip'}}}},complete=true}
+            end
+        }"#;
         let game = GameQuery {
             appid: 42,
             name: "Game".into(),
@@ -174,12 +182,12 @@ mod script_binding_tests {
             related_dlc: Vec::new(),
             instance_id: Some("test".into()),
         };
-        let update = |sources: &Sources| {
+        let update = |sources: &Sources, source_id: &str| {
             let rule = sources
                 .registry()
                 .rules()
                 .iter()
-                .find(|r| r.id == "custom")
+                .find(|r| r.id == source_id)
                 .unwrap();
             let mut ctx = RequestContext::with_settings(
                 Box::new(Arc::new(FakeFetcher::new())),
@@ -195,17 +203,18 @@ mod script_binding_tests {
             )
             .unwrap();
         };
-        sources.import_script_source(&raw, 1, code, false).unwrap();
-        update(&sources);
+        let imported = sources.import_script_source(None, 1, code).unwrap();
+        let source_id = imported.rule.id;
+        update(&sources, &source_id);
         let old = sources.registry().index_candidates(&game).remove(0);
         let input = super::super::service::ManualDownloadInput {
-            source_id: "custom".into(),
+            source_id: source_id.clone(),
             candidate_id: old.candidate_id,
             url: "https://download.example.com/manual.zip".into(),
         };
         assert!(resolve_download(sources.registry(), &game, &input).is_ok());
         sources
-            .import_script_source(&raw, 1, &format!("{code}\n-- parser B"), true)
+            .import_script_source(Some(&source_id), 1, &format!("{code}\n-- parser B"))
             .unwrap();
         assert_eq!(
             resolve_download(sources.registry(), &game, &input)
@@ -213,7 +222,7 @@ mod script_binding_tests {
                 .code,
             "selection_not_found"
         );
-        update(&sources);
+        update(&sources, &source_id);
         assert_eq!(
             resolve_download(sources.registry(), &game, &input)
                 .unwrap_err()

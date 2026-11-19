@@ -90,6 +90,9 @@
     "AddSourceResult": {
       "additionalProperties": false,
       "properties": {
+        "name": {
+          "type": "string"
+        },
         "rule": {
           "$ref": "#/$defs/SourceRule"
         },
@@ -101,7 +104,8 @@
       },
       "required": [
         "settings_revision",
-        "rule"
+        "rule",
+        "name"
       ],
       "type": "object"
     },
@@ -321,58 +325,6 @@
         "busy"
       ],
       "type": "string"
-    },
-    "Columns": {
-      "additionalProperties": false,
-      "properties": {
-        "appid": {
-          "default": null,
-          "format": "uint8",
-          "maximum": 255,
-          "minimum": 0,
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
-        "date": {
-          "default": null,
-          "format": "uint8",
-          "maximum": 255,
-          "minimum": 0,
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
-        "download": {
-          "format": "uint8",
-          "maximum": 255,
-          "minimum": 0,
-          "type": "integer"
-        },
-        "language": {
-          "default": null,
-          "format": "uint8",
-          "maximum": 255,
-          "minimum": 0,
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
-        "title": {
-          "format": "uint8",
-          "maximum": 255,
-          "minimum": 0,
-          "type": "integer"
-        }
-      },
-      "required": [
-        "title",
-        "download"
-      ],
-      "type": "object"
     },
     "ContractVersions": {
       "additionalProperties": false,
@@ -819,22 +771,8 @@
             "null"
           ]
         },
-        "columns": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Columns"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
         "complete": {
           "description": "Whether the current published index snapshot covers the whole source.",
-          "type": "boolean"
-        },
-        "discovery_only": {
-          "default": false,
           "type": "boolean"
         },
         "download_hosts": {
@@ -861,12 +799,6 @@
           "minimum": 0,
           "type": "integer"
         },
-        "language": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
         "matched": {
           "type": "boolean"
         },
@@ -881,6 +813,10 @@
             "integer",
             "null"
           ]
+        },
+        "official_title_match": {
+          "default": false,
+          "type": "boolean"
         },
         "origin": {
           "description": "`\"builtin\"` (compiled default) or `\"added\"` (user rule, including one that\nshadows a builtin id).",
@@ -915,17 +851,6 @@
           "$ref": "#/$defs/SourceRole",
           "default": "publisher"
         },
-        "root_layout": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/RootLayout"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
-        },
         "script": {
           "anyOf": [
             {
@@ -941,27 +866,15 @@
         },
         "subscribed": {
           "type": "boolean"
-        },
-        "table_id": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "url": {
-          "type": [
-            "string",
-            "null"
-          ]
         }
       },
       "required": [
         "id",
-        "name",
         "adapter",
         "enabled",
         "pages",
         "page_hosts",
+        "name",
         "origin",
         "status",
         "entry_count",
@@ -1066,6 +979,7 @@
       "additionalProperties": false,
       "properties": {
         "api_version": {
+          "default": 1,
           "format": "uint32",
           "minimum": 0,
           "type": "integer"
@@ -1076,18 +990,16 @@
         "host": {
           "$ref": "#/$defs/HostInputs"
         },
-        "replace": {
-          "default": false,
-          "type": "boolean"
-        },
-        "rule": {
-          "$ref": "#/$defs/RawSourceRule"
+        "source_id": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [
         "host",
-        "rule",
-        "api_version",
         "code"
       ],
       "type": "object"
@@ -1940,6 +1852,7 @@
         "set_game_source",
         "import_script_source",
         "get_script_source",
+        "get_script_source_prompt",
         "set_source_update_interval",
         "update_source",
         "match_games",
@@ -2012,6 +1925,9 @@
         },
         {
           "$ref": "#/$defs/ScriptSourceDocument"
+        },
+        {
+          "$ref": "#/$defs/ScriptSourcePromptResult"
         },
         {
           "$ref": "#/$defs/SetSourceIntervalResult"
@@ -2389,117 +2305,6 @@
       "required": [
         "source_id",
         "page"
-      ],
-      "type": "object"
-    },
-    "RawSourceRule": {
-      "additionalProperties": false,
-      "description": "Deserialization intermediate: loose field types so `validate_rule` can return\nthe exact Python error codes.",
-      "properties": {
-        "adapter": {
-          "default": "lua",
-          "description": "Author rules are Lua; bundled rules keep their historical adapter name to\nlocate the compiled script. Omitted means `lua`.",
-          "type": "string"
-        },
-        "columns": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Columns"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
-        },
-        "discovery_only": {
-          "default": null,
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
-        "download_hosts": {
-          "default": null,
-          "items": {
-            "type": "string"
-          },
-          "type": [
-            "array",
-            "null"
-          ]
-        },
-        "enabled": {
-          "type": "boolean"
-        },
-        "id": {
-          "type": "string"
-        },
-        "language": {
-          "default": null,
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "name": {
-          "type": "string"
-        },
-        "page_hosts": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "pages": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "priority": {
-          "default": null,
-          "format": "int64",
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
-        "role": {
-          "default": null,
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "root_layout": {
-          "default": null,
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "table_id": {
-          "default": null,
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "url": {
-          "default": null,
-          "type": [
-            "string",
-            "null"
-          ]
-        }
-      },
-      "required": [
-        "id",
-        "name",
-        "enabled",
-        "pages",
-        "page_hosts"
       ],
       "type": "object"
     },
@@ -3113,6 +2918,30 @@
           "additionalProperties": false,
           "properties": {
             "method": {
+              "const": "get_script_source_prompt"
+            },
+            "params": {
+              "$ref": "#/$defs/HostParams"
+            },
+            "protocol_version": {
+              "const": 5
+            },
+            "request_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "protocol_version",
+            "request_id",
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "method": {
               "const": "set_source_update_interval"
             },
             "params": {
@@ -3241,12 +3070,6 @@
         }
       ]
     },
-    "RootLayout": {
-      "enum": [
-        "game_root"
-      ],
-      "type": "string"
-    },
     "ScanReport": {
       "additionalProperties": false,
       "properties": {
@@ -3334,18 +3157,38 @@
         "code": {
           "type": "string"
         },
+        "name": {
+          "type": "string"
+        },
         "rule": {
-          "$ref": "#/$defs/RawSourceRule"
+          "$ref": "#/$defs/SourceRule"
         },
         "sha256": {
+          "type": "string"
+        },
+        "source_id": {
           "type": "string"
         }
       },
       "required": [
+        "source_id",
+        "name",
         "rule",
         "api_version",
         "code",
         "sha256"
+      ],
+      "type": "object"
+    },
+    "ScriptSourcePromptResult": {
+      "additionalProperties": false,
+      "properties": {
+        "prompt": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "prompt"
       ],
       "type": "object"
     },
@@ -3792,7 +3635,7 @@
     },
     "SourceMatch": {
       "additionalProperties": false,
-      "description": "Output of `matches()`: the matched source entry plus its rule/ release ids\n(field names mirror the Python `{**selected, source_id, release_id,\nroot_layout}` dict and the TS `SourceSubscription` shape).",
+      "description": "Output of `matches()`: the matched source entry plus its rule/ release ids\n(field names mirror the Python `{**selected, source_id, release_id}` dict).",
       "properties": {
         "aliases": {
           "default": [],
@@ -3822,16 +3665,6 @@
         },
         "release_id": {
           "type": "string"
-        },
-        "root_layout": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/RootLayout"
-            },
-            {
-              "type": "null"
-            }
-          ]
         },
         "source_id": {
           "type": "string"
@@ -3968,24 +3801,10 @@
     },
     "SourceRule": {
       "additionalProperties": false,
-      "description": "Validated canonical rule; field names match the Python rule dict.",
+      "description": "Validated canonical rule; host-maintained identity without display name.",
       "properties": {
         "adapter": {
           "type": "string"
-        },
-        "columns": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Columns"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "discovery_only": {
-          "default": false,
-          "type": "boolean"
         },
         "download_hosts": {
           "default": [],
@@ -4000,14 +3819,9 @@
         "id": {
           "type": "string"
         },
-        "language": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "name": {
-          "type": "string"
+        "official_title_match": {
+          "default": false,
+          "type": "boolean"
         },
         "page_hosts": {
           "items": {
@@ -4032,17 +3846,6 @@
           "$ref": "#/$defs/SourceRole",
           "default": "publisher"
         },
-        "root_layout": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/RootLayout"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
-        },
         "script": {
           "anyOf": [
             {
@@ -4052,23 +3855,10 @@
               "type": "null"
             }
           ]
-        },
-        "table_id": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "url": {
-          "type": [
-            "string",
-            "null"
-          ]
         }
       },
       "required": [
         "id",
-        "name",
         "adapter",
         "enabled",
         "pages",
@@ -4135,22 +3925,8 @@
             "null"
           ]
         },
-        "columns": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Columns"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
         "complete": {
           "description": "Whether the current published index snapshot covers the whole source.",
-          "type": "boolean"
-        },
-        "discovery_only": {
-          "default": false,
           "type": "boolean"
         },
         "download_hosts": {
@@ -4177,12 +3953,6 @@
           "minimum": 0,
           "type": "integer"
         },
-        "language": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
         "name": {
           "type": "string"
         },
@@ -4194,6 +3964,10 @@
             "integer",
             "null"
           ]
+        },
+        "official_title_match": {
+          "default": false,
+          "type": "boolean"
         },
         "origin": {
           "description": "`\"builtin\"` (compiled default) or `\"added\"` (user rule, including one that\nshadows a builtin id).",
@@ -4228,17 +4002,6 @@
           "$ref": "#/$defs/SourceRole",
           "default": "publisher"
         },
-        "root_layout": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/RootLayout"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
-        },
         "script": {
           "anyOf": [
             {
@@ -4251,27 +4014,15 @@
         },
         "status": {
           "type": "string"
-        },
-        "table_id": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "url": {
-          "type": [
-            "string",
-            "null"
-          ]
         }
       },
       "required": [
         "id",
-        "name",
         "adapter",
         "enabled",
         "pages",
         "page_hosts",
+        "name",
         "origin",
         "status",
         "entry_count",

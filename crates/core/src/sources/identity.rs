@@ -681,7 +681,7 @@ fn candidate_matches_targets(
 }
 
 /// Exact normalized base/DLC title match used to upgrade trusted publisher
-/// candidates (`!rule.discovery_only` or queries carrying Steam DLC context)
+/// candidates (`rule.official_title_match` or queries carrying Steam DLC context)
 /// from `MatchBasis::Title` to `MatchBasis::OfficialTitle`.
 fn matches_trusted_title(
     rule: &SourceRule,
@@ -689,10 +689,10 @@ fn matches_trusted_title(
     alias_list: &[String],
     query: &QueryContext,
 ) -> bool {
-    if rule.discovery_only && query.related_dlc.is_empty() {
+    if !rule.official_title_match && query.related_dlc.is_empty() {
         return false;
     }
-    let split_mode = !rule.discovery_only;
+    let split_mode = rule.official_title_match;
     let targets = collect_match_targets(
         std::iter::once(query.name.as_str())
             .chain(query.localized_name.as_deref())
@@ -721,7 +721,7 @@ fn matched_dlc_for_candidate(
     {
         return Some(dlc.appid);
     }
-    let split_mode = !rule.discovery_only;
+    let split_mode = rule.official_title_match;
     let base_targets = collect_match_targets(
         std::iter::once(query.name.as_str()).chain(query.localized_name.as_deref()),
         split_mode,
@@ -816,12 +816,14 @@ fn build_candidates_inner(
     if variant == Variant::Demo || (!has_ids && gog_only(text)) {
         return Vec::new();
     }
-    let platforms: Vec<String> =
-        if has_ids || (!rule.discovery_only && trusted_title) || word_bounded_ci(text, "steam") {
-            vec!["steam".to_string()]
-        } else {
-            Vec::new()
-        };
+    let platforms: Vec<String> = if has_ids
+        || (rule.official_title_match && trusted_title)
+        || word_bounded_ci(text, "steam")
+    {
+        vec!["steam".to_string()]
+    } else {
+        Vec::new()
+    };
     let all_versions = versions(text);
 
     let mut groups: Vec<(GroupKey, Vec<Mirror>)> = Vec::new();
@@ -1454,20 +1456,14 @@ mod tests {
         SourceRule {
             script: None,
             id: "kagura-cn".to_string(),
-            name: "Kagura".to_string(),
             adapter: "kagura_wordpress".to_string(),
             role: SourceRole::Publisher,
-            discovery_only: true,
+            official_title_match: false,
             priority: 10,
             enabled: true,
             pages: vec!["https://kagurafan.com/".to_string()],
             page_hosts: vec!["kagurafan.com".to_string()],
             download_hosts: vec!["kaguraserver.com".to_string()],
-            root_layout: None,
-            columns: None,
-            table_id: None,
-            language: None,
-            url: None,
         }
     }
 

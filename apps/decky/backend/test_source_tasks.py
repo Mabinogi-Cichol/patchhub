@@ -23,7 +23,7 @@ PUBLISHER = {"id": "patchmoe", "name": "patch.moe", "adapter": "patchmoe", "enab
              "role": "publisher", "complete": False, "revision": 0, "entry_count": 0,
              "interval_hours": 0, "cached_at": None, "checked_at": None,
              "status": "not_refreshed", "origin": "builtin", "pages": [], "page_hosts": [],
-             "download_hosts": [], "priority": 100, "discovery_only": False, "root_layout": None}
+             "download_hosts": [], "priority": 100, "official_title_match": False}
 
 
 async def until(condition):
@@ -99,18 +99,21 @@ class SourceTasksRpcTests(unittest.IsolatedAsyncioTestCase):
     async def test_script_rpcs_keep_full_source_and_error_detail(self):
         plugin = self.plugin()
         code = "-- " + "源码" * 40000 + "\nreturn {}"
-        document = {"rule": {"id": "custom"}, "api_version": 1, "code": code, "sha256": "a" * 64}
+        document = {"source_id": "custom", "name": "Custom", "rule": {"id": "custom"}, "api_version": 1, "code": code, "sha256": "a" * 64}
         plugin.sources.get_script_source = AsyncMock(return_value=document)
         self.assertEqual(await plugin.get_script_source("custom"), document)
-        result = {"rule": document["rule"], "settings_revision": 3}
+        prompt = response("get_script_source_prompt")["result"]
+        plugin.sources.get_script_source_prompt = AsyncMock(return_value=prompt)
+        self.assertEqual(await plugin.get_script_source_prompt(), prompt)
+        result = {"rule": document["rule"], "name": "Custom", "settings_revision": 3}
         plugin.sources.import_script_source = AsyncMock(return_value=result)
-        saved = await plugin.import_script_source('{"id":"custom"}', 1, code, True)
-        plugin.sources.import_script_source.assert_awaited_once_with({"id": "custom"}, 1, code, True)
+        saved = await plugin.import_script_source(code, "custom", 1)
+        plugin.sources.import_script_source.assert_awaited_once_with(code, "custom", 1)
         self.assertEqual(saved, result)
         detail = "source/custom.lua:8: " + "完整语法诊断" * 1000
         plugin.sources.import_script_source.side_effect = CoreError("script_source_syntax_error", detail)
         with self.assertRaises(RuntimeError) as failure:
-            await plugin.import_script_source('{"id":"custom"}', 1, "return {", True)
+            await plugin.import_script_source("return {", "custom", 1)
         self.assertIn(detail, str(failure.exception))
         plugin.sources.get_script_source.side_effect = CoreError("script_source_digest_mismatch", detail)
         with self.assertRaises(RuntimeError) as failure:

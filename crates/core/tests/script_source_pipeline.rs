@@ -24,8 +24,15 @@ use std::{
     time::Duration,
 };
 
+const CUSTOM_ID: &str = "example-com";
 const CODE: &str = r#"
-local M = {}
+local M = {
+  meta = {
+    name = "Custom",
+    pages = {"https://example.com/list"},
+    download_hosts = {"download.example.com"},
+  }
+}
 function M.collect_index(ctx, rule, previous)
   local entries = {}
   for _, node in ipairs(ctx.html(ctx.get(rule.pages[1]).text):select('article')) do
@@ -45,13 +52,10 @@ return M
 "#;
 const LIST: &str = "<article data-page='/game'>Test Game</article>";
 const DETAIL: &str = "<h1>Test Game</h1><a href='https://download.example.com/a.zip'>ZIP</a><a href='https://download.example.com/a.exe'>EXE</a>";
-fn raw() -> RawSourceRule {
-    serde_json::from_value(
-        json!({"id":"custom", "name":"Custom", "adapter":"lua", "enabled":true,
-        "pages":["https://example.com/list"], "page_hosts":["example.com"],
-        "download_hosts":["download.example.com"], "root_layout":"game_root"}),
+fn with_meta(body: &str) -> String {
+    format!(
+        "return {{\n  meta = {{ name = 'Custom', pages = {{'https://example.com/list'}}, download_hosts = {{'download.example.com'}} }},\n  {body}\n}}"
     )
-    .unwrap()
 }
 fn open(state: &std::path::Path) -> Sources {
     Sources::open_with_rules(state, r#"{"schema_version":2,"sources":[]}"#).unwrap()
@@ -60,7 +64,7 @@ fn rule(s: &Sources) -> SourceRule {
     s.registry()
         .rules()
         .iter()
-        .find(|r| r.id == "custom")
+        .find(|r| r.id == CUSTOM_ID)
         .unwrap()
         .clone()
 }
@@ -115,7 +119,7 @@ fn matches(
 fn seeded() -> (tempfile::TempDir, Sources, Vec<SourceCandidate>) {
     let temp = tempfile::tempdir().unwrap();
     let mut s = open(temp.path());
-    s.import_script_source(&raw(), 1, CODE, false).unwrap();
+    s.import_script_source(None, 1, CODE).unwrap();
     update(&s, &transport(&[LIST])).unwrap();
     let candidate = matches(&s, &transport(&[DETAIL]), &[game(42)]).unwrap()[0]
         .candidates
@@ -167,7 +171,7 @@ fn assert_retired(s: &Sources, candidates: &[SourceCandidate]) {
 fn non_table_update_matching_shared_details_and_all_selection_paths() {
     let temp = tempfile::tempdir().unwrap();
     let mut s = open(temp.path());
-    s.import_script_source(&raw(), 1, CODE, false).unwrap();
+    s.import_script_source(None, 1, CODE).unwrap();
     let list = transport(&[LIST]);
     let out = update(&s, &list).unwrap();
     assert_eq!(out.revision, 1);
@@ -175,7 +179,7 @@ fn non_table_update_matching_shared_details_and_all_selection_paths() {
     assert_eq!(list.calls()[0].url, "https://example.com/list");
     assert!(s
         .store()
-        .load_detail("custom", "https://example.com/game")
+        .load_detail(CUSTOM_ID, "https://example.com/game")
         .unwrap()
         .is_none());
     let detail = transport(&[DETAIL]);
@@ -216,14 +220,16 @@ fn non_table_update_matching_shared_details_and_all_selection_paths() {
 #[test]
 fn script_replacement_invalidates_before_update_after_update_restart_and_same_facts() {
     let (temp, mut s, a) = seeded();
-    let old = s.store().load_index("custom").unwrap().unwrap();
-    s.registry_mut().set_name("custom", "Display name").unwrap();
+    let old = s.store().load_index(CUSTOM_ID).unwrap().unwrap();
+    s.registry_mut()
+        .set_name(CUSTOM_ID, "Display name")
+        .unwrap();
     assert_eq!(
         s.registry().cached_candidates(&game(42)),
         a,
         "display name is not parser identity"
     );
-    s.import_script_source(&raw(), 1, &format!("{CODE}\n-- parser B"), true)
+    s.import_script_source(Some(CUSTOM_ID), 1, &format!("{CODE}\n-- parser B"))
         .unwrap();
     assert_retired(&s, &a);
     let summary = s.registry().list_sources().remove(0);
@@ -231,7 +237,7 @@ fn script_replacement_invalidates_before_update_after_update_restart_and_same_fa
     assert_eq!(summary.entry_count, 0);
     assert_eq!(summary.status, "not_refreshed");
     assert_eq!(
-        s.store().load_index("custom").unwrap().unwrap(),
+        s.store().load_index(CUSTOM_ID).unwrap().unwrap(),
         old,
         "replacement preserves old file"
     );
@@ -241,7 +247,7 @@ fn script_replacement_invalidates_before_update_after_update_restart_and_same_fa
     let out = update(&s, &transport(&[LIST])).unwrap();
     assert_eq!(out.revision, old.revision + 1);
     assert_eq!(
-        s.store().load_index("custom").unwrap().unwrap().entries,
+        s.store().load_index(CUSTOM_ID).unwrap().unwrap().entries,
         old.entries
     );
     assert_retired(&s, &a);
@@ -352,8 +358,12 @@ fn readonly_projection_and_preview_reject_retired_selection_without_running_lua(
         assert_eq!(report.blockers, Vec::<String>::new());
     }
     // Any accidental VM execution in these read paths would never return.
-    s.import_script_source(&raw(), 1, "while true do end", true)
-        .unwrap();
+    s.import_script_source(
+        Some(CUSTOM_ID),
+        1,
+        &with_meta("collect_index = function() while true do end end"),
+    )
+    .unwrap();
     let paths = s.store().paths();
     let before = fs::read(paths.settings()).unwrap();
     let snapshot = SourceSnapshot::load(temp.path(), &[query.clone()], 500)
@@ -405,44 +415,47 @@ fn readonly_projection_and_preview_reject_retired_selection_without_running_lua(
 #[test]
 fn partial_and_failed_script_attempts_preserve_official_index_and_old_parser_is_not_resumed() {
     let (_temp, mut s, _) = seeded();
-    let old = s.store().load_index("custom").unwrap().unwrap();
-    let partial = r#"return {collect_index=function(ctx,rule,previous) assert(previous==ctx.null); return {entries={{title='Partial',page='https://example.com/p',current_step=1,total_steps=2}},pending={'https://example.com/next'},complete=false} end}"#;
-    s.import_script_source(&raw(), 1, partial, true).unwrap();
+    let old = s.store().load_index(CUSTOM_ID).unwrap().unwrap();
+    let partial = with_meta("collect_index=function(ctx,rule,previous) assert(previous==ctx.null); return {entries={{title='Partial',page='https://example.com/p',current_step=1,total_steps=2}},pending={'https://example.com/next'},complete=false} end");
+    s.import_script_source(Some(CUSTOM_ID), 1, &partial)
+        .unwrap();
     let out = update(&s, &transport(&[])).unwrap();
     assert_eq!(out.status.code, "source_partial");
-    let progress = s.store().load_index_progress("custom").unwrap().unwrap();
+    let progress = s.store().load_index_progress(CUSTOM_ID).unwrap().unwrap();
     assert!(!progress.complete);
     assert_ne!(progress.parser_fingerprint, old.parser_fingerprint);
-    assert_eq!(s.store().load_index("custom").unwrap().unwrap(), old);
+    assert_eq!(s.store().load_index(CUSTOM_ID).unwrap().unwrap(), old);
     s.import_script_source(
-        &raw(),
+        Some(CUSTOM_ID),
         1,
-        "return {collect_index=function() error('broken list') end}",
-        true,
+        &with_meta("collect_index=function() error('broken list') end"),
     )
     .unwrap();
     let err = update(&s, &transport(&[])).unwrap_err();
     assert!(err.to_string().contains("script_source_runtime_error"));
-    assert_eq!(s.store().load_index("custom").unwrap().unwrap(), old);
+    assert_eq!(s.store().load_index(CUSTOM_ID).unwrap().unwrap(), old);
     assert_eq!(
-        s.store().load_index_progress("custom").unwrap().unwrap(),
+        s.store().load_index_progress(CUSTOM_ID).unwrap().unwrap(),
         progress
     );
-    s.import_script_source(&raw(), 1, &format!("{CODE}\n-- new parser"), true)
+    s.import_script_source(Some(CUSTOM_ID), 1, &format!("{CODE}\n-- new parser"))
         .unwrap();
     assert_eq!(
         update(&s, &transport(&[LIST])).unwrap().revision,
         old.revision + 1
     );
-    assert!(s.store().load_index_progress("custom").unwrap().is_none());
+    assert!(s.store().load_index_progress(CUSTOM_ID).unwrap().is_none());
 }
 
 #[test]
 fn cancelled_update_and_detail_cannot_publish_success_even_if_script_catches_it() {
     let (temp, mut s, _) = seeded();
-    let old = s.store().load_index("custom").unwrap().unwrap();
-    let looping="return {collect_index=function() while true do pcall(function() while true do end end) end end}";
-    s.import_script_source(&raw(), 1, looping, true).unwrap();
+    let old = s.store().load_index(CUSTOM_ID).unwrap().unwrap();
+    let looping = with_meta(
+        "collect_index=function() while true do pcall(function() while true do end end) end end",
+    );
+    s.import_script_source(Some(CUSTOM_ID), 1, &looping)
+        .unwrap();
     let cancel = flag();
     let flag2 = Arc::clone(&cancel);
     let thread = std::thread::spawn(move || {
@@ -460,9 +473,9 @@ fn cancelled_update_and_detail_cannot_publish_success_even_if_script_catches_it(
     .unwrap_err();
     thread.join().unwrap();
     assert_eq!(err.to_string(), "task_cancelled");
-    assert_eq!(s.store().load_index("custom").unwrap().unwrap(), old);
+    assert_eq!(s.store().load_index(CUSTOM_ID).unwrap().unwrap(), old);
     let detail_loop=CODE.replace("local doc = ctx.html(ctx.get(state.page).text)","while true do pcall(function() while true do end end) end\nlocal doc = ctx.html(ctx.get(state.page).text)");
-    s.import_script_source(&raw(), 1, &detail_loop, true)
+    s.import_script_source(Some(CUSTOM_ID), 1, &detail_loop)
         .unwrap();
     update(&s, &transport(&[LIST])).unwrap();
     let before = fs::read(s.store().paths().matches(42)).unwrap();
@@ -496,7 +509,8 @@ fn cancelled_update_and_detail_cannot_publish_success_even_if_script_catches_it(
 fn category_inline_linked_details_and_pagination_use_the_same_script_dispatch() {
     let temp = tempfile::tempdir().unwrap();
     let mut s = open(temp.path());
-    let code = r#"return {
+    let code = with_meta(
+        r#"
         collect_index=function() return {entries={{title='Test Game',page='https://example.com/category',current_step=1,total_steps=2,step_data={kind='category'}}},complete=true} end,
         resolve_detail=function(ctx,rule,state)
             local details = state.details or {}
@@ -511,8 +525,9 @@ fn category_inline_linked_details_and_pagination_use_the_same_script_dispatch() 
             end
             return {current_step=3,total_steps=3,details=details}
         end
-    }"#;
-    s.import_script_source(&raw(), 1, code, false).unwrap();
+    "#,
+    );
+    s.import_script_source(None, 1, &code).unwrap();
     update(&s, &transport(&[])).unwrap();
     let inline = json!({"title":"Test Game", "page":"https://example.com/inline", "steam_ids":[42], "mirrors":[{"url":"https://download.example.com/a.zip","format":"zip"}]});
     let category = json!({"inline":[inline], "next_page":"https://example.com/page2"}).to_string();
@@ -527,12 +542,12 @@ fn category_inline_linked_details_and_pagination_use_the_same_script_dispatch() 
     assert!(exe(&result[0].candidates).parser_fingerprint.is_some());
     assert!(s
         .store()
-        .load_detail("custom", "https://example.com/inline")
+        .load_detail(CUSTOM_ID, "https://example.com/inline")
         .unwrap()
         .is_some());
     assert!(s
         .store()
-        .load_detail("custom", "https://example.com/linked")
+        .load_detail(CUSTOM_ID, "https://example.com/linked")
         .unwrap()
         .is_some());
 }
@@ -545,10 +560,9 @@ impl sources::http::Fetcher for ReplacingFetcher {
     fn fetch(&self, _: &sources::http::FetchRequest) -> sources::Result<FetchResponse> {
         let mut writer = open(&self.state);
         writer.import_script_source(
-            &raw(),
+            Some(CUSTOM_ID),
             1,
             &format!("{CODE}\n-- replaced during network"),
-            true,
         )?;
         Ok(FetchResponse {
             status: 200,
@@ -560,7 +574,7 @@ impl sources::http::Fetcher for ReplacingFetcher {
 #[test]
 fn mid_task_replacement_does_not_publish_old_index_or_return_old_candidates() {
     let (temp, s, _) = seeded();
-    let before = fs::read(s.store().paths().index("custom")).unwrap();
+    let before = fs::read(s.store().paths().index(CUSTOM_ID)).unwrap();
     let mut network = RequestContext::with_settings(
         Box::new(ReplacingFetcher {
             state: temp.path().into(),
@@ -571,7 +585,10 @@ fn mid_task_replacement_does_not_publish_old_index_or_return_old_candidates() {
     let err = update::update_source(s.store(), &rule(&s), false, &mut network, &flag(), |_| {})
         .unwrap_err();
     assert_eq!(err.to_string(), "source_rule_changed");
-    assert_eq!(before, fs::read(s.store().paths().index("custom")).unwrap());
+    assert_eq!(
+        before,
+        fs::read(s.store().paths().index(CUSTOM_ID)).unwrap()
+    );
     assert_eq!(
         update(&s, &transport(&[])).unwrap_err().to_string(),
         "source_rule_changed"
@@ -583,7 +600,7 @@ fn mid_task_replacement_does_not_publish_old_index_or_return_old_candidates() {
         "source_rule_changed"
     );
     let mut s = open(temp.path());
-    s.import_script_source(&raw(), 1, CODE, true).unwrap();
+    s.import_script_source(Some(CUSTOM_ID), 1, CODE).unwrap();
     let before = fs::read(s.store().paths().matches(42)).unwrap();
     let mut network = RequestContext::with_settings(
         Box::new(ReplacingFetcher {
@@ -616,14 +633,14 @@ fn mid_task_replacement_does_not_publish_old_index_or_return_old_candidates() {
 #[test]
 fn unchanged_script_failures_keep_last_success_without_publishing_false_completion() {
     let (_temp, s, a) = seeded();
-    let index = s.store().load_index("custom").unwrap().unwrap();
+    let index = s.store().load_index(CUSTOM_ID).unwrap().unwrap();
     let detail = s
         .store()
-        .load_detail("custom", "https://example.com/game")
+        .load_detail(CUSTOM_ID, "https://example.com/game")
         .unwrap()
         .unwrap();
     assert!(update(&s, &transport(&[])).is_err());
-    assert_eq!(s.store().load_index("custom").unwrap().unwrap(), index);
+    assert_eq!(s.store().load_index(CUSTOM_ID).unwrap().unwrap(), index);
     let result = matching::rematch_game(
         s.store(),
         s.registry().rules(),
@@ -647,7 +664,7 @@ fn unchanged_script_failures_keep_last_success_without_publishing_false_completi
                 .is_some_and(|s| s.contains("entry=resolve_detail"))));
     assert_eq!(
         s.store()
-            .load_detail("custom", "https://example.com/game")
+            .load_detail(CUSTOM_ID, "https://example.com/game")
             .unwrap()
             .unwrap(),
         detail
@@ -667,13 +684,13 @@ fn unreadable_parser_settings_are_reported_instead_of_authorizing_cached_candida
 #[test]
 fn removing_a_custom_source_retires_its_candidates_and_allows_matching_again() {
     let (_temp, mut s, candidates) = seeded();
-    let revision = s.registry_mut().remove_source("custom").unwrap();
+    let revision = s.registry_mut().remove_source(CUSTOM_ID).unwrap();
     assert_eq!(revision, s.settings_revision());
     assert!(!s
         .registry()
         .list_sources()
         .iter()
-        .any(|source| source.rule.id == "custom"));
+        .any(|source| source.rule.id == CUSTOM_ID));
     // Retained match records cannot authorize candidates of a deleted source.
     assert_retired(&s, &candidates);
     let summary = matching::game_match_summary(s.store(), 42);

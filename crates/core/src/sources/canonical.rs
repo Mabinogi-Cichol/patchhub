@@ -463,20 +463,14 @@ mod tests {
         let policy_rule = serde_json::to_value(crate::sources::model::SourceRule {
             script: None,
             id: "patchmoe".to_string(),
-            name: "PatchMoe".to_string(),
             adapter: "patchmoe".to_string(),
             role: crate::sources::model::SourceRole::Publisher,
-            discovery_only: false,
+            official_title_match: true,
             priority: 100,
             enabled: true,
             pages: vec!["https://www.patch.moe/".to_string()],
             page_hosts: vec!["www.patch.moe".to_string()],
             download_hosts: vec!["download.patch.moe".to_string()],
-            root_layout: Some(crate::sources::model::RootLayout::GameRoot),
-            columns: None,
-            table_id: None,
-            language: None,
-            url: None,
         })
         .unwrap();
 

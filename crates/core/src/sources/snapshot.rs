@@ -1,6 +1,6 @@
 //! Immutable, fully materialized source state for projection and resolution.
 use super::{
-    invalid, model::*, registry::SourceRegistry, store::SourceStore, validate, Clock, Result,
+    builtin, invalid, model::*, registry::SourceRegistry, store::SourceStore, Clock, Result,
     DEFAULT_RULES_JSON,
 };
 use std::path::{Path, PathBuf};
@@ -52,16 +52,7 @@ impl SourceSnapshot {
             return Ok(None);
         }
         let store = SourceStore::open_readonly(state_dir)?;
-        let config: RulesConfig = serde_json::from_str(DEFAULT_RULES_JSON)
-            .map_err(|_| invalid("invalid_sources_config"))?;
-        if config.schema_version != 2 {
-            return Err(invalid("invalid_sources_config"));
-        }
-        let builtins = config
-            .sources
-            .iter()
-            .map(validate::validate_rule)
-            .collect::<Result<Vec<_>>>()?;
+        let builtins = builtin::load_rules(DEFAULT_RULES_JSON)?;
         let mut registry =
             SourceRegistry::load_with_clock(store, builtins, Box::new(SnapshotClock(now_unix)))?;
         for rule in registry.rules() {

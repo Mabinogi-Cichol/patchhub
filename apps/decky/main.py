@@ -3,7 +3,6 @@ from pathlib import Path
 import sys
 import os
 import asyncio
-import json
 import logging
 import time
 import uuid
@@ -179,14 +178,20 @@ class Plugin:
         except CoreError as error:
             raise RuntimeError(f"{error.code}: {error.detail}" if error.detail else error.code) from error
 
-    async def import_script_source(self, rule_json, api_version, code, replace=False):
+    async def get_script_source_prompt(self):
+        try:
+            return await self.sources.get_script_source_prompt()
+        except CoreError as error:
+            raise RuntimeError(f"{error.code}: {error.detail}" if error.detail else error.code) from error
+
+    async def import_script_source(self, code, source_id=None, api_version=1):
         self._require_idle()
-        if (not isinstance(rule_json, str) or not isinstance(code, str)
-                or type(api_version) is not int or type(replace) is not bool):
+        if (not isinstance(code, str)
+                or (source_id is not None and not isinstance(source_id, str))
+                or type(api_version) is not int):
             raise ValueError("invalid_request")
         try:
-            return await self.sources.import_script_source(
-                json.loads(rule_json), api_version, code, replace)
+            return await self.sources.import_script_source(code, source_id, api_version)
         except CoreError as error:
             raise RuntimeError(f"{error.code}: {error.detail}" if error.detail else error.code) from error
 

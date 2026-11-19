@@ -44,16 +44,13 @@ pub const SOURCES_ENCODING_VERSION: u32 = 1;
 pub const DEFAULT_RULES_SCHEMA: u32 = 2;
 pub const STORE_SCHEMA_VERSION: u32 = 2;
 /// Settings only: the index/detail/match namespace remains schema 2.
-pub const SOURCE_SETTINGS_SCHEMA_VERSION: u32 = 3;
+pub const SOURCE_SETTINGS_SCHEMA_VERSION: u32 = 4;
 /// On-disk schema of `index/<source_id>.json` (p1-contract §1, §5).
 pub const SOURCE_INDEX_SCHEMA_VERSION: u32 = 2;
 /// On-disk schema of `details/<source_id>/<key>.json` (p1-contract §1, §6).
 pub const SOURCE_DETAIL_SCHEMA_VERSION: u32 = 2;
 /// On-disk schema of `matches/<appid>.json` (p1-contract §1, §7.1).
 pub const GAME_MATCH_SCHEMA_VERSION: u32 = 1;
-
-/// Bundled adapters registered for discovery by the default source configuration.
-pub use builtin::DISCOVERY_ADAPTERS;
 
 /// Default runtime rules generated from `crates/core/resources/sources.json`.
 pub use builtin::DEFAULT_RULES_JSON;
@@ -115,16 +112,7 @@ impl Sources {
 
     /// Opens with an explicit rules document (`schema_version` must be 2).
     pub fn open_with_rules(state_dir: &Path, rules_json: &str) -> Result<Self> {
-        let config: RulesConfig =
-            serde_json::from_str(rules_json).map_err(|_| invalid("invalid_sources_config"))?;
-        if config.schema_version != 2 {
-            return Err(invalid("invalid_sources_config"));
-        }
-        let builtins: Vec<SourceRule> = config
-            .sources
-            .iter()
-            .map(validate::validate_rule)
-            .collect::<Result<Vec<_>>>()?;
+        let builtins = builtin::load_rules(rules_json)?;
         let store = store::SourceStore::open(state_dir)?;
         let registry = registry::SourceRegistry::load(store, builtins)?;
         Ok(Self { registry })
@@ -136,13 +124,12 @@ impl Sources {
 
     pub fn import_script_source(
         &mut self,
-        rule: &RawSourceRule,
+        source_id: Option<&str>,
         api_version: u32,
         code: &str,
-        replace: bool,
     ) -> Result<ImportedScriptSource> {
         self.registry
-            .import_script_source(rule, api_version, code, replace)
+            .import_script_source(source_id, api_version, code)
     }
 
     pub fn get_script_source(&self, source_id: &str) -> Result<ScriptSourceDocument> {

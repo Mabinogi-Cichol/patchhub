@@ -1,6 +1,6 @@
 import { ScriptSourceEditor } from "./script-source-editor";
 import { scriptSourceError } from "./script-source-error";
-import type { AddSourceResult, ScriptSourceDocument } from "../../../packages/contracts/generated/protocol";
+import type { AddSourceResult, ScriptSourceDocument, ScriptSourcePromptResult } from "../../../packages/contracts/generated/protocol";
 import { callable, definePlugin, routerHook } from "@decky/api";
 import { AppUpdatePanel, startAppUpdateNotifications, waitForAppUpdate } from './app-update';
 import { Button, ButtonItem, DialogButton, DropdownItem, Field, Focusable, Navigation, PanelSection, PanelSectionRow, SidebarNavigation, TextField, ToggleField, showModal, useParams } from "@decky/ui";
@@ -48,7 +48,8 @@ const setSourceName = callable<[string, string], SourceSubscription[]>("set_sour
 const setGameSource = callable<[number, string, boolean], { appid: number }>("set_game_source");
 const removeSourceRpc = callable<[string], SourceSubscription[]>("remove_source");
 const getScriptSource = callable<[string], ScriptSourceDocument>("get_script_source");
-const importScriptSource = callable<[string, number, string, boolean], AddSourceResult>("import_script_source");
+const getScriptSourcePrompt = callable<[], ScriptSourcePromptResult>("get_script_source_prompt");
+const importScriptSource = callable<[string, string | null, number], AddSourceResult>("import_script_source");
 const backupStatus = callable<[], BackupInventory>("backup_status");
 const cleanupBackups = callable<[], BackupCleanupResult>("cleanup_backups");
 const cacheStatus = callable<[], CacheInventory>("cache_status");
@@ -616,6 +617,8 @@ function SourceCard({ source, busy, expanded, onToggle, task, changeSources, onU
           </>}
       </>}
       <InfoRow label="站点" below>{source.pages.join(" · ")}</InfoRow>
+      <InfoRow label="访问域名" below>{source.page_hosts?.length ? source.page_hosts.join(" · ") : "无"}</InfoRow>
+      <InfoRow label="下载域名" below>{source.download_hosts?.length ? source.download_hosts.join(" · ") : "无"}</InfoRow>
       {publisher && <>
         <InfoRow label="索引条目">{source.entry_count} 条 · 修订 {source.revision}</InfoRow>
         <InfoRow label="索引覆盖">{sourceCoverageText(source)}</InfoRow>
@@ -801,11 +804,11 @@ function GlobalSources() {
     catch (failure) { session.setFeedback({ error: `读取脚本失败：${scriptSourceError(failure)}`, note: null }); }
     finally { session.update({ busy: null, busySince: null }); }
   }
-  async function saveScript(ruleJson: string, apiVersion: number, code: string, replace: boolean) {
+  async function saveScript(code: string, sourceId: string | null, apiVersion: number) {
     if (session.getSnapshot().busy) throw Error("其他操作正在进行，请稍后保存");
     session.update({ busy: "正在保存脚本…", busySince: Date.now() });
     try {
-      const result = await importScriptSource(ruleJson, apiVersion, code, replace);
+      const result = await importScriptSource(code, sourceId, apiVersion);
       session.commitScriptSource(session.getSnapshot().report?.sources ?? [], result.settings_revision);
       session.setFeedback({ note: "脚本已保存，尚未执行。请更新来源或重新匹配游戏。", error: null });
       try {
@@ -822,7 +825,9 @@ function GlobalSources() {
     return sources;
   }, () => {});
   return <><div>{busy && <Status>{busy}</Status>}{error && <Status warning>{error}</Status>}{note && <Status>{note}</Status>}</div>
-    {editor && <div ref={editorSection}><ScriptSourceEditor document={editor.document} readOnly={editor.readOnly} onSave={saveScript} onClose={() => setEditor(null)} /></div>}
+    {editor && <div ref={editorSection}><ScriptSourceEditor document={editor.document} readOnly={editor.readOnly}
+      onLoadPrompt={editor.document || editor.readOnly ? undefined : async () => (await getScriptSourcePrompt()).prompt}
+      onSave={saveScript} onClose={() => setEditor(null)} /></div>}
     <SourcesPage report={report} busy={!!busy || !!editor} tasks={tasks} expandedSources={state.expandedSources} onToggleSource={session.toggleSourceExpanded} changeSources={changeSources}
       onUpdateSource={(sourceId, force) => void session.updateSource(sourceId, force)}
       onCancelTask={taskId => void session.cancelSourceTask(taskId)}

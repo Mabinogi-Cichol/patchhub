@@ -46,9 +46,11 @@ fn candidate() -> SourceCandidate {
     candidate
 }
 fn fixture_rule() -> sources::SourceRule {
-    let config: sources::RulesConfig = serde_json::from_str(sources::DEFAULT_RULES_JSON).unwrap();
-    sources::validate::validate_rule(config.sources.iter().find(|r| r.id == "kagura-cn").unwrap())
+    sources::builtin::default_builtins()
+        .into_iter()
+        .find(|entry| entry.rule.id == "kagura-cn")
         .unwrap()
+        .rule
 }
 fn seed(state: &Path, candidate: SourceCandidate) -> u64 {
     let handle = sources::Sources::open(state).unwrap();

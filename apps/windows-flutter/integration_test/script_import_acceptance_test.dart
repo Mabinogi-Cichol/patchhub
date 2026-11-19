@@ -30,23 +30,17 @@ void main() {
   const root = String.fromEnvironment('PATCHHUB_IMPORT_ROOT');
   const evidence = String.fromEnvironment('PATCHHUB_IMPORT_EVIDENCE');
   testWidgets(
-    'native window imports a repository source and keeps it after restart',
+    'native window imports a repository source by pasting Lua only and keeps it after restart',
     (tester) async {
       final config =
           jsonDecode(
                 File('../../crates/core/resources/sources.json').readAsStringSync(),
               )
               as Map<String, dynamic>;
-      final rule = Map<String, dynamic>.from(
-        (config['sources'] as List).firstWhere(
-              (source) => (source as Map)['id'] == 'kagura-cn',
-            )
-            as Map,
-      );
-      rule
-        ..['id'] = 'kagura-native'
-        ..['name'] = 'Kagura native';
-      final adapter = rule.remove('adapter') as String;
+      final entry = (config['sources'] as List).firstWhere(
+        (source) => (source as Map)['id'] == 'kagura-cn',
+      ) as Map;
+      final adapter = entry['adapter'] as String;
       final code = File(
         '../../crates/core/resources/source-scripts/'
         '${(config['bundled_scripts'] as Map)[adapter]}',
@@ -60,6 +54,7 @@ void main() {
       );
       final client = CoreClient(paths, protocol);
       final model = AppModel(client);
+      const assignedId = 'kagurafan-com';
       try {
         await tester.runAsync(() => model.loadSources());
         await tester.pumpWidget(
@@ -72,32 +67,21 @@ void main() {
         await tester.ensureVisible(import);
         await tester.tap(import);
         await tester.pumpAndSettle();
-        Future<void> type(String key, String value) async {
-          await tester.enterText(find.byKey(ValueKey('script-$key')), value);
-          await tester.pump();
-        }
-
-        await type('id', rule['id'] as String);
-        await type('name', rule['name'] as String);
-        await tester.tap(find.text('仅发现'));
+        await tester.enterText(find.byKey(const ValueKey('script-code')), code);
         await tester.pump();
-        await type('priority', '${rule['priority']}');
-        await type('pages', (rule['pages'] as List).join('\n'));
-        await type('page_hosts', (rule['page_hosts'] as List).join('\n'));
-        await type('code', code);
         await tester.tap(find.text('保存并导入'));
         await tester.pumpAndSettle();
-        expect(find.text('Kagura native'), findsWidgets);
+        expect(find.text('Kagura Games 国内'), findsWidgets);
         final saved = await tester.runAsync(
           () => client.call('get_script_source', {
-            'source_id': 'kagura-native',
+            'source_id': assignedId,
           }),
         ) as Map;
         expect(saved['code'], code);
-        expect(saved['rule']['discovery_only'], true);
+        expect(saved['rule']['adapter'], 'lua');
         File('$evidence/result.json').writeAsStringSync(
           jsonEncode({
-            'source': 'kagura-native',
+            'source': assignedId,
             'sha256': saved['sha256'],
             'code_length': code.length,
           }),
@@ -112,10 +96,10 @@ void main() {
       final sources = await reopened.call('list_sources') as List;
       expect(
         sources.map((source) => (source as Map)['id']),
-        contains('kagura-native'),
+        contains(assignedId),
       );
       final document = await reopened.call('get_script_source', {
-        'source_id': 'kagura-native',
+        'source_id': assignedId,
       }) as Map;
       expect(document['code'], code);
     },

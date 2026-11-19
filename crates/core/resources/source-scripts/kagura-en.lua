@@ -164,6 +164,13 @@ local function parse_index(ctx, u, root, page)
 end
 
 return {
+    meta = {
+        name = "Kagura Games 海外",
+        pages = {"https://www.kaguragames.com/patch/", "https://www.kaguragames.com/product-category/patches/patch/"},
+        page_hosts = {"www.kaguragames.com"},
+        download_hosts = {"kaguraserver.com", "kaguragamespatch.com"},
+        priority = 20,
+    },
     collect_index = function(ctx, rule, previous)
         local u = library(ctx, rule)
         local entries, pending, diagnostics = ctx.array(), ctx.array(), ctx.array()
@@ -177,7 +184,6 @@ return {
             entries = previous.entries
             for _, page in ipairs(previous.pending) do enqueue(page) end
         else
-            if rule.url and rule.url ~= ctx.null then enqueue(rule.url) end
             for _, page in ipairs(rule.pages) do enqueue(page) end
         end
         while #pending > 0 do

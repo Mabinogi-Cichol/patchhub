@@ -123,20 +123,14 @@ mod patchmoe {
         SourceRule {
             script: None,
             id: "patchmoe".to_string(),
-            name: "patch.moe".to_string(),
             adapter: "patchmoe".to_string(),
             role: patchhub_core::sources::model::SourceRole::Publisher,
-            discovery_only: false,
+            official_title_match: true,
             priority: 100,
             enabled: true,
             pages: vec!["https://www.patch.moe/?flag=1".to_string()],
             page_hosts: vec!["www.patch.moe".to_string()],
             download_hosts: vec!["download.patch.moe".to_string()],
-            root_layout: Some(patchhub_core::sources::model::RootLayout::GameRoot),
-            columns: None,
-            table_id: None,
-            language: None,
-            url: None,
         }
     }
 
@@ -365,20 +359,14 @@ mod hgamer {
         SourceRule {
             script: None,
             id: "hgamer".to_string(),
-            name: "HGamer".to_string(),
             adapter: "hgamer_html".to_string(),
             role: SourceRole::FallbackIndexer,
-            discovery_only: true,
+            official_title_match: false,
             priority: 100,
             enabled: true,
             pages: vec!["https://hgamer.tw/zh-CN/patches".to_string()],
             page_hosts: vec!["hgamer.tw".to_string()],
             download_hosts: Vec::new(),
-            root_layout: None,
-            columns: None,
-            table_id: None,
-            language: None,
-            url: None,
         }
     }
 

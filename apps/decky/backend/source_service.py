@@ -156,9 +156,14 @@ class SourceService:
     async def get_script_source(self, source_id):
         return await self.bridge.call_sync("get_script_source", {"source_id": source_id})
 
-    async def import_script_source(self, rule, api_version, code, replace=False):
-        result = await self.bridge.call_sync("import_script_source", {
-            "rule": rule, "api_version": api_version, "code": code, "replace": replace})
+    async def get_script_source_prompt(self):
+        return await self.bridge.call_sync("get_script_source_prompt", {})
+
+    async def import_script_source(self, code, source_id=None, api_version=1):
+        params = {"code": code, "api_version": api_version}
+        if source_id is not None:
+            params["source_id"] = source_id
+        result = await self.bridge.call_sync("import_script_source", params)
         self.settings_revision = result["settings_revision"]
         return result
 
