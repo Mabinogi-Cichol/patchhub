@@ -6,6 +6,10 @@ use std::io::{BufReader, Read, Seek, SeekFrom};
 
 const V28: u32 = 0x0756_4428;
 const V29: u32 = 0x0756_4429;
+const V2A: u32 = 0x0756_442A;
+const V2A_HEADER_BYTES: u64 = 44;
+const V2A_ENTRY_BYTES: u64 = 80;
+const V2A_PAYLOAD_PREFIX_BYTES: u64 = 20;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ResolvedName {
@@ -53,6 +57,155 @@ fn read_u32(reader: &mut impl Read) -> Result<u32, String> {
     Ok(u32::from_le_bytes(bytes))
 }
 
+fn read_key_table<R: Read>(
+    reader: &mut R,
+    count: usize,
+    table_bytes: u64,
+    limits: Limits,
+) -> Result<Vec<String>, String> {
+    if count > limits.keys || table_bytes > limits.key_bytes as u64 {
+        return Err("appinfo key table exceeds limits".into());
+    }
+    if count == 0 {
+        return if table_bytes == 0 {
+            Ok(Vec::new())
+        } else {
+            Err("trailing appinfo key table bytes".into())
+        };
+    }
+    if (count as u64) > table_bytes {
+        return Err("appinfo key count out of bounds".into());
+    }
+    let mut buffered = BufReader::new(reader.by_ref().take(table_bytes));
+    let mut keys = Vec::with_capacity(count);
+    let mut total = 0usize;
+    for _ in 0..count {
+        let mut value = Vec::new();
+        loop {
+            let mut byte = [0];
+            buffered.read_exact(&mut byte).map_err(io_error)?;
+            total = total.checked_add(1).ok_or("appinfo key byte overflow")?;
+            if total > limits.key_bytes {
+                return Err("appinfo key table exceeds byte limit".into());
+            }
+            if byte[0] == 0 {
+                break;
+            }
+            if value.len() >= limits.string {
+                return Err("appinfo key exceeds string limit".into());
+            }
+            value.push(byte[0]);
+        }
+        keys.push(String::from_utf8(value).map_err(|_| "invalid UTF-8 key")?);
+    }
+    if total as u64 != table_bytes {
+        return Err("trailing appinfo key table bytes".into());
+    }
+    Ok(keys)
+}
+
+fn parse_v2a<R: Read + Seek>(
+    reader: &mut R,
+    length: u64,
+    targets: &HashSet<u32>,
+    language: Option<&str>,
+    limits: Limits,
+) -> Result<HashMap<u32, ResolvedName>, String> {
+    if length < V2A_HEADER_BYTES {
+        return Err("truncated appinfo header".into());
+    }
+    let bucket_index = read_u32(reader)?;
+    let bucket_count = read_u32(reader)?;
+    let app_count = read_u32(reader)?;
+    let dir_bytes = u64::from(read_u32(reader)?);
+    let key_count = usize::try_from(read_u32(reader)?)
+        .map_err(|_| "appinfo key count out of bounds".to_owned())?;
+    let key_bytes = u64::from(read_u32(reader)?);
+    let data_bytes = u64::from(read_u32(reader)?);
+    let _dir_keys_crc = read_u32(reader)?;
+    let _header_crc = read_u32(reader)?;
+
+    if bucket_count == 0 || bucket_index >= bucket_count {
+        return Err("invalid appinfo bucket header".into());
+    }
+    let expected_dir = u64::from(app_count)
+        .checked_mul(V2A_ENTRY_BYTES)
+        .ok_or("appinfo directory size overflow")?;
+    if dir_bytes != expected_dir {
+        return Err("appinfo directory size mismatch".into());
+    }
+    if key_count > limits.keys || key_bytes > limits.key_bytes as u64 {
+        return Err("appinfo key table exceeds limits".into());
+    }
+    let keys_start = V2A_HEADER_BYTES
+        .checked_add(dir_bytes)
+        .ok_or("appinfo offset overflow")?;
+    let data_start = keys_start
+        .checked_add(key_bytes)
+        .ok_or("appinfo offset overflow")?;
+    let total_end = data_start
+        .checked_add(data_bytes)
+        .ok_or("appinfo offset overflow")?;
+    if total_end != length {
+        return Err("appinfo file size mismatch".into());
+    }
+
+    let mut matched = Vec::new();
+    {
+        let mut dir_reader = BufReader::new(reader.by_ref().take(dir_bytes));
+        for _ in 0..app_count {
+            let mut entry = [0u8; V2A_ENTRY_BYTES as usize];
+            dir_reader.read_exact(&mut entry).map_err(io_error)?;
+            let appid = u32::from_le_bytes(entry[0..4].try_into().unwrap());
+            let payload_offset = u64::from(u32::from_le_bytes(entry[4..8].try_into().unwrap()));
+            let payload_size = u64::from(u32::from_le_bytes(entry[8..12].try_into().unwrap()));
+            let payload_end = payload_offset
+                .checked_add(payload_size)
+                .ok_or("appinfo entry offset overflow")?;
+            if payload_size < V2A_PAYLOAD_PREFIX_BYTES || payload_end > data_bytes {
+                return Err("appinfo entry payload out of bounds".into());
+            }
+            if targets.contains(&appid) {
+                matched.push((appid, payload_offset, payload_size));
+            }
+        }
+    }
+
+    if matched.is_empty() {
+        if reader.seek(SeekFrom::End(0)).map_err(io_error)? != length {
+            return Err("appinfo length changed while reading".into());
+        }
+        return Ok(HashMap::new());
+    }
+
+    reader.seek(SeekFrom::Start(keys_start)).map_err(io_error)?;
+    let keys = read_key_table(reader, key_count, key_bytes, limits)?;
+    let mut names = HashMap::new();
+    for (appid, payload_offset, payload_size) in matched {
+        // Duplicate entries must not retain an earlier partial/stale result.
+        names.remove(&appid);
+        let vdf_len = payload_size - V2A_PAYLOAD_PREFIX_BYTES;
+        if vdf_len <= limits.payload {
+            let vdf_offset = data_start
+                .checked_add(payload_offset)
+                .and_then(|pos| pos.checked_add(V2A_PAYLOAD_PREFIX_BYTES))
+                .ok_or("appinfo payload offset overflow")?;
+            reader.seek(SeekFrom::Start(vdf_offset)).map_err(io_error)?;
+            let allocation = usize::try_from(vdf_len)
+                .map_err(|_| "appinfo payload allocation overflow".to_owned())?;
+            let mut payload = vec![0; allocation];
+            reader.read_exact(&mut payload).map_err(io_error)?;
+            if let Ok(Some(name)) = decode_name(&payload, Some(&keys), language, limits) {
+                names.insert(appid, name);
+            }
+        }
+    }
+    if reader.seek(SeekFrom::End(0)).map_err(io_error)? != length {
+        return Err("appinfo length changed while reading".into());
+    }
+    Ok(names)
+}
+
 fn parse_with_limits<R: Read + Seek>(
     reader: &mut R,
     targets: &HashSet<u32>,
@@ -66,6 +219,9 @@ fn parse_with_limits<R: Read + Seek>(
     reader.seek(SeekFrom::Start(0)).map_err(io_error)?;
     let version = read_u32(reader)?;
     let _universe = read_u32(reader)?;
+    if version == V2A {
+        return parse_v2a(reader, length, targets, language, limits);
+    }
     let (start, entries_end, keys) = match version {
         V28 => (8, length - 4, None),
         V29 => {
@@ -86,34 +242,7 @@ fn parse_with_limits<R: Read + Seek>(
             let count = read_u32(reader)?;
             let count =
                 usize::try_from(count).map_err(|_| "appinfo key count out of bounds".to_owned())?;
-            if count > limits.keys || count as u64 > table_bytes - 4 {
-                return Err("appinfo key count out of bounds".into());
-            }
-            let mut buffered = BufReader::new(reader.by_ref().take(table_bytes - 4));
-            let mut keys = Vec::with_capacity(count);
-            let mut total = 0usize;
-            for _ in 0..count {
-                let mut value = Vec::new();
-                loop {
-                    let mut byte = [0];
-                    buffered.read_exact(&mut byte).map_err(io_error)?;
-                    total = total.checked_add(1).ok_or("appinfo key byte overflow")?;
-                    if total > limits.key_bytes {
-                        return Err("appinfo key table exceeds byte limit".into());
-                    }
-                    if byte[0] == 0 {
-                        break;
-                    }
-                    if value.len() >= limits.string {
-                        return Err("appinfo key exceeds string limit".into());
-                    }
-                    value.push(byte[0]);
-                }
-                keys.push(String::from_utf8(value).map_err(|_| "invalid UTF-8 key")?);
-            }
-            if total as u64 != table_bytes - 4 {
-                return Err("trailing appinfo key table bytes".into());
-            }
+            let keys = read_key_table(reader, count, table_bytes - 4, limits)?;
             (16, offset - 4, Some(keys))
         }
         _ => return Err("unsupported appinfo version".into()),
@@ -807,5 +936,205 @@ mod tests {
             ends: 0,
         };
         assert!(parse_names(&mut reader, &targets(), None).is_err());
+    }
+
+    fn v2a_container(
+        bucket_index: u32,
+        bucket_count: u32,
+        keys: &[&str],
+        entries: Vec<(u32, Vec<u8>)>,
+    ) -> Vec<u8> {
+        let mut dir = Vec::new();
+        let mut data = Vec::new();
+        for (appid, vdf_payload) in &entries {
+            let offset = data.len() as u32;
+            let total_size = (V2A_PAYLOAD_PREFIX_BYTES as usize + vdf_payload.len()) as u32;
+            let mut record = vec![0u8; V2A_ENTRY_BYTES as usize];
+            record[0..4].copy_from_slice(&appid.to_le_bytes());
+            record[4..8].copy_from_slice(&offset.to_le_bytes());
+            record[8..12].copy_from_slice(&total_size.to_le_bytes());
+            dir.extend_from_slice(&record);
+            data.extend_from_slice(&[0u8; V2A_PAYLOAD_PREFIX_BYTES as usize]);
+            data.extend_from_slice(vdf_payload);
+        }
+        let mut key_table = Vec::new();
+        for key in keys {
+            key_table.extend_from_slice(key.as_bytes());
+            key_table.push(0);
+        }
+        let mut out = Vec::new();
+        out.extend_from_slice(&V2A.to_le_bytes());
+        out.extend_from_slice(&1u32.to_le_bytes()); // universe
+        out.extend_from_slice(&bucket_index.to_le_bytes());
+        out.extend_from_slice(&bucket_count.to_le_bytes());
+        out.extend_from_slice(&(entries.len() as u32).to_le_bytes());
+        out.extend_from_slice(&(dir.len() as u32).to_le_bytes());
+        out.extend_from_slice(&(keys.len() as u32).to_le_bytes());
+        out.extend_from_slice(&(key_table.len() as u32).to_le_bytes());
+        out.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        out.extend_from_slice(&0u32.to_le_bytes()); // dir+keys crc (unused)
+        out.extend_from_slice(&0u32.to_le_bytes()); // header crc (unused)
+        out.extend_from_slice(&dir);
+        out.extend_from_slice(&key_table);
+        out.extend_from_slice(&data);
+        out
+    }
+
+    fn idx_text(key_idx: i32, value: &str) -> Vec<u8> {
+        let mut bytes = vec![1];
+        bytes.extend_from_slice(&key_idx.to_le_bytes());
+        bytes.extend_from_slice(value.as_bytes());
+        bytes.push(0);
+        bytes
+    }
+
+    fn idx_u32(key_idx: i32, value: u32) -> Vec<u8> {
+        let mut bytes = vec![2];
+        bytes.extend_from_slice(&key_idx.to_le_bytes());
+        bytes.extend_from_slice(&value.to_le_bytes());
+        bytes
+    }
+
+    fn idx_object(key_idx: i32, children: Vec<Vec<u8>>) -> Vec<u8> {
+        let mut bytes = vec![0];
+        bytes.extend_from_slice(&key_idx.to_le_bytes());
+        bytes.extend(children.into_iter().flatten());
+        bytes.push(8);
+        bytes
+    }
+
+    fn idx_payload(children: Vec<Vec<u8>>) -> Vec<u8> {
+        let mut bytes = idx_object(0, children);
+        bytes.push(8);
+        bytes
+    }
+
+    #[test]
+    fn v2a_empty_shard_and_valid_entries_resolve_names_and_dlc() {
+        let empty = v2a_container(13, 256, &[], vec![]);
+        assert_eq!(empty.len(), V2A_HEADER_BYTES as usize);
+        assert!(parse(&empty, Some("schinese")).unwrap().is_empty());
+
+        // keys: 0=appinfo, 1=common, 2=name, 3=name_localized, 4=schinese, 5=japanese, 6=extended, 7=listofdlc
+        let keys = &[
+            "appinfo",
+            "common",
+            "name",
+            "name_localized",
+            "schinese",
+            "japanese",
+            "extended",
+            "listofdlc",
+        ];
+        let vdf_main = idx_payload(vec![
+            idx_object(
+                1,
+                vec![
+                    idx_text(2, "My Life as a Cult Leader"),
+                    idx_object(
+                        3,
+                        vec![idx_text(4, "妃神会秘史"), idx_text(5, "色々教団生活")],
+                    ),
+                ],
+            ),
+            idx_object(6, vec![idx_u32(7, 2_303_801)]),
+        ]);
+        let vdf_other = idx_payload(vec![idx_object(1, vec![idx_text(2, "Other Game")])]);
+        let shard = v2a_container(
+            0,
+            256,
+            keys,
+            vec![(99, vec![255]), (APPID, vdf_main), (100, vdf_other)],
+        );
+
+        let schinese = parse_names(
+            &mut Cursor::new(&shard),
+            &HashSet::from([APPID, 100]),
+            Some("schinese"),
+        )
+        .unwrap();
+        assert_eq!(
+            schinese[&APPID],
+            ResolvedName {
+                name: "妃神会秘史".into(),
+                language: Some("schinese".into()),
+                dlc_appids: vec![2_303_801],
+            }
+        );
+        assert_eq!(
+            schinese[&100],
+            ResolvedName {
+                name: "Other Game".into(),
+                language: None,
+                dlc_appids: vec![],
+            }
+        );
+        assert!(!schinese.contains_key(&99));
+        assert_eq!(
+            parse(&shard, None).unwrap()[&APPID].name,
+            "My Life as a Cult Leader"
+        );
+    }
+
+    #[test]
+    fn v2a_skips_unmatched_shard_without_reading_keys_or_payload() {
+        let keys = &["appinfo", "common", "name"];
+        let shard = v2a_container(1, 256, keys, vec![(42, vec![255; 2048])]);
+        let mut reader = CountedReader {
+            inner: Cursor::new(shard),
+            read_bytes: 0,
+        };
+        assert!(parse_names(&mut reader, &targets(), Some("schinese"))
+            .unwrap()
+            .is_empty());
+        assert!(
+            reader.read_bytes <= 44 + 80,
+            "read {} bytes",
+            reader.read_bytes
+        );
+    }
+
+    #[test]
+    fn v2a_duplicate_entry_and_malformed_containers_behave_safely() {
+        let keys = &["appinfo", "common", "name"];
+        let good = idx_payload(vec![idx_object(1, vec![idx_text(2, "stale")])]);
+        let dup_bad = v2a_container(
+            0,
+            256,
+            keys,
+            vec![(APPID, good.clone()), (APPID, vec![255])],
+        );
+        assert!(parse(&dup_bad, None).unwrap().is_empty());
+
+        let base = v2a_container(0, 256, keys, vec![(APPID, good)]);
+        assert!(parse(&base[..43], None).is_err());
+
+        let mut bad_bucket = base.clone();
+        bad_bucket[8..12].copy_from_slice(&256u32.to_le_bytes());
+        assert!(parse(&bad_bucket, None).is_err());
+
+        let mut bad_dir = base.clone();
+        bad_dir[20..24].copy_from_slice(&40u32.to_le_bytes());
+        assert!(parse(&bad_dir, None).is_err());
+
+        let mut bad_payload_sz = base.clone();
+        bad_payload_sz[52..56].copy_from_slice(&19u32.to_le_bytes());
+        assert!(parse(&bad_payload_sz, None).is_err());
+
+        let mut payload_oob = base.clone();
+        payload_oob[52..56].copy_from_slice(&9999u32.to_le_bytes());
+        assert!(parse(&payload_oob, None).is_err());
+
+        let mut extra_tail = base.clone();
+        extra_tail.push(0);
+        assert!(parse(&extra_tail, None).is_err());
+
+        assert!(parse_with_limits(
+            &mut Cursor::new(&base),
+            &targets(),
+            None,
+            Limits { keys: 2, ..LIMITS }
+        )
+        .is_err());
     }
 }

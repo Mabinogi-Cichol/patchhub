@@ -307,3 +307,128 @@ fn scan_extracts_installed_dlc_from_installed_depots_and_installed_dlc_sections(
     assert_eq!(report.installs.len(), 1);
     assert_eq!(report.installs[0].installed_dlc, vec![1390150, 1400000]);
 }
+
+fn v2a_shard_fixture(bucket: u32, entries: Vec<(u32, &str, &str, Option<u32>)>) -> Vec<u8> {
+    let keys = [
+        "appinfo",
+        "common",
+        "name",
+        "name_localized",
+        "schinese",
+        "extended",
+        "listofdlc",
+    ];
+    let mut key_table = Vec::new();
+    for key in keys {
+        key_table.extend_from_slice(key.as_bytes());
+        key_table.push(0);
+    }
+    let mut dir = Vec::new();
+    let mut data = Vec::new();
+    for (appid, default_name, schinese_name, dlc) in entries {
+        let mut vdf = Vec::new();
+        vdf.push(0);
+        vdf.extend_from_slice(&0i32.to_le_bytes());
+        vdf.push(0);
+        vdf.extend_from_slice(&1i32.to_le_bytes());
+        vdf.push(1);
+        vdf.extend_from_slice(&2i32.to_le_bytes());
+        vdf.extend_from_slice(default_name.as_bytes());
+        vdf.push(0);
+        vdf.push(0);
+        vdf.extend_from_slice(&3i32.to_le_bytes());
+        vdf.push(1);
+        vdf.extend_from_slice(&4i32.to_le_bytes());
+        vdf.extend_from_slice(schinese_name.as_bytes());
+        vdf.extend_from_slice(&[0, 8, 8]);
+        if let Some(dlc_id) = dlc {
+            vdf.push(0);
+            vdf.extend_from_slice(&5i32.to_le_bytes());
+            vdf.push(2);
+            vdf.extend_from_slice(&6i32.to_le_bytes());
+            vdf.extend_from_slice(&dlc_id.to_le_bytes());
+            vdf.push(8);
+        }
+        vdf.push(8);
+        vdf.push(8);
+
+        let offset = data.len() as u32;
+        let size = (20 + vdf.len()) as u32;
+        let mut record = vec![0u8; 80];
+        record[0..4].copy_from_slice(&appid.to_le_bytes());
+        record[4..8].copy_from_slice(&offset.to_le_bytes());
+        record[8..12].copy_from_slice(&size.to_le_bytes());
+        dir.extend_from_slice(&record);
+        data.extend_from_slice(&[0u8; 20]);
+        data.extend_from_slice(&vdf);
+    }
+    let mut out = Vec::new();
+    out.extend_from_slice(&0x0756_442Au32.to_le_bytes());
+    out.extend_from_slice(&1u32.to_le_bytes());
+    out.extend_from_slice(&bucket.to_le_bytes());
+    out.extend_from_slice(&256u32.to_le_bytes());
+    out.extend_from_slice(&((dir.len() / 80) as u32).to_le_bytes());
+    out.extend_from_slice(&(dir.len() as u32).to_le_bytes());
+    out.extend_from_slice(&(keys.len() as u32).to_le_bytes());
+    out.extend_from_slice(&(key_table.len() as u32).to_le_bytes());
+    out.extend_from_slice(&(data.len() as u32).to_le_bytes());
+    out.extend_from_slice(&0u32.to_le_bytes());
+    out.extend_from_slice(&0u32.to_le_bytes());
+    out.extend_from_slice(&dir);
+    out.extend_from_slice(&key_table);
+    out.extend_from_slice(&data);
+    out
+}
+
+#[test]
+fn scan_resolves_sharded_v2a_names_and_cross_shard_dlc_without_legacy_appinfo_file() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    write_manifest(root, 1227890);
+    language(root, "schinese");
+    fs::create_dir_all(root.join("appcache/appinfo")).unwrap();
+    fs::write(
+        root.join("appcache/appinfo/appinfo_0d.vdf"),
+        v2a_shard_fixture(13, vec![]),
+    )
+    .unwrap();
+    fs::write(
+        root.join("appcache/appinfo/appinfo_2a.vdf"),
+        v2a_shard_fixture(
+            42,
+            vec![(
+                1227890,
+                "Summer Memories",
+                "夏日狂想曲：乡间的难忘回忆",
+                Some(1390150),
+            )],
+        ),
+    )
+    .unwrap();
+    fs::write(
+        root.join("appcache/appinfo/appinfo_ff.vdf"),
+        v2a_shard_fixture(
+            255,
+            vec![(1390150, "Summer Memories+ DLC", "夏日狂想曲+", None)],
+        ),
+    )
+    .unwrap();
+
+    let report = scan(&[root.to_owned()]);
+    assert!(report.diagnostics.is_empty(), "{:?}", report.diagnostics);
+    assert_eq!(report.installs.len(), 1);
+    let game = &report.installs[0];
+    assert_eq!(game.name, "Manifest 1227890");
+    assert_eq!(
+        game.localized_name.as_deref(),
+        Some("夏日狂想曲：乡间的难忘回忆")
+    );
+    assert_eq!(game.name_language.as_deref(), Some("schinese"));
+    assert_eq!(
+        game.related_dlc,
+        [patchhub_core::steam::SteamDlc {
+            appid: 1390150,
+            name: Some("夏日狂想曲+".into()),
+        }]
+    );
+}
