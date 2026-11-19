@@ -44,13 +44,14 @@ pub fn outcome(state: &str, disposition: &str) -> Value {
     v
 }
 pub fn rule() -> Value {
-    json!({"id":"fixture","name":"Fixture","adapter":"table_html","enabled":true,"pages":["https://example.com/"],"page_hosts":["example.com"],"download_hosts":[],"role":"publisher","discovery_only":false,"priority":100,"root_layout":null})
+    json!({"id":"fixture","adapter":"lua","enabled":true,"pages":["https://example.com/"],"page_hosts":["example.com"],"download_hosts":[],"role":"publisher","official_title_match":false,"priority":100})
 }
 pub fn source_status() -> Value {
     json!({"checked_at":1,"cached_at":null,"entry_count":0,"code":"source_refreshed"})
 }
 pub fn source_summary() -> Value {
     let mut v = rule();
+    v["name"] = json!("Fixture");
     v["origin"] = json!("builtin");
     v["status"] = json!("source_refreshed");
     v["entry_count"] = json!(1);
@@ -105,10 +106,13 @@ pub fn success_result(method: Method) -> Value {
             json!({"settings_revision":1,"source_id":"fixture","subscribed":true})
         }
         Method::ImportScriptSource => {
-            json!({"settings_revision":1,"rule":rule()})
+            json!({"settings_revision":1,"rule":rule(),"name":"Fixture"})
         }
         Method::GetScriptSource => {
-            json!({"rule":rule(),"api_version":1,"code":"return {}","sha256":"a".repeat(64)})
+            json!({"source_id":"fixture","name":"Fixture","rule":rule(),"api_version":1,"code":"return {}","sha256":"a".repeat(64)})
+        }
+        Method::GetScriptSourcePrompt => {
+            json!({"prompt":patchhub_core::sources::script::AI_SOURCE_PROMPT})
         }
         Method::SetSourceUpdateInterval => {
             json!({"settings_revision":1,"source_id":"fixture","interval_hours":24})
@@ -152,11 +156,12 @@ pub fn request(method: Method) -> Value {
             p["appid"] = json!(42);
         }
         Method::ImportScriptSource => {
-            p["rule"] = rule();
+            p["source_id"] = json!("fixture");
             p["api_version"] = json!(1);
             p["code"] = json!("return {}");
         }
         Method::GetScriptSource => p["source_id"] = json!("fixture"),
+        Method::GetScriptSourcePrompt => {}
         Method::RemoveSource => p["source_id"] = json!("fixture"),
         Method::SetSourceUpdateInterval => {
             p["source_id"] = json!("fixture");
@@ -219,15 +224,16 @@ pub fn cases() -> Value {
     }
     let mut r = request(Method::ImportScriptSource);
     r["params"]["code"] = json!(large_code);
-    r["params"]["replace"] = json!(true);
-    requests.push(json!({"name":"script-import-large-replace","request":r,"task_channel":false}));
+    r["params"]["source_id"] = Value::Null;
+    requests.push(json!({"name":"script-import-large-new","request":r,"task_channel":false}));
     let mut document = success_result(Method::GetScriptSource);
     document["code"] = json!(large_code);
     responses.push(json!({"name":"script-document-large","method":"get_script_source","response":{"protocol_version":5,"request_id":"fixture","ok":true,"result":document}}));
     for (field, value) in [
         ("code", json!(false)),
         ("api_version", json!(true)),
-        ("replace", json!("true")),
+        ("source_id", json!(false)),
+        ("rule", json!({})),
         ("path", json!("adapter.lua")),
     ] {
         let mut r = request(Method::ImportScriptSource);

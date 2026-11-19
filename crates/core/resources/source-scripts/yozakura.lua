@@ -121,6 +121,13 @@ local function downloads(ctx, u, body, page)
 end
 
 return {
+    meta = {
+        name = "YOZAKURA",
+        pages = {"https://yozakuragames.com/index.php?rest_route=/wp/v2/posts&per_page=100&_fields=link,title,content"},
+        page_hosts = {"yozakuragames.com"},
+        download_hosts = {"www.zakuragames.com"},
+        priority = 30,
+    },
     match_appid = function(_, _, site_ids, steam)
         for _, appid in ipairs(site_ids) do
             if appid == steam.appid then return true end

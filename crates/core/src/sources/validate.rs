@@ -7,7 +7,6 @@
 
 use super::invalid;
 use super::model::*;
-use super::DISCOVERY_ADAPTERS;
 use std::collections::HashSet;
 use std::io;
 
@@ -305,7 +304,7 @@ pub fn split_names(title: &str) -> Vec<String> {
 
 // ---- rules ---------------------------------------------------------------
 
-fn valid_source_id(value: &str) -> bool {
+pub(crate) fn valid_source_id(value: &str) -> bool {
     let mut bytes = value.bytes();
     if !matches!(bytes.next(), Some(first) if first.is_ascii_lowercase()) {
         return false;
@@ -313,7 +312,7 @@ fn valid_source_id(value: &str) -> bool {
     value.len() <= 48 && bytes.all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
 }
 
-fn valid_adapter_id(value: &str) -> bool {
+pub(crate) fn valid_adapter_id(value: &str) -> bool {
     let mut bytes = value.bytes();
     if !matches!(bytes.next(), Some(first) if first.is_ascii_lowercase()) {
         return false;
@@ -321,84 +320,147 @@ fn valid_adapter_id(value: &str) -> bool {
     value.len() <= 48 && bytes.all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
 }
 
-/// Port of `sources.py::_validate_rule`, preserving the Python check order and
-/// error codes.
-pub fn validate_rule(raw: &RawSourceRule) -> io::Result<SourceRule> {
-    if !valid_source_id(&raw.id) {
+pub fn generate_source_id(primary_host: &str, existing_ids: &HashSet<String>) -> String {
+    let lower = primary_host.trim().to_ascii_lowercase();
+    let stripped = lower
+        .strip_prefix("www.")
+        .filter(|rest| !rest.is_empty())
+        .unwrap_or(&lower);
+    let mut slug = String::new();
+    let mut last_dash = true;
+    for byte in stripped.bytes() {
+        if byte.is_ascii_lowercase() || byte.is_ascii_digit() {
+            slug.push(byte as char);
+            last_dash = false;
+        } else if !last_dash {
+            slug.push('-');
+            last_dash = true;
+        }
+    }
+    while slug.ends_with('-') {
+        slug.pop();
+    }
+    if slug.is_empty() {
+        slug = "custom".to_string();
+    } else if !slug.as_bytes()[0].is_ascii_lowercase() {
+        slug.insert_str(0, "s-");
+    }
+    if slug.len() > 48 {
+        slug.truncate(48);
+        while slug.ends_with('-') {
+            slug.pop();
+        }
+        if slug.is_empty() {
+            slug = "custom".to_string();
+        }
+    }
+    if !existing_ids.contains(&slug) {
+        return slug;
+    }
+    for index in 2_usize.. {
+        let suffix = format!("-{index}");
+        let max_prefix = 48 - suffix.len();
+        let prefix = slug[..slug.len().min(max_prefix)].trim_end_matches('-');
+        let prefix = if prefix.is_empty() { "s" } else { prefix };
+        let candidate = format!("{prefix}{suffix}");
+        if !existing_ids.contains(&candidate) {
+            return candidate;
+        }
+    }
+    unreachable!()
+}
+
+/// Validates script `meta` and builds a canonical [`SourceRule`] alongside the
+/// default display name for local `settings.names` initialization.
+pub fn build_rule_from_meta(
+    id: String,
+    adapter: String,
+    enabled: bool,
+    meta: &ScriptMeta,
+    role: SourceRole,
+    script: ScriptDescriptor,
+) -> io::Result<(SourceRule, String)> {
+    if !valid_source_id(&id) {
         return Err(invalid("invalid_source_id"));
     }
-    if raw.name.trim().is_empty() || raw.name.len() > 128 {
-        return Err(invalid("invalid_source_name"));
-    }
-    if !valid_adapter_id(&raw.adapter) {
+    if !valid_adapter_id(&adapter) {
         return Err(invalid("unsupported_source_adapter"));
     }
-    let role = match raw.role.as_deref().unwrap_or("publisher") {
-        "publisher" => SourceRole::Publisher,
-        "fallback_indexer" => SourceRole::FallbackIndexer,
-        _ => return Err(invalid("invalid_source_rule")),
-    };
-    let discovery_only = raw.discovery_only.unwrap_or(false);
-    let priority = raw.priority.unwrap_or(100);
+    let priority = meta.priority.unwrap_or(100);
     if !(0..=1000).contains(&priority) {
         return Err(invalid("invalid_source_rule"));
     }
-    if discovery_only {
-        if raw.root_layout.is_some()
-            || !(DISCOVERY_ADAPTERS.contains(&raw.adapter.as_str()) || raw.adapter == "lua")
-        {
-            return Err(invalid("invalid_source_rule"));
-        }
-    } else if raw.root_layout.as_deref() != Some("game_root") || role != SourceRole::Publisher {
-        return Err(invalid("invalid_source_rule"));
-    }
-    let download_hosts = raw.download_hosts.clone().unwrap_or_default();
-    if role == SourceRole::FallbackIndexer && (!discovery_only || !download_hosts.is_empty()) {
-        return Err(invalid("invalid_source_rule"));
-    }
-    if raw.pages.is_empty() {
+    if meta.pages.is_empty() {
         return Err(invalid("invalid_source_pages"));
     }
-    if raw.page_hosts.is_empty() {
-        return Err(invalid("invalid_source_hosts"));
-    }
-    for value in &raw.page_hosts {
-        host(value)?;
-    }
-    let minimum_download_hosts = if discovery_only { 0 } else { 1 };
-    if download_hosts.len() < minimum_download_hosts {
-        return Err(invalid("invalid_source_hosts"));
-    }
-    for value in &download_hosts {
-        host(value)?;
-    }
-    for page in &raw.pages {
-        allowed_url(page, &raw.page_hosts, false)?;
-    }
-    let mut rule = SourceRule {
-        id: raw.id.clone(),
-        name: raw.name.clone(),
-        adapter: raw.adapter.clone(),
-        role,
-        discovery_only,
-        priority: priority as u16,
-        enabled: raw.enabled,
-        pages: raw.pages.clone(),
-        page_hosts: raw.page_hosts.clone(),
-        download_hosts,
-        root_layout: if discovery_only {
-            None
-        } else {
-            Some(RootLayout::GameRoot)
-        },
-        columns: raw.columns.clone(),
-        table_id: raw.table_id.clone(),
-        language: raw.language.clone(),
-        url: raw.url.clone(),
-        script: None,
+    let page_hosts = match &meta.page_hosts {
+        Some(hosts) if !hosts.is_empty() => {
+            let mut deduped = Vec::new();
+            for value in hosts {
+                let valid = host(value)?;
+                if !deduped.contains(&valid) {
+                    deduped.push(valid);
+                }
+            }
+            deduped
+        }
+        _ => {
+            let mut derived = Vec::new();
+            for page in &meta.pages {
+                let hostname = split_url(page)
+                    .hostname()
+                    .ok_or_else(|| invalid("invalid_source_url"))?;
+                let valid = host(&hostname)?;
+                if !derived.contains(&valid) {
+                    derived.push(valid);
+                }
+            }
+            if derived.is_empty() {
+                return Err(invalid("invalid_source_hosts"));
+            }
+            derived
+        }
     };
-    super::builtin::bind(&mut rule);
-    Ok(rule)
+    for page in &meta.pages {
+        allowed_url(page, &page_hosts, false)?;
+    }
+    if role == SourceRole::FallbackIndexer
+        && (!meta.download_hosts.is_empty() || meta.official_title_match)
+    {
+        return Err(invalid("invalid_source_rule"));
+    }
+    let mut download_hosts = Vec::new();
+    for value in &meta.download_hosts {
+        let valid = host(value)?;
+        if !download_hosts.contains(&valid) {
+            download_hosts.push(valid);
+        }
+    }
+    let default_name = match &meta.name {
+        Some(name) => {
+            let trimmed = name.trim();
+            if trimmed.is_empty() || name.len() > 128 {
+                return Err(invalid("invalid_source_name"));
+            }
+            trimmed.to_string()
+        }
+        None => page_hosts[0].clone(),
+    };
+    Ok((
+        SourceRule {
+            id,
+            adapter,
+            role,
+            official_title_match: meta.official_title_match,
+            priority: priority as u16,
+            enabled,
+            pages: meta.pages.clone(),
+            page_hosts,
+            download_hosts,
+            script: Some(script),
+        },
+        default_name,
+    ))
 }
 
 /// Port of `sources.py::_validate_entries`.
@@ -605,24 +667,36 @@ pub fn validate_overrides(overrides: &Overrides) -> io::Result<()> {
 mod tests {
     use super::*;
 
-    fn raw_rule() -> RawSourceRule {
-        RawSourceRule {
-            id: "example".into(),
-            name: "Example".into(),
-            adapter: "patchmoe".into(),
+    fn script_meta() -> ScriptMeta {
+        ScriptMeta {
+            name: Some("Example".into()),
             role: None,
-            discovery_only: None,
-            priority: None,
-            enabled: true,
             pages: vec!["https://example.com/".into()],
-            page_hosts: vec!["example.com".into()],
-            download_hosts: Some(vec!["download.example.com".into()]),
-            root_layout: Some("game_root".into()),
-            columns: None,
-            table_id: None,
-            language: None,
-            url: None,
+            page_hosts: Some(vec!["example.com".into()]),
+            download_hosts: vec!["download.example.com".into()],
+            priority: None,
+            official_title_match: false,
         }
+    }
+
+    fn descriptor() -> ScriptDescriptor {
+        ScriptDescriptor {
+            api_version: 1,
+            sha256: "a".repeat(64),
+        }
+    }
+
+    fn built_rule() -> SourceRule {
+        build_rule_from_meta(
+            "example".into(),
+            "lua".into(),
+            true,
+            &script_meta(),
+            SourceRole::Publisher,
+            descriptor(),
+        )
+        .unwrap()
+        .0
     }
 
     fn entry() -> SourceEntry {
@@ -638,136 +712,176 @@ mod tests {
     }
 
     #[test]
-    fn rule_validation_applies_defaults_and_roles() {
-        let rule = validate_rule(&raw_rule()).unwrap();
+    fn meta_rule_building_applies_defaults_and_derives_page_hosts() {
+        let mut meta = script_meta();
+        meta.page_hosts = None;
+        meta.name = None;
+        meta.pages = vec![
+            "https://sub.example.com/list".into(),
+            "https://sub.example.com/extra".into(),
+            "https://other.example.com/".into(),
+        ];
+        let (rule, default_name) = build_rule_from_meta(
+            "sub-example-com".into(),
+            "lua".into(),
+            true,
+            &meta,
+            SourceRole::Publisher,
+            descriptor(),
+        )
+        .unwrap();
         assert_eq!(rule.role, SourceRole::Publisher);
-        assert!(!rule.discovery_only);
+        assert!(!rule.official_title_match);
         assert_eq!(rule.priority, 100);
-        assert_eq!(rule.root_layout, Some(RootLayout::GameRoot));
+        assert_eq!(
+            rule.page_hosts,
+            vec!["sub.example.com", "other.example.com"]
+        );
+        assert_eq!(default_name, "sub.example.com");
 
-        let mut discovery = raw_rule();
-        discovery.id = "hgamer".into();
-        discovery.adapter = "hgamer_html".into();
-        discovery.role = Some("fallback_indexer".into());
-        discovery.discovery_only = Some(true);
-        discovery.root_layout = None;
-        discovery.download_hosts = Some(vec![]);
-        let rule = validate_rule(&discovery).unwrap();
+        let mut discovery = script_meta();
+        discovery.download_hosts = Vec::new();
+        let (rule, _) = build_rule_from_meta(
+            "hgamer".into(),
+            "hgamer_html".into(),
+            true,
+            &discovery,
+            SourceRole::FallbackIndexer,
+            descriptor(),
+        )
+        .unwrap();
         assert_eq!(rule.role, SourceRole::FallbackIndexer);
-        assert!(rule.discovery_only);
-        assert_eq!(rule.root_layout, None);
+        assert!(!rule.official_title_match);
     }
 
     #[test]
-    fn rules_config_schema2_required_defaults_and_rejections() {
-        // Minimal schema 2 publisher: required fields only, defaults applied.
-        let schema2 = r#"{"schema_version":2,"sources":[{"id":"patchmoe","name":"patch.moe","adapter":"patchmoe","enabled":true,"pages":["https://www.patch.moe/?flag=1"],"page_hosts":["www.patch.moe"],"download_hosts":["download.patch.moe"],"root_layout":"game_root"}]}"#;
-        let config: RulesConfig = serde_json::from_str(schema2).unwrap();
-        assert_eq!(config.schema_version, 2);
-        let rule = validate_rule(&config.sources[0]).unwrap();
-        assert_eq!(rule.role, SourceRole::Publisher);
-        assert!(!rule.discovery_only);
-        assert_eq!(rule.priority, 100);
-        assert_eq!(rule.root_layout, Some(RootLayout::GameRoot));
-
-        // A publisher must carry `root_layout == "game_root"`.
-        let missing_root = r#"{"schema_version":2,"sources":[{"id":"patchmoe","name":"patch.moe","adapter":"patchmoe","enabled":true,"pages":["https://www.patch.moe/"],"page_hosts":["www.patch.moe"],"download_hosts":["download.patch.moe"]}]}"#;
-        let config: RulesConfig = serde_json::from_str(missing_root).unwrap();
+    fn source_id_generation_normalizes_and_deduplicates() {
+        let mut used = HashSet::new();
+        assert_eq!(generate_source_id("www.patch.moe", &used), "patch-moe");
+        used.insert("patch-moe".into());
+        assert_eq!(generate_source_id("www.patch.moe", &used), "patch-moe-2");
+        used.insert("patch-moe-2".into());
+        assert_eq!(generate_source_id("www.patch.moe", &used), "patch-moe-3");
         assert_eq!(
-            validate_rule(&config.sources[0]).unwrap_err().to_string(),
-            "invalid_source_rule"
+            generate_source_id("123site.example", &used),
+            "s-123site-example"
         );
-
-        // A `discovery_only` rule must leave `root_layout` absent.
-        let discovery_root = r#"{"schema_version":2,"sources":[{"id":"hgamer","name":"HGamer","adapter":"hgamer_html","enabled":true,"role":"fallback_indexer","discovery_only":true,"pages":["https://hgamer.tw/zh-CN/patches"],"page_hosts":["hgamer.tw"],"download_hosts":[],"root_layout":"game_root"}]}"#;
-        let config: RulesConfig = serde_json::from_str(discovery_root).unwrap();
-        assert_eq!(
-            validate_rule(&config.sources[0]).unwrap_err().to_string(),
-            "invalid_source_rule"
-        );
-
-        // Required fields `enabled`/`pages`/`page_hosts` cannot be omitted.
-        for incomplete in [
-            r#"{"schema_version":2,"sources":[{"id":"patchmoe","name":"patch.moe","adapter":"patchmoe","pages":["https://www.patch.moe/"],"page_hosts":["www.patch.moe"]}]}"#,
-            r#"{"schema_version":2,"sources":[{"id":"patchmoe","name":"patch.moe","adapter":"patchmoe","enabled":true,"page_hosts":["www.patch.moe"]}]}"#,
-            r#"{"schema_version":2,"sources":[{"id":"patchmoe","name":"patch.moe","adapter":"patchmoe","enabled":true,"pages":["https://www.patch.moe/"]}]}"#,
-        ] {
-            assert!(
-                serde_json::from_str::<RulesConfig>(incomplete).is_err(),
-                "missing required field must fail: {incomplete}"
-            );
-        }
+        let long_host = format!("{}.example.com", "a".repeat(60));
+        let generated = generate_source_id(&long_host, &used);
+        assert!(generated.len() <= 48 && valid_source_id(&generated));
+        used.insert(generated.clone());
+        let next = generate_source_id(&long_host, &used);
+        assert!(next.ends_with("-2") && next.len() <= 48 && valid_source_id(&next));
     }
 
     #[test]
-    fn builtin_rules_validate_and_keep_roles() {
-        let config: RulesConfig = serde_json::from_str(crate::sources::DEFAULT_RULES_JSON).unwrap();
-        assert_eq!(config.schema_version, 2);
-        let rules: Vec<SourceRule> = config
-            .sources
-            .iter()
-            .map(|raw| validate_rule(raw).unwrap())
-            .collect();
-        let hgamer = rules.iter().find(|r| r.id == "hgamer").unwrap();
-        assert_eq!(hgamer.role, SourceRole::FallbackIndexer);
-        assert!(hgamer.discovery_only);
-        assert!(hgamer.download_hosts.is_empty());
-    }
-
-    #[test]
-    fn rule_validation_rejects_unsupported_adapter_and_bad_shapes() {
-        let mut bad = raw_rule();
-        bad.id = "Bad".into();
+    fn meta_validation_rejects_bad_shapes() {
+        let meta = script_meta();
         assert_eq!(
-            validate_rule(&bad).unwrap_err().to_string(),
+            build_rule_from_meta(
+                "Bad".into(),
+                "lua".into(),
+                true,
+                &meta,
+                SourceRole::Publisher,
+                descriptor()
+            )
+            .unwrap_err()
+            .to_string(),
             "invalid_source_id"
         );
-
-        let mut bad = raw_rule();
-        bad.adapter = "bad!".into();
         assert_eq!(
-            validate_rule(&bad).unwrap_err().to_string(),
+            build_rule_from_meta(
+                "good".into(),
+                "bad!".into(),
+                true,
+                &meta,
+                SourceRole::Publisher,
+                descriptor()
+            )
+            .unwrap_err()
+            .to_string(),
             "unsupported_source_adapter"
         );
 
-        // discovery_only requires a discovery adapter and no root layout.
-        let mut bad = raw_rule();
-        bad.discovery_only = Some(true);
+        let mut bad = script_meta();
+        bad.download_hosts = vec!["dl.example.com".into()];
         assert_eq!(
-            validate_rule(&bad).unwrap_err().to_string(),
+            build_rule_from_meta(
+                "fb".into(),
+                "lua".into(),
+                true,
+                &bad,
+                SourceRole::FallbackIndexer,
+                descriptor()
+            )
+            .unwrap_err()
+            .to_string(),
             "invalid_source_rule"
         );
 
-        // Non-discovery publishers must be game_root publishers.
-        let mut bad = raw_rule();
-        bad.root_layout = None;
+        let mut bad = script_meta();
+        bad.official_title_match = true;
+        bad.download_hosts = Vec::new();
         assert_eq!(
-            validate_rule(&bad).unwrap_err().to_string(),
+            build_rule_from_meta(
+                "fb".into(),
+                "lua".into(),
+                true,
+                &bad,
+                SourceRole::FallbackIndexer,
+                descriptor()
+            )
+            .unwrap_err()
+            .to_string(),
             "invalid_source_rule"
         );
 
-        // Bounds: pages 1..=5, page_hosts 1..=8, download_hosts 1..=8.
-        let mut bad = raw_rule();
-        bad.pages = vec![];
+        let mut bad = script_meta();
+        bad.pages = Vec::new();
         assert_eq!(
-            validate_rule(&bad).unwrap_err().to_string(),
+            build_rule_from_meta(
+                "example".into(),
+                "lua".into(),
+                true,
+                &bad,
+                SourceRole::Publisher,
+                descriptor()
+            )
+            .unwrap_err()
+            .to_string(),
             "invalid_source_pages"
         );
-        let mut bad = raw_rule();
-        bad.pages = (0..6).map(|i| format!("https://example.com/{i}")).collect();
-        assert_eq!(validate_rule(&bad).unwrap().pages.len(), 6);
-        let mut bad = raw_rule();
-        bad.page_hosts = vec![];
+
+        let mut bad = script_meta();
+        bad.name = Some("   ".into());
         assert_eq!(
-            validate_rule(&bad).unwrap_err().to_string(),
-            "invalid_source_hosts"
+            build_rule_from_meta(
+                "example".into(),
+                "lua".into(),
+                true,
+                &bad,
+                SourceRole::Publisher,
+                descriptor()
+            )
+            .unwrap_err()
+            .to_string(),
+            "invalid_source_name"
         );
-        let mut bad = raw_rule();
-        bad.download_hosts = Some(vec![]);
-        assert_eq!(
-            validate_rule(&bad).unwrap_err().to_string(),
-            "invalid_source_hosts"
-        );
+    }
+
+    #[test]
+    fn builtin_rules_load_from_lua_meta() {
+        let builtins =
+            crate::sources::builtin::load_rules(crate::sources::DEFAULT_RULES_JSON).unwrap();
+        assert_eq!(builtins.len(), 5);
+        let patchmoe = builtins.iter().find(|b| b.rule.id == "patchmoe").unwrap();
+        assert!(patchmoe.rule.official_title_match);
+        assert_eq!(patchmoe.default_name, "Shiravune");
+        let hgamer = builtins.iter().find(|b| b.rule.id == "hgamer").unwrap();
+        assert_eq!(hgamer.rule.role, SourceRole::FallbackIndexer);
+        assert!(!hgamer.rule.official_title_match);
+        assert!(hgamer.rule.download_hosts.is_empty());
     }
 
     #[test]
@@ -827,7 +941,7 @@ mod tests {
 
     #[test]
     fn validate_entries_rejects_bad_date_and_appid() {
-        let rule = validate_rule(&raw_rule()).unwrap();
+        let rule = built_rule();
         assert_eq!(validate_entries(&rule, &[entry()]).unwrap().len(), 1);
 
         assert_eq!(

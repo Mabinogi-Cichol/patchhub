@@ -33,6 +33,7 @@ fn stored_rule<'a>(
 pub struct SourceRegistry {
     store: SourceStore,
     builtins: Vec<SourceRule>,
+    builtin_names: BTreeMap<String, String>,
     rules: Vec<SourceRule>,
     overrides: Overrides,
     names: BTreeMap<String, String>,
@@ -50,18 +51,25 @@ pub struct SourceRegistry {
 }
 
 impl SourceRegistry {
-    pub fn load(store: SourceStore, builtins: Vec<SourceRule>) -> Result<Self> {
+    pub fn load(store: SourceStore, builtins: Vec<super::builtin::BuiltinSource>) -> Result<Self> {
         Self::load_with_clock(store, builtins, Box::new(SystemClock))
     }
 
     pub fn load_with_clock(
         store: SourceStore,
-        builtins: Vec<SourceRule>,
+        builtins: Vec<super::builtin::BuiltinSource>,
         clock: Box<dyn Clock>,
     ) -> Result<Self> {
+        let mut builtin_names = BTreeMap::new();
+        let mut builtin_rules = Vec::with_capacity(builtins.len());
+        for entry in builtins {
+            builtin_names.insert(entry.rule.id.clone(), entry.default_name);
+            builtin_rules.push(entry.rule);
+        }
         let mut registry = Self {
             store,
-            builtins,
+            builtins: builtin_rules,
+            builtin_names,
             rules: Vec::new(),
             overrides: Overrides::default(),
             names: BTreeMap::new(),
@@ -247,6 +255,21 @@ impl SourceRegistry {
         })
     }
 
+    pub fn display_name(&self, source_id: &str) -> String {
+        if let Some(name) = self.names.get(source_id) {
+            return name.clone();
+        }
+        if let Some(name) = self.builtin_names.get(source_id) {
+            return name.clone();
+        }
+        self.rules
+            .iter()
+            .find(|rule| rule.id == source_id)
+            .and_then(|rule| rule.page_hosts.first())
+            .cloned()
+            .unwrap_or_else(|| source_id.to_string())
+    }
+
     pub fn list_sources(&self) -> Vec<SourceSummary> {
         let intervals = self
             .store
@@ -302,12 +325,9 @@ impl SourceRegistry {
                     interval_hours,
                     stored_status.map(|status| status.checked_at).unwrap_or(0),
                 );
-                let mut display_rule = rule.clone();
-                if let Some(name) = self.names.get(&rule.id) {
-                    display_rule.name = name.clone();
-                }
                 SourceSummary {
-                    rule: display_rule,
+                    rule: rule.clone(),
+                    name: self.display_name(&rule.id),
                     origin: self.source_origin(&rule.id).unwrap_or("added").to_string(),
                     status: code,
                     entry_count,
@@ -497,64 +517,86 @@ impl SourceRegistry {
         Ok(name.to_string())
     }
 
-    /// Compile only, then atomically store rule, raw UTF-8 source and digest.
+    /// Parses `meta`, validates entrypoints, assigns or preserves ID and local name,
+    /// and atomically persists rule, raw UTF-8 source and digest.
     pub fn import_script_source(
         &mut self,
-        raw: &RawSourceRule,
+        source_id: Option<&str>,
         api_version: u32,
         code: &str,
-        replace: bool,
     ) -> Result<ImportedScriptSource> {
-        let mut rule = validate::validate_rule(raw)?;
-        if rule.adapter != "lua" {
-            return Err(invalid("source_not_script"));
+        if let Some(id) = source_id {
+            if !validate::valid_source_id(id) {
+                return Err(invalid("invalid_source_id"));
+            }
         }
-        rule.script = Some(super::script::validate_code(
-            &rule.id,
+        let parsed = super::script::parse_script(
+            source_id.unwrap_or("import"),
             api_version,
             code.as_bytes(),
-        )?);
-        let rule_id = rule.id.clone();
+        )?;
+        let template_id = source_id.unwrap_or("custom").to_string();
+        let (base_rule, default_name) = validate::build_rule_from_meta(
+            template_id,
+            "lua".to_string(),
+            true,
+            &parsed.meta,
+            parsed.role,
+            parsed.descriptor,
+        )?;
+        let mut final_rule = base_rule.clone();
+        let mut final_name = default_name.clone();
         let revision = self.store.update_settings(|settings| {
-            let user_rule = settings
-                .added
-                .iter()
-                .find(|rule| rule.id == rule_id)
-                .cloned();
-            match (replace, user_rule) {
-                (false, Some(_)) => return Err(invalid("script_source_exists")),
-                (false, None) => {
-                    if self.builtins.iter().any(|builtin| builtin.id == rule_id) {
-                        return Err(invalid("script_source_exists"));
+            let resolved_id = match source_id {
+                None => {
+                    let mut existing_ids: HashSet<String> =
+                        self.builtins.iter().map(|rule| rule.id.clone()).collect();
+                    for added in &settings.added {
+                        existing_ids.insert(added.id.clone());
                     }
+                    validate::generate_source_id(&base_rule.page_hosts[0], &existing_ids)
                 }
-                (true, Some(existing)) => {
-                    rule.enabled = settings
+                Some(id) => {
+                    let Some(existing) = settings.added.iter().find(|rule| rule.id == id).cloned()
+                    else {
+                        return Err(invalid(
+                            if self.builtins.iter().any(|builtin| builtin.id == id) {
+                                "source_builtin_readonly"
+                            } else {
+                                "unknown_source"
+                            },
+                        ));
+                    };
+                    final_rule.enabled = settings
                         .enabled
-                        .get(&rule_id)
+                        .get(id)
                         .copied()
                         .unwrap_or(existing.enabled);
+                    id.to_string()
                 }
-                (true, None) => {
-                    return Err(invalid(
-                        if self.builtins.iter().any(|builtin| builtin.id == rule_id) {
-                            "source_builtin_readonly"
-                        } else {
-                            "unknown_source"
-                        },
-                    ));
-                }
-            }
-            settings.added.retain(|existing| existing.id != rule_id);
-            settings.added.push(rule.clone());
+            };
+            final_rule.id = resolved_id.clone();
+            settings.added.retain(|existing| existing.id != resolved_id);
+            settings.added.push(final_rule.clone());
             settings
                 .script_sources
-                .insert(rule_id.clone(), code.to_string());
+                .insert(resolved_id.clone(), code.to_string());
+            if source_id.is_none() || !settings.names.contains_key(&resolved_id) {
+                settings
+                    .names
+                    .insert(resolved_id.clone(), default_name.clone());
+            }
+            final_name = settings
+                .names
+                .get(&resolved_id)
+                .cloned()
+                .unwrap_or_else(|| default_name.clone());
             Ok(settings.revision)
         })?;
         self.reload()?;
         Ok(ImportedScriptSource {
-            rule,
+            rule: final_rule,
+            name: final_name,
             settings_revision: revision,
         })
     }
@@ -590,7 +632,11 @@ impl SourceRegistry {
             .iter()
             .find(|rule| rule.id == source_id)
             .ok_or_else(|| invalid("unknown_source"))?;
-        super::script::document(rule, self.script_sources.get(source_id).map(String::as_str))
+        super::script::document(
+            rule,
+            &self.display_name(source_id),
+            self.script_sources.get(source_id).map(String::as_str),
+        )
     }
 
     pub fn set_game_source(&mut self, appid: u32, source_id: &str, subscribed: bool) -> Result<()> {
@@ -757,7 +803,6 @@ fn source_match_from_candidate(
         appid: candidate.game_appid,
         source_id: rule.id.clone(),
         release_id: release_id_for(&rule.id, appid),
-        root_layout: rule.root_layout,
     })
 }
 
@@ -773,17 +818,13 @@ fn release_id_for(source_id: &str, appid: u32) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sources::builtin::BuiltinSource;
     use crate::sources::store::SourceStore;
-    use crate::sources::{validate, FakeClock, DEFAULT_RULES_JSON};
+    use crate::sources::FakeClock;
     use std::path::Path;
 
-    fn builtins() -> Vec<SourceRule> {
-        let config: RulesConfig = serde_json::from_str(DEFAULT_RULES_JSON).unwrap();
-        config
-            .sources
-            .iter()
-            .map(|raw| validate::validate_rule(raw).unwrap())
-            .collect()
+    fn builtins() -> Vec<BuiltinSource> {
+        crate::sources::builtin::default_builtins()
     }
 
     fn registry_at(dir: &Path) -> SourceRegistry {
@@ -792,27 +833,31 @@ mod tests {
             .unwrap()
     }
 
+    const CUSTOM_LUA: &str = r#"return {
+        meta = {
+            name = "Custom",
+            pages = {"https://example.com/"},
+            page_hosts = {"example.com"},
+            download_hosts = {"download.example.com"},
+        },
+        collect_index = function() return {entries = {}, complete = true} end
+    }"#;
+
     #[test]
     fn display_names_persist_without_changing_rules_or_subscriptions() {
         let temp = tempfile::tempdir().unwrap();
         let mut registry = registry_at(temp.path());
-        assert_eq!(registry.list_sources()[0].rule.name, "Shiravune");
-        let mut raw: RawSourceRule = serde_json::from_value(serde_json::json!({
-            "id": "custom", "name": "Custom", "enabled": true,
-            "pages": ["https://example.com/"], "page_hosts": ["example.com"],
-            "download_hosts": ["download.example.com"], "root_layout": "game_root"
-        }))
-        .unwrap();
-        registry
-            .import_script_source(&raw, 1, "return {}", false)
-            .unwrap();
+        assert_eq!(registry.list_sources()[0].name, "Shiravune");
+        let imported = registry.import_script_source(None, 1, CUSTOM_LUA).unwrap();
+        assert_eq!(imported.rule.id, "example-com");
+        assert_eq!(imported.name, "Custom");
         registry.set_enabled("patchmoe", false).unwrap();
         registry.set_game_source(42, "patchmoe", false).unwrap();
         registry.set_update_interval("patchmoe", 24).unwrap();
         let rules = registry.rules().to_vec();
         let names = [
             ("patchmoe", "我的发行商".repeat(80)),
-            ("custom", "自定义来源".to_string()),
+            ("example-com", "自定义来源".to_string()),
             ("hgamer", "补查来源".to_string()),
         ];
         for (id, name) in &names {
@@ -825,9 +870,8 @@ mod tests {
         let revision = registry.settings_revision();
         drop(registry);
         // Simulate an app upgrade: compiled rules still update under a display name.
-        raw.pages = vec!["https://www.patch.moe/updated".to_string()];
         let mut updated_builtins = builtins();
-        updated_builtins[0].pages = raw.pages;
+        updated_builtins[0].rule.pages = vec!["https://www.patch.moe/updated".to_string()];
         let registry =
             SourceRegistry::load(SourceStore::open(temp.path()).unwrap(), updated_builtins)
                 .unwrap();
@@ -839,7 +883,7 @@ mod tests {
                 .into_iter()
                 .find(|source| &source.source.rule.id == id)
                 .unwrap();
-            assert_eq!(&source.source.rule.name, name);
+            assert_eq!(&source.source.name, name);
         }
         assert!(!registry.game_subscribed(42, "patchmoe"));
         let source = registry
@@ -882,10 +926,7 @@ mod tests {
         )
         .unwrap();
         drop(registry);
-        assert_eq!(
-            registry_at(temp.path()).list_sources()[0].rule.name,
-            "Shiravune"
-        );
+        assert_eq!(registry_at(temp.path()).list_sources()[0].name, "Shiravune");
     }
 
     fn game(appid: u32) -> GameQuery {
@@ -1083,15 +1124,7 @@ mod tests {
         }
         registry.set_update_interval("patchmoe", 0).unwrap();
         registry.set_update_interval("kagura-cn", 24).unwrap();
-        let raw = serde_json::from_value(serde_json::json!({
-            "id": "custom", "name": "Custom", "enabled": true,
-            "pages": ["https://example.com/"], "page_hosts": ["example.com"],
-            "download_hosts": ["download.example.com"], "root_layout": "game_root"
-        }))
-        .unwrap();
-        registry
-            .import_script_source(&raw, 1, "return {}", false)
-            .unwrap();
+        registry.import_script_source(None, 1, CUSTOM_LUA).unwrap();
         registry
             .store()
             .save_status(
@@ -1125,7 +1158,7 @@ mod tests {
         assert_eq!(intervals["kagura-cn"], 24);
         assert_eq!(intervals["kagura-en"], 168);
         assert_eq!(intervals["hgamer"], 0);
-        assert_eq!(intervals["custom"], 0);
+        assert_eq!(intervals["example-com"], 0);
     }
 
     #[test]

@@ -270,7 +270,7 @@ Installation resolves a locally matched source selection. Close the game and pau
 Methods: get_capabilities scan project_instances preview install_patch list_transactions recover discard_plan cleanup_cache cache_status game_cache_status cleanup_game_cache backup_status cleanup_backups.
 Sources: list_sources list_game_sources set_source_enabled set_source_name set_game_source remove_source set_source_update_interval update_source match_games rematch_game.
 Options: --state-dir --selection --operation install|reinstall --request-id ID.
-Source options: --source-id ID --name TEXT --appid N --enabled true|false --subscribed true|false --rule JSON --interval-hours N --name-hint TEXT --force --force-details --instance-id ID --match-instance ID.
+Source options: --source-id ID --name TEXT --appid N --enabled true|false --subscribed true|false --interval-hours N --name-hint TEXT --force --force-details --instance-id ID --match-instance ID.
 ";
 
 fn parse_bool(value: &str) -> Result<bool, String> {
@@ -334,11 +334,6 @@ fn run() -> Result<(), String> {
             "--enabled" => params.enabled = Some(parse_bool(&value)?),
             "--name" => params.name = Some(value),
             "--subscribed" => params.subscribed = Some(parse_bool(&value)?),
-            "--rule" => {
-                params.rule = Some(
-                    serde_json::from_str(&value).map_err(|_| "invalid_rule_json".to_string())?,
-                )
-            }
             "--name-hint" => params.name_hints.push(value),
             "--operation" => {
                 params.operation = match value.as_str() {
@@ -480,6 +475,7 @@ mod tests {
         "set_game_source",
         "import_script_source",
         "get_script_source",
+        "get_script_source_prompt",
         "set_source_update_interval",
         "update_source",
         "match_games",
@@ -493,7 +489,7 @@ mod tests {
         expected.sort_unstable();
         let mut actual = runtime::METHODS.to_vec();
         actual.sort_unstable();
-        assert_eq!(runtime::METHODS.len(), 26);
+        assert_eq!(runtime::METHODS.len(), 27);
         assert_eq!(actual, expected);
 
         let capabilities = respond(
@@ -505,7 +501,7 @@ mod tests {
             .iter()
             .map(|method| method.as_str().unwrap())
             .collect();
-        assert_eq!(methods.len(), 26);
+        assert_eq!(methods.len(), 27);
         let mut sorted = methods.clone();
         sorted.sort_unstable();
         assert_eq!(sorted, expected);
@@ -533,7 +529,7 @@ mod tests {
         assert_eq!(result["sources"]["schedule_schema_version"], 1);
         assert_eq!(result["sources"]["parser_version"], 2);
         assert_eq!(result["sources"]["encoding_version"], 1);
-        assert_eq!(result["sources"]["methods"].as_array().unwrap().len(), 12);
+        assert_eq!(result["sources"]["methods"].as_array().unwrap().len(), 13);
     }
 
     #[test]

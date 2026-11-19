@@ -29,16 +29,6 @@ fn main() {
         writeln!(generated, "        {adapter:?} => Some({code:?}),").unwrap();
     }
     generated.push_str("        _ => None,\n    }\n}\n");
-    let discovery_adapters: Vec<_> = sources
-        .iter()
-        .filter(|source| source["discovery_only"] == true)
-        .map(|source| source["adapter"].as_str().expect("bundled source adapter"))
-        .collect();
-    writeln!(
-        generated,
-        "pub const DISCOVERY_ADAPTERS: &[&str] = &{discovery_adapters:?};"
-    )
-    .unwrap();
     writeln!(
         generated,
         "pub const DEFAULT_RULES_JSON: &str = {:?};",

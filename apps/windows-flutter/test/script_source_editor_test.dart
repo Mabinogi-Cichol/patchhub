@@ -14,6 +14,20 @@ import 'package:patchhub_windows/pages/source_pages.dart';
 
 import 'library_page_test.dart' show FixtureClient;
 
+const sampleScript = '''
+return {
+  meta = {
+    name = "脚本发行商示例",
+    pages = { "https://patches.vendor.example/" },
+    page_hosts = { "patches.vendor.example" },
+    download_hosts = { "downloads.vendor.example" },
+  },
+  collect_index = function()
+    return { entries = {}, pending = {}, complete = true }
+  end,
+}
+''';
+
 class ScriptClient extends FixtureClient {
   Map<String, dynamic>? document;
   bool reject = false;
@@ -21,20 +35,29 @@ class ScriptClient extends FixtureClient {
   bool rejectRefresh = false;
   final calls = <String>[];
   final writes = <Map<String, Object?>>[];
+
   Map<String, dynamic> get source => {
     ...document!['rule'] as Map<String, dynamic>,
+    'name': document!['name'],
     'status': 'not_refreshed',
     'interval_hours': 72,
     'entry_count': 0,
     'complete': false,
     'script': {'api_version': 1, 'sha256': document!['sha256']},
   };
+
   @override
   Future<Object?> call(
     String method, [
     Map<String, Object?> args = const {},
   ]) async {
     calls.add(method);
+    if (method == 'get_script_source_prompt') {
+      return {
+        'prompt':
+            '请先阅读 https://raw.githubusercontent.com/Mabinogi-Cichol/patchhub/main/docs/custom-subscription-sources.md',
+      };
+    }
     if (method == 'get_script_source') {
       if (rejectRead) throw StateError('读取失败');
       return document;
@@ -44,13 +67,31 @@ class ScriptClient extends FixtureClient {
       if (reject) {
         throw StateError('script_source_syntax_error: source/custom.lua:4: 错误');
       }
+      final sourceId = args['source_id'] as String? ?? 'patches-vendor-example';
+      final rule = {
+        'id': sourceId,
+        'adapter': 'lua',
+        'enabled': true,
+        'role': 'publisher',
+        'official_title_match': false,
+        'priority': 100,
+        'pages': ['https://patches.vendor.example/'],
+        'page_hosts': ['patches.vendor.example'],
+        'download_hosts': ['downloads.vendor.example'],
+      };
       document = {
-        'rule': args['rule'],
-        'api_version': args['api_version'],
+        'source_id': sourceId,
+        'name': '脚本发行商示例',
+        'rule': rule,
+        'api_version': args['api_version'] ?? 1,
         'code': args['code'],
         'sha256': 'a' * 64,
       };
-      return {'rule': args['rule'], 'settings_revision': 3};
+      return {
+        'rule': rule,
+        'name': '脚本发行商示例',
+        'settings_revision': 3,
+      };
     }
     if (method == 'list_sources') {
       if (rejectRefresh) throw StateError('列表读取失败');
@@ -80,9 +121,12 @@ class SourceAdminClient extends FixtureClient {
         (item) => item['id'] == args['source_id'],
       );
       return {
+        'source_id': source['id'],
+        'name': source['name'],
         'rule': {
           for (final entry in source.entries)
             if (![
+              'name',
               'status',
               'interval_hours',
               'entry_count',
@@ -117,40 +161,28 @@ Map<String, dynamic> adminSource(String id, String name, String origin) => {
   'adapter': 'lua',
   'enabled': true,
   'role': 'publisher',
+  'official_title_match': false,
+  'priority': 100,
   'origin': origin,
   'status': 'not_refreshed',
   'interval_hours': 0,
   'entry_count': 0,
   'complete': false,
-  'pages': <String>[],
-  'page_hosts': <String>[],
-  'download_hosts': <String>[],
-  'root_layout': 'game_root',
+  'pages': <String>['https://example.com/'],
+  'page_hosts': <String>['example.com'],
+  'download_hosts': <String>['dl.example.com'],
   'script': {'api_version': 1, 'sha256': 'a' * 64},
 };
 
-Future<void> enterField(WidgetTester tester, String key, String value) async {
-  final field = find.byKey(ValueKey('script-$key'));
+Future<void> enterCode(WidgetTester tester, String code) async {
+  final field = find.byKey(const ValueKey('script-code'));
   await tester.ensureVisible(field);
-  await tester.enterText(field, value);
-}
-
-Future<void> fillPublisher(WidgetTester tester) async {
-  final fixture = jsonDecode(
-    File(
-      '../../docs/features/script-source-adapters/examples/publisher/source.json',
-    ).readAsStringSync(),
-  ) as Map<String, dynamic>;
-  await enterField(tester, 'id', fixture['id'] as String);
-  await enterField(tester, 'name', fixture['name'] as String);
-  for (final key in ['pages', 'page_hosts', 'download_hosts']) {
-    await enterField(tester, key, (fixture[key] as List).join('\n'));
-  }
+  await tester.enterText(field, code);
 }
 
 void main() {
   final emptyCore = Platform.environment['PATCHHUB_EMPTY_WINDOWS_CORE'];
-  testWidgets('five bundled sources roundtrip through the empty Core form', (
+  testWidgets('five bundled sources import by pasting only Lua through empty Core', (
     tester,
   ) async {
     final sandbox = Directory.systemTemp.createTempSync(
@@ -170,10 +202,10 @@ void main() {
     final files = config['bundled_scripts'] as Map;
     expect(await tester.runAsync(() => client.call('list_sources')), isEmpty);
 
-    for (final rule in (config['sources'] as List).cast<Map>()) {
-      final code = File('$resource/source-scripts/${files[rule['adapter']]}')
+    for (final entry in (config['sources'] as List).cast<Map>()) {
+      final code = File('$resource/source-scripts/${files[entry['adapter']]}')
           .readAsStringSync();
-      Future<void>? saved;
+      late Future<Map<String, dynamic>> saved;
       await tester.pumpWidget(
         MaterialApp(
           home: Builder(
@@ -182,10 +214,11 @@ void main() {
                 onPressed: () => showDialog<void>(
                   context: context,
                   builder: (_) => ScriptSourceEditor(
-                    onSave: (params) {
-                      return saved = client
+                    onSave: (params) async {
+                      saved = client
                           .call('import_script_source', params)
-                          .then((_) {});
+                          .then((v) => v as Map<String, dynamic>);
+                      await saved;
                     },
                   ),
                 ),
@@ -197,47 +230,18 @@ void main() {
       );
       await tester.tap(find.text('打开'));
       await tester.pumpAndSettle();
-      for (final key in ['id', 'name', 'priority']) {
-        if (rule[key] != null) {
-          await enterField(tester, key, rule[key].toString());
-        }
-      }
-      if (rule['role'] == 'fallback_indexer') {
-        final roles = find.byType(DropdownButtonFormField<String>);
-        await tester.ensureVisible(roles);
-        await tester.tap(roles);
-        await tester.pumpAndSettle();
-        await tester.tap(find.text('补查源').last);
-        await tester.pumpAndSettle();
-      } else if (rule['discovery_only'] == true) {
-        final discovery = find.widgetWithText(SwitchListTile, '仅发现');
-        await tester.ensureVisible(discovery);
-        await tester.tap(discovery);
-        await tester.pumpAndSettle();
-      }
-      for (final key in ['pages', 'page_hosts', 'download_hosts']) {
-        await enterField(tester, key, (rule[key] as List).join('\n'));
-      }
-      await enterField(tester, 'code', code);
+      await enterCode(tester, code);
+      late Map<String, dynamic> imported;
       await tester.runAsync(() async {
         await tester.tap(find.text('保存并导入'));
-        await saved;
+        imported = await saved;
       });
       await tester.pumpAndSettle();
       expect(find.byType(ScriptSourceEditor), findsNothing);
+      final assignedId = (imported['rule'] as Map)['id'] as String;
       final record = await tester.runAsync(
-        () => client.call('get_script_source', {'source_id': rule['id']}),
+        () => client.call('get_script_source', {'source_id': assignedId}),
       ) as Map;
-      for (final entry in rule.entries.where(
-        (entry) => entry.key != 'adapter',
-      )) {
-        final actual = record['rule'][entry.key];
-        expect(
-          entry.key == 'download_hosts' ? actual ?? <String>[] : actual,
-          entry.value,
-          reason: '${rule['id']}/${entry.key}',
-        );
-      }
       expect(record['rule']['adapter'], 'lua');
       expect(record['code'], code);
     }
@@ -247,9 +251,42 @@ void main() {
     );
   }, skip: emptyCore == null);
 
+  testWidgets('copy AI prompt button loads prompt and copies it to clipboard', (
+    tester,
+  ) async {
+    String? copied;
+    final messenger = tester.binding.defaultBinaryMessenger;
+    messenger.setMockMethodCallHandler(SystemChannels.platform, (call) async {
+      if (call.method == 'Clipboard.setData') {
+        copied = (call.arguments as Map)['text'] as String;
+      }
+      return null;
+    });
+    addTearDown(
+      () => messenger.setMockMethodCallHandler(SystemChannels.platform, null),
+    );
+
+    const promptText =
+        '请查阅 https://raw.githubusercontent.com/Mabinogi-Cichol/patchhub/main/docs/custom-subscription-sources.md';
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: ScriptSourceEditor(
+            onLoadPrompt: () async => promptText,
+            onSave: (_) async {},
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.byKey(const ValueKey('script-copy-prompt')));
+    await tester.pumpAndSettle();
+    expect(copied, promptText);
+    expect(find.textContaining('AI 提示词已复制'), findsOneWidget);
+  });
+
   for (final brightness in Brightness.values) {
     testWidgets(
-      'failed import retains named fields and large Lua draft in $brightness',
+      'failed import retains large Lua draft without extra form fields in $brightness',
       (tester) async {
         tester.view.physicalSize = const Size(580, 600);
         tester.view.devicePixelRatio = 1;
@@ -283,13 +320,13 @@ void main() {
         );
         await tester.tap(find.text('打开'));
         await tester.pumpAndSettle();
-        final code = '-- ${'中文' * 18000}\nreturn {}';
-        await fillPublisher(tester);
-        await enterField(tester, 'code', code);
+        final code = '-- ${'中文' * 18000}\n$sampleScript';
+        await enterCode(tester, code);
         await tester.tap(find.text('保存并导入'));
         await tester.pumpAndSettle();
         expect(received!['code'], code);
-        expect(received!['replace'], false);
+        expect(received!.containsKey('source_id'), isFalse);
+        expect(received!.containsKey('rule'), isFalse);
         expect(find.byType(ScriptSourceEditor), findsOneWidget);
         expect(
           tester
@@ -299,14 +336,6 @@ void main() {
           code,
         );
         expect(find.textContaining('完整错误'), findsOneWidget);
-        expect((received!['rule'] as Map)['id'], 'my-script-publisher');
-        expect(
-          tester
-              .widget<TextField>(find.byKey(const ValueKey('script-id')))
-              .controller!
-              .text,
-          'my-script-publisher',
-        );
         expect(tester.takeException(), isNull);
       },
     );
@@ -339,6 +368,7 @@ void main() {
       await tester.tap(find.text('查看脚本'));
       await tester.pumpAndSettle();
       expect(find.text('查看脚本：patchmoe'), findsOneWidget);
+      expect(find.byKey(const ValueKey('script-summary')), findsOneWidget);
       expect(find.byType(FilledButton), findsNothing);
       final code = tester.widget<TextField>(
         find.byKey(const ValueKey('script-code')),
@@ -388,7 +418,7 @@ void main() {
   );
 
   testWidgets(
-    'page imports, refreshes projections, reads and explicitly replaces the same ID',
+    'page imports, displays host domains, refreshes projections, reads and locks edited ID',
     (tester) async {
       tester.view.physicalSize = const Size(1200, 900);
       tester.view.devicePixelRatio = 1;
@@ -422,8 +452,8 @@ void main() {
       );
       await tester.tap(find.text('导入脚本来源'));
       await tester.pumpAndSettle();
-      await fillPublisher(tester);
-      await enterField(tester, 'code', 'return {}');
+      expect(find.byKey(const ValueKey('script-copy-prompt')), findsOneWidget);
+      await enterCode(tester, sampleScript);
       await tester.tap(find.text('保存并导入'));
       await tester.pumpAndSettle();
       expect(
@@ -434,6 +464,7 @@ void main() {
           'project_instances',
         ]),
       );
+      expect(client.writes.last.containsKey('source_id'), isFalse);
       expect(
         model.snapshot!.rows.single.patches.map((patch) => patch['release_id']),
         ['signed'],
@@ -442,33 +473,41 @@ void main() {
       expect(find.textContaining('脚本已保存，尚未执行'), findsOneWidget);
       await tester.tap(find.text('脚本发行商示例'));
       await tester.pumpAndSettle();
+      await tester.ensureVisible(find.text('调度与地址详情'));
+      await tester.tap(find.text('调度与地址详情'));
+      await tester.pumpAndSettle();
+      expect(
+        find.textContaining('允许访问域名：patches.vendor.example'),
+        findsOneWidget,
+      );
+      expect(
+        find.textContaining('允许下载域名：downloads.vendor.example'),
+        findsOneWidget,
+      );
       await tester.ensureVisible(find.text('编辑脚本'));
       await tester.tap(find.text('编辑脚本'));
       await tester.pumpAndSettle();
       expect(client.calls.last, 'get_script_source');
+      expect(find.byKey(const ValueKey('script-copy-prompt')), findsNothing);
+      expect(find.byKey(const ValueKey('script-summary')), findsOneWidget);
       expect(
         tester
             .widget<TextField>(find.byKey(const ValueKey('script-code')))
             .controller!
             .text,
-        'return {}',
+        sampleScript,
       );
-      expect(
-        tester
-            .widget<TextField>(find.byKey(const ValueKey('script-id')))
-            .enabled,
-        isFalse,
-      );
-      await enterField(tester, 'code', 'return { updated = true }');
+      await enterCode(tester, '$sampleScript\n-- updated');
       client.reject = true;
-      await tester.tap(find.text('保存并替换 my-script-publisher'));
+      await tester.tap(find.text('保存并替换 patches-vendor-example'));
       await tester.pumpAndSettle();
-      expect(client.document!['code'], 'return {}');
+      expect(client.document!['code'], sampleScript);
       expect(find.byType(ScriptSourceEditor), findsOneWidget);
       client.reject = false;
-      await tester.tap(find.text('保存并替换 my-script-publisher'));
+      await tester.tap(find.text('保存并替换 patches-vendor-example'));
       await tester.pumpAndSettle();
-      expect(client.writes.last['replace'], true);
+      expect(client.writes.last['source_id'], 'patches-vendor-example');
+      expect(client.writes.last.containsKey('replace'), isFalse);
       await tester.ensureVisible(find.text('编辑脚本'));
       await tester.tap(find.text('编辑脚本'));
       await tester.pumpAndSettle();
@@ -477,7 +516,7 @@ void main() {
             .widget<TextField>(find.byKey(const ValueKey('script-code')))
             .controller!
             .text,
-        'return { updated = true }',
+        '$sampleScript\n-- updated',
       );
       await tester.tap(find.text('取消'));
       await tester.pumpAndSettle();
@@ -492,14 +531,11 @@ void main() {
       await tester.ensureVisible(find.text('编辑脚本'));
       await tester.tap(find.text('编辑脚本'));
       await tester.pumpAndSettle();
-      await tester.enterText(
-        find.byKey(const ValueKey('script-code')),
-        'return { saved = true }',
-      );
-      await tester.tap(find.text('保存并替换 my-script-publisher'));
+      await enterCode(tester, '$sampleScript\n-- saved');
+      await tester.tap(find.text('保存并替换 patches-vendor-example'));
       await tester.pumpAndSettle();
       expect(find.byType(ScriptSourceEditor), findsNothing);
-      expect(client.document!['code'], 'return { saved = true }');
+      expect(client.document!['code'], '$sampleScript\n-- saved');
       expect(model.stateRefreshError.toString(), contains('设置已保存'));
       expect(tester.takeException(), isNull);
     },

@@ -1,16 +1,16 @@
-import { ButtonItem, DropdownItem, Focusable, PanelSection, PanelSectionRow, TextField, ToggleField } from "@decky/ui";
+import { ButtonItem, Focusable, PanelSection, PanelSectionRow } from "@decky/ui";
 import { useRef, useState } from "react";
-import type { Columns, RawSourceRule, ScriptSourceDocument } from "../../../packages/contracts/generated/protocol";
+import type { ScriptSourceDocument } from "../../../packages/contracts/generated/protocol";
 import { scriptSourceError } from "./script-source-error";
 
-function CodeInput({ label, value, disabled, rows = 9, onChange }: {
-  label: string; value: string; disabled: boolean; rows?: number; onChange: (value: string) => void;
+function CodeInput({ label, value, disabled, placeholder, rows = 11, onChange }: {
+  label: string; value: string; disabled: boolean; placeholder?: string; rows?: number; onChange: (value: string) => void;
 }) {
   const input = useRef<HTMLTextAreaElement>(null);
   return <Focusable onActivate={() => input.current?.focus()}>
     <label style={{ display: "block", marginBlock: 12 }}>{label}
       <textarea ref={input} aria-label={label} rows={rows} value={value} disabled={disabled}
-        spellCheck={false} onChange={e => onChange(e.target.value)}
+        placeholder={placeholder} spellCheck={false} onChange={e => onChange(e.target.value)}
         style={{ display: "block", boxSizing: "border-box", width: "100%", marginTop: 8, padding: 12,
           background: "#1b2838", color: "#fff", border: "1px solid #8b929a", borderRadius: 4,
           fontFamily: "monospace", fontSize: 16, resize: "vertical" }} />
@@ -18,86 +18,53 @@ function CodeInput({ label, value, disabled, rows = 9, onChange }: {
   </Focusable>;
 }
 
-const columnFields = [
-  ["title", "标题列"], ["download", "下载列"], ["date", "日期列"],
-  ["language", "语言列"], ["appid", "Steam AppID 列"],
-] as const;
-const optionalStrings = [
-  ["url", "起始 URL"], ["language", "语言"], ["table_id", "表格 ID"],
-] as const;
-const lists = [
-  ["pages", "起始页面（必填，每行一项）"],
-  ["page_hosts", "页面域名（必填，每行一项）"],
-  ["download_hosts", "下载域名（每行一项）"],
-] as const;
-
-function integer(value: string, label: string): number {
-  const parsed = Number(value);
-  if (!value.trim() || !Number.isSafeInteger(parsed)) throw Error(`${label}必须是整数`);
-  return parsed;
+function hostList(hosts?: string[]): string {
+  return hosts && hosts.length ? hosts.join(" · ") : "无";
 }
 
-export function ScriptSourceEditor({ document, readOnly = false, onSave, onClose }: {
+export function ScriptSourceEditor({ document, readOnly = false, onLoadPrompt, onSave, onClose }: {
   document?: ScriptSourceDocument;
-  /** 内置来源随版本更新，只展示规则与源码。 */
+  /** 内置来源随版本更新，只展示只读摘要与源码。 */
   readOnly?: boolean;
-  onSave: (rule: string, apiVersion: number, code: string, replace: boolean) => Promise<void>;
+  onLoadPrompt?: () => Promise<string>;
+  onSave: (code: string, sourceId: string | null, apiVersion: number) => Promise<void>;
   onClose: () => void;
 }) {
   const original = document?.rule;
-  const [rule, setRule] = useState<RawSourceRule>(() => original ?? {
-    id: "", name: "", adapter: "lua", enabled: true, pages: [], page_hosts: [],
-    root_layout: "game_root",
-  });
-  const [priority, setPriority] = useState(String(original?.priority ?? ""));
-  const [listValues, setListValues] = useState(() => ({
-    pages: original?.pages.join("\n") ?? "",
-    page_hosts: original?.page_hosts.join("\n") ?? "",
-    download_hosts: original?.download_hosts?.join("\n") ?? "",
-  }));
-  const [useColumns, setUseColumns] = useState(!!original?.columns);
-  const [columns, setColumns] = useState(() => Object.fromEntries(
-    columnFields.map(([key]) => [key, String(original?.columns?.[key] ?? "")]),
-  ));
+  const target = document?.source_id ?? original?.id ?? null;
+  const isCreate = target === null && !readOnly;
+  const displayName = document?.name ?? target ?? "";
+  const roleLabel = original?.role === "fallback_indexer" ? "补查源" : "索引源";
+
   const [code, setCode] = useState(document?.code ?? "");
   const [saving, setSaving] = useState(false);
+  const [loadingPrompt, setLoadingPrompt] = useState(false);
   const [error, setError] = useState("");
   const [note, setNote] = useState("");
-  const target = original?.id;
   const disabled = saving || readOnly;
-  const discoveryOnly = !!rule.discovery_only || rule.role === "fallback_indexer";
 
-  function update<K extends keyof RawSourceRule>(key: K, value: RawSourceRule[K]) {
-    setRule(previous => ({ ...previous, [key]: value }));
+  async function copyPrompt() {
+    if (!onLoadPrompt) return;
+    setLoadingPrompt(true);
+    setError("");
+    setNote("");
+    try {
+      const prompt = await onLoadPrompt();
+      await navigator.clipboard.writeText(prompt);
+      setNote("AI 提示词已复制，请粘贴发送给你的 AI 工具。");
+    } catch (failure) {
+      setError(`复制 AI 提示词失败：${scriptSourceError(failure)}`);
+    } finally {
+      setLoadingPrompt(false);
+    }
   }
 
   async function save() {
     setSaving(true);
     setError("");
+    setNote("");
     try {
-      const lines = (value: string) => value.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
-      const downloads = lines(listValues.download_hosts);
-      let parsedColumns: Columns | undefined;
-      if (useColumns) {
-        parsedColumns = {
-          title: integer(columns.title, "标题列"),
-          download: integer(columns.download, "下载列"),
-          date: columns.date.trim() ? integer(columns.date, "日期列") : null,
-          language: columns.language.trim() ? integer(columns.language, "语言列") : null,
-          appid: columns.appid.trim() ? integer(columns.appid, "Steam AppID 列") : null,
-        };
-      }
-      const parsed: RawSourceRule = {
-        ...rule,
-        discovery_only: discoveryOnly,
-        root_layout: discoveryOnly ? undefined : "game_root",
-        priority: priority.trim() ? integer(priority, "优先级") : undefined,
-        pages: lines(listValues.pages),
-        page_hosts: lines(listValues.page_hosts),
-        download_hosts: downloads.length || original?.download_hosts != null ? downloads : undefined,
-        columns: parsedColumns,
-      };
-      await onSave(JSON.stringify(parsed), document?.api_version ?? 1, code, !!target);
+      await onSave(code, target, document?.api_version ?? 1);
       onClose();
     } catch (failure) {
       setError(scriptSourceError(failure));
@@ -117,45 +84,34 @@ export function ScriptSourceEditor({ document, readOnly = false, onSave, onClose
 
   return <PanelSection title={readOnly ? `查看脚本：${target}` : target ? `编辑脚本：${target}` : "导入脚本来源"}>
     {readOnly && <PanelSectionRow><p>内置来源随版本更新，只读查看。</p></PanelSectionRow>}
-    {!readOnly && <PanelSectionRow><p>仅导入你信任的 Lua 脚本。按 A 聚焦文本框，可使用 Steam + X 输入或粘贴。</p></PanelSectionRow>}
-    <PanelSectionRow><TextField label="来源 ID（必填）" value={rule.id} disabled={disabled || !!target}
-      onChange={e => update("id", e.target.value)} /></PanelSectionRow>
-    <PanelSectionRow><TextField label="规则名称（必填）" value={rule.name} disabled={disabled}
-      onChange={e => update("name", e.target.value)} /></PanelSectionRow>
-    <PanelSectionRow><DropdownItem label="角色" layout="below" selectedOption={rule.role ?? "publisher"}
-      disabled={disabled} rgOptions={[{ data: "publisher", label: "索引源" }, { data: "fallback_indexer", label: "补查源" }]}
-      onChange={option => update("role", option.data)} /></PanelSectionRow>
-    <PanelSectionRow><ToggleField label="仅发现" checked={discoveryOnly}
-      disabled={disabled || rule.role === "fallback_indexer"} onChange={value => update("discovery_only", value)} /></PanelSectionRow>
-    <PanelSectionRow><TextField label="安装布局" disabled value={discoveryOnly ? "无" : "游戏根目录（game_root）"} /></PanelSectionRow>
-    <PanelSectionRow><TextField label="优先级（默认 100）" value={priority} disabled={disabled}
-      onChange={e => setPriority(e.target.value)} /></PanelSectionRow>
-    <PanelSectionRow><ToggleField label="启用" checked={rule.enabled} disabled={disabled || !!target}
-      onChange={value => update("enabled", value)} /></PanelSectionRow>
-    {lists.map(([key, label]) => <PanelSectionRow key={key}>
-      <CodeInput label={label} rows={3} value={listValues[key]} disabled={disabled}
-        onChange={value => setListValues(previous => ({ ...previous, [key]: value }))} />
-    </PanelSectionRow>)}
-    {optionalStrings.map(([key, label]) => <PanelSectionRow key={key}>
-      <ToggleField label={`设置${label}`} checked={rule[key] != null} disabled={disabled}
-        onChange={checked => update(key, checked ? "" : undefined)} />
-      {rule[key] != null && <TextField label={label} value={rule[key]} disabled={disabled}
-        onChange={e => update(key, e.target.value)} />}
-    </PanelSectionRow>)}
-    <PanelSectionRow><ToggleField label="设置表格列（从 0 开始）" checked={useColumns} disabled={disabled}
-      onChange={setUseColumns} /></PanelSectionRow>
-    {useColumns && columnFields.map(([key, label]) => <PanelSectionRow key={key}>
-      <TextField label={label} value={columns[key]} disabled={disabled}
-        onChange={e => {
-          const value = e.target.value;
-          setColumns(previous => ({ ...previous, [key]: value }));
-        }} />
-    </PanelSectionRow>)}
-    <PanelSectionRow><CodeInput label="Lua 源码" value={code} disabled={disabled} onChange={setCode} /></PanelSectionRow>
+    {isCreate && <PanelSectionRow><p>仅导入你信任的 Lua 脚本。可复制 AI 提示词发给 AI 工具生成脚本后直接粘贴导入；按 A 聚焦文本框，可使用 Steam + X 输入或粘贴。</p></PanelSectionRow>}
+    {!readOnly && !isCreate && <PanelSectionRow><p>仅导入你信任的 Lua 脚本。替换代码会保留当前来源 ID、名称及订阅设置；按 A 聚焦文本框。</p></PanelSectionRow>}
+    {isCreate && onLoadPrompt && <PanelSectionRow>
+      <ButtonItem layout="below" disabled={saving || loadingPrompt} onClick={copyPrompt}>
+        {loadingPrompt ? "正在读取提示词…" : "复制 AI 提示词"}
+      </ButtonItem>
+    </PanelSectionRow>}
+    {target && <PanelSectionRow>
+      <div style={{ padding: 12, background: "rgba(255,255,255,0.04)", borderRadius: 4, fontSize: 14, lineHeight: 1.6 }}>
+        <div>来源 ID：{target}</div>
+        <div>显示名称：{displayName}</div>
+        <div>来源类型：{roleLabel}</div>
+        <div>允许访问域名：{hostList(original?.page_hosts)}</div>
+        <div>允许下载域名：{hostList(original?.download_hosts)}</div>
+      </div>
+    </PanelSectionRow>}
+    <PanelSectionRow>
+      <CodeInput label="Lua 源码" value={code} disabled={disabled}
+        placeholder={isCreate ? "粘贴包含 meta 表的完整 Lua 脚本…" : undefined} onChange={setCode} />
+    </PanelSectionRow>
     {error && <PanelSectionRow><p role="alert" className="patch-warning" style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{error}</p></PanelSectionRow>}
-    {readOnly && <PanelSectionRow><ButtonItem layout="below" onClick={() => void copyCode()}>复制 Lua 源码</ButtonItem></PanelSectionRow>}
+    {readOnly && <PanelSectionRow><ButtonItem layout="below" onClick={copyCode}>复制 Lua 源码</ButtonItem></PanelSectionRow>}
     {note && <PanelSectionRow><p role="status">{note}</p></PanelSectionRow>}
-    {!readOnly && <PanelSectionRow><ButtonItem layout="below" disabled={saving} onClick={save}>{saving ? "正在保存…" : target ? `保存并替换 ${target}` : "保存并导入"}</ButtonItem></PanelSectionRow>}
+    {!readOnly && <PanelSectionRow>
+      <ButtonItem layout="below" disabled={saving || loadingPrompt} onClick={save}>
+        {saving ? "正在保存…" : target ? `保存并替换 ${target}` : "保存并导入"}
+      </ButtonItem>
+    </PanelSectionRow>}
     <PanelSectionRow><ButtonItem layout="below" disabled={saving} onClick={onClose}>{readOnly ? "关闭" : "取消"}</ButtonItem></PanelSectionRow>
   </PanelSection>;
 }

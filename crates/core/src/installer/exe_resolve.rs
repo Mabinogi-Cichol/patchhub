@@ -58,7 +58,6 @@ pub fn resolve_exe(
         .find(|s| s.eq_ignore_ascii_case("zh-CN"))
         .or(candidate.languages.first())
         .cloned()
-        .or(rule.language.clone())
         .unwrap_or_default();
     Ok(ResolvedExeCandidate {
         selection_id: id.into(),
@@ -181,12 +180,12 @@ mod tests {
 
     #[test]
     fn supported_exe_from_an_added_non_builtin_source_is_admitted_manually() {
-        use crate::sources::model::{ArtifactFormat, RawSourceRule};
+        use crate::sources::model::ArtifactFormat;
 
         let temp = tempfile::tempdir().unwrap();
         let mut candidate = super::super::orchestrator::tests::candidate();
         let appid = candidate.game_appid.unwrap();
-        candidate.source_id = "custom-exe".to_string();
+        candidate.source_id = "mirror-example".to_string();
         candidate.source_record_id = "https://mirror.example/p/1".to_string();
         candidate.source_page = "https://mirror.example/p/1".to_string();
         candidate.mirrors[0].format = "exe".into();
@@ -195,31 +194,20 @@ mod tests {
         candidate.format_observed = ArtifactFormat::Exe;
 
         let mut sources = Sources::open(temp.path()).unwrap();
+        let code = r#"return {
+            meta = {
+                name = "Custom",
+                pages = {"https://mirror.example/"},
+                page_hosts = {"mirror.example"},
+                download_hosts = {"dl.mirror.example"},
+            },
+            collect_index = function() return {entries = {}, complete = true} end
+        }"#;
         let rule = sources
-            .import_script_source(
-                &RawSourceRule {
-                    id: "custom-exe".to_string(),
-                    name: "Custom".to_string(),
-                    adapter: "lua".to_string(),
-                    role: None,
-                    discovery_only: Some(true),
-                    priority: None,
-                    enabled: true,
-                    pages: vec!["https://mirror.example/".to_string()],
-                    page_hosts: vec!["mirror.example".to_string()],
-                    download_hosts: Some(vec!["dl.mirror.example".to_string()]),
-                    root_layout: None,
-                    columns: None,
-                    table_id: None,
-                    language: None,
-                    url: None,
-                },
-                1,
-                "return {}",
-                false,
-            )
+            .import_script_source(None, 1, code)
             .map(|imported| imported.rule)
             .unwrap();
+        assert_eq!(rule.id, "mirror-example");
         assert_eq!(sources.registry().source_origin(&rule.id), Some("added"));
         candidate.parser_fingerprint = crate::sources::index::parser_fingerprint(&rule);
         save_match(&sources, appid, candidate.clone());
@@ -230,7 +218,7 @@ mod tests {
             super::super::manual_selection::selection_id(&candidate, &query, &candidate.mirrors[0])
                 .unwrap();
         let resolved = resolve_exe(sources.registry(), &query, &selection).unwrap();
-        assert_eq!(resolved.source_id, "custom-exe");
+        assert_eq!(resolved.source_id, "mirror-example");
         assert_eq!(resolved.download_url, "https://dl.mirror.example/a.exe");
     }
 

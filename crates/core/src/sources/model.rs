@@ -11,10 +11,6 @@ fn d_role() -> SourceRole {
     SourceRole::Publisher
 }
 
-fn default_adapter() -> String {
-    "lua".to_string()
-}
-
 fn d_priority() -> u16 {
     100
 }
@@ -30,55 +26,24 @@ pub enum SourceRole {
     FallbackIndexer,
 }
 
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema, ts_rs::TS,
-)]
-#[serde(rename_all = "snake_case")]
-pub enum RootLayout {
-    GameRoot,
-}
-
-/// Deserialization intermediate: loose field types so `validate_rule` can return
-/// the exact Python error codes.
-#[derive(Debug, Clone, Deserialize, schemars::JsonSchema, ts_rs::TS, serde::Serialize)]
+/// Static metadata declared inside a single-file Lua source's `meta` table.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct RawSourceRule {
-    pub id: String,
-    pub name: String,
-    /// Author rules are Lua; bundled rules keep their historical adapter name to
-    /// locate the compiled script. Omitted means `lua`.
-    #[serde(default = "default_adapter")]
-    pub adapter: String,
+pub struct ScriptMeta {
     #[serde(default)]
-    #[ts(optional = nullable)]
+    pub name: Option<String>,
+    #[serde(default)]
     pub role: Option<String>,
     #[serde(default)]
-    #[ts(optional = nullable)]
-    pub discovery_only: Option<bool>,
-    #[serde(default)]
-    #[ts(optional = nullable)]
-    pub priority: Option<i64>,
-    pub enabled: bool,
     pub pages: Vec<String>,
-    pub page_hosts: Vec<String>,
     #[serde(default)]
-    #[ts(optional = nullable)]
-    pub download_hosts: Option<Vec<String>>,
+    pub page_hosts: Option<Vec<String>>,
     #[serde(default)]
-    #[ts(optional = nullable)]
-    pub root_layout: Option<String>,
+    pub download_hosts: Vec<String>,
     #[serde(default)]
-    #[ts(optional = nullable)]
-    pub columns: Option<Columns>,
+    pub priority: Option<i64>,
     #[serde(default)]
-    #[ts(optional = nullable)]
-    pub table_id: Option<String>,
-    #[serde(default)]
-    #[ts(optional = nullable)]
-    pub language: Option<String>,
-    #[serde(default)]
-    #[ts(optional = nullable)]
-    pub url: Option<String>,
+    pub official_title_match: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema, ts_rs::TS)]
@@ -88,17 +53,16 @@ pub struct ScriptDescriptor {
     pub sha256: String,
 }
 
-/// Validated canonical rule; field names match the Python rule dict.
+/// Validated canonical rule; host-maintained identity without display name.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema, ts_rs::TS)]
 #[serde(deny_unknown_fields)]
 pub struct SourceRule {
     pub id: String,
-    pub name: String,
     pub adapter: String,
     #[serde(default = "d_role")]
     pub role: SourceRole,
     #[serde(default)]
-    pub discovery_only: bool,
+    pub official_title_match: bool,
     #[serde(default = "d_priority")]
     pub priority: u16,
     pub enabled: bool,
@@ -106,58 +70,17 @@ pub struct SourceRule {
     pub page_hosts: Vec<String>,
     #[serde(default)]
     pub download_hosts: Vec<String>,
-    #[serde(default)]
-    pub root_layout: Option<RootLayout>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional = nullable)]
-    pub columns: Option<Columns>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional = nullable)]
-    pub table_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional = nullable)]
-    pub language: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional = nullable)]
-    pub url: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional = nullable)]
     pub script: Option<ScriptDescriptor>,
 }
 
-/// Author-facing rule without the host-generated script descriptor.
-impl From<&SourceRule> for RawSourceRule {
-    fn from(rule: &SourceRule) -> Self {
-        Self {
-            id: rule.id.clone(),
-            name: rule.name.clone(),
-            adapter: rule.adapter.clone(),
-            role: Some(
-                match rule.role {
-                    SourceRole::Publisher => "publisher",
-                    SourceRole::FallbackIndexer => "fallback_indexer",
-                }
-                .into(),
-            ),
-            discovery_only: Some(rule.discovery_only),
-            priority: Some(rule.priority.into()),
-            enabled: rule.enabled,
-            pages: rule.pages.clone(),
-            page_hosts: rule.page_hosts.clone(),
-            download_hosts: Some(rule.download_hosts.clone()),
-            root_layout: rule.root_layout.map(|_| "game_root".into()),
-            columns: rule.columns.clone(),
-            table_id: rule.table_id.clone(),
-            language: rule.language.clone(),
-            url: rule.url.clone(),
-        }
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, ts_rs::TS)]
 #[serde(deny_unknown_fields)]
 pub struct ScriptSourceDocument {
-    pub rule: RawSourceRule,
+    pub source_id: String,
+    pub name: String,
+    pub rule: SourceRule,
     pub api_version: u32,
     pub code: String,
     pub sha256: String,
@@ -167,28 +90,24 @@ pub struct ScriptSourceDocument {
 #[serde(deny_unknown_fields)]
 pub struct ImportedScriptSource {
     pub rule: SourceRule,
+    pub name: String,
     #[ts(type = "number")]
     pub settings_revision: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema, ts_rs::TS)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct Columns {
-    pub title: u8,
-    pub download: u8,
-    #[serde(default)]
-    pub date: Option<u8>,
-    #[serde(default)]
-    pub language: Option<u8>,
-    #[serde(default)]
-    pub appid: Option<u8>,
+pub struct BuiltinSourceEntry {
+    pub id: String,
+    pub adapter: String,
+    pub enabled: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct RulesConfig {
     pub schema_version: u32,
-    pub sources: Vec<RawSourceRule>,
+    pub sources: Vec<BuiltinSourceEntry>,
 }
 
 // ---- §2.2 overrides / settings / summaries -------------------------------
@@ -254,6 +173,7 @@ impl SettingsFile {
 pub struct SourceSummary {
     #[serde(flatten)]
     pub rule: SourceRule,
+    pub name: String,
     /// `"builtin"` (compiled default) or `"added"` (user rule, including one that
     /// shadows a builtin id).
     pub origin: String,
@@ -293,8 +213,7 @@ pub struct GameDiscovery {
 }
 
 /// Output of `matches()`: the matched source entry plus its rule/ release ids
-/// (field names mirror the Python `{**selected, source_id, release_id,
-/// root_layout}` dict and the TS `SourceSubscription` shape).
+/// (field names mirror the Python `{**selected, source_id, release_id}` dict).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema, ts_rs::TS)]
 #[serde(deny_unknown_fields)]
 pub struct SourceMatch {
@@ -310,7 +229,6 @@ pub struct SourceMatch {
     pub appid: Option<u32>,
     pub source_id: String,
     pub release_id: String,
-    pub root_layout: Option<RootLayout>,
 }
 
 // ---- §2.3 legacy cache / status ------------------------------------------

@@ -1,7 +1,7 @@
 use patchhub_core::sources::{
     self, adapters,
     http::{FakeFetcher, FetchResponse, RequestContext},
-    identity, QueryContext, RawSourceRule,
+    identity, QueryContext,
 };
 use serde_json::{json, Value};
 use std::sync::{atomic::AtomicBool, Arc};
@@ -47,8 +47,12 @@ fn normalize(value: &mut Value) {
     }
 }
 fn run(case: &Value) -> sources::Result<Value> {
-    let raw: RawSourceRule = serde_json::from_value(case["rule"].clone()).unwrap();
-    let rule = sources::validate::validate_rule(&raw)?;
+    let id = case["rule"]["id"].as_str().unwrap();
+    let rule = sources::builtin::default_builtins()
+        .into_iter()
+        .find(|entry| entry.rule.id == id)
+        .unwrap()
+        .rule;
     let fake = Arc::new(FakeFetcher::new());
     for response in case["responses"].as_array().unwrap() {
         fake.push(FetchResponse {

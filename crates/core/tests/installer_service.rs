@@ -267,7 +267,6 @@ fn script_source_update_to_isolated_zip_and_exe_install() {
         },
     };
     use patchhub_installer_worker::production::WorkerRuntime;
-    use serde_json::json;
     use std::{
         io::Write,
         sync::{atomic::AtomicBool, Arc},
@@ -301,9 +300,9 @@ fn script_source_update_to_isolated_zip_and_exe_install() {
         fs::write(manifest_path, text).unwrap();
         let state = temp.path().join("state");
         let mut sources = Sources::open(&state).unwrap();
-        let raw = serde_json::from_value(json!({"id":"script-install","name":"Script install","adapter":"lua","enabled":true,"discovery_only":true,"pages":["https://script.example/list"],"page_hosts":["script.example"],"download_hosts":["kaguraserver.com"]})).unwrap();
         let code = format!(
             r#"return {{
+          meta={{name='Script install',pages={{'https://script.example/list'}},download_hosts={{'kaguraserver.com'}}}},
           collect_index=function(ctx,rule,previous)
             local title=ctx.html(ctx.get(rule.pages[1]).text):select('h1')[1]:text()
             return {{entries={{{{title=title,page='https://script.example/game',current_step=1,total_steps=2}}}},complete=true}}
@@ -314,7 +313,7 @@ fn script_source_update_to_isolated_zip_and_exe_install() {
           end
         }}"#
         );
-        sources.import_script_source(&raw, 1, &code, false).unwrap();
+        let imported = sources.import_script_source(None, 1, &code).unwrap();
         let fake = Arc::new(FakeFetcher::new());
         for page in ["list", "game"] {
             fake.push(FetchResponse {
@@ -326,13 +325,7 @@ fn script_source_update_to_isolated_zip_and_exe_install() {
         }
         let mut ctx = RequestContext::with_settings(Box::new(Arc::clone(&fake)), Duration::ZERO);
         let flag = Arc::new(AtomicBool::new(false));
-        let rule = sources
-            .registry()
-            .rules()
-            .iter()
-            .find(|r| r.id == "script-install")
-            .unwrap()
-            .clone();
+        let rule = imported.rule;
         update::update_source(sources.store(), &rule, true, &mut ctx, &flag, |_| {}).unwrap();
         let query = GameQuery {
             appid: 42,
@@ -358,7 +351,7 @@ fn script_source_update_to_isolated_zip_and_exe_install() {
         let candidate = matched[0]
             .candidates
             .iter()
-            .find(|c| c.source_id == "script-install")
+            .find(|c| c.source_id == rule.id)
             .unwrap();
         assert!(candidate.parser_fingerprint.is_some());
         let (selection, payload) = if format == "zip" {

@@ -24,14 +24,25 @@ use std::{
     },
     time::Duration,
 };
-const CODE: &str = "return {discover=function(ctx,rule,query,previous) assert(query.appid==42); assert(query.terms[1]); return ctx.json_decode(ctx.get(rule.pages[1]).text) end}";
+const PUBLISHER_ID: &str = "publisher-example-com";
+const ID_A: &str = "a-example-com";
+const ID_B: &str = "b-example-com";
+const PUBLISHER_CODE: &str = r#"return {
+    meta = { name = "Publisher", pages = { "https://publisher.example.com/" }, download_hosts = { "download.example.com" } },
+    collect_index = function() return { entries = {}, complete = true } end,
+}"#;
+const DISCOVER_FN: &str = "discover=function(ctx,rule,query,previous) assert(query.appid==42); assert(query.terms[1]); return ctx.json_decode(ctx.get(rule.pages[1]).text) end";
+fn fallback_code(prefix: &str, discover_fn: &str) -> String {
+    format!(
+        "return {{ meta = {{ name = '{prefix}', role = 'fallback_indexer', pages = {{'https://{prefix}.example.com/query'}}, priority = 10 }}, {discover_fn}\n}}"
+    )
+}
 fn config() -> String {
     let mut config: Value = serde_json::from_str(sources::DEFAULT_RULES_JSON).unwrap();
     config["sources"]
         .as_array_mut()
         .unwrap()
         .retain(|r| r["id"] == "hgamer");
-    config["sources"].as_array_mut().unwrap().push(json!({"id":"publisher","name":"Publisher","adapter":"patchmoe","enabled":true,"pages":["https://example.com/"],"page_hosts":["example.com"],"download_hosts":["download.example.com"],"root_layout":"game_root"}));
     config.to_string()
 }
 fn open(state: &Path) -> Sources {
@@ -41,17 +52,18 @@ fn setup() -> (tempfile::TempDir, Sources) {
     let temp = tempfile::tempdir().unwrap();
     let mut s = open(temp.path());
     s.registry_mut().set_enabled("hgamer", false).unwrap();
+    s.import_script_source(None, 1, PUBLISHER_CODE).unwrap();
     s.store()
         .save_index(&SourceIndex {
             parser_fingerprint: sources::index::parser_fingerprint(
                 s.registry()
                     .rules()
                     .iter()
-                    .find(|r| r.id == "publisher")
+                    .find(|r| r.id == PUBLISHER_ID)
                     .unwrap(),
             ),
             schema_version: sources::SOURCE_INDEX_SCHEMA_VERSION,
-            source_id: "publisher".into(),
+            source_id: PUBLISHER_ID.into(),
             revision: 1,
             complete: true,
             checked_at: 100,
@@ -64,11 +76,21 @@ fn setup() -> (tempfile::TempDir, Sources) {
         .unwrap();
     (temp, s)
 }
-fn raw(id: &str) -> RawSourceRule {
-    serde_json::from_value(json!({"id":id,"name":id,"adapter":"lua","enabled":true,"role":"fallback_indexer","discovery_only":true,"priority":10,"pages":[format!("https://{id}.example.com/query")],"page_hosts":[format!("{id}.example.com")],"download_hosts":[]})).unwrap()
+fn source_id(prefix: &str) -> &'static str {
+    match prefix {
+        "a" => ID_A,
+        "b" => ID_B,
+        _ => unreachable!(),
+    }
 }
-fn add(s: &mut Sources, id: &str, code: &str) {
-    s.import_script_source(&raw(id), 1, code, false).unwrap();
+fn add(s: &mut Sources, prefix: &str, discover_fn: &str) {
+    let code = fallback_code(prefix, discover_fn);
+    s.import_script_source(None, 1, &code).unwrap();
+}
+fn replace_script(s: &mut Sources, prefix: &str, discover_fn: &str) -> sources::Result<()> {
+    let code = fallback_code(prefix, discover_fn);
+    s.import_script_source(Some(source_id(prefix)), 1, &code)?;
+    Ok(())
 }
 fn game() -> GameQuery {
     GameQuery {
@@ -131,8 +153,8 @@ fn assert_hidden(s: &Sources) {
 #[test]
 fn multiple_scripts_are_all_queried_keep_source_identity_and_reuse_after_restart() {
     let (temp, mut s) = setup();
-    add(&mut s, "b", CODE);
-    add(&mut s, "a", CODE);
+    add(&mut s, "b", DISCOVER_FN);
+    add(&mut s, "a", DISCOVER_FN);
     let network = fake(&[found("a"), found("b")]);
     let result = run(&s, &network);
     assert_eq!(result[0].status, GameMatchStatus::FallbackMatch);
@@ -149,7 +171,7 @@ fn multiple_scripts_are_all_queried_keep_source_identity_and_reuse_after_restart
         .candidates
         .iter()
         .all(|c| c.parser_fingerprint.is_some()));
-    for id in ["a", "b"] {
+    for id in [ID_A, ID_B] {
         assert!(
             s.registry()
                 .list_game_sources(&game())
@@ -171,11 +193,11 @@ fn multiple_scripts_are_all_queried_keep_source_identity_and_reuse_after_restart
 #[test]
 fn mixed_success_failure_partial_and_complete_empty_have_distinct_outcomes() {
     let (_temp, mut s) = setup();
-    add(&mut s, "a", CODE);
+    add(&mut s, "a", DISCOVER_FN);
     add(
         &mut s,
         "b",
-        "return {discover=function() error('broken source') end}",
+        "discover=function() error('broken source') end",
     );
     let result = run(&s, &fake(&[found("a")]));
     assert_eq!(result[0].status, GameMatchStatus::FallbackMatch);
@@ -183,7 +205,7 @@ fn mixed_success_failure_partial_and_complete_empty_have_distinct_outcomes() {
     let diagnostic = result[0]
         .diagnostics
         .iter()
-        .find(|d| d.source_id.as_deref() == Some("b"))
+        .find(|d| d.source_id.as_deref() == Some(ID_B))
         .unwrap();
     assert_eq!(diagnostic.code, "script_source_runtime_error");
     assert!(diagnostic
@@ -195,25 +217,23 @@ fn mixed_success_failure_partial_and_complete_empty_have_distinct_outcomes() {
         !s.registry()
             .list_game_sources(&game())
             .iter()
-            .find(|r| r.source.rule.id == "b")
+            .find(|r| r.source.rule.id == ID_B)
             .unwrap()
             .matched
     );
     // One successful empty response plus one failure is incomplete, never no-match.
-    s.import_script_source(&raw("a"), 1, &format!("{CODE}\n-- empty attempt"), true)
-        .unwrap();
+    replace_script(&mut s, "a", &format!("{DISCOVER_FN}\n-- empty attempt")).unwrap();
     assert_eq!(
         run(&s, &fake(&[empty()]))[0].status,
         GameMatchStatus::Incomplete
     );
-    s.import_script_source(&raw("b"), 1, CODE, true).unwrap();
+    replace_script(&mut s, "b", DISCOVER_FN).unwrap();
     assert_eq!(
         run(&s, &fake(&[empty(), empty()]))[0].status,
         GameMatchStatus::NoMatch
     );
     // Partial success with no facts remains incomplete; a title lead stays visible.
-    s.import_script_source(&raw("a"), 1, &format!("{CODE}\n-- partial attempt"), true)
-        .unwrap();
+    replace_script(&mut s, "a", &format!("{DISCOVER_FN}\n-- partial attempt")).unwrap();
     assert_eq!(
         run(
             &s,
@@ -228,14 +248,8 @@ fn mixed_success_failure_partial_and_complete_empty_have_distinct_outcomes() {
     assert_eq!(result[0].status, GameMatchStatus::Incomplete);
     assert!(!result[0].candidates.is_empty());
     assert!(!s.registry().cached_candidates(&game()).is_empty());
-    for id in ["a", "b"] {
-        s.import_script_source(
-            &raw(id),
-            1,
-            "return {discover=function() error('failure') end}",
-            true,
-        )
-        .unwrap();
+    for prefix in ["a", "b"] {
+        replace_script(&mut s, prefix, "discover=function() error('failure') end").unwrap();
     }
     assert_eq!(run(&s, &fake(&[]))[0].status, GameMatchStatus::Incomplete);
     assert_eq!(
@@ -253,7 +267,7 @@ fn mixed_success_failure_partial_and_complete_empty_have_distinct_outcomes() {
 #[test]
 fn source_set_subscription_and_same_fact_code_replacement_invalidate_cache_and_old_choices() {
     let (temp, mut s) = setup();
-    add(&mut s, "a", CODE);
+    add(&mut s, "a", DISCOVER_FN);
     let result = run(&s, &fake(&[found("a")]));
     let old = result[0].candidates.clone();
     let old_key = s
@@ -264,9 +278,9 @@ fn source_set_subscription_and_same_fact_code_replacement_invalidate_cache_and_o
         .fallback
         .unwrap()
         .query_key;
-    s.registry_mut().set_name("a", "Display").unwrap();
+    s.registry_mut().set_name(ID_A, "Display").unwrap();
     assert_eq!(s.registry().cached_candidates(&game()), old);
-    add(&mut s, "b", CODE);
+    add(&mut s, "b", DISCOVER_FN);
     assert_hidden(&s);
     let network = fake(&[found("a"), empty()]);
     run(&s, &network);
@@ -281,21 +295,20 @@ fn source_set_subscription_and_same_fact_code_replacement_invalidate_cache_and_o
             .query_key,
         old_key
     );
-    s.registry_mut().set_game_source(42, "a", false).unwrap();
+    s.registry_mut().set_game_source(42, ID_A, false).unwrap();
     assert_hidden(&s);
     let network = fake(&[found("b")]);
     let result = run(&s, &network);
     assert_eq!(network.call_count(), 1);
-    assert!(result[0].candidates.iter().all(|c| c.source_id == "b"));
-    s.registry_mut().set_enabled("b", false).unwrap();
+    assert!(result[0].candidates.iter().all(|c| c.source_id == ID_B));
+    s.registry_mut().set_enabled(ID_B, false).unwrap();
     assert_hidden(&s);
-    s.registry_mut().set_enabled("b", true).unwrap();
-    s.registry_mut().set_game_source(42, "a", true).unwrap();
-    s.import_script_source(
-        &raw("a"),
-        1,
-        &format!("{CODE}\n-- same facts, new code"),
-        true,
+    s.registry_mut().set_enabled(ID_B, true).unwrap();
+    s.registry_mut().set_game_source(42, ID_A, true).unwrap();
+    replace_script(
+        &mut s,
+        "a",
+        &format!("{DISCOVER_FN}\n-- same facts, new code"),
     )
     .unwrap();
     assert_hidden(&s);
@@ -326,7 +339,7 @@ fn hgamer_alone_and_hgamer_plus_script_are_queried_without_indexing_fallbacks() 
     });
     assert_eq!(run(&s, &network)[0].status, GameMatchStatus::NoMatch);
     assert_eq!(network.call_count(), 1);
-    add(&mut s, "a", CODE);
+    add(&mut s, "a", DISCOVER_FN);
     let network = fake(&[found("a")]);
     network.push(FetchResponse {
         status: 200,
@@ -335,7 +348,7 @@ fn hgamer_alone_and_hgamer_plus_script_are_queried_without_indexing_fallbacks() 
     });
     assert_eq!(run(&s, &network)[0].status, GameMatchStatus::FallbackMatch);
     assert_eq!(network.call_count(), 2);
-    let rule = s.registry().rules().iter().find(|r| r.id == "a").unwrap();
+    let rule = s.registry().rules().iter().find(|r| r.id == ID_A).unwrap();
     assert_eq!(
         update::update_source(s.store(), rule, true, &mut ctx(&fake(&[])), &flag(), |_| {})
             .unwrap_err()
@@ -344,7 +357,7 @@ fn hgamer_alone_and_hgamer_plus_script_are_queried_without_indexing_fallbacks() 
     );
     assert_eq!(
         s.registry_mut()
-            .set_update_interval("a", 1)
+            .set_update_interval(ID_A, 1)
             .unwrap_err()
             .to_string(),
         "source_not_indexable"
@@ -354,11 +367,11 @@ fn hgamer_alone_and_hgamer_plus_script_are_queried_without_indexing_fallbacks() 
 #[test]
 fn publisher_hit_skips_all_fallbacks_and_incomplete_coverage_never_confirms_no_patch() {
     let (_temp, mut s) = setup();
-    add(&mut s, "a", "while true do end");
-    let mut index = s.store().load_index("publisher").unwrap().unwrap();
+    add(&mut s, "a", "discover=function() while true do end end");
+    let mut index = s.store().load_index(PUBLISHER_ID).unwrap().unwrap();
     index.entries.push(SourceIndexEntry {
         title: "Game".into(),
-        page: "https://example.com/".into(),
+        page: "https://publisher.example.com/".into(),
         appid: Some(42),
         aliases: vec![],
         current_step: 1,
@@ -366,7 +379,7 @@ fn publisher_hit_skips_all_fallbacks_and_incomplete_coverage_never_confirms_no_p
         step_data: None,
         details: vec![SourceDetail {
             title: "Game".into(),
-            page: "https://example.com/".into(),
+            page: "https://publisher.example.com/".into(),
             steam_ids: vec![42],
             mirrors: vec![Mirror {
                 url: "https://download.example.com/game.zip".into(),
@@ -394,7 +407,7 @@ fn publisher_hit_skips_all_fallbacks_and_incomplete_coverage_never_confirms_no_p
 #[test]
 fn query_identities_enrich_facts_but_foreign_appids_do_not_authorize_this_game() {
     let (_temp, mut s) = setup();
-    add(&mut s, "a", CODE);
+    add(&mut s, "a", DISCOVER_FN);
     let mut response = found("a");
     response["details"][0]["title"] = json!("Another official title");
     response["details"][0]["steam_ids"] = json!([]);
@@ -406,19 +419,23 @@ fn query_identities_enrich_facts_but_foreign_appids_do_not_authorize_this_game()
         .iter()
         .all(|c| c.match_basis == MatchBasis::VerifiedAlias));
     response["identities"][0]["appid"] = json!(43);
-    s.import_script_source(&raw("a"), 1, &format!("{CODE}\n-- foreign"), true)
-        .unwrap();
+    replace_script(&mut s, "a", &format!("{DISCOVER_FN}\n-- foreign")).unwrap();
     assert!(run(&s, &fake(&[response]))[0].candidates.is_empty());
 }
 
 #[test]
 fn cancellation_in_later_source_does_not_commit_an_aggregate_success() {
     let (_temp, mut s) = setup();
-    add(&mut s, "a", CODE);
-    add(&mut s, "b", CODE);
+    add(&mut s, "a", DISCOVER_FN);
+    add(&mut s, "b", DISCOVER_FN);
     run(&s, &fake(&[found("a"), found("b")]));
     let before = fs::read(s.store().paths().matches(42)).unwrap();
-    s.import_script_source(&raw("b"),1,"return {discover=function() while true do pcall(function() while true do end end) end end}",true).unwrap();
+    replace_script(
+        &mut s,
+        "b",
+        "discover=function() while true do pcall(function() while true do end end) end end",
+    )
+    .unwrap();
     let cancel = flag();
     let flag = Arc::clone(&cancel);
     let thread = std::thread::spawn(move || {
@@ -452,9 +469,9 @@ impl Fetcher for ReplaceDuringQuery {
     fn fetch(&self, _: &FetchRequest) -> sources::Result<FetchResponse> {
         let mut s = open(&self.state);
         if self.add_source {
-            s.import_script_source(&raw("b"), 1, CODE, false)?;
+            s.import_script_source(None, 1, &fallback_code("b", DISCOVER_FN))?;
         } else {
-            s.import_script_source(&raw("a"), 1, "while true do end", true)?;
+            replace_script(&mut s, "a", "discover=function() while true do end end")?;
         }
         Ok(FetchResponse {
             status: 200,
@@ -467,7 +484,7 @@ impl Fetcher for ReplaceDuringQuery {
 fn mid_query_replacement_preserves_disk_but_does_not_return_old_positive() {
     for add_source in [false, true] {
         let (temp, mut s) = setup();
-        add(&mut s, "a", CODE);
+        add(&mut s, "a", DISCOVER_FN);
         run(&s, &fake(&[found("a")]));
         let before = fs::read(s.store().paths().matches(42)).unwrap();
         let mut network = RequestContext::with_settings(
@@ -513,10 +530,9 @@ fn mid_query_replacement_preserves_disk_but_does_not_return_old_positive() {
 #[test]
 fn readonly_projection_and_old_selection_resolution_do_not_execute_replacement_code() {
     let (temp, mut s) = setup();
-    add(&mut s, "a", CODE);
+    add(&mut s, "a", DISCOVER_FN);
     let old = run(&s, &fake(&[found("a")]))[0].candidates.clone();
-    s.import_script_source(&raw("a"), 1, "while true do end", true)
-        .unwrap();
+    replace_script(&mut s, "a", "discover=function() while true do end end").unwrap();
     assert_hidden(&s);
     for candidate in &old {
         if let Some(id) = resolve::zip_selection_id(candidate) {
@@ -558,8 +574,8 @@ fn readonly_projection_and_old_selection_resolution_do_not_execute_replacement_c
 #[test]
 fn unbound_negative_cache_is_recomputed_and_source_order_does_not_change_the_key() {
     let (_temp, mut s) = setup();
-    add(&mut s, "a", CODE);
-    add(&mut s, "b", CODE);
+    add(&mut s, "a", DISCOVER_FN);
+    add(&mut s, "b", DISCOVER_FN);
     run(&s, &fake(&[empty(), empty()]));
     let mut record = s.store().load_match(42).unwrap().unwrap();
     let key = record.fallback.as_ref().unwrap().query_key.clone();
@@ -602,8 +618,8 @@ fn unbound_negative_cache_is_recomputed_and_source_order_does_not_change_the_key
 #[test]
 fn name_hints_and_explicit_rematch_query_all_sources_and_expose_force_to_scripts() {
     let (_temp, mut s) = setup();
-    add(&mut s, "a", CODE);
-    add(&mut s, "b", CODE);
+    add(&mut s, "a", DISCOVER_FN);
+    add(&mut s, "b", DISCOVER_FN);
     run(&s, &fake(&[empty(), empty()]));
     let before = s
         .store()
@@ -639,12 +655,12 @@ fn name_hints_and_explicit_rematch_query_all_sources_and_expose_force_to_scripts
             .query_key,
         before
     );
-    let code = CODE.replace(
+    let discover = DISCOVER_FN.replace(
         "assert(query.appid==42)",
         "assert(query.appid==42); assert(query.force)",
     );
-    for id in ["a", "b"] {
-        s.import_script_source(&raw(id), 1, &code, true).unwrap();
+    for prefix in ["a", "b"] {
+        replace_script(&mut s, prefix, &discover).unwrap();
     }
     let network = fake(&[empty(), empty()]);
     let result = matching::rematch_game(

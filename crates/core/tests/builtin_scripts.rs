@@ -32,11 +32,15 @@ fn bundled_sources_are_readable_and_read_only() {
     }
     assert_eq!(fs::read(sources.store().paths().settings()).unwrap(), bytes);
     // Bundled definitions change with the release, never through user imports.
-    let mut document = sources.get_script_source("patchmoe").unwrap();
-    document.rule.name = "作者修改名".into();
+    let document = sources.get_script_source("patchmoe").unwrap();
+    assert_eq!(document.name, "Shiravune");
     assert_eq!(
         sources
-            .import_script_source(&document.rule, 1, "return {}", true)
+            .import_script_source(
+                Some("patchmoe"),
+                1,
+                r#"return { meta = { pages = { "https://www.patch.moe/" } }, collect_index = function() return { entries = {}, complete = true } end }"#,
+            )
             .unwrap_err()
             .to_string(),
         "source_builtin_readonly"
@@ -196,15 +200,26 @@ fn yozakura_matches_english_steam_names_and_keeps_each_download() {
 fn legacy_user_override_still_loads_and_deleting_it_restores_the_bundle() {
     let state = tempfile::tempdir().unwrap();
     let sources = Sources::open(state.path()).unwrap();
-    let mut document = sources.get_script_source("patchmoe").unwrap();
-    document.rule.name = "旧版用户覆盖".into();
+    let document = sources.get_script_source("patchmoe").unwrap();
     let code = "-- user override\nreturn {}\n";
     let descriptor = sources::script::validate_code("patchmoe", 1, code.as_bytes()).unwrap();
-    let mut rule = sources::validate::validate_rule(&document.rule).unwrap();
-    rule.script = Some(descriptor);
     let path = sources.store().paths().settings();
     let mut settings: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
-    settings["added"] = json!([serde_json::to_value(&rule).unwrap()]);
+    settings["schema_version"] = json!(3);
+    settings["added"] = json!([{
+        "id": document.rule.id,
+        "name": "旧版用户覆盖",
+        "adapter": "lua",
+        "role": "publisher",
+        "discovery_only": false,
+        "priority": document.rule.priority,
+        "enabled": true,
+        "pages": document.rule.pages,
+        "page_hosts": document.rule.page_hosts,
+        "download_hosts": document.rule.download_hosts,
+        "root_layout": "game_root",
+        "script": descriptor,
+    }]);
     settings["script_sources"] = json!({"patchmoe": code});
     fs::write(&path, serde_json::to_vec(&settings).unwrap()).unwrap();
     drop(sources);
@@ -219,7 +234,8 @@ fn legacy_user_override_still_loads_and_deleting_it_restores_the_bundle() {
         .find(|s| s.rule.id == "patchmoe")
         .unwrap();
     assert_eq!(summary.origin, "added");
-    assert_eq!(summary.rule.name, "旧版用户覆盖");
+    assert_eq!(summary.name, "旧版用户覆盖");
+    assert!(summary.rule.official_title_match);
     // Deleting the user rule restores the bundled definition.
     sources.registry_mut().remove_source("patchmoe").unwrap();
     assert_eq!(
@@ -233,6 +249,7 @@ fn legacy_user_override_still_loads_and_deleting_it_restores_the_bundle() {
         .find(|s| s.rule.id == "patchmoe")
         .unwrap();
     assert_eq!(summary.origin, "builtin");
+    assert_eq!(summary.name, "Shiravune");
 }
 
 #[test]
@@ -288,11 +305,12 @@ fn old_unbound_builtin_index_is_preserved_but_cannot_authorize_results() {
 fn retired_table_rules_are_filtered_until_the_next_settings_write() {
     let state = tempfile::tempdir().unwrap();
     let mut sources = Sources::open(state.path()).unwrap();
-    let mut rule = sources.get_script_source("patchmoe").unwrap().rule;
-    rule.id = "user-lua".into();
-    sources
-        .import_script_source(&rule, 1, "return {}", false)
-        .unwrap();
+    let user_code = r#"return { meta = { name = "User Lua", pages = { "https://user-lua.example/" } }, collect_index = function() return { entries = {}, complete = true } end }"#;
+    let user_id = sources
+        .import_script_source(None, 1, user_code)
+        .unwrap()
+        .rule
+        .id;
 
     let path = sources.store().paths().settings();
     let mut settings: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
@@ -310,7 +328,7 @@ fn retired_table_rules_are_filtered_until_the_next_settings_write() {
     drop(sources);
 
     let snapshot = SourceSnapshot::load(state.path(), &[], 0).unwrap().unwrap();
-    assert!(snapshot.get_script_source("user-lua").is_ok());
+    assert!(snapshot.get_script_source(&user_id).is_ok());
     assert!(snapshot.get_script_source("old-table").is_err());
     assert!(snapshot.get_script_source("old-html").is_err());
     assert_eq!(fs::read(&path).unwrap(), bytes);
@@ -318,7 +336,7 @@ fn retired_table_rules_are_filtered_until_the_next_settings_write() {
     let sources = Sources::open(state.path()).unwrap();
     let loaded = sources.store().load_settings().unwrap();
     assert_eq!(loaded.added.len(), 1);
-    assert_eq!(loaded.added[0].id, "user-lua");
+    assert_eq!(loaded.added[0].id, user_id);
     assert!(sources.get_script_source("patchmoe").is_ok());
     assert!(sources.get_script_source("old-table").is_err());
     assert!(sources.get_script_source("old-html").is_err());
@@ -332,7 +350,7 @@ fn retired_table_rules_are_filtered_until_the_next_settings_write() {
             assert!(saved[field].get(id).is_none());
         }
     }
-    assert_eq!(saved["script_sources"]["user-lua"], "return {}");
+    assert_eq!(saved["script_sources"][&user_id], user_code);
 }
 
 #[test]
@@ -340,9 +358,8 @@ fn empty_builtin_registry_recovers_all_five_sources_via_ordinary_import() {
     use sources::{
         http::{FakeFetcher, FetchResponse, RequestContext},
         matching::match_games,
-        model::{GameMatchStatus, GameQuery, Overrides, RulesConfig},
+        model::{GameMatchStatus, GameQuery, Overrides, SourceRole},
         update::update_source,
-        DEFAULT_RULES_JSON,
     };
     use std::sync::{atomic::AtomicBool, Arc};
     use std::time::Duration;
@@ -354,45 +371,50 @@ fn empty_builtin_registry_recovers_all_five_sources_via_ordinary_import() {
 
     let scripts = [
         (
-            "patchmoe",
+            "patch-moe",
+            "Shiravune",
+            SourceRole::Publisher,
             include_str!("../resources/source-scripts/patchmoe.lua"),
         ),
         (
-            "kagura-cn",
+            "kagurafan-com",
+            "Kagura Games 国内",
+            SourceRole::Publisher,
             include_str!("../resources/source-scripts/kagura-cn.lua"),
         ),
         (
-            "kagura-en",
+            "kaguragames-com",
+            "Kagura Games 海外",
+            SourceRole::Publisher,
             include_str!("../resources/source-scripts/kagura-en.lua"),
         ),
         (
-            "yozakura",
+            "yozakuragames-com",
+            "YOZAKURA",
+            SourceRole::Publisher,
             include_str!("../resources/source-scripts/yozakura.lua"),
         ),
         (
-            "hgamer",
+            "hgamer-tw",
+            "HGamer 补丁索引",
+            SourceRole::FallbackIndexer,
             include_str!("../resources/source-scripts/hgamer.lua"),
         ),
     ];
-    let config: RulesConfig = serde_json::from_str(DEFAULT_RULES_JSON).unwrap();
 
-    for (id, code) in scripts {
-        let mut raw = config
-            .sources
-            .iter()
-            .find(|rule| rule.id == id)
-            .unwrap()
-            .clone();
-        raw.adapter = "lua".to_string();
-        let imported = sources.import_script_source(&raw, 1, code, false).unwrap();
-        assert_eq!(imported.rule.id, id);
+    for (expected_id, expected_name, expected_role, code) in scripts {
+        let imported = sources.import_script_source(None, 1, code).unwrap();
+        assert_eq!(imported.rule.id, expected_id);
+        assert_eq!(imported.name, expected_name);
+        assert_eq!(imported.rule.role, expected_role);
         let summary = sources
             .registry()
             .list_sources()
             .into_iter()
-            .find(|s| s.rule.id == id)
+            .find(|s| s.rule.id == expected_id)
             .unwrap();
         assert_eq!(summary.origin, "added");
+        assert_eq!(summary.name, expected_name);
     }
     drop(sources);
 
@@ -400,7 +422,7 @@ fn empty_builtin_registry_recovers_all_five_sources_via_ordinary_import() {
         Sources::open_with_rules(state.path(), r#"{"schema_version":2,"sources":[]}"#).unwrap();
     assert_eq!(sources.registry().rules().len(), 5);
 
-    // Exercise one-shot (`patchmoe`), multi-step category (`kagura-cn`), and `kagura-en` + `hgamer`.
+    // Exercise one-shot (`patchmoe`), multi-step category (`kagura-cn`), and recovered metadata.
     let patchmoe_fake = Arc::new(FakeFetcher::new());
     patchmoe_fake.push(FetchResponse {
         status: 200,
@@ -418,7 +440,7 @@ fn empty_builtin_registry_recovers_all_five_sources_via_ordinary_import() {
         .registry()
         .rules()
         .iter()
-        .find(|r| r.id == "patchmoe")
+        .find(|r| r.id == "patch-moe")
         .unwrap()
         .clone();
     let mut ctx =
@@ -434,14 +456,14 @@ fn empty_builtin_registry_recovers_all_five_sources_via_ordinary_import() {
     )
     .unwrap();
     assert!(patchmoe_out.complete);
-    let patchmoe_idx = sources.store().load_index("patchmoe").unwrap().unwrap();
+    let patchmoe_idx = sources.store().load_index("patch-moe").unwrap().unwrap();
     assert!(patchmoe_idx.entries[0].is_complete());
 
     let kagura_cn_rule = sources
         .registry()
         .rules()
         .iter()
-        .find(|r| r.id == "kagura-cn")
+        .find(|r| r.id == "kagurafan-com")
         .unwrap()
         .clone();
     let cn_fake = Arc::new(FakeFetcher::new());
@@ -463,7 +485,11 @@ fn empty_builtin_registry_recovers_all_five_sources_via_ordinary_import() {
     )
     .unwrap();
     assert!(cn_out.complete);
-    let cn_idx = sources.store().load_index("kagura-cn").unwrap().unwrap();
+    let cn_idx = sources
+        .store()
+        .load_index("kagurafan-com")
+        .unwrap()
+        .unwrap();
     assert!(!cn_idx.entries[0].is_complete());
 
     let match_fake = Arc::new(FakeFetcher::new());
@@ -505,9 +531,11 @@ fn empty_builtin_registry_recovers_all_five_sources_via_ordinary_import() {
     assert!(matches[0]
         .candidates
         .iter()
-        .any(|c| c.source_id == "patchmoe"
+        .any(|c| c.source_id == "patch-moe"
             && c.mirrors[0].url == "https://download.patch.moe/recovered.zip"));
-    assert!(matches[0].candidates.iter().any(
-        |c| c.source_id == "kagura-cn" && c.mirrors[0].url == "https://kaguraserver.com/r.zip"
-    ));
+    assert!(matches[0]
+        .candidates
+        .iter()
+        .any(|c| c.source_id == "kagurafan-com"
+            && c.mirrors[0].url == "https://kaguraserver.com/r.zip"));
 }

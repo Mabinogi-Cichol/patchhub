@@ -25,20 +25,14 @@ fn kagura_rule() -> SourceRule {
     SourceRule {
         script: patchhub_core::sources::builtin::descriptor("kagura_wordpress"),
         id: "kagura-cn".to_string(),
-        name: "Kagura CN".to_string(),
         adapter: "kagura_wordpress".to_string(),
         role: SourceRole::Publisher,
-        discovery_only: true,
+        official_title_match: false,
         priority: 10,
         enabled: true,
         pages: vec![KAGURA_ENTRY.to_string()],
         page_hosts: vec!["kagurafan.com".to_string()],
         download_hosts: vec!["kaguraserver.com".to_string()],
-        root_layout: None,
-        columns: None,
-        table_id: None,
-        language: None,
-        url: None,
     }
 }
 
@@ -55,26 +49,14 @@ fn entry_rule() -> SourceRule {
             .unwrap(),
         ),
         id: "table-source".to_string(),
-        name: "Table".to_string(),
         adapter: "lua".to_string(),
         role: SourceRole::Publisher,
-        discovery_only: false,
+        official_title_match: true,
         priority: 20,
         enabled: true,
         pages: vec!["https://example.com/list".to_string()],
         page_hosts: vec!["example.com".to_string()],
         download_hosts: vec!["download.example.com".to_string()],
-        root_layout: Some(RootLayout::GameRoot),
-        columns: Some(Columns {
-            title: 0,
-            download: 1,
-            date: None,
-            language: None,
-            appid: None,
-        }),
-        table_id: None,
-        language: None,
-        url: None,
     }
 }
 
@@ -82,20 +64,14 @@ fn hgamer_rule() -> SourceRule {
     SourceRule {
         script: patchhub_core::sources::builtin::descriptor("hgamer_html"),
         id: "hgamer".to_string(),
-        name: "HGamer".to_string(),
         adapter: "hgamer_html".to_string(),
         role: SourceRole::FallbackIndexer,
-        discovery_only: true,
+        official_title_match: false,
         priority: 100,
         enabled: true,
         pages: vec![HGAMER_BASE.to_string()],
         page_hosts: vec!["hgamer.tw".to_string()],
         download_hosts: Vec::new(),
-        root_layout: None,
-        columns: None,
-        table_id: None,
-        language: None,
-        url: None,
     }
 }
 
@@ -2334,7 +2310,14 @@ fn matched_related_dlc_binds_variant_dlc_and_requires_dlc_with_keyword_fallback(
     );
     store.save_index(&index_data).unwrap();
 
-    let registry = SourceRegistry::load(store, vec![rule]).unwrap();
+    let registry = SourceRegistry::load(
+        store,
+        vec![patchhub_core::sources::builtin::BuiltinSource {
+            rule,
+            default_name: "PatchMoe".into(),
+        }],
+    )
+    .unwrap();
     let mut query = game(1227890, "Summer Memories");
     query.related_dlc = vec![SteamDlc {
         appid: 1390150,

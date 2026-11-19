@@ -677,20 +677,14 @@ pub(crate) mod tests {
         SourceRule {
             script: None,
             id: "kagura-cn".to_string(),
-            name: "Kagura".to_string(),
             adapter: "kagura_wordpress".to_string(),
             role: SourceRole::Publisher,
-            discovery_only: true,
+            official_title_match: false,
             priority: 10,
             enabled: true,
             pages: vec!["https://kagurafan.com/".to_string()],
             page_hosts: vec!["kagurafan.com".to_string()],
             download_hosts: vec!["kaguraserver.com".to_string()],
-            root_layout: None,
-            columns: None,
-            table_id: None,
-            language: None,
-            url: None,
         }
     }
 

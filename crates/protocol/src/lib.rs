@@ -10,8 +10,8 @@ pub use patchhub_core::{
     },
     projection::{DomainError, InstanceProjection, PreviewReport, ScanReport},
     sources::{
-        GameMatch, GameSourceSummary, RawSourceRule, ScriptSourceDocument, SourceCandidate,
-        SourceRule, SourceStatus, SourceSummary,
+        GameMatch, GameSourceSummary, ScriptSourceDocument, SourceCandidate, SourceRule,
+        SourceStatus, SourceSummary,
     },
 };
 use schemars::JsonSchema;
@@ -88,13 +88,14 @@ pub enum Method {
     SetGameSource,
     ImportScriptSource,
     GetScriptSource,
+    GetScriptSourcePrompt,
     SetSourceUpdateInterval,
     UpdateSource,
     MatchGames,
     RematchGame,
     RemoveSource,
 }
-pub const ALL_METHODS: [Method; 26] = [
+pub const ALL_METHODS: [Method; 27] = [
     Method::GetCapabilities,
     Method::Scan,
     Method::ProjectInstances,
@@ -116,13 +117,14 @@ pub const ALL_METHODS: [Method; 26] = [
     Method::SetGameSource,
     Method::ImportScriptSource,
     Method::GetScriptSource,
+    Method::GetScriptSourcePrompt,
     Method::SetSourceUpdateInterval,
     Method::UpdateSource,
     Method::MatchGames,
     Method::RematchGame,
     Method::RemoveSource,
 ];
-pub const METHODS: [&str; 26] = [
+pub const METHODS: [&str; 27] = [
     "get_capabilities",
     "scan",
     "project_instances",
@@ -144,13 +146,14 @@ pub const METHODS: [&str; 26] = [
     "set_game_source",
     "import_script_source",
     "get_script_source",
+    "get_script_source_prompt",
     "set_source_update_interval",
     "update_source",
     "match_games",
     "rematch_game",
     "remove_source",
 ];
-pub const SOURCE_METHODS: [&str; 12] = [
+pub const SOURCE_METHODS: [&str; 13] = [
     "list_sources",
     "list_game_sources",
     "set_source_enabled",
@@ -158,6 +161,7 @@ pub const SOURCE_METHODS: [&str; 12] = [
     "set_game_source",
     "import_script_source",
     "get_script_source",
+    "get_script_source_prompt",
     "set_source_update_interval",
     "update_source",
     "match_games",
@@ -192,7 +196,10 @@ params!(ListGameSourcesParams{#[ts(optional = nullable)]pub instance_id:Option<S
 params!(SetSourceEnabledParams{pub source_id:String,pub enabled:bool,});
 params!(SetSourceNameParams{pub source_id:String,pub name:String,});
 params!(SetGameSourceParams{pub source_id:String,pub subscribed:bool,#[ts(optional = nullable)]pub instance_id:Option<String>,#[ts(optional = nullable)]pub appid:Option<u32>,});
-params!(ImportScriptSourceParams{pub rule:RawSourceRule,pub api_version:u32,pub code:String,#[serde(default)]#[ts(as="Option<bool>", optional)]pub replace:bool,});
+fn default_script_api_version() -> u32 {
+    patchhub_core::sources::script::SCRIPT_API_VERSION
+}
+params!(ImportScriptSourceParams{#[serde(default)]#[ts(optional = nullable)]pub source_id:Option<String>,#[serde(default = "default_script_api_version")]#[ts(as="Option<u32>", optional)]pub api_version:u32,pub code:String,});
 params!(GetScriptSourceParams{pub source_id:String,});
 params!(SetSourceUpdateIntervalParams{pub source_id:String,#[ts(type="number")]pub interval_hours:u64,});
 params!(UpdateSourceParams{pub source_id:String,#[serde(default)]#[ts(as="Option<bool>", optional)]pub force:bool,});
@@ -223,6 +230,7 @@ pub enum RequestParams {
     SetGameSource(SetGameSourceParams),
     ImportScriptSource(ImportScriptSourceParams),
     GetScriptSource(GetScriptSourceParams),
+    GetScriptSourcePrompt(HostParams),
     SetSourceUpdateInterval(SetSourceUpdateIntervalParams),
     UpdateSource(UpdateSourceParams),
     MatchGames(MatchGamesParams),
@@ -242,7 +250,8 @@ impl RequestParams {
             | Self::CleanupGameCache(p)
             | Self::BackupStatus(p)
             | Self::CleanupBackups(p)
-            | Self::ListSources(p) => &p.host,
+            | Self::ListSources(p)
+            | Self::GetScriptSourcePrompt(p) => &p.host,
             Self::ProjectInstances(p) => &p.host,
             Self::Preview(p) => &p.host,
             Self::InstallPatch(p) => &p.host,
@@ -597,6 +606,12 @@ pub struct AddSourceResult {
     #[ts(type = "number")]
     pub settings_revision: u64,
     pub rule: SourceRule,
+    pub name: String,
+}
+#[derive(Debug, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(deny_unknown_fields)]
+pub struct ScriptSourcePromptResult {
+    pub prompt: String,
 }
 #[derive(Debug, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(deny_unknown_fields)]
@@ -663,6 +678,7 @@ pub enum MethodResult {
     GameSource(GameSourceResult),
     Added(AddSourceResult),
     ScriptDocument(ScriptSourceDocument),
+    ScriptSourcePrompt(ScriptSourcePromptResult),
     SetInterval(SetSourceIntervalResult),
     Removed(SourceRemovedResult),
     SourceUpdated(SourceUpdateResult),
@@ -839,6 +855,9 @@ pub fn validate_response(
         }
         Some(Method::GetScriptSource) => {
             check!(ScriptSourceDocument);
+        }
+        Some(Method::GetScriptSourcePrompt) => {
+            check!(ScriptSourcePromptResult);
         }
         Some(Method::SetSourceUpdateInterval) => {
             check!(SetSourceIntervalResult);
@@ -1401,7 +1420,7 @@ pub fn schema() -> Value {
     let variants: Vec<Value> = ALL_METHODS.iter().map(|method| {
         let name = match method {
             Method::GetCapabilities | Method::Scan | Method::ListTransactions | Method::Recover
-                | Method::CleanupCache | Method::CacheStatus | Method::GameCacheStatus | Method::CleanupGameCache | Method::BackupStatus | Method::CleanupBackups | Method::ListSources => "HostParams",
+                | Method::CleanupCache | Method::CacheStatus | Method::GameCacheStatus | Method::CleanupGameCache | Method::BackupStatus | Method::CleanupBackups | Method::ListSources | Method::GetScriptSourcePrompt => "HostParams",
             Method::Preview => "PreviewParams",
             Method::InstallPatch => "InstallPatchParams",
             Method::DiscardPlan => "DiscardPlanParams",
@@ -1598,6 +1617,7 @@ pub fn result_schema_name(method: Method) -> &'static str {
         Method::SetGameSource => "GameSourceResult",
         Method::ImportScriptSource => "AddSourceResult",
         Method::GetScriptSource => "ScriptSourceDocument",
+        Method::GetScriptSourcePrompt => "ScriptSourcePromptResult",
         Method::SetSourceUpdateInterval => "SetSourceIntervalResult",
         Method::UpdateSource => "SourceUpdateResult",
         Method::MatchGames | Method::RematchGame => "MatchGamesResult",

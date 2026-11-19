@@ -257,7 +257,7 @@ pub fn collect_index(
                 if entry.is_complete() && entry.details.is_empty() {
                     return Err(invalid("invalid_source_entry"));
                 }
-                let require_download_host = entry.is_complete() && !rule.discovery_only;
+                let require_download_host = entry.is_complete() && !rule.download_hosts.is_empty();
                 for detail in &mut entry.details {
                     validate_detail(rule, detail, require_download_host)?;
                 }
@@ -505,7 +505,7 @@ impl UserData for Node {
     }
 }
 
-fn environment(lua: &Lua, cancel: &Arc<AtomicBool>) -> mlua::Result<Table> {
+pub(crate) fn environment(lua: &Lua, cancel: &Arc<AtomicBool>) -> mlua::Result<Table> {
     let globals = lua.globals();
     let environment = lua.create_table()?;
     for name in [
@@ -542,7 +542,7 @@ fn environment(lua: &Lua, cancel: &Arc<AtomicBool>) -> mlua::Result<Table> {
     Ok(environment)
 }
 
-fn vm() -> mlua::Result<Lua> {
+pub(crate) fn vm() -> mlua::Result<Lua> {
     Lua::new_with(
         StdLib::STRING | StdLib::TABLE | StdLib::MATH | StdLib::UTF8,
         LuaOptions::default(),
@@ -552,7 +552,7 @@ fn vm() -> mlua::Result<Lua> {
 // mlua's default conversion drops string keys on non-empty sequence tables;
 // detect_mixed_tables also encodes {} as []. Validate the actual JSON/DTO
 // boundary once, then use normal serde conversion to preserve empty objects.
-fn from_value<T: DeserializeOwned>(lua: &Lua, value: Value) -> mlua::Result<T> {
+pub(crate) fn from_value<T: DeserializeOwned>(lua: &Lua, value: Value) -> mlua::Result<T> {
     let mut active = HashSet::new();
     let mut pending = vec![(value.clone(), false)];
     while let Some((value, leaving)) = pending.pop() {

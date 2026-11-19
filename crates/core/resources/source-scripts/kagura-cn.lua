@@ -187,6 +187,13 @@ local function parse_category_page(ctx, u, root, page, details, seen_pages, pend
 end
 
 return {
+    meta = {
+        name = "Kagura Games 国内",
+        pages = {"https://kagurafan.com/"},
+        page_hosts = {"kagurafan.com"},
+        download_hosts = {"kaguraserver.com", "kaguragamespatch.com"},
+        priority = 10,
+    },
     collect_index = function(ctx, rule, previous)
         local u = library(ctx, rule)
         local entries, pending, diagnostics = ctx.array(), ctx.array(), ctx.array()
@@ -200,7 +207,6 @@ return {
             entries = previous.entries
             for _, page in ipairs(previous.pending) do enqueue(page) end
         else
-            if rule.url and rule.url ~= ctx.null then enqueue(rule.url) end
             for _, page in ipairs(rule.pages) do enqueue(page) end
         end
         while #pending > 0 do

@@ -105,4 +105,13 @@ local function resolve_detail(ctx, rule, state)
     }
 end
 
-return { collect_index = collect_index, resolve_detail = resolve_detail }
+return {
+    meta = {
+        name = "Kagura EN Prototype",
+        pages = { "https://www.kaguragames.com/patch/" },
+        page_hosts = { "www.kaguragames.com" },
+        download_hosts = { "kaguraserver.com", "kaguragamespatch.com" },
+    },
+    collect_index = collect_index,
+    resolve_detail = resolve_detail,
+}

@@ -154,16 +154,15 @@
   ],
   "rule_fingerprint": [
     {
-      "expected": "cd7b214b63ea43c7145d8d09f2d6592b8da6c812b2288e689a14600de637865f",
+      "expected": "1161879848451806b9cfaacf5524d8d92630bfd2a5e6ab94ac89823ca5068a58",
       "input": {
         "adapter": "patchmoe",
-        "discovery_only": false,
         "download_hosts": [
           "download.patch.moe"
         ],
         "enabled": true,
         "id": "patchmoe",
-        "name": "PatchMoe",
+        "official_title_match": true,
         "page_hosts": [
           "www.patch.moe"
         ],
@@ -171,8 +170,7 @@
           "https://www.patch.moe/"
         ],
         "priority": 100,
-        "role": "publisher",
-        "root_layout": "game_root"
+        "role": "publisher"
       }
     }
   ],

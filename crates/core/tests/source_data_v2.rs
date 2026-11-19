@@ -30,12 +30,11 @@ fn read_json(path: &Path) -> Value {
 }
 
 fn current_patchmoe_fingerprint() -> Option<String> {
-    let config: RulesConfig =
-        serde_json::from_str(patchhub_core::sources::DEFAULT_RULES_JSON).unwrap();
-    let rule = patchhub_core::sources::validate::validate_rule(
-        config.sources.iter().find(|r| r.id == "patchmoe").unwrap(),
-    )
-    .unwrap();
+    let rule = patchhub_core::sources::builtin::default_builtins()
+        .into_iter()
+        .find(|entry| entry.rule.id == "patchmoe")
+        .unwrap()
+        .rule;
     patchhub_core::sources::index::parser_fingerprint(&rule)
 }
 
@@ -603,6 +602,11 @@ fn schema1_state_migrates_to_schema2_without_losing_old_files() {
     );
     assert_eq!(settings.added.len(), 1);
     assert_eq!(settings.added[0].id, "extra");
+    assert_eq!(
+        settings.names.get("extra").map(String::as_str),
+        Some("Extra")
+    );
+    assert!(!settings.added[0].official_title_match);
     assert_eq!(
         read_json(&root.join("settings.json"))["schema_version"],
         json!(SOURCE_SETTINGS_SCHEMA_VERSION)

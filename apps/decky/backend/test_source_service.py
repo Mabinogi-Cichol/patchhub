@@ -12,16 +12,16 @@ from protocol_test_support import response
 
 SUMMARIES = [
     {"id": "patchmoe", "name": "patch.moe", "adapter": "patchmoe", "role": "publisher",
-     "discovery_only": False, "priority": 100, "enabled": True,
+     "official_title_match": True, "priority": 100, "enabled": True,
      "pages": ["https://www.patch.moe/"], "page_hosts": ["www.patch.moe"],
-     "download_hosts": ["download.patch.moe"], "root_layout": "game_root",
+     "download_hosts": ["download.patch.moe"],
      "status": "cached", "entry_count": 2, "revision": 1, "complete": True,
      "interval_hours": 24, "next_due_at": 1000, "cached_at": None, "checked_at": None,
      "origin": "builtin"},
     {"id": "hgamer", "name": "HGamer", "adapter": "hgamer", "role": "fallback_indexer",
-     "discovery_only": True, "priority": 100, "enabled": True,
+     "official_title_match": False, "priority": 100, "enabled": True,
      "pages": ["https://hgamer.tw/"], "page_hosts": ["hgamer.tw"], "download_hosts": [],
-     "root_layout": None, "status": "not_refreshed", "entry_count": 0, "revision": 0,
+     "status": "not_refreshed", "entry_count": 0, "revision": 0,
      "complete": False, "interval_hours": 0, "next_due_at": None,
      "cached_at": None, "checked_at": None, "origin": "builtin"},
 ]
@@ -107,32 +107,39 @@ class SourceServiceTests(unittest.IsolatedAsyncioTestCase):
     async def test_script_import_forwards_large_source_without_execution_or_conflating_refresh(self):
         await self.service.initialize()
         code = "-- " + "来源代码" * 20000 + "\nwhile true do end\nreturn {}"
-        document = response("get_script_source")["result"]
         self.bridge.sync_results["import_script_source"] = response("import_script_source")["result"]
-        for replace in (False, True):
+        for source_id, expected_params in (
+            (None, {"code": code, "api_version": 1}),
+            ("fixture", {"code": code, "api_version": 1, "source_id": "fixture"}),
+        ):
             self.bridge.sync_calls.clear()
-            result = await self.service.import_script_source(document["rule"], 1, code, replace)
-            self.assertEqual(self.bridge.sync_calls, [
-                ("import_script_source", {"rule": document["rule"], "api_version": 1, "code": code, "replace": replace})])
+            result = await self.service.import_script_source(code, source_id, 1)
+            self.assertEqual(self.bridge.sync_calls, [("import_script_source", expected_params)])
             self.assertEqual(self.service.settings_revision, result["settings_revision"])
         self.assertEqual(self.bridge.stream_calls, [])
 
     async def test_script_read_is_read_only_and_failure_keeps_the_source_snapshot(self):
         await self.service.initialize()
         document = response("get_script_source")["result"]
+        prompt = response("get_script_source_prompt")["result"]
         self.bridge.sync_results["get_script_source"] = document
+        self.bridge.sync_results["get_script_source_prompt"] = prompt
         self.bridge.sync_calls.clear()
         self.assertEqual(await self.service.get_script_source("fixture"), document)
-        self.assertEqual(self.bridge.sync_calls, [("get_script_source", {"source_id": "fixture"})])
+        self.assertEqual(await self.service.get_script_source_prompt(), prompt)
+        self.assertEqual(self.bridge.sync_calls, [
+            ("get_script_source", {"source_id": "fixture"}),
+            ("get_script_source_prompt", {}),
+        ])
         before = self.service.list_sources()
         def fail(_):
             raise CoreError("script_source_syntax_error", "source/fixture.lua:4: syntax")
         self.bridge.sync_results["import_script_source"] = fail
         with self.assertRaises(CoreError):
-            await self.service.import_script_source(document["rule"], 1, "return {", True)
+            await self.service.import_script_source("return {", "fixture", 1)
         self.assertEqual(self.service.list_sources(), before)
         self.assertFalse(self.service.state_dir.exists())
-        self.assertEqual(len(self.bridge.sync_calls), 2)
+        self.assertEqual(len(self.bridge.sync_calls), 3)
 
     async def test_prime_rejects_malformed_scan_results(self):
         with self.assertRaises(ValueError):

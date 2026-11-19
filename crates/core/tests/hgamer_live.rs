@@ -6,18 +6,16 @@
 //! artifact is downloaded and no page is persisted.
 use patchhub_core::sources::adapters::{self, DiscoverPrevious};
 use patchhub_core::sources::http::RequestContext;
-use patchhub_core::sources::model::{QueryContext, RulesConfig, SourceRule};
-use patchhub_core::sources::{validate, DEFAULT_RULES_JSON, PARSER_VERSION, QUERY_VERSION};
+use patchhub_core::sources::model::{QueryContext, SourceRule};
+use patchhub_core::sources::{builtin, PARSER_VERSION, QUERY_VERSION};
 use std::time::Instant;
 
 fn live_rule() -> SourceRule {
-    let config: RulesConfig = serde_json::from_str(DEFAULT_RULES_JSON).unwrap();
-    config
-        .sources
-        .iter()
-        .map(|raw| validate::validate_rule(raw).unwrap())
-        .find(|rule| rule.id == "hgamer")
+    builtin::default_builtins()
+        .into_iter()
+        .find(|entry| entry.rule.id == "hgamer")
         .unwrap()
+        .rule
 }
 
 fn run(appid: u32, name: &str) {

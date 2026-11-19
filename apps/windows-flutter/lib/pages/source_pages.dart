@@ -140,6 +140,12 @@ class _GlobalSourcesPageState extends State<GlobalSourcesPage> {
       builder: (_) => ScriptSourceEditor(
         document: document,
         readOnly: readOnly,
+        onLoadPrompt: readOnly || sourceId != null
+            ? null
+            : () async =>
+                  (await widget.model.client.call('get_script_source_prompt')
+                          as Map<String, dynamic>)['prompt']
+                      as String,
         onSave: (params) => widget.model.mutate('import_script_source', params),
       ),
     );
@@ -485,7 +491,12 @@ class _GlobalSourcesPageState extends State<GlobalSourcesPage> {
                   title: const Text('调度与地址详情'),
                   children: [
                     SelectableText(
-                      '最近成功：${sourceTime(source['cached_at'])}\n下次到期：${sourceTime(source['next_due_at'])}\n来源版本：${source['revision']}\n设置版本：${widget.model.settingsRevision ?? '未知'}',
+                      '最近成功：${sourceTime(source['cached_at'])}\n'
+                      '下次到期：${sourceTime(source['next_due_at'])}\n'
+                      '来源版本：${source['revision']}\n'
+                      '设置版本：${widget.model.settingsRevision ?? '未知'}\n'
+                      '允许访问域名：${((source['page_hosts'] as List?) ?? const []).isEmpty ? '无' : (source['page_hosts'] as List).join(' · ')}\n'
+                      '允许下载域名：${((source['download_hosts'] as List?) ?? const []).isEmpty ? '无' : (source['download_hosts'] as List).join(' · ')}',
                       key: PageStorageKey('source:$id:details-text'),
                     ),
                     for (final page in source['pages'] as List)

@@ -31,7 +31,7 @@ fn wire_params(method: &str, mut legacy: Value) -> Value {
             "cleanup_policy",
             "manual_download",
         ],
-        "import_script_source" => &["rule", "api_version", "code"],
+        "import_script_source" => &["source_id", "api_version", "code"],
         "set_source_enabled" => &["source_id", "enabled"],
         "update_source" => &["source_id"],
         "rematch_game" => &["appid"],
@@ -162,6 +162,12 @@ fn clean_app_queries_matches_installs_and_replays_without_a_public_catalog() {
         assert_eq!(result["ok"], true, "{result}");
     }
     let code = r#"return {
+        meta = {
+            name = 'Fixture',
+            pages = {'https://example.com/list'},
+            page_hosts = {'example.com'},
+            download_hosts = {'download.example.com'}
+        },
         collect_index=function() return {entries={{title='Game',page='https://example.com/game',current_step=1,total_steps=2}},complete=true} end,
         resolve_detail=function(ctx,rule,state) return {current_step=2,total_steps=2,details={{title='Game',page=state.page,steam_ids={42},text='English patch',mirrors={{url='https://download.example.com/fixture.zip',format='zip'}}}}} end
     }"#;
@@ -169,14 +175,16 @@ fn clean_app_queries_matches_installs_and_replays_without_a_public_catalog() {
         &binary,
         "import_script_source",
         "import",
-        json!({"state_dir":state,"rule":{"id":"custom","name":"Fixture","adapter":"lua","enabled":true,"pages":["https://example.com/list"],"page_hosts":["example.com"],"download_hosts":["download.example.com"],"root_layout":"game_root"},"api_version":1,"code":code}),
+        json!({"state_dir":state,"api_version":1,"code":code}),
     );
     assert_eq!(imported["ok"], true, "{imported}");
+    let source_id = imported["result"]["rule"]["id"].as_str().unwrap();
+    assert_eq!(source_id, "example-com", "{imported}");
     let updated = call(
         &binary,
         "update_source",
         "update",
-        json!({"state_dir":state,"source_id":"custom"}),
+        json!({"state_dir":state,"source_id":source_id}),
     );
     assert_eq!(updated["ok"], true, "{updated}");
     let matched = call(
@@ -187,7 +195,7 @@ fn clean_app_queries_matches_installs_and_replays_without_a_public_catalog() {
     );
     assert_eq!(matched["ok"], true, "{matched}");
     let candidate = &matched["result"]["results"][0]["candidates"][0];
-    assert_eq!(candidate["source_id"], "custom", "{matched}");
+    assert_eq!(candidate["source_id"], source_id, "{matched}");
     let projected = call(
         &binary,
         "scan",
@@ -195,7 +203,7 @@ fn clean_app_queries_matches_installs_and_replays_without_a_public_catalog() {
         json!({"roots":[library],"state_dir":state}),
     );
     assert_eq!(
-        projected["result"]["installs"][0]["patches"][0]["source_id"], "custom",
+        projected["result"]["installs"][0]["patches"][0]["source_id"], source_id,
         "{projected}"
     );
     assert!(
@@ -229,7 +237,7 @@ fn clean_app_queries_matches_installs_and_replays_without_a_public_catalog() {
         .installs
         .remove(0)
         .instance_id;
-    let params = json!({"roots":[library],"state_dir":state,"instance_id":id,"manual_download":{"source_id":"custom","candidate_id":candidate["candidate_id"],"url":url},"cleanup_policy":"after_commit"});
+    let params = json!({"roots":[library],"state_dir":state,"instance_id":id,"manual_download":{"source_id":source_id,"candidate_id":candidate["candidate_id"],"url":url},"cleanup_policy":"after_commit"});
     let result = call(&binary, "install_patch", "cli-cleanup", params.clone());
     assert_eq!(result["ok"], true, "{result}");
     server.join().unwrap();

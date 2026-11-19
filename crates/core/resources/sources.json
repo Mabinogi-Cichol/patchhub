@@ -10,65 +10,28 @@
   "sources": [
     {
       "id": "patchmoe",
-      "name": "Shiravune",
       "adapter": "patchmoe",
-      "enabled": true,
-      "pages": ["https://www.patch.moe/?flag=1"],
-      "page_hosts": ["www.patch.moe"],
-      "download_hosts": ["download.patch.moe"],
-      "root_layout": "game_root"
+      "enabled": true
     },
     {
       "id": "kagura-cn",
-      "name": "Kagura Games 国内",
       "adapter": "kagura_wordpress",
-      "enabled": true,
-      "role": "publisher",
-      "discovery_only": true,
-      "priority": 10,
-      "pages": ["https://kagurafan.com/"],
-      "page_hosts": ["kagurafan.com"],
-      "download_hosts": ["kaguraserver.com", "kaguragamespatch.com"],
-      "root_layout": null
+      "enabled": true
     },
     {
       "id": "kagura-en",
-      "name": "Kagura Games 海外",
       "adapter": "kagura_woocommerce",
-      "enabled": true,
-      "role": "publisher",
-      "discovery_only": true,
-      "priority": 20,
-      "pages": ["https://www.kaguragames.com/patch/", "https://www.kaguragames.com/product-category/patches/patch/"],
-      "page_hosts": ["www.kaguragames.com"],
-      "download_hosts": ["kaguraserver.com", "kaguragamespatch.com"],
-      "root_layout": null
+      "enabled": true
     },
     {
       "id": "yozakura",
-      "name": "YOZAKURA",
       "adapter": "yozakura_wordpress",
-      "enabled": true,
-      "role": "publisher",
-      "discovery_only": true,
-      "priority": 30,
-      "pages": ["https://yozakuragames.com/index.php?rest_route=/wp/v2/posts&per_page=100&_fields=link,title,content"],
-      "page_hosts": ["yozakuragames.com"],
-      "download_hosts": ["www.zakuragames.com"],
-      "root_layout": null
+      "enabled": true
     },
     {
       "id": "hgamer",
-      "name": "HGamer 补丁索引",
       "adapter": "hgamer_html",
-      "enabled": true,
-      "role": "fallback_indexer",
-      "discovery_only": true,
-      "priority": 100,
-      "pages": ["https://hgamer.tw/zh-CN/patches"],
-      "page_hosts": ["hgamer.tw"],
-      "download_hosts": [],
-      "root_layout": null
+      "enabled": true
     }
   ]
 }

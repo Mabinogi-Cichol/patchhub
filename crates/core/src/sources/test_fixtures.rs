@@ -2,8 +2,11 @@
 use super::{model::*, registry::SourceRegistry, Result};
 
 pub(crate) fn default_rule(id: &str) -> SourceRule {
-    let config: RulesConfig = serde_json::from_str(super::DEFAULT_RULES_JSON).unwrap();
-    super::validate::validate_rule(config.sources.iter().find(|r| r.id == id).unwrap()).unwrap()
+    super::builtin::default_builtins()
+        .into_iter()
+        .find(|entry| entry.rule.id == id)
+        .unwrap()
+        .rule
 }
 
 pub(crate) fn save_match(registry: &SourceRegistry, mut record: GameMatchRecord) -> Result<()> {
