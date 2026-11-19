@@ -149,3 +149,11 @@
 - 自动探测另一个既有 Steam 根时产生 1 条库不可访问诊断，未影响 33 个有效实例；不与显式单根 CLI 的 0 诊断混写。
 - 用户指出妃神会秘史 Windows 无源而 Decky 正常。用客户端相同资源/状态请求核实：name 与 localized_name 正确，catalog_trust=signed、revision=4，但 `match_status=no_catalog_match`、patches=0，目录中 AppID 2303800 条目为 0，且无 discovery 字段。Decky 的动态查源位于其 Python 宿主；Windows 当前只读静态目录。名称功能验收通过不代表两端来源能力对齐，该独立缺口尚未修复。
 - 未安装游戏补丁、未操作 Steam Deck、未提交 Git。部署包含当前工作区已有 Windows 改动；没有将本轮名称验收扩大为所有安装流程验收。
+
+
+## 2026-11-20 Steam 新版分片 appinfo（0x0756442A）适配
+
+- 现象：Steam 客户端更新后，`appcache/appinfo.vdf` 被替换为 `appcache/appinfo/appinfo_00.vdf`～`appinfo_ff.vdf` 共 256 个分片，魔数 `0x0756442A`，旧解析读不到文件而静默回退，Windows 列表显示 manifest 英文名，关联 DLC 信息同时丢失。
+- 格式（本机 256 分片、907 个应用实测）：44 字节头（magic、universe、bucket_index、bucket_count、app_count、dir_bytes、key_count、key_bytes、data_bytes、dir+keys CRC32、头 CRC32）→ 每应用 80 字节目录项（appid、payload 偏移、payload 大小）→ key 表（NUL 结尾字符串）→ 数据区。每条 payload 前 20 字节为 SHA-1，其后即与 V29 相同的 binary VDF（key 为 int32 索引）。
+- 实现：[appinfo.rs](../../../crates/core/src/appinfo.rs) 新增 V2A 解析（先流式扫目录，无命中分片不读 key 表与 payload；边界全部 checked 运算并复用既有限额；抽出 `read_key_table` 与 V29 共用）；[steam_metadata.rs](../../../crates/core/src/steam_metadata.rs) 优先读取 `appcache/appinfo/` 分片（单分片损坏只丢弃该分片，目录链仍拒绝 symlink/reparse point），目录不存在或没有分片文件时回退旧 `appcache/appinfo.vdf`（V28/V29 原逻辑不变）。CRC/SHA-1 未校验，依赖结构边界校验与现有回退。
+- 验证：appinfo 单测 20 项（含 3 项 V2A）、steam_metadata 4 项、localized_game_names 集成 8 项（含分片跨文件 DLC 与联接拒绝）、fmt、Clippy（core/cli）通过；本机真实 Steam 扫描 35/35 取得中文名（语言 schinese）。Windows 客户端界面与 Decky 实机待验收。
