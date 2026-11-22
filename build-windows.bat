@@ -31,10 +31,22 @@ set "CARGO_TARGET_DIR=%CD%\target"
 echo Building a local preview without tests or release packaging...
 call pwsh -NoProfile -File scripts/build-windows-flutter.ps1 -Preview
 set "RESULT=%errorlevel%"
-if not "%RESULT%"=="0" goto finish
+if not "%RESULT%"=="0" goto build_failed
 echo Starting the preview...
 start "" "%CD%\apps\windows-flutter\build\windows\x64\runner\Release\patchhub.exe"
 set "RESULT=%errorlevel%"
+goto finish
+
+:build_failed
+where /q pwsh
+if errorlevel 1 (
+    >&2 echo Install PowerShell 7 and make pwsh available on PATH, then open a new terminal.
+    goto finish
+)
+if not exist ".tools\flutter\bin\flutter.bat" (
+    where /q flutter
+    if errorlevel 1 >&2 echo Set up Flutter in .tools\flutter or add its bin directory to PATH. See docs\features\platform-build-entrypoints\build-guide.md.
+)
 goto finish
 
 :help
