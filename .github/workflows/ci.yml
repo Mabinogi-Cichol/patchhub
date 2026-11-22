@@ -25,6 +25,10 @@ jobs:
         with:
           python-version: '3.12'
       - run: python scripts/project_version.py --check
+      - if: startsWith(github.ref, 'refs/tags/v')
+        name: Check release notes file
+        shell: bash
+        run: test -s "docs/releases/${GITHUB_REF_NAME}.md" || { echo "Missing or empty docs/releases/${GITHUB_REF_NAME}.md"; exit 1; }
       - run: python -m unittest discover -s scripts -p test_project_version.py -v
       - run: python3 -m unittest discover -s .github/ci -p 'test_*.py' -v
       - id: select
@@ -117,6 +121,7 @@ jobs:
       group: release-${{ github.ref }}
       cancel-in-progress: false
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           pattern: windows-*
@@ -146,6 +151,11 @@ jobs:
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
+          notes_file="docs/releases/${RELEASE_TAG}.md"
+          test -s "$notes_file" || {
+            echo "Missing or empty release notes: $notes_file"
+            exit 1
+          }
           flags=()
           if [[ "$RELEASE_TAG" == *-* ]]; then
             flags+=(--prerelease)
@@ -158,11 +168,11 @@ jobs:
             gh release upload "$RELEASE_TAG" release-assets/* --clobber
           else
             gh release create "$RELEASE_TAG" release-assets/* \
-              --draft --verify-tag --title "$RELEASE_TAG" --generate-notes "${flags[@]}"
+              --draft --verify-tag --title "$RELEASE_TAG" --notes-file "$notes_file" "${flags[@]}"
           fi
           gh release download "$RELEASE_TAG" --dir verify-release
           (cd verify-release && sha256sum --check SHA256SUMS.txt)
-          gh release edit "$RELEASE_TAG" --draft=false --title "$RELEASE_TAG"
+          gh release edit "$RELEASE_TAG" --draft=false --title "$RELEASE_TAG" --notes-file "$notes_file"
   decky:
     needs: changes
     if: needs.changes.outputs.decky == 'true'
