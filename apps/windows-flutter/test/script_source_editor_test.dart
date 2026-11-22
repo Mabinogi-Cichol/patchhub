@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -30,11 +31,17 @@ return {
 
 class ScriptClient extends FixtureClient {
   Map<String, dynamic>? document;
+  String role = 'publisher';
   bool reject = false;
   bool rejectRead = false;
   bool rejectRefresh = false;
   final calls = <String>[];
   final writes = <Map<String, Object?>>[];
+  final startedTasks = <Map<String, Object?>>[];
+
+  @override
+  Future<Process> startProcess(String channel) async =>
+      _FakeUpdateProcess(startedTasks);
 
   Map<String, dynamic> get source => {
     ...document!['rule'] as Map<String, dynamic>,
@@ -72,7 +79,7 @@ class ScriptClient extends FixtureClient {
         'id': sourceId,
         'adapter': 'lua',
         'enabled': true,
-        'role': 'publisher',
+        'role': role,
         'official_title_match': false,
         'priority': 100,
         'pages': ['https://patches.vendor.example/'],
@@ -102,6 +109,79 @@ class ScriptClient extends FixtureClient {
     }
     return super.call(method, args);
   }
+}
+
+class _FakeUpdateProcess implements Process {
+  _FakeUpdateProcess(this.startedTasks) {
+    _stdinController.stream.transform(utf8.decoder).listen((chunk) {
+      for (final line in chunk.split('\n')) {
+        final trimmed = line.trim();
+        if (!trimmed.startsWith('{')) continue;
+        final decoded = jsonDecode(trimmed);
+        if (decoded is! Map<String, dynamic>) continue;
+        final requestId = decoded['request_id'];
+        final method = decoded['method'];
+        final params = decoded['params'];
+        if (requestId is String &&
+            method is String &&
+            params is Map<String, dynamic> &&
+            !_completed) {
+          _completed = true;
+          startedTasks.add({'method': method, 'params': params});
+          _stdout.add(
+            utf8.encode(
+              '${jsonEncode({
+                'protocol_version': 5,
+                'request_id': requestId,
+                'ok': true,
+                'result': {
+                  'source_id': params['source_id'],
+                  'settings_revision': 3,
+                  'status': {
+                    'checked_at': 1,
+                    'cached_at': 1,
+                    'entry_count': 0,
+                    'code': 'ok',
+                  },
+                  'revision': 1,
+                  'complete': true,
+                  'affected_appids': <int>[],
+                },
+              })}\n',
+            ),
+          );
+          _stdout.close();
+          _stderr.close();
+          _exitCode.complete(0);
+        }
+      }
+    });
+  }
+
+  final List<Map<String, Object?>> startedTasks;
+  final _stdout = StreamController<List<int>>();
+  final _stderr = StreamController<List<int>>();
+  final _stdinController = StreamController<List<int>>();
+  final _exitCode = Completer<int>();
+  bool _completed = false;
+
+  @override
+  Future<int> get exitCode => _exitCode.future;
+
+  @override
+  Stream<List<int>> get stdout => _stdout.stream;
+
+  @override
+  Stream<List<int>> get stderr => _stderr.stream;
+
+  @override
+  late final IOSink stdin = IOSink(_stdinController.sink);
+
+  @override
+  int get pid => 1;
+
+  @override
+  bool kill([ProcessSignal signal = ProcessSignal.sigterm]) => true;
 }
 
 class SourceAdminClient extends FixtureClient {
@@ -470,7 +550,19 @@ void main() {
         ['signed'],
       );
       expect(model.snapshot!.rows.single.discovery!['candidates'], isEmpty);
-      expect(find.textContaining('脚本已保存，尚未执行'), findsOneWidget);
+      expect(client.startedTasks, hasLength(1));
+      expect(client.startedTasks.single['method'], 'update_source');
+      expect(
+        (client.startedTasks.single['params'] as Map)['source_id'],
+        'patches-vendor-example',
+      );
+      expect(
+        (client.startedTasks.single['params'] as Map)['force'],
+        isTrue,
+      );
+      expect(find.textContaining('脚本已导入，正在进行初次订阅更新'), findsOneWidget);
+      await tester.pump(const Duration(seconds: 5));
+      await tester.pumpAndSettle();
       await tester.tap(find.text('脚本发行商示例'));
       await tester.pumpAndSettle();
       await tester.ensureVisible(find.text('调度与地址详情'));
@@ -508,6 +600,10 @@ void main() {
       await tester.pumpAndSettle();
       expect(client.writes.last['source_id'], 'patches-vendor-example');
       expect(client.writes.last.containsKey('replace'), isFalse);
+      expect(client.startedTasks, hasLength(1));
+      expect(find.textContaining('脚本已保存，尚未执行'), findsOneWidget);
+      await tester.pump(const Duration(seconds: 5));
+      await tester.pumpAndSettle();
       await tester.ensureVisible(find.text('编辑脚本'));
       await tester.tap(find.text('编辑脚本'));
       await tester.pumpAndSettle();
@@ -540,4 +636,29 @@ void main() {
       expect(tester.takeException(), isNull);
     },
   );
+
+  testWidgets('fallback script import does not start initial update', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1200, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final client = ScriptClient()..role = 'fallback_indexer';
+    final model = AppModel(client);
+    addTearDown(model.dispose);
+    await tester.pumpWidget(
+      PatchHubApp(
+        home: Scaffold(body: GlobalSourcesPage(model: model)),
+      ),
+    );
+    await tester.tap(find.text('导入脚本来源'));
+    await tester.pumpAndSettle();
+    await enterCode(tester, sampleScript);
+    await tester.tap(find.text('保存并导入'));
+    await tester.pumpAndSettle();
+    expect(client.startedTasks, isEmpty);
+    expect(find.text('脚本已保存，尚未执行。请更新来源或重新匹配游戏。'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
 }

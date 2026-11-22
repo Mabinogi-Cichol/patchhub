@@ -134,6 +134,7 @@ class _GlobalSourcesPageState extends State<GlobalSourcesPage> {
       }
     }
     if (!mounted) return;
+    Map<String, dynamic>? savedResult;
     final saved = await showDialog<bool>(
       context: context,
       barrierDismissible: false,
@@ -146,14 +147,31 @@ class _GlobalSourcesPageState extends State<GlobalSourcesPage> {
                   (await widget.model.client.call('get_script_source_prompt')
                           as Map<String, dynamic>)['prompt']
                       as String,
-        onSave: (params) => widget.model.mutate('import_script_source', params),
+        onSave: (params) async {
+          savedResult = await widget.model.mutate(
+            'import_script_source',
+            params,
+          );
+        },
       ),
     );
     if (saved == true && mounted) {
       setState(() {});
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('脚本已保存，尚未执行。请更新来源或重新匹配游戏。')));
+      final rule = savedResult?['rule'];
+      final startedInitialUpdate =
+          sourceId == null &&
+          rule is Map<String, dynamic> &&
+          rule['role'] == 'publisher' &&
+          rule['enabled'] == true;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            startedInitialUpdate
+                ? '脚本已导入，正在进行初次订阅更新。'
+                : '脚本已保存，尚未执行。请更新来源或重新匹配游戏。',
+          ),
+        ),
+      );
     }
   }
 

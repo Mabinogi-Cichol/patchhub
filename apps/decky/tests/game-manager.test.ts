@@ -39,6 +39,7 @@ function mount(item: Install, task?: sourceTasks.SourceTaskSnapshot) {
   const copies: string[] = [];
   const methods: string[] = [];
   const removals: unknown[][] = [];
+  const sourceUpdates: unknown[][] = [];
   let pending = Promise.resolve();
   const state: any = { report: { installs: [item], sources: [], diagnostics: [] }, transactions: [], busy: null, sourceTasks: task ? { [task.task_id]: task } : {}, error: null, note: null, errorInstance: null, noteInstance: null };
   const native: Record<string, any> = {};
@@ -64,6 +65,7 @@ function mount(item: Install, task?: sourceTasks.SourceTaskSnapshot) {
     async projectRows(ids: string[]) { projections.push(ids); },
     commitSources(sources: unknown[]) { state.report.sources = sources; },
     commitScriptSource(sources: unknown[], revision: number) { state.report.sources = sources; state.report.settings_revision = revision; },
+    async updateSource(sourceId: string, force = false) { sourceUpdates.push([sourceId, force]); return `update-${sourceId}`; },
     invalidateDiscovery() { state.report.installs.forEach((row: any) => { row.discovery = { status: "pending", candidates: [] }; }); },
     work(_label: string, action: () => Promise<any>, success: (value: any) => void) {
       pending = (async () => { try { success(await action()); } catch (error) { state.error = String(error); } })();
@@ -91,7 +93,7 @@ function mount(item: Install, task?: sourceTasks.SourceTaskSnapshot) {
         const [code, sourceId, apiVersion] = args as [string, string | null, number];
         const id = sourceId ?? "example-com";
         const rule = {
-          id, adapter: "lua", enabled: true, role: "publisher",
+          id, adapter: "lua", enabled: true, role: state.scriptRole ?? "publisher",
           official_title_match: false, priority: 100,
           pages: ["https://example.com/"], page_hosts: ["example.com"], download_hosts: ["dl.example.com"],
         };
@@ -133,7 +135,7 @@ function mount(item: Install, task?: sourceTasks.SourceTaskSnapshot) {
   const renderSources = () => { hook = 0; controls.length = 0; return renderToStaticMarkup(React.createElement(exports.GlobalSources)); };
   const renderSettings = () => { hook = 0; controls.length = 0; return renderToStaticMarkup(React.createElement(exports.Manager)); };
   const button = (label: string) => controls.find(control => control.name === "ButtonItem" && React.Children.toArray(control.props.children).join("") === label)!.props;
-  return { render, renderList, renderSources, renderSettings, controls, button, installs, state, sourceWrites, scriptWrites, projections, copies, methods, removals, settle: () => pending };
+  return { render, renderList, renderSources, renderSettings, controls, button, installs, state, sourceWrites, scriptWrites, projections, copies, methods, removals, sourceUpdates, settle: () => pending };
 }
 
 test("artwork follows the selected game and only appears in patch details", () => {
@@ -174,7 +176,8 @@ test("source page imports and reads script documents through RPC, refreshes and 
   const sourcesHtml = page.renderSources();
   assert.match(sourcesHtml, /访问域名.*example\.com/);
   assert.match(sourcesHtml, /下载域名.*dl\.example\.com/);
-  assert.match(page.state.note, /脚本已保存，尚未执行/);
+  assert.deepEqual(page.sourceUpdates, [["example-com", true]]);
+  assert.match(page.state.note, /脚本已导入，正在进行初次订阅更新/);
   assert.deepEqual(page.projections[0], ["game"]);
   page.button("编辑脚本").onClick(); await new Promise<void>(resolve => setImmediate(resolve)); page.renderSources();
   assert.equal(editor().document.code, "return {}");
@@ -187,6 +190,8 @@ test("source page imports and reads script documents through RPC, refreshes and 
   page.state.rejectScript = false;
   await editor().onSave("return { updated = true }", "example-com", 1); editor().onClose(); page.renderSources();
   assert.deepEqual(page.scriptWrites.at(-1), ["return { updated = true }", "example-com", 1]);
+  assert.equal(page.sourceUpdates.length, 1);
+  assert.match(page.state.note, /脚本已保存，尚未执行/);
   page.button("编辑脚本").onClick(); await new Promise<void>(resolve => setImmediate(resolve)); page.renderSources();
   assert.equal(editor().document.code, "return { updated = true }");
   page.state.rejectRefresh = true;
@@ -197,6 +202,17 @@ test("source page imports and reads script documents through RPC, refreshes and 
   page.button("编辑脚本").onClick(); await new Promise<void>(resolve => setImmediate(resolve)); page.renderSources();
   assert.match(page.state.error, /读取被拒绝/);
   assert.equal(page.controls.some(control => control.name === "ScriptSourceEditor"), false);
+});
+
+test("importing fallback script source does not trigger initial source update", async () => {
+  const page = mount(game());
+  page.state.scriptRole = "fallback_indexer";
+  page.renderSources();
+  page.button("导入脚本来源").onClick(); page.renderSources();
+  const editor = () => page.controls.find(control => control.name === "ScriptSourceEditor")!.props;
+  await editor().onSave("return {}", null, 1);
+  assert.deepEqual(page.sourceUpdates, []);
+  assert.match(page.state.note, /脚本已保存，尚未执行/);
 });
 
 test("builtin sources are viewed read-only and user sources can be deleted", async () => {

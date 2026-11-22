@@ -810,11 +810,18 @@ function GlobalSources() {
     try {
       const result = await importScriptSource(code, sourceId, apiVersion);
       session.commitScriptSource(session.getSnapshot().report?.sources ?? [], result.settings_revision);
-      session.setFeedback({ note: "脚本已保存，尚未执行。请更新来源或重新匹配游戏。", error: null });
+      const initialUpdate = sourceId === null && result.rule.role === "publisher" && result.rule.enabled;
+      let refreshError: string | null = null;
       try {
         session.commitSources(await listSourcesRpc());
         await session.projectRows(session.getSnapshot().report?.installs.map(row => row.game.instance_id) ?? []);
-      } catch (failure) { session.setFeedback({ error: `脚本已保存，但刷新来源或游戏状态失败：${scriptSourceError(failure)}` }); }
+      } catch (failure) { refreshError = `脚本已保存，但刷新来源或游戏状态失败：${scriptSourceError(failure)}`; }
+      if (initialUpdate) {
+        await session.updateSource(result.rule.id, true);
+      }
+      session.setFeedback(refreshError
+        ? { error: refreshError, note: null }
+        : { note: initialUpdate ? "脚本已导入，正在进行初次订阅更新。" : "脚本已保存，尚未执行。请更新来源或重新匹配游戏。", error: null });
     } finally { session.update({ busy: null, busySince: null }); }
   }
   const tasks = Object.values(sourceTasks).filter(task => !sourceTaskTerminal(task.state));

@@ -244,7 +244,10 @@ class AppModel extends ChangeNotifier {
         'instance_id': instanceId,
       }) as List).cast<Map<String, dynamic>>();
 
-  Future<void> mutate(String method, Map<String, Object?> args) async {
+  Future<Map<String, dynamic>> mutate(
+    String method,
+    Map<String, Object?> args,
+  ) async {
     final value = await client.call(method, args) as Map<String, dynamic>;
     settingsRevision = value['settings_revision'] as int;
     if (method == 'import_script_source' && snapshot != null) {
@@ -282,6 +285,20 @@ class AppModel extends ChangeNotifier {
       );
       notifyListeners();
     }
+    final isInitialImport =
+        method == 'import_script_source' && args['source_id'] == null;
+    final rule = value['rule'];
+    if (isInitialImport &&
+        rule is Map<String, dynamic> &&
+        rule['role'] == 'publisher' &&
+        rule['enabled'] == true &&
+        !tasks.closing) {
+      startSource('update_source', {
+        'source_id': rule['id'] as String,
+        'force': true,
+      });
+    }
+    return value;
   }
 
   Future<void> project(Set<String> instanceIds) async {
