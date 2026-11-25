@@ -6,6 +6,7 @@ import '../models/app_model.dart';
 import 'app_update_panel.dart';
 import 'cache_page.dart';
 import 'source_pages.dart';
+import 'remote_page.dart';
 
 class SettingsPage extends StatefulWidget {
   const SettingsPage({super.key, required this.model});
@@ -17,6 +18,7 @@ class SettingsPage extends StatefulWidget {
 class _SettingsPageState extends State<SettingsPage> {
   int selected = 0;
   bool cacheVisited = false;
+  bool remoteVisited = false;
 
   @override
   Widget build(BuildContext context) {
@@ -40,7 +42,8 @@ class _SettingsPageState extends State<SettingsPage> {
                 for (final (index, label, icon) in const [
                   (0, '全局来源', Icons.folder_open_outlined),
                   (1, '缓存管理', Icons.storage_outlined),
-                  (2, '关于', Icons.info_outline),
+                  (2, 'Remote', Icons.wifi_outlined),
+                  (3, '关于', Icons.info_outline),
                 ])
                   Padding(
                     padding: const EdgeInsets.only(bottom: 8),
@@ -58,6 +61,7 @@ class _SettingsPageState extends State<SettingsPage> {
                       onTap: () => setState(() {
                         selected = index;
                         if (index == 1) cacheVisited = true;
+                        if (index == 2) remoteVisited = true;
                       }),
                     ),
                   ),
@@ -79,6 +83,9 @@ class _SettingsPageState extends State<SettingsPage> {
                         sourceTaskRunning: widget.model.sourceTaskRunning,
                       ),
                     )
+                  : const SizedBox.shrink(),
+              remoteVisited
+                  ? RemotePage(server: widget.model.remote)
                   : const SizedBox.shrink(),
               const AboutPage(),
             ],

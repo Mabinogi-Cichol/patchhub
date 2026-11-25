@@ -1,0 +1,13 @@
+name: patchhub_remote_web
+description: Shared offline assets for PatchHub Remote
+publish_to: none
+version: 1.0.0
+environment:
+  sdk: ^3.13.0
+flutter:
+  assets:
+    - index.html
+    - app.js
+    - style.css
+    - tabler.min.css
+    - LICENSE-tabler.txt

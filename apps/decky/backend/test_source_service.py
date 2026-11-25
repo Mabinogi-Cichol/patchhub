@@ -97,6 +97,30 @@ class SourceServiceTests(unittest.IsolatedAsyncioTestCase):
         for name in ("matches", "cached_candidates", "_rules", "builtins", "validate_download", "source_for_release"):
             self.assertFalse(hasattr(self.service, name))
 
+    async def test_settings_and_import_share_one_write_queue(self):
+        active = 0
+        maximum = 0
+        persisted = {}
+        async def call_sync(method, params):
+            nonlocal active, maximum
+            if method == "list_sources":
+                return list(SUMMARIES)
+            active += 1
+            maximum = max(active, maximum)
+            before = dict(persisted)
+            await asyncio.sleep(0)
+            before[params.get("source_id", "imported")] = method
+            persisted.clear()
+            persisted.update(before)
+            active -= 1
+            return {"settings_revision": len(persisted)}
+        self.bridge.call_sync = call_sync
+        await asyncio.gather(self.service.set_name("one", "First"),
+                             self.service.set_enabled("two", True),
+                             self.service.import_script_source("return {}"))
+        self.assertEqual(maximum, 1)
+        self.assertEqual(persisted, {"one": "set_source_name", "two": "set_source_enabled", "imported": "import_script_source"})
+
     async def test_prime_exposes_summaries_from_one_scan(self):
         await self.service.initialize()
         self.service.prime(SCAN)

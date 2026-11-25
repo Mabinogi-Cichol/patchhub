@@ -199,10 +199,14 @@ class ProjectVersionTests(unittest.TestCase):
         for relative in ('main.py', 'plugin.json', 'README.md', 'dist/index.js',
                          'backend/bridge.py', 'backend/source_service.py', 'backend/source_browser.py', 'backend/tasks.py',
                          'backend/plugin_settings.py', 'backend/state_host.py',
-                         'backend/protocol_validation.py', 'backend/app_update.py'):
+                         'backend/protocol_validation.py', 'backend/app_update.py', 'backend/remote_server.py'):
             target = app / relative
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text('fixture', encoding='utf-8')
+        for name in ('index.html', 'app.js', 'style.css', 'tabler.min.css', 'LICENSE-tabler.txt'):
+            target = self.root / 'apps/remote-web' / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(name, encoding='utf-8')
         for relative in ('LICENSE', 'scripts/install-decky.py', 'scripts/licenses/sfextract-MIT.txt',
                          'scripts/licenses/Lua-5.4-LICENSE.txt', 'scripts/licenses/mlua-MIT.txt',
                          'packages/contracts/generated/protocol.py', 'packages/contracts/generated/v5.schema.json',
@@ -220,6 +224,8 @@ class ProjectVersionTests(unittest.TestCase):
         result = subprocess.run(['node', str(app / 'scripts/package-plugin.mjs')], capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(json.loads((app / 'plugin-output/package.json').read_text())['version'], '9.8.7')
+        for asset in (self.root / 'apps/remote-web').iterdir():
+            self.assertEqual((app / 'plugin-output/remote' / asset.name).read_bytes(), asset.read_bytes())
         self.assertFalse((self.root / 'catalog').exists())
         self.assertEqual({p.name for p in (app / 'plugin-output/bin').iterdir()}, {'patchhub-core', 'patchhub-worker', 'runtime.json'})
         self.assertEqual(versions.check(self.root), '9.8.7')

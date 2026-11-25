@@ -4,9 +4,10 @@ import 'package:window_manager/window_manager.dart';
 import 'source_tasks.dart';
 
 class AppLifecycle extends ChangeNotifier with WindowListener {
-  AppLifecycle({this.tasks, this.onReturnToApp});
+  AppLifecycle({this.tasks, this.onReturnToApp, this.beforeClose});
   final AppTasks? tasks;
   final VoidCallback? onReturnToApp;
+  final Future<void> Function()? beforeClose;
   bool closing = false;
   bool readyToExit = false;
   Object? error;
@@ -23,7 +24,7 @@ class AppLifecycle extends ChangeNotifier with WindowListener {
     error = null;
     notifyListeners();
     try {
-      final notices = await tasks?.shutdown() ?? <String>[];
+      final notices = await shutdown();
       readyToExit = true;
       if (notices.isNotEmpty) {
         error = notices.join('\n');
@@ -37,6 +38,11 @@ class AppLifecycle extends ChangeNotifier with WindowListener {
       closing = false;
       notifyListeners();
     }
+  }
+
+  Future<List<String>> shutdown() async {
+    await beforeClose?.call();
+    return await tasks?.shutdown() ?? <String>[];
   }
 
   Future<void> finishExit() async {

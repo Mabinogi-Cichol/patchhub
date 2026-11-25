@@ -37,6 +37,7 @@ function mount(item: Install, task?: sourceTasks.SourceTaskSnapshot) {
   const scriptWrites: unknown[][] = [];
   const projections: string[][] = [];
   const copies: string[] = [];
+  const opened: string[] = [];
   const methods: string[] = [];
   const removals: unknown[][] = [];
   const sourceUpdates: unknown[][] = [];
@@ -56,7 +57,7 @@ function mount(item: Install, task?: sourceTasks.SourceTaskSnapshot) {
     return props.pages.find((page: any) => page.route === props.page)?.content;
   };
   native.showModal = () => ({ Close() {} });
-  native.useParams = () => ({ instance: "sources" });
+  native.useParams = () => ({ instance: "sources", panel: state.settingsPanel });
   native.Navigation = {};
   const exports: Record<string, any> = {};
   const mockSession = {
@@ -76,6 +77,7 @@ function mount(item: Install, task?: sourceTasks.SourceTaskSnapshot) {
     "./script-source-error": { scriptSourceError },
     "@decky/api": { callable: (method: string) => async (...args: unknown[]) => {
       methods.push(method);
+      if (method === "get_remote_status") return state.remoteStatus;
       if (method === "list_sources") {
         if (state.rejectRefresh) throw Error("列表读取失败");
         return state.savedSources ?? [];
@@ -109,7 +111,7 @@ function mount(item: Install, task?: sourceTasks.SourceTaskSnapshot) {
       sourceWrites.push(args);
       if (state.rejectName) throw Error("保存被拒绝");
       return state.report.sources.map((source: any) => source.id === args[0] ? { ...source, name: (args[1] as string).trim() } : source);
-    }, definePlugin: () => {}, routerHook: {} },
+    }, definePlugin: () => {}, routerHook: {}, toaster: { toast() {} } },
     "@decky/ui": native,
     "@patchhub/ui": ui,
     "react-icons/fa": { FaGamepad: () => null },
@@ -129,13 +131,14 @@ function mount(item: Install, task?: sourceTasks.SourceTaskSnapshot) {
   };
   runInNewContext(output, { exports, crypto: { randomUUID: () => "request-1" }, URL, console,
     navigator: { clipboard: { writeText: async (text: string) => { copies.push(text); } } },
+    SteamClient: { System: { OpenInSystemBrowser: (url: string) => { opened.push(url); } } },
     require: (id: string) => id.endsWith(".png") ? "logo" : modules[id] ?? require(id) });
   const render = (panel?: string) => { hook = 0; controls.length = 0; return renderToStaticMarkup(React.createElement(exports.GameManager, { item, seg: "game", panel })); };
   const renderList = () => { hook = 0; controls.length = 0; return renderToStaticMarkup(React.createElement(exports.QuickAccess)); };
   const renderSources = () => { hook = 0; controls.length = 0; return renderToStaticMarkup(React.createElement(exports.GlobalSources)); };
   const renderSettings = () => { hook = 0; controls.length = 0; return renderToStaticMarkup(React.createElement(exports.Manager)); };
-  const button = (label: string) => controls.find(control => control.name === "ButtonItem" && React.Children.toArray(control.props.children).join("") === label)!.props;
-  return { render, renderList, renderSources, renderSettings, controls, button, installs, state, sourceWrites, scriptWrites, projections, copies, methods, removals, sourceUpdates, settle: () => pending };
+  const button = (label: string) => controls.find(control => ["ButtonItem", "Button"].includes(control.name) && React.Children.toArray(control.props.children).join("") === label)!.props;
+  return { render, renderList, renderSources, renderSettings, controls, button, installs, state, sourceWrites, scriptWrites, projections, copies, opened, methods, removals, sourceUpdates, settle: () => pending };
 }
 
 test("artwork follows the selected game and only appears in patch details", () => {
@@ -163,7 +166,24 @@ test("all native sidebar pages hide duplicate content titles and retain sidebar 
   const settingsNav = page.controls.find(control => control.name === "SidebarNavigation")!.props;
   assert.equal(settingsNav.showTitle, true);
   assert.deepEqual(Array.from(settingsNav.pages.filter((p: any) => typeof p === "object"), (p: any) => [p.title, p.hideTitle]),
-    [["全局来源", true], ["缓存管理", true], ["关于", true]]);
+    [["全局来源", true], ["缓存管理", true], ["Remote", true], ["关于", true]]);
+});
+
+test("Remote opens the displayed URL and copies all six digits", async () => {
+  const page = mount(game());
+  page.state.settingsPanel = "remote";
+  page.state.remoteStatus = {
+    enabled: true, addresses: ["192.168.1.10"],
+    url: "http://192.168.1.10:45678", access_key: "012345",
+  };
+  page.renderSettings();
+  assert.doesNotMatch(page.renderSettings(), /打开网页|复制密钥/);
+  await page.button("刷新状态与网络地址").onClick();
+  page.renderSettings();
+  page.button("打开网页").onClick();
+  await page.button("复制密钥").onClick();
+  assert.deepEqual(page.opened, [page.state.remoteStatus.url]);
+  assert.deepEqual(page.copies, ["012345"]);
 });
 
 test("source page imports and reads script documents through RPC, refreshes and preserves failed edits", async () => {

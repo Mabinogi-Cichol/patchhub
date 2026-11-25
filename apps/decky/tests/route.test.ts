@@ -33,6 +33,7 @@ test("global settings pages cannot shadow each other under Steam prefix matching
   }
   assert.equal(settingsPage("subscriptions"), settingsRoutes.sources);
   assert.equal(settingsPage("cache"), settingsRoutes.cache);
+  assert.equal(settingsPage("remote"), settingsRoutes.remote);
   assert.equal(settingsPage("about"), settingsRoutes.about);
   assert.equal(settingsPage(), settingsRoutes.sources, "legacy settings entry still opens sources");
 });

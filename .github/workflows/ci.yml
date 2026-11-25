@@ -203,6 +203,7 @@ jobs:
       - run: npm run test -w apps/decky
       - run: node --test scripts/test-install-decky-bridge.mjs
       - run: cargo build --release --locked -p patchhub-cli -p patchhub-installer-worker --bin patchhub-core --bin patchhub-worker
+      - run: python -m pip install "aiohttp>=3.10.11,<4"
       - run: python -m unittest discover -s apps/decky/backend -p 'test_*.py' -v
         env:
           PATCHHUB_TEST_CORE: ${{ github.workspace }}/target/linux/release/patchhub-core

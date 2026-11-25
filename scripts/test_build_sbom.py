@@ -61,8 +61,9 @@ checksum = "{cargo_checksum}"
             inventory = json.loads((root / '.artifacts/dependencies.cdx.json').read_text(encoding='utf-8'))
             components = {entry['name']: entry for entry in inventory['components']}
             self.assertEqual(inventory['metadata']['component']['version'], '9.8.7-rc.1')
-            self.assertEqual(summary['components'], 5)
-            self.assertEqual(set(components), {'locked-rust', 'locked-npm', 'patchhub-rust-installer', 'lua-src', 'mlua'})
+            self.assertEqual(summary['components'], 6)
+            self.assertEqual(set(components), {'locked-rust', 'locked-npm', 'patchhub-rust-installer', 'lua-src', 'mlua', '@tabler/core'})
+            self.assertEqual(components['@tabler/core']['licenses'], [{'expression': 'MIT'}])
             self.assertEqual(components['locked-rust']['hashes'][0]['content'], 'ab' * 32)
             self.assertEqual(components['locked-npm']['hashes'][0]['content'], npm_digest.hex())
             lua = {p['name']: p['value'] for p in components['lua-src']['properties']}

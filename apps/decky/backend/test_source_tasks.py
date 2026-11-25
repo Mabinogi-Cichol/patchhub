@@ -92,7 +92,7 @@ class SourceTasksRpcTests(unittest.IsolatedAsyncioTestCase):
         plugin = self.plugin()
         plugin.sources.list_sources.return_value = [{**PUBLISHER, "name": "Shiravune"}]
         result = await plugin.set_source_name("patchmoe", "Shiravune")
-        plugin.sources.set_name.assert_awaited_once_with("patchmoe", "Shiravune")
+        plugin.sources.set_name.assert_awaited_once_with("patchmoe", "Shiravune", refresh=True)
         self.assertEqual(result[0]["name"], "Shiravune")
         plugin.bridge.scan.assert_not_awaited()
 

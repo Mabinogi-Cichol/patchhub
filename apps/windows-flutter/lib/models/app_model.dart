@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 
 import '../host/core_client.dart';
 import '../host/core_task.dart';
+import '../host/remote_server.dart';
 import '../host/source_tasks.dart';
 import 'library.dart';
 import 'cache_model.dart';
@@ -30,11 +31,14 @@ List<String> dueSources(
 class AppModel extends ChangeNotifier {
   AppModel(this.client) : tasks = AppTasks(client) {
     cache = CacheModel(client, onGameCacheCleaned: () => unawaited(refresh()));
+    remote = RemoteServer(this);
     tasks.addListener(_taskChanged);
   }
   final CoreClient client;
   final AppTasks tasks;
   late final CacheModel cache;
+  late final RemoteServer remote;
+  Future<void> _mutationTail = Future<void>.value();
   ScanSnapshot? snapshot;
   List<Map<String, dynamic>> sources = [];
   List<Map<String, dynamic>> transactions = [];
@@ -247,7 +251,22 @@ class AppModel extends ChangeNotifier {
   Future<Map<String, dynamic>> mutate(
     String method,
     Map<String, Object?> args,
+  ) {
+    final operation = _mutationTail.then((_) => _mutate(method, args));
+    // Keep subsequent writes runnable; the caller still receives this error.
+    _mutationTail = operation.then<void>((_) {}, onError: (Object _) {});
+    return operation;
+  }
+
+  Future<Map<String, dynamic>> _mutate(
+    String method,
+    Map<String, Object?> args,
   ) async {
+    if (tasks.closing) throw const CoreError('app_closing');
+    if (method == 'remove_source' &&
+        tasks.sources['update_source:${args['source_id']}']?.running == true) {
+      throw const CoreError('source_task_busy');
+    }
     final value = await client.call(method, args) as Map<String, dynamic>;
     settingsRevision = value['settings_revision'] as int;
     if (method == 'import_script_source' && snapshot != null) {
@@ -293,10 +312,17 @@ class AppModel extends ChangeNotifier {
         rule['role'] == 'publisher' &&
         rule['enabled'] == true &&
         !tasks.closing) {
-      startSource('update_source', {
-        'source_id': rule['id'] as String,
-        'force': true,
-      });
+      try {
+        startSource('update_source', {
+          'source_id': rule['id'] as String,
+          'force': true,
+        });
+      } on CoreError catch (failure) {
+        return {
+          ...value,
+          'task_error': {'code': failure.code, 'detail': failure.detail},
+        };
+      }
     }
     return value;
   }
@@ -388,6 +414,7 @@ class AppModel extends ChangeNotifier {
     tasks.removeListener(_taskChanged);
     tasks.dispose();
     cache.dispose();
+    remote.dispose();
     super.dispose();
   }
 }

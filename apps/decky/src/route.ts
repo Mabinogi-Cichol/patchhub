@@ -2,11 +2,13 @@
 export const settingsRoutes = {
   sources: "/patchhub/sources/subscriptions",
   cache: "/patchhub/sources/cache",
+  remote: "/patchhub/sources/remote",
   about: "/patchhub/sources/about",
 } as const;
 
 export function settingsPage(panel?: string): string {
   if (panel === "cache") return settingsRoutes.cache;
+  if (panel === "remote") return settingsRoutes.remote;
   if (panel === "about") return settingsRoutes.about;
   return settingsRoutes.sources;
 }

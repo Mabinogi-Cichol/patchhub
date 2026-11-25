@@ -65,6 +65,9 @@ for location, package in lock['packages'].items():
         value['hashes'] = [{'alg': 'SHA-512', 'content': base64.b64decode(integrity[7:]).hex()}]
 
 
+# Remote serves the vendored distribution stylesheet directly on both hosts.
+component('npm', '@tabler/core', '1.4.0', 'MIT')
+
 if args.flutter_deps:
     from flutter_sbom import flutter_components
     for item in flutter_components(root, args.flutter_deps, args.flutter_version):

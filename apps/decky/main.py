@@ -16,6 +16,7 @@ from source_service import SourceService, due_source_ids
 from state_host import prepare_host_state
 from tasks import TaskManager
 from app_update import AppUpdate
+from remote_server import RemoteServer
 
 # Runtime-only automatic update check. The core persists intervals and derives
 # next_due_at; the host never stores its own timers (p1-contract §10).
@@ -56,6 +57,7 @@ class Plugin:
         self.tasks = TaskManager(state_dir=state_dir / "host-v3")
         self.settings = Settings(state_dir)
         self.sources = await SourceService(self.bridge, state_dir).initialize()
+        self.remote = RemoteServer(self, root / "remote")
         self._scan_generation = 0
         self._cache_result = None
         # Patch extraction never resumes or restores files at startup. Old
@@ -68,6 +70,15 @@ class Plugin:
 
     async def get_capabilities(self):
         return await self.bridge.call_sync("get_capabilities", {})
+
+    async def get_remote_status(self):
+        return self.remote.status()
+
+    async def start_remote(self, address):
+        return await self.remote.start(address)
+
+    async def stop_remote(self):
+        return await self.remote.stop()
 
     async def _read_report(self):
         # A scan is one read-only whole-library projection; source work never
@@ -150,27 +161,27 @@ class Plugin:
         if self.tasks.busy():
             raise RuntimeError("installer_busy")
 
-    async def set_source_enabled(self, source_id, enabled):
+    async def set_source_enabled(self, source_id, enabled, *, refresh=True):
         self._require_idle()
         if type(enabled) is not bool:
             raise ValueError("invalid_request")
-        await self.sources.set_enabled(source_id, enabled)
-        return self.sources.list_sources()
+        result = await self.sources.set_enabled(source_id, enabled, refresh=refresh)
+        return self.sources.list_sources() if refresh else result
 
-    async def set_source_name(self, source_id, name):
+    async def set_source_name(self, source_id, name, *, refresh=True):
         self._require_idle()
-        await self.sources.set_name(source_id, name)
-        return self.sources.list_sources()
+        result = await self.sources.set_name(source_id, name, refresh=refresh)
+        return self.sources.list_sources() if refresh else result
 
-    async def remove_source(self, source_id):
+    async def remove_source(self, source_id, *, refresh=True):
         self._require_idle()
         if not isinstance(source_id, str):
             raise ValueError("invalid_request")
         try:
-            await self.sources.remove_source(source_id)
+            result = await self.sources.remove_source(source_id, refresh=refresh)
         except CoreError as error:
             raise RuntimeError(f"{error.code}: {error.detail}" if error.detail else error.code) from error
-        return self.sources.list_sources()
+        return self.sources.list_sources() if refresh else result
 
     async def get_script_source(self, source_id):
         try:
@@ -202,9 +213,9 @@ class Plugin:
         await self.sources.set_game_source(appid, source_id, subscribed)
         return {"appid": appid}
 
-    async def set_source_update_interval(self, source_id, interval_hours):
+    async def set_source_update_interval(self, source_id, interval_hours, *, refresh=True):
         self._require_idle()
-        return await self.sources.set_update_interval(source_id, interval_hours)
+        return await self.sources.set_update_interval(source_id, interval_hours, refresh=refresh)
 
     # -- source tasks (parallel to installation, keyed by source/match) ----
     async def update_source(self, source_id, force=False):
@@ -435,6 +446,8 @@ class Plugin:
         return [task.snapshot() for task in self.tasks.tasks.values()]
 
     async def _unload(self):
+        if hasattr(self, "remote"):
+            await self.remote.stop()
         drain = getattr(self, '_app_update_drain', None)
         if drain is not None:
             await asyncio.gather(drain, return_exceptions=True)
@@ -462,6 +475,7 @@ def _await_startup(method):
             if self._startup_error is not None and method.__name__ not in update_methods:
                 raise RuntimeError("plugin_startup_failed") from self._startup_error
         allowed = {'get_capabilities', 'list_tasks', 'source_task_status', 'get_app_update_status',
+                   'get_remote_status', 'stop_remote',
                    'prepare_app_update', 'finish_app_update', 'check_app_update', 'skip_app_update', 'cancel_app_update', 'recover_app_update', 'claim_app_update_notice', 'task_status', 'cancel_task', 'cancel_source_task', 'restart_app_update_client'}
         if getattr(self, '_app_update_gate', False) and method.__name__ not in allowed:
             raise RuntimeError('plugin_update_in_progress')

@@ -40,6 +40,32 @@ void main() {
         .setMockMethodCallHandler(channel, null),
   );
 
+  test(
+    'close awaits the listener shutdown before shutting down tasks',
+    () async {
+      final stopped = Completer<void>();
+      final closed = Completer<void>();
+      final host = AppTasks(ProcessFixtureClient('normal'));
+      final lifecycle = AppLifecycle(
+        tasks: host,
+        beforeClose: () => stopped.future,
+      );
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, (call) async {
+            if (call.method == 'close') closed.complete();
+            return null;
+          });
+      lifecycle.onWindowClose();
+      expect(host.closing, false);
+      expect(closed.isCompleted, false);
+      stopped.complete();
+      await closed.future;
+      expect(host.closing, true);
+      lifecycle.dispose();
+      host.dispose();
+    },
+  );
+
   test('minimize leaves task running, close waits for cancellation before native close', () async {
     final gate = Completer<void>();
     final host = AppTasks(ProcessFixtureClient('cancel_wait', gate: gate));

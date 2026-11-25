@@ -1,3 +1,7 @@
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#include <iphlpapi.h>
+
 #include "flutter_window.h"
 
 #include <optional>
@@ -33,6 +37,25 @@ bool FlutterWindow::OnCreate() {
   desktop_channel_->SetMethodCallHandler([](
       const flutter::MethodCall<flutter::EncodableValue>& call,
       std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result) {
+    if (call.method_name() == "physicalLanInterfaces") {
+      PMIB_IF_TABLE2 table = nullptr;
+      if (GetIfTable2(&table) != NO_ERROR) {
+        result->Error("network_interfaces", "Cannot read network adapters");
+        return;
+      }
+      flutter::EncodableList indices;
+      for (ULONG i = 0; i < table->NumEntries; ++i) {
+        const auto& row = table->Table[i];
+        if (row.OperStatus == IfOperStatusUp &&
+            row.InterfaceAndOperStatusFlags.HardwareInterface &&
+            (row.Type == IF_TYPE_ETHERNET_CSMACD || row.Type == IF_TYPE_IEEE80211)) {
+          indices.emplace_back(static_cast<int64_t>(row.InterfaceIndex));
+        }
+      }
+      FreeMibTable(table);
+      result->Success(flutter::EncodableValue(indices));
+      return;
+    }
     if (call.method_name() != "steamArtworkContext") {
       result->NotImplemented();
       return;

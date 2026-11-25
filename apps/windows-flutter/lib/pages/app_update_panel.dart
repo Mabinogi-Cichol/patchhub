@@ -45,7 +45,7 @@ class _AppUpdatePanelState extends State<AppUpdatePanel> {
       // Gate tasks before awaiting helper preparation. Core calls are drained by shutdown.
       widget.lifecycle.tasks?.closing = true;
       work = await update.prepare();
-      final notices = await widget.lifecycle.tasks?.shutdown() ?? <String>[];
+      final notices = await widget.lifecycle.shutdown();
       if (notices.isNotEmpty) throw StateError(notices.join('\n'));
       await File('${work.path}/apply.json').writeAsString('{}', flush: true);
       await widget.lifecycle.finishExit();

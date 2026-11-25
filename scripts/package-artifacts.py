@@ -17,7 +17,7 @@ INSTALLER_FILES = (
 )
 SCRIPT_LICENSES = ('Lua-5.4-LICENSE.txt', 'mlua-MIT.txt')
 SFEXTRACT_COMMIT = '21f5c5595a70e9284fff83476c0e307d5b92f573'
-PRODUCTION_BACKEND = {'bridge.py', 'source_service.py', 'source_browser.py', 'tasks.py', 'plugin_settings.py', 'state_host.py', 'protocol.py', 'protocol_validation.py', 'v5.schema.json', 'app_update.py', 'install-decky.py'}
+PRODUCTION_BACKEND = {'bridge.py', 'source_service.py', 'source_browser.py', 'tasks.py', 'plugin_settings.py', 'state_host.py', 'protocol.py', 'protocol_validation.py', 'v5.schema.json', 'app_update.py', 'install-decky.py', 'remote_server.py'}
 
 
 def validate_sbom(sbom, plugin, decky):

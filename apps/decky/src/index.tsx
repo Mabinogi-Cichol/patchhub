@@ -1,7 +1,7 @@
 import { ScriptSourceEditor } from "./script-source-editor";
 import { scriptSourceError } from "./script-source-error";
 import type { AddSourceResult, ScriptSourceDocument, ScriptSourcePromptResult } from "../../../packages/contracts/generated/protocol";
-import { callable, definePlugin, routerHook } from "@decky/api";
+import { callable, definePlugin, routerHook, toaster } from "@decky/api";
 import { AppUpdatePanel, startAppUpdateNotifications, waitForAppUpdate } from './app-update';
 import { Button, ButtonItem, DialogButton, DropdownItem, Field, Focusable, Navigation, PanelSection, PanelSectionRow, SidebarNavigation, TextField, ToggleField, showModal, useParams } from "@decky/ui";
 import { FaGamepad } from "react-icons/fa";
@@ -58,6 +58,10 @@ const gameCacheStatus = callable<[], CacheInventory>("game_cache_status");
 const cleanupGameCache = callable<[], CacheStatus>("cleanup_game_cache");
 const getSettings = callable<[], Settings>("get_settings");
 const setAutoCleanup = callable<[boolean], Settings>("set_auto_cleanup");
+type RemoteStatus = { enabled: boolean; addresses: string[]; url: string | null; access_key: string | null };
+const getRemoteStatus = callable<[], RemoteStatus>("get_remote_status");
+const startRemote = callable<[string], RemoteStatus>("start_remote");
+const stopRemote = callable<[], RemoteStatus>("stop_remote");
 
 async function readSnapshot() {
   await waitForAppUpdate();
@@ -161,6 +165,17 @@ const css = `
   .patch-patch-name { font-weight:600; }
   .patch-patch-source { font-size:12px; opacity:.8; overflow-wrap:anywhere; }
   .patch-kv-value { overflow-wrap:anywhere; }
+  .patch-remote-connection { margin-top:12px; padding:16px; border:1px solid #627387; border-radius:8px; background:#202c39; }
+  .patch-remote-connection dl { margin:0 0 14px; }
+  .patch-remote-connection dt { font-weight:600; }
+  .patch-remote-connection dd { margin:4px 0 12px; }
+  .patch-remote-pin { color:#a7d8ff; font-size:28px; font-weight:700; font-variant-numeric:tabular-nums; letter-spacing:.14em; }
+  .patch-remote-connection .patch-actions button { min-height:44px; padding:8px; border-radius:6px; background:#365b7c; color:#fff; box-shadow:none; }
+  .patch-remote-connection .patch-actions button:first-child { background:#1763a3; }
+  .patch-remote-connection .patch-actions button:hover:not(:disabled),
+  .patch-remote-connection .patch-actions button:focus-visible,
+  .patch-remote-connection .patch-actions button.gpfocus { background:#2470ae; outline:2px solid #fff; outline-offset:2px; }
+  .patch-remote-connection .patch-actions button:disabled { opacity:.5; }
   .patch-game-artwork { height:clamp(120px,20vh,180px); margin:16px 0; }
   .patch-game-artwork-image, .patch-game-artwork-content { width:100%; height:100%; object-fit:cover; }
   .patch-source-card { margin:0 0 16px; border:1px solid #627387; border-radius:8px; background:#202c39; min-width:0; }
@@ -767,6 +782,89 @@ function GlobalAbout() {
   </div>;
 }
 
+function GlobalRemote() {
+  const [status, setStatus] = useState<RemoteStatus | null>(null);
+  const [address, setAddress] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const url = status?.url;
+  const key = status?.access_key;
+  const live = useRef(true);
+  const read = async () => {
+    setBusy(true);
+    setError("");
+    try {
+      const value = await getRemoteStatus();
+      if (!live.current) return;
+      setStatus(value);
+      setAddress(previous => value.enabled && value.url ? new URL(value.url).hostname
+        : value.addresses.includes(previous) ? previous : value.addresses[0] ?? "");
+    } catch (failure) {
+      if (live.current) setError(`读取 Remote 状态失败：${String(failure)}`);
+    } finally { if (live.current) setBusy(false); }
+  };
+  useEffect(() => {
+    live.current = true;
+    void read();
+    return () => { live.current = false; };
+  }, []);
+  async function toggle(enabled: boolean) {
+    setBusy(true);
+    setError("");
+    try {
+      const value = await (enabled ? startRemote(address) : stopRemote());
+      if (live.current) setStatus(value);
+    } catch (failure) {
+      if (live.current) setError(`Remote ${enabled ? "启动" : "关闭"}失败：${String(failure)}`);
+    } finally { if (live.current) setBusy(false); }
+  }
+  function openRemote(url: string) {
+    setError("");
+    try {
+      SteamClient.System.OpenInSystemBrowser(url);
+    } catch (failure) {
+      setError(`无法打开 Remote 网页：${String(failure)}`);
+    }
+  }
+  async function copyKey(key: string) {
+    setError("");
+    try {
+      await navigator.clipboard.writeText(key);
+      toaster.toast({ title: "PatchHub Remote", body: "已复制密钥" });
+    } catch (failure) {
+      if (live.current) setError(`复制密钥失败：${String(failure)}`);
+    }
+  }
+  return <div className="patch-page">
+    <Status>在可信局域网中的电脑或手机打开访问地址，输入访问密钥即可管理这台设备的全局来源。HTTP 连接以明文传输。</Status>
+    {error && <Status warning>{error}</Status>}
+    <PanelSection title="Remote">
+      <Row><Action disabled={busy} onClick={read}>刷新状态与网络地址</Action></Row>
+      {status && <>
+        {!!status.addresses.length && <Row><DropdownItem label="局域网 IPv4 地址" layout="below"
+          disabled={busy || status.enabled} rgOptions={status.addresses.map(value => ({ data: value, label: value }))}
+          selectedOption={address} onChange={option => setAddress(option.data)} /></Row>}
+        {!status.addresses.length && <Row><Status>未找到可用的局域网 IPv4 地址。</Status></Row>}
+        <Row><ToggleField label="启用 Remote" checked={status.enabled}
+          disabled={busy || (!status.enabled && !address)} onChange={enabled => void toggle(enabled)} /></Row>
+        {status.enabled && url && key && <>
+          <section className="patch-remote-connection" aria-label="Remote 连接信息">
+            <dl>
+              <dt>访问地址</dt><dd className="patch-kv-value">{url}</dd>
+              <dt>本次访问密钥</dt><dd className="patch-remote-pin">{key}</dd>
+            </dl>
+            <Focusable className="patch-actions" flow-children="right">
+              <Button disabled={busy} onClick={() => openRemote(url)}>打开网页</Button>
+              <Button disabled={busy} onClick={() => copyKey(key)}>复制密钥</Button>
+            </Focusable>
+          </section>
+          <Row><Status>关闭设置页后仍可访问；停用或插件卸载后停止监听，再次启用将更换密钥。</Status></Row>
+        </>}
+      </>}
+    </PanelSection>
+  </div>;
+}
+
 function Manager() {
   const { instance, panel } = useParams<{ instance: string; panel?: string }>();
   const { report } = useSyncExternalStore(session.subscribe, session.getSnapshot);
@@ -781,6 +879,7 @@ function Manager() {
       { identifier: settingsRoutes.sources, route: settingsRoutes.sources, title: "全局来源", hideTitle: true, visible: true, content: <GlobalSources /> },
       "separator",
       { identifier: settingsRoutes.cache, route: settingsRoutes.cache, title: "缓存管理", hideTitle: true, visible: true, content: <GlobalCache /> },
+      { identifier: settingsRoutes.remote, route: settingsRoutes.remote, title: "Remote", hideTitle: true, visible: true, content: <GlobalRemote /> },
       { identifier: settingsRoutes.about, route: settingsRoutes.about, title: "关于", hideTitle: true, visible: true, content: <GlobalAbout /> },
     ]} />
       : item ? <GameManager key={instance} item={item} seg={instance!} panel={panel} />
@@ -793,6 +892,9 @@ function GlobalSources() {
   const { error, note } = feedbackFor(state);
   const [editor, setEditor] = useState<{ document?: ScriptSourceDocument; readOnly?: boolean } | null>(null);
   const editorSection = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    void session.refreshSources().catch(failure => session.setFeedback({ error: `刷新来源失败：${String(failure)}`, note: null }));
+  }, []);
   useLayoutEffect(() => {
     if (editor) editorSection.current?.scrollIntoView({ block: "start" });
   }, [editor]);
@@ -832,6 +934,7 @@ function GlobalSources() {
     return sources;
   }, () => {});
   return <><div>{busy && <Status>{busy}</Status>}{error && <Status warning>{error}</Status>}{note && <Status>{note}</Status>}</div>
+    <Row><Action disabled={!!busy} onClick={() => void session.work("正在刷新来源…", () => session.refreshSources(), () => {})}>刷新来源</Action></Row>
     {editor && <div ref={editorSection}><ScriptSourceEditor document={editor.document} readOnly={editor.readOnly}
       onLoadPrompt={editor.document || editor.readOnly ? undefined : async () => (await getScriptSourcePrompt()).prompt}
       onSave={saveScript} onClose={() => setEditor(null)} /></div>}

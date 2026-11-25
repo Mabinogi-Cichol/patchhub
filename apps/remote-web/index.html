@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PatchHub Remote</title>
+  <link rel="stylesheet" href="/tabler.min.css">
+  <link rel="stylesheet" href="/style.css">
+  <script type="module" src="/app.js"></script>
+</head>
+<body class="page">
+  <header class="navbar">
+    <div class="container-xl"><span class="navbar-brand">PatchHub Remote</span></div>
+  </header>
+  <main class="page-wrapper">
+    <div class="container-xl py-4">
+      <h1 class="page-title">全局来源</h1>
+      <div id="notice" role="status" aria-live="polite"></div>
+      <section id="login" class="card mt-3">
+        <div class="card-body">
+          <h2 class="card-title">连接设备</h2>
+          <form id="login-form">
+            <label class="form-label" for="key">访问密钥</label>
+            <div class="input-group">
+              <input id="key" class="form-control" type="password" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" placeholder="六位数字" autocomplete="off" required>
+              <button class="btn btn-primary">连接</button>
+            </div>
+          </form>
+        </div>
+      </section>
+      <div id="workspace" hidden>
+        <div class="d-flex flex-wrap gap-2 my-3">
+          <button id="import" class="btn btn-primary">导入脚本来源</button>
+          <button id="update-all" class="btn">更新全部</button>
+          <button id="refresh" class="btn">刷新列表</button>
+        </div>
+        <section id="editor" class="card mb-3" hidden>
+          <div class="card-body">
+            <h2 id="editor-title" class="card-title"></h2>
+            <div id="import-tools">
+              <label class="form-label" for="file">选择 Lua 文件</label>
+              <input id="file" class="form-control mb-3" type="file" accept=".lua,text/plain">
+              <button id="prompt-load" class="btn btn-outline-secondary mb-3">显示 AI 提示词</button>
+              <div id="prompt-box" hidden>
+                <label class="form-label" for="prompt">AI 提示词（可手动选中复制）</label>
+                <textarea id="prompt" class="form-control mb-3" rows="8" readonly></textarea>
+              </div>
+            </div>
+            <label class="form-label" for="code">Lua 源码</label>
+            <textarea id="code" class="form-control code" rows="16" spellcheck="false"></textarea>
+            <div class="d-flex gap-2 mt-3">
+              <button id="save" class="btn btn-primary">保存</button>
+              <button id="close-editor" class="btn">关闭</button>
+            </div>
+          </div>
+        </section>
+        <div id="tasks"></div>
+        <div id="sources"></div>
+      </div>
+    </div>
+  </main>
+</body>
+</html>

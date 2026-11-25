@@ -64,6 +64,7 @@ class SourceService:
         self._summaries = []
         self._tasks = {}
         self._closed = False
+        self._write_lock = asyncio.Lock()
 
     # -- lifecycle ---------------------------------------------------------
     async def initialize(self):
@@ -136,22 +137,24 @@ class SourceService:
         return self.list_sources()
 
     # -- local writes (one-shot serve) ------------------------------------
-    async def _call_sync(self, method, params):
-        result = await self.bridge.call_sync(method, params)
-        self.settings_revision = result["settings_revision"]
-        await self.reload_sources()
-        return result
+    async def _call_sync(self, method, params, *, refresh=True):
+        async with self._write_lock:
+            result = await self.bridge.call_sync(method, params)
+            self.settings_revision = result["settings_revision"]
+            if refresh:
+                await self.reload_sources()
+            return result
 
-    async def set_enabled(self, source_id, enabled):
+    async def set_enabled(self, source_id, enabled, *, refresh=True):
         return await self._call_sync("set_source_enabled",
-                                     {"source_id": source_id, "enabled": bool(enabled)})
+                                     {"source_id": source_id, "enabled": bool(enabled)}, refresh=refresh)
 
-    async def set_name(self, source_id, name):
-        return await self._call_sync("set_source_name", {"source_id": source_id, "name": name})
+    async def set_name(self, source_id, name, *, refresh=True):
+        return await self._call_sync("set_source_name", {"source_id": source_id, "name": name}, refresh=refresh)
 
-    async def remove_source(self, source_id):
+    async def remove_source(self, source_id, *, refresh=True):
         validate_id(source_id)
-        return await self._call_sync("remove_source", {"source_id": source_id})
+        return await self._call_sync("remove_source", {"source_id": source_id}, refresh=refresh)
 
     async def get_script_source(self, source_id):
         return await self.bridge.call_sync("get_script_source", {"source_id": source_id})
@@ -163,21 +166,22 @@ class SourceService:
         params = {"code": code, "api_version": api_version}
         if source_id is not None:
             params["source_id"] = source_id
-        result = await self.bridge.call_sync("import_script_source", params)
-        self.settings_revision = result["settings_revision"]
-        return result
+        async with self._write_lock:
+            result = await self.bridge.call_sync("import_script_source", params)
+            self.settings_revision = result["settings_revision"]
+            return result
 
     async def set_game_source(self, appid, source_id, subscribed):
         return await self._call_sync("set_game_source",
                                      {"appid": appid, "source_id": source_id,
                                       "subscribed": bool(subscribed)})
 
-    async def set_update_interval(self, source_id, interval_hours):
+    async def set_update_interval(self, source_id, interval_hours, *, refresh=True):
         validate_id(source_id)
         if type(interval_hours) is not int or not 0 <= interval_hours <= JS_MAX_INTEGER:
             raise ValueError("invalid_interval")
         return await self._call_sync("set_source_update_interval",
-                                     {"source_id": source_id, "interval_hours": interval_hours})
+                                     {"source_id": source_id, "interval_hours": interval_hours}, refresh=refresh)
 
     # -- source task registry ---------------------------------------------
     def _snapshot(self, task):

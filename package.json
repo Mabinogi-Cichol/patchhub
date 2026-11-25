@@ -8,7 +8,7 @@
   "scripts": {
     "build:windows": "pwsh -NoProfile -File scripts/build-windows-flutter.ps1",
     "build:decky": "npm run build -w apps/decky",
-    "test:contracts": "node scripts/test-ui-contract.mjs && node scripts/test-flutter-presentation.mjs --check",
+    "test:contracts": "node scripts/test-ui-contract.mjs && node scripts/test-flutter-presentation.mjs --check && node apps/remote-web/build.cjs --check && node apps/remote-web/test.cjs",
     "typecheck": "npm run typecheck -w apps/decky"
   },
   "devDependencies": {

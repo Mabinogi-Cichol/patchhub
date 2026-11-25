@@ -115,7 +115,11 @@ Future<void> main(List<String> arguments) async {
       ),
     );
   }
-  final lifecycle = AppLifecycle(tasks: tasks, onReturnToApp: model?.refresh);
+  final lifecycle = AppLifecycle(
+    tasks: tasks,
+    onReturnToApp: model?.refresh,
+    beforeClose: model?.remote.stop,
+  );
   await lifecycle.initialize();
   final metadataFile = File('${directory.path}/app-version.json');
   final version = await metadataFile.exists()

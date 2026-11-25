@@ -160,13 +160,16 @@ class _GlobalSourcesPageState extends State<GlobalSourcesPage> {
       final rule = savedResult?['rule'];
       final startedInitialUpdate =
           sourceId == null &&
+          savedResult?['task_error'] == null &&
           rule is Map<String, dynamic> &&
           rule['role'] == 'publisher' &&
           rule['enabled'] == true;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-            startedInitialUpdate
+            savedResult?['task_error'] != null
+                ? '脚本已保存，初次订阅更新启动失败：${savedResult!['task_error']}'
+                : startedInitialUpdate
                 ? '脚本已导入，正在进行初次订阅更新。'
                 : '脚本已保存，尚未执行。请更新来源或重新匹配游戏。',
           ),

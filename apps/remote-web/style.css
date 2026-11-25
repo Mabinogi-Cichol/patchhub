@@ -1,0 +1,5 @@
+.code { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; tab-size: 2; }
+.source-details { border-top: 1px solid var(--tblr-border-color, #dadfe5); }
+.source-details summary { cursor: pointer; }
+.source-domains { overflow-wrap: anywhere; }
+[hidden] { display: none !important; }

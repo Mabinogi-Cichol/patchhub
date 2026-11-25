@@ -17,7 +17,7 @@ RULES = (
         "scripts/sync-project-version.mjs",
     )),
     (("windows", "decky"), (
-        "packages/ui/**", "package.json", "package-lock.json", ".npmrc",
+        "packages/ui/**", "apps/remote-web/**", "package.json", "package-lock.json", ".npmrc",
         "scripts/test-ui-contract.mjs", "scripts/test-flutter-presentation.mjs",
         "scripts/package-artifacts.py", "scripts/test_package_artifacts.py",
         "scripts/build-sbom.py", "scripts/test_build_sbom.py",
