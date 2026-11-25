@@ -43,17 +43,10 @@ gh release view v0.1.0 --repo OWNER/REPO --json name,tagName,url
 
 ## 发布新版本
 
-1. 核实实际仓库、`git remote -v`、分支、工作区、目标提交和已有 Tag/Release。用户要求“最新”时先 fetch 并确认发布提交；保留不属于本次发布的未提交内容。明确发布范围后继续，不重复索取已给出的授权。
-2. 应用版本只人工修改根 `Cargo.toml` 的 `workspace.package.version`；执行 `python scripts/project_version.py --sync`，检查并提交自动生成的 Flutter / Decky / 共享 UI 清单及 Cargo/npm 项目锁字段，再运行 `--check`。同时在打 Tag 前于 `docs/releases/v<主版本>.md` 编写符合“发布描述”格式的中文 Release 正文并一并提交，CI 在 `changes` 阶段会校验该文件存在且非空。Windows EXE（默认额外构建号 `+1`）、更新 JSON、NSIS、Decky 包内 package.json 与 SBOM 应用版本须按格式映射对应同一主版本。CI 在编译前核对派生字段及 `v<主版本>` Tag；Tag 不会自动改写程序内版本。沿用对应且未过期的验证证据，只有新改动或未解决问题才补检查。
-3. 本仓库 [CI 工作流](../../../.github/workflows/ci.yml) 在推送 `v*` Tag 后运行双平台检查和打包，只有 core、windows、decky 全部成功才发布。以 Tag 对应运行作为发行证据，不能用旧安装包代替最新源码构建。
+1. 核实实际仓库、`git remote -v`、分支、工作区、目标提交和已有 Tag/Release。保留不属于本次发布的未提交内容。明确发布范围后继续，不重复索取已给出的授权。
+2. 使用 `python scripts/project_version.py --bump <patch|minor|major>`（或 `--set <版本>`）一步更新根 `Cargo.toml` 的 `workspace.package.version`、同步派生清单及锁文件并完成一致性校验。同时在打 Tag 前于 `docs/releases/v<主版本>.md` 编写符合“发布描述”格式的中文 Release 正文并一并提交，CI 在 `changes` 阶段会校验该文件存在且非空。
+3. 本仓库 [CI 工作流](../../../.github/workflows/ci.yml) 在推送 `v*` Tag 后自动运行双平台检查、打包、`sha256sum --check` 校验并创建 GitHub Release。发布前不强制运行全套本地 CI 对齐。
 4. Git 改动需要提交时使用 [项目提交技能](../steam-patch-git-commit/SKILL.md)，按仓库规则拆分。只有用户授权发布或推送时才推送；已发布 Tag 保持不变，新代码版本使用新 Tag。
-5. Release 标题只用 Tag；正文遵循上述“发布描述”格式，由 CI 直接读取 `docs/releases/v<主版本>.md` 通过 `--notes-file` 写入 Release。事后修正已有 Release 正文时，同样将多行正文存入临时文件并通过 `--notes-file` 更新。版本 Tag 含 `-` 时，现有工作流将其标记为预发行版。
-6. 仅修改文档、技能或标题时，不触发额外设备部署、截图或游戏补丁安装。需要设备工作且已授权时使用 [Decky 部署验证技能](../decky-deploy-verify/SKILL.md)。
-
-## 附件与在线核验
-
-- 公开附件仅包括 Windows NSIS、Windows portable ZIP、Decky ZIP 和 `SHA256SUMS.txt`，清单覆盖这三个安装包。不单独上传 checksums JSON、CycloneDX SBOM 或 `install-decky.py`；包内 SBOM 与仓库安装脚本继续保留，在线安装入口从仓库读取脚本。
-- GitHub 上传会规范化文件名，例如把 NSIS 名称中的空格改为点号；在暂存附件时先统一公开名称，再生成校验清单。核对清单中的名称与实际公开下载名一致，不能只核对哈希值。
-- 发布后从 Release 下载并验证附件 SHA-256、ZIP 内容白名单与 CRC、程序平台/架构、Decky 执行权限与 runtime 哈希、SBOM 锁文件摘要及资源/契约来源。Windows runner 的 CRLF 检出与 Git LF blob 应按实际规则区分。
-- 读回 Release 的标题、Tag、公开/预发行状态、附件数量与下载链接。只改标题时无需重新下载并校验未变化的所有附件。
-- 证据及下载文件保存在忽略目录 `.artifacts/`；报告实际发布 URL、Tag 对应提交和未验证项。发布记录见 [发行检查](../../../docs/releases/release-checklist.md)，不能把历史实机验证当作本次安装包的部署证明。
+5. 推送 `main` 与 `v<主版本>` Tag 后，确认对应线上 CI 工作流已触发即可完成发布操作；**无需阻塞等待线上 CI 完成，也无需下载核验 Release 附件**（若线上 CI 失败，GitHub 会邮件通知仓库所有者）。
+6. Release 标题只用 Tag；正文遵循上述“发布描述”格式，由 CI 直接读取 `docs/releases/v<主版本>.md` 通过 `--notes-file` 写入 Release。事后仅要求修正已有 Release 标题或正文时，将多行正文存入临时文件并通过 `gh release edit --title / --notes-file` 更新。版本 Tag 含 `-` 时，现有工作流将其标记为预发行版。
+7. 仅修改文档、技能或标题时，不触发额外设备部署、截图或游戏补丁安装。需要设备工作且已授权时使用 [Decky 部署验证技能](../decky-deploy-verify/SKILL.md)。
