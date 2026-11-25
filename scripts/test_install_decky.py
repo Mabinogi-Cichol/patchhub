@@ -450,6 +450,16 @@ class InstallerTests(unittest.TestCase):
             self.installer.install(self.package, yes=True)
         self.assertTrue(all(pending == (op == "launch") for op, pending in observed))
 
+    def test_update_and_rollback_succeed_when_old_plugin_lacks_sbom_or_runtime(self):
+        self.old()
+        for obsolete in ("dependencies.cdx.json", "licenses/sfextract-MIT.txt", "backend/v5.schema.json", "bin/runtime.json"):
+            (self.loader.plugin / obsolete).unlink()
+        self.original_files = m.tree_manifest(self.loader.plugin)
+        self.loader.fail_verify = True
+        with self.assertRaisesRegex(m.InstallError, "已恢复"):
+            self.installer.install(self.package, yes=True)
+        self.assert_original()
+
 
 class PackageTests(unittest.TestCase):
     def setUp(self):
@@ -481,14 +491,55 @@ class PackageTests(unittest.TestCase):
 
     def test_rejects_wrong_version_runtime_and_identity(self):
         cases = [({"plugin.json": b'{"name":"other"}'}, None),
-                 ({"bin/runtime.json": b'{"protocol_version":3}'}, None),
+                 ({"bin/runtime.json": b'{"files":[]}'}, None),
+                 ({"bin/runtime.json": b'{"files":[{"path":"bin/patchhub-core"}]}'}, None),
                  ({"bin/patchhub-core": b"MZ"}, None),
+                 ({"main.py": None}, None),
                  ({"dist/index.js": None}, None),
                  ({}, "9.9.9")]
         for changes, expected in cases:
             create_package(self.zip, changes=changes)
             with self.subTest(changes=list(changes)), self.assertRaises(m.InstallError):
                 m.validate_package(self.zip, expected)
+
+    def test_validate_package_accepts_future_protocol_and_minimal_files(self):
+        elf = b"\x7fELF\x02\x01\x01" + b"\0" * 11 + struct.pack("<H", 62) + b"future"
+        runtime = {"protocol_version": 6, "worker_protocol": 2,
+                   "files": [{"path": "bin/patchhub-daemon", "size": len(elf), "sha256": m.hashlib.sha256(elf).hexdigest()}]}
+        with zipfile.ZipFile(self.zip, "w", zipfile.ZIP_DEFLATED) as bundle:
+            entries = {
+                "main.py": (b"fixture", 0o100644),
+                "dist/index.js": (b"fixture", 0o100644),
+                "plugin.json": (json.dumps({"name": m.NAME, "api_version": 1, "flags": []}).encode(), 0o100644),
+                "package.json": (json.dumps({"name": "@patchhub/decky", "version": "0.8.0", "type": "module"}).encode(), 0o100644),
+                "bin/runtime.json": (json.dumps(runtime).encode(), 0o100644),
+                "bin/patchhub-daemon": (elf, 0o100755),
+            }
+            for name, (data, mode) in entries.items():
+                info = zipfile.ZipInfo(m.FOLDER + "/" + name)
+                info.create_system = 3
+                info.external_attr = mode << 16
+                bundle.writestr(info, data)
+        result = m.validate_package(self.zip, "0.8.0")
+        self.assertEqual(result["version"], "0.8.0")
+        self.assertIn("bin/patchhub-daemon", result["files"])
+
+    def test_backup_plugin_and_validate_backup_allow_missing_sbom_and_runtime(self):
+        old_dir = self.root / "old-plugin"
+        old_zip = self.root / "old-input.zip"
+        create_package(old_zip, "0.6.2")
+        unpack_fixture(old_zip, old_dir)
+        for obsolete in ("dependencies.cdx.json", "licenses/sfextract-MIT.txt", "backend/v5.schema.json", "bin/runtime.json"):
+            (old_dir / obsolete).unlink()
+        rollback_zip = self.root / "rollback.zip"
+        ctx = patch.object(m.os, "fsync") if os.name == "nt" else contextlib.nullcontext()
+        with ctx:
+            original = m.backup_plugin(old_dir, rollback_zip)
+        self.assertEqual(original["version"], "0.6.2")
+        self.assertNotIn("dependencies.cdx.json", original["files"])
+        self.assertEqual(m.validate_backup(rollback_zip, "0.6.2")["files"], original["files"])
+        with self.assertRaisesRegex(m.InstallError, "旧插件版本不一致"):
+            m.validate_backup(rollback_zip, "0.6.3")
 
     def test_runtime_must_be_executable_linux_x86_64(self):
         create_package(self.zip)

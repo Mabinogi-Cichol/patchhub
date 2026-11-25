@@ -209,49 +209,70 @@ def release_package(work, requested, download=fetch, source=None):
     return {**package, "tag": tag, "sha256": matches[0]}
 
 
+def _inspect_zip(bundle):
+    entries = bundle.infolist()
+    require(entries, "ZIP 为空")
+    files, infos, total, seen = {}, {}, 0, set()
+    for item in entries:
+        raw = item.orig_filename
+        path = PurePosixPath(raw)
+        require(raw and "\\" not in raw and "\x00" not in raw and ":" not in raw and not path.is_absolute()
+                and all(p not in ("", ".", "..") for p in raw.rstrip("/").split("/"))
+                and path.parts[0] == FOLDER, "ZIP 路径越界或插件目录错误")
+        require(raw.casefold().rstrip("/") not in seen, "ZIP 存在重复路径")
+        seen.add(raw.casefold().rstrip("/"))
+        mode = item.external_attr >> 16
+        require(stat.S_IFMT(mode) in (0, stat.S_IFREG, stat.S_IFDIR) and not mode & 0o7000 and not item.flag_bits & 1, "ZIP 含链接、特殊权限、特殊文件或加密成员")
+        if item.is_dir():
+            continue
+        require(len(path.parts) > 1 and not stat.S_ISDIR(mode), "ZIP 文件类型异常")
+        total += item.file_size
+        relative = "/".join(path.parts[1:])
+        with bundle.open(item) as stream:
+            sha = _digest(stream)
+        files[relative] = {"sha256": sha, "size": item.file_size, "executable": bool(mode & 0o111)}
+        infos[relative] = item
+    for name in files:
+        require(not any(str(parent) in files for parent in PurePosixPath(name).parents if str(parent) != "."), "ZIP 文件与目录冲突")
+    return files, infos
+
+
+def _read_zip_json(bundle, infos, name):
+    require(name in infos, f"ZIP 缺少 {name}")
+    return json.loads(bundle.read(infos[name]))
+
+
+def validate_backup(archive, expected_version=None):
+    """Validate structural safety and identity of a backed-up old plugin archive."""
+    with zipfile.ZipFile(archive) as bundle:
+        files, infos = _inspect_zip(bundle)
+        plugin = _read_zip_json(bundle, infos, "plugin.json")
+        package = _read_zip_json(bundle, infos, "package.json")
+        require(plugin.get("name") == NAME, "旧插件身份不匹配")
+        version = package.get("version")
+        version_tag("v" + str(version))
+        require(expected_version is None or version == expected_version, "包内版本与旧插件版本不一致")
+        return {"name": plugin["name"], "version": version, "files": files}
+
+
 def validate_package(archive, expected_version=None):
     with zipfile.ZipFile(archive) as bundle:
-        entries = bundle.infolist()
-        require(entries, "ZIP 为空")
-        files, infos, total, seen = {}, {}, 0, set()
-        for item in entries:
-            raw = item.orig_filename
-            path = PurePosixPath(raw)
-            require(raw and "\\" not in raw and "\x00" not in raw and ":" not in raw and not path.is_absolute()
-                    and all(p not in ("", ".", "..") for p in raw.rstrip("/").split("/"))
-                    and path.parts[0] == FOLDER, "ZIP 路径越界或插件目录错误")
-            require(raw.casefold().rstrip("/") not in seen, "ZIP 存在重复路径")
-            seen.add(raw.casefold().rstrip("/"))
-            mode = item.external_attr >> 16
-            require(stat.S_IFMT(mode) in (0, stat.S_IFREG, stat.S_IFDIR) and not mode & 0o7000 and not item.flag_bits & 1, "ZIP 含链接、特殊权限、特殊文件或加密成员")
-            if item.is_dir():
-                continue
-            require(len(path.parts) > 1 and not stat.S_ISDIR(mode), "ZIP 文件类型异常")
-            total += item.file_size
-            relative = "/".join(path.parts[1:])
-            with bundle.open(item) as stream:
-                sha = _digest(stream)
-            files[relative] = {"sha256": sha, "size": item.file_size, "executable": bool(mode & 0o111)}
-            infos[relative] = item
-        for name in files:
-            require(not any(str(parent) in files for parent in PurePosixPath(name).parents if str(parent) != "."), "ZIP 文件与目录冲突")
-
-        def read(name):
-            require(name in infos, f"ZIP 缺少 {name}")
-            return json.loads(bundle.read(infos[name]))
-
-        plugin, package, runtime = read("plugin.json"), read("package.json"), read("bin/runtime.json")
+        files, infos = _inspect_zip(bundle)
+        plugin = _read_zip_json(bundle, infos, "plugin.json")
+        package = _read_zip_json(bundle, infos, "package.json")
+        runtime = _read_zip_json(bundle, infos, "bin/runtime.json")
         require(plugin.get("name") == NAME and plugin.get("api_version") == 1 and plugin.get("flags") == [], "插件身份/API/权限不匹配")
         version = package.get("version")
         version_tag("v" + str(version))
         require(package.get("name") == "@patchhub/decky" and package.get("type") == "module" and not package.get("remote_binary"), "插件 package.json 不匹配")
         require(expected_version is None or version == expected_version, "包内版本与 Release Tag 不一致")
-        required = {"main.py", "dist/index.js", "backend/bridge.py", "backend/tasks.py", "backend/protocol.py", "backend/v5.schema.json", "LICENSE", "licenses/sfextract-MIT.txt", "dependencies.cdx.json"}
-        require(required <= files.keys(), "插件运行文件不完整")
-        require(runtime.get("protocol_version") == 5 and runtime.get("worker_protocol") == 1, "不支持的 runtime 协议")
-        binaries = runtime.get("files", [])
-        require(isinstance(binaries, list) and len(binaries) == 2 and {entry.get("path") for entry in binaries} == {"bin/patchhub-core", "bin/patchhub-worker"}, "runtime 清单不完整")
+        required = {"main.py", "dist/index.js"}
+        missing = sorted(required - files.keys())
+        require(not missing, f"插件运行文件不完整：{', '.join(missing)}")
+        binaries = runtime.get("files")
+        require(isinstance(binaries, list) and len(binaries) >= 1, "runtime 清单不完整")
         for entry in binaries:
+            require(isinstance(entry, dict) and isinstance(entry.get("path"), str) and entry["path"], "runtime 清单格式异常")
             name = entry["path"]
             require(name in files and files[name]["size"] == entry.get("size") and files[name]["sha256"] == entry.get("sha256") and files[name]["executable"], "runtime 哈希/大小/权限不匹配")
             with bundle.open(infos[name]) as stream:
@@ -300,7 +321,9 @@ def backup_plugin(root, output):
             info.compress_type = zipfile.ZIP_DEFLATED
             bundle.writestr(info, source.read_bytes())
     require(tree_manifest(root) == manifest, "备份时旧插件发生变化")
-    validated = validate_package(output, version)
+    validated = validate_backup(output, version)
+    expected_files = {name: value for name, value in manifest.items() if "__pycache__" not in PurePosixPath(name).parts}
+    require(validated["files"] == expected_files, "备份包清单与旧插件不一致")
     with output.open("rb") as stream:
         os.fsync(stream.fileno())
     return {"name": validated["name"], "version": version, "files": validated["files"], "sha256": digest(output)}
@@ -763,7 +786,7 @@ class Installer:
         if original:
             archive = no_links(self.work / "rollback.zip")
             require(digest(archive) == original["sha256"], "唯一回滚包哈希异常，保留恢复材料")
-            package = validate_package(archive, original["version"])
+            package = validate_backup(archive, original["version"])
             require(package["files"] == original["files"], "回滚包清单异常")
             self.loader.mutate(state, kind="install", name=package["name"], artifact=archive.as_uri(), version=original["version"], hash=original["sha256"], installType=1, checkTasks=False)
             self.restore_settings(state)
