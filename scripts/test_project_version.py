@@ -230,6 +230,26 @@ class ProjectVersionTests(unittest.TestCase):
         self.assertEqual({p.name for p in (app / 'plugin-output/bin').iterdir()}, {'patchhub-core', 'patchhub-worker', 'runtime.json'})
         self.assertEqual(versions.check(self.root), '9.8.7')
 
+    def test_set_and_bump_version_sync_and_verify(self):
+        ver, changed = versions.set_version('1.2.3', self.root)
+        self.assertEqual(ver, '1.2.3')
+        self.assertIn('Cargo.toml', changed)
+        self.assertEqual(versions.check(self.root), '1.2.3')
+
+        ver, _ = versions.bump_version('patch', self.root)
+        self.assertEqual(ver, '1.2.4')
+        ver, _ = versions.bump_version('minor', self.root)
+        self.assertEqual(ver, '1.3.0')
+        ver, _ = versions.bump_version('major', self.root)
+        self.assertEqual(ver, '2.0.0')
+        self.assertEqual(versions.check(self.root), '2.0.0')
+
+    def test_set_version_rejects_invalid_semver_without_writing(self):
+        before = (self.root / 'Cargo.toml').read_text(encoding='utf-8')
+        with self.assertRaises(ValueError):
+            versions.set_version('not-a-semver', self.root)
+        self.assertEqual((self.root / 'Cargo.toml').read_text(encoding='utf-8'), before)
+
 
 if __name__ == '__main__':
     unittest.main()

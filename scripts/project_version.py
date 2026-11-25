@@ -11,16 +11,24 @@ import re
 import tomllib
 
 ROOT = Path(__file__).resolve().parents[1]
+SEMVER_RE = re.compile(
+    r'(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)'
+    r'(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?'
+    r'(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?'
+)
+
+
+def parse_semver(version):
+    match = SEMVER_RE.fullmatch(version) if isinstance(version, str) else None
+    if not match or (match[4] and any(p.isdigit() and len(p) > 1 and p[0] == '0' for p in match[4].split('.'))):
+        raise ValueError('Cargo.toml workspace.package.version must be a valid SemVer')
+    return tuple(int(match[i]) for i in (1, 2, 3))
 
 
 def project_version(root=ROOT):
     manifest = tomllib.loads((root / 'Cargo.toml').read_text(encoding='utf-8'))
     version = manifest['workspace']['package']['version']
-    identifier = r'[0-9A-Za-z-]+'
-    semver = rf'(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-({identifier}(?:\.{identifier})*))?(?:\+{identifier}(?:\.{identifier})*)?'
-    match = re.fullmatch(semver, version) if isinstance(version, str) else None
-    if not match or (match[4] and any(p.isdigit() and len(p) > 1 and p[0] == '0' for p in match[4].split('.'))):
-        raise ValueError('Cargo.toml workspace.package.version must be a valid SemVer')
+    parse_semver(version)
     tag = os.environ.get('GITHUB_REF', '')
     if tag.startswith('refs/tags/') and tag != f'refs/tags/v{version}':
         raise ValueError(f'Release Tag differs from application version: expected v{version}, got {tag}')
@@ -112,11 +120,47 @@ def check(root=ROOT):
     return version
 
 
+def set_version(version, root=ROOT):
+    """Update Cargo.toml [workspace.package].version, synchronize all derived files, and verify."""
+    parse_semver(version)
+    cargo_path = root / 'Cargo.toml'
+    content = cargo_path.read_text(encoding='utf-8')
+    section_match = re.search(r'(?ms)^\[workspace\.package\]\s*.*?(?=^\[|\Z)', content)
+    if not section_match:
+        raise ValueError('Cargo.toml: missing [workspace.package] section')
+    section = section_match.group(0)
+    ver_match = re.search(r'(?m)^(version\s*=\s*)("[^"\n]*"|\x27[^\x27\n]*\x27)', section)
+    if not ver_match:
+        raise ValueError('Cargo.toml: missing workspace.package.version')
+    new_section = section[:ver_match.start(2)] + json.dumps(version) + section[ver_match.end(2):]
+    new_content = content[:section_match.start()] + new_section + content[section_match.end():]
+    cargo_path.write_text(new_content, encoding='utf-8', newline='\n')
+    changed = synchronize(root)
+    check(root)
+    return version, ['Cargo.toml'] + changed
+
+
+def bump_version(part, root=ROOT):
+    """Increment major/minor/patch from Cargo.toml version, synchronize, and verify."""
+    major, minor, patch = parse_semver(project_version(root))
+    if part == 'major':
+        next_ver = f'{major + 1}.0.0'
+    elif part == 'minor':
+        next_ver = f'{major}.{minor + 1}.0'
+    elif part == 'patch':
+        next_ver = f'{major}.{minor}.{patch + 1}'
+    else:
+        raise ValueError(f'Unsupported bump part: {part}')
+    return set_version(next_ver, root)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument('--sync', action='store_true', help='Update derived manifests and project lock fields')
     mode.add_argument('--check', action='store_true', help='Check all derived fields and the Release Tag without writing')
+    mode.add_argument('--set', metavar='VERSION', help='Set Cargo.toml version to VERSION, sync derived files, and check')
+    mode.add_argument('--bump', choices=('major', 'minor', 'patch'), help='Bump version part, sync derived files, and check')
     args = parser.parse_args()
     try:
         if args.sync:
@@ -124,6 +168,12 @@ def main():
             print('Synchronized versions: ' + (', '.join(changed) if changed else 'already current'))
         elif args.check:
             print(f'Version fields match {check()}')
+        elif args.set:
+            ver, changed = set_version(args.set)
+            print(f'Updated version to {ver}: ' + ', '.join(changed))
+        elif args.bump:
+            ver, changed = bump_version(args.bump)
+            print(f'Bumped version to {ver}: ' + ', '.join(changed))
         else:
             print(project_version())
     except (ValueError, KeyError, OSError) as error:
