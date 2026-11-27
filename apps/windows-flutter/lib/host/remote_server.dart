@@ -299,18 +299,23 @@ class RemoteServer extends ChangeNotifier {
               ? _field<bool>(body, 'force')
               : false;
           await model.loadSources();
+          final tasks = [
+            for (final source in model.sources)
+              if (source['enabled'] == true &&
+                  source['role'] == 'publisher' &&
+                  model
+                          .tasks
+                          .sources['update_source:${source['id']}']
+                          ?.running !=
+                      true)
+                {
+                  'source_id': source['id'],
+                  'task_id': _update(source['id'] as String, force).requestId,
+                },
+          ];
           return {
-            'task_ids': [
-              for (final source in model.sources)
-                if (source['enabled'] == true &&
-                    source['role'] == 'publisher' &&
-                    model
-                            .tasks
-                            .sources['update_source:${source['id']}']
-                            ?.running !=
-                        true)
-                  _update(source['id'] as String, force).requestId,
-            ],
+            'task_ids': [for (final task in tasks) task['task_id']],
+            'tasks': tasks,
           };
       }
     }

@@ -189,7 +189,11 @@ class RemoteServerTests(unittest.IsolatedAsyncioTestCase):
                                                  {**SOURCE, "id": "active"}]
         self.plugin.source_task_status.return_value = [{**TASK, "key": "active"}]
         status, data = await self.request("POST", "/api/updates")
-        self.assertEqual((status, data), (200, {"task_ids": ["remote-task"]}))
+        self.assertEqual(status, 200)
+        self.assertEqual(data, {
+            "task_ids": ["remote-task"],
+            "tasks": [{"source_id": "custom", "task_id": "remote-task"}],
+        })
         self.plugin.update_source.assert_awaited_once_with("custom", False)
 
     async def test_stop_releases_port_and_restart_invalidates_old_key(self):

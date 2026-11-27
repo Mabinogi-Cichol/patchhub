@@ -1,4 +1,5 @@
-import type { SourceSummary, ScriptSourceDocument, ScriptSourcePromptResult, SourceProgressEvent } from "../../packages/contracts/generated/protocol";
+import type { AddSourceResult, SourceSummary, ScriptSourceDocument, ScriptSourcePromptResult, SourceProgressEvent } from "../../packages/contracts/generated/protocol";
+type TaskRef = { source_id: string; task_id: string };
 type Task = {
     task_id: string;
     running: boolean;
@@ -17,8 +18,13 @@ type Task = {
 const el = <T extends HTMLElement>(id: string): T => document.getElementById(id) as T;
 const notice = el<HTMLDivElement>("notice");
 const workspace = el<HTMLDivElement>("workspace");
-const editor = el<HTMLElement>("editor");
+const editor = el<HTMLDialogElement>("editor");
+const editorNotice = el<HTMLDivElement>("editor-notice");
 const code = el<HTMLTextAreaElement>("code");
+const prompt = el<HTMLTextAreaElement>("prompt");
+const promptBox = el<HTMLDetailsElement>("prompt-box");
+const copyPrompt = el<HTMLButtonElement>("prompt-copy");
+const promptFeedback = el<HTMLDivElement>("prompt-feedback");
 let key = "";
 let editing: string | null = null;
 let readonly = false;
@@ -26,10 +32,10 @@ let saving = false;
 let editorVersion = 0;
 let listRequest = 0;
 let writes: Promise<unknown> = Promise.resolve();
-const tasks = new Map<string, HTMLElement>();
-function message(text: string, error = false) {
-    notice.className = `alert mt-3 ${error ? "alert-danger" : "alert-success"}`;
-    notice.textContent = text;
+const tasks = new Map<string, { id: string | null; box: HTMLElement }>();
+function message(text: string, error = false, target = notice) {
+    target.className = `alert mt-3 ${error ? "alert-danger" : "alert-success"}`;
+    target.textContent = text;
 }
 function errorText(error: unknown): string {
     return error instanceof Error ? error.message : String(error);
@@ -181,18 +187,36 @@ function sourceCard(source: SourceSummary): HTMLElement {
     }
     if (source.role === "publisher") {
         actions.append(button("更新索引", async () => {
-            try { await startUpdate(`${path}/updates`); } catch (error) { message(errorText(error), true); }
+            try {
+                const result = await api<{ task_id: string }>(`${path}/updates`, "POST", { force: false });
+                trackTask({ source_id: source.id, task_id: result.task_id });
+            } catch (error) {
+                message(errorText(error), true);
+            }
         }));
     }
     if (source.origin !== "builtin") {
         actions.append(button("删除", async () => {
             if (!confirm(`确定删除来源“${source.name}”？`)) return;
-            try { await mutate(path, "DELETE"); } catch (error) { message(errorText(error), true); }
+            try {
+                await mutate(path, "DELETE");
+                tasks.get(source.id)?.box.remove();
+                tasks.delete(source.id);
+            } catch (error) {
+                message(errorText(error), true);
+            }
         }, "btn btn-outline-danger"));
     }
     body.append(actions);
     details.append(body);
     card.append(details);
+    if (source.role === "publisher") {
+        const taskSlot = document.createElement("div");
+        taskSlot.dataset.sourceTask = source.id;
+        const task = tasks.get(source.id);
+        if (task) taskSlot.append(task.box);
+        card.append(taskSlot);
+    }
     return card;
 }
 async function openScript(source: SourceSummary) {
@@ -208,27 +232,26 @@ async function openScript(source: SourceSummary) {
     el("editor-title").textContent = readonly ? `查看脚本：${source.name}` : `编辑脚本：${source.name}`;
     el("import-tools").hidden = true;
     el("save").hidden = readonly;
-    editor.hidden = false;
-    editor.scrollIntoView();
+    showEditor();
 }
-async function startUpdate(path: string) {
-    const result = await api<{
-        task_id?: string;
-        task_ids?: string[];
-    }>(path, "POST", { force: false });
-    for (const id of result.task_ids || (result.task_id ? [result.task_id] : []))
-        trackTask(id);
-    if (!result.task_id && !result.task_ids?.length)
-        message("没有需要更新的来源");
+function showEditor() {
+    editorNotice.textContent = "";
+    editorNotice.className = "";
+    editor.showModal();
 }
-function trackTask(id: string) {
-    if (tasks.has(id))
-        return;
+function showTaskStatus(sourceId: string, id: string | null, status: string, error = false) {
     const box = document.createElement("div");
-    box.className = "alert alert-info";
-    el("tasks").append(box);
-    tasks.set(id, box);
-    void poll(id);
+    box.className = `source-task alert ${error ? "alert-danger" : "alert-info"}`;
+    box.setAttribute("role", "status");
+    box.textContent = status;
+    tasks.set(sourceId, { id, box });
+    const slot = document.querySelector(`[data-source-task="${CSS.escape(sourceId)}"]`);
+    slot?.replaceChildren(box);
+}
+function trackTask({ source_id, task_id }: TaskRef) {
+    if (tasks.get(source_id)?.id === task_id) return;
+    showTaskStatus(source_id, task_id, "正在更新");
+    void poll(source_id, task_id);
 }
 function taskMessage(task: Task): string {
     if (task.error) {
@@ -238,10 +261,12 @@ function taskMessage(task: Task): string {
     if (task.control_error) return `任务错误：${task.control_error.code} ${task.control_error.detail || ""}`;
     if (!task.running) return task.cancel_requested && !task.result ? "更新已取消" : "更新完成";
     const progress = task.progress;
-    return `正在更新 ${progress ? `${progress.source_id} ${progress.completed}/${progress.total}` : ""}${task.cancel_requested ? "（正在取消）" : ""}`;
+    return `正在更新${progress ? ` ${progress.completed}/${progress.total}` : ""}${task.cancel_requested ? "（正在取消）" : ""}`;
 }
-async function poll(id: string) {
-    const box = tasks.get(id)!;
+async function poll(sourceId: string, id: string) {
+    const current = tasks.get(sourceId);
+    if (current?.id !== id) return;
+    const { box } = current;
     try {
         const task = await api<Task>(`/tasks/${encodeURIComponent(id)}`);
         box.replaceChildren();
@@ -252,10 +277,9 @@ async function poll(id: string) {
             const cancel = button("取消", () => { void api(`/tasks/${encodeURIComponent(id)}/cancel`, "POST").catch(e => message(errorText(e), true)); }, "btn btn-sm ms-3");
             cancel.disabled = task.cancel_requested;
             box.append(cancel);
-            window.setTimeout(() => void poll(id), 1000);
+            window.setTimeout(() => void poll(sourceId, id), 1000);
         }
         else {
-            tasks.delete(id);
             try {
                 await refresh();
             } catch (error) {
@@ -265,7 +289,7 @@ async function poll(id: string) {
     }
     catch (error) {
         box.textContent = `任务状态读取失败：${errorText(error)}`;
-        box.append(button("重查", () => { void poll(id); }, "btn btn-sm ms-3"));
+        box.append(button("重查", () => { void poll(sourceId, id); }, "btn btn-sm ms-3"));
     }
 }
 el<HTMLFormElement>("login-form").addEventListener("submit", async event => {
@@ -302,11 +326,34 @@ el("import").addEventListener("click", () => {
     el<HTMLInputElement>("file").value = "";
     el("editor-title").textContent = "导入脚本来源";
     el("import-tools").hidden = false;
-    el("prompt-box").hidden = true;
+    promptBox.open = false;
+    promptFeedback.replaceChildren();
+    promptFeedback.className = "";
     el("save").hidden = false;
-    editor.hidden = false;
-    editor.scrollIntoView();
+    showEditor();
+    if (!prompt.value && !copyPrompt.disabled) void loadPrompt();
 });
+
+async function loadPrompt() {
+    promptFeedback.replaceChildren();
+    promptFeedback.className = "";
+    promptBox.hidden = true;
+    copyPrompt.disabled = true;
+    copyPrompt.textContent = "正在读取 AI 提示词…";
+    try {
+        const result = await api<ScriptSourcePromptResult>("/script-prompt");
+        prompt.value = result.prompt;
+        promptBox.hidden = false;
+        copyPrompt.textContent = "复制 AI 提示词";
+    } catch (error) {
+        copyPrompt.textContent = "重试读取 AI 提示词";
+        if (editor.open && !el("import-tools").hidden) {
+            message(errorText(error), true, promptFeedback);
+        }
+    } finally {
+        copyPrompt.disabled = false;
+    }
+}
 
 el<HTMLInputElement>("file").addEventListener("change", async event => {
     const file = (event.target as HTMLInputElement).files?.[0];
@@ -316,24 +363,48 @@ el<HTMLInputElement>("file").addEventListener("change", async event => {
         const text = await file.text();
         if (version === editorVersion) code.value = text;
     } catch (error) {
-        message(errorText(error), true);
+        if (version === editorVersion) message(errorText(error), true, editorNotice);
     }
 });
 
-el("prompt-load").addEventListener("click", async () => {
-    try {
-        const result = await api<ScriptSourcePromptResult>("/script-prompt");
-        el<HTMLTextAreaElement>("prompt").value = result.prompt;
-        el("prompt-box").hidden = false;
-    } catch (error) {
-        message(errorText(error), true);
+copyPrompt.addEventListener("click", async () => {
+    if (!prompt.value) {
+        await loadPrompt();
+        return;
     }
+    const version = editorVersion;
+    if (navigator.clipboard) {
+        try {
+            await navigator.clipboard.writeText(prompt.value);
+            if (version === editorVersion) message("AI 提示词已复制", false, promptFeedback);
+            return;
+        } catch {
+            if (version !== editorVersion) return;
+        }
+    }
+    // LAN HTTP pages cannot use the secure-context clipboard API.
+    const wasOpen = promptBox.open;
+    promptBox.open = true;
+    prompt.focus();
+    prompt.select();
+    if (!document.execCommand("copy")) {
+        message("自动复制失败，已选中提示词，可手动复制。", true, promptFeedback);
+        return;
+    }
+    promptBox.open = wasOpen;
+    copyPrompt.focus();
+    message("AI 提示词已复制", false, promptFeedback);
 });
 
-el("close-editor").addEventListener("click", () => {
+function closeEditor() {
     if (saving) return;
     ++editorVersion;
-    editor.hidden = true;
+    editor.close();
+}
+el("close-editor").addEventListener("click", closeEditor);
+editor.addEventListener("cancel", event => {
+    event.preventDefault();
+    closeEditor();
 });
 
 el("save").addEventListener("click", async () => {
@@ -344,24 +415,24 @@ el("save").addEventListener("click", async () => {
     save.disabled = true;
     const path = editing ? `/sources/${encodeURIComponent(editing)}/script` : "/sources";
     try {
-        const result = await api<{
+        const result = await api<AddSourceResult & {
             task_id?: string;
             task_error?: { code: string; detail?: string | null };
         }>(path, editing ? "PUT" : "POST", { code: code.value });
-        if (result.task_id) trackTask(result.task_id);
-        editor.hidden = true;
+        if (result.task_id) trackTask({ source_id: result.rule.id, task_id: result.task_id });
+        if (result.task_error) {
+            const { code, detail } = result.task_error;
+            showTaskStatus(result.rule.id, null, `首次更新未启动：${detail || code}`, true);
+        }
+        editor.close();
         try {
             await refresh();
-            if (result.task_error) {
-                message(`脚本已保存，但首次更新未启动：${result.task_error.code} ${result.task_error.detail || ""}`, true);
-            } else {
-                message("脚本已保存");
-            }
+            message("脚本已保存");
         } catch (error) {
             message(`脚本已保存，但刷新失败：${errorText(error)}。请点击刷新列表。`, true);
         }
     } catch (error) {
-        message(errorText(error), true);
+        message(errorText(error), true, editorNotice);
     } finally {
         saving = false;
         save.disabled = false;
@@ -370,7 +441,9 @@ el("save").addEventListener("click", async () => {
 
 el("update-all").addEventListener("click", async () => {
     try {
-        await startUpdate("/updates");
+        const result = await api<{ tasks: TaskRef[] }>("/updates", "POST", { force: false });
+        result.tasks.forEach(trackTask);
+        if (!result.tasks.length) message("没有需要更新的来源");
     } catch (error) {
         message(errorText(error), true);
     }

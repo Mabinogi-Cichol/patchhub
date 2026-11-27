@@ -182,11 +182,12 @@ class RemoteServer:
             sources = await plugin.list_sources()
             active = {task["key"] for task in await plugin.source_task_status()
                       if task["kind"] == "update_source" and task["state"] not in TERMINAL}
-            ids = []
+            tasks = []
             for source in sources:
                 if source["enabled"] and source["role"] == "publisher" and source["id"] not in active:
-                    ids.append(self._remember_task(await plugin.update_source(source["id"], force)))
-            return {"task_ids": ids}
+                    task_id = self._remember_task(await plugin.update_source(source["id"], force))
+                    tasks.append({"source_id": source["id"], "task_id": task_id})
+            return {"task_ids": [task["task_id"] for task in tasks], "tasks": tasks}
         if len(parts) == 2 and parts[0] == "sources" and method == "DELETE":
             return await plugin.remove_source(parts[1], refresh=False)
         if len(parts) == 3 and parts[0] == "sources":

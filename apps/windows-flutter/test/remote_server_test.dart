@@ -303,6 +303,9 @@ void main() {
     expect(ids, hasLength(1));
     final task = model.tasks.sources['update_source:publisher']!;
     expect(ids.single, task.requestId);
+    expect(result.body['tasks'], [
+      {'source_id': 'publisher', 'task_id': task.requestId},
+    ]);
     expect(task.arguments['force'], true);
     await task.done;
     expect(
