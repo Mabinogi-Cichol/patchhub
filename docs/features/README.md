@@ -9,7 +9,7 @@
 
 | 功能 | 状态 | 设计 | 施工记录 |
 | --- | --- | --- | --- |
-| Remote 局域网全局来源管理 | Windows、Decky 及共享网页已实现，本地定向验证通过，双设备实机待验收 | [设计](remote-source-management/design.md) | [施工记录](remote-source-management/progress.md) |
+| Remote 局域网全局来源管理 | 来源卡片进度与临时反馈改版已实现，网页契约与桌面、窄屏浏览器验证通过，跨设备实机待验收 | [设计](remote-source-management/design.md) | [施工记录](remote-source-management/progress.md) |
 | 单文件自描述 Lua 与面向 AI 的极简脚本导入 | 已实现：本地定向自动化（核心 `sources::` 114 单测、`script_source_import` 13、`builtin_scripts` 6 及受改核心/协议/CLI/冒烟回归、Decky Python 127 / TS 113、Flutter analyze & 326 测试）、契约字节检查、fmt/Clippy 及过度设计审阅通过；Windows 原生窗口 / Steam Deck 实机、空内置 Flutter 专用环境变量构建及发布前全矩阵待验收 | [设计](simplified-script-source-import/design.md) | [施工记录](simplified-script-source-import/progress.md) |
 | CI 优化 | 已实现：job 超时、移出 sf95 与重复测试、测试等待失败出口；本地定向验证通过，线上 CI 待验证 | [设计](ci-optimization/design.md) | [施工记录](ci-optimization/progress.md) |
 | 订阅源缓存与抓取模型统一重构 | 已实现，本地定向自动化（核心订阅源单测、14 项核心集成套件、5 源空内置恢复、CLI 单测/冒烟及 Clippy/fmt）与过度设计审阅通过；沙箱限制项、发布前全矩阵与实机待验收 | [设计](unified-source-index-detail/design.md) | [施工记录](unified-source-index-detail/progress.md) |

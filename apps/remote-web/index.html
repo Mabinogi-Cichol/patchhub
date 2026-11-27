@@ -44,10 +44,10 @@
             <div id="import-tools">
               <label class="form-label" for="file">选择 Lua 文件</label>
               <input id="file" class="form-control mb-3" type="file" accept=".lua,text/plain">
-              <button id="prompt-copy" class="btn btn-outline-secondary editor-action mb-2">复制 AI 提示词</button>
-              <div id="prompt-feedback" role="status"></div>
+              <button id="prompt-copy" class="btn btn-outline-secondary editor-action mb-2" aria-live="polite">复制 AI 提示词</button>
               <details id="prompt-box" class="mb-3">
                 <summary id="prompt-label">查看 AI 提示词</summary>
+                <div id="prompt-feedback" role="status"></div>
                 <textarea id="prompt" class="form-control mt-2" aria-labelledby="prompt-label" rows="8" readonly></textarea>
               </details>
             </div>
@@ -58,7 +58,10 @@
             </div>
           </div>
         </dialog>
-        <div id="sources"></div>
+        <div id="sources">
+          <section class="mb-4"><h2 class="h3">索引源</h2><p id="publisher-empty" class="text-secondary">暂无来源</p><div id="publisher"></div></section>
+          <section class="mb-4"><h2 class="h3">补查源</h2><p id="fallback_indexer-empty" class="text-secondary">暂无来源</p><div id="fallback_indexer"></div></section>
+        </div>
       </div>
     </div>
   </main>
