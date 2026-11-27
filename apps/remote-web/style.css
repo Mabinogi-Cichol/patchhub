@@ -2,7 +2,56 @@
 .source-details { border-top: 1px solid var(--tblr-border-color, #dadfe5); }
 .card summary, #prompt-box summary { cursor: pointer; }
 .source-domains { overflow-wrap: anywhere; }
-.source-task { margin: 0 1rem 1rem; overflow-wrap: anywhere; }
+.source-heading, .source-status-row {
+  display: flex;
+  align-items: center;
+  gap: .65rem;
+  padding-inline: 1rem;
+}
+.source-heading {
+  width: 100%;
+  min-height: 44px;
+  padding-block: .4rem;
+  border: 0;
+  border-radius: inherit;
+  background: transparent;
+  color: inherit;
+  text-align: start;
+}
+.source-heading:hover { background: var(--tblr-bg-surface-secondary); }
+.source-heading:focus-visible, .source-action:focus-visible { outline: 2px solid var(--tblr-primary); outline-offset: -2px; }
+.source-heading::before {
+  content: "";
+  width: .45rem;
+  height: .45rem;
+  flex: none;
+  border: solid currentColor;
+  border-width: 0 1.5px 1.5px 0;
+  transform: rotate(-45deg);
+}
+.source-heading[aria-expanded="true"]::before { transform: rotate(45deg); }
+.source-heading strong { overflow-wrap: anywhere; }
+.source-enabled { margin-inline-start: auto; white-space: nowrap; color: var(--tblr-secondary); font-size: .8rem; }
+.source-status-row { justify-content: space-between; padding-block-end: .45rem; padding-inline-start: 2.1rem; }
+.source-caption { font-size: .875rem; font-variant-numeric: tabular-nums; color: var(--tblr-secondary); }
+.source-caption[data-warning="true"] { color: var(--tblr-danger); }
+.source-caption[data-busy="true"]::before {
+  content: "";
+  display: inline-block;
+  width: .8em;
+  height: .8em;
+  margin-inline-end: .5em;
+  border: 2px solid var(--tblr-primary);
+  border-right-color: transparent;
+  border-radius: 50%;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .source-caption[data-busy="true"]::before { animation: source-spin .85s linear infinite; }
+}
+@keyframes source-spin { to { transform: rotate(360deg); } }
+.source-action { width: 4rem; min-height: 44px; flex: none; }
+.source-action[aria-disabled="true"] { opacity: .65; cursor: default; }
+#prompt-copy { width: 12em; max-width: 100%; }
 .editor-drawer {
   box-sizing: border-box;
   position: fixed;
